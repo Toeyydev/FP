@@ -69,16 +69,16 @@ async function main() {
     update: { role: "ADMIN", state: "ACTIVE", passwordHash: bcrypt.hashSync(adminPw, 10) },
   });
 
-  // Guides as INVITED, each with a single-use invite code
+  // Guide records (INVITED placeholders). Idempotent: an existing account is left
+  // completely untouched, so re-running on every deploy never resets a guide who has
+  // already signed up / been activated.
   const issued: { guideId: string; email: string; code: string }[] = [];
   for (const [guideId, displayName] of GUIDES) {
+    if (await prisma.user.findUnique({ where: { guideId } })) continue;
     const email = emailFor(guideId);
-    const user = await prisma.user.upsert({
-      where: { guideId },
-      create: { email, displayName, guideId, role: "GUIDE", state: "INVITED", passwordHash: null },
-      update: { email, displayName, role: "GUIDE", state: "INVITED", passwordHash: null },
+    const user = await prisma.user.create({
+      data: { email, displayName, guideId, role: "GUIDE", state: "INVITED" },
     });
-    await prisma.invite.deleteMany({ where: { userId: user.id, usedAt: null } });
     const selector = randStr(6), secret = randStr(10);
     await prisma.invite.create({
       data: {
@@ -89,8 +89,8 @@ async function main() {
     issued.push({ guideId, email, code: `${selector}-${secret}` });
   }
 
-  console.log(`\nSeeded ${GUIDES.length} guides (INVITED) + ${TOURS.length} tours + 1 admin.`);
-  console.log(`\nADMIN login:  ${adminEmail}  /  "${adminPw}"\n`);
+  console.log(`\nEnsured admin + ${TOURS.length} tours. New guide records created: ${issued.length}.`);
+  console.log(`\nADMIN login:  ${adminEmail}  (password = ADMIN_PASSWORD env)\n`);
   console.log("Guide invite codes (claim at /start -> \"I have an invite code\"):");
   console.log("─".repeat(60));
   for (const x of issued) console.log(`  ${x.guideId}  ${x.code}   ${x.email}`);
