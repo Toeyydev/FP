@@ -186,3 +186,9 @@ tour, reconciliation produces the correct payout. No manual copy-paste, no chasi
 | 2026-06-01 | Q4 Qualifications | _Open — owner to supply per-guide tour qualifications + languages._ |
 | 2026-06-01 | Q6 Cutoff (data freeze) | _Open._ |
 | 2026-06-01 | Q7 LINE account | _Open — reuse customer OA vs separate guide OA._ |
+| 2026-06-01 | Account provisioning | **Invite-led claim, no open self-registration.** States: INVITED → ACTIVE (+ PENDING for self-requests, SUSPENDED). Guide claim = invite code → email OTP → password → onboarding (languages, qualifications, consent). Self-request → operator approval. Only ACTIVE can log in. |
+| 2026-06-01 | Roles | **GUIDE / OPERATOR / ADMIN.** Operators + admins issue guide invites, approve pending, suspend; only admins invite operators. First admin bootstrapped at seed. |
+| 2026-06-01 | Invite/OTP delivery (prototype) | **Stub/dev** — codes shown to operator + OTP logged/shown in dev; email is the OTP target; real channel left as a seam (`STUB_DELIVERY=false`). |
+| 2026-06-01 | Q4 Qualifications/languages | Now **captured at guide claim/onboarding** (multi-select tours + languages); owner can still edit later. Bank/tax never collected in sign-up. |
+| 2026-06-01 | Seed | 25 guides seeded **INVITED** with single-use codes printed by `db:seed`; one bootstrapped **ADMIN** (active). |
+| 2026-06-01 | Auth entry screen | Single card with **Log in / Sign up** tabs (chooser tiles removed). **Sign up** (full name, nickname, email, password) creates a **PENDING** account with a hashed password; operator approval links it to a guide record and **activates directly** (no OTP). Invite-code claim flow retained but **operator-initiated only** (tokenised `/claim?c=` link). Remember-me + Forgot-password on the Log in tab. |
