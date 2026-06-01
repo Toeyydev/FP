@@ -1,0 +1,194 @@
+// Folkpath availability prototype — data model.
+// Availability = guide × date × 10 slots; assignment = guide × date × slot.
+// Plus the account-provisioning layer (invite-led claim, OTP, access requests, audit).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  GUIDE
+  OPERATOR
+  ADMIN
+}
+
+enum AccountState {
+  INVITED // code issued, not yet claimed
+  PENDING // self-requested, awaiting operator approval
+  ACTIVE // can log in
+  SUSPENDED // access revoked without deleting the record
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String? // null until the account is claimed
+  role         Role         @default(GUIDE)
+  state        AccountState @default(INVITED)
+  displayName  String // nickname shown on the roster
+  fullName     String?
+  guideId      String?      @unique // G-001..G-025; null for operator/admin
+  phone        String?
+  languages    String[]     @default([])
+  qualifications String[]   @default([]) // tour ids the guide can run
+  consentAt    DateTime? // acknowledged handling customer booking data
+  claimedAt    DateTime?
+  createdAt    DateTime     @default(now())
+
+  availability   Availability[]
+  assignments    Assignment[]
+  invites        Invite[]
+  otps           Otp[]
+  refreshTokens  RefreshToken[]
+  passwordResets PasswordReset[]
+}
+
+model Tour {
+  id   String @id // T-001..T-009
+  name String
+  time String
+
+  assignments Assignment[]
+}
+
+model Availability {
+  id      String    @id @default(cuid())
+  guideId String
+  guide   User      @relation(fields: [guideId], references: [guideId], onDelete: Cascade)
+  date    String // "YYYY-MM-DD"
+  slots   Boolean[]
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([guideId, date])
+  @@index([date])
+}
+
+model Assignment {
+  id      String  @id @default(cuid())
+  guideId String
+  guide   User    @relation(fields: [guideId], references: [guideId], onDelete: Cascade)
+  date    String
+  slotIdx Int
+  tourId  String
+  tour    Tour    @relation(fields: [tourId], references: [id])
+  pax     Int?
+  note    String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([guideId, date, slotIdx])
+  @@index([date])
+}
+
+// Single-use, expiring invite. Code shown to the user is `selector-secret`;
+// `selector` is the indexed lookup, `secretHash` is the bcrypt of the secret.
+model Invite {
+  id          String    @id @default(cuid())
+  selector    String    @unique
+  secretHash  String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  role        Role
+  channel     String    @default("email")
+  sentTo      String? // masked destination, for display
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// One-time code for claim identity verification. Short-lived, rate-limited.
+model Otp {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  purpose    String    @default("CLAIM_VERIFY")
+  codeHash   String
+  channel    String    @default("email")
+  sentTo     String?
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  lastSentAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+enum RequestState {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Self-service "request access" queue. Kept separate from User so an unverified
+// stranger never gets a User row until an operator links them to a guide record.
+model AccessRequest {
+  id              String       @id @default(cuid())
+  name            String // full name
+  nickname        String? // shown to operators on the roster
+  passwordHash    String? // self-set at sign-up; copied onto the guide account on approval
+  phone           String?
+  email           String
+  believedGuideId String?
+  state           RequestState @default(PENDING)
+  linkedUserId    String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  note            String?
+  createdAt       DateTime     @default(now())
+
+  @@index([state])
+}
+
+// "Remember me" persistent session. Opaque token, only its SHA-256 hash is stored.
+// Rotated on every use; `family` ties a rotation chain so reuse can revoke the lot.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  tokenHash String    @unique
+  family    String
+  userAgent String?
+  expiresAt DateTime
+  rotatedAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([family])
+}
+
+// Single-use, time-limited password reset. Only the token hash is stored.
+model PasswordReset {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorRole  String?
+  action     String // invite.issued | invite.claimed | otp.sent | request.created | ...
+  entityType String?
+  entityId   String?
+  detail     Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
