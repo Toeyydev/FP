@@ -78,23 +78,17 @@ export async function POST(req: NextRequest) {
       if (!guide || guide.role !== "GUIDE") return NextResponse.json({ error: "no-guide" }, { status: 400 });
       if (guide.state === "ACTIVE") return NextResponse.json({ error: "already-active" }, { status: 400 });
     } else {
-      // Free-flow: grab the lowest-numbered unclaimed guide record (G-001 first).
-      guide = await prisma.user.findFirst({
-        where: { role: "GUIDE", state: "INVITED" },
-        orderBy: { guideId: "asc" },
+      // Free-flow: ALWAYS mint a brand-new guide id (G-026, G-027, ...). Never
+      // overwrite an existing record, so the roster only grows.
+      const last = await prisma.user.findFirst({
+        where: { role: "GUIDE", guideId: { not: null } },
+        orderBy: { guideId: "desc" },
       });
-      if (!guide) {
-        // Pool exhausted -> mint the next id (G-026, G-027, ...).
-        const last = await prisma.user.findFirst({
-          where: { role: "GUIDE", guideId: { not: null } },
-          orderBy: { guideId: "desc" },
-        });
-        const n = last?.guideId ? parseInt(last.guideId.slice(2), 10) + 1 : 1;
-        const newGuideId = `G-${String(n).padStart(3, "0")}`;
-        guide = await prisma.user.create({
-          data: { guideId: newGuideId, role: "GUIDE", state: "INVITED", email: `unassigned-${newGuideId.toLowerCase()}@folkpath.local`, displayName: reqRow.nickname || reqRow.name },
-        });
-      }
+      const n = last?.guideId ? parseInt(last.guideId.slice(2), 10) + 1 : 1;
+      const newGuideId = `G-${String(n).padStart(3, "0")}`;
+      guide = await prisma.user.create({
+        data: { guideId: newGuideId, role: "GUIDE", state: "INVITED", email: `unassigned-${newGuideId.toLowerCase()}@folkpath.local`, displayName: reqRow.nickname || reqRow.name },
+      });
     }
     if (clash && clash.id !== guide.id) return NextResponse.json({ error: "email-in-use" }, { status: 400 });
 
