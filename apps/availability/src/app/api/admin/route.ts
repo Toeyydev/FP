@@ -59,20 +59,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, code });
   }
 
-  // Approve a pending sign-up -> link it to a guide record and ACTIVATE it directly,
-  // using the password/email/nickname the person set at sign-up (no OTP needed).
+  // Approve a pending sign-up and ACTIVATE it, auto-assigning the next available
+  // guide id (first-come-first-serve). The guide never picks an id — it's internal.
+  // An explicit guideUserId can still be passed to override the auto-pick.
   if (action === "approveRequest") {
-    const schema = z.object({ requestId: z.string().min(1), guideUserId: z.string().min(1) });
+    const schema = z.object({ requestId: z.string().min(1), guideUserId: z.string().min(1).optional() });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const reqRow = await prisma.accessRequest.findUnique({ where: { id: parsed.data.requestId } });
     if (!reqRow || reqRow.state !== "PENDING") return NextResponse.json({ error: "no-request" }, { status: 400 });
     if (!reqRow.passwordHash) return NextResponse.json({ error: "no-password" }, { status: 400 });
-    const guide = await prisma.user.findUnique({ where: { id: parsed.data.guideUserId } });
-    if (!guide || guide.role !== "GUIDE") return NextResponse.json({ error: "no-guide" }, { status: 400 });
-    if (guide.state === "ACTIVE") return NextResponse.json({ error: "already-active" }, { status: 400 });
-    // The sign-up email becomes the login email; make sure it isn't taken by another account.
+    // The sign-up email becomes the login email; make sure it isn't already taken.
     const clash = await prisma.user.findUnique({ where: { email: reqRow.email } });
+
+    let guide;
+    if (parsed.data.guideUserId) {
+      guide = await prisma.user.findUnique({ where: { id: parsed.data.guideUserId } });
+      if (!guide || guide.role !== "GUIDE") return NextResponse.json({ error: "no-guide" }, { status: 400 });
+      if (guide.state === "ACTIVE") return NextResponse.json({ error: "already-active" }, { status: 400 });
+    } else {
+      // Free-flow: grab the lowest-numbered unclaimed guide record (G-001 first).
+      guide = await prisma.user.findFirst({
+        where: { role: "GUIDE", state: "INVITED" },
+        orderBy: { guideId: "asc" },
+      });
+      if (!guide) {
+        // Pool exhausted -> mint the next id (G-026, G-027, ...).
+        const last = await prisma.user.findFirst({
+          where: { role: "GUIDE", guideId: { not: null } },
+          orderBy: { guideId: "desc" },
+        });
+        const n = last?.guideId ? parseInt(last.guideId.slice(2), 10) + 1 : 1;
+        const newGuideId = `G-${String(n).padStart(3, "0")}`;
+        guide = await prisma.user.create({
+          data: { guideId: newGuideId, role: "GUIDE", state: "INVITED", email: `unassigned-${newGuideId.toLowerCase()}@folkpath.local`, displayName: reqRow.nickname || reqRow.name },
+        });
+      }
+    }
     if (clash && clash.id !== guide.id) return NextResponse.json({ error: "email-in-use" }, { status: 400 });
 
     await prisma.user.update({
@@ -89,8 +112,8 @@ export async function POST(req: NextRequest) {
     await prisma.accessRequest.update({
       where: { id: reqRow.id }, data: { state: "APPROVED", linkedUserId: guide.id, reviewedById: actorId, reviewedAt: new Date() },
     });
-    await audit({ actorId, actorRole, action: "request.approved", entityType: "AccessRequest", entityId: reqRow.id, detail: { guideUserId: guide.id } });
-    return NextResponse.json({ ok: true });
+    await audit({ actorId, actorRole, action: "request.approved", entityType: "AccessRequest", entityId: reqRow.id, detail: { guideId: guide.guideId } });
+    return NextResponse.json({ ok: true, guideId: guide.guideId });
   }
 
   if (action === "rejectRequest") {

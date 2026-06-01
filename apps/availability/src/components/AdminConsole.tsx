@@ -17,11 +17,10 @@ export default function AdminConsole() {
   const { t } = useLang();
   const [data, setData] = useState<Data | null>(null);
   const [tab, setTab] = useState<"invites" | "requests">("invites");
-  const [flash, setFlash] = useState<{ who: string; code: string } | null>(null);
+  const [flash, setFlash] = useState<{ msg: string; copy?: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showOp, setShowOp] = useState(false);
   const [opEmail, setOpEmail] = useState(""); const [opName, setOpName] = useState("");
-  const [link, setLink] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const r = await fetch("/api/admin", { cache: "no-store" });
@@ -31,7 +30,9 @@ export default function AdminConsole() {
 
   async function act(body: unknown, who?: string) {
     const r = await post(body);
-    if (r.ok && r.data.code) { setFlash({ who: who ?? "", code: r.data.code }); setCopied(false); }
+    if (r.ok && r.data.code) { setFlash({ msg: `Invite code for ${who ?? ""}: ${r.data.code} — relay out-of-band (single use)`, copy: r.data.code }); setCopied(false); }
+    else if (r.ok && r.data.guideId) { setFlash({ msg: `Approved ${who ?? ""} — assigned ${r.data.guideId} and activated.` }); }
+    else if (!r.ok) { setFlash({ msg: `Error: ${(r.data as { error?: string }).error ?? "failed"}` }); }
     await load();
   }
 
@@ -39,7 +40,6 @@ export default function AdminConsole() {
 
   const guides = data.accounts.filter((a) => a.role === "GUIDE");
   const ops = data.accounts.filter((a) => a.role !== "GUIDE");
-  const linkTargets = guides.filter((g) => g.state !== "ACTIVE");
 
   const badge = (s: string) => <span className={`badge ${s.toLowerCase()}`}>{s}</span>;
 
@@ -73,8 +73,8 @@ export default function AdminConsole() {
 
       {flash && (
         <div className="codeflash">
-          <span>{flash.who}: <code>{flash.code}</code> <span style={{ opacity: .7 }}>(relay out-of-band — single use)</span></span>
-          <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(flash.code); setCopied(true); }}>{copied ? t("copied") : t("copyCode")}</button>
+          <span>{flash.msg}</span>
+          {flash.copy && <button className="btn sm" onClick={() => { navigator.clipboard?.writeText(flash.copy!); setCopied(true); }}>{copied ? t("copied") : t("copyCode")}</button>}
         </div>
       )}
 
@@ -103,25 +103,16 @@ export default function AdminConsole() {
           <div style={{ padding: 14 }}>
             {data.requests.length === 0 ? <div className="op-empty">{t("noRequests")}</div> : (
               <table className="acct-table">
-                <thead><tr><th>Name</th><th>Nickname</th><th>Email</th><th>Link to guide</th><th /></tr></thead>
+                <thead><tr><th>Name</th><th>Nickname</th><th>Email</th><th /></tr></thead>
                 <tbody>
                   {data.requests.map((rq) => {
-                    const auto = linkTargets.find((g) => g.email.toLowerCase() === rq.email.toLowerCase());
-                    const sel = link[rq.id] ?? auto?.id ?? "";
                     return (
                       <tr key={rq.id}>
                         <td>{rq.name}</td>
                         <td>{rq.nickname ?? "—"}</td>
                         <td style={{ color: "var(--ink-soft)" }}>{rq.email}</td>
-                        <td>
-                          <select value={sel} onChange={(e) => setLink({ ...link, [rq.id]: e.target.value })} style={{ padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${auto && sel === auto.id ? "var(--green-line)" : "var(--line-strong)"}`, background: "var(--paper)" }}>
-                            <option value="">— select guide —</option>
-                            {linkTargets.map((g) => <option key={g.id} value={g.id}>{g.guideId} · {g.displayName}</option>)}
-                          </select>
-                          {auto && sel === auto.id && <div className="fieldhelp" style={{ color: "var(--green)" }}>✓ auto-matched by email</div>}
-                        </td>
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                          <button className="btn sm primary" disabled={!sel} onClick={() => act({ action: "approveRequest", requestId: rq.id, guideUserId: sel }, `${rq.name}`)}>{t("approve")}</button>{" "}
+                          <button className="btn sm primary" onClick={() => act({ action: "approveRequest", requestId: rq.id }, rq.name)}>{t("approve")}</button>{" "}
                           <button className="btn sm danger" onClick={() => act({ action: "rejectRequest", requestId: rq.id })}>{t("reject")}</button>
                         </td>
                       </tr>
