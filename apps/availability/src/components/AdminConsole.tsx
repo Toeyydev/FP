@@ -50,6 +50,7 @@ export default function AdminConsole() {
       <td>{a.role}</td>
       <td>{badge(a.state)}</td>
       <td style={{ textAlign: "right" }}>
+        {a.role === "GUIDE" && <a className="btn sm" href={`/profile?userId=${a.id}`}>{t("details")}</a>}{" "}
         {a.state !== "ACTIVE" && a.state !== "SUSPENDED" && (
           <button className="btn sm" onClick={() => act({ action: "issueInvite", userId: a.id }, `${a.guideId ?? a.role} · ${a.displayName}`)}>
             {a.state === "INVITED" ? t("reissue") : t("issueInvite")}

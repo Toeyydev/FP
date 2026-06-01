@@ -22,15 +22,13 @@ type AsMap = Record<string, Record<string, Record<number, Record<number, Job>>>>
 const EMPTY: boolean[] = Array(SLOTS.length).fill(false);
 
 function visibleMonths(role: Role, view: string, anchor: Date): string[] {
-  if (role === "guide") {
-    if (view === "week") {
-      const ws = weekStart(anchor);
-      return uniq([mkey(ws), mkey(addDays(ws, 6))]);
-    }
-    if (view === "year") {
-      const y = anchor.getFullYear();
-      return Array.from({ length: 12 }, (_, m) => mkey(new Date(y, m, 1)));
-    }
+  if (view === "year") {
+    const y = anchor.getFullYear();
+    return Array.from({ length: 12 }, (_, m) => mkey(new Date(y, m, 1)));
+  }
+  if (role === "guide" && view === "week") {
+    const ws = weekStart(anchor);
+    return uniq([mkey(ws), mkey(addDays(ws, 6))]);
   }
   return [mkey(anchor)];
 }
@@ -187,7 +185,9 @@ export default function AppClient({
       else if (view === "month") setAnchor(addMonths(anchor, dir));
       else setAnchor(new Date(anchor.getFullYear() + dir, 0, 1));
     } else {
-      setAnchor(view === "day" ? addDays(anchor, dir) : addMonths(anchor, dir));
+      if (view === "day") setAnchor(addDays(anchor, dir));
+      else if (view === "month") setAnchor(addMonths(anchor, dir));
+      else setAnchor(new Date(anchor.getFullYear() + dir, 0, 1));
     }
   }
   function periodLabel() {
@@ -200,6 +200,7 @@ export default function AppClient({
       return String(anchor.getFullYear());
     }
     if (view === "day") return anchor.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    if (view === "year") return String(anchor.getFullYear());
     return `${MON[anchor.getMonth()]} ${anchor.getFullYear()}`;
   }
 
@@ -415,6 +416,39 @@ export default function AppClient({
     );
   }
 
+  // ============ OPERATOR: YEAR (12-month overview, next-year planning) ============
+  function opYear(): ReactNode {
+    const y = anchor.getFullYear();
+    const guides = ref?.guides ?? [];
+    return (
+      <>
+        <div className="panel-head"><h2>{t("capacityMonth")} · {y}</h2><span className="hint">{t("capacityHint")}</span></div>
+        <div className="year">
+          {Array.from({ length: 12 }, (_, mo) => {
+            const mk = mkey(new Date(y, mo, 1));
+            const avMonth = av[mk] || {}; const asMonth = as[mk] || {};
+            let guidesAvail = 0, assignedTot = 0;
+            for (const g of guides) {
+              const days = avMonth[g.guideId] || {};
+              if (Object.values(days).some((arr) => arr.some(Boolean))) guidesAvail++;
+              const ad = asMonth[g.guideId] || {};
+              for (const day of Object.values(ad)) assignedTot += Object.keys(day).length;
+            }
+            return (
+              <div className="ymini" key={mo} onClick={() => { setAnchor(new Date(y, mo, 1)); setView("month"); }}>
+                <h4>{MON[mo]}</h4>
+                <div className="heatval" style={{ textAlign: "center", color: guidesAvail ? "var(--green)" : "var(--grey)" }}>
+                  {guidesAvail || "—"}<small>{guidesAvail ? t("guides") : ""}</small>
+                </div>
+                {assignedTot ? <div className="meta" style={{ justifyContent: "center" }}><span className="asg">{assignedTot}🔒</span></div> : null}
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  }
+
   function modalBody(): ReactNode {
     if (!modal) return null;
     if (modal.kind === "dayedit") {
@@ -485,7 +519,7 @@ export default function AppClient({
 
   const tabs: [string, string][] = role === "guide"
     ? [["week", t("week")], ["month", t("month")], ["year", t("year")]]
-    : [["day", t("day")], ["month", t("month")]];
+    : [["day", t("day")], ["month", t("month")], ["year", t("year")]];
 
   return (
     <div className="wrap">
@@ -494,6 +528,7 @@ export default function AppClient({
         <div className="spacer" />
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
         <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
+        {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
             {t("accountsTitle")}
@@ -521,7 +556,7 @@ export default function AppClient({
       <section className="panel">
         {role === "guide"
           ? (view === "week" ? guideWeek() : view === "month" ? guideMonth() : guideYear())
-          : (view === "day" ? opDay() : opMonth())}
+          : (view === "day" ? opDay() : view === "month" ? opMonth() : opYear())}
       </section>
 
       <div className="footnote">{t("footnote1")}<br />{t("footnote2")}</div>

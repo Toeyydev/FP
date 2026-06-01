@@ -40,12 +40,41 @@ model User {
   claimedAt    DateTime?
   createdAt    DateTime     @default(now())
 
+  lineId       String? // LINE id/handle for future LINE OA notifications
+  emergencyName     String?
+  emergencyPhone    String?
+  emergencyRelation String?
+  // Verified profile (sensitive PII — stored AES-encrypted via lib/crypto).
+  taxId           String?
+  idCardAddress   String?
+  currentAddress  String?
+  bankName        String?
+  bankAccountNo   String?
+  bankAccountName String?
+  bankBranch      String?
+
   availability   Availability[]
   assignments    Assignment[]
   invites        Invite[]
   otps           Otp[]
   refreshTokens  RefreshToken[]
   passwordResets PasswordReset[]
+  documents      GuideDocument[]
+}
+
+// Uploaded reference documents (ID card, bank book). Bytes stored AES-encrypted.
+model GuideDocument {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  kind       String // ID_CARD | BANK_BOOK
+  filename   String
+  mimeType   String
+  size       Int
+  data       Bytes // encrypted
+  uploadedAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Tour {
