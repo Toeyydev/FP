@@ -1,0 +1,26 @@
+# --- Local-only assets: contain live PII / bank / tax data — never commit (public repo) ---
+assets/
+*.xlsx
+*.xls
+*.gs
+FOLK-*.html
+folkpaths-app*.html
+
+# --- Secrets ---
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# --- Node / build ---
+node_modules/
+dist/
+build/
+coverage/
+*.log
+
+# --- OS / editor ---
+.DS_Store
+.vscode/
+.idea/
