@@ -5,8 +5,10 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 export function GET() {
+  // Same build id the client baked in (inlined at build time), so they always
+  // agree within a deploy and only differ when a new version ships.
   return NextResponse.json(
-    { version: process.env.RAILWAY_GIT_COMMIT_SHA || "dev" },
+    { version: process.env.NEXT_PUBLIC_BUILD_ID || "dev" },
     { headers: { "cache-control": "no-store" } },
   );
 }
