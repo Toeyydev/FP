@@ -48,6 +48,7 @@ export default function AppClient({
   const [modal, setModal] = useState<
     | { kind: "assign"; gid: string; idx: number; date: string }
     | { kind: "dayedit"; date: string }
+    | { kind: "newoffer" }
     | null
   >(null);
   const [q, setQ] = useState("");
@@ -60,6 +61,9 @@ export default function AppClient({
   const [fTour, setFTour] = useState("");
   const [fPax, setFPax] = useState("");
   const [fNote, setFNote] = useState("");
+  // dedicated "new job offer" form state
+  const [oDate, setODate] = useState("");
+  const [oSlot, setOSlot] = useState(0);
 
   const tourById = useMemo(
     () => Object.fromEntries((ref?.tours ?? []).map((x) => [x.id, x])),
@@ -207,6 +211,37 @@ export default function AppClient({
     setFTour(ref?.tours[0]?.id ?? "");
     setFPax(""); setFNote("");
     setModal({ kind: "assign", gid, idx, date });
+  }
+  function openNewOffer() {
+    setFTour(ref?.tours[0]?.id ?? "");
+    setFPax(""); setFNote("");
+    setODate(ymd(anchor)); setOSlot(0);
+    setModal({ kind: "newoffer" });
+  }
+  // How many guides are free for a date+slot (client-side preview before sending).
+  function availCountFor(dateStr: string, slotIdx: number): number {
+    const d = new Date(`${dateStr}T00:00:00`);
+    if (isBlocked(d)) return 0;
+    return (ref?.guides ?? []).filter((g) => {
+      const avd = getAvail(g.guideId, d) ?? EMPTY;
+      const asg = getAssign(g.guideId, d);
+      return !avd[slotIdx] && !asg[slotIdx];
+    }).length;
+  }
+  async function doOfferForm() {
+    if (!fTour) { toast(t("tour")); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(oDate)) { toast(t("pickDate")); return; }
+    if (fPax && Number(fPax) > 10) { toast(t("offerPaxMax")); return; }
+    const r = await fetch("/api/offers", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tourId: fTour, date: oDate, slotIdx: oSlot, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined }),
+    });
+    const j = await r.json().catch(() => ({}));
+    setModal(null);
+    if (!r.ok) { toast(t("errGeneric")); return; }
+    if (!j.candidates) { toast(t("offerNoCandidates")); return; }
+    toast(`${t("offerSent")}: ${j.candidates} · LINE ${j.lineSent}`);
+    await load();
   }
   async function toggleBlock(d: Date) {
     const date = ymd(d);
@@ -407,7 +442,8 @@ export default function AppClient({
         <div className="panel-head"><h2>{t("rosterDay")}</h2>
           <span className="hint">{d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
           <div className="head-tools">
-            <button className="btn sm primary" onClick={() => sendJobSheets(d)}>📤 {t("sendJobSheet")}</button>
+            <button className="btn sm primary" onClick={openNewOffer}>➕ {t("newOffer")}</button>
+            <button className="btn sm" onClick={() => sendJobSheets(d)}>📤 {t("sendJobSheet")}</button>
             <button className={`btn sm ${blocked ? "" : "danger"}`} onClick={() => toggleBlock(d)}>{blocked ? t("unblockDay") : t("blockDay")}</button>
           </div>
         </div>
@@ -541,6 +577,39 @@ export default function AppClient({
             <button className="btn ghost" onClick={() => setDayAll(d, false)}>{t("clearDay")}</button>
             <button className="btn danger" onClick={() => setDayAll(d, true)}>{t("dayOff")}</button>
             <button className="btn dark" onClick={() => setModal(null)}>{t("done")}</button>
+          </div>
+        </>
+      );
+    }
+    if (modal.kind === "newoffer") {
+      const avail = availCountFor(oDate, oSlot);
+      return (
+        <>
+          <h3>📣 {t("newOffer")}</h3>
+          <div className="mctx">{t("newOfferHint")}</div>
+          <div className="mbody">
+            <div><label className="fl">{t("dateLabel")}</label>
+              <input type="date" value={oDate} onChange={(e) => setODate(e.target.value)} />
+            </div>
+            <div><label className="fl">{t("timeSlot")}</label>
+              <select value={oSlot} onChange={(e) => setOSlot(Number(e.target.value))}>
+                {SLOTS.map((s) => <option key={s.idx} value={s.idx}>{s.start}</option>)}
+              </select>
+            </div>
+            <div><label className="fl">{t("tour")}</label>
+              <select value={fTour} onChange={(e) => setFTour(e.target.value)}>
+                {(ref?.tours ?? []).map((x) => <option key={x.id} value={x.id}>{x.id} · {x.name} ({x.time})</option>)}
+              </select>
+            </div>
+            <div><label className="fl">{t("paxOpt")}</label><input type="number" min={1} max={10} value={fPax} onChange={(e) => setFPax(e.target.value)} placeholder="e.g. 4" /></div>
+            <div><label className="fl">{t("noteOpt")}</label><input value={fNote} onChange={(e) => setFNote(e.target.value)} placeholder="Bokun / GYG booking no." /></div>
+            <div className="offeravail" style={{ marginTop: 4, fontWeight: 600, color: avail ? "var(--green, #1a7f37)" : "var(--red, #c0392b)" }}>
+              {avail > 0 ? `✅ ${avail} ${t("guidesAvailable")}` : `⚠️ ${t("offerNoCandidates")}`}
+            </div>
+          </div>
+          <div className="mfoot">
+            <button className="btn ghost" onClick={() => setModal(null)}>{t("cancel")}</button>
+            <button className="btn primary" disabled={avail === 0} onClick={doOfferForm}>📣 {t("sendOffer")}</button>
           </div>
         </>
       );

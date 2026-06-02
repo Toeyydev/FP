@@ -108,6 +108,8 @@ export const STRINGS = {
     jobSheetSent: "Job sheets sent", noLineLinked: "no LINE",
     offerBtn: "Offer to available", offerSent: "Offer sent to guides",
     offerNoCandidates: "No available guides for this slot.", offerPaxMax: "Max 10 pax per offer.",
+    newOffer: "New job offer", newOfferHint: "Fill in the job, then send it to all available guides (first to accept wins).",
+    dateLabel: "Date", timeSlot: "Time slot", guidesAvailable: "guides available", sendOffer: "Send offer", pickDate: "Pick a date.",
     notifications: "Notifications", noNotifications: "No notifications.",
   },
   th: {
@@ -215,6 +217,8 @@ export const STRINGS = {
     jobSheetSent: "ส่งใบงานแล้ว", noLineLinked: "ไม่ได้เชื่อม LINE",
     offerBtn: "เสนองานให้ไกด์ว่าง", offerSent: "ส่งข้อเสนองานแล้ว",
     offerNoCandidates: "ไม่มีไกด์ว่างในช่วงเวลานี้", offerPaxMax: "สูงสุด 10 ท่านต่อหนึ่งงาน",
+    newOffer: "เสนองานใหม่", newOfferHint: "กรอกรายละเอียดงาน แล้วส่งให้ไกด์ที่ว่างทุกคน (ใครรับก่อนได้ก่อน)",
+    dateLabel: "วันที่", timeSlot: "ช่วงเวลา", guidesAvailable: "ไกด์ว่าง", sendOffer: "ส่งข้อเสนอ", pickDate: "เลือกวันที่",
     notifications: "การแจ้งเตือน", noNotifications: "ไม่มีการแจ้งเตือน",
   },
 } as const;
