@@ -1,7 +1,7 @@
 // Service worker — makes the app installable (PWA). Chrome requires the app to
 // work offline, so we serve a cached offline fallback for navigations when the
 // network is unavailable. We do NOT cache authenticated pages (stale/wrong-user risk).
-const CACHE = "folkpath-v2";
+const CACHE = "folkpath-v3";
 const OFFLINE = "/offline.html";
 
 self.addEventListener("install", (event) => {
@@ -18,8 +18,11 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  // For page navigations: network-first, fall back to the offline page when offline.
+  // Page navigations: always fetch fresh HTML (no-store) so a reload picks up a
+  // new deploy; fall back to the offline page when there's no network.
   if (req.mode === "navigate") {
-    event.respondWith(fetch(req).catch(() => caches.match(OFFLINE)));
+    event.respondWith(
+      fetch(req.url, { cache: "no-store", credentials: "include" }).catch(() => caches.match(OFFLINE)),
+    );
   }
 });

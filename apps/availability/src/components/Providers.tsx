@@ -23,6 +23,27 @@ export function Providers({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Auto-update: detect when a newer version has been deployed and refresh when
+  // the user next returns to the app (never interrupts active use). No manual
+  // sign-out / cache-clear needed.
+  useEffect(() => {
+    const loaded = process.env.NEXT_PUBLIC_BUILD_ID || "dev";
+    if (loaded === "dev") return; // skip locally
+    let updateReady = false;
+    const check = async () => {
+      try {
+        const r = await fetch("/api/version", { cache: "no-store" });
+        const d = await r.json();
+        if (d?.version && d.version !== loaded) updateReady = true;
+      } catch { /* offline — try later */ }
+    };
+    const onVisible = () => { if (updateReady && document.visibilityState === "visible") window.location.reload(); };
+    document.addEventListener("visibilitychange", onVisible);
+    check();
+    const id = window.setInterval(check, 120000); // every 2 min
+    return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+
   const setLang = (l: Lang) => {
     setLangState(l);
     localStorage.setItem("folkpath:lang", l);
