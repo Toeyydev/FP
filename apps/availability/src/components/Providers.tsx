@@ -29,19 +29,30 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const loaded = process.env.NEXT_PUBLIC_BUILD_ID || "dev";
     if (loaded === "dev") return; // skip locally
-    let updateReady = false;
+    let serverVer = "";
     const check = async () => {
       try {
         const r = await fetch("/api/version", { cache: "no-store" });
         const d = await r.json();
-        if (d?.version && d.version !== loaded) updateReady = true;
+        if (d?.version) serverVer = d.version;
       } catch { /* offline — try later */ }
     };
-    const onVisible = () => { if (updateReady && document.visibilityState === "visible") window.location.reload(); };
-    document.addEventListener("visibilitychange", onVisible);
+    const maybeReload = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!serverVer || serverVer === loaded) return;
+      // Reload AT MOST ONCE per server-version per session. If a stale cache makes
+      // the reload come back on the same old version, we won't reload again — so it
+      // can never get stuck in a reload loop.
+      try {
+        if (sessionStorage.getItem("fp_upd") === serverVer) return;
+        sessionStorage.setItem("fp_upd", serverVer);
+      } catch { return; }
+      window.location.reload();
+    };
+    document.addEventListener("visibilitychange", maybeReload);
     check();
     const id = window.setInterval(check, 120000); // every 2 min
-    return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+    return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", maybeReload); };
   }, []);
 
   const setLang = (l: Lang) => {
