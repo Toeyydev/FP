@@ -8,14 +8,17 @@ export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const [guides, tours] = await Promise.all([
-    prisma.user.findMany({
-      where: { role: "GUIDE", guideId: { not: null } },
-      select: { guideId: true, displayName: true },
-      orderBy: { guideId: "asc" },
-    }),
-    prisma.tour.findMany({ orderBy: { id: "asc" } }),
-  ]);
+  // Only operators/admins get the full guide roster; a guide doesn't need
+  // (and shouldn't see) anyone else's record.
+  const isOps = session.user.role === "OPERATOR" || session.user.role === "ADMIN";
+  const guides = isOps
+    ? await prisma.user.findMany({
+        where: { role: "GUIDE", guideId: { not: null } },
+        select: { guideId: true, displayName: true },
+        orderBy: { guideId: "asc" },
+      })
+    : [];
+  const tours = await prisma.tour.findMany({ orderBy: { id: "asc" } });
 
   return NextResponse.json({ guides, tours, slots: SLOTS });
 }
