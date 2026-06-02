@@ -104,6 +104,8 @@ export const STRINGS = {
     lineConnectHint: "Add the Folkpath LINE Official Account, then send this code in the chat to link your account:",
     blocked: "Blocked", blockDay: "Block day", unblockDay: "Unblock day",
     dayBlocked: "This day is blocked — no availability or assignments.",
+    sendJobSheet: "Send job sheet", noJobsToSend: "No assignments to send for this day.",
+    jobSheetSent: "Job sheets sent", noLineLinked: "no LINE",
     notifications: "Notifications", noNotifications: "No notifications.",
   },
   th: {
@@ -207,6 +209,8 @@ export const STRINGS = {
     lineConnectHint: "เพิ่มเพื่อน LINE Official Account ของ Folkpath แล้วส่งรหัสนี้ในแชทเพื่อเชื่อมบัญชี:",
     blocked: "ถูกบล็อก", blockDay: "บล็อกวันนี้", unblockDay: "ปลดบล็อก",
     dayBlocked: "วันนี้ถูกบล็อก — ไม่สามารถลงเวลาว่างหรือมอบหมายงานได้",
+    sendJobSheet: "ส่งใบงาน", noJobsToSend: "ไม่มีงานที่มอบหมายในวันนี้",
+    jobSheetSent: "ส่งใบงานแล้ว", noLineLinked: "ไม่ได้เชื่อม LINE",
     notifications: "การแจ้งเตือน", noNotifications: "ไม่มีการแจ้งเตือน",
   },
 } as const;
