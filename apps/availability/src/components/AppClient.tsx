@@ -315,7 +315,7 @@ export default function AppClient({
             return (
               <>
                 <div className="dn">{d.getDate()}</div>
-                <div className="fillbar"><i style={{ width: `${busyN * 10}%`, background: "#e07a6b" }} /></div>
+                <div className="fillbar"><i style={{ width: `${(busyN / SLOTS.length) * 100}%`, background: "#e07a6b" }} /></div>
                 <div className="meta"><span style={busyN ? { color: "#b23b2e", fontWeight: 700 } : undefined}>{busyN ? `${busyN} ${t("busy").toLowerCase()}` : "—"}</span>{na ? <span className="asg">{na}🔒</span> : null}</div>
               </>
             );
@@ -343,7 +343,7 @@ export default function AppClient({
                     const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d);
                     const busyN = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
                     let bg = "var(--grey-bg)";
-                    if (na) bg = "var(--assign)"; else if (busyN) bg = `rgba(178,59,46,${0.2 + 0.6 * busyN / 10})`;
+                    if (na) bg = "var(--assign)"; else if (busyN) bg = `rgba(178,59,46,${0.2 + 0.6 * busyN / SLOTS.length})`;
                     return <span key={dn} className="yd" style={{ background: bg, boxShadow: sameDay(d, today) ? "0 0 0 1.5px var(--accent)" : undefined }} />;
                   })}
                 </div>

@@ -64,13 +64,14 @@ export function todayD(): Date {
   return new Date(y, m - 1, d); // local Date at the Bangkok civil date, midnight
 }
 
+// Highlight the most recent departure that has started (until the next one).
 export function currentSlotIdx(): number {
   const { h, min } = bangkokParts();
   const mins = h * 60 + min;
-  for (const s of SLOTS) {
-    const [hh, mm] = s.start.split(":").map(Number);
-    const st = hh * 60 + mm;
-    if (mins >= st && mins < st + 60) return s.idx;
+  let idx = -1;
+  for (let i = 0; i < SLOTS.length; i++) {
+    const [hh, mm] = SLOTS[i].start.split(":").map(Number);
+    if (mins >= hh * 60 + mm) idx = i; else break;
   }
-  return -1;
+  return idx;
 }
