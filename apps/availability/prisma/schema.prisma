@@ -247,3 +247,38 @@ model AuditLog {
 
   @@index([createdAt])
 }
+
+// A job offered to the available guides. Broadcast to everyone marked available
+// for the slot; first to Accept wins (atomic). Expires + alerts the operator if
+// nobody accepts in time. status: OPEN | ASSIGNED | EXPIRED | CANCELLED.
+model JobOffer {
+  id              String   @id @default(cuid())
+  tourId          String
+  date            String // "YYYY-MM-DD"
+  slotIdx         Int
+  pax             Int?
+  note            String?
+  status          String   @default("OPEN")
+  assignedGuideId String?
+  expiresAt       DateTime
+  createdById     String?
+  createdAt       DateTime @default(now())
+
+  responses JobOfferResponse[]
+
+  @@index([status])
+  @@index([date])
+}
+
+// One row per guide the offer touched: OFFERED when sent, then ACCEPTED/DENIED.
+model JobOfferResponse {
+  id          String   @id @default(cuid())
+  offer       JobOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  offerId     String
+  guideId     String
+  response    String   @default("OFFERED") // OFFERED | ACCEPTED | DENIED
+  respondedAt DateTime @default(now())
+
+  @@unique([offerId, guideId])
+  @@index([offerId])
+}

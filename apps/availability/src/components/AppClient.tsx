@@ -179,6 +179,22 @@ export default function AppClient({
     toast(`${t("assignBtn")} → ${name}`);
     setModal(null);
   }
+  // Broadcast this slot as a job offer to every available guide (first to Accept wins).
+  async function doOffer() {
+    if (modal?.kind !== "assign") return;
+    if (!fTour) { toast(t("tour")); return; }
+    if (fPax && Number(fPax) > 10) { toast(t("offerPaxMax")); return; }
+    const r = await fetch("/api/offers", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tourId: fTour, date: modal.date, slotIdx: modal.idx, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined }),
+    });
+    const j = await r.json().catch(() => ({}));
+    setModal(null);
+    if (!r.ok) { toast(t("errGeneric")); return; }
+    if (!j.candidates) { toast(t("offerNoCandidates")); return; }
+    toast(`${t("offerSent")}: ${j.candidates} · LINE ${j.lineSent}`);
+    await load();
+  }
   async function doUnassign(gid: string, idx: number, date: string) {
     await fetch("/api/assignments", {
       method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: gid, date, slotIdx: idx }),
@@ -567,6 +583,7 @@ export default function AppClient({
         </div>
         <div className="mfoot">
           <button className="btn ghost" onClick={() => setModal(null)}>{t("cancel")}</button>
+          <button className="btn" onClick={doOffer}>📣 {t("offerBtn")}</button>
           <button className="btn primary" onClick={doAssign}>{t("assignBtn")}</button>
         </div>
       </>

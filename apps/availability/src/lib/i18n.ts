@@ -106,6 +106,8 @@ export const STRINGS = {
     dayBlocked: "This day is blocked — no availability or assignments.",
     sendJobSheet: "Send job sheet", noJobsToSend: "No assignments to send for this day.",
     jobSheetSent: "Job sheets sent", noLineLinked: "no LINE",
+    offerBtn: "Offer to available", offerSent: "Offer sent to guides",
+    offerNoCandidates: "No available guides for this slot.", offerPaxMax: "Max 10 pax per offer.",
     notifications: "Notifications", noNotifications: "No notifications.",
   },
   th: {
@@ -211,6 +213,8 @@ export const STRINGS = {
     dayBlocked: "วันนี้ถูกบล็อก — ไม่สามารถลงเวลาว่างหรือมอบหมายงานได้",
     sendJobSheet: "ส่งใบงาน", noJobsToSend: "ไม่มีงานที่มอบหมายในวันนี้",
     jobSheetSent: "ส่งใบงานแล้ว", noLineLinked: "ไม่ได้เชื่อม LINE",
+    offerBtn: "เสนองานให้ไกด์ว่าง", offerSent: "ส่งข้อเสนองานแล้ว",
+    offerNoCandidates: "ไม่มีไกด์ว่างในช่วงเวลานี้", offerPaxMax: "สูงสุด 10 ท่านต่อหนึ่งงาน",
     notifications: "การแจ้งเตือน", noNotifications: "ไม่มีการแจ้งเตือน",
   },
 } as const;

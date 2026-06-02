@@ -34,3 +34,32 @@ export function lineReply(replyToken: string, text: string) {
 export function linePush(to: string, text: string) {
   return lineApi("message/push", { to, messages: [{ type: "text", text }] });
 }
+
+type PostbackAction = { label: string; data: string; displayText?: string };
+// Push a buttons template with tappable postback actions (e.g. Accept / Deny).
+// `text` is the body shown above the buttons (max ~160 chars).
+export function linePushButtons(to: string, altText: string, text: string, actions: PostbackAction[]) {
+  return lineApi("message/push", {
+    to,
+    messages: [{
+      type: "template",
+      altText,
+      template: {
+        type: "buttons",
+        text: text.slice(0, 160),
+        actions: actions.map((a) => ({ type: "postback", label: a.label.slice(0, 20), data: a.data, displayText: a.displayText })),
+      },
+    }],
+  });
+}
+// Reply to a postback/message with a buttons template.
+export function lineReplyButtons(replyToken: string, altText: string, text: string, actions: PostbackAction[]) {
+  return lineApi("message/reply", {
+    replyToken,
+    messages: [{
+      type: "template",
+      altText,
+      template: { type: "buttons", text: text.slice(0, 160), actions: actions.map((a) => ({ type: "postback", label: a.label.slice(0, 20), data: a.data, displayText: a.displayText })) },
+    }],
+  });
+}

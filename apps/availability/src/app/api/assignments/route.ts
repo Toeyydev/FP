@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_COUNT } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
+import { sweepExpiredOffers } from "@/lib/offers";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -21,6 +22,8 @@ export async function GET(req: NextRequest) {
   if (!monthRe.test(month)) return NextResponse.json({ error: "bad month" }, { status: 400 });
 
   const isOperator = session.user.role === "OPERATOR";
+  // While an operator is using the board, expire any timed-out offers + alert.
+  if (isOperator || session.user.role === "ADMIN") await sweepExpiredOffers();
   const rows = await prisma.assignment.findMany({
     where: {
       date: { startsWith: month },

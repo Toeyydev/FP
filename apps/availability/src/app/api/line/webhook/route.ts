@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyLineSignature, lineReply } from "@/lib/line";
 import { audit } from "@/lib/audit";
+import { acceptOffer, denyOffer, slotLabel } from "@/lib/offers";
 
 // LINE calls this (no app session). Verify the signature, then handle events.
 export async function POST(req: NextRequest) {
@@ -15,6 +16,36 @@ export async function POST(req: NextRequest) {
   for (const ev of body.events ?? []) {
     const userId = ev.source?.userId;
     if (!userId) continue;
+
+    if (ev.type === "postback" && ev.postback?.data?.startsWith("offer:")) {
+      // Accept / Deny tapped on a job-offer button.
+      const [, action, offerId] = ev.postback.data.split(":");
+      const guide = await prisma.user.findFirst({ where: { lineUserId: userId } });
+      if (!guide?.guideId) {
+        if (ev.replyToken) await lineReply(ev.replyToken, "Please link your guide account first: app → My details → Connect LINE.");
+        continue;
+      }
+      if (action === "accept") {
+        const res = await acceptOffer(offerId, guide.guideId);
+        if (res.ok) {
+          await audit({ actorId: guide.id, action: "offer.accepted", entityType: "JobOffer", entityId: offerId });
+          if (ev.replyToken) await lineReply(ev.replyToken, `✅ You got it, ${guide.displayName}! ${slotLabel(res.offer.slotIdx)} on ${res.offer.date}. It's now in your job sheet.`);
+          // Tell the operator who took it.
+          const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
+          if (offer?.createdById) await prisma.notification.create({ data: { userId: offer.createdById, kind: "offer", message: `✅ ${guide.guideId} ${guide.displayName} accepted: ${slotLabel(res.offer.slotIdx)} · ${res.offer.date}` } });
+        } else if (ev.replyToken) {
+          const msg = res.reason === "taken" ? "Sorry — another guide already took this one. 🙏"
+            : res.reason === "expired" ? "This offer has expired."
+            : "This offer is no longer open.";
+          await lineReply(ev.replyToken, msg);
+        }
+      } else if (action === "deny") {
+        await denyOffer(offerId, guide.guideId);
+        await audit({ actorId: guide.id, action: "offer.denied", entityType: "JobOffer", entityId: offerId });
+        if (ev.replyToken) await lineReply(ev.replyToken, "No problem — thanks for letting us know. 🙏");
+      }
+      continue;
+    }
 
     if (ev.type === "follow" && ev.replyToken) {
       await lineReply(ev.replyToken, "Welcome to Folkpath 👋\nTo link your guide account, open the app → My details → Connect LINE, then send me the code shown there.");
@@ -40,4 +71,5 @@ type LineEvent = {
   replyToken?: string;
   source?: { userId?: string };
   message?: { type?: string; text?: string };
+  postback?: { data?: string };
 };

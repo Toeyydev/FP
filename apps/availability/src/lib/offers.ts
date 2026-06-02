@@ -1,0 +1,87 @@
+import { prisma } from "@/lib/db";
+import { SLOT_TIMES } from "@/lib/slots";
+
+// Guides who are AVAILABLE for a given date + slot:
+//  - active guide with a G-id
+//  - NOT marked busy for that slot (availability.slots[idx] === true means busy)
+//  - NOT already assigned that slot
+//  - the day is not company-blocked
+export async function availableGuides(date: string, slotIdx: number) {
+  const blocked = await prisma.blockedDate.findUnique({ where: { date } }).catch(() => null);
+  if (blocked) return [];
+
+  const [guides, avail, assigned] = await Promise.all([
+    prisma.user.findMany({
+      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } },
+      select: { id: true, guideId: true, displayName: true, lineUserId: true },
+    }),
+    prisma.availability.findMany({ where: { date }, select: { guideId: true, slots: true } }),
+    prisma.assignment.findMany({ where: { date, slotIdx }, select: { guideId: true } }),
+  ]);
+
+  const busy = new Set(avail.filter((a) => a.slots[slotIdx] === true).map((a) => a.guideId));
+  const taken = new Set(assigned.map((a) => a.guideId));
+  return guides.filter((g) => g.guideId && !busy.has(g.guideId) && !taken.has(g.guideId));
+}
+
+export function slotLabel(slotIdx: number) {
+  return SLOT_TIMES[slotIdx] ?? `slot ${slotIdx}`;
+}
+
+export type AcceptResult =
+  | { ok: true; offer: { id: string; date: string; slotIdx: number; tourId: string } }
+  | { ok: false; reason: "taken" | "expired" | "closed" | "not-offered" };
+
+// Atomic first-wins accept. The conditional updateMany (status OPEN + not expired)
+// can only succeed for ONE concurrent caller, so a race resolves to a single winner.
+export async function acceptOffer(offerId: string, guideId: string): Promise<AcceptResult> {
+  const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
+  if (!offer) return { ok: false, reason: "closed" };
+  if (offer.status === "ASSIGNED") return { ok: false, reason: "taken" };
+  if (offer.status !== "OPEN") return { ok: false, reason: "closed" };
+  if (offer.expiresAt.getTime() < Date.now()) {
+    await prisma.jobOffer.updateMany({ where: { id: offerId, status: "OPEN" }, data: { status: "EXPIRED" } });
+    return { ok: false, reason: "expired" };
+  }
+
+  // The race-safe claim: only one updateMany matches status=OPEN and flips it.
+  const won = await prisma.jobOffer.updateMany({
+    where: { id: offerId, status: "OPEN", expiresAt: { gt: new Date() } },
+    data: { status: "ASSIGNED", assignedGuideId: guideId },
+  });
+  if (won.count !== 1) return { ok: false, reason: "taken" };
+
+  await prisma.assignment.upsert({
+    where: { guideId_date_slotIdx: { guideId, date: offer.date, slotIdx: offer.slotIdx } },
+    create: { guideId, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId, pax: offer.pax ?? null, note: offer.note ?? null },
+    update: { tourId: offer.tourId, pax: offer.pax ?? null, note: offer.note ?? null },
+  });
+  await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "ACCEPTED", respondedAt: new Date() } });
+
+  return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
+}
+
+export async function denyOffer(offerId: string, guideId: string): Promise<"ok" | "closed"> {
+  const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
+  if (!offer) return "closed";
+  await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "DENIED", respondedAt: new Date() } });
+  return "ok";
+}
+
+// Expire OPEN offers past their deadline and alert the operator who made them,
+// so a job that nobody accepted never goes silently unfilled.
+export async function sweepExpiredOffers(): Promise<number> {
+  const stale = await prisma.jobOffer.findMany({ where: { status: "OPEN", expiresAt: { lt: new Date() } } });
+  if (stale.length === 0) return 0;
+  const tours = await prisma.tour.findMany({ where: { id: { in: stale.map((o) => o.tourId) } }, select: { id: true, name: true } });
+  const tourName = new Map(tours.map((t) => [t.id, t.name]));
+  for (const o of stale) {
+    await prisma.jobOffer.updateMany({ where: { id: o.id, status: "OPEN" }, data: { status: "EXPIRED" } });
+    if (o.createdById) {
+      await prisma.notification.create({
+        data: { userId: o.createdById, kind: "offer", message: `⏰ No one accepted: ${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}. Needs manual assignment.` },
+      });
+    }
+  }
+  return stale.length;
+}
