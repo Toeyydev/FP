@@ -6,5 +6,8 @@ import { authConfig } from "@/auth.config";
 export default NextAuth(authConfig).auth;
 
 export const config = {
-  matcher: ["/((?!api/auth|_next/static|_next/image|favicon.ico).*)"],
+  // Exclude auth API, Next internals, and static/PWA files (manifest, service
+  // worker, icons) — otherwise unauthenticated requests for them get redirected
+  // to /start and the app isn't installable.
+  matcher: ["/((?!api/auth|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|.*\\.png$).*)"],
 };
