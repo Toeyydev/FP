@@ -4,9 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { useLang } from "@/components/Providers";
 
-type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null };
+type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null; lineLinked?: boolean; lineId?: string | null; lineLinkCode?: string | null };
 type Req = { id: string; name: string; nickname: string | null; phone: string | null; email: string; believedGuideId: string | null; createdAt: string };
-type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean };
+type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null };
+
+function lineInvite(name: string, code: string, oaUrl: string | null) {
+  return `Hi ${name}! To get Folkpath job offers & job sheets on LINE:\n` +
+    `1) Add our Folkpath Official Account${oaUrl ? `: ${oaUrl}` : " (search our OA)"}\n` +
+    `2) Send this code in the chat: ${code}\n` +
+    `You'll get a "✓ Connected" reply. 🙏`;
+}
 
 async function post(body: unknown) {
   const r = await fetch("/api/admin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -16,12 +23,14 @@ async function post(body: unknown) {
 export default function AdminConsole() {
   const { t } = useLang();
   const [data, setData] = useState<Data | null>(null);
-  const [tab, setTab] = useState<"invites" | "requests">("invites");
+  const [tab, setTab] = useState<"invites" | "requests" | "line">("invites");
   const [flash, setFlash] = useState<{ msg: string; copy?: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showOp, setShowOp] = useState(false);
   const [opEmail, setOpEmail] = useState(""); const [opName, setOpName] = useState("");
   const [linkSel, setLinkSel] = useState<Record<string, string>>({}); // requestId -> existing guide userId to link
+  const [lineCodes, setLineCodes] = useState<Record<string, string>>({}); // userId -> freshly generated code
+  const [copiedId, setCopiedId] = useState("");
 
   const load = useCallback(async () => {
     const r = await fetch("/api/admin", { cache: "no-store" });
@@ -86,6 +95,7 @@ export default function AdminConsole() {
         <div className="subtabs">
           <button className={`subtab ${tab === "invites" ? "active" : ""}`} onClick={() => setTab("invites")}>{t("tabInvites")}</button>
           <button className={`subtab ${tab === "requests" ? "active" : ""}`} onClick={() => setTab("requests")}>{t("tabRequests")} ({data.requests.length})</button>
+          <button className={`subtab ${tab === "line" ? "active" : ""}`} onClick={() => setTab("line")}>LINE ({guides.filter((g) => g.lineLinked).length}/{guides.length})</button>
         </div>
       </div>
 
@@ -120,7 +130,7 @@ export default function AdminConsole() {
               <tbody>{ops.map(acctRow)}{guides.map(acctRow)}</tbody>
             </table>
           </div>
-        ) : (
+        ) : tab === "requests" ? (
           <div style={{ padding: 14 }}>
             {data.requests.length === 0 ? <div className="op-empty">{t("noRequests")}</div> : (
               <table className="acct-table">
@@ -146,6 +156,48 @@ export default function AdminConsole() {
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                           <button className="btn sm primary" onClick={() => act({ action: "approveRequest", requestId: rq.id, ...(sel ? { guideUserId: sel } : {}) }, rq.name)}>{t("approve")}</button>{" "}
                           <button className="btn sm danger" onClick={() => act({ action: "rejectRequest", requestId: rq.id })}>{t("reject")}</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ) : (
+          <div style={{ padding: 14 }}>
+            <div className="fieldhelp" style={{ marginBottom: 10 }}>
+              Generate a guide&apos;s one-time code, then send them the invite. They add the Folkpath LINE Official Account and send the code to connect. (Sending offers/sheets over LINE also needs <code>LINE_CHANNEL_ACCESS_TOKEN</code> set.)
+            </div>
+            {guides.length === 0 ? <div className="op-empty">{t("noGuides")}</div> : (
+              <table className="acct-table">
+                <thead><tr><th>Guide</th><th>LINE ID (ref)</th><th>Status</th><th /></tr></thead>
+                <tbody>
+                  {guides.map((g) => {
+                    const code = lineCodes[g.id] ?? g.lineLinkCode ?? "";
+                    return (
+                      <tr key={g.id}>
+                        <td>{g.guideId && <span className="gid">{g.guideId}</span>}{g.displayName}</td>
+                        <td style={{ color: "var(--ink-soft)" }}>{g.lineId || "—"}</td>
+                        <td>{g.lineLinked
+                          ? <span className="badge active">✓ Linked</span>
+                          : <span className="badge invited">Not linked</span>}</td>
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          {g.lineLinked ? <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>connected</span> : (
+                            <>
+                              {code && <code style={{ marginRight: 8, fontWeight: 700 }}>{code}</code>}
+                              <button className="btn sm" onClick={async () => {
+                                const r = await post({ action: "lineCode", userId: g.id });
+                                if (r.ok && r.data.code) setLineCodes((m) => ({ ...m, [g.id]: r.data.code }));
+                              }}>{code ? "New code" : "Generate code"}</button>{" "}
+                              {code && (
+                                <button className="btn sm primary" onClick={() => {
+                                  navigator.clipboard?.writeText(lineInvite(g.displayName, code, data.lineOaUrl));
+                                  setCopiedId(g.id);
+                                }}>{copiedId === g.id ? t("copied") : "Copy invite"}</button>
+                              )}
+                            </>
+                          )}
                         </td>
                       </tr>
                     );

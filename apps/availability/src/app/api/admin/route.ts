@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { issueInvite } from "@/lib/provision";
 import { revokeAllForUser } from "@/lib/sessionTokens";
+import { randomBytes } from "crypto";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -14,14 +15,16 @@ export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const [accounts, requests] = await Promise.all([
+  const [rows, requests] = await Promise.all([
     prisma.user.findMany({
-      select: { id: true, guideId: true, displayName: true, email: true, role: true, state: true, claimedAt: true },
+      select: { id: true, guideId: true, displayName: true, email: true, role: true, state: true, claimedAt: true, lineUserId: true, lineId: true, lineLinkCode: true },
       orderBy: [{ role: "asc" }, { guideId: "asc" }, { email: "asc" }],
     }),
     prisma.accessRequest.findMany({ where: { state: "PENDING" }, orderBy: { createdAt: "asc" } }),
   ]);
-  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN" });
+  // Don't leak the raw LINE user id — just whether they're linked.
+  const accounts = rows.map(({ lineUserId, ...a }) => ({ ...a, lineLinked: Boolean(lineUserId) }));
+  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null });
 }
 
 export async function POST(req: NextRequest) {
@@ -144,6 +147,20 @@ export async function POST(req: NextRequest) {
     if (parsed.data.suspend) await revokeAllForUser(user.id); // kill persistent sessions on suspend
     await audit({ actorId, actorRole, action: parsed.data.suspend ? "account.suspended" : "account.reactivated", entityType: "User", entityId: user.id });
     return NextResponse.json({ ok: true, state: nextState });
+  }
+
+  // Generate (or re-generate) a guide's one-time LINE link code so the operator
+  // can hand it to the guide to send to the Official Account. Does not message
+  // anyone — linking still happens when the guide sends the code from their LINE.
+  if (action === "lineCode") {
+    const parsed = z.object({ userId: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const user = await prisma.user.findUnique({ where: { id: parsed.data.userId } });
+    if (!user || user.role !== "GUIDE") return NextResponse.json({ error: "no-guide" }, { status: 400 });
+    const code = randomBytes(4).toString("hex").toUpperCase().slice(0, 6);
+    await prisma.user.update({ where: { id: user.id }, data: { lineLinkCode: code } });
+    await audit({ actorId, actorRole, action: "line.code.issued", entityType: "User", entityId: user.id });
+    return NextResponse.json({ ok: true, code });
   }
 
   // Remove a single guide account. Cascades clean up their availability,
