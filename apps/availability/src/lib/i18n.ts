@@ -111,6 +111,7 @@ export const STRINGS = {
     jobSheet: "Job sheet",
     newOffer: "New job offer", newOfferHint: "Fill in the job, then send it to all available guides (first to accept wins).",
     dateLabel: "Date", timeSlot: "Time slot", guidesAvailable: "guides available", sendOffer: "Send offer", pickDate: "Pick a date.",
+    durationHrs: "Duration (hours)", offerEnds: "Ends",
     notifications: "Notifications", noNotifications: "No notifications.",
   },
   th: {
@@ -221,6 +222,7 @@ export const STRINGS = {
     jobSheet: "ใบงาน",
     newOffer: "เสนองานใหม่", newOfferHint: "กรอกรายละเอียดงาน แล้วส่งให้ไกด์ที่ว่างทุกคน (ใครรับก่อนได้ก่อน)",
     dateLabel: "วันที่", timeSlot: "ช่วงเวลา", guidesAvailable: "ไกด์ว่าง", sendOffer: "ส่งข้อเสนอ", pickDate: "เลือกวันที่",
+    durationHrs: "ระยะเวลา (ชม.)", offerEnds: "สิ้นสุด",
     notifications: "การแจ้งเตือน", noNotifications: "ไม่มีการแจ้งเตือน",
   },
 } as const;

@@ -64,6 +64,7 @@ export default function AppClient({
   // dedicated "new job offer" form state
   const [oDate, setODate] = useState("");
   const [oSlot, setOSlot] = useState(0);
+  const [oDur, setODur] = useState("3"); // tour duration in hours
 
   const tourById = useMemo(
     () => Object.fromEntries((ref?.tours ?? []).map((x) => [x.id, x])),
@@ -215,7 +216,7 @@ export default function AppClient({
   function openNewOffer() {
     setFTour(ref?.tours[0]?.id ?? "");
     setFPax(""); setFNote("");
-    setODate(ymd(anchor)); setOSlot(0);
+    setODate(ymd(anchor)); setOSlot(0); setODur("3");
     setModal({ kind: "newoffer" });
   }
   // How many guides are free for a date+slot (client-side preview before sending).
@@ -228,13 +229,24 @@ export default function AppClient({
       return !avd[slotIdx] && !asg[slotIdx];
     }).length;
   }
+  // "10:00–13:00" preview for the offer form (start slot + duration hours).
+  function timeRange(slotIdx: number, hoursStr: string): string {
+    const start = SLOTS[slotIdx]?.start ?? "";
+    const hrs = Number(hoursStr);
+    if (!start || !hrs || hrs <= 0) return start || "—";
+    const [h, m] = start.split(":").map(Number);
+    const total = h * 60 + m + Math.round(hrs * 60);
+    const eh = Math.floor(total / 60) % 24, em = total % 60;
+    return `${start}–${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
+  }
   async function doOfferForm() {
     if (!fTour) { toast(t("tour")); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(oDate)) { toast(t("pickDate")); return; }
     if (fPax && Number(fPax) > 10) { toast(t("offerPaxMax")); return; }
+    const durMin = oDur && Number(oDur) > 0 ? Math.round(Number(oDur) * 60) : undefined;
     const r = await fetch("/api/offers", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tourId: fTour, date: oDate, slotIdx: oSlot, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined }),
+      body: JSON.stringify({ tourId: fTour, date: oDate, slotIdx: oSlot, durationMin: durMin, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined }),
     });
     const j = await r.json().catch(() => ({}));
     setModal(null);
@@ -595,6 +607,10 @@ export default function AppClient({
               <select value={oSlot} onChange={(e) => setOSlot(Number(e.target.value))}>
                 {SLOTS.map((s) => <option key={s.idx} value={s.idx}>{s.start}</option>)}
               </select>
+            </div>
+            <div><label className="fl">{t("durationHrs")}</label>
+              <input type="number" min={0} step={0.5} value={oDur} onChange={(e) => setODur(e.target.value)} placeholder="e.g. 3" />
+              <div className="fieldhelp">{t("offerEnds")}: {timeRange(oSlot, oDur)}</div>
             </div>
             <div><label className="fl">{t("tour")}</label>
               <select value={fTour} onChange={(e) => setFTour(e.target.value)}>

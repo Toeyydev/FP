@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { linePushButtons, lineEnabled } from "@/lib/line";
-import { availableGuides, slotLabel, sweepExpiredOffers } from "@/lib/offers";
+import { availableGuides, timeRangeLabel, sweepExpiredOffers } from "@/lib/offers";
 import { SLOT_COUNT } from "@/lib/slots";
 
 function ops(role?: string) {
@@ -34,11 +34,12 @@ export async function POST(req: NextRequest) {
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1),
     pax: z.number().int().min(1).max(10).optional(),
+    durationMin: z.number().int().min(15).max(720).optional(),
     note: z.string().max(300).optional(),
     ttlMinutes: z.number().int().min(5).max(1440).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { tourId, date, slotIdx, pax, note } = parsed.data;
+  const { tourId, date, slotIdx, pax, note, durationMin } = parsed.data;
   const ttl = parsed.data.ttlMinutes ?? 60;
 
   const tour = await prisma.tour.findUnique({ where: { id: tourId } });
@@ -48,12 +49,13 @@ export async function POST(req: NextRequest) {
   if (candidates.length === 0) return NextResponse.json({ ok: true, offerId: null, candidates: 0, lineSent: 0 });
 
   const dateLabel = new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-  const summary = `🧭 Job offer\n${tour.name}\n${slotLabel(slotIdx)} · ${dateLabel}${pax != null ? ` · ${pax} pax` : ""}${note ? `\n📝 ${note}` : ""}`;
-  const btnText = `${tour.name} · ${slotLabel(slotIdx)} · ${dateLabel}${pax != null ? ` · ${pax} pax` : ""}`;
+  const timeLabel = timeRangeLabel(slotIdx, durationMin);
+  const summary = `🧭 Job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${pax != null ? ` · ${pax} pax` : ""}${note ? `\n📝 ${note}` : ""}`;
+  const btnText = `${tour.name} · ${dateLabel} · ${timeLabel}${pax != null ? ` · ${pax} pax` : ""}`;
 
   const offer = await prisma.jobOffer.create({
     data: {
-      tourId, date, slotIdx, pax: pax ?? null, note: note ?? null,
+      tourId, date, slotIdx, durationMin: durationMin ?? null, pax: pax ?? null, note: note ?? null,
       status: "OPEN", expiresAt: new Date(Date.now() + ttl * 60_000),
       createdById: session!.user!.id ?? null,
       responses: { create: candidates.map((g) => ({ guideId: g.guideId!, response: "OFFERED" })) },

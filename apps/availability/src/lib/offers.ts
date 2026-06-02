@@ -28,6 +28,19 @@ export function slotLabel(slotIdx: number) {
   return SLOT_TIMES[slotIdx] ?? `slot ${slotIdx}`;
 }
 
+// "10:00–13:00 (3h)" so the guide can see when they're free again. If no
+// duration is given, just the start time.
+export function timeRangeLabel(slotIdx: number, durationMin?: number | null): string {
+  const start = SLOT_TIMES[slotIdx] ?? "";
+  if (!durationMin || durationMin <= 0) return start;
+  const [h, m] = start.split(":").map(Number);
+  const total = h * 60 + m + durationMin;
+  const eh = Math.floor(total / 60) % 24, em = total % 60;
+  const end = `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
+  const hrs = durationMin % 60 === 0 ? `${durationMin / 60}h` : `${Math.floor(durationMin / 60)}h${durationMin % 60}m`;
+  return `${start}–${end} (${hrs})`;
+}
+
 export type AcceptResult =
   | { ok: true; offer: { id: string; date: string; slotIdx: number; tourId: string } }
   | { ok: false; reason: "taken" | "expired" | "closed" | "not-offered" };

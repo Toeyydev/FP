@@ -256,6 +256,7 @@ model JobOffer {
   tourId          String
   date            String // "YYYY-MM-DD"
   slotIdx         Int
+  durationMin     Int? // how long the tour runs, so the guide sees when it ends
   pax             Int?
   note            String?
   status          String   @default("OPEN")
