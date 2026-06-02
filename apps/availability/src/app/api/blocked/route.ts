@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
+import { linePush } from "@/lib/line";
 
 const isOps = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -35,10 +36,11 @@ export async function POST(req: NextRequest) {
   const affected = avail.filter((a) => a.slots.some(Boolean));
   const msg = `An operator blocked ${date}${reason ? ` (${reason})` : ""}. Your availability that day is on hold — no jobs will be assigned.`;
   for (const a of affected) {
-    const guide = await prisma.user.findUnique({ where: { guideId: a.guideId }, select: { id: true, email: true } });
+    const guide = await prisma.user.findUnique({ where: { guideId: a.guideId }, select: { id: true, email: true, lineUserId: true } });
     if (!guide) continue;
     await prisma.notification.create({ data: { userId: guide.id, message: msg, kind: "block" } });
     await sendEmail({ to: guide.email, subject: "Folkpath — a date was blocked", text: msg });
+    if (guide.lineUserId) await linePush(guide.lineUserId, msg);
   }
   await audit({ actorId: session!.user!.id, actorRole: session!.user!.role, action: "date.blocked", entityType: "BlockedDate", entityId: date, detail: { notified: affected.length } });
   return NextResponse.json({ ok: true, notified: affected.length });

@@ -19,7 +19,8 @@ export const authConfig = {
         p === "/start" || p.startsWith("/signin") || p.startsWith("/claim") || p.startsWith("/request") ||
         p.startsWith("/forgot") || p.startsWith("/reset") ||
         p.startsWith("/api/auth") || p.startsWith("/api/claim") || p.startsWith("/api/request") ||
-        p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version");
+        p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version") ||
+        p === "/api/line/webhook";
       if (isPublic) return true;
       if (auth?.user) return true;
       // No valid access session, but a "remember me" refresh token is present:

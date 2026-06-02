@@ -24,6 +24,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   const [form, setForm] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lineCode, setLineCode] = useState<{ code: string; addUrl: string | null } | null>(null);
   const fileRefs = { ID_CARD: useRef<HTMLInputElement>(null), BANK_BOOK: useRef<HTMLInputElement>(null), OTHER: useRef<HTMLInputElement>(null) };
   const qs = targetUserId ? `?userId=${targetUserId}` : "";
 
@@ -56,6 +57,11 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   async function del(id: string) {
     await fetch(`/api/profile/document/${id}`, { method: "DELETE" });
     await load();
+  }
+  async function connectLine() {
+    const r = await fetch("/api/line/connect", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (d.code) setLineCode({ code: d.code, addUrl: d.addUrl ?? null });
   }
 
   if (!p) return <div className="wrap"><AuthHeader backHref="/" /><section className="panel"><div className="op-empty">…</div></section></div>;
@@ -109,6 +115,21 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
               {docBtn("BANK_BOOK", t("bankBookDoc"))}
               {docBtn("OTHER", t("otherDoc"))}
             </div>
+          </div>
+
+          <div className="fld" style={{ marginTop: 22 }}>
+            <label>{t("lineSection")}</label>
+            {p.lineLinked ? (
+              <div className="docrow" style={{ color: "var(--green)", fontWeight: 700 }}>{t("lineConnected")}</div>
+            ) : lineCode ? (
+              <div className="note">
+                {t("lineConnectHint")}
+                <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800, letterSpacing: ".15em", fontFamily: '"Bricolage Grotesque"', color: "var(--ink)" }}>{lineCode.code}</div>
+                {lineCode.addUrl && <a className="glink" href={lineCode.addUrl} target="_blank" rel="noreferrer">Add the Folkpath LINE account →</a>}
+              </div>
+            ) : (
+              <button type="button" className="btn" onClick={connectLine}>{t("connectLine")}</button>
+            )}
           </div>
         </div>
       </section>

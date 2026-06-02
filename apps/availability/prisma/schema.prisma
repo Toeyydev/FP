@@ -40,7 +40,9 @@ model User {
   claimedAt    DateTime?
   createdAt    DateTime     @default(now())
 
-  lineId       String? // LINE id/handle for future LINE OA notifications
+  lineId       String? // LINE id/handle the guide typed (reference)
+  lineUserId   String? @unique // real LINE Messaging API user id (captured on link)
+  lineLinkCode String? // one-time code to link their LINE to this account
   emergencyName     String?
   emergencyPhone    String?
   emergencyRelation String?
