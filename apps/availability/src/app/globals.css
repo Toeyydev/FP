@@ -211,3 +211,9 @@ a.glink:hover{text-decoration:underline}
 .switchline button:hover{text-decoration:underline}
 
 .navbadge{position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-family:"Bricolage Grotesque";font-weight:800;font-size:11px;line-height:18px;text-align:center;box-shadow:0 1px 3px rgba(22,32,28,.25)}
+
+/* blocked dates */
+.pill.blocked{background:#fbe6e2;border-color:#e7b3aa;color:#b23b2e;cursor:default}
+.blockbanner{padding:10px 18px;background:#fbe6e2;border-bottom:1.5px solid #e7b3aa;color:#b23b2e;font-weight:700;font-size:13px}
+.cell-day.blocked{background:repeating-linear-gradient(45deg,#fbe6e2,#fbe6e2 5px,#f5d5cf 5px,#f5d5cf 10px);border-color:#e7b3aa}
+.cell-day .blk{color:#b23b2e;font-weight:800;font-size:11px}

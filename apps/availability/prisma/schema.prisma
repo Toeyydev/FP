@@ -60,6 +60,30 @@ model User {
   refreshTokens  RefreshToken[]
   passwordResets PasswordReset[]
   documents      GuideDocument[]
+  notifications  Notification[]
+}
+
+// Company-wide whole-day blackout (holiday / closed day). Blocks all availability
+// and assignments on that date.
+model BlockedDate {
+  id          String   @id @default(cuid())
+  date        String   @unique // YYYY-MM-DD
+  reason      String?
+  createdById String?
+  createdAt   DateTime @default(now())
+}
+
+// In-app notification for a guide (e.g. operator blocked a date they were free).
+model Notification {
+  id        String    @id @default(cuid())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  message   String
+  kind      String    @default("info")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 // Uploaded reference documents (ID card, bank book). Bytes stored AES-encrypted.

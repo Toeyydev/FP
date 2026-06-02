@@ -98,6 +98,9 @@ export const STRINGS = {
     bankNameLabel: "Bank", bankAccountNoLabel: "Account no.", bankAccountNameLabel: "Account holder name", bankBranchLabel: "Branch",
     idCardDoc: "ID card copy", bankBookDoc: "Bank book (first page)", otherDoc: "Other document",
     uploadFile: "Upload", viewDoc: "View", deleteDoc: "Delete", uploaded: "Uploaded",
+    blocked: "Blocked", blockDay: "Block day", unblockDay: "Unblock day",
+    dayBlocked: "This day is blocked — no availability or assignments.",
+    notifications: "Notifications", noNotifications: "No notifications.",
   },
   th: {
     kicker: "ระบบปฏิบัติการ Folkpath",
@@ -194,6 +197,9 @@ export const STRINGS = {
     bankNameLabel: "ธนาคาร", bankAccountNoLabel: "เลขที่บัญชี", bankAccountNameLabel: "ชื่อบัญชี", bankBranchLabel: "สาขา",
     idCardDoc: "สำเนาบัตรประชาชน", bankBookDoc: "สมุดบัญชี (หน้าแรก)", otherDoc: "เอกสารอื่น",
     uploadFile: "อัปโหลด", viewDoc: "ดู", deleteDoc: "ลบ", uploaded: "อัปโหลดแล้ว",
+    blocked: "ถูกบล็อก", blockDay: "บล็อกวันนี้", unblockDay: "ปลดบล็อก",
+    dayBlocked: "วันนี้ถูกบล็อก — ไม่สามารถลงเวลาว่างหรือมอบหมายงานได้",
+    notifications: "การแจ้งเตือน", noNotifications: "ไม่มีการแจ้งเตือน",
   },
 } as const;
 

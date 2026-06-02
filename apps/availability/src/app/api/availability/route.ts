@@ -54,6 +54,10 @@ export async function PUT(req: NextRequest) {
   const guideId = session.user.guideId;
   const { date, slots } = parsed.data;
 
+  if (await prisma.blockedDate.findUnique({ where: { date } })) {
+    return NextResponse.json({ error: "date-blocked" }, { status: 409 });
+  }
+
   await prisma.availability.upsert({
     where: { guideId_date: { guideId, date } },
     create: { guideId, date, slots },

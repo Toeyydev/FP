@@ -53,6 +53,9 @@ export default function AppClient({
   const [q, setQ] = useState("");
   const [onlyAvail, setOnlyAvail] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
+  const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
+  const [showNotif, setShowNotif] = useState(false);
   // assign-form state lives here (not in a child) so a poll re-render never wipes it
   const [fTour, setFTour] = useState("");
   const [fPax, setFPax] = useState("");
@@ -88,6 +91,8 @@ export default function AppClient({
       lastSlice.current = slice;
       setAv((prev) => ({ ...prev, ...nextAv }));
       setAs((prev) => ({ ...prev, ...nextAs }));
+      const blk = await fetch("/api/blocked", { cache: "no-store" }).then((r) => r.json()).catch(() => []);
+      setBlockedDates(new Set(Array.isArray(blk) ? blk.map((x: { date: string }) => x.date) : []));
     } catch {
       /* keep last good data */
     }
@@ -118,9 +123,19 @@ export default function AppClient({
     return () => window.clearInterval(id);
   }, [role]);
 
+  // Guide: poll notifications (e.g. operator blocked a date you were free).
+  useEffect(() => {
+    if (role !== "guide") return;
+    const f = () => fetch("/api/notifications", { cache: "no-store" }).then((r) => r.json()).then(setNotif).catch(() => {});
+    f();
+    const id = window.setInterval(f, 15000);
+    return () => window.clearInterval(id);
+  }, [role]);
+
   // ---- accessors ----
   const getAvail = (gid: string, d: Date): boolean[] | null => av[mkey(d)]?.[gid]?.[d.getDate()] ?? null;
   const getAssign = (gid: string, d: Date): Record<number, Job> => as[mkey(d)]?.[gid]?.[d.getDate()] ?? {};
+  const isBlocked = (d: Date): boolean => blockedDates.has(ymd(d));
 
   // ---- mutations ----
   async function putAvail(d: Date, slots: boolean[]) {
@@ -176,6 +191,23 @@ export default function AppClient({
     setFTour(ref?.tours[0]?.id ?? "");
     setFPax(""); setFNote("");
     setModal({ kind: "assign", gid, idx, date });
+  }
+  async function toggleBlock(d: Date) {
+    const date = ymd(d);
+    if (blockedDates.has(date)) {
+      await fetch("/api/blocked", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ date }) });
+    } else {
+      const reason = window.prompt(`Block ${date} for everyone — optional reason:`) ?? undefined;
+      const r = await fetch("/api/blocked", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date, reason: reason || undefined }) });
+      const j = await r.json().catch(() => ({}));
+      toast(j.notified ? `Blocked · ${j.notified} guide(s) notified` : "Date blocked");
+    }
+    await load();
+  }
+  async function openNotif() {
+    setShowNotif(true);
+    await fetch("/api/notifications", { method: "POST" });
+    setNotif((n) => ({ unread: 0, items: n.items.map((i) => ({ ...i, readAt: i.readAt || new Date().toISOString() })) }));
   }
 
   // ---- navigation ----
@@ -239,23 +271,25 @@ export default function AppClient({
         </div>
         <div className="weekwrap">
           {Array.from({ length: 7 }, (_, i) => {
-            const d = addDays(ws, i); const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d); const isToday = sameDay(d, today);
+            const d = addDays(ws, i); const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d); const isToday = sameDay(d, today); const blocked = isBlocked(d);
             return (
               <div className="weekrow" key={i}>
                 <div className={`daylab ${isToday ? "today" : ""}`}>
                   <b>{DOW[i]}</b><small>{d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</small>
                 </div>
                 <div className="pills">
-                  {SLOTS.map((s) => {
-                    const a = asg[s.idx];
-                    if (a) return <span key={s.idx} className="pill assigned" title={tourById[a.tour]?.name || a.tour}>🔒 {a.tour}</span>;
-                    const on = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
-                    return <span key={s.idx} className={`pill ${on ? "on" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
-                  })}
-                  <button className="allbtn" onClick={() => {
-                    const asg2 = getAssign(gid, d); const cur = getAvail(gid, d) ?? EMPTY;
-                    setDayAll(d, SLOTS.some((s) => !asg2[s.idx] && !cur[s.idx]));
-                  }}>{t("dayOnOff")}</button>
+                  {blocked ? <span className="pill blocked">🚫 {t("blocked")}</span> : (<>
+                    {SLOTS.map((s) => {
+                      const a = asg[s.idx];
+                      if (a) return <span key={s.idx} className="pill assigned" title={tourById[a.tour]?.name || a.tour}>🔒 {a.tour}</span>;
+                      const on = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
+                      return <span key={s.idx} className={`pill ${on ? "on" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
+                    })}
+                    <button className="allbtn" onClick={() => {
+                      const asg2 = getAssign(gid, d); const cur = getAvail(gid, d) ?? EMPTY;
+                      setDayAll(d, SLOTS.some((s) => !asg2[s.idx] && !cur[s.idx]));
+                    }}>{t("dayOnOff")}</button>
+                  </>)}
                 </div>
               </div>
             );
@@ -271,8 +305,10 @@ export default function AppClient({
       <>
         <div className="panel-head"><h2>{t("myMonth")}</h2><span className="hint">{t("monthHint")}</span></div>
         {calendar({
-          onClick: (d) => setModal({ kind: "dayedit", date: ymd(d) }),
+          onClick: (d) => { if (!isBlocked(d)) setModal({ kind: "dayedit", date: ymd(d) }); },
+          tint: (d) => (isBlocked(d) ? "repeating-linear-gradient(45deg,#fbe6e2,#fbe6e2 5px,#f5d5cf 5px,#f5d5cf 10px)" : undefined),
           cell: (d) => {
+            if (isBlocked(d)) return <><div className="dn">{d.getDate()}</div><div className="blk" style={{ marginTop: "auto" }}>🚫 {t("blocked")}</div></>;
             const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d);
             const free = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
             return (
@@ -319,7 +355,7 @@ export default function AppClient({
   }
 
   function opDay(): ReactNode {
-    const d = anchor; const nowIdx = currentSlotIdx(); const isToday = sameDay(d, todayD()); const guides = ref?.guides ?? [];
+    const d = anchor; const nowIdx = currentSlotIdx(); const isToday = sameDay(d, todayD()); const guides = ref?.guides ?? []; const blocked = isBlocked(d);
     let availNow = 0, assignTot = 0, posted = 0;
     for (const g of guides) {
       const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
@@ -340,7 +376,9 @@ export default function AppClient({
       <>
         <div className="panel-head"><h2>{t("rosterDay")}</h2>
           <span className="hint">{d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
+          <div className="head-tools"><button className={`btn sm ${blocked ? "" : "danger"}`} onClick={() => toggleBlock(d)}>{blocked ? t("unblockDay") : t("blockDay")}</button></div>
         </div>
+        {blocked && <div className="blockbanner">🚫 {t("dayBlocked")}</div>}
         <div className="op-toolbar">
           <div className="stat g"><b>{availNow}</b><span>{t("freeSlots")}</span></div>
           <div className="stat a"><b>{assignTot}</b><span>{t("assigned")}</span></div>
@@ -369,8 +407,8 @@ export default function AppClient({
                       <td className="gname"><span className="gid">{g.guideId}</span>{g.displayName}</td>
                       {SLOTS.map((s) => {
                         const a = asg[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
-                        if (a) return <td key={s.idx} className={`cell assigned${nm}`} title={tourById[a.tour]?.name || a.tour} onClick={() => openAssign(g.guideId, s.idx, ymd(d))}><span className="ttag">{a.tour}</span></td>;
-                        if (avd[s.idx]) return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => openAssign(g.guideId, s.idx, ymd(d))} />;
+                        if (a) return <td key={s.idx} className={`cell assigned${nm}`} title={tourById[a.tour]?.name || a.tour} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{a.tour}</span></td>;
+                        if (avd[s.idx]) return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
                         return <td key={s.idx} className={`cell off${nm}`} />;
                       })}
                     </tr>
@@ -392,6 +430,7 @@ export default function AppClient({
         {calendar({
           extraClass: "heat",
           tint: (d) => {
+            if (isBlocked(d)) return "repeating-linear-gradient(45deg,#fbe6e2,#fbe6e2 5px,#f5d5cf 5px,#f5d5cf 10px)";
             let g = 0;
             for (const x of guides) { const avd = getAvail(x.guideId, d) ?? EMPTY; const asg = getAssign(x.guideId, d); if (avd.some((v, i) => v && !asg[i])) g++; }
             return g ? `rgba(31,157,87,${0.08 + 0.5 * Math.min(g, 15) / 15})` : undefined;
@@ -528,6 +567,7 @@ export default function AppClient({
         <div className="spacer" />
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
         <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
+        {role === "guide" && <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>}
         {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
@@ -564,6 +604,22 @@ export default function AppClient({
       {modal && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setModal(null); }}>
           <div className="modal">{modalBody()}</div>
+        </div>
+      )}
+
+      {showNotif && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setShowNotif(false); }}>
+          <div className="modal">
+            <h3>{t("notifications")}</h3>
+            <div className="mbody">
+              {notif.items.length ? notif.items.map((i) => (
+                <div key={i.id} className="assigned-note" style={{ background: "var(--grey-bg)", borderColor: "var(--line)" }}>
+                  {i.message}<br /><small style={{ color: "var(--ink-soft)" }}>{new Date(i.createdAt).toLocaleString()}</small>
+                </div>
+              )) : <div className="op-empty">{t("noNotifications")}</div>}
+            </div>
+            <div className="mfoot"><button className="btn dark" onClick={() => setShowNotif(false)}>{t("close")}</button></div>
+          </div>
         </div>
       )}
 

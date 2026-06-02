@@ -61,6 +61,10 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
   const { guideId, date, slotIdx, tourId, pax, note } = parsed.data;
 
+  if (await prisma.blockedDate.findUnique({ where: { date } })) {
+    return NextResponse.json({ error: "date-blocked" }, { status: 409 });
+  }
+
   // Validate FK targets exist for clean errors.
   const [guide, tour] = await Promise.all([
     prisma.user.findUnique({ where: { guideId } }),
