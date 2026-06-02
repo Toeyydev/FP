@@ -632,6 +632,7 @@ export default function AppClient({
           </div></div>
           <div className="mfoot">
             <button className="btn danger" onClick={() => doUnassign(modal.gid, modal.idx, modal.date)}>{t("unassign")}</button>
+            <a className="btn primary" href={`/job-sheet?guideId=${encodeURIComponent(modal.gid)}&date=${modal.date}&slotIdx=${modal.idx}`}>📄 {t("jobSheet")}</a>
             <button className="btn dark" onClick={() => setModal(null)}>{t("close")}</button>
           </div>
         </>

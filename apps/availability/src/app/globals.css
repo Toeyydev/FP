@@ -222,3 +222,35 @@ a.glink:hover{text-decoration:underline}
 .blockbanner{padding:10px 18px;background:#fbe6e2;border-bottom:1.5px solid #e7b3aa;color:#b23b2e;font-weight:700;font-size:13px}
 .cell-day.blocked{background:repeating-linear-gradient(45deg,#fbe6e2,#fbe6e2 5px,#f5d5cf 5px,#f5d5cf 10px);border-color:#e7b3aa}
 .cell-day .blk{color:#b23b2e;font-weight:800;font-size:11px}
+
+/* ---- Job sheet editor ---- */
+.jobsheet .js-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;flex-wrap:wrap}
+.jobsheet .js-sheet{max-width:1000px;margin:0 auto}
+.js-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #2f7d32;padding-bottom:10px;margin-bottom:12px}
+.js-brand b{font-size:22px;letter-spacing:1px}
+.js-meta{border-collapse:collapse;font-size:13px}
+.js-meta td{border:1px solid #cfcfcf;padding:3px 9px}
+.js-meta td:first-child{background:#f4f4f4;font-weight:600}
+.js-meta select{border:none;background:transparent;font:inherit}
+.js-guide{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:13.5px;margin-bottom:14px}
+.js-guide>div{display:contents}
+.js-guide span{color:#666;font-weight:600}
+.js-section{margin:16px 0 0;background:#bfe3bf;text-align:center;padding:5px;border:1px solid #cfcfcf;border-bottom:none;font-size:14px}
+.js-table{width:100%;border-collapse:collapse;font-size:13px}
+.js-table th,.js-table td{border:1px solid #cfcfcf;padding:3px 6px;text-align:left}
+.js-table th{background:#f4f4f4;font-weight:700;text-align:center}
+.js-table .js-total td{background:#fafafa;font-weight:600}
+.js-table input,.js-table select{background:#fff}
+.js-summary{margin:14px 0 0;margin-left:auto;width:280px;font-size:14px}
+.js-summary>div{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #eee}
+.js-summary span{color:#555}
+.js-summary .grand b{background:#bfe3bf;padding:2px 8px;font-style:italic}
+.print-only{display:none}
+@media print{
+  #appBar,.js-bar,.no-print,nav,header{display:none !important}
+  .wrap{padding:0 !important}
+  .panel{box-shadow:none !important;border:none !important}
+  .print-only{display:inline}
+  .no-print-border{display:none}
+  .js-table input,.js-table select{border:none !important;padding:0 !important}
+}

@@ -1,0 +1,181 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { computeTotals, expenseAmount, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+
+type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string } | null;
+type Tour = { id: string; name: string; time: string } | null;
+type Sheet = {
+  ref: string | null; guideId: string; date: string; slotIdx: number; tourId: string; status: string;
+  bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee;
+};
+
+const numOrNull = (v: string): number | null => (v.trim() === "" ? null : Number(v));
+
+export default function JobSheetEditor() {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const guideId = sp.get("guideId") || "";
+  const date = sp.get("date") || "";
+  const slotIdx = Number(sp.get("slotIdx") ?? "-1");
+
+  const [header, setHeader] = useState<Header>(null);
+  const [tour, setTour] = useState<Tour>(null);
+  const [sheet, setSheet] = useState<Sheet | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
+    if (!r.ok) { setMsg("Could not load (operator only)."); return; }
+    const d = await r.json();
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved);
+  }, [guideId, date, slotIdx]);
+  useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
+
+  if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
+
+  const t = computeTotals(sheet.expenses, sheet.guideFee);
+  const up = (patch: Partial<Sheet>) => setSheet({ ...sheet, ...patch });
+  const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
+  const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
+  const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
+
+  async function save() {
+    setBusy(true); setMsg("");
+    const r = await fetch("/api/jobsheet", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, tourId: sheet!.tourId, status: sheet!.status, bookings: sheet!.bookings, expenses: sheet!.expenses, guideFee: sheet!.guideFee }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg(d.error === "bad-body" ? "Please check the values." : "Save failed."); return; }
+    setSheet(d.sheet); setSaved(true); setMsg("Saved ✓");
+  }
+  async function sendToGuide() {
+    if (!saved) { setMsg("Save first, then send."); return; }
+    setBusy(true);
+    const r = await fetch("/api/jobsheet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: sheet!.date, guideId: sheet!.guideId }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    setMsg(r.ok ? `Sent to guide (LINE ${d.lineSent ?? 0})` : "Send failed.");
+  }
+
+  const L = { width: "100%", boxSizing: "border-box" as const, padding: "5px 7px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit" };
+
+  return (
+    <div className="wrap jobsheet">
+      <div className="js-bar no-print">
+        <button className="btn ghost" onClick={() => router.back()}>← Back</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
+          <button className="btn" onClick={() => window.print()}>🖨 Print</button>
+          <button className="btn" disabled={busy} onClick={sendToGuide}>📤 Send to guide</button>
+          <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>
+        </div>
+      </div>
+
+      <section className="panel js-sheet" style={{ padding: 18 }}>
+        {/* Header */}
+        <div className="js-head">
+          <div className="js-brand"><b>FOLKPATHS</b><div style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>บริษัท โฟล์คพาธส์ จำกัด</div></div>
+          <table className="js-meta"><tbody>
+            <tr><td>No.</td><td>{sheet.ref ?? <i style={{ color: "#aaa" }}>auto on save</i>}</td></tr>
+            <tr><td>Tour ID</td><td><b>{sheet.tourId || "—"}</b></td></tr>
+            <tr><td>Guide ID</td><td>{sheet.guideId}</td></tr>
+            <tr><td>Status</td><td>
+              <select value={sheet.status} onChange={(e) => up({ status: e.target.value })} className="no-print-border">
+                {["Confirmed", "Pending", "Cancelled"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+              <span className="print-only">{sheet.status}</span>
+            </td></tr>
+          </tbody></table>
+        </div>
+
+        {/* Guide / tour block (auto-filled from profile) */}
+        <div className="js-guide">
+          <div><span>Tour Date</span><b>{date}</b></div>
+          <div><span>Time</span><b style={{ color: "#1b4ef0" }}>{tour?.time || ""}</b></div>
+          <div><span>Tour Name</span><b style={{ color: "#1b4ef0" }}>{tour?.name || ""}</b></div>
+          <div><span>Guide name</span>{header?.name || ""}</div>
+          <div><span>Tax ID</span>{header?.taxId || "—"}</div>
+          <div><span>Address</span>{header?.address || "—"}</div>
+          <div><span>E-mail</span>{header?.email || ""}</div>
+          <div><span>Tel no.</span>{header?.tel || "—"}</div>
+        </div>
+
+        {/* Job details */}
+        <h3 className="js-section">Job Details</h3>
+        <table className="js-table">
+          <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th>Booked Pax</th><th>Actual Pax</th><th>Tickets</th><th>Status</th><th className="no-print" /></tr></thead>
+          <tbody>
+            {sheet.bookings.map((b, i) => (
+              <tr key={i}>
+                <td>{i + 1}</td>
+                <td><input style={L} value={b.name} onChange={(e) => setBooking(i, { name: e.target.value })} /></td>
+                <td><input style={L} value={b.bookingNo} onChange={(e) => setBooking(i, { bookingNo: e.target.value })} /></td>
+                <td><input style={{ ...L, width: 70 }} type="number" value={b.bookedPax ?? ""} onChange={(e) => setBooking(i, { bookedPax: numOrNull(e.target.value) })} /></td>
+                <td><input style={{ ...L, width: 70 }} type="number" value={b.actualPax ?? ""} onChange={(e) => setBooking(i, { actualPax: numOrNull(e.target.value) })} /></td>
+                <td>
+                  <select style={L} value={b.tickets} onChange={(e) => setBooking(i, { tickets: e.target.value as Booking["tickets"] })}>
+                    <option value="">—</option><option value="included">Included</option><option value="not">Not incl.</option>
+                  </select>
+                </td>
+                <td><input style={L} value={b.status} onChange={(e) => setBooking(i, { status: e.target.value })} /></td>
+                <td className="no-print"><button className="btn sm danger" onClick={() => up({ bookings: sheet.bookings.filter((_, j) => j !== i) })}>×</button></td>
+              </tr>
+            ))}
+            <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td colSpan={2} /><td className="no-print" /></tr>
+          </tbody>
+        </table>
+        <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
+
+        {/* Expenses */}
+        <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense</h3>
+        <table className="js-table">
+          <thead><tr><th>Description</th><th>Price</th><th></th><th>Pax</th><th>Amount</th><th className="no-print" /></tr></thead>
+          <tbody>
+            {sheet.expenses.map((e, i) => (
+              <tr key={i}>
+                <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
+                <td><input style={{ ...L, width: 90 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
+                <td style={{ textAlign: "center" }}>×</td>
+                <td><input style={{ ...L, width: 70 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
+                <td style={{ textAlign: "right" }}>{thb(expenseAmount(e))}</td>
+                <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
+              </tr>
+            ))}
+            <tr className="js-total"><td colSpan={4} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /></tr>
+          </tbody>
+        </table>
+        <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
+
+        {/* Guide fee */}
+        <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide</h3>
+        <table className="js-table">
+          <thead><tr><th>Description</th><th>Price</th><th></th><th>Time</th><th>WHT %</th><th>WHT</th><th>Net</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Guide Fee</td>
+              <td><input style={{ ...L, width: 100 }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, price: numOrNull(e.target.value) } })} /></td>
+              <td style={{ textAlign: "center" }}>×</td>
+              <td><input style={{ ...L, width: 60 }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, time: numOrNull(e.target.value) } })} /></td>
+              <td><input style={{ ...L, width: 60 }} type="number" value={sheet.guideFee.whtPct ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} /></td>
+              <td style={{ textAlign: "right" }}>{thb(t.wht)}</td>
+              <td style={{ textAlign: "right" }}><b>{thb(t.netGuideFee)}</b></td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Summary */}
+        <div className="js-summary">
+          <div><span>Total Expenses</span><b>{thb(t.totalExpenses)}</b></div>
+          <div><span>Net Guide Fee</span><b>{thb(t.netGuideFee)}</b></div>
+          <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
+        </div>
+      </section>
+    </div>
+  );
+}

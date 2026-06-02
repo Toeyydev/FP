@@ -270,6 +270,28 @@ model JobOffer {
   @@index([date])
 }
 
+// The full Folkpath job sheet for one assigned job (guide × date × slot).
+// Living document: the operator edits pax/costs/tickets anytime and re-saves.
+// bookings / expenses / guideFee are JSON so rows can be added/removed freely.
+model JobSheet {
+  id        String   @id @default(cuid())
+  ref       String? // FOLK-BKK-YYYYMMDD-NN
+  guideId   String
+  date      String // "YYYY-MM-DD"
+  slotIdx   Int
+  tourId    String
+  status    String   @default("Confirmed")
+  bookings  Json     @default("[]") // [{name, bookingNo, bookedPax, actualPax, tickets, status}]
+  expenses  Json     @default("[]") // [{description, price, pax}]
+  guideFee  Json     @default("{}") // {price, time, whtPct}
+  createdById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([guideId, date, slotIdx])
+  @@index([date])
+}
+
 // One row per guide the offer touched: OFFERED when sent, then ACCEPTED/DENIED.
 model JobOfferResponse {
   id          String   @id @default(cuid())

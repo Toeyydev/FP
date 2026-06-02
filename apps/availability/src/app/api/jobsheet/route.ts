@@ -5,13 +5,19 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { linePush, lineEnabled } from "@/lib/line";
 import { SLOT_TIMES } from "@/lib/slots";
+import { decrypt } from "@/lib/crypto";
+import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, makeRef, computeTotals, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
 }
 
+type SheetJob = {
+  slotIdx: number; tourName: string; pax: number | null; note: string | null;
+  totalExpenses?: number; netGuideFee?: number;
+};
 // Build one guide's "mini job sheet" for a date as a LINE-friendly text block.
-function buildSheet(dateLabel: string, jobs: { slotIdx: number; tourName: string; pax: number | null; note: string | null }[]) {
+function buildSheet(dateLabel: string, jobs: SheetJob[]) {
   const lines = jobs
     .sort((a, b) => a.slotIdx - b.slotIdx)
     .map((j) => {
@@ -21,9 +27,81 @@ function buildSheet(dateLabel: string, jobs: { slotIdx: number; tourName: string
       if (j.pax != null) extra.push(`👥 ${j.pax} pax`);
       if (j.note) extra.push(`📝 ${j.note}`);
       if (extra.length) s += `\n   ${extra.join(" · ")}`;
+      if (j.totalExpenses != null) s += `\n   💵 Expenses ${thb(j.totalExpenses)}`;
+      if (j.netGuideFee != null) s += ` · Net guide fee ${thb(j.netGuideFee)}`;
       return s;
     });
   return `📋 Folkpath job sheet — ${dateLabel}\n━━━━━━━━━━━━━━\n${lines.join("\n")}\n━━━━━━━━━━━━━━\n${jobs.length} job(s). Reply here if anything's unclear 🙏`;
+}
+
+// Header fields auto-pulled from the guide's profile (operator is authorized to see PII).
+async function guideHeader(guideId: string) {
+  const u = await prisma.user.findUnique({ where: { guideId } });
+  if (!u) return null;
+  return {
+    guideId: u.guideId, name: u.fullName || u.displayName, email: u.email,
+    tel: u.phone || "", taxId: decrypt(u.taxId), address: decrypt(u.currentAddress) || decrypt(u.idCardAddress),
+  };
+}
+
+// GET ?guideId&date&slotIdx — operator only. Returns the saved sheet, or a
+// default scaffold (preset expenses + standard guide fee) if none exists yet.
+export async function GET(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const guideId = req.nextUrl.searchParams.get("guideId") || "";
+  const date = req.nextUrl.searchParams.get("date") || "";
+  const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
+  if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
+
+  const [header, existing, assignment] = await Promise.all([
+    guideHeader(guideId),
+    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
+    prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
+  ]);
+  const tourId = existing?.tourId || assignment?.tourId || "";
+  const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
+
+  if (existing) return NextResponse.json({ header, tour, saved: true, sheet: existing });
+  return NextResponse.json({
+    header, tour, saved: false,
+    sheet: {
+      ref: null, guideId, date, slotIdx, tourId, status: "Confirmed",
+      bookings: [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }],
+      expenses: DEFAULT_EXPENSES,
+      guideFee: DEFAULT_GUIDE_FEE,
+    },
+  });
+}
+
+const bookingZ = z.object({ name: z.string().max(160), bookingNo: z.string().max(80), bookedPax: z.number().nullable(), actualPax: z.number().nullable(), tickets: z.string().max(20), status: z.string().max(40) });
+const expenseZ = z.object({ description: z.string().max(120), price: z.number().nullable(), pax: z.number().nullable() });
+const guideFeeZ = z.object({ price: z.number().nullable(), time: z.number().nullable(), whtPct: z.number().nullable() });
+
+// PUT — operator only. Upserts the sheet; assigns a FOLK-BKK-… ref on first save.
+export async function PUT(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({
+    guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0),
+    tourId: z.string().min(1), status: z.string().max(40).default("Confirmed"),
+    bookings: z.array(bookingZ).max(20), expenses: z.array(expenseZ).max(40), guideFee: guideFeeZ,
+  }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const d = parsed.data;
+  const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
+
+  const existing = await prisma.jobSheet.findUnique({ where: key });
+  let ref = existing?.ref ?? null;
+  if (!ref) ref = makeRef(d.date, (await prisma.jobSheet.count({ where: { date: d.date } })) + 1);
+
+  const sheet = await prisma.jobSheet.upsert({
+    where: key,
+    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, createdById: session!.user!.id ?? null },
+    update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee },
+  });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref } });
+  return NextResponse.json({ ok: true, sheet });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.
@@ -46,11 +124,20 @@ export async function POST(req: NextRequest) {
   });
   if (assignments.length === 0) return NextResponse.json({ ok: true, count: 0, lineSent: 0, lineSkipped: [] });
 
+  // Saved job sheets for the day → so the guide also sees expenses + net fee.
+  const sheets = await prisma.jobSheet.findMany({ where: { date, ...(guideId ? { guideId } : {}) } });
+  const sheetBy = new Map(sheets.map((s) => [`${s.guideId}:${s.slotIdx}`, s]));
+
   // Group jobs per guide.
-  const byGuide = new Map<string, { slotIdx: number; tourName: string; pax: number | null; note: string | null }[]>();
+  const byGuide = new Map<string, SheetJob[]>();
   for (const a of assignments) {
     const arr = byGuide.get(a.guideId) ?? [];
-    arr.push({ slotIdx: a.slotIdx, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note });
+    const s = sheetBy.get(`${a.guideId}:${a.slotIdx}`);
+    const totals = s ? computeTotals(s.expenses as unknown as Expense[], s.guideFee as unknown as GuideFee) : null;
+    arr.push({
+      slotIdx: a.slotIdx, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
+      totalExpenses: totals?.totalExpenses, netGuideFee: totals?.netGuideFee,
+    });
     byGuide.set(a.guideId, arr);
   }
 
