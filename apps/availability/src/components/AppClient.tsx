@@ -265,7 +265,7 @@ export default function AppClient({
         <div className="panel-head">
           <h2>{t("myWeek")}</h2><span className="hint">{t("weekHint")}</span>
           <div className="head-tools">
-            <button className="btn sm" onClick={() => weekBulk(true)}>{t("allFree")}</button>
+            <button className="btn sm" onClick={() => weekBulk(true)}>{t("busyWeek")}</button>
             <button className="btn sm ghost" onClick={() => weekBulk(false)}>{t("clearWeek")}</button>
           </div>
         </div>
@@ -282,13 +282,14 @@ export default function AppClient({
                     {SLOTS.map((s) => {
                       const a = asg[s.idx];
                       if (a) return <span key={s.idx} className="pill assigned" title={tourById[a.tour]?.name || a.tour}>🔒 {a.tour}</span>;
-                      const on = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
-                      return <span key={s.idx} className={`pill ${on ? "on" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
+                      const busy = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
+                      return <span key={s.idx} className={`pill ${busy ? "busy" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
                     })}
                     <button className="allbtn" onClick={() => {
                       const asg2 = getAssign(gid, d); const cur = getAvail(gid, d) ?? EMPTY;
+                      // toggle day-off: if any slot is still free, mark the whole day busy; else clear
                       setDayAll(d, SLOTS.some((s) => !asg2[s.idx] && !cur[s.idx]));
-                    }}>{t("dayOnOff")}</button>
+                    }}>{t("dayOff")}</button>
                   </>)}
                 </div>
               </div>
@@ -310,12 +311,12 @@ export default function AppClient({
           cell: (d) => {
             if (isBlocked(d)) return <><div className="dn">{d.getDate()}</div><div className="blk" style={{ marginTop: "auto" }}>🚫 {t("blocked")}</div></>;
             const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d);
-            const free = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
+            const busyN = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
             return (
               <>
                 <div className="dn">{d.getDate()}</div>
-                <div className="fillbar"><i style={{ width: `${free * 10}%` }} /></div>
-                <div className="meta"><span>{free ? `${free} ${t("legendFree").toLowerCase()}` : "—"}</span>{na ? <span className="asg">{na}🔒</span> : null}</div>
+                <div className="fillbar"><i style={{ width: `${busyN * 10}%`, background: "#e07a6b" }} /></div>
+                <div className="meta"><span style={busyN ? { color: "#b23b2e", fontWeight: 700 } : undefined}>{busyN ? `${busyN} ${t("busy").toLowerCase()}` : "—"}</span>{na ? <span className="asg">{na}🔒</span> : null}</div>
               </>
             );
           },
@@ -340,9 +341,9 @@ export default function AppClient({
                   {Array.from({ length: dim }, (_, k) => {
                     const dn = k + 1; const d = new Date(y, mo, dn);
                     const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d);
-                    const free = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
+                    const busyN = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
                     let bg = "var(--grey-bg)";
-                    if (na) bg = "var(--assign)"; else if (free) bg = `rgba(31,157,87,${0.25 + 0.6 * free / 10})`;
+                    if (na) bg = "var(--assign)"; else if (busyN) bg = `rgba(178,59,46,${0.2 + 0.6 * busyN / 10})`;
                     return <span key={dn} className="yd" style={{ background: bg, boxShadow: sameDay(d, today) ? "0 0 0 1.5px var(--accent)" : undefined }} />;
                   })}
                 </div>
@@ -356,19 +357,18 @@ export default function AppClient({
 
   function opDay(): ReactNode {
     const d = anchor; const nowIdx = currentSlotIdx(); const isToday = sameDay(d, todayD()); const guides = ref?.guides ?? []; const blocked = isBlocked(d);
-    let availNow = 0, assignTot = 0, posted = 0;
+    let availNow = 0, assignTot = 0, busyTot = 0;
     for (const g of guides) {
       const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
-      if (avd.some(Boolean) || Object.keys(asg).length) posted++;
-      avd.forEach((v, i) => { if (v && !asg[i]) availNow++; });
+      for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busyTot++; else availNow++; }
       assignTot += Object.keys(asg).length;
     }
     const ql = q.toLowerCase();
     const rows = guides.filter((g) => {
       if (ql && !g.displayName.toLowerCase().includes(ql) && !g.guideId.toLowerCase().includes(ql)) return false;
       if (onlyAvail) {
-        const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
-        if (!avd.some(Boolean) && !Object.keys(asg).length) return false;
+        const avd = getAvail(g.guideId, d) ?? EMPTY; // "only with busy"
+        if (!avd.some(Boolean)) return false;
       }
       return true;
     });
@@ -382,7 +382,7 @@ export default function AppClient({
         <div className="op-toolbar">
           <div className="stat g"><b>{availNow}</b><span>{t("freeSlots")}</span></div>
           <div className="stat a"><b>{assignTot}</b><span>{t("assigned")}</span></div>
-          <div className="stat"><b>{posted}</b><span>{t("guidesPosted")}</span></div>
+          <div className="stat"><b>{busyTot}</b><span>{t("guidesPosted")}</span></div>
           <input className="search" placeholder={t("searchGuide")} value={q} onChange={(e) => setQ(e.target.value)} />
           <label style={{ fontSize: 12.5, fontWeight: 600, display: "flex", gap: 5, alignItems: "center" }}>
             <input type="checkbox" checked={onlyAvail} onChange={(e) => setOnlyAvail(e.target.checked)} /> {t("onlyAvail")}
@@ -408,8 +408,8 @@ export default function AppClient({
                       {SLOTS.map((s) => {
                         const a = asg[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
                         if (a) return <td key={s.idx} className={`cell assigned${nm}`} title={tourById[a.tour]?.name || a.tour} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{a.tour}</span></td>;
-                        if (avd[s.idx]) return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
-                        return <td key={s.idx} className={`cell off${nm}`} />;
+                        if (avd[s.idx]) return <td key={s.idx} className={`cell busy${nm}`} title={t("busy")} />;
+                        return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
                       })}
                     </tr>
                   );
@@ -432,7 +432,7 @@ export default function AppClient({
           tint: (d) => {
             if (isBlocked(d)) return "repeating-linear-gradient(45deg,#fbe6e2,#fbe6e2 5px,#f5d5cf 5px,#f5d5cf 10px)";
             let g = 0;
-            for (const x of guides) { const avd = getAvail(x.guideId, d) ?? EMPTY; const asg = getAssign(x.guideId, d); if (avd.some((v, i) => v && !asg[i])) g++; }
+            for (const x of guides) { const avd = getAvail(x.guideId, d) ?? EMPTY; const asg = getAssign(x.guideId, d); if (SLOTS.some((s) => !avd[s.idx] && !asg[s.idx])) g++; }
             return g ? `rgba(31,157,87,${0.08 + 0.5 * Math.min(g, 15) / 15})` : undefined;
           },
           onClick: (d) => { setAnchor(d); setView("day"); },
@@ -440,7 +440,7 @@ export default function AppClient({
             let g = 0, a = 0;
             for (const x of guides) {
               const avd = getAvail(x.guideId, d) ?? EMPTY; const asg = getAssign(x.guideId, d);
-              if (avd.some((v, i) => v && !asg[i])) g++; a += Object.keys(asg).length;
+              if (SLOTS.some((s) => !avd[s.idx] && !asg[s.idx])) g++; a += Object.keys(asg).length;
             }
             return (
               <>
@@ -466,18 +466,18 @@ export default function AppClient({
           {Array.from({ length: 12 }, (_, mo) => {
             const mk = mkey(new Date(y, mo, 1));
             const avMonth = av[mk] || {}; const asMonth = as[mk] || {};
-            let guidesAvail = 0, assignedTot = 0;
+            let guidesOff = 0, assignedTot = 0;
             for (const g of guides) {
               const days = avMonth[g.guideId] || {};
-              if (Object.values(days).some((arr) => arr.some(Boolean))) guidesAvail++;
+              if (Object.values(days).some((arr) => arr.some(Boolean))) guidesOff++; // marked busy / day off
               const ad = asMonth[g.guideId] || {};
               for (const day of Object.values(ad)) assignedTot += Object.keys(day).length;
             }
             return (
               <div className="ymini" key={mo} onClick={() => { setAnchor(new Date(y, mo, 1)); setView("month"); }}>
                 <h4>{MON[mo]}</h4>
-                <div className="heatval" style={{ textAlign: "center", color: guidesAvail ? "var(--green)" : "var(--grey)" }}>
-                  {guidesAvail || "—"}<small>{guidesAvail ? t("guides") : ""}</small>
+                <div className="heatval" style={{ textAlign: "center", color: guidesOff ? "#b23b2e" : "var(--grey)" }}>
+                  {guidesOff || "—"}<small>{guidesOff ? t("busy").toLowerCase() : ""}</small>
                 </div>
                 {assignedTot ? <div className="meta" style={{ justifyContent: "center" }}><span className="asg">{assignedTot}🔒</span></div> : null}
               </div>
@@ -501,12 +501,12 @@ export default function AppClient({
             {SLOTS.map((s) => {
               const a = asg[s.idx];
               if (a) return <span key={s.idx} className="pill assigned">🔒 {s.start} · {a.tour}</span>;
-              return <span key={s.idx} className={`pill ${avd[s.idx] ? "on" : ""}`} onClick={() => toggleSlot(d, s.idx)}>{s.label}</span>;
+              return <span key={s.idx} className={`pill ${avd[s.idx] ? "busy" : ""}`} onClick={() => toggleSlot(d, s.idx)}>{s.label}</span>;
             })}
           </div></div>
           <div className="mfoot">
             <button className="btn ghost" onClick={() => setDayAll(d, false)}>{t("clearDay")}</button>
-            <button className="btn" onClick={() => setDayAll(d, true)}>{t("allFree")}</button>
+            <button className="btn danger" onClick={() => setDayAll(d, true)}>{t("dayOff")}</button>
             <button className="btn dark" onClick={() => setModal(null)}>{t("done")}</button>
           </div>
         </>

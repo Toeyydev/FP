@@ -108,7 +108,7 @@ header.app{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-
 .search:focus{outline:none;border-color:var(--ink-soft)}
 .legend{display:flex;gap:13px;flex-wrap:wrap;font-size:12px;color:var(--ink-soft);font-weight:600}
 .legend i{width:12px;height:12px;border-radius:4px;display:inline-block;vertical-align:-1px;margin-right:5px;border:1.5px solid}
-.legend .lg{background:var(--green-bg);border-color:var(--green-line)}.legend .lo{background:var(--grey-bg);border-color:var(--line-strong)}.legend .la{background:var(--assign-bg);border-color:var(--assign-line)}
+.legend .lg{background:var(--green-bg);border-color:var(--green-line)}.legend .lo{background:#fbe6e2;border-color:#e7b3aa}.legend .la{background:var(--assign-bg);border-color:var(--assign-line)}
 .grid-scroll{overflow:auto}
 table.grid{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
 table.grid th,table.grid td{padding:0;text-align:center}
@@ -211,6 +211,11 @@ a.glink:hover{text-decoration:underline}
 .switchline button:hover{text-decoration:underline}
 
 .navbadge{position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-family:"Bricolage Grotesque";font-weight:800;font-size:11px;line-height:18px;text-align:center;box-shadow:0 1px 3px rgba(22,32,28,.25)}
+
+/* busy (guide marked unavailable) */
+.pill.busy{background:#fbe6e2;border-color:#e7b3aa;color:#b23b2e}
+.cell.busy{background:#fbe6e2;cursor:default;font-weight:700;color:#b23b2e;font-size:9px}
+.cell.busy:hover{background:#f5d5cf}
 
 /* blocked dates */
 .pill.blocked{background:#fbe6e2;border-color:#e7b3aa;color:#b23b2e;cursor:default}
