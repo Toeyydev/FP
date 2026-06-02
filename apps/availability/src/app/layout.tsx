@@ -5,11 +5,15 @@ import { Providers } from "@/components/Providers";
 export const metadata: Metadata = {
   title: "Folkpath — Guide Availability",
   description: "Guide availability & job dispatch board",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Folkpath", statusBarStyle: "default" },
+  icons: { icon: "/icon-192.png", apple: "/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  themeColor: "#1f9d57",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

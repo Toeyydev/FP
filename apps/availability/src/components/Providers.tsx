@@ -17,6 +17,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const saved = localStorage.getItem("folkpath:lang");
     if (saved === "th" || saved === "en") setLangState(saved);
+    // Register the PWA service worker (installable to home screen).
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
   }, []);
 
   const setLang = (l: Lang) => {
