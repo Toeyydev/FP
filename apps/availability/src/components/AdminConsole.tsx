@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { useLang } from "@/components/Providers";
 
 type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null };
-type Req = { id: string; name: string; nickname: string | null; email: string; believedGuideId: string | null; createdAt: string };
+type Req = { id: string; name: string; nickname: string | null; phone: string | null; email: string; believedGuideId: string | null; createdAt: string };
 type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean };
 
 async function post(body: unknown) {
@@ -21,6 +21,7 @@ export default function AdminConsole() {
   const [copied, setCopied] = useState(false);
   const [showOp, setShowOp] = useState(false);
   const [opEmail, setOpEmail] = useState(""); const [opName, setOpName] = useState("");
+  const [linkSel, setLinkSel] = useState<Record<string, string>>({}); // requestId -> existing guide userId to link
 
   const load = useCallback(async () => {
     const r = await fetch("/api/admin", { cache: "no-store" });
@@ -123,16 +124,27 @@ export default function AdminConsole() {
           <div style={{ padding: 14 }}>
             {data.requests.length === 0 ? <div className="op-empty">{t("noRequests")}</div> : (
               <table className="acct-table">
-                <thead><tr><th>Name</th><th>Nickname</th><th>Email</th><th /></tr></thead>
+                <thead><tr><th>Name</th><th>Nickname</th><th>Phone</th><th>Email</th><th>Link to guide</th><th /></tr></thead>
                 <tbody>
                   {data.requests.map((rq) => {
+                    // Existing (not-yet-active) guide records the operator can link this sign-up to.
+                    const unclaimed = guides.filter((g) => g.state !== "ACTIVE");
+                    const autoMatch = unclaimed.find((g) => g.email.toLowerCase() === rq.email.toLowerCase());
+                    const sel = linkSel[rq.id] ?? "";
                     return (
                       <tr key={rq.id}>
                         <td>{rq.name}</td>
                         <td>{rq.nickname ?? "—"}</td>
+                        <td style={{ color: "var(--ink-soft)" }}>{rq.phone ?? "—"}</td>
                         <td style={{ color: "var(--ink-soft)" }}>{rq.email}</td>
+                        <td>
+                          <select className="search" style={{ minWidth: 170 }} value={sel} onChange={(e) => setLinkSel((m) => ({ ...m, [rq.id]: e.target.value }))}>
+                            <option value="">{autoMatch ? `Auto → ${autoMatch.guideId} (${autoMatch.displayName})` : "Auto / new ID"}</option>
+                            {unclaimed.map((g) => <option key={g.id} value={g.id}>{g.guideId} · {g.displayName}</option>)}
+                          </select>
+                        </td>
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                          <button className="btn sm primary" onClick={() => act({ action: "approveRequest", requestId: rq.id }, rq.name)}>{t("approve")}</button>{" "}
+                          <button className="btn sm primary" onClick={() => act({ action: "approveRequest", requestId: rq.id, ...(sel ? { guideUserId: sel } : {}) }, rq.name)}>{t("approve")}</button>{" "}
                           <button className="btn sm danger" onClick={() => act({ action: "rejectRequest", requestId: rq.id })}>{t("reject")}</button>
                         </td>
                       </tr>

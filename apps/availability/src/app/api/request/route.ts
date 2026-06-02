@@ -8,8 +8,9 @@ import { sendEmail } from "@/lib/email";
 // Public sign-up -> creates a PENDING account (hashed password). No login until an
 // operator approves and links it to a guide record.
 const schema = z.object({
-  fullName: z.string().min(1).max(120),
-  nickname: z.string().min(1).max(60),
+  fullName: z.string().trim().min(1).max(120),
+  nickname: z.string().trim().min(1).max(60),
+  phone: z.string().trim().min(1).max(40),
   email: z.string().email(),
   password: z.string().min(8).max(200),
 });
@@ -17,7 +18,7 @@ const schema = z.object({
 export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { fullName, nickname, email, password } = parsed.data;
+  const { fullName, nickname, phone, email, password } = parsed.data;
   const lower = email.toLowerCase().trim();
 
   // Don't let an already-active account be shadowed by a new request.
@@ -30,6 +31,7 @@ export async function POST(req: NextRequest) {
     data: {
       name: fullName.trim(),
       nickname: nickname.trim(),
+      phone: phone.trim(),
       email: lower,
       passwordHash: bcrypt.hashSync(password, 10),
     },

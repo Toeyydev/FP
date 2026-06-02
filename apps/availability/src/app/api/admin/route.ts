@@ -74,21 +74,29 @@ export async function POST(req: NextRequest) {
 
     let guide;
     if (parsed.data.guideUserId) {
+      // Operator manually linked this sign-up to a specific existing guide record.
       guide = await prisma.user.findUnique({ where: { id: parsed.data.guideUserId } });
       if (!guide || guide.role !== "GUIDE") return NextResponse.json({ error: "no-guide" }, { status: 400 });
       if (guide.state === "ACTIVE") return NextResponse.json({ error: "already-active" }, { status: 400 });
     } else {
-      // Free-flow: ALWAYS mint a brand-new guide id (G-026, G-027, ...). Never
-      // overwrite an existing record, so the roster only grows.
-      const last = await prisma.user.findFirst({
-        where: { role: "GUIDE", guideId: { not: null } },
-        orderBy: { guideId: "desc" },
+      // Auto-match by email: if a guide record already exists for this sign-up's
+      // email (e.g. one of the originals), reuse it so the guide keeps their
+      // original G-id — they never need to know the number.
+      guide = await prisma.user.findFirst({
+        where: { role: "GUIDE", email: reqRow.email, state: { not: "ACTIVE" } },
       });
-      const n = last?.guideId ? parseInt(last.guideId.slice(2), 10) + 1 : 1;
-      const newGuideId = `G-${String(n).padStart(3, "0")}`;
-      guide = await prisma.user.create({
-        data: { guideId: newGuideId, role: "GUIDE", state: "INVITED", email: `unassigned-${newGuideId.toLowerCase()}@folkpath.local`, displayName: reqRow.nickname || reqRow.name },
-      });
+      if (!guide) {
+        // No match — mint a brand-new guide id (next in sequence), in sign-up order.
+        const last = await prisma.user.findFirst({
+          where: { role: "GUIDE", guideId: { not: null } },
+          orderBy: { guideId: "desc" },
+        });
+        const n = last?.guideId ? parseInt(last.guideId.slice(2), 10) + 1 : 1;
+        const newGuideId = `G-${String(n).padStart(3, "0")}`;
+        guide = await prisma.user.create({
+          data: { guideId: newGuideId, role: "GUIDE", state: "INVITED", email: `unassigned-${newGuideId.toLowerCase()}@folkpath.local`, displayName: reqRow.nickname || reqRow.name },
+        });
+      }
     }
     if (clash && clash.id !== guide.id) return NextResponse.json({ error: "email-in-use" }, { status: 400 });
 

@@ -25,6 +25,7 @@ export default function StartPage() {
   // signup state
   const [fullName, setFullName] = useState("");
   const [nickname, setNickname] = useState("");
+  const [phone, setPhone] = useState("");
   const [suEmail, setSuEmail] = useState("");
   const [suPw, setSuPw] = useState("");
   const [showSuPw, setShowSuPw] = useState(false);
@@ -45,11 +46,13 @@ export default function StartPage() {
   async function doSignup(e: React.FormEvent) {
     e.preventDefault();
     setSuMsg("");
+    // Every field is required — no blanks.
+    if (!fullName.trim() || !nickname.trim() || !phone.trim() || !suEmail.trim() || !suPw) { setSuMsg(t("allRequired")); return; }
     if (suPw.length < 8) { setSuMsg(t("pwShort")); return; }
     setSuBusy(true);
     const r = await fetch("/api/request", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fullName, nickname, email: suEmail, password: suPw }),
+      body: JSON.stringify({ fullName, nickname, phone, email: suEmail, password: suPw }),
     });
     setSuBusy(false);
     if (r.status === 409) { setSuMsg(t("accountExists")); return; }
@@ -96,19 +99,22 @@ export default function StartPage() {
                 </form>
               ) : (
                 <form onSubmit={doSignup}>
-                  <div className="fld"><label>{t("fullName")}</label>
-                    <input value={fullName} onChange={(e) => setFullName(e.target.value)} autoComplete="name" />
+                  <div className="fld"><label>{t("fullName")} *</label>
+                    <input required value={fullName} onChange={(e) => setFullName(e.target.value)} autoComplete="name" />
                   </div>
-                  <div className="fld"><label>{t("nickname")}</label>
-                    <input value={nickname} onChange={(e) => setNickname(e.target.value)} />
+                  <div className="fld"><label>{t("nickname")} *</label>
+                    <input required value={nickname} onChange={(e) => setNickname(e.target.value)} />
                     <div className="fieldhelp">{t("nicknameHelp")}</div>
                   </div>
-                  <div className="fld"><label>{t("email")}</label>
-                    <input type="email" autoComplete="email" value={suEmail} onChange={(e) => setSuEmail(e.target.value)} placeholder="name@example.com" />
+                  <div className="fld"><label>{t("phoneLabel")} *</label>
+                    <input required type="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />
                   </div>
-                  <div className="fld"><label>{t("password")}</label>
+                  <div className="fld"><label>{t("email")} *</label>
+                    <input required type="email" autoComplete="email" value={suEmail} onChange={(e) => setSuEmail(e.target.value)} placeholder="name@example.com" />
+                  </div>
+                  <div className="fld"><label>{t("password")} *</label>
                     <div className="pw-wrap">
-                      <input type={showSuPw ? "text" : "password"} autoComplete="new-password" value={suPw} onChange={(e) => setSuPw(e.target.value)} />
+                      <input required type={showSuPw ? "text" : "password"} autoComplete="new-password" value={suPw} onChange={(e) => setSuPw(e.target.value)} />
                       <button type="button" className="eye" aria-label={showSuPw ? t("hidePw") : t("showPw")} onClick={() => setShowSuPw((s) => !s)}>{showSuPw ? "🙈" : "👁"}</button>
                     </div>
                     <div className="fieldhelp">{t("passwordHelp")}</div>
