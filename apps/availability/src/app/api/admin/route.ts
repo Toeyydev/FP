@@ -138,5 +138,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, state: nextState });
   }
 
+  // Remove a single guide account. Cascades clean up their availability,
+  // assignments, invites, documents and notifications. Only GUIDE rows can be
+  // removed here (never an operator/admin), and the Guide Database view stays —
+  // it just no longer lists this guide.
+  if (action === "deleteGuide") {
+    const parsed = z.object({ userId: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const user = await prisma.user.findUnique({ where: { id: parsed.data.userId } });
+    if (!user) return NextResponse.json({ error: "no-user" }, { status: 400 });
+    if (user.role !== "GUIDE") return NextResponse.json({ error: "not-a-guide" }, { status: 400 });
+    await revokeAllForUser(user.id);
+    await prisma.user.delete({ where: { id: user.id } });
+    await audit({ actorId, actorRole, action: "guide.deleted", entityType: "User", entityId: user.id, detail: { guideId: user.guideId, email: user.email } });
+    return NextResponse.json({ ok: true });
+  }
+
+  // Remove ALL guide accounts (ADMIN only) — a blank slate. Operators/admin and
+  // tours are untouched. Guides self-register again afterwards and are assigned a
+  // fresh id in sign-up order (G-001, G-002, ...). The Guide Database view remains.
+  if (action === "clearGuides") {
+    if (actorRole !== "ADMIN") return NextResponse.json({ error: "admin-only" }, { status: 403 });
+    const guides = await prisma.user.findMany({ where: { role: "GUIDE" }, select: { id: true } });
+    for (const g of guides) await revokeAllForUser(g.id);
+    const res = await prisma.user.deleteMany({ where: { role: "GUIDE" } });
+    await audit({ actorId, actorRole, action: "guides.cleared", entityType: "User", detail: { count: res.count } });
+    return NextResponse.json({ ok: true, count: res.count });
+  }
+
   return NextResponse.json({ error: "unknown action" }, { status: 400 });
 }

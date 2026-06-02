@@ -58,9 +58,25 @@ export default function AdminConsole() {
         )}{" "}
         {a.state === "ACTIVE" && <button className="btn sm danger" onClick={() => act({ action: "setSuspended", userId: a.id, suspend: true })}>{t("suspend")}</button>}
         {a.state === "SUSPENDED" && <button className="btn sm" onClick={() => act({ action: "setSuspended", userId: a.id, suspend: false })}>{t("reactivate")}</button>}
+        {a.role === "GUIDE" && (
+          <>{" "}<button className="btn sm danger" onClick={() => {
+            if (confirm(`Remove ${a.guideId ?? ""} ${a.displayName}?\n\nThis permanently deletes the account and all its availability, assignments and documents. This cannot be undone.`)) act({ action: "deleteGuide", userId: a.id });
+          }}>Remove</button></>
+        )}
       </td>
     </tr>
   );
+
+  async function clearAllGuides() {
+    const n = guides.length;
+    if (n === 0) { setFlash({ msg: "No guides to remove." }); return; }
+    if (!confirm(`Remove ALL ${n} guide accounts?\n\nThis permanently deletes every guide and all their availability, assignments and documents. Operators and tours are kept. The Guide Database stays — guides re-register and get fresh ids (G-001…) in sign-up order.`)) return;
+    if (!confirm(`Final check: permanently remove ${n} guide(s)? This cannot be undone.`)) return;
+    const r = await post({ action: "clearGuides" });
+    if (r.ok) setFlash({ msg: `Removed ${r.data.count} guide(s). Roster is now blank — guides will self-register and be assigned G-001, G-002, … in sign-up order.` });
+    else setFlash({ msg: `Error: ${(r.data as { error?: string }).error ?? "failed"}` });
+    await load();
+  }
 
   return (
     <div className="wrap">
@@ -82,7 +98,10 @@ export default function AdminConsole() {
       <section className="panel">
         <div className="panel-head"><h2>{t("accountsTitle")}</h2>
           {tab === "invites" && data.isAdmin && (
-            <div className="head-tools"><button className="btn sm" onClick={() => setShowOp((s) => !s)}>{t("inviteOperatorBtn")}</button></div>
+            <div className="head-tools">
+              <button className="btn sm" onClick={() => setShowOp((s) => !s)}>{t("inviteOperatorBtn")}</button>
+              {guides.length > 0 && <button className="btn sm danger" onClick={clearAllGuides}>Remove all guides ({guides.length})</button>}
+            </div>
           )}
         </div>
 
