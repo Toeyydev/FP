@@ -48,11 +48,15 @@ async function guideHeader(guideId: string) {
 // default scaffold (preset expenses + standard guide fee) if none exists yet.
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const guideId = req.nextUrl.searchParams.get("guideId") || "";
   const date = req.nextUrl.searchParams.get("date") || "";
   const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
+
+  // Operators/admin edit any sheet; a guide may only VIEW their own.
+  const isOps = ops(session.user.role);
+  if (!isOps && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const [header, existing, assignment] = await Promise.all([
     guideHeader(guideId),
@@ -62,9 +66,10 @@ export async function GET(req: NextRequest) {
   const tourId = existing?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
-  if (existing) return NextResponse.json({ header, tour, saved: true, sheet: existing });
+  if (existing) return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing });
+  // A guide opening a job with no saved sheet yet just sees an empty/pending view.
   return NextResponse.json({
-    header, tour, saved: false,
+    header, tour, saved: false, canEdit: isOps,
     sheet: {
       ref: null, guideId, date, slotIdx, tourId, status: "Confirmed",
       bookings: [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }],

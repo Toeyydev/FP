@@ -358,7 +358,7 @@ export default function AppClient({
                   {blocked ? <span className="pill blocked">🚫 {t("blocked")}</span> : (<>
                     {SLOTS.map((s) => {
                       const a = asg[s.idx];
-                      if (a) return <span key={s.idx} className="pill assigned" title={tourById[a.tour]?.name || a.tour}>🔒 {a.tour}</span>;
+                      if (a) return <a key={s.idx} className="pill assigned" title={t("viewJobSheet")} href={`/job-sheet?guideId=${guideId}&date=${ymd(d)}&slotIdx=${s.idx}`}>🔒 {a.tour} 📄</a>;
                       const busy = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
                       return <span key={s.idx} className={`pill ${busy ? "busy" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
                     })}

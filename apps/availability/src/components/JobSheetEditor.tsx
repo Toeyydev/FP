@@ -24,20 +24,32 @@ export default function JobSheetEditor() {
   const [tour, setTour] = useState<Tour>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [saved, setSaved] = useState(false);
+  const [canEdit, setCanEdit] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
-    if (!r.ok) { setMsg("Could not load (operator only)."); return; }
+    if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false);
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
 
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
+  // A guide viewing a job that has no saved sheet yet — nothing to show.
+  if (!canEdit && !saved) {
+    return (
+      <div className="wrap">
+        <div className="js-bar no-print"><button className="btn ghost" onClick={() => router.back()}>← Back</button></div>
+        <section className="panel"><div className="op-empty" style={{ padding: 30 }}>📋 Your job sheet for this job isn&apos;t ready yet.<br />Your operator will send it once it&apos;s prepared.</div></section>
+      </div>
+    );
+  }
+
   const t = computeTotals(sheet.expenses, sheet.guideFee);
+  const ro = !canEdit; // read-only (guide view)
   const up = (patch: Partial<Sheet>) => setSheet({ ...sheet, ...patch });
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
@@ -70,14 +82,16 @@ export default function JobSheetEditor() {
       <div className="js-bar no-print">
         <button className="btn ghost" onClick={() => router.back()}>← Back</button>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {ro && <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>}
           <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
           <button className="btn" onClick={() => window.print()}>🖨 Print</button>
-          <button className="btn" disabled={busy} onClick={sendToGuide}>📤 Send to guide</button>
-          <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>
+          {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>📤 Send to guide</button>}
+          {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}
         </div>
       </div>
 
       <section className="panel js-sheet" style={{ padding: 18 }}>
+       <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
         <div className="js-head">
           <div className="js-brand"><b>FOLKPATHS</b><div style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>บริษัท โฟล์คพาธส์ จำกัด</div></div>
@@ -175,6 +189,7 @@ export default function JobSheetEditor() {
           <div><span>Net Guide Fee</span><b>{thb(t.netGuideFee)}</b></div>
           <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
         </div>
+       </fieldset>
       </section>
     </div>
   );
