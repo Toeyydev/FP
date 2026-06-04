@@ -172,7 +172,7 @@ export default function BookingsInbox() {
             <div className="mbody">
               <table className="acct-table"><tbody>
                 {([
-                  ["Source", detail.source], ["Booking ref", detail.confirmationCode], ["Bokun id", detail.externalId],
+                  ["Source", detail.source], ["OTA booking no.", detail.externalRef], ["Bokun confirmation", detail.confirmationCode], ["Bokun id", detail.externalId],
                   ["Product", detail.productName], ["Tour (mapped)", detail.tourId], ["Date", detail.date],
                   ["Start time", detail.startTime], ["Slot", detail.slotIdx], ["Pax", detail.pax],
                   ["Customer", detail.customerName], ["Status", detail.status],

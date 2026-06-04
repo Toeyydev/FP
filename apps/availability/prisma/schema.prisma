@@ -287,7 +287,8 @@ model Booking {
   id               String   @id @default(cuid())
   source           String   @default("bokun") // bokun | gyg | viator | manual
   externalId       String? // Bokun booking id
-  confirmationCode String? // e.g. GYG6H797YG86
+  confirmationCode String? // Bokun confirmation code
+  externalRef      String? // original OTA booking number (GetYourGuide / Viator ref)
   productName      String?
   tourId           String? // mapped to our Tour (null until mapped)
   date             String? // "YYYY-MM-DD" start date

@@ -56,13 +56,15 @@ export function timeToSlot(time: string | undefined): number | undefined {
 }
 
 export type ParsedBooking = {
-  externalId?: string; confirmationCode?: string; productName?: string;
+  externalId?: string; confirmationCode?: string; externalRef?: string; productName?: string;
   date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string;
 };
 
 export function parseBokun(raw: unknown): ParsedBooking {
   const externalId = deepFind(raw, ["bookingId", "id", "parentBookingId"]);
-  const confirmationCode = deepFind(raw, ["confirmationCode", "externalBookingReference", "productConfirmationCode", "bookingCode"]);
+  const confirmationCode = deepFind(raw, ["confirmationCode", "bookingCode"]);
+  // The original OTA booking number (GetYourGuide / Viator), separate from Bokun's.
+  const externalRef = deepFind(raw, ["externalBookingReference", "externalReference", "resellerReference", "agencyReference", "productConfirmationCode", "externalId"]);
   const productName = deepFind(raw, ["title", "productTitle", "activityTitle", "name"]);
   const date = toYMD(deepFind(raw, ["startDate", "date", "startDateTime", "travelDate", "fromDate"]));
   const startTime = normTime(deepFind(raw, ["startTime", "time", "departureTime", "startTimeStr"])) ?? normTime(deepFind(raw, ["startDateTime"]));
@@ -74,6 +76,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
   return {
     externalId: externalId != null ? String(externalId) : undefined,
     confirmationCode: confirmationCode != null ? String(confirmationCode) : undefined,
+    externalRef: externalRef != null ? String(externalRef) : undefined,
     productName: productName != null ? String(productName) : undefined,
     date,
     startTime,

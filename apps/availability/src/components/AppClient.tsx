@@ -37,7 +37,7 @@ export default function AppClient({
   role, guideId, displayName,
 }: { role: Role; isAdmin?: boolean; guideId: string | null; displayName: string }) {
   const { t, lang, setLang } = useLang();
-  const [view, setView] = useState<string>(role === "guide" ? "week" : "day");
+  const [view, setView] = useState<string>(role === "guide" ? "schedule" : "day");
   const [anchor, setAnchor] = useState<Date>(() => todayD());
   const [ref, setRef] = useState<Ref | null>(null);
   const [av, setAv] = useState<AvMap>({});
@@ -57,6 +57,7 @@ export default function AppClient({
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[]>([]);
+  const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null }[]>([]);
   const [showNotif, setShowNotif] = useState(false);
   // assign-form state lives here (not in a child) so a poll re-render never wipes it
   const [fTour, setFTour] = useState("");
@@ -135,6 +136,15 @@ export default function AppClient({
     const f = () => fetch("/api/notifications", { cache: "no-store" }).then((r) => r.json()).then(setNotif).catch(() => {});
     f();
     const id = window.setInterval(f, 15000);
+    return () => window.clearInterval(id);
+  }, [role]);
+
+  // Guide: load their upcoming confirmed tours (schedule).
+  useEffect(() => {
+    if (role !== "guide") return;
+    const f = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
+    f();
+    const id = window.setInterval(f, 30000);
     return () => window.clearInterval(id);
   }, [role]);
 
@@ -320,6 +330,7 @@ export default function AppClient({
 
   // ---- navigation ----
   function navBy(dir: number) {
+    if (view === "schedule") return; // flat list — no period navigation
     if (role === "guide") {
       if (view === "week") setAnchor(addDays(weekStart(anchor), dir * 7));
       else if (view === "month") setAnchor(addMonths(anchor, dir));
@@ -331,6 +342,7 @@ export default function AppClient({
     }
   }
   function periodLabel() {
+    if (view === "schedule") return "";
     if (role === "guide") {
       if (view === "week") {
         const ws = weekStart(anchor), we = addDays(ws, 6);
@@ -366,6 +378,23 @@ export default function AppClient({
     );
   }
 
+  function guideSchedule(): ReactNode {
+    const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+    return (
+      <>
+        <div className="panel-head"><h2>{t("mySchedule")}</h2><span className="hint">{t("scheduleHint")}</span></div>
+        <div style={{ padding: 14 }}>
+          {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => (
+            <a key={i} href={`/tour-details?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`} className="sched-card">
+              <div className="sched-when"><b>{fmt(s.date)}</b><span>{s.time}</span></div>
+              <div className="sched-mid"><b>{s.tourName}</b><div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div></div>
+              <div className="sched-go">ℹ️</div>
+            </a>
+          ))}
+        </div>
+      </>
+    );
+  }
   function guideWeek(): ReactNode {
     const gid = guideId!; const ws = weekStart(anchor); const today = todayD(); const nowIdx = currentSlotIdx();
     return (
@@ -708,7 +737,7 @@ export default function AppClient({
   }
 
   const tabs: [string, string][] = role === "guide"
-    ? [["week", t("week")], ["month", t("month")], ["year", t("year")]]
+    ? [["schedule", t("schedule")], ["week", t("week")], ["month", t("month")], ["year", t("year")]]
     : [["day", t("day")], ["month", t("month")], ["year", t("year")]];
 
   return (
@@ -765,7 +794,7 @@ export default function AppClient({
 
       <section className="panel">
         {role === "guide"
-          ? (view === "week" ? guideWeek() : view === "month" ? guideMonth() : guideYear())
+          ? (view === "schedule" ? guideSchedule() : view === "week" ? guideWeek() : view === "month" ? guideMonth() : guideYear())
           : (view === "day" ? opDay() : view === "month" ? opMonth() : opYear())}
       </section>
 

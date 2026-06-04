@@ -34,13 +34,13 @@ export async function POST(req: NextRequest) {
       await prisma.booking.upsert({
         where: { source_externalId: { source: channel, externalId: p.externalId } },
         create: {
-          source: channel, externalId: p.externalId, confirmationCode: p.confirmationCode ?? null,
+          source: channel, externalId: p.externalId, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null,
           productName: p.productName ?? null, tourId, date: p.date ?? null, startTime: p.startTime ?? null,
           slotIdx: p.slotIdx ?? null, pax: p.pax ?? null, customerName: p.customerName ?? null,
           status: cancelled ? "CANCELLED" : "PENDING", raw,
         },
         update: {
-          confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined,
+          confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined,
           tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined,
           pax: p.pax ?? undefined, customerName: p.customerName ?? undefined,
           status: cancelled ? "CANCELLED" : undefined, raw,
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       // No id we recognise yet — still capture it so we can see the shape.
       await prisma.booking.create({
         data: {
-          source: channel, confirmationCode: p.confirmationCode ?? null, productName: p.productName ?? null, tourId,
+          source: channel, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null, productName: p.productName ?? null, tourId,
           date: p.date ?? null, startTime: p.startTime ?? null, slotIdx: p.slotIdx ?? null,
           pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING", raw,
         },
