@@ -34,6 +34,15 @@ function visibleMonths(role: Role, view: string, anchor: Date): string[] {
   return [mkey(anchor)];
 }
 
+function urlB64ToUint8(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const b64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
 export default function AppClient({
   role, guideId, displayName,
 }: { role: Role; isAdmin?: boolean; guideId: string | null; displayName: string }) {
@@ -60,6 +69,7 @@ export default function AppClient({
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null }[]>([]);
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
+  const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [showNotif, setShowNotif] = useState(false);
   // assign-form state lives here (not in a child) so a poll re-render never wipes it
   const [fTour, setFTour] = useState("");
@@ -146,6 +156,29 @@ export default function AppClient({
     if (role !== "guide") return;
     fetch("/api/profile/status", { cache: "no-store" }).then((r) => r.json()).then(setProfileGate).catch(() => {});
   }, [role]);
+
+  // Guide: are home-screen job alerts already on for this device?
+  useEffect(() => {
+    if (role !== "guide") return;
+    const supported = typeof window !== "undefined" && "Notification" in window && "PushManager" in window && "serviceWorker" in navigator;
+    setAlertsOn(!supported || Notification.permission === "granted");
+  }, [role]);
+
+  async function enableAlerts() {
+    try {
+      if (!("Notification" in window) || !("PushManager" in window) || !("serviceWorker" in navigator)) {
+        toast(t("alertsNeedInstall")); return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { toast(t("alertsDenied")); return; }
+      const { key } = await fetch("/api/push/subscribe").then((r) => r.json());
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(key) as unknown as BufferSource });
+      await fetch("/api/push/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: sub.toJSON() }) });
+      setAlertsOn(true);
+      toast(t("alertsOn"));
+    } catch { toast(t("alertsNeedInstall")); }
+  }
 
   // Guide: load their upcoming confirmed tours (schedule).
   useEffect(() => {
@@ -782,6 +815,13 @@ export default function AppClient({
       </div>
 
       {role === "guide" && <GuideWelcome />}
+
+      {role === "guide" && !alertsOn && (
+        <section className="alerts-banner">
+          <div><b>🔔 {t("alertsTitle")}</b><div style={{ fontSize: 13, marginTop: 3 }}>{t("alertsBody")}</div></div>
+          <button className="btn primary" onClick={enableAlerts}>{t("alertsEnable")}</button>
+        </section>
+      )}
 
       {role === "guide" && !profileGate.complete && (
         <section className="profile-gate">

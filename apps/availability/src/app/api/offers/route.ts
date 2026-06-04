@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { linePushButtons, lineEnabled } from "@/lib/line";
 import { availableGuides, timeRangeLabel, sweepExpiredOffers } from "@/lib/offers";
+import { sendPushToUser } from "@/lib/push";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 
 function ops(role?: string) {
@@ -98,6 +99,8 @@ export async function POST(req: NextRequest) {
   for (const g of candidates) {
     // In-app notification for everyone (record + fallback).
     await prisma.notification.create({ data: { userId: g.id, kind: "offer", offerId: offer.id, message: `${summary}\n(open the app or LINE to Accept/Deny)` } });
+    // Home-screen push alert (if the guide enabled it on a device).
+    await sendPushToUser(g.id, { title: "🧭 New job offer", body: btnText, url: "/", tag: `offer-${offer.id}` });
     // LINE Accept/Deny buttons for linked guides — addressed to the guide by name.
     if (lineEnabled && g.lineUserId) {
       const firstName = (g.displayName || "").split(" ")[0];

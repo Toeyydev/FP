@@ -306,6 +306,18 @@ model Booking {
   @@index([status])
 }
 
+// Web Push subscription (one per browser/device) for home-screen job alerts.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
 // Learned mapping: a channel product name → our Tour. Set the first time an
 // operator maps a booking's product; future bookings of that product auto-map.
 model ProductMap {
