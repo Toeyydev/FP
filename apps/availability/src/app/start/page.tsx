@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { useLang } from "@/components/Providers";
+import InstallPrompt from "@/components/InstallPrompt";
 
 type Tab = "login" | "signup";
 
@@ -63,6 +64,7 @@ export default function StartPage() {
   return (
     <div className="wrap">
       <AuthHeader />
+      <InstallPrompt />
       <section id="authView" className="panel">
         <div className="auth-card">
           {sent ? (

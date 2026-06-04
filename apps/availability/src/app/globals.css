@@ -286,3 +286,8 @@ a.glink:hover{text-decoration:underline}
 .profile-gate{ display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap;
   background:#fff7e6; border:1.5px solid #f0d49a; border-radius:14px; padding:13px 16px; margin-bottom:12px; }
 .profile-gate b{ color:#9a6a00; }
+
+/* ---- Add-to-home-screen helper ---- */
+.install-card{ display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;
+  background:#eef6ff; border:1.5px solid #bcd8ff; border-radius:14px; padding:12px 14px; margin-bottom:12px; }
+.install-card b{ color:#1b4ef0; }
