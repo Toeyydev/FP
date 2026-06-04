@@ -264,3 +264,10 @@ a.glink:hover{text-decoration:underline}
 .offer-actions{ display:flex; gap:8px; }
 @keyframes offerpulse{ 0%{ box-shadow:0 0 0 0 rgba(27,78,240,.25);} 100%{ box-shadow:0 0 0 8px rgba(27,78,240,0);} }
 .offers-banner{ animation:offerpulse 2s ease-out 2; }
+
+/* ---- Tour details (guide) ---- */
+.td-grid{ display:flex; flex-direction:column; gap:14px; }
+.td-row{ display:flex; gap:12px; align-items:flex-start; }
+.td-ic{ font-size:20px; width:26px; flex-shrink:0; text-align:center; }
+.td-lab{ font-size:12px; color:var(--ink-soft,#888); font-weight:700; text-transform:uppercase; letter-spacing:.3px; }
+.td-val{ font-size:14.5px; margin-top:2px; }

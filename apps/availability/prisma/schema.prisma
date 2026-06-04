@@ -108,6 +108,13 @@ model Tour {
   name String
   time String
 
+  // Operator-maintained tour info, shown to assigned guides.
+  meetingPoint String?
+  itinerary    String?
+  included     String?
+  bring        String?
+  durationMin  Int? // default tour length (prefills offer duration)
+
   assignments Assignment[]
 }
 

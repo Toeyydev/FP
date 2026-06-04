@@ -385,7 +385,7 @@ export default function AppClient({
                   {blocked ? <span className="pill blocked">🚫 {t("blocked")}</span> : (<>
                     {SLOTS.map((s) => {
                       const a = asg[s.idx];
-                      if (a) return <a key={s.idx} className="pill assigned" title={t("viewJobSheet")} href={`/job-sheet?guideId=${guideId}&date=${ymd(d)}&slotIdx=${s.idx}`}>🔒 {a.tour} 📄</a>;
+                      if (a) return <a key={s.idx} className="pill assigned" title={t("tourDetailsTitle")} href={`/tour-details?guideId=${guideId}&date=${ymd(d)}&slotIdx=${s.idx}`}>🔒 {a.tour} ℹ️</a>;
                       const busy = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
                       return <span key={s.idx} className={`pill ${busy ? "busy" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
                     })}
@@ -717,6 +717,7 @@ export default function AppClient({
         {role === "guide" && <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>}
         {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
         {role === "operator" && <a className="btn sm" href="/bookings">📥 {t("bookings")}</a>}
+        {role === "operator" && <a className="btn sm" href="/tours">🗺 {t("toursInfo")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
             {t("accountsTitle")}
