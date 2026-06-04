@@ -291,3 +291,13 @@ a.glink:hover{text-decoration:underline}
 .install-card{ display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;
   background:#eef6ff; border:1.5px solid #bcd8ff; border-radius:14px; padding:12px 14px; margin-bottom:12px; }
 .install-card b{ color:#1b4ef0; }
+
+/* ---- Guide welcome + touch targets ---- */
+.welcome-row{ display:flex; gap:12px; align-items:flex-start; }
+.welcome-ic{ font-size:22px; width:30px; text-align:center; flex-shrink:0; }
+@media (pointer: coarse){
+  .pill{ min-height:40px; padding:10px 12px; }
+  .btn.sm{ padding:8px 13px; }
+  .sched-card{ padding:14px; }
+  .vtab,.subtab,.authtab{ padding:11px 14px; }
+}

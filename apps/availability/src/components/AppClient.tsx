@@ -4,6 +4,7 @@ import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLang } from "@/components/Providers";
+import GuideWelcome from "@/components/GuideWelcome";
 import { SLOTS } from "@/lib/slots";
 import {
   DOW, MON, addDays, addMonths, currentSlotIdx, mkey, parseYMD,
@@ -779,6 +780,8 @@ export default function AppClient({
           <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
         </div>
       </div>
+
+      {role === "guide" && <GuideWelcome />}
 
       {role === "guide" && !profileGate.complete && (
         <section className="profile-gate">
