@@ -12,11 +12,20 @@ export default function Dispatch() {
   const [data, setData] = useState<{ assignments: Assignment[]; offers: Offer[] } | null>(null);
   const [tab, setTab] = useState<"assigned" | "offers">("assigned");
 
+  const [msg, setMsg] = useState("");
   const load = useCallback(async () => {
     const r = await fetch("/api/offers", { cache: "no-store" });
     if (r.ok) setData(await r.json());
   }, []);
   useEffect(() => { load(); const id = window.setInterval(load, 15000); return () => window.clearInterval(id); }, [load]);
+
+  async function sendSheet(a: Assignment) {
+    setMsg(`Sending to ${a.guideId}…`);
+    const r = await fetch("/api/jobsheet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: a.date, guideId: a.guideId }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg("Send failed."); return; }
+    setMsg(d.lineSent > 0 ? `✅ Sent to ${a.guideId} on LINE` : `✅ Sent to ${a.guideId}'s in-app inbox`);
+  }
 
   if (!data) return <div className="wrap"><AuthHeader backHref="/" /><section className="panel"><div className="op-empty">…</div></section></div>;
 
@@ -38,14 +47,17 @@ export default function Dispatch() {
 
       {tab === "assigned" ? (
         <section className="panel">
-          <div className="panel-head"><h2>Assigned jobs (upcoming)</h2><span className="hint">Who is doing what — auto-updates</span></div>
+          <div className="panel-head"><h2>Assigned jobs (upcoming)</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Who is doing what — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
             {data.assignments.length === 0 ? <div className="op-empty">No upcoming assigned jobs yet.</div> : data.assignments.map((a, i) => (
-              <a key={i} href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`} className="sched-card">
+              <div key={i} className="sched-card" style={{ cursor: "default" }}>
                 <div className="sched-when"><b>{fmt(a.date)}</b><span>{a.time}</span></div>
                 <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">👤 {a.guideId} {a.guideName}{a.pax != null ? ` · 👥 ${a.pax} pax` : ""}{a.note ? ` · 📝 ${a.note}` : ""}</div></div>
-                <div className="sched-go">📄</div>
-              </a>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
+                  <button className="btn sm primary" onClick={() => sendSheet(a)}>📤 Send</button>
+                </div>
+              </div>
             ))}
           </div>
         </section>
