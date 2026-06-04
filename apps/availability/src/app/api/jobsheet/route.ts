@@ -67,15 +67,20 @@ export async function GET(req: NextRequest) {
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
   if (existing) return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing });
-  // A guide opening a job with no saved sheet yet just sees an empty/pending view.
+
+  // No saved sheet yet — scaffold it, pre-filling Job Details from the channel
+  // bookings for this tour/date/slot (customer names, refs, pax).
+  const linked = tourId ? await prisma.booking.findMany({
+    where: { tourId, date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    select: { customerName: true, confirmationCode: true, pax: true },
+  }) : [];
+  const bookings = linked.length
+    ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.confirmationCode ?? "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
+    : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
+
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps,
-    sheet: {
-      ref: null, guideId, date, slotIdx, tourId, status: "Confirmed",
-      bookings: [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }],
-      expenses: DEFAULT_EXPENSES,
-      guideFee: DEFAULT_GUIDE_FEE,
-    },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE },
   });
 }
 

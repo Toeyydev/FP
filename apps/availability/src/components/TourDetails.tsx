@@ -30,7 +30,6 @@ export default function TourDetails() {
   if (!d) return <div className="wrap"><section className="panel"><div className="op-empty">…</div></section></div>;
 
   const totalPax = d.bookings.reduce((s, b) => s + (b.pax ?? 0), 0) || d.pax || 0;
-  const hasInfo = d.tour?.meetingPoint || d.tour?.itinerary || d.tour?.included || d.tour?.bring;
 
   return (
     <div className="wrap jobsheet">
@@ -66,18 +65,7 @@ export default function TourDetails() {
             )) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
           </tbody>
         </table>
-        {d.note && <div style={{ marginTop: 8, fontSize: 13 }}>📝 <b>Note:</b> {d.note}</div>}
-
-        {/* tour info */}
-        <h3 className="js-section" style={{ background: "#fff8c4", marginTop: 18 }}>Tour information</h3>
-        {hasInfo ? (
-          <div className="td-grid" style={{ padding: "10px 4px" }}>
-            {d.tour?.meetingPoint && <div className="td-row"><span className="td-ic">📍</span><div><div className="td-lab">Meeting point</div><div className="td-val">{d.tour.meetingPoint}</div></div></div>}
-            {d.tour?.itinerary && <div className="td-row"><span className="td-ic">🗺</span><div><div className="td-lab">Itinerary</div><div className="td-val" style={{ whiteSpace: "pre-wrap" }}>{d.tour.itinerary}</div></div></div>}
-            {d.tour?.included && <div className="td-row"><span className="td-ic">✅</span><div><div className="td-lab">Included</div><div className="td-val">{d.tour.included}</div></div></div>}
-            {d.tour?.bring && <div className="td-row"><span className="td-ic">🎒</span><div><div className="td-lab">Bring / notes</div><div className="td-val">{d.tour.bring}</div></div></div>}
-          </div>
-        ) : <div style={{ padding: "10px 4px", color: "var(--ink-soft)", fontSize: 13 }}>Meeting point & itinerary not added yet — check with operations.</div>}
+        {d.note && <div style={{ marginTop: 10, fontSize: 13 }}>📝 <b>Note:</b> {d.note}</div>}
       </section>
     </div>
   );

@@ -83,6 +83,15 @@ export function parseBokun(raw: unknown): ParsedBooking {
   };
 }
 
+// Which sales channel the booking came through (Bokun aggregates them).
+export function detectChannel(raw: unknown): string {
+  const s = JSON.stringify(raw ?? "").toLowerCase();
+  if (s.includes("viator")) return "Viator";
+  if (s.includes("getyourguide") || s.includes("get your guide") || s.includes('"gyg')) return "GetYourGuide";
+  const c = deepFind(raw, ["channelTitle", "salesChannel", "agencyTitle", "agency", "bookingSource", "sourceName", "channel"]);
+  return c ? String(c) : "Bokun";
+}
+
 // Detect a cancellation from the event/action field.
 export function isCancellation(raw: unknown): boolean {
   const action = String(deepFind(raw, ["action", "status", "eventType", "type"]) ?? "").toUpperCase();

@@ -721,7 +721,6 @@ export default function AppClient({
         {role === "guide" && <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>}
         {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
         {role === "operator" && <a className="btn sm" href="/bookings">📥 {t("bookings")}</a>}
-        {role === "operator" && <a className="btn sm" href="/tours">🗺 {t("toursInfo")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
             {t("accountsTitle")}

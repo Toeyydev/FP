@@ -100,18 +100,17 @@ export default function BookingsInbox() {
             </div>
           )}
 
-          {/* Needs mapping */}
+          {/* Connect tour (one-time per product) */}
           {needMap.length > 0 && (
             <>
-              <h3 style={{ fontSize: 14, margin: "4px 0 8px" }}>⚠️ Needs mapping ({needMap.length})</h3>
+              <h3 style={{ fontSize: 14, margin: "4px 0 8px" }}>🔗 Connect tour ({needMap.length}) <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>— one-time per product; future bookings auto-connect</span></h3>
               <table className="acct-table">
-                <thead><tr><th>Source</th><th>Ref / Customer</th><th>Product</th><th>Date</th><th>Tour</th><th>Slot</th><th /></tr></thead>
+                <thead><tr><th>Source</th><th>Ref / Customer</th><th>Date</th><th>Tour</th><th>Slot</th><th /></tr></thead>
                 <tbody>
                   {needMap.map((b) => (
                     <tr key={b.id}>
                       <td><span className="badge">{b.source}</span></td>
                       <td>{b.confirmationCode || b.customerName || "—"}</td>
-                      <td style={{ color: "var(--ink-soft)", maxWidth: 180 }}>{b.productName || "—"}</td>
                       <td><input type="date" className="search" style={{ width: 140 }} defaultValue={b.date ?? ""} onBlur={(e) => e.target.value && post({ action: "update", id: b.id, date: e.target.value }).then(load)} /></td>
                       <td>
                         <select className="search" defaultValue={b.tourId ?? ""} onChange={(e) => post({ action: "update", id: b.id, tourId: e.target.value }).then(load)}>
@@ -126,9 +125,7 @@ export default function BookingsInbox() {
                         </select>
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                        <button className="btn sm" onClick={() => openDetail(b.id)}>ℹ️ Details</button>{" "}
-                        <button className="btn sm" onClick={() => post({ action: "ignore", id: b.id }).then(load)}>Ignore</button>{" "}
-                        <button className="btn sm danger" onClick={() => { if (confirm("Remove this booking permanently?")) post({ action: "delete", id: b.id }).then(load); }}>🗑 Remove</button>
+                        <button className="btn sm" onClick={() => openDetail(b.id)}>ℹ️ Details</button>
                       </td>
                     </tr>
                   ))}
@@ -153,16 +150,14 @@ export default function BookingsInbox() {
                     </div>
                     <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
                       {items.map((b) => (
-                        <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
-                          <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
-                          <button title="Remove booking" onClick={() => { if (confirm("Remove this booking permanently?")) post({ action: "delete", id: b.id }).then(load); }}
-                            style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
-                        </span>
+                        <button key={b.id} onClick={() => openDetail(b.id)} title="Details" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 10px", fontSize: 12, cursor: "pointer" }}>
+                          {b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️
+                        </button>
                       ))}
                     </div>
                   </div>
                   <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 60, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
-                  <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer to available</button>
+                  <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📄 Create job sheet</button>
                 </div>
               );
             })
@@ -190,7 +185,10 @@ export default function BookingsInbox() {
                 <pre style={{ background: "#f6f6f6", border: "1px solid var(--line,#ddd)", borderRadius: 8, padding: 10, fontSize: 11, overflow: "auto", maxHeight: 320 }}>{JSON.stringify(detail.raw, null, 2)}</pre>
               </details>
             </div>
-            <div className="mfoot"><button className="btn dark" onClick={() => setDetail(null)}>Close</button></div>
+            <div className="mfoot">
+              <button className="btn ghost danger" onClick={() => { if (confirm("Remove this booking permanently?")) { post({ action: "delete", id: String(detail.id) }).then(load); setDetail(null); } }}>🗑 Remove</button>
+              <button className="btn dark" onClick={() => setDetail(null)}>Close</button>
+            </div>
           </div>
         </div>
       )}
