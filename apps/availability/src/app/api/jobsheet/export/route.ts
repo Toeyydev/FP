@@ -71,12 +71,12 @@ export async function GET(req: NextRequest) {
   const jdHead = r; ws.getCell(`A${jdHead}`).value = "Job Details"; ws.mergeCells(`A${jdHead}:G${jdHead}`);
   ws.getCell(`A${jdHead}`).font = bold; ws.getCell(`A${jdHead}`).alignment = { horizontal: "center" }; ws.getCell(`A${jdHead}`).fill = fill("FFBFE3BF");
   r++;
-  const jdCols = ["No.", "Name lists", "Booking No.", "Booked Pax", "Actual Pax", "Tickets", "Status"];
+  const jdCols = ["No.", "Name lists", "Booking No.", "Booked Pax", "Actual Pax", "Tickets"];
   jdCols.forEach((h, i) => { const c = ws.getCell(r, i + 1); c.value = h; c.font = bold; c.border = border; c.fill = fill("FFF4F4F4"); });
   let bookedSum = 0, actualSum = 0;
   bookings.forEach((b, i) => {
     r++; bookedSum += b.bookedPax ?? 0; actualSum += b.actualPax ?? 0;
-    const vals = [i + 1, b.name, b.bookingNo, b.bookedPax, b.actualPax, b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "", b.status];
+    const vals = [i + 1, b.name, b.bookingNo, b.bookedPax, b.actualPax, b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : ""];
     vals.forEach((v, ci) => { const c = ws.getCell(r, ci + 1); c.value = v as ExcelJS.CellValue; c.border = border; });
   });
   r++; set(`C${r}`, "Total", { bold: true }); set(`D${r}`, bookedSum, { bold: true }); set(`E${r}`, actualSum, { bold: true });

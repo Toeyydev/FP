@@ -58,6 +58,7 @@ export default function AppClient({
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null }[]>([]);
+  const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [showNotif, setShowNotif] = useState(false);
   // assign-form state lives here (not in a child) so a poll re-render never wipes it
   const [fTour, setFTour] = useState("");
@@ -139,6 +140,12 @@ export default function AppClient({
     return () => window.clearInterval(id);
   }, [role]);
 
+  // Guide: must complete account details before setting availability.
+  useEffect(() => {
+    if (role !== "guide") return;
+    fetch("/api/profile/status", { cache: "no-store" }).then((r) => r.json()).then(setProfileGate).catch(() => {});
+  }, [role]);
+
   // Guide: load their upcoming confirmed tours (schedule).
   useEffect(() => {
     if (role !== "guide") return;
@@ -181,6 +188,7 @@ export default function AppClient({
 
   // ---- mutations ----
   async function putAvail(d: Date, slots: boolean[]) {
+    if (!profileGate.complete) { toast(t("completeProfileFirst")); return; }
     await fetch("/api/availability", {
       method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: ymd(d), slots }),
     });
@@ -759,6 +767,16 @@ export default function AppClient({
           <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
         </div>
       </div>
+
+      {role === "guide" && !profileGate.complete && (
+        <section className="profile-gate">
+          <div>
+            <b>📝 {t("completeProfileTitle")}</b>
+            <div style={{ fontSize: 13, marginTop: 4 }}>{t("completeProfileBody")}{profileGate.missing.length ? ` (${t("missing")}: ${profileGate.missing.join(", ")})` : ""}</div>
+          </div>
+          <a className="btn primary" href="/profile">{t("myDetails")}</a>
+        </section>
+      )}
 
       {role === "guide" && offers.length > 0 && (
         <section className="offers-banner">

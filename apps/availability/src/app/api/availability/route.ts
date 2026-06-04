@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_COUNT } from "@/lib/slots";
+import { guideProfileStatus } from "@/lib/profile";
 import { dayOf } from "@/lib/dates";
 
 const monthRe = /^\d{4}-\d{2}$/;
@@ -53,6 +54,15 @@ export async function PUT(req: NextRequest) {
 
   const guideId = session.user.guideId;
   const { date, slots } = parsed.data;
+
+  // Must complete account details before setting availability.
+  const me = await prisma.user.findUnique({
+    where: { id: session.user.id! },
+    select: { fullName: true, phone: true, taxId: true, currentAddress: true, idCardAddress: true, bankName: true, bankAccountNo: true, bankAccountName: true, emergencyName: true, emergencyPhone: true },
+  });
+  if (me && !guideProfileStatus(me).complete) {
+    return NextResponse.json({ error: "profile-incomplete" }, { status: 403 });
+  }
 
   if (await prisma.blockedDate.findUnique({ where: { date } })) {
     return NextResponse.json({ error: "date-blocked" }, { status: 409 });
