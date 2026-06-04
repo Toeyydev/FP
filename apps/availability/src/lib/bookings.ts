@@ -57,41 +57,73 @@ export function timeToSlot(time: string | undefined): number | undefined {
 
 export type ParsedBooking = {
   externalId?: string; confirmationCode?: string; externalRef?: string; productName?: string;
-  date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string;
+  date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string; durationMin?: number;
 };
 
+type Any = Record<string, unknown>;
+const obj = (v: unknown): Any => (v && typeof v === "object" ? (v as Any) : {});
+const arr = (v: unknown): Any[] => (Array.isArray(v) ? (v as Any[]) : []);
+
+// Parser tuned to the real Bokun booking webhook shape, with deep-search fallbacks.
 export function parseBokun(raw: unknown): ParsedBooking {
-  const externalId = deepFind(raw, ["bookingId", "id", "parentBookingId"]);
-  const confirmationCode = deepFind(raw, ["confirmationCode", "bookingCode"]);
-  // The original OTA booking number (GetYourGuide / Viator), separate from Bokun's.
-  const externalRef = deepFind(raw, ["externalBookingReference", "externalReference", "resellerReference", "agencyReference", "productConfirmationCode", "externalId"]);
-  const productName = deepFind(raw, ["title", "productTitle", "activityTitle", "name"]);
-  const date = toYMD(deepFind(raw, ["startDate", "date", "startDateTime", "travelDate", "fromDate"]));
-  const startTime = normTime(deepFind(raw, ["startTime", "time", "departureTime", "startTimeStr"])) ?? normTime(deepFind(raw, ["startDateTime"]));
-  const paxRaw = deepFind(raw, ["totalParticipants", "pax", "participants", "totalPax", "quantity"]);
-  const first = deepFind(raw, ["firstName"]);
-  const last = deepFind(raw, ["lastName"]);
-  const customerName = (first || last) ? `${first ?? ""} ${last ?? ""}`.trim() : (deepFind(raw, ["customerName", "name"]) as string | undefined);
+  const r = obj(raw);
+  const ab = obj(arr(r.activityBookings)[0]);              // the activity booking
+  const abInv = obj(ab.invoice);
+  const pi = obj(arr(obj(r.invoice).productInvoices)[0]);  // the product invoice
+  const product = obj(ab.product || pi.product);
+
+  const externalId = r.bookingId ?? ab.bookingId ?? deepFind(raw, ["bookingId"]);
+  const productName = product.title ?? ab.title ?? deepFind(raw, ["title", "productTitle"]);
+  const confirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? obj(ab.barcode).value
+    ?? deepFind(raw, ["productConfirmationCode", "confirmationCode", "bookingCode"]);
+  // Original OTA ref if Bokun passes one; otherwise reuse the confirmation code.
+  const externalRef = deepFind(raw, ["externalBookingReference", "externalReference", "resellerReference", "agencyReference"]) ?? confirmationCode;
+
+  // Bokun encodes the local wall-clock start time as a UTC epoch — read it back
+  // with UTC so 08:30 stays 08:30. Prefer the product-invoice timestamp (has the
+  // time); fall back to the activity date.
+  const startMs = pi.timestamp ?? abInv.timestamp ?? ab.startDate ?? ab.date ?? deepFind(raw, ["startDate", "startDateTime", "date"]);
+  let date: string | undefined, startTime: string | undefined;
+  if (typeof startMs === "number") {
+    const iso = new Date(startMs).toISOString();
+    date = iso.slice(0, 10);
+    startTime = iso.slice(11, 16);
+  } else {
+    date = toYMD(deepFind(raw, ["startDate", "date"]));
+    startTime = normTime(deepFind(raw, ["startTime", "time"]));
+  }
+
+  // pax = sum of line-item quantities.
+  const lineItems = arr(abInv.lineItems).length ? arr(abInv.lineItems) : arr(pi.lineItems);
+  let pax = lineItems.reduce((s, li) => s + (Number(li.quantity) || Number(li.people) || 0), 0);
+  if (!pax) pax = Number(deepFind(raw, ["totalParticipants", "pax", "participants"])) || 0;
+
+  const first = r.customer ? obj(r.customer).firstName : deepFind(raw, ["firstName"]);
+  const last = r.customer ? obj(r.customer).lastName : deepFind(raw, ["lastName"]);
+  const customerName = (first || last) ? `${first ?? ""} ${last ?? ""}`.trim() : undefined;
+
+  const durHours = Number(product.duration ?? obj(ab.activity).durationHours) || 0;
 
   return {
     externalId: externalId != null ? String(externalId) : undefined,
     confirmationCode: confirmationCode != null ? String(confirmationCode) : undefined,
     externalRef: externalRef != null ? String(externalRef) : undefined,
     productName: productName != null ? String(productName) : undefined,
-    date,
-    startTime,
-    slotIdx: timeToSlot(startTime),
-    pax: paxRaw != null ? Number(paxRaw) || undefined : undefined,
-    customerName: customerName || undefined,
+    date, startTime, slotIdx: timeToSlot(startTime),
+    pax: pax || undefined, customerName,
+    durationMin: durHours ? durHours * 60 : undefined,
   };
 }
 
 // Which sales channel the booking came through (Bokun aggregates them).
 export function detectChannel(raw: unknown): string {
+  const r = obj(raw);
+  const title = obj(r.bookingChannel).title ?? obj(r.seller).title;
+  if (title) return String(title);
   const s = JSON.stringify(raw ?? "").toLowerCase();
   if (s.includes("viator")) return "Viator";
-  if (s.includes("getyourguide") || s.includes("get your guide") || s.includes('"gyg')) return "GetYourGuide";
-  const c = deepFind(raw, ["channelTitle", "salesChannel", "agencyTitle", "agency", "bookingSource", "sourceName", "channel"]);
+  if (s.includes("getyourguide") || s.includes("gyg.me")) return "GetYourGuide";
+  const c = deepFind(raw, ["channelTitle", "salesChannel", "agencyTitle", "agency"]);
   return c ? String(c) : "Bokun";
 }
 
