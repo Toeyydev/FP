@@ -313,20 +313,6 @@ export default function AppClient({
     await fetch("/api/notifications", { method: "DELETE" });
     setNotif({ unread: 0, items: [] });
   }
-  // Push each assigned guide their personal job sheet for the day (LINE + in-app).
-  async function sendJobSheets(d: Date) {
-    const date = ymd(d);
-    const assigned = (ref?.guides ?? []).filter((g) => Object.keys(getAssign(g.guideId, d)).length > 0);
-    if (assigned.length === 0) { toast(t("noJobsToSend")); return; }
-    if (!window.confirm(`${t("sendJobSheet")} — ${assigned.length} guide(s) · ${date}?`)) return;
-    const r = await fetch("/api/jobsheet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date }) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) { toast(t("errGeneric")); return; }
-    const skipped = (j.lineSkipped as string[] | undefined) ?? [];
-    toast(skipped.length
-      ? `${t("jobSheetSent")}: ${j.count} · LINE ${j.lineSent} · ${t("noLineLinked")}: ${skipped.join(", ")}`
-      : `${t("jobSheetSent")}: ${j.count} · LINE ${j.lineSent}`);
-  }
 
   // ---- navigation ----
   function navBy(dir: number) {
@@ -515,7 +501,6 @@ export default function AppClient({
           <span className="hint">{d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
           <div className="head-tools">
             <button className="btn sm primary" onClick={openNewOffer}>➕ {t("newOffer")}</button>
-            <button className="btn sm" onClick={() => sendJobSheets(d)}>📤 {t("sendJobSheet")}</button>
             <button className={`btn sm ${blocked ? "" : "danger"}`} onClick={() => toggleBlock(d)}>{blocked ? t("unblockDay") : t("blockDay")}</button>
           </div>
         </div>
