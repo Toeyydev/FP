@@ -11,9 +11,16 @@ function ops(role?: string) {
 }
 
 // GET — operator inbox: recent non-ignored bookings + tours for mapping.
-export async function GET() {
+// With ?id=… returns that single booking in full (incl. the raw Bokun payload).
+export async function GET(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const id = req.nextUrl.searchParams.get("id");
+  if (id) {
+    const booking = await prisma.booking.findUnique({ where: { id } });
+    if (!booking) return NextResponse.json({ error: "not-found" }, { status: 404 });
+    return NextResponse.json({ booking });
+  }
   const [bookings, tours] = await Promise.all([
     prisma.booking.findMany({
       where: { status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },

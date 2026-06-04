@@ -22,6 +22,12 @@ export default function BookingsInbox() {
   const [msg, setMsg] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [dur, setDur] = useState<Record<string, string>>({});
+  const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
+
+  async function openDetail(id: string) {
+    const r = await fetch(`/api/bookings?id=${id}`, { cache: "no-store" });
+    if (r.ok) setDetail((await r.json()).booking);
+  }
   // manual-add form
   const [m, setM] = useState({ tourId: "", date: "", slotIdx: 0, pax: "", confirmationCode: "", customerName: "", source: "viator" });
 
@@ -120,6 +126,7 @@ export default function BookingsInbox() {
                         </select>
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <button className="btn sm" onClick={() => openDetail(b.id)}>ℹ️ Details</button>{" "}
                         <button className="btn sm" onClick={() => post({ action: "ignore", id: b.id }).then(load)}>Ignore</button>{" "}
                         <button className="btn sm danger" onClick={() => { if (confirm("Remove this booking permanently?")) post({ action: "delete", id: b.id }).then(load); }}>🗑 Remove</button>
                       </td>
@@ -147,7 +154,7 @@ export default function BookingsInbox() {
                     <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
                       {items.map((b) => (
                         <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
-                          {b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"}
+                          <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
                           <button title="Remove booking" onClick={() => { if (confirm("Remove this booking permanently?")) post({ action: "delete", id: b.id }).then(load); }}
                             style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
                         </span>
@@ -162,6 +169,31 @@ export default function BookingsInbox() {
           )}
         </div>
       </section>
+
+      {detail && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
+          <div className="modal" style={{ maxWidth: 560, width: "92%" }}>
+            <h3>Booking details</h3>
+            <div className="mbody">
+              <table className="acct-table"><tbody>
+                {([
+                  ["Source", detail.source], ["Booking ref", detail.confirmationCode], ["Bokun id", detail.externalId],
+                  ["Product", detail.productName], ["Tour (mapped)", detail.tourId], ["Date", detail.date],
+                  ["Start time", detail.startTime], ["Slot", detail.slotIdx], ["Pax", detail.pax],
+                  ["Customer", detail.customerName], ["Status", detail.status],
+                ] as [string, unknown][]).map(([k, v]) => (
+                  <tr key={k}><td style={{ fontWeight: 600, width: 130 }}>{k}</td><td>{v == null || v === "" ? "—" : String(v)}</td></tr>
+                ))}
+              </tbody></table>
+              <details style={{ marginTop: 12 }}>
+                <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Raw Bokun payload</summary>
+                <pre style={{ background: "#f6f6f6", border: "1px solid var(--line,#ddd)", borderRadius: 8, padding: 10, fontSize: 11, overflow: "auto", maxHeight: 320 }}>{JSON.stringify(detail.raw, null, 2)}</pre>
+              </details>
+            </div>
+            <div className="mfoot"><button className="btn dark" onClick={() => setDetail(null)}>Close</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
