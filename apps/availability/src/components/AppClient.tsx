@@ -299,6 +299,10 @@ export default function AppClient({
     await fetch("/api/notifications", { method: "POST" });
     setNotif((n) => ({ unread: 0, items: n.items.map((i) => ({ ...i, readAt: i.readAt || new Date().toISOString() })) }));
   }
+  async function clearNotif() {
+    await fetch("/api/notifications", { method: "DELETE" });
+    setNotif({ unread: 0, items: [] });
+  }
   // Push each assigned guide their personal job sheet for the day (LINE + in-app).
   async function sendJobSheets(d: Date) {
     const date = ymd(d);
@@ -785,7 +789,10 @@ export default function AppClient({
                 </div>
               )) : <div className="op-empty">{t("noNotifications")}</div>}
             </div>
-            <div className="mfoot"><button className="btn dark" onClick={() => setShowNotif(false)}>{t("close")}</button></div>
+            <div className="mfoot">
+              {notif.items.length > 0 && <button className="btn ghost" onClick={clearNotif}>{t("clearAll")}</button>}
+              <button className="btn dark" onClick={() => setShowNotif(false)}>{t("close")}</button>
+            </div>
           </div>
         </div>
       )}

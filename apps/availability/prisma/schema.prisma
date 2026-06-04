@@ -82,10 +82,12 @@ model Notification {
   userId    String
   message   String
   kind      String    @default("info")
+  offerId   String? // job-offer notifications are auto-cleared when the offer resolves
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
   @@index([userId])
+  @@index([offerId])
 }
 
 // Uploaded reference documents (ID card, bank book). Bytes stored AES-encrypted.

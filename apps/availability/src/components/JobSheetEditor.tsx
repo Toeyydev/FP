@@ -55,7 +55,7 @@ export default function JobSheetEditor() {
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
 
-  async function save() {
+  async function save(): Promise<boolean> {
     setBusy(true); setMsg("");
     const r = await fetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
@@ -63,16 +63,19 @@ export default function JobSheetEditor() {
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "bad-body" ? "Please check the values." : "Save failed."); return; }
-    setSheet(d.sheet); setSaved(true); setMsg("Saved ✓");
+    if (!r.ok) { setMsg(d.error === "bad-body" ? "Please check the values." : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
+    setSheet(d.sheet); setSaved(true); setMsg("Saved ✓"); return true;
   }
   async function sendToGuide() {
-    if (!saved) { setMsg("Save first, then send."); return; }
-    setBusy(true);
+    // Auto-save first so you never hit a "save first" dead-end.
+    if (!saved) { const ok = await save(); if (!ok) return; }
+    setBusy(true); setMsg("Sending…");
     const r = await fetch("/api/jobsheet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: sheet!.date, guideId: sheet!.guideId }) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    setMsg(r.ok ? `Sent to guide (LINE ${d.lineSent ?? 0})` : "Send failed.");
+    if (!r.ok) { setMsg("Send failed."); return; }
+    if ((d.count ?? 0) === 0) { setMsg("Nothing to send — assign a guide to this slot first."); return; }
+    setMsg(d.lineSent > 0 ? `✅ Sent to guide on LINE` : `✅ Sent to guide's in-app inbox (link LINE to also send there)`);
   }
 
   const L = { width: "100%", boxSizing: "border-box" as const, padding: "5px 7px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit" };

@@ -22,3 +22,11 @@ export async function POST() {
   await prisma.notification.updateMany({ where: { userId: session.user.id, readAt: null }, data: { readAt: new Date() } });
   return NextResponse.json({ ok: true });
 }
+
+// DELETE — clear all of the user's notifications.
+export async function DELETE() {
+  const session = await auth();
+  if (!session?.user?.id) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  await prisma.notification.deleteMany({ where: { userId: session.user.id } });
+  return NextResponse.json({ ok: true });
+}

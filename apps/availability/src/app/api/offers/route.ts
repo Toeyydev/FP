@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
   let lineSent = 0;
   for (const g of candidates) {
     // In-app notification for everyone (record + fallback).
-    await prisma.notification.create({ data: { userId: g.id, kind: "offer", message: `${summary}\n(open the app or LINE to Accept/Deny)` } });
+    await prisma.notification.create({ data: { userId: g.id, kind: "offer", offerId: offer.id, message: `${summary}\n(open the app or LINE to Accept/Deny)` } });
     // LINE Accept/Deny buttons for linked guides — addressed to the guide by name.
     if (lineEnabled && g.lineUserId) {
       const firstName = (g.displayName || "").split(" ")[0];

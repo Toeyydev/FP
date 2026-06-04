@@ -70,6 +70,8 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
     update: { tourId: offer.tourId, pax: offer.pax ?? null, note: offer.note ?? null },
   });
   await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "ACCEPTED", respondedAt: new Date() } });
+  // Offer is resolved — clear its notification from EVERY candidate's bell.
+  await prisma.notification.deleteMany({ where: { offerId } });
 
   return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
 }
@@ -78,6 +80,9 @@ export async function denyOffer(offerId: string, guideId: string): Promise<"ok" 
   const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
   if (!offer) return "closed";
   await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "DENIED", respondedAt: new Date() } });
+  // Remove the offer from the denying guide's bell.
+  const u = await prisma.user.findUnique({ where: { guideId }, select: { id: true } });
+  if (u) await prisma.notification.deleteMany({ where: { offerId, userId: u.id } });
   return "ok";
 }
 
@@ -90,6 +95,7 @@ export async function sweepExpiredOffers(): Promise<number> {
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
   for (const o of stale) {
     await prisma.jobOffer.updateMany({ where: { id: o.id, status: "OPEN" }, data: { status: "EXPIRED" } });
+    await prisma.notification.deleteMany({ where: { offerId: o.id } }); // clear the dead offer from guides' bells
     if (o.createdById) {
       await prisma.notification.create({
         data: { userId: o.createdById, kind: "offer", message: `⏰ No one accepted: ${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}. Needs manual assignment.` },
