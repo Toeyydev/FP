@@ -28,6 +28,14 @@ export default function BookingsInbox() {
     const r = await fetch(`/api/bookings?id=${id}`, { cache: "no-store" });
     if (r.ok) setDetail((await r.json()).booking);
   }
+  // Delete a booking — confirm twice before it's gone for good.
+  async function removeBooking(id: string, label: string) {
+    if (!confirm(`Delete this booking?\n${label}`)) return;
+    if (!confirm("Are you sure? This permanently removes it and cannot be undone.")) return;
+    await post({ action: "delete", id });
+    setDetail(null);
+    await load();
+  }
   // manual-add form
   const [m, setM] = useState({ tourId: "", date: "", slotIdx: 0, pax: "", confirmationCode: "", customerName: "", source: "viator" });
 
@@ -125,7 +133,8 @@ export default function BookingsInbox() {
                         </select>
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                        <button className="btn sm" onClick={() => openDetail(b.id)}>ℹ️ Details</button>
+                        <button className="btn sm" onClick={() => openDetail(b.id)}>ℹ️ Details</button>{" "}
+                        <button className="btn sm danger" onClick={() => removeBooking(b.id, `${b.source} · ${b.confirmationCode || b.customerName || "—"}`)}>🗑 Delete</button>
                       </td>
                     </tr>
                   ))}
@@ -150,9 +159,10 @@ export default function BookingsInbox() {
                     </div>
                     <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
                       {items.map((b) => (
-                        <button key={b.id} onClick={() => openDetail(b.id)} title="Details" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 10px", fontSize: 12, cursor: "pointer" }}>
-                          {b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️
-                        </button>
+                        <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
+                          <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
+                          <button title="Delete" onClick={() => removeBooking(b.id, b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
+                        </span>
                       ))}
                     </div>
                   </div>
@@ -186,7 +196,7 @@ export default function BookingsInbox() {
               </details>
             </div>
             <div className="mfoot">
-              <button className="btn ghost danger" onClick={() => { if (confirm("Remove this booking permanently?")) { post({ action: "delete", id: String(detail.id) }).then(load); setDetail(null); } }}>🗑 Remove</button>
+              <button className="btn ghost danger" onClick={() => removeBooking(String(detail.id), `${detail.source} · ${detail.confirmationCode || detail.customerName || "—"}`)}>🗑 Delete</button>
               <button className="btn dark" onClick={() => setDetail(null)}>Close</button>
             </div>
           </div>
