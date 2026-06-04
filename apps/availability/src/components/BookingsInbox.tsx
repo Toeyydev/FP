@@ -119,7 +119,10 @@ export default function BookingsInbox() {
                           {SLOTS.map((s) => <option key={s.idx} value={s.idx}>{s.start}</option>)}
                         </select>
                       </td>
-                      <td style={{ textAlign: "right" }}><button className="btn sm danger" onClick={() => post({ action: "ignore", id: b.id }).then(load)}>Ignore</button></td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <button className="btn sm" onClick={() => post({ action: "ignore", id: b.id }).then(load)}>Ignore</button>{" "}
+                        <button className="btn sm danger" onClick={() => { if (confirm("Remove this booking permanently?")) post({ action: "delete", id: b.id }).then(load); }}>🗑 Remove</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -140,7 +143,15 @@ export default function BookingsInbox() {
                     <b>{date} · {slot?.start} · {tourName(tourId)}</b>
                     <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 3 }}>
                       {items.length} booking(s) · {pax} pax{pax > 10 ? " ⚠️ over 10 — split into separate jobs" : ""}
-                      <br />{items.map((b) => `${b.confirmationCode || "—"}${b.customerName ? ` (${b.customerName})` : ""} ×${b.pax ?? "?"}`).join(" · ")}
+                    </div>
+                    <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
+                      {items.map((b) => (
+                        <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
+                          {b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"}
+                          <button title="Remove booking" onClick={() => { if (confirm("Remove this booking permanently?")) post({ action: "delete", id: b.id }).then(load); }}
+                            style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
+                        </span>
+                      ))}
                     </div>
                   </div>
                   <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 60, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>

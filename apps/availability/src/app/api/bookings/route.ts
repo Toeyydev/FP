@@ -76,11 +76,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, booking: b });
   }
 
-  // Hide a booking from the inbox.
+  // Hide a booking from the inbox (sticky — survives a Bokun re-send).
   if (action === "ignore") {
     const id = z.string().min(1).safeParse(body?.id);
     if (!id.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     await prisma.booking.update({ where: { id: id.data }, data: { status: "IGNORED" } });
+    return NextResponse.json({ ok: true });
+  }
+
+  // Permanently remove a booking (drafts can be removed anytime).
+  if (action === "delete") {
+    const parsed = z.object({ ids: z.array(z.string().min(1)).min(1) }).or(z.object({ id: z.string().min(1) })).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const ids = "ids" in parsed.data ? parsed.data.ids : [parsed.data.id];
+    await prisma.booking.deleteMany({ where: { id: { in: ids } } });
+    await audit({ actorId, actorRole, action: "booking.deleted", entityType: "Booking", detail: { count: ids.length } });
     return NextResponse.json({ ok: true });
   }
 
