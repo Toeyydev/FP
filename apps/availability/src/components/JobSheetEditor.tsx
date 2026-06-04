@@ -85,6 +85,7 @@ export default function JobSheetEditor() {
           {ro && <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>}
           <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
           <button className="btn" onClick={() => window.print()}>🖨 Print</button>
+          <button className="btn" disabled={busy} onClick={async () => { if (canEdit && !saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>⬇ Excel</button>
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>📤 Send to guide</button>}
           {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}
         </div>
