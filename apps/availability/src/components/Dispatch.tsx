@@ -18,6 +18,12 @@ export default function Dispatch() {
   }, []);
   useEffect(() => { load(); const id = window.setInterval(load, 15000); return () => window.clearInterval(id); }, [load]);
 
+  async function removeAssignment(a: Assignment) {
+    if (!confirm(`Remove this tour?\n${a.tourName} · ${a.date} ${a.time} · ${a.guideId} ${a.guideName}`)) return;
+    const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx }) });
+    if (r.ok) await load();
+  }
+
   if (!data) return <div className="wrap"><AuthHeader backHref="/" /><section className="panel"><div className="op-empty">…</div></section></div>;
 
   const openOffers = data.offers.filter((o) => o.status === "OPEN");
@@ -57,7 +63,10 @@ export default function Dispatch() {
                     <div key={i} className="sched-card" style={{ cursor: "default" }}>
                       <div className="sched-when"><b style={{ fontSize: 18 }}>{i + 1}</b><span>{a.time}</span></div>
                       <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">👤 {a.guideId} {a.guideName}{a.pax != null ? ` · 👥 ${a.pax} pax` : ""}{a.note ? ` · 📝 ${a.note}` : ""}</div></div>
-                      <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
+                        <button className="btn sm danger" onClick={() => removeAssignment(a)}>🗑 Remove</button>
+                      </div>
                     </div>
                   ))}
                 </div>
