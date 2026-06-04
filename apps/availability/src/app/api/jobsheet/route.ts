@@ -72,10 +72,11 @@ export async function GET(req: NextRequest) {
   // bookings for this tour/date/slot (customer names, refs, pax).
   const linked = tourId ? await prisma.booking.findMany({
     where: { tourId, date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-    select: { customerName: true, confirmationCode: true, pax: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true },
+    orderBy: { createdAt: "asc" },
   }) : [];
   const bookings = linked.length
-    ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.confirmationCode ?? "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
+    ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
 
   return NextResponse.json({
