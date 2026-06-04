@@ -41,26 +41,25 @@ export default function Dispatch() {
           <div className="panel-head"><h2>On-going tours</h2><span className="hint">Today &amp; tomorrow — auto-updates</span></div>
           <div style={{ padding: 14 }}>
             {data.assignments.length === 0 ? <div className="op-empty">No upcoming assigned jobs yet.</div> : (() => {
+              // Group by date (each date shown once), tours numbered 1, 2, 3…
               const todayStr = new Date().toLocaleDateString("en-CA");
-              const tmrwStr = new Date(Date.now() + 86400000).toLocaleDateString("en-CA");
-              const groups: [string, Assignment[]][] = [
-                ["📅 Today", data.assignments.filter((a) => a.date === todayStr)],
-                ["Tomorrow", data.assignments.filter((a) => a.date === tmrwStr)],
-                ["Later", data.assignments.filter((a) => a.date > tmrwStr)],
-              ];
-              const card = (a: Assignment, i: number) => (
-                <div key={i} className="sched-card" style={{ cursor: "default" }}>
-                  <div className="sched-when"><b>{fmt(a.date)}</b><span>{a.time}</span></div>
-                  <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">👤 {a.guideId} {a.guideName}{a.pax != null ? ` · 👥 ${a.pax} pax` : ""}{a.note ? ` · 📝 ${a.note}` : ""}</div></div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
-                  </div>
-                </div>
-              );
-              return groups.map(([label, items]) => items.length === 0 ? null : (
-                <div key={label} style={{ marginBottom: 18 }}>
-                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: label.includes("Today") ? "#1b4ef0" : undefined }}>{label} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>({items.length})</span></h3>
-                  {items.map(card)}
+              const byDate: [string, Assignment[]][] = [];
+              for (const a of data.assignments) {
+                const g = byDate.find(([d]) => d === a.date);
+                if (g) g[1].push(a); else byDate.push([a.date, [a]]);
+              }
+              return byDate.map(([date, items]) => (
+                <div key={date} style={{ marginBottom: 18 }}>
+                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: date === todayStr ? "#1b4ef0" : undefined }}>
+                    {date === todayStr ? "📅 Today · " : ""}{fmt(date)} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>({items.length})</span>
+                  </h3>
+                  {items.map((a, i) => (
+                    <div key={i} className="sched-card" style={{ cursor: "default" }}>
+                      <div className="sched-when"><b style={{ fontSize: 18 }}>{i + 1}</b><span>{a.time}</span></div>
+                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">👤 {a.guideId} {a.guideName}{a.pax != null ? ` · 👥 ${a.pax} pax` : ""}{a.note ? ` · 📝 ${a.note}` : ""}</div></div>
+                      <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
+                    </div>
+                  ))}
                 </div>
               ));
             })()}

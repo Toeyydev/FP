@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps,
-    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }
 

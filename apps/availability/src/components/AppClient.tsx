@@ -372,18 +372,30 @@ export default function AppClient({
     );
   }
 
+  async function cancelTour(s: { date: string; slotIdx: number; tourName: string }) {
+    const reason = window.prompt(t("cancelReasonPrompt"));
+    if (reason === null) return; // dismissed
+    const r = await fetch("/api/schedule", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: s.date, slotIdx: s.slotIdx, reason: reason || undefined }) });
+    if (!r.ok) { toast(t("errGeneric")); return; }
+    setSchedule((sc) => sc.filter((x) => !(x.date === s.date && x.slotIdx === s.slotIdx)));
+    toast(t("tourCancelled"));
+    await load();
+  }
   function guideSchedule(): ReactNode {
     const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
     return (
       <>
-        <div className="panel-head"><h2>{t("mySchedule")}</h2><span className="hint">{t("scheduleHint")}</span></div>
+        <div className="panel-head"><h2>{t("myTours")}</h2><span className="hint">{t("scheduleHint")}</span></div>
         <div style={{ padding: 14 }}>
           {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => (
-            <a key={i} href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`} className="sched-card">
+            <div key={i} className="sched-card" style={{ cursor: "default" }}>
               <div className="sched-when"><b>{fmt(s.date)}</b><span>{s.time}</span></div>
               <div className="sched-mid"><b>{s.tourName}</b><div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div></div>
-              <div className="sched-go">ℹ️</div>
-            </a>
+              <div style={{ display: "flex", gap: 6 }}>
+                <a className="btn sm" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>📄</a>
+                <button className="btn sm danger" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>
+              </div>
+            </div>
           ))}
         </div>
       </>

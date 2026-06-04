@@ -8,7 +8,7 @@ type Header = { guideId: string; name: string; email: string; tel: string; taxId
 type Tour = { id: string; name: string; time: string } | null;
 type Sheet = {
   ref: string | null; guideId: string; date: string; slotIdx: number; tourId: string; status: string;
-  bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee;
+  bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee; updatedAt?: string | null;
 };
 
 const numOrNull = (v: string): number | null => (v.trim() === "" ? null : Number(v));
@@ -91,6 +91,7 @@ export default function JobSheetEditor() {
           <div className="js-brand"><b>FOLKPATHS</b><div style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>บริษัท โฟล์คพาธส์ จำกัด</div></div>
           <table className="js-meta"><tbody>
             <tr><td>No.</td><td>{sheet.ref ?? <i style={{ color: "#aaa" }}>auto on save</i>}</td></tr>
+            <tr><td>Updated</td><td>{sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <i style={{ color: "#aaa" }}>not saved yet</i>}</td></tr>
             <tr><td>Tour ID</td><td><b>{sheet.tourId || "—"}</b></td></tr>
             <tr><td>Guide ID</td><td>{sheet.guideId}</td></tr>
             <tr><td>Status</td><td>
