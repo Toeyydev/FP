@@ -749,6 +749,7 @@ export default function AppClient({
         <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
         <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>
         {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
+        {role === "operator" && <a className="btn sm" href="/jobs">🧭 {t("jobsNav")}</a>}
         {role === "operator" && <a className="btn sm" href="/bookings">📥 {t("bookings")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
