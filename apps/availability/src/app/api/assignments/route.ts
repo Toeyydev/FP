@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { SLOT_COUNT } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
 import { sweepExpiredOffers } from "@/lib/offers";
+import { sendTourCalendarInvite } from "@/lib/calendar";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -76,11 +77,14 @@ export async function POST(req: NextRequest) {
   if (!guide) return NextResponse.json({ error: "unknown guide" }, { status: 400 });
   if (!tour) return NextResponse.json({ error: "unknown tour" }, { status: 400 });
 
+  const existed = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   await prisma.assignment.upsert({
     where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
     create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
     update: { tourId, pax: pax ?? null, note: note ?? null },
   });
+  // Email the guide a calendar invite (with reminders) when first assigned.
+  if (!existed) await sendTourCalendarInvite(guideId, date, slotIdx);
   return NextResponse.json({ ok: true });
 }
 

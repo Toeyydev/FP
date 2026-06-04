@@ -20,14 +20,20 @@ function getTransport(): Transporter | null {
   return transporter;
 }
 
+type Attachment = { filename: string; content: string; contentType?: string };
+
 // Never throws — a failed/disabled email must not break the request that triggered it.
-export async function sendEmail(opts: { to: string; subject: string; text: string; html?: string }): Promise<{ sent: boolean }> {
+export async function sendEmail(opts: { to: string; subject: string; text: string; html?: string; attachments?: Attachment[]; icalEvent?: { method: string; content: string } }): Promise<{ sent: boolean }> {
   if (!emailEnabled) {
-    console.log(`[email:stub] to=${opts.to} subject="${opts.subject}"\n${opts.text}`);
+    console.log(`[email:stub] to=${opts.to} subject="${opts.subject}"${opts.icalEvent ? " (+calendar invite)" : ""}\n${opts.text}`);
     return { sent: false };
   }
   try {
-    await getTransport()!.sendMail({ from, to: opts.to, subject: opts.subject, text: opts.text, html: opts.html });
+    await getTransport()!.sendMail({
+      from, to: opts.to, subject: opts.subject, text: opts.text, html: opts.html,
+      attachments: opts.attachments,
+      icalEvent: opts.icalEvent ? { method: opts.icalEvent.method, content: opts.icalEvent.content } : undefined,
+    });
     return { sent: true };
   } catch (e) {
     console.error("[email:error]", (e as Error).message);

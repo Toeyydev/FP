@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
+import { sendTourCalendarInvite } from "@/lib/calendar";
 
 // Guides who are AVAILABLE for a given date + slot:
 //  - active guide with a G-id
@@ -72,6 +73,8 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "ACCEPTED", respondedAt: new Date() } });
   // Offer is resolved — clear its notification from EVERY candidate's bell.
   await prisma.notification.deleteMany({ where: { offerId } });
+  // Email the guide a calendar invite (with reminders).
+  await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx);
 
   return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
 }

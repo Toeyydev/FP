@@ -385,7 +385,7 @@ export default function AppClient({
         <div className="panel-head"><h2>{t("mySchedule")}</h2><span className="hint">{t("scheduleHint")}</span></div>
         <div style={{ padding: 14 }}>
           {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => (
-            <a key={i} href={`/tour-details?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`} className="sched-card">
+            <a key={i} href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`} className="sched-card">
               <div className="sched-when"><b>{fmt(s.date)}</b><span>{s.time}</span></div>
               <div className="sched-mid"><b>{s.tourName}</b><div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div></div>
               <div className="sched-go">ℹ️</div>
@@ -418,7 +418,7 @@ export default function AppClient({
                   {blocked ? <span className="pill blocked">🚫 {t("blocked")}</span> : (<>
                     {SLOTS.map((s) => {
                       const a = asg[s.idx];
-                      if (a) return <a key={s.idx} className="pill assigned" title={t("tourDetailsTitle")} href={`/tour-details?guideId=${guideId}&date=${ymd(d)}&slotIdx=${s.idx}`}>🔒 {a.tour} ℹ️</a>;
+                      if (a) return <a key={s.idx} className="pill assigned" title={t("jobSheet")} href={`/job-sheet?guideId=${guideId}&date=${ymd(d)}&slotIdx=${s.idx}`}>🔒 {a.tour} 📄</a>;
                       const busy = !!avd[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
                       return <span key={s.idx} className={`pill ${busy ? "busy" : ""}${nm}`} onClick={() => toggleSlot(d, s.idx)}>{s.start}</span>;
                     })}

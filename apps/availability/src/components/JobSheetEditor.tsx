@@ -38,16 +38,6 @@ export default function JobSheetEditor() {
 
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
-  // A guide viewing a job that has no saved sheet yet — nothing to show.
-  if (!canEdit && !saved) {
-    return (
-      <div className="wrap">
-        <div className="js-bar no-print"><button className="btn ghost" onClick={() => router.back()}>← Back</button></div>
-        <section className="panel"><div className="op-empty" style={{ padding: 30 }}>📋 Your job sheet for this job isn&apos;t ready yet.<br />Your operator will send it once it&apos;s prepared.</div></section>
-      </div>
-    );
-  }
-
   const t = computeTotals(sheet.expenses, sheet.guideFee);
   const ro = !canEdit; // read-only (guide view)
   const up = (patch: Partial<Sheet>) => setSheet({ ...sheet, ...patch });
