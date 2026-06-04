@@ -32,6 +32,11 @@ function toYMD(v: unknown): string | undefined {
   return undefined;
 }
 
+// Normalized key for matching a product name to a learned tour mapping.
+export function productKey(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export function normTime(v: unknown): string | undefined {
   if (v == null) return undefined;
   const s = String(v).replace(".", ":");

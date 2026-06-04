@@ -296,6 +296,16 @@ model Booking {
   @@index([status])
 }
 
+// Learned mapping: a channel product name → our Tour. Set the first time an
+// operator maps a booking's product; future bookings of that product auto-map.
+model ProductMap {
+  id          String   @id @default(cuid())
+  productKey  String   @unique // normalized product name
+  productName String
+  tourId      String
+  updatedAt   DateTime @updatedAt
+}
+
 // The full Folkpath job sheet for one assigned job (guide × date × slot).
 // Living document: the operator edits pax/costs/tickets anytime and re-saves.
 // bookings / expenses / guideFee are JSON so rows can be added/removed freely.

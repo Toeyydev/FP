@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_COUNT } from "@/lib/slots";
+import { productKey } from "@/lib/bookings";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -58,6 +59,20 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const { id, ...rest } = parsed.data;
     const b = await prisma.booking.update({ where: { id }, data: rest });
+    // Learn the product → tour mapping so future bookings of this product auto-map,
+    // and back-apply it to other pending bookings of the same product.
+    if (rest.tourId && b.productName) {
+      const key = productKey(b.productName);
+      await prisma.productMap.upsert({
+        where: { productKey: key },
+        create: { productKey: key, productName: b.productName, tourId: rest.tourId },
+        update: { tourId: rest.tourId, productName: b.productName },
+      });
+      await prisma.booking.updateMany({
+        where: { productName: b.productName, tourId: null, status: { in: ["PENDING"] } },
+        data: { tourId: rest.tourId },
+      });
+    }
     return NextResponse.json({ ok: true, booking: b });
   }
 

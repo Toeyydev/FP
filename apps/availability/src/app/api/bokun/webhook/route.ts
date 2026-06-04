@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { parseBokun, isCancellation } from "@/lib/bookings";
+import { parseBokun, isCancellation, productKey } from "@/lib/bookings";
 
 // Bokun posts booking events here (GYG/Viator via Bokun). We always store the
 // raw payload (so the exact shape can be confirmed) and best-effort parse the
@@ -21,19 +21,26 @@ export async function POST(req: NextRequest) {
   const p = parseBokun(raw);
   const cancelled = isCancellation(raw);
 
+  // Auto-map the tour from a previously-learned product → tour mapping.
+  let tourId: string | null = null;
+  if (p.productName) {
+    const map = await prisma.productMap.findUnique({ where: { productKey: productKey(p.productName) } }).catch(() => null);
+    if (map) tourId = map.tourId;
+  }
+
   try {
     if (p.externalId) {
       await prisma.booking.upsert({
         where: { source_externalId: { source: "bokun", externalId: p.externalId } },
         create: {
           source: "bokun", externalId: p.externalId, confirmationCode: p.confirmationCode ?? null,
-          productName: p.productName ?? null, date: p.date ?? null, startTime: p.startTime ?? null,
+          productName: p.productName ?? null, tourId, date: p.date ?? null, startTime: p.startTime ?? null,
           slotIdx: p.slotIdx ?? null, pax: p.pax ?? null, customerName: p.customerName ?? null,
           status: cancelled ? "CANCELLED" : "PENDING", raw,
         },
         update: {
           confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined,
-          date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined,
+          tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined,
           pax: p.pax ?? undefined, customerName: p.customerName ?? undefined,
           status: cancelled ? "CANCELLED" : undefined, raw,
         },
@@ -42,7 +49,7 @@ export async function POST(req: NextRequest) {
       // No id we recognise yet — still capture it so we can see the shape.
       await prisma.booking.create({
         data: {
-          source: "bokun", confirmationCode: p.confirmationCode ?? null, productName: p.productName ?? null,
+          source: "bokun", confirmationCode: p.confirmationCode ?? null, productName: p.productName ?? null, tourId,
           date: p.date ?? null, startTime: p.startTime ?? null, slotIdx: p.slotIdx ?? null,
           pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING", raw,
         },
