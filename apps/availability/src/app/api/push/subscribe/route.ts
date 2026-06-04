@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { VAPID_PUBLIC } from "@/lib/push";
+import { VAPID_PUBLIC, sendPushToUser } from "@/lib/push";
 
 // GET — the public VAPID key the browser needs to subscribe.
 export function GET() {
@@ -23,7 +23,9 @@ export async function POST(req: NextRequest) {
     create: { userId: session.user.id, endpoint: s.endpoint, p256dh: s.keys.p256dh, auth: s.keys.auth },
     update: { userId: session.user.id, p256dh: s.keys.p256dh, auth: s.keys.auth },
   });
-  return NextResponse.json({ ok: true });
+  // Instant confirmation so the guide sees a real notification right away.
+  const sent = await sendPushToUser(session.user.id, { title: "🔔 Folkpath alerts on", body: "You'll get job offers here — even with the app closed.", url: "/" });
+  return NextResponse.json({ ok: true, testSent: sent });
 }
 
 // DELETE { endpoint } — remove a subscription (turn off alerts on this device).
