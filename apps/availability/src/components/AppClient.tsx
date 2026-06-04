@@ -56,6 +56,7 @@ export default function AppClient({
   const [pendingCount, setPendingCount] = useState(0);
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
+  const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[]>([]);
   const [showNotif, setShowNotif] = useState(false);
   // assign-form state lives here (not in a child) so a poll re-render never wipes it
   const [fTour, setFTour] = useState("");
@@ -136,6 +137,32 @@ export default function AppClient({
     const id = window.setInterval(f, 15000);
     return () => window.clearInterval(id);
   }, [role]);
+
+  // Guide: poll open job offers they can Accept/Deny in-app.
+  const loadOffers = useCallback(() => {
+    if (role !== "guide") return;
+    fetch("/api/offers/mine", { cache: "no-store" }).then((r) => r.json()).then((d) => setOffers(d.offers ?? [])).catch(() => {});
+  }, [role]);
+  useEffect(() => {
+    if (role !== "guide") return;
+    loadOffers();
+    const id = window.setInterval(loadOffers, 15000);
+    return () => window.clearInterval(id);
+  }, [role, loadOffers]);
+
+  async function respondOffer(offerId: string, action: "accept" | "deny") {
+    const r = await fetch("/api/offers/mine", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ offerId, action }) });
+    const d = await r.json().catch(() => ({}));
+    if (action === "accept") {
+      if (r.ok) toast(t("offerAccepted"));
+      else toast(d.reason === "taken" ? t("offerTaken") : d.reason === "expired" ? t("offerExpired") : t("errGeneric"));
+    } else {
+      toast(t("offerDenied"));
+    }
+    setOffers((os) => os.filter((o) => o.id !== offerId));
+    loadOffers();
+    await load();
+  }
 
   // ---- accessors ----
   const getAvail = (gid: string, d: Date): boolean[] | null => av[mkey(d)]?.[gid]?.[d.getDate()] ?? null;
@@ -713,6 +740,24 @@ export default function AppClient({
           <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
         </div>
       </div>
+
+      {role === "guide" && offers.length > 0 && (
+        <section className="offers-banner">
+          <h3>🧭 {t("jobOffers")} ({offers.length})</h3>
+          {offers.map((o) => (
+            <div key={o.id} className="offer-card">
+              <div className="offer-info">
+                <b>{o.tourName}</b>
+                <div className="offer-meta">{o.date} · {o.time}{o.pax != null ? ` · ${o.pax} pax` : ""}{o.note ? ` · ${o.note}` : ""}</div>
+              </div>
+              <div className="offer-actions">
+                <button className="btn sm primary" onClick={() => respondOffer(o.id, "accept")}>✅ {t("accept")}</button>
+                <button className="btn sm ghost" onClick={() => respondOffer(o.id, "deny")}>{t("deny")}</button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       <section className="panel">
         {role === "guide"
