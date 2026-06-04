@@ -1,7 +1,7 @@
 // Service worker — makes the app installable (PWA). Chrome requires the app to
 // work offline, so we serve a cached offline fallback for navigations when the
 // network is unavailable. We do NOT cache authenticated pages (stale/wrong-user risk).
-const CACHE = "folkpath-v3";
+const CACHE = "folkpath-v4";
 const OFFLINE = "/offline.html";
 
 self.addEventListener("install", (event) => {

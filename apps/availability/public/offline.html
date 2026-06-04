@@ -1,16 +1,31 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Folkpath — offline</title>
+<title>Folkpath — reconnecting</title>
 <style>
   html,body{height:100%;margin:0}
   body{display:grid;place-items:center;font-family:system-ui,sans-serif;
     background:radial-gradient(900px 420px at 50% -10%,#eef4ee,transparent 60%),#f4f1ea;color:#16201c;text-align:center;padding:24px}
   .ico{width:72px;height:72px;border-radius:18px;background:#1f9d57;display:grid;place-items:center;color:#fff;font-weight:800;font-size:32px;margin:0 auto 16px;font-family:Georgia,serif}
-  h1{font-size:22px;margin:0 0 6px}p{color:#46554d;font-size:14px;max-width:300px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}p{color:#46554d;font-size:14px;max-width:300px;margin:0 auto 16px}
+  button{font:inherit;font-weight:700;padding:11px 22px;border:none;border-radius:10px;background:#1f9d57;color:#fff;cursor:pointer}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#1f9d57;margin:0 2px;animation:b 1s infinite alternate}
+  .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+  @keyframes b{to{opacity:.2}}
 </style>
 <div>
   <div class="ico">F</div>
-  <h1>You're offline</h1>
-  <p>Folkpath needs an internet connection. Reconnect and reopen the app.</p>
+  <h1>Reconnecting…</h1>
+  <p>Folkpath lost the connection for a moment. We'll bring you back automatically as soon as it returns.</p>
+  <p><span class="dot"></span><span class="dot"></span><span class="dot"></span></p>
+  <button id="retry">Try again now</button>
 </div>
+<script>
+  function back(){ location.reload(); }
+  document.getElementById('retry').addEventListener('click', back);
+  // Auto-recover the instant the network is back.
+  window.addEventListener('online', back);
+  setInterval(function(){
+    fetch('/api/version', { cache: 'no-store' }).then(function(r){ if (r && r.ok) back(); }).catch(function(){});
+  }, 4000);
+</script>
