@@ -232,9 +232,10 @@ a.glink:hover{text-decoration:underline}
 .js-meta td{border:1px solid #cfcfcf;padding:3px 9px}
 .js-meta td:first-child{background:#f4f4f4;font-weight:600}
 .js-meta select{border:none;background:transparent;font:inherit}
-.js-guide{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:13.5px;margin-bottom:14px}
+.js-guide{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:3px 12px;font-size:13px;margin-bottom:14px}
 .js-guide>div{display:contents}
-.js-guide span{color:#666;font-weight:600}
+.js-guide span{color:#666;font-weight:600;white-space:nowrap}
+@media (max-width:560px){.js-guide{grid-template-columns:auto 1fr}}
 .js-section{margin:16px 0 0;background:#bfe3bf;text-align:center;padding:5px;border:1px solid #cfcfcf;border-bottom:none;font-size:14px}
 .js-table{width:100%;border-collapse:collapse;font-size:13px}
 .js-table th,.js-table td{border:1px solid #cfcfcf;padding:3px 6px;text-align:left}

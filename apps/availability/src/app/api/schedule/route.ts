@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
+import { createOffer } from "@/lib/offers";
 
 // GET — the signed-in guide's upcoming confirmed tours (today onward).
 export async function GET() {
@@ -44,11 +45,15 @@ export async function POST(req: NextRequest) {
 
   await prisma.assignment.delete({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
 
+  // Auto re-offer to the OTHER guides available for this same tour/date/slot.
+  const reoffer = await createOffer({ tourId: a.tourId, date, slotIdx, pax: a.pax, note: a.note, durationMin: a.tour?.durationMin, excludeGuideId: guideId });
+
   const ops = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
   const who = session!.user!.name ?? "";
-  const msg = `⚠️ ${guideId} ${who} CANCELLED their tour: ${a.tour?.name ?? a.tourId} · ${date} ${SLOT_TIMES[slotIdx] ?? ""}${reason ? `\nReason: ${reason}` : ""}`;
+  const reLine = reoffer.candidates > 0 ? `\n🔁 Auto re-offered to ${reoffer.candidates} available guide(s).` : `\n⚠️ No other guide is available — please reassign manually.`;
+  const msg = `⚠️ ${guideId} ${who} CANCELLED their tour: ${a.tour?.name ?? a.tourId} · ${date} ${SLOT_TIMES[slotIdx] ?? ""}${reason ? `\nReason: ${reason}` : ""}${reLine}`;
   if (ops.length) await prisma.notification.createMany({ data: ops.map((o) => ({ userId: o.id, kind: "cancel", message: msg })) });
-  await audit({ actorId: session!.user!.id ?? null, action: "tour.cancelled", entityType: "Assignment", detail: { guideId, date, slotIdx, reason } });
+  await audit({ actorId: session!.user!.id ?? null, action: "tour.cancelled", entityType: "Assignment", detail: { guideId, date, slotIdx, reason, reoffered: reoffer.candidates } });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, reoffered: reoffer.candidates });
 }

@@ -3,9 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { linePushButtons, lineEnabled } from "@/lib/line";
-import { availableGuides, timeRangeLabel, sweepExpiredOffers } from "@/lib/offers";
-import { sendPushToUser } from "@/lib/push";
+import { timeRangeLabel, sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 
 function ops(role?: string) {
@@ -42,7 +40,7 @@ export async function GET() {
   return NextResponse.json({
     assignments: assigns.map((a) => ({
       guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
-      time: SLOT_TIMES[a.slotIdx] ?? "", tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
+      time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
     })),
     offers: offers.map((o) => ({
       id: o.id, tourName: tourName.get(o.tourId) ?? o.tourId, date: o.date, slotIdx: o.slotIdx,
@@ -73,50 +71,13 @@ export async function POST(req: NextRequest) {
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { tourId, date, slotIdx, pax, note, durationMin } = parsed.data;
-  const ttl = parsed.data.ttlMinutes ?? 60;
 
-  const tour = await prisma.tour.findUnique({ where: { id: tourId } });
-  if (!tour) return NextResponse.json({ error: "no-tour" }, { status: 400 });
-
-  const candidates = await availableGuides(date, slotIdx);
-  if (candidates.length === 0) return NextResponse.json({ ok: true, offerId: null, candidates: 0, lineSent: 0 });
-
-  const dateLabel = new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-  const timeLabel = timeRangeLabel(slotIdx, durationMin);
-  const summary = `🧭 Job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${pax != null ? ` · ${pax} pax` : ""}${note ? `\n📝 ${note}` : ""}`;
-  const btnText = `${tour.name} · ${dateLabel} · ${timeLabel}${pax != null ? ` · ${pax} pax` : ""}`;
-
-  const offer = await prisma.jobOffer.create({
-    data: {
-      tourId, date, slotIdx, durationMin: durationMin ?? null, pax: pax ?? null, note: note ?? null,
-      status: "OPEN", expiresAt: new Date(Date.now() + ttl * 60_000),
-      createdById: session!.user!.id ?? null,
-      responses: { create: candidates.map((g) => ({ guideId: g.guideId!, response: "OFFERED" })) },
-    },
-  });
-
-  let lineSent = 0;
-  for (const g of candidates) {
-    // In-app notification for everyone (record + fallback).
-    await prisma.notification.create({ data: { userId: g.id, kind: "offer", offerId: offer.id, message: `${summary}\n(open the app or LINE to Accept/Deny)` } });
-    // Home-screen push alert (if the guide enabled it on a device).
-    await sendPushToUser(g.id, { title: "🧭 New job offer", body: btnText, url: "/", tag: `offer-${offer.id}` });
-    // LINE Accept/Deny buttons for linked guides — addressed to the guide by name.
-    if (lineEnabled && g.lineUserId) {
-      const firstName = (g.displayName || "").split(" ")[0];
-      await linePushButtons(g.lineUserId, `Folkpath job offer for ${g.displayName}`, `${firstName ? firstName + ", " : ""}${btnText}`, [
-        { label: "✅ Accept", data: `offer:accept:${offer.id}`, displayText: "Accept" },
-        { label: "❌ Deny", data: `offer:deny:${offer.id}`, displayText: "Deny" },
-      ]);
-      lineSent++;
-    }
-  }
-
+  const r = await createOffer({ tourId, date, slotIdx, pax, note, durationMin, ttlMinutes: parsed.data.ttlMinutes, createdById: session!.user!.id ?? null });
+  if (r.noTour) return NextResponse.json({ error: "no-tour" }, { status: 400 });
   await audit({
     actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
-    action: "offer.created", entityType: "JobOffer", entityId: offer.id,
-    detail: { date, slotIdx, tourId, candidates: candidates.length, lineSent, ttl },
+    action: "offer.created", entityType: "JobOffer", entityId: r.offerId ?? undefined,
+    detail: { date, slotIdx, tourId, candidates: r.candidates, lineSent: r.lineSent },
   });
-
-  return NextResponse.json({ ok: true, offerId: offer.id, candidates: candidates.length, lineSent });
+  return NextResponse.json({ ok: true, offerId: r.offerId, candidates: r.candidates, lineSent: r.lineSent });
 }

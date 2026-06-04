@@ -1,6 +1,51 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { sendTourCalendarInvite } from "@/lib/calendar";
+import { linePushButtons, lineEnabled } from "@/lib/line";
+import { sendPushToUser } from "@/lib/push";
+
+// Create and broadcast a job offer to every available guide (in-app + push +
+// LINE buttons). Reused by the operator endpoint and by auto re-offer on cancel.
+export async function createOffer(o: {
+  tourId: string; date: string; slotIdx: number; pax?: number | null; note?: string | null;
+  durationMin?: number | null; ttlMinutes?: number; createdById?: string | null; excludeGuideId?: string | null;
+}): Promise<{ offerId: string | null; candidates: number; lineSent: number; noTour?: boolean }> {
+  const tour = await prisma.tour.findUnique({ where: { id: o.tourId } });
+  if (!tour) return { offerId: null, candidates: 0, lineSent: 0, noTour: true };
+
+  let candidates = await availableGuides(o.date, o.slotIdx);
+  if (o.excludeGuideId) candidates = candidates.filter((g) => g.guideId !== o.excludeGuideId);
+  if (candidates.length === 0) return { offerId: null, candidates: 0, lineSent: 0 };
+
+  const ttl = o.ttlMinutes ?? 60;
+  const dateLabel = new Date(`${o.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  const timeLabel = timeRangeLabel(o.slotIdx, o.durationMin ?? undefined);
+  const summary = `🧭 Job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${o.pax != null ? ` · ${o.pax} pax` : ""}${o.note ? `\n📝 ${o.note}` : ""}`;
+  const btnText = `${tour.name} · ${dateLabel} · ${timeLabel}${o.pax != null ? ` · ${o.pax} pax` : ""}`;
+
+  const offer = await prisma.jobOffer.create({
+    data: {
+      tourId: o.tourId, date: o.date, slotIdx: o.slotIdx, durationMin: o.durationMin ?? null, pax: o.pax ?? null, note: o.note ?? null,
+      status: "OPEN", expiresAt: new Date(Date.now() + ttl * 60_000), createdById: o.createdById ?? null,
+      responses: { create: candidates.map((g) => ({ guideId: g.guideId!, response: "OFFERED" })) },
+    },
+  });
+
+  let lineSent = 0;
+  for (const g of candidates) {
+    await prisma.notification.create({ data: { userId: g.id, kind: "offer", offerId: offer.id, message: `${summary}\n(open the app or LINE to Accept/Deny)` } });
+    await sendPushToUser(g.id, { title: "🧭 New job offer", body: btnText, url: "/", tag: `offer-${offer.id}` });
+    if (lineEnabled && g.lineUserId) {
+      const firstName = (g.displayName || "").split(" ")[0];
+      await linePushButtons(g.lineUserId, `Folkpath job offer for ${g.displayName}`, `${firstName ? firstName + ", " : ""}${btnText}`, [
+        { label: "✅ Accept", data: `offer:accept:${offer.id}`, displayText: "Accept" },
+        { label: "❌ Deny", data: `offer:deny:${offer.id}`, displayText: "Deny" },
+      ]);
+      lineSent++;
+    }
+  }
+  return { offerId: offer.id, candidates: candidates.length, lineSent };
+}
 
 // Guides who are AVAILABLE for a given date + slot:
 //  - active guide with a G-id

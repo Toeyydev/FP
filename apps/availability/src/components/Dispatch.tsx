@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
-type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourName: string; pax: number | null; note: string | null };
+type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null };
 type Offer = { id: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number };
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -18,10 +18,21 @@ export default function Dispatch() {
   }, []);
   useEffect(() => { load(); const id = window.setInterval(load, 15000); return () => window.clearInterval(id); }, [load]);
 
+  const [msg, setMsg] = useState("");
   async function removeAssignment(a: Assignment) {
     if (!confirm(`Remove this tour?\n${a.tourName} · ${a.date} ${a.time} · ${a.guideId} ${a.guideName}`)) return;
     const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx }) });
     if (r.ok) await load();
+  }
+  // Reassign: unassign the current guide and re-offer to the others available.
+  async function reoffer(a: Assignment) {
+    if (!confirm(`Re-offer this tour to other available guides?\n${a.tourName} · ${a.date} ${a.time}\n(${a.guideId} will be unassigned)`)) return;
+    setMsg("Re-offering…");
+    await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx }) });
+    const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId: a.tourId, date: a.date, slotIdx: a.slotIdx, pax: a.pax && a.pax <= 10 ? a.pax : undefined }) });
+    const d = await r.json().catch(() => ({}));
+    setMsg(r.ok ? (d.candidates ? `🔁 Re-offered to ${d.candidates} guide(s)` : "No other guide available — assign manually") : "Re-offer failed");
+    await load();
   }
 
   if (!data) return <div className="wrap"><AuthHeader backHref="/" /><section className="panel"><div className="op-empty">…</div></section></div>;
@@ -44,7 +55,7 @@ export default function Dispatch() {
 
       {tab === "assigned" ? (
         <section className="panel">
-          <div className="panel-head"><h2>On-going tours</h2><span className="hint">Today &amp; tomorrow — auto-updates</span></div>
+          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today & tomorrow — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
             {data.assignments.length === 0 ? <div className="op-empty">No upcoming assigned jobs yet.</div> : (() => {
               // Group by date (each date shown once), tours numbered 1, 2, 3…
@@ -63,8 +74,9 @@ export default function Dispatch() {
                     <div key={i} className="sched-card" style={{ cursor: "default" }}>
                       <div className="sched-when"><b style={{ fontSize: 18 }}>{i + 1}</b><span>{a.time}</span></div>
                       <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">👤 {a.guideId} {a.guideName}{a.pax != null ? ` · 👥 ${a.pax} pax` : ""}{a.note ? ` · 📝 ${a.note}` : ""}</div></div>
-                      <div style={{ display: "flex", gap: 6 }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
+                        <button className="btn sm" onClick={() => reoffer(a)}>🔄 Re-offer</button>
                         <button className="btn sm danger" onClick={() => removeAssignment(a)}>🗑 Remove</button>
                       </div>
                     </div>
