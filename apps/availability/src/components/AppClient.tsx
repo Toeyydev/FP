@@ -130,9 +130,9 @@ export default function AppClient({
     return () => window.clearInterval(id);
   }, [role]);
 
-  // Guide: poll notifications (e.g. operator blocked a date you were free).
+  // Poll notifications — guides (date blocked, offers) and operators (a guide
+  // accepted a job, an offer expired).
   useEffect(() => {
-    if (role !== "guide") return;
     const f = () => fetch("/api/notifications", { cache: "no-store" }).then((r) => r.json()).then(setNotif).catch(() => {});
     f();
     const id = window.setInterval(f, 15000);
@@ -747,7 +747,7 @@ export default function AppClient({
         <div className="spacer" />
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
         <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
-        {role === "guide" && <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>}
+        <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>
         {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
         {role === "operator" && <a className="btn sm" href="/bookings">📥 {t("bookings")}</a>}
         {role === "operator" && (
