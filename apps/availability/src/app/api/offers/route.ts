@@ -65,10 +65,11 @@ export async function POST(req: NextRequest) {
   let lineSent = 0;
   for (const g of candidates) {
     // In-app notification for everyone (record + fallback).
-    await prisma.notification.create({ data: { userId: g.id, kind: "offer", message: `${summary}\n(open LINE to Accept/Deny)` } });
-    // LINE Accept/Deny buttons for linked guides.
+    await prisma.notification.create({ data: { userId: g.id, kind: "offer", message: `${summary}\n(open the app or LINE to Accept/Deny)` } });
+    // LINE Accept/Deny buttons for linked guides — addressed to the guide by name.
     if (lineEnabled && g.lineUserId) {
-      await linePushButtons(g.lineUserId, "Folkpath job offer", btnText, [
+      const firstName = (g.displayName || "").split(" ")[0];
+      await linePushButtons(g.lineUserId, `Folkpath job offer for ${g.displayName}`, `${firstName ? firstName + ", " : ""}${btnText}`, [
         { label: "✅ Accept", data: `offer:accept:${offer.id}`, displayText: "Accept" },
         { label: "❌ Deny", data: `offer:deny:${offer.id}`, displayText: "Deny" },
       ]);
