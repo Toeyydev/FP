@@ -271,6 +271,31 @@ model JobOffer {
   @@index([date])
 }
 
+// A booking imported from a channel (Bokun webhook → GYG/Viator) or added by
+// hand. Gathered in the Bookings Inbox, grouped by date+tour+slot, then turned
+// into a job offer. `raw` keeps the full payload so parsing can be refined.
+model Booking {
+  id               String   @id @default(cuid())
+  source           String   @default("bokun") // bokun | gyg | viator | manual
+  externalId       String? // Bokun booking id
+  confirmationCode String? // e.g. GYG6H797YG86
+  productName      String?
+  tourId           String? // mapped to our Tour (null until mapped)
+  date             String? // "YYYY-MM-DD" start date
+  startTime        String? // "HH:MM"
+  slotIdx          Int? // mapped slot index
+  pax              Int?
+  customerName     String?
+  status           String   @default("PENDING") // PENDING | OFFERED | ASSIGNED | CANCELLED | IGNORED
+  raw              Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([source, externalId])
+  @@index([date])
+  @@index([status])
+}
+
 // The full Folkpath job sheet for one assigned job (guide × date × slot).
 // Living document: the operator edits pax/costs/tickets anytime and re-saves.
 // bookings / expenses / guideFee are JSON so rows can be added/removed freely.
