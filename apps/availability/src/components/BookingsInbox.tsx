@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { SLOTS } from "@/lib/slots";
+import BookingsTable from "@/components/BookingsTable";
 
 type Booking = {
   id: string; source: string; confirmationCode: string | null; productName: string | null;
@@ -23,6 +24,7 @@ export default function BookingsInbox() {
   const [showAdd, setShowAdd] = useState(false);
   const [dur, setDur] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
+  const [tab, setTab] = useState<"inbox" | "all">("inbox");
 
   async function openDetail(id: string) {
     const r = await fetch(`/api/bookings?id=${id}`, { cache: "no-store" });
@@ -74,8 +76,14 @@ export default function BookingsInbox() {
   return (
     <div className="wrap">
       <AuthHeader backHref="/" />
-      <div id="appBar"><div className="subtabs"><span className="subtab active">Bookings inbox</span></div></div>
+      <div id="appBar"><div className="subtabs">
+        <button className={`subtab ${tab === "inbox" ? "active" : ""}`} onClick={() => setTab("inbox")}>Inbox</button>
+        <button className={`subtab ${tab === "all" ? "active" : ""}`} onClick={() => setTab("all")}>All bookings</button>
+      </div></div>
 
+      {tab === "all" && <BookingsTable />}
+
+      {tab === "inbox" && (
       <section className="panel">
         <div className="panel-head"><h2>Incoming bookings</h2>
           <div className="head-tools">
@@ -174,6 +182,7 @@ export default function BookingsInbox() {
           )}
         </div>
       </section>
+      )}
 
       {detail && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>

@@ -376,3 +376,6 @@ a.glink:hover{text-decoration:underline}
 .cell.assigned.conflict{background:var(--danger-bg);color:var(--danger);box-shadow:inset 0 0 0 2px var(--danger)}
 .cell.assigned.conflict:hover{filter:brightness(.98)}
 .stat.c b{color:var(--danger)}
+
+/* muted/neutral badge (booking source, archived status) */
+.badge.muted{background:var(--grey-bg);border-color:var(--line);color:var(--ink-soft);text-transform:none;letter-spacing:.02em}

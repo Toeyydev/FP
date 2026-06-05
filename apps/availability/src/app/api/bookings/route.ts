@@ -21,6 +21,33 @@ export async function GET(req: NextRequest) {
     if (!booking) return NextResponse.json({ error: "not-found" }, { status: 404 });
     return NextResponse.json({ booking });
   }
+  // Full Bookings table view: ?view=all with optional status / source / q filters.
+  const sp = req.nextUrl.searchParams;
+  if (sp.get("view") === "all") {
+    const status = sp.get("status") || "";
+    const source = sp.get("source") || "";
+    const q = (sp.get("q") || "").trim();
+    const where: Record<string, unknown> = {};
+    if (status) where.status = status;
+    if (source) where.source = source;
+    if (q) where.OR = [
+      { customerName: { contains: q, mode: "insensitive" } },
+      { confirmationCode: { contains: q, mode: "insensitive" } },
+      { externalRef: { contains: q, mode: "insensitive" } },
+      { productName: { contains: q, mode: "insensitive" } },
+    ];
+    const [bookings, tours] = await Promise.all([
+      prisma.booking.findMany({
+        where,
+        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+        take: 1000,
+        select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true, createdAt: true },
+      }),
+      prisma.tour.findMany({ orderBy: { id: "asc" }, select: { id: true, name: true } }),
+    ]);
+    return NextResponse.json({ bookings, tours });
+  }
+
   const [bookings, tours] = await Promise.all([
     prisma.booking.findMany({
       where: { status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
