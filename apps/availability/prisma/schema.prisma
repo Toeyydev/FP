@@ -357,6 +357,20 @@ model JobSheet {
   @@index([date])
 }
 
+// Payroll paid/pending marker per guide per month. The amounts are computed live
+// from job sheets; this just records what's been settled.
+model PayrollStatus {
+  id        String    @id @default(cuid())
+  guideId   String
+  period    String // "YYYY-MM"
+  status    String    @default("pending") // pending | paid
+  paidAt    DateTime?
+  note      String?
+  updatedAt DateTime  @updatedAt
+
+  @@unique([guideId, period])
+}
+
 // One row per guide the offer touched: OFFERED when sent, then ACCEPTED/DENIED.
 model JobOfferResponse {
   id          String   @id @default(cuid())

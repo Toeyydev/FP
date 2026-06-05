@@ -878,6 +878,7 @@ export default function AppClient({
         {role === "operator" && <a className="btn sm" href="/dashboard">{t("dashboardNav")}</a>}
         {role === "operator" && <a className="btn sm" href="/jobs">🧭 {t("jobsNav")}</a>}
         {role === "operator" && <a className="btn sm" href="/bookings">📥 {t("bookings")}</a>}
+        {role === "operator" && <a className="btn sm" href="/payments">{t("paymentsNav")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
             {t("accountsTitle")}

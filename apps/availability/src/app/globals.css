@@ -418,3 +418,8 @@ a.dash-row:hover{background:var(--grey-bg)}
 .tag.bad{background:var(--danger);color:#fff}.tag.warn{background:#f59e0b;color:#fff}
 .act-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line);font-size:13px}
 .act-row:last-child{border-bottom:none}.act-row small{color:var(--ink-soft);font-size:11.5px;white-space:nowrap}
+
+/* ---- Payroll table ---- */
+.pay-table th.r,.pay-table td.r{text-align:right;font-variant-numeric:tabular-nums}
+.pay-table tfoot .pay-foot td{border-top:2px solid var(--line-strong);padding-top:10px;font-weight:600}
+.pay-table .gid{color:var(--grey);font-weight:600;font-size:11px;font-family:"Bricolage Grotesque"}
