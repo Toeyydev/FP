@@ -391,3 +391,8 @@ a.glink:hover{text-decoration:underline}
   font-size:13.5px;font-weight:500;background:#fff;color:var(--ink);text-transform:none;letter-spacing:0}
 .bk-form input:focus,.bk-form select:focus{outline:none;border-color:var(--ink-soft)}
 @media (max-width:480px){ .bk-form{grid-template-columns:1fr} }
+
+/* ---- Bookings bulk action bar + selected row ---- */
+.bulkbar{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);
+  background:var(--grey-bg);font-size:13px}
+.acct-table tr.sel{background:var(--assign-bg)}
