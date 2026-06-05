@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
     tourId: z.string().min(1),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1),
-    pax: z.number().int().min(1).max(10).optional(),
+    pax: z.number().int().min(1).max(50).optional(),
     durationMin: z.number().int().min(15).max(720).optional(),
     note: z.string().max(300).optional(),
     ttlMinutes: z.number().int().min(5).max(1440).optional(),

@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
 import { SLOTS } from "@/lib/slots";
+import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import {
   DOW, MON, addDays, addMonths, currentSlotIdx, mkey, parseYMD,
   sameDay, todayD, uniq, weekStart, ymd,
@@ -336,7 +337,7 @@ export default function AppClient({
   async function doOffer() {
     if (modal?.kind !== "assign") return;
     if (!fTour) { toast(t("tour")); return; }
-    if (fPax && Number(fPax) > 10) { toast(t("offerPaxMax")); return; }
+    if (fPax && Number(fPax) > 50) { toast(t("offerPaxMax")); return; }
     const r = await fetch("/api/offers", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ tourId: fTour, date: modal.date, slotIdx: modal.idx, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined }),
@@ -390,7 +391,7 @@ export default function AppClient({
   async function doOfferForm() {
     if (!fTour) { toast(t("tour")); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(oDate)) { toast(t("pickDate")); return; }
-    if (fPax && Number(fPax) > 10) { toast(t("offerPaxMax")); return; }
+    if (fPax && Number(fPax) > 50) { toast(t("offerPaxMax")); return; }
     const durMin = oDur && Number(oDur) > 0 ? Math.round(Number(oDur) * 60) : undefined;
     const r = await fetch("/api/offers", {
       method: "POST", headers: { "content-type": "application/json" },
@@ -803,8 +804,13 @@ export default function AppClient({
                 {(ref?.guides ?? []).map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
               </select>
             </div>
-            <div><label className="fl">{t("paxOpt")}</label><input type="number" min={1} max={10} value={fPax} onChange={(e) => setFPax(e.target.value)} placeholder="e.g. 4" /></div>
+            <div><label className="fl">{t("paxOpt")}</label><input type="number" min={1} max={50} value={fPax} onChange={(e) => setFPax(e.target.value)} placeholder="e.g. 4" /></div>
             <div><label className="fl">{t("noteOpt")}</label><input value={fNote} onChange={(e) => setFNote(e.target.value)} placeholder="Bokun / GYG booking no." /></div>
+            {Number(fPax) >= SPLIT_AT && (
+              <div style={{ marginTop: 4, fontWeight: 600, fontSize: 12.5, color: "var(--danger)" }}>
+                ⚠ {fPax} pax — this is a {guidesNeeded(Number(fPax))}-guide tour. Offer, then assign {guidesNeeded(Number(fPax)) - 1} more.
+              </div>
+            )}
             <div className="offeravail" style={{ marginTop: 4, fontWeight: 600, color: (oGuide || avail > 0) ? "var(--green, #1a7f37)" : "var(--red, #c0392b)" }}>
               {oGuide ? `📨 ${t("offerToOne")}` : avail > 0 ? `✅ ${avail} ${t("guidesAvailable")}` : `⚠️ ${t("offerNoCandidates")}`}
             </div>
