@@ -93,7 +93,7 @@ export default function JobSheetEditor() {
           <button className="btn" onClick={() => window.print()}>🖨 Print</button>
           <a className="btn" target="_blank" rel="noopener noreferrer"
             href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>📅 Google Calendar</a>
-          <button className="btn" disabled={busy} onClick={async () => { if (canEdit && !saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>⬇ Excel</button>
+          {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>⬇ Excel</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>📤 Send to guide</button>}
           {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}
         </div>
