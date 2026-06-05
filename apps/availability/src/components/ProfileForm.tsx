@@ -26,6 +26,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   const [p, setP] = useState<Profile | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState("");
+  const [missing, setMissing] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [lineCode, setLineCode] = useState<{ code: string; addUrl: string | null } | null>(null);
   const fileRefs = { ID_CARD: useRef<HTMLInputElement>(null), BANK_BOOK: useRef<HTMLInputElement>(null), OTHER: useRef<HTMLInputElement>(null) };
@@ -43,8 +44,17 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   async function save() {
     // Every required field must be filled (operators editing others can skip).
     if (!targetUserId) {
-      const missing = REQUIRED_PROFILE_FIELDS.filter((k) => !(form[k] && form[k].trim()));
-      if (missing.length) { setMsg(t("allRequired")); return; }
+      const miss = REQUIRED_PROFILE_FIELDS.filter((k) => !(form[k] && form[k].trim()));
+      if (miss.length) {
+        setMissing(new Set(miss));
+        const labelFor = (k: string) => { const f = FIELDS.find(([fk]) => fk === k); return f ? t(f[1] as Parameters<typeof t>[0]) : k; };
+        setMsg(`${t("allRequired")} — ${miss.map(labelFor).join(", ")}`);
+        const el = document.getElementById(`fld-${miss[0]}`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+        return;
+      }
+      setMissing(new Set());
     }
     setBusy(true); setMsg("");
     const body: Record<string, string> = { ...form };
@@ -94,11 +104,13 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
           {FIELDS.map(([k, labelKey]) => (
             <div className="fld" key={k}>
               <label>{t(labelKey as Parameters<typeof t>[0])}{REQUIRED.has(k) ? <span style={{ color: "#c0392b" }}> *</span> : ""}</label>
-              <input required={REQUIRED.has(k)} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
+              <input id={`fld-${k}`} required={REQUIRED.has(k)} value={form[k] ?? ""}
+                style={missing.has(k) ? { borderColor: "#c0392b", background: "#fff6f5" } : undefined}
+                onChange={(e) => { setForm({ ...form, [k]: e.target.value }); if (missing.has(k)) setMissing((prev) => { const n = new Set(prev); n.delete(k); return n; }); }} />
             </div>
           ))}
 
-          <div className="auth-msg" style={{ color: "var(--green)" }}>{msg}</div>
+          <div className="auth-msg" style={{ color: missing.size ? "#c0392b" : "var(--green)" }}>{msg}</div>
           <button className="btn primary" style={{ width: "100%", padding: 11 }} disabled={busy} onClick={save}>{busy ? "…" : t("save")}</button>
 
           <div className="fld" style={{ marginTop: 22 }}>
