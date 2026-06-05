@@ -20,7 +20,7 @@ function statusBadge(s: string) {
 
 // Full Bookings table — the operational source of truth (all sources, all
 // statuses, searchable + filterable). Read-only list for now (slice 1).
-export default function BookingsTable() {
+export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => void }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [tours, setTours] = useState<Tour[]>([]);
   const [q, setQ] = useState("");
@@ -62,7 +62,7 @@ export default function BookingsTable() {
             {rows.length === 0 ? (
               <tr><td colSpan={7} className="op-empty">No bookings match.</td></tr>
             ) : rows.map((b) => (
-              <tr key={b.id}>
+              <tr key={b.id} onClick={() => onOpen?.(b.id)} style={{ cursor: onOpen ? "pointer" : "default" }}>
                 <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{b.confirmationCode || b.externalRef || "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{b.date ?? "—"}{b.startTime ? <span style={{ color: "var(--ink-soft)" }}> · {b.startTime}</span> : ""}</td>
                 <td>{b.tourId ? tourName(b.tourId) : <span style={{ color: "var(--ink-soft)" }}>{b.productName ?? "unmapped"}</span>}</td>

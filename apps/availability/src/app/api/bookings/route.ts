@@ -98,6 +98,11 @@ export async function POST(req: NextRequest) {
     const parsed = z.object({
       id: z.string().min(1), tourId: z.string().optional(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1).optional(), pax: z.number().int().min(1).max(50).optional(),
+      confirmationCode: z.string().max(80).optional(), customerName: z.string().max(160).optional(),
+      nationality: z.string().max(80).optional(), email: z.string().max(160).optional(), phone: z.string().max(40).optional(),
+      specialRequests: z.string().max(500).optional(), notes: z.string().max(500).optional(),
+      paymentStatus: z.enum(["unpaid", "deposit", "paid"]).optional(),
+      status: z.enum(["PENDING", "OFFERED", "ASSIGNED", "CANCELLED", "IGNORED"]).optional(),
     }).safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const { id, ...rest } = parsed.data;

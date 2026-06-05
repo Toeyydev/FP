@@ -30,6 +30,21 @@ export default function BookingsInbox() {
     const r = await fetch(`/api/bookings?id=${id}`, { cache: "no-store" });
     if (r.ok) setDetail((await r.json()).booking);
   }
+  const setField = (k: string, v: unknown) => setDetail((p) => (p ? { ...p, [k]: v } : p));
+  const str = (v: unknown) => (v == null ? "" : String(v));
+  async function saveDetail() {
+    if (!detail) return;
+    const d = detail;
+    const r = await post({
+      action: "update", id: d.id, status: d.status, paymentStatus: d.paymentStatus,
+      confirmationCode: str(d.confirmationCode) || undefined, customerName: str(d.customerName) || undefined,
+      nationality: str(d.nationality) || undefined, email: str(d.email) || undefined, phone: str(d.phone) || undefined,
+      specialRequests: str(d.specialRequests) || undefined, notes: str(d.notes) || undefined,
+      tourId: str(d.tourId) || undefined, date: str(d.date) || undefined,
+      slotIdx: d.slotIdx != null ? Number(d.slotIdx) : undefined, pax: d.pax != null && d.pax !== "" ? Number(d.pax) : undefined,
+    });
+    if (r.ok) { setDetail(null); await load(); }
+  }
   // Delete a booking — confirm twice before it's gone for good.
   async function removeBooking(id: string, label: string) {
     if (!confirm(`Delete this booking?\n${label}`)) return;
@@ -82,7 +97,7 @@ export default function BookingsInbox() {
         <button className={`subtab ${tab === "all" ? "active" : ""}`} onClick={() => setTab("all")}>All bookings</button>
       </div></div>
 
-      {tab === "all" && <BookingsTable />}
+      {tab === "all" && <BookingsTable onOpen={openDetail} />}
 
       {tab === "inbox" && (
       <section className="panel">
@@ -198,26 +213,43 @@ export default function BookingsInbox() {
       {detail && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
           <div className="modal" style={{ maxWidth: 560, width: "92%" }}>
-            <h3>Booking details</h3>
+            <h3>Booking · {str(detail.confirmationCode || detail.externalRef) || "—"}</h3>
             <div className="mbody">
-              <table className="acct-table"><tbody>
-                {([
-                  ["Source", detail.source], ["OTA booking no.", detail.externalRef], ["Bokun confirmation", detail.confirmationCode], ["Bokun id", detail.externalId],
-                  ["Product", detail.productName], ["Tour (mapped)", detail.tourId], ["Date", detail.date],
-                  ["Start time", detail.startTime], ["Slot", detail.slotIdx], ["Pax", detail.pax],
-                  ["Customer", detail.customerName], ["Status", detail.status],
-                ] as [string, unknown][]).map(([k, v]) => (
-                  <tr key={k}><td style={{ fontWeight: 600, width: 130 }}>{k}</td><td>{v == null || v === "" ? "—" : String(v)}</td></tr>
-                ))}
-              </tbody></table>
-              <details style={{ marginTop: 12 }}>
-                <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Raw Bokun payload</summary>
-                <pre style={{ background: "#f6f6f6", border: "1px solid var(--line,#ddd)", borderRadius: 8, padding: 10, fontSize: 11, overflow: "auto", maxHeight: 320 }}>{JSON.stringify(detail.raw, null, 2)}</pre>
-              </details>
+              <div className="bk-meta">
+                <span><b>Source</b> {str(detail.source)}</span>
+                {detail.externalRef ? <span><b>OTA #</b> {str(detail.externalRef)}</span> : null}
+                {detail.productName ? <span><b>Product</b> {str(detail.productName)}</span> : null}
+              </div>
+              <div className="bk-form">
+                <label>Status<select value={str(detail.status) || "PENDING"} onChange={(e) => setField("status", e.target.value)}>
+                  {["PENDING", "OFFERED", "ASSIGNED", "CANCELLED", "IGNORED"].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+                <label>Payment<select value={str(detail.paymentStatus) || "unpaid"} onChange={(e) => setField("paymentStatus", e.target.value)}>
+                  {["unpaid", "deposit", "paid"].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+                <label>Tour<select value={str(detail.tourId)} onChange={(e) => setField("tourId", e.target.value)}>
+                  <option value="">—</option>{tours.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.name}</option>)}</select></label>
+                <label>Date<input type="date" value={str(detail.date)} onChange={(e) => setField("date", e.target.value)} /></label>
+                <label>Slot<select value={Number(detail.slotIdx ?? 0)} onChange={(e) => setField("slotIdx", Number(e.target.value))}>
+                  {SLOTS.map((s) => <option key={s.idx} value={s.idx}>{s.start}</option>)}</select></label>
+                <label>Pax<input type="number" min={1} value={str(detail.pax)} onChange={(e) => setField("pax", e.target.value)} /></label>
+                <label>Booking #<input value={str(detail.confirmationCode)} onChange={(e) => setField("confirmationCode", e.target.value)} /></label>
+                <label>Guest name<input value={str(detail.customerName)} onChange={(e) => setField("customerName", e.target.value)} /></label>
+                <label>Nationality<input value={str(detail.nationality)} onChange={(e) => setField("nationality", e.target.value)} /></label>
+                <label>Email<input value={str(detail.email)} onChange={(e) => setField("email", e.target.value)} /></label>
+                <label>Phone<input value={str(detail.phone)} onChange={(e) => setField("phone", e.target.value)} /></label>
+                <label className="wide">Special requests<input value={str(detail.specialRequests)} onChange={(e) => setField("specialRequests", e.target.value)} /></label>
+                <label className="wide">Notes<input value={str(detail.notes)} onChange={(e) => setField("notes", e.target.value)} /></label>
+              </div>
+              {detail.raw ? (
+                <details style={{ marginTop: 12 }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Raw OTA payload</summary>
+                  <pre style={{ background: "#f6f6f6", border: "1px solid var(--line,#ddd)", borderRadius: 8, padding: 10, fontSize: 11, overflow: "auto", maxHeight: 320 }}>{JSON.stringify(detail.raw, null, 2)}</pre>
+                </details>
+              ) : null}
             </div>
             <div className="mfoot">
               <button className="btn ghost danger" onClick={() => removeBooking(String(detail.id), `${detail.source} · ${detail.confirmationCode || detail.customerName || "—"}`)}>🗑 Delete</button>
-              <button className="btn dark" onClick={() => setDetail(null)}>Close</button>
+              <button className="btn" onClick={() => setDetail(null)}>Close</button>
+              <button className="btn primary" onClick={saveDetail}>Save changes</button>
             </div>
           </div>
         </div>
