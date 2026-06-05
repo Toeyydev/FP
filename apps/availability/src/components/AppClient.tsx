@@ -264,12 +264,19 @@ export default function AppClient({
   const isBlocked = (d: Date): boolean => blockedDates.has(ymd(d));
 
   // ---- mutations ----
+  // Availability auto-saves on every tap; saveState drives the Save bar so the
+  // guide always sees that their changes are stored.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   async function putAvail(d: Date, slots: boolean[]) {
     if (!profileGate.complete) { toast(t("completeProfileFirst")); return; }
-    await fetch("/api/availability", {
-      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: ymd(d), slots }),
-    });
-    await load();
+    setSaveState("saving");
+    try {
+      await fetch("/api/availability", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: ymd(d), slots }),
+      });
+      await load();
+      setSaveState("saved");
+    } catch { setSaveState("idle"); }
   }
   const toggleSlot = (d: Date, idx: number) => {
     const cur = (getAvail(guideId!, d) ?? EMPTY).slice();
@@ -515,6 +522,15 @@ export default function AppClient({
               </div>
             );
           })}
+        </div>
+        <div className="savebar">
+          <span className="savebar-status">
+            {saveState === "saving" ? t("saving") : `${t("allSaved")} ✓`}
+          </span>
+          <button className="btn primary" disabled={saveState === "saving"}
+            onClick={async () => { setSaveState("saving"); await load(); setSaveState("saved"); toast(t("saved")); }}>
+            {t("saveChanges")}
+          </button>
         </div>
       </>
     );
