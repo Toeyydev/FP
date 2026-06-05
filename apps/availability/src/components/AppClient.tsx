@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
+import PasskeySetup from "@/components/PasskeySetup";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import {
@@ -892,6 +893,7 @@ export default function AppClient({
             {pendingCount > 0 && <span className="navbadge" title={`${pendingCount} pending sign-up(s)`}>{pendingCount}</span>}
           </a>
         )}
+        <PasskeySetup />
         <div className="chip">
           <div className="who"><small>{role === "guide" ? t("signedInGuide") : t("signedInOperator")}</small><span>{role === "guide" ? displayName : t("operations")}</span></div>
           <button className="btn sm ghost" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }} type="button">{t("signOut")}</button>

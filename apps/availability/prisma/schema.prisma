@@ -357,6 +357,20 @@ model JobSheet {
   @@index([date])
 }
 
+// WebAuthn passkey — true Face ID / fingerprint sign-in (one per device).
+model Passkey {
+  id           String   @id @default(cuid())
+  credentialId String   @unique // base64url
+  publicKey    String // base64url
+  counter      Int      @default(0)
+  userId       String
+  transports   String? // csv
+  label        String?
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
 // Payroll paid/pending marker per guide per month. The amounts are computed live
 // from job sheets; this just records what's been settled.
 model PayrollStatus {
