@@ -341,7 +341,8 @@ a.glink:hover{text-decoration:underline}
 .gs-exp li{ align-items:flex-start; }
 .gs-calc{ color:var(--ink-soft,#888); font-size:12px; }
 
-/* ---- FOLKPATHS wordmark (company logo, in header) ---- */
+/* ---- FOLKPATHS logo lockup (wordmark + Thai company name) ---- */
+.brand{ line-height:1; }
 .brand .wordmark{ font-family:"Bricolage Grotesque",sans-serif; font-weight:800; font-size:26px;
-  letter-spacing:.03em; color:#2f343b; line-height:1; }
-.brand .kicker{ font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-soft); font-weight:700; margin-top:4px; }
+  letter-spacing:.02em; color:#2f343b; line-height:1; }
+.brand .th-name{ font-size:12.5px; font-weight:600; color:#2f343b; margin-top:4px; letter-spacing:.01em; }
