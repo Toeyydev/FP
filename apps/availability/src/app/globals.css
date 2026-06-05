@@ -1,12 +1,12 @@
 :root{
-  --ink:#16201c;--ink-soft:#46554d;--paper:#f4f1ea;--card:#fffdf8;--line:#e0dccf;--line-strong:#cdc7b6;
-  --green:#1f9d57;--green-bg:#e3f6e9;--green-line:#a7e0bd;--grey:#b8b2a3;--grey-bg:#efece3;
-  --assign:#2b6cb0;--assign-bg:#e2ecf7;--assign-line:#a9c6e6;--accent:#d9602b;
-  --shadow:0 1px 2px rgba(22,32,28,.06),0 10px 30px rgba(22,32,28,.07);
+  --ink:#1a1d21;--ink-soft:#6b7280;--paper:#f7f8fa;--card:#ffffff;--line:#e8eaed;--line-strong:#d6d9de;
+  --green:#15935a;--green-bg:#e9f6ef;--green-line:#bfe3cd;--grey:#aeb4bc;--grey-bg:#f1f3f5;
+  --assign:#2563a8;--assign-bg:#e8f0f9;--assign-line:#bcd4ec;--accent:#15935a;
+  --shadow:0 1px 2px rgba(16,24,40,.04),0 4px 14px rgba(16,24,40,.05);
 }
 *{box-sizing:border-box}html,body{margin:0;padding:0}
 body{font-family:"Spline Sans",system-ui,sans-serif;color:var(--ink);font-size:15px;-webkit-font-smoothing:antialiased;
-  background:radial-gradient(1200px 500px at 85% -10%,#eef4ee 0,transparent 60%),radial-gradient(900px 420px at -5% 0%,#f6efe2 0,transparent 55%),var(--paper);}
+  background:var(--paper);}
 .wrap{max-width:1180px;margin:0 auto;padding:20px 16px 64px}
 h1,h2,h3,.bg{font-family:"Bricolage Grotesque",sans-serif}
 
@@ -22,14 +22,14 @@ header.app{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-
 .chip .who{display:flex;flex-direction:column;line-height:1.15}
 .chip .who small{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);font-weight:700}
 
-.btn{font-family:inherit;border:1.5px solid var(--line-strong);background:var(--paper);border-radius:10px;padding:8px 13px;font-size:13.5px;font-weight:600;cursor:pointer;color:var(--ink);transition:.15s}
+.btn{font-family:inherit;border:1px solid var(--line-strong);background:var(--card);border-radius:9px;padding:8px 13px;font-size:13.5px;font-weight:600;cursor:pointer;color:var(--ink);transition:.15s}
 .btn:hover{border-color:var(--ink-soft)}.btn.sm{padding:6px 10px;font-size:12.5px}
 .btn.primary{background:var(--green);border-color:var(--green);color:#fff}.btn.primary:hover{filter:brightness(.96)}
 .btn.dark{background:var(--ink);border-color:var(--ink);color:#fff}
 .btn.ghost{background:transparent}.btn.danger{color:#b23b2e;border-color:#e7c3bd}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 
-.panel{background:var(--card);border:1.5px solid var(--line);border-radius:18px;box-shadow:var(--shadow);overflow:hidden}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
 
 /* sign-in */
 #authView{max-width:440px;margin:6vh auto 0}
