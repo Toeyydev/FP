@@ -99,6 +99,41 @@ export default function JobSheetEditor() {
         </div>
       </div>
 
+      {ro && (() => {
+        const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
+        const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0);
+        return (
+          <section className="panel guide-sum">
+            <div className="gs-head">
+              <h2>{tour?.name ?? "Your tour"}</h2>
+              <div className="gs-when">📅 {sheet.date} · {SLOT_TIMES[sheet.slotIdx] ?? ""}{totalPax ? ` · 👥 ${totalPax} pax` : ""}</div>
+            </div>
+            <div className="gs-grid">
+              <div>
+                <h3>👥 Your customers ({sheet.bookings.length})</h3>
+                {sheet.bookings.length ? (
+                  <ol className="gs-cust">
+                    {sheet.bookings.map((b, i) => (
+                      <li key={i}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{b.tickets === "included" ? " 🎫 tickets incl." : b.tickets === "not" ? " 🎫 no tickets" : ""}</li>
+                    ))}
+                  </ol>
+                ) : <div className="gs-empty">No customer list yet.</div>}
+              </div>
+              <div>
+                <h3>💵 Expenses</h3>
+                {exp.length ? (
+                  <ul className="gs-exp">
+                    {exp.map((e, i) => <li key={i}><span>{e.description}</span><b>{thb(expenseAmount(e))}</b></li>)}
+                    <li className="gs-total"><span>Total expenses</span><b>{thb(t.totalExpenses)}</b></li>
+                  </ul>
+                ) : <div className="gs-empty">No expenses recorded.</div>}
+                <div className="gs-fee">Your fee (net): <b>{thb(t.netGuideFee)}</b></div>
+              </div>
+            </div>
+          </section>
+        );
+      })()}
+
       <section className="panel js-sheet" style={{ padding: 18 }}>
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}

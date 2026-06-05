@@ -189,10 +189,52 @@ export default function AppClient({
     return () => window.clearInterval(id);
   }, [role]);
 
-  // Guide: poll open job offers they can Accept/Deny in-app.
+  // A short chime when a new job offer arrives (Web Audio — no asset needed).
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const seenOffersRef = useRef<Set<string> | null>(null);
+  // Browsers block sound until the user interacts — unlock on the first tap.
+  useEffect(() => {
+    if (role !== "guide") return;
+    const unlock = () => {
+      try {
+        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!audioCtxRef.current) audioCtxRef.current = new AC();
+        audioCtxRef.current.resume();
+      } catch { /* ignore */ }
+      window.removeEventListener("pointerdown", unlock);
+    };
+    window.addEventListener("pointerdown", unlock);
+    return () => window.removeEventListener("pointerdown", unlock);
+  }, [role]);
+  function playChime() {
+    try {
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!audioCtxRef.current) audioCtxRef.current = new AC();
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+      [0, 0.18].forEach((delay, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = "sine"; o.frequency.value = i === 0 ? 784 : 1047; // G5 then C6
+        const start = ctx.currentTime + delay;
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.exponentialRampToValueAtTime(0.35, start + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + 0.32);
+        o.start(start); o.stop(start + 0.34);
+      });
+    } catch { /* ignore (autoplay not unlocked yet) */ }
+  }
+
+  // Guide: poll open job offers they can Accept/Deny in-app — chime on a new one.
   const loadOffers = useCallback(() => {
     if (role !== "guide") return;
-    fetch("/api/offers/mine", { cache: "no-store" }).then((r) => r.json()).then((d) => setOffers(d.offers ?? [])).catch(() => {});
+    fetch("/api/offers/mine", { cache: "no-store" }).then((r) => r.json()).then((d) => {
+      const ofs = (d.offers ?? []) as { id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[];
+      setOffers(ofs);
+      const ids = new Set(ofs.map((o) => o.id));
+      if (seenOffersRef.current && ofs.some((o) => !seenOffersRef.current!.has(o.id))) playChime();
+      seenOffersRef.current = ids;
+    }).catch(() => {});
   }, [role]);
   useEffect(() => {
     if (role !== "guide") return;
