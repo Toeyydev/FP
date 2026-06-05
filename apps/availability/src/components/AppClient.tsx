@@ -15,7 +15,7 @@ type Role = "guide" | "operator";
 type Job = { tour: string; pax: number | null; note: string | null };
 type Ref = {
   guides: { guideId: string; displayName: string }[];
-  tours: { id: string; name: string; time: string }[];
+  tours: { id: string; name: string; time: string; durationMin?: number | null }[];
 };
 type AvMap = Record<string, Record<string, Record<number, boolean[]>>>; // mkey -> gid -> day -> [10]
 type AsMap = Record<string, Record<string, Record<number, Record<number, Job>>>>; // mkey -> gid -> day -> idx -> Job
@@ -265,6 +265,21 @@ export default function AppClient({
   // ---- accessors ----
   const getAvail = (gid: string, d: Date): boolean[] | null => av[mkey(d)]?.[gid]?.[d.getDate()] ?? null;
   const getAssign = (gid: string, d: Date): Record<number, Job> => as[mkey(d)]?.[gid]?.[d.getDate()] ?? {};
+
+  // Slots where a guide has two tours whose time ranges OVERLAP (double-booked).
+  // Uses each tour's duration so a 4h tour at 13:30 conflicts with one at 15:00.
+  const conflictSlots = (gid: string, d: Date): Set<number> => {
+    const asg = getAssign(gid, d);
+    const iv = Object.keys(asg).map((k) => {
+      const i = Number(k); const [h, m] = (SLOTS[i]?.start ?? "00:00").split(":").map(Number);
+      const start = h * 60 + m; const dur = tourById[asg[i].tour]?.durationMin ?? 180;
+      return { i, start, end: start + dur };
+    });
+    const bad = new Set<number>();
+    for (let a = 0; a < iv.length; a++) for (let b = a + 1; b < iv.length; b++)
+      if (iv[a].start < iv[b].end && iv[b].start < iv[a].end) { bad.add(iv[a].i); bad.add(iv[b].i); }
+    return bad;
+  };
   const isBlocked = (d: Date): boolean => blockedDates.has(ymd(d));
 
   // ---- mutations ----
@@ -597,11 +612,12 @@ export default function AppClient({
 
   function opDay(): ReactNode {
     const d = anchor; const nowIdx = currentSlotIdx(); const isToday = sameDay(d, todayD()); const guides = ref?.guides ?? []; const blocked = isBlocked(d);
-    let availNow = 0, assignTot = 0, busyTot = 0;
+    let availNow = 0, assignTot = 0, busyTot = 0, conflictTot = 0;
     for (const g of guides) {
       const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
       for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busyTot++; else availNow++; }
       assignTot += Object.keys(asg).length;
+      if (conflictSlots(g.guideId, d).size) conflictTot++;
     }
     const ql = q.toLowerCase();
     const rows = guides.filter((g) => {
@@ -626,6 +642,7 @@ export default function AppClient({
           <div className="stat g"><b>{availNow}</b><span>{t("freeSlots")}</span></div>
           <div className="stat a"><b>{assignTot}</b><span>{t("assigned")}</span></div>
           <div className="stat"><b>{busyTot}</b><span>{t("guidesPosted")}</span></div>
+          {conflictTot > 0 && <div className="stat c"><b>⚠ {conflictTot}</b><span>{t("conflicts")}</span></div>}
           <input className="search" placeholder={t("searchGuide")} value={q} onChange={(e) => setQ(e.target.value)} />
           <label style={{ fontSize: 12.5, fontWeight: 600, display: "flex", gap: 5, alignItems: "center" }}>
             <input type="checkbox" checked={onlyAvail} onChange={(e) => setOnlyAvail(e.target.checked)} /> {t("onlyAvail")}
@@ -645,12 +662,13 @@ export default function AppClient({
               <tbody>
                 {rows.map((g) => {
                   const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
+                  const conf = conflictSlots(g.guideId, d);
                   return (
                     <tr key={g.guideId}>
                       <td className="gname"><span className="gid">{g.guideId}</span>{g.displayName}</td>
                       {SLOTS.map((s) => {
                         const a = asg[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
-                        if (a) return <td key={s.idx} className={`cell assigned${nm}`} title={tourById[a.tour]?.name || a.tour} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{a.tour}</span></td>;
+                        if (a) { const c = conf.has(s.idx); return <td key={s.idx} className={`cell assigned${c ? " conflict" : ""}${nm}`} title={c ? t("conflictWarn") : (tourById[a.tour]?.name || a.tour)} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{c ? "⚠ " : ""}{a.tour}</span></td>; }
                         if (avd[s.idx]) return <td key={s.idx} className={`cell busy${nm}`} title={t("busy")} />;
                         return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
                       })}
