@@ -3,9 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeTotals, expenseAmount, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { SLOT_TIMES } from "@/lib/slots";
 
 type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string } | null;
-type Tour = { id: string; name: string; time: string } | null;
+type Tour = { id: string; name: string; time: string; durationMin?: number | null } | null;
+
+// Google Calendar "add event" link — opens a pre-filled event the guide saves
+// in one tap (Google then sends its own reminders). Bangkok time → UTC.
+function gcalUrl(tourName: string, date: string, slotIdx: number, durationMin: number, details: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const [H, M] = (SLOT_TIMES[slotIdx] || "09:00").split(":").map(Number);
+  const startMs = Date.UTC(y, m - 1, d, H, M) - 7 * 3600 * 1000;
+  const f = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
+  const dates = `${f(startMs)}/${f(startMs + durationMin * 60000)}`;
+  const params = new URLSearchParams({ action: "TEMPLATE", text: `Folkpath tour — ${tourName}`, dates, details });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
 type Sheet = {
   ref: string | null; guideId: string; date: string; slotIdx: number; tourId: string; status: string;
   bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee; updatedAt?: string | null;
@@ -78,6 +91,8 @@ export default function JobSheetEditor() {
           {ro && <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>}
           <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
           <button className="btn" onClick={() => window.print()}>🖨 Print</button>
+          <a className="btn" target="_blank" rel="noopener noreferrer"
+            href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>📅 Google Calendar</a>
           <button className="btn" disabled={busy} onClick={async () => { if (canEdit && !saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>⬇ Excel</button>
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>📤 Send to guide</button>}
           {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}

@@ -307,3 +307,10 @@ a.glink:hover{text-decoration:underline}
 .alerts-banner{ display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap;
   background:#fdf3e7; border:1.5px solid #f0cfa0; border-radius:14px; padding:13px 16px; margin-bottom:12px; }
 .alerts-banner b{ color:#9a5b00; }
+
+/* ---- Read-only job sheet (guide view): keep values fully legible ---- */
+.jobsheet fieldset:disabled, .jobsheet fieldset[disabled]{ opacity:1 !important; }
+.jobsheet fieldset:disabled input, .jobsheet fieldset:disabled select, .jobsheet fieldset:disabled textarea{
+  color:#16201c !important; -webkit-text-fill-color:#16201c !important; opacity:1 !important;
+  background:#fff !important; border-color:#e3e0d8 !important;
+}
