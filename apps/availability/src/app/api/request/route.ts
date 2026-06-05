@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
+import { sendPushToUser } from "@/lib/push";
 
 // Public sign-up -> creates a PENDING account (hashed password). No login until an
 // operator approves and links it to a guide record.
@@ -37,6 +38,15 @@ export async function POST(req: NextRequest) {
     },
   });
   await audit({ action: "request.created", entityType: "AccessRequest", entityId: r.id, detail: { email: lower } });
+
+  // Reliable notice to every operator/admin: in-app bell + home-screen push.
+  // (Email below is a best-effort extra channel and may be unconfigured.)
+  const operators = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
+  const opMsg = `🆕 New guide sign-up: ${fullName.trim()} (${nickname.trim()}) <${lower}> — approve in Accounts → Pending requests.`;
+  for (const op of operators) {
+    await prisma.notification.create({ data: { userId: op.id, kind: "signup", message: opMsg } });
+    await sendPushToUser(op.id, { title: "New guide sign-up", body: `${fullName.trim()} (${nickname.trim()}) awaiting approval`, url: "/", tag: "signup" });
+  }
 
   // Acknowledge the applicant (never blocks the request — sendEmail can't throw).
   await sendEmail({
