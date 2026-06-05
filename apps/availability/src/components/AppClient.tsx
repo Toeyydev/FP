@@ -70,6 +70,7 @@ export default function AppClient({
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null }[]>([]);
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
+  const [installed, setInstalled] = useState(true); // home-screen install state
   const [showNotif, setShowNotif] = useState(false);
   // assign-form state lives here (not in a child) so a poll re-render never wipes it
   const [fTour, setFTour] = useState("");
@@ -163,6 +164,9 @@ export default function AppClient({
     if (role !== "guide") return;
     const supported = typeof window !== "undefined" && "Notification" in window && "PushManager" in window && "serviceWorker" in navigator;
     setAlertsOn(!supported || Notification.permission === "granted");
+    const standalone = window.matchMedia?.("(display-mode: standalone)").matches
+      || (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+    setInstalled(Boolean(standalone));
   }, [role]);
 
   async function enableAlerts() {
@@ -882,9 +886,21 @@ export default function AppClient({
       {role === "guide" && <GuideWelcome />}
 
       {role === "guide" && !alertsOn && (
-        <section className="alerts-banner">
-          <div><b>🔔 {t("alertsTitle")}</b><div style={{ fontSize: 13, marginTop: 3 }}>{t("alertsBody")}</div></div>
-          <button className="btn primary" onClick={enableAlerts}>{t("alertsEnable")}</button>
+        <section className="setup-card">
+          <div className="setup-head"><b>🔔 {t("setupTitle")}</b><span>{t("setupSub")}</span></div>
+          <ol className="setup-steps">
+            <li className={installed ? "done" : ""}>
+              <span className="num">{installed ? "✓" : "1"}</span>
+              <div className="txt"><b>{t("stepInstall")}</b><div className="how">{t("stepInstallHow")}</div></div>
+            </li>
+            <li>
+              <span className="num">2</span>
+              <div className="txt">
+                <b>{t("stepAlerts")}</b><div className="how">{t("stepAlertsHow")}</div>
+                <button className="btn primary sm" style={{ marginTop: 8 }} onClick={enableAlerts}>{t("alertsEnable")}</button>
+              </div>
+            </li>
+          </ol>
         </section>
       )}
 

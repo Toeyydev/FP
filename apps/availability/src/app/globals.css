@@ -356,3 +356,18 @@ a.glink:hover{text-decoration:underline}
 .savebar{ position:sticky; bottom:0; display:flex; align-items:center; justify-content:space-between;
   gap:12px; padding:12px 16px; margin-top:4px; background:var(--card); border-top:1px solid var(--line); }
 .savebar-status{ font-size:13px; font-weight:600; color:var(--green); }
+
+/* ---- Guide setup card: 2 steps to receive job offers ---- */
+.setup-card{background:#fff;border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:12px;
+  padding:14px 16px;margin-bottom:14px}
+.setup-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+.setup-head b{font-size:15px}
+.setup-head span{font-size:12px;color:var(--ink-soft)}
+.setup-steps{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
+.setup-steps li{display:flex;gap:11px;align-items:flex-start}
+.setup-steps .num{flex:none;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+  font-size:12px;font-weight:700;background:var(--grey-bg);color:var(--ink-soft)}
+.setup-steps li.done .num{background:var(--green-bg);color:var(--green)}
+.setup-steps li.done .txt b{color:var(--ink-soft);text-decoration:line-through}
+.setup-steps .txt b{font-size:14px}
+.setup-steps .how{font-size:12.5px;color:var(--ink-soft);margin-top:2px;line-height:1.45}
