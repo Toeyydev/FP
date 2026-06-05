@@ -423,3 +423,18 @@ a.dash-row:hover{background:var(--grey-bg)}
 .pay-table th.r,.pay-table td.r{text-align:right;font-variant-numeric:tabular-nums}
 .pay-table tfoot .pay-foot td{border-top:2px solid var(--line-strong);padding-top:10px;font-weight:600}
 .pay-table .gid{color:var(--grey);font-weight:600;font-size:11px;font-family:"Bricolage Grotesque"}
+
+/* ---- Reports ---- */
+.rep-kpi{display:flex;flex-wrap:wrap;gap:10px 28px;padding-bottom:14px;margin-bottom:6px;border-bottom:1px solid var(--line)}
+.rep-kpi div{display:flex;flex-direction:column}
+.rep-kpi b{font-family:"Bricolage Grotesque";font-size:24px;line-height:1}
+.rep-kpi span{font-size:11.5px;color:var(--ink-soft);font-weight:600;margin-top:3px}
+.rep-kpi .warn b{color:#b45309}
+.rep-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px 28px;margin-top:14px}
+@media (max-width:760px){ .rep-grid{grid-template-columns:1fr} }
+.rep-bars-head{display:flex;justify-content:space-between;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:8px}
+.rep-bar{display:grid;grid-template-columns:120px 1fr 36px;align-items:center;gap:8px;padding:3px 0}
+.rep-bar .rb-k{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rep-bar .rb-track{height:14px;background:var(--grey-bg);border-radius:4px;overflow:hidden}
+.rep-bar .rb-track i{display:block;height:100%;background:var(--primary);border-radius:4px}
+.rep-bar .rb-v{font-size:12.5px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
