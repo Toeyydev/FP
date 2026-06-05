@@ -9,7 +9,6 @@ export function AuthHeader({ backHref }: { backHref?: string }) {
     <header className="app">
       <div className="brand">
         <div className="wordmark">FOLKPATHS</div>
-        <div className="th-name">บริษัท โฟล์คพาธส์ จำกัด</div>
       </div>
       <div className="spacer" />
       {backHref && <Link className="btn sm ghost" href={backHref}>{t("back")}</Link>}
