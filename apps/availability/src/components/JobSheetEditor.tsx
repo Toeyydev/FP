@@ -124,7 +124,12 @@ export default function JobSheetEditor() {
                 <h3>💵 Expenses</h3>
                 {exp.length ? (
                   <ul className="gs-exp">
-                    {exp.map((e, i) => <li key={i}><span>{e.description}</span><b>{thb(expenseAmount(e))}</b></li>)}
+                    {exp.map((e, i) => (
+                      <li key={i}>
+                        <span>{e.description}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax (incl. guide)</small></span>
+                        <b>{thb(expenseAmount(e))}</b>
+                      </li>
+                    ))}
                     <li className="gs-total"><span>Total expenses</span><b>{thb(t.totalExpenses)}</b></li>
                   </ul>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
