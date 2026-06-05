@@ -40,6 +40,7 @@ export default function JobSheetEditor() {
   const [canEdit, setCanEdit] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -127,13 +128,21 @@ export default function JobSheetEditor() {
                     <li className="gs-total"><span>Total expenses</span><b>{thb(t.totalExpenses)}</b></li>
                   </ul>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
-                <div className="gs-fee">Your fee (net): <b>{thb(t.netGuideFee)}</b></div>
+                <div className="gs-payout">
+                  <div className="gs-payout-row"><span>Expenses (reimbursed)</span><b>{thb(t.totalExpenses)}</b></div>
+                  <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
+                  <div className="gs-payout-row gs-grand"><span>💰 You&apos;ll receive</span><b>{thb(t.grandTotal)}</b></div>
+                </div>
               </div>
+            </div>
+            <div style={{ marginTop: 14, textAlign: "center" }}>
+              <button className="btn" onClick={() => setShowFull((s) => !s)}>{showFull ? "Hide full details" : "📄 See full details"}</button>
             </div>
           </section>
         );
       })()}
 
+      {(canEdit || showFull) && (
       <section className="panel js-sheet" style={{ padding: 18 }}>
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
@@ -235,6 +244,7 @@ export default function JobSheetEditor() {
         </div>
        </fieldset>
       </section>
+      )}
     </div>
   );
 }

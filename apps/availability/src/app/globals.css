@@ -327,5 +327,7 @@ a.glink:hover{text-decoration:underline}
 .gs-exp{ list-style:none; margin:0; padding:0; }
 .gs-exp li{ display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #eee; font-size:14px; }
 .gs-exp .gs-total{ border-top:2px solid var(--line,#ddd); border-bottom:none; margin-top:4px; padding-top:7px; font-weight:700; }
-.gs-fee{ margin-top:10px; padding:8px 12px; background:#e3f6e9; border-radius:10px; font-size:14.5px; }
+.gs-payout{margin-top:10px}
+.gs-payout-row{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
+.gs-payout .gs-grand{margin-top:6px;padding:9px 12px;background:#e3f6e9;border-radius:10px;font-size:15.5px;font-weight:700}
 .gs-empty{ color:var(--ink-soft,#999); font-size:13.5px; }
