@@ -67,7 +67,7 @@ export default function AppClient({
   const [pendingCount, setPendingCount] = useState(0);
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
-  const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[]>([]);
+  const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null }[]>([]);
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
@@ -235,7 +235,7 @@ export default function AppClient({
   const loadOffers = useCallback(() => {
     if (role !== "guide") return;
     fetch("/api/offers/mine", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-      const ofs = (d.offers ?? []) as { id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null }[];
+      const ofs = (d.offers ?? []) as { id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[];
       setOffers(ofs);
       const ids = new Set(ofs.map((o) => o.id));
       if (seenOffersRef.current && ofs.some((o) => !seenOffersRef.current!.has(o.id))) playChime();
@@ -947,8 +947,14 @@ export default function AppClient({
           {offers.map((o) => (
             <div key={o.id} className="offer-card">
               <div className="offer-info">
-                <b>{o.tourName}</b>
-                <div className="offer-meta">{o.date} · {o.time}{o.pax != null ? ` · ${o.pax} pax` : ""}{o.note ? ` · ${o.note}` : ""}</div>
+                <b className="offer-tour">{o.tourName}</b>
+                <dl className="offer-data">
+                  <div><dt>{t("ofDate")}</dt><dd>{new Date(`${o.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</dd></div>
+                  <div><dt>{t("ofTime")}</dt><dd>{o.time}</dd></div>
+                  {o.pax != null && <div><dt>{t("ofPax")}</dt><dd>{o.pax} pax</dd></div>}
+                  {o.meetingPoint && <div><dt>{t("ofMeet")}</dt><dd>{o.meetingPoint}</dd></div>}
+                  {o.note && <div><dt>{t("ofRef")}</dt><dd>{o.note}</dd></div>}
+                </dl>
               </div>
               <div className="offer-actions">
                 <button className="btn sm primary" onClick={() => respondOffer(o.id, "accept")}>✅ {t("accept")}</button>

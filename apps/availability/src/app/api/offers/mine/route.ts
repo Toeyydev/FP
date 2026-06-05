@@ -19,12 +19,13 @@ export async function GET() {
     where: { id: { in: ids }, status: "OPEN", expiresAt: { gt: new Date() } },
     orderBy: [{ date: "asc" }, { slotIdx: "asc" }],
   });
-  const tours = await prisma.tour.findMany({ where: { id: { in: offers.map((o) => o.tourId) } }, select: { id: true, name: true } });
-  const name = new Map(tours.map((t) => [t.id, t.name]));
+  const tours = await prisma.tour.findMany({ where: { id: { in: offers.map((o) => o.tourId) } }, select: { id: true, name: true, meetingPoint: true } });
+  const tmap = new Map(tours.map((t) => [t.id, t]));
 
   return NextResponse.json({
     offers: offers.map((o) => ({
-      id: o.id, tourId: o.tourId, tourName: name.get(o.tourId) ?? o.tourId,
+      id: o.id, tourId: o.tourId, tourName: tmap.get(o.tourId)?.name ?? o.tourId,
+      meetingPoint: tmap.get(o.tourId)?.meetingPoint ?? null,
       date: o.date, slotIdx: o.slotIdx, time: timeRangeLabel(o.slotIdx, o.durationMin),
       pax: o.pax, note: o.note, expiresAt: o.expiresAt,
     })),
