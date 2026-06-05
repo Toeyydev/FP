@@ -1,7 +1,8 @@
-// Service worker — makes the app installable (PWA) and SELF-HEALS: when a new
-// version activates it wipes old caches and reloads any wedged tab into the live
-// app, so a stuck "Reconnecting…" page recovers on its own after one reload.
-const CACHE = "folkpath-v6";
+// Service worker — PWA install + push + SELF-HEAL. Navigation handling passes the
+// ORIGINAL request to fetch() so redirects (e.g. auth → /start) work natively;
+// a previous version re-fetched the URL string with redirect:follow, which made
+// Chrome reject the redirected response and break every page load.
+const CACHE = "folkpath-v7";
 const OFFLINE = "/offline.html";
 
 self.addEventListener("install", (event) => {
@@ -12,11 +13,10 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
-    // Drop every old cache (including any stale offline page).
     const keys = await caches.keys();
     await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
     await self.clients.claim();
-    // Force any open tab to reload into the fresh, live app.
+    // Reload any open tab so a wedged one recovers into the live app.
     const cs = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const c of cs) { try { c.navigate(c.url); } catch (e) { /* ignore */ } }
   })());
@@ -24,12 +24,11 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  // Page navigations: always go to the network (no-store) so reloads pick up new
-  // deploys; only fall back to the offline page on a genuine network failure.
+  // Only navigations; pass the original request so redirect mode ("manual") is
+  // preserved and the browser performs auth redirects itself. Offline fallback
+  // only on a real network error.
   if (req.mode === "navigate") {
-    event.respondWith(
-      fetch(req.url, { cache: "no-store", credentials: "include" }).catch(() => caches.match(OFFLINE)),
-    );
+    event.respondWith(fetch(req).catch(() => caches.match(OFFLINE)));
   }
 });
 
@@ -48,7 +47,6 @@ self.addEventListener("push", (event) => {
   }));
 });
 
-// Tapping the notification opens (or focuses) the app.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = (event.notification.data && event.notification.data.url) || "/";
