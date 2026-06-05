@@ -23,6 +23,10 @@
 <script>
   function back(){ location.reload(); }
   document.getElementById('retry').addEventListener('click', back);
+  // Force the browser to pick up the newest (self-healing) service worker.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function(rs){ rs.forEach(function(r){ try { r.update(); } catch(e){} }); }).catch(function(){});
+  }
   // Auto-recover the instant the network is back.
   window.addEventListener('online', back);
   setInterval(function(){

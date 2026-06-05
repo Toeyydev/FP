@@ -15,7 +15,7 @@ This app deploys to Railway as a Next.js service + a managed Postgres database.
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | reference the Postgres service |
 | `AUTH_SECRET` | _generate one_ | `openssl rand -base64 33` — **never commit it** |
 | `AUTH_TRUST_HOST` | `true` | required behind Railway's proxy |
-| `AUTH_URL` | `https://<app>.up.railway.app` | set after you generate the domain (step 3) |
+| `AUTH_URL` | `https://guide.folkpaths.com` | **must match the public URL** guides use in the browser (not the `*.up.railway.app` hostname) |
 | `ADMIN_EMAIL` | `admin@folkpaths.com` | your prod admin login |
 | `ADMIN_PASSWORD` | _a strong password_ | |
 | `STUB_DELIVERY` | `true` | leave stubbed until the email domain is verified |
@@ -26,8 +26,9 @@ Email (set these once a sending domain is verified, then `STUB_DELIVERY=false`):
 
 ## 3. Deploy, expose, seed
 1. The first deploy builds + runs migrations automatically.
-2. **Settings → Networking → Generate Domain** → copy the URL → set `AUTH_URL` to it → redeploy.
-3. **Seed once** to create the admin + 25 INVITED guides:
+2. **Settings → Networking → Generate Domain** (Railway default `*.up.railway.app` — keep this as the upstream target).
+3. **Custom domain** (production): DNS `CNAME guide → <railway-service>.up.railway.app`, then Railway → **Networking → Custom Domain** → add `guide.folkpaths.com`. Set `AUTH_URL=https://guide.folkpaths.com` and redeploy. If `AUTH_URL` still points at the Railway hostname, log-in redirects and the `callback-url` cookie will jump users to `*.up.railway.app` instead of the custom domain.
+4. **Seed once** to create the admin + 25 INVITED guides:
    - Railway one-off command, or via CLI: `railway run npm run db:seed`
    - The invite codes + admin login print in the logs.
 

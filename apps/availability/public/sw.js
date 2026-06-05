@@ -1,7 +1,7 @@
-// Service worker — makes the app installable (PWA). Chrome requires the app to
-// work offline, so we serve a cached offline fallback for navigations when the
-// network is unavailable. We do NOT cache authenticated pages (stale/wrong-user risk).
-const CACHE = "folkpath-v5";
+// Service worker — makes the app installable (PWA) and SELF-HEALS: when a new
+// version activates it wipes old caches and reloads any wedged tab into the live
+// app, so a stuck "Reconnecting…" page recovers on its own after one reload.
+const CACHE = "folkpath-v6";
 const OFFLINE = "/offline.html";
 
 self.addEventListener("install", (event) => {
@@ -11,15 +11,21 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()),
-  );
+  event.waitUntil((async () => {
+    // Drop every old cache (including any stale offline page).
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+    await self.clients.claim();
+    // Force any open tab to reload into the fresh, live app.
+    const cs = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of cs) { try { c.navigate(c.url); } catch (e) { /* ignore */ } }
+  })());
 });
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  // Page navigations: always fetch fresh HTML (no-store) so a reload picks up a
-  // new deploy; fall back to the offline page when there's no network.
+  // Page navigations: always go to the network (no-store) so reloads pick up new
+  // deploys; only fall back to the offline page on a genuine network failure.
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req.url, { cache: "no-store", credentials: "include" }).catch(() => caches.match(OFFLINE)),

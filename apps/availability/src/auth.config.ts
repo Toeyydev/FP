@@ -7,6 +7,9 @@ const REFRESH_COOKIE = "folkpath_rt";
 // Edge-safe base config (NO database / Node-only imports here). Used by the
 // middleware. Providers that touch the DB are added in auth.ts.
 export const authConfig = {
+  // Use the browser's Host header (guide.folkpaths.com) for redirects/cookies,
+  // not the Railway upstream hostname baked into AUTH_URL.
+  trustHost: true,
   session: { strategy: "jwt", maxAge: ACCESS_TTL_SEC },
   jwt: { maxAge: ACCESS_TTL_SEC },
   pages: { signIn: "/start" },
