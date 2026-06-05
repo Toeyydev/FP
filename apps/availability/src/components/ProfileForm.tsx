@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { useLang } from "@/components/Providers";
+import { REQUIRED_PROFILE_FIELDS } from "@/lib/profile";
+
+const REQUIRED = new Set(REQUIRED_PROFILE_FIELDS);
 
 type Doc = { id: string; kind: string; filename: string; mimeType: string; size: number; uploadedAt: string };
 type Profile = {
@@ -38,6 +41,11 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   useEffect(() => { load(); }, [load]);
 
   async function save() {
+    // Every required field must be filled (operators editing others can skip).
+    if (!targetUserId) {
+      const missing = REQUIRED_PROFILE_FIELDS.filter((k) => !(form[k] && form[k].trim()));
+      if (missing.length) { setMsg(t("allRequired")); return; }
+    }
     setBusy(true); setMsg("");
     const body: Record<string, string> = { ...form };
     if (targetUserId) body.userId = targetUserId;
@@ -85,10 +93,8 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
 
           {FIELDS.map(([k, labelKey]) => (
             <div className="fld" key={k}>
-              <label>{t(labelKey as Parameters<typeof t>[0])}</label>
-              {k === "idCardAddress"
-                ? <input value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: e.target.value })} placeholder="" />
-                : <input value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />}
+              <label>{t(labelKey as Parameters<typeof t>[0])}{REQUIRED.has(k) ? <span style={{ color: "#c0392b" }}> *</span> : ""}</label>
+              <input required={REQUIRED.has(k)} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
             </div>
           ))}
 
