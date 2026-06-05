@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
+import { guidesNeeded } from "@/lib/capacity";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -14,12 +15,11 @@ export async function GET() {
   const today = bkk(0);
   const horizon = bkk(7);
 
-  const [assigns, bookings, tours, guides, recent] = await Promise.all([
+  const [assigns, bookings, tours, guides] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: today, lte: horizon } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }),
-    prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true } }),
+    prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true } }),
     prisma.tour.findMany({ select: { id: true, name: true, durationMin: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
-    prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 14, select: { action: true, entityType: true, actorRole: true, createdAt: true } }),
   ]);
 
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
@@ -30,8 +30,10 @@ export async function GET() {
   const todayTours = assigns.filter((a) => a.date === today).map(fmt);
   const upcomingTours = assigns.filter((a) => a.date > today).map(fmt);
 
-  // Unassigned: a tour instance (date+slot+tour) with bookings but no guide on that slot.
-  const assignedSlot = new Set(assigns.map((a) => `${a.date}|${a.slotIdx}`));
+  // Tour instances (date+slot+tour) from bookings, with how many guides are on
+  // them vs. how many the pax needs. → unassigned (0 guides) + understaffed.
+  const guidesByInst: Record<string, number> = {};
+  for (const a of assigns) { const k = `${a.date}|${a.slotIdx}|${a.tourId}`; guidesByInst[k] = (guidesByInst[k] ?? 0) + 1; }
   const inst: Record<string, { date: string; slotIdx: number; tourId: string; pax: number; count: number }> = {};
   for (const b of bookings) {
     if (!b.tourId || b.slotIdx == null || !b.date) continue;
@@ -39,10 +41,18 @@ export async function GET() {
     (inst[k] ??= { date: b.date, slotIdx: b.slotIdx, tourId: b.tourId, pax: 0, count: 0 });
     inst[k].pax += b.pax ?? 0; inst[k].count += 1;
   }
-  const unassigned = Object.values(inst)
-    .filter((i) => !assignedSlot.has(`${i.date}|${i.slotIdx}`))
-    .map((i) => ({ date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "", tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax, count: i.count }))
-    .sort((a, b) => (a.date + String(a.slotIdx).padStart(2, "0")).localeCompare(b.date + String(b.slotIdx).padStart(2, "0")));
+  const sortKey = (a: { date: string; slotIdx: number }) => a.date + String(a.slotIdx).padStart(2, "0");
+  const unassigned: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number }[] = [];
+  const understaffed: { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number }[] = [];
+  for (const i of Object.values(inst)) {
+    const have = guidesByInst[`${i.date}|${i.slotIdx}|${i.tourId}`] ?? 0;
+    const need = guidesNeeded(i.pax);
+    const base = { date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "", tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax };
+    if (have === 0) unassigned.push({ ...base, count: i.count, need });
+    else if (have < need) understaffed.push({ ...base, have, need });
+  }
+  unassigned.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+  understaffed.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
 
   // Conflicts: a guide with two overlapping tours on the same day.
   const byGD: Record<string, typeof assigns> = {};
@@ -56,5 +66,5 @@ export async function GET() {
     if (bad.size) conflicts.push({ guideId, guide: gName(guideId), date, slots: [...bad].sort((a, b) => a - b).map((i) => `${SLOT_TIMES[iv[i].slotIdx]} ${iv[i].tour}`) });
   }
 
-  return NextResponse.json({ today, todayTours, upcomingTours, unassigned, conflicts, recent });
+  return NextResponse.json({ today, todayTours, upcomingTours, unassigned, understaffed, conflicts });
 }
