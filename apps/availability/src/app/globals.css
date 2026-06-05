@@ -445,3 +445,8 @@ a.dash-row:hover{background:var(--grey-bg)}
 .offer-data > div{display:grid;grid-template-columns:96px 1fr;gap:8px;align-items:baseline}
 .offer-data dt{margin:0;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft)}
 .offer-data dd{margin:0;font-size:13.5px;font-weight:600}
+
+/* ---- FOLKPATHS logo below the login box ---- */
+.login-logo{ text-align:center; margin:26px auto 0; max-width:440px;
+  font-family:"Inter",system-ui,sans-serif; font-weight:800; font-size:26px;
+  letter-spacing:.04em; color:#2f343b; opacity:.85; }

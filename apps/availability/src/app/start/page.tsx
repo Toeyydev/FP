@@ -130,6 +130,7 @@ export default function StartPage() {
           )}
         </div>
       </section>
+      <div className="login-logo">FOLKPATHS</div>
     </div>
   );
 }
