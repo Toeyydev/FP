@@ -178,7 +178,7 @@ table.grid tbody tr:hover td.gname{background:var(--grey-bg)}
 .badge.invited{background:#fff7e8;border-color:#e0b964;color:#7a5a16}
 .badge.pending{background:#eef0ff;border-color:#b9c0f0;color:#3a44a8}
 .badge.active{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
-.badge.suspended{background:#fbe6e2;border-color:#e7b3aa;color:#b23b2e}
+.badge.suspended{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}
 .acct-table{width:100%;border-collapse:collapse;font-size:13px}
 .acct-table th{text-align:left;font-family:"Bricolage Grotesque";font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft);padding:8px 10px;border-bottom:1.5px solid var(--line-strong)}
 .acct-table td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}

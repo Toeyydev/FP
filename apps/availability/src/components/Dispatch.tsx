@@ -67,17 +67,17 @@ export default function Dispatch() {
               }
               return byDate.map(([date, items]) => (
                 <div key={date} style={{ marginBottom: 18 }}>
-                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: date === todayStr ? "#1b4ef0" : undefined }}>
-                    {date === todayStr ? "📅 Today · " : ""}{fmt(date)} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>({items.length})</span>
+                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: date === todayStr ? "var(--primary)" : undefined }}>
+                    {date === todayStr ? "Today · " : ""}{fmt(date)} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>({items.length})</span>
                   </h3>
                   {items.map((a, i) => (
                     <div key={i} className="sched-card" style={{ cursor: "default" }}>
                       <div className="sched-when"><b style={{ fontSize: 18 }}>{i + 1}</b><span>{a.time}</span></div>
-                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">👤 {a.guideId} {a.guideName}{a.pax != null ? ` · 👥 ${a.pax} pax` : ""}{a.note ? ` · 📝 ${a.note}` : ""}</div></div>
+                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div></div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>📄 Sheet</a>
-                        <button className="btn sm" onClick={() => reoffer(a)}>🔄 Re-offer</button>
-                        <button className="btn sm danger" onClick={() => removeAssignment(a)}>🗑 Remove</button>
+                        <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>Job sheet</a>
+                        <button className="btn sm" onClick={() => reoffer(a)}>Re-offer</button>
+                        <button className="btn sm danger" onClick={() => removeAssignment(a)}>Remove</button>
                       </div>
                     </div>
                   ))}
@@ -98,10 +98,10 @@ export default function Dispatch() {
                     <tr key={o.id}>
                       <td style={{ whiteSpace: "nowrap" }}>{fmt(o.date)}<br /><small style={{ color: "var(--ink-soft)" }}>{o.time}</small></td>
                       <td>{o.tourName}{o.pax != null ? <small style={{ color: "var(--ink-soft)" }}> · {o.pax} pax</small> : null}</td>
-                      <td>{badge(o.status)}{o.assignedGuide && <div style={{ fontSize: 12, marginTop: 3 }}>✅ {o.assignedGuide}</div>}</td>
+                      <td>{badge(o.status)}{o.assignedGuide && <div style={{ fontSize: 12, marginTop: 3, color: "var(--green)", fontWeight: 600 }}>{o.assignedGuide}</div>}</td>
                       <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
                         {o.status === "OPEN" ? `${o.pending} waiting of ${o.candidates}` : `${o.candidates} offered`}
-                        {o.denied.length > 0 && <div>❌ declined: {o.denied.join(", ")}</div>}
+                        {o.denied.length > 0 && <div>declined: {o.denied.join(", ")}</div>}
                       </td>
                     </tr>
                   ))}
