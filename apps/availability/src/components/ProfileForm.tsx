@@ -114,14 +114,15 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
           <button className="btn primary" style={{ width: "100%", padding: 11 }} disabled={busy} onClick={save}>{busy ? "…" : t("save")}</button>
 
           <div className="fld" style={{ marginTop: 22 }}>
-            <label>{t("docsSection")}</label>
+            <label>{t("docsSection")} <span style={{ color: "var(--ink-soft)", fontWeight: 600 }}>· {t("optional")}</span></label>
+            <div className="auth-note" style={{ marginTop: 0, marginBottom: 10 }}>{t("docsOpsOnly")}</div>
             {p.documents.length > 0 && (
               <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
                 {p.documents.map((d) => (
                   <div key={d.id} className="codeflash" style={{ background: "var(--grey-bg)", color: "var(--ink)" }}>
                     <span><b>{d.kind === "ID_CARD" ? t("idCardDoc") : d.kind === "BANK_BOOK" ? t("bankBookDoc") : t("otherDoc")}</b> · {d.filename} · {(d.size / 1024).toFixed(0)} KB</span>
                     <span style={{ display: "flex", gap: 8 }}>
-                      <a className="glink" href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer">{t("viewDoc")}</a>
+                      {Boolean(p.isOperator) && <a className="glink" href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer">{t("viewDoc")}</a>}
                       <button className="btn sm danger" onClick={() => del(d.id)}>{t("deleteDoc")}</button>
                     </span>
                   </div>

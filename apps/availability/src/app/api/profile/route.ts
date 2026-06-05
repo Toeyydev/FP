@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
     bankAccountNo: decrypt(u.bankAccountNo), bankAccountName: decrypt(u.bankAccountName), bankBranch: decrypt(u.bankBranch),
     documents: u.documents,
     canEdit: true,
+    isOperator: isOps(session.user.role),
   });
 }
 
