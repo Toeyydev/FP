@@ -9,12 +9,24 @@ import { sendPushToUser } from "@/lib/push";
 export async function createOffer(o: {
   tourId: string; date: string; slotIdx: number; pax?: number | null; note?: string | null;
   durationMin?: number | null; ttlMinutes?: number; createdById?: string | null; excludeGuideId?: string | null;
+  onlyGuideId?: string | null;
 }): Promise<{ offerId: string | null; candidates: number; lineSent: number; noTour?: boolean }> {
   const tour = await prisma.tour.findUnique({ where: { id: o.tourId } });
   if (!tour) return { offerId: null, candidates: 0, lineSent: 0, noTour: true };
 
-  let candidates = await availableGuides(o.date, o.slotIdx);
-  if (o.excludeGuideId) candidates = candidates.filter((g) => g.guideId !== o.excludeGuideId);
+  let candidates;
+  if (o.onlyGuideId) {
+    // Manual pick: offer to this one guide (operator override), unless they're
+    // already booked that slot.
+    const [g, assigned] = await Promise.all([
+      prisma.user.findFirst({ where: { guideId: o.onlyGuideId, role: "GUIDE", state: "ACTIVE" }, select: { id: true, guideId: true, displayName: true, lineUserId: true } }),
+      prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: o.onlyGuideId, date: o.date, slotIdx: o.slotIdx } } }),
+    ]);
+    candidates = g && g.guideId && !assigned ? [g] : [];
+  } else {
+    candidates = await availableGuides(o.date, o.slotIdx);
+    if (o.excludeGuideId) candidates = candidates.filter((g) => g.guideId !== o.excludeGuideId);
+  }
   if (candidates.length === 0) return { offerId: null, candidates: 0, lineSent: 0 };
 
   const ttl = o.ttlMinutes ?? 60;

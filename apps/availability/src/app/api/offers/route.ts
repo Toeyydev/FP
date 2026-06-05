@@ -68,11 +68,12 @@ export async function POST(req: NextRequest) {
     durationMin: z.number().int().min(15).max(720).optional(),
     note: z.string().max(300).optional(),
     ttlMinutes: z.number().int().min(5).max(1440).optional(),
+    guideId: z.string().min(1).optional(), // offer to one specific guide
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { tourId, date, slotIdx, pax, note, durationMin } = parsed.data;
+  const { tourId, date, slotIdx, pax, note, durationMin, guideId } = parsed.data;
 
-  const r = await createOffer({ tourId, date, slotIdx, pax, note, durationMin, ttlMinutes: parsed.data.ttlMinutes, createdById: session!.user!.id ?? null });
+  const r = await createOffer({ tourId, date, slotIdx, pax, note, durationMin, ttlMinutes: parsed.data.ttlMinutes, createdById: session!.user!.id ?? null, onlyGuideId: guideId ?? null });
   if (r.noTour) return NextResponse.json({ error: "no-tour" }, { status: 400 });
   await audit({
     actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,

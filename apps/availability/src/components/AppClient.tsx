@@ -79,6 +79,7 @@ export default function AppClient({
   const [oDate, setODate] = useState("");
   const [oSlot, setOSlot] = useState(0);
   const [oDur, setODur] = useState("3"); // tour duration in hours
+  const [oGuide, setOGuide] = useState(""); // "" = all available; or a specific guideId
 
   const tourById = useMemo(
     () => Object.fromEntries((ref?.tours ?? []).map((x) => [x.id, x])),
@@ -337,7 +338,7 @@ export default function AppClient({
   function openNewOffer() {
     setFTour(ref?.tours[0]?.id ?? "");
     setFPax(""); setFNote("");
-    setODate(ymd(anchor)); setOSlot(0); setODur("3");
+    setODate(ymd(anchor)); setOSlot(0); setODur("3"); setOGuide("");
     setModal({ kind: "newoffer" });
   }
   // How many guides are free for a date+slot (client-side preview before sending).
@@ -367,7 +368,7 @@ export default function AppClient({
     const durMin = oDur && Number(oDur) > 0 ? Math.round(Number(oDur) * 60) : undefined;
     const r = await fetch("/api/offers", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tourId: fTour, date: oDate, slotIdx: oSlot, durationMin: durMin, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined }),
+      body: JSON.stringify({ tourId: fTour, date: oDate, slotIdx: oSlot, durationMin: durMin, pax: fPax ? Number(fPax) : undefined, note: fNote.trim() || undefined, guideId: oGuide || undefined }),
     });
     const j = await r.json().catch(() => ({}));
     setModal(null);
@@ -758,15 +759,21 @@ export default function AppClient({
                 {(ref?.tours ?? []).map((x) => <option key={x.id} value={x.id}>{x.id} · {x.name} ({x.time})</option>)}
               </select>
             </div>
+            <div><label className="fl">{t("sendTo")}</label>
+              <select value={oGuide} onChange={(e) => setOGuide(e.target.value)}>
+                <option value="">{t("allAvailableGuides")}</option>
+                {(ref?.guides ?? []).map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
+              </select>
+            </div>
             <div><label className="fl">{t("paxOpt")}</label><input type="number" min={1} max={10} value={fPax} onChange={(e) => setFPax(e.target.value)} placeholder="e.g. 4" /></div>
             <div><label className="fl">{t("noteOpt")}</label><input value={fNote} onChange={(e) => setFNote(e.target.value)} placeholder="Bokun / GYG booking no." /></div>
-            <div className="offeravail" style={{ marginTop: 4, fontWeight: 600, color: avail ? "var(--green, #1a7f37)" : "var(--red, #c0392b)" }}>
-              {avail > 0 ? `✅ ${avail} ${t("guidesAvailable")}` : `⚠️ ${t("offerNoCandidates")}`}
+            <div className="offeravail" style={{ marginTop: 4, fontWeight: 600, color: (oGuide || avail > 0) ? "var(--green, #1a7f37)" : "var(--red, #c0392b)" }}>
+              {oGuide ? `📨 ${t("offerToOne")}` : avail > 0 ? `✅ ${avail} ${t("guidesAvailable")}` : `⚠️ ${t("offerNoCandidates")}`}
             </div>
           </div>
           <div className="mfoot">
             <button className="btn ghost" onClick={() => setModal(null)}>{t("cancel")}</button>
-            <button className="btn primary" disabled={avail === 0} onClick={doOfferForm}>📣 {t("sendOffer")}</button>
+            <button className="btn primary" disabled={!oGuide && avail === 0} onClick={doOfferForm}>📣 {t("sendOffer")}</button>
           </div>
         </>
       );
