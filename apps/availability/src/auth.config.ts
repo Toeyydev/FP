@@ -26,15 +26,21 @@ export const authConfig = {
         p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health";
       if (isPublic) return true;
       if (auth?.user) return true;
+
+      // Build redirects from the REAL public host (the browser's Host header), so
+      // the user is never bounced onto the Railway upstream hostname / AUTH_URL —
+      // they stay on whatever domain they're using (e.g. guide.folkpaths.com).
+      const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || request.nextUrl.host;
+      const proto = request.headers.get("x-forwarded-proto") || (request.nextUrl.protocol.replace(":", "")) || "https";
+      const base = `${proto}://${host}`;
+
       // No valid access session, but a "remember me" refresh token is present:
       // bounce through the refresh route to silently re-mint the access session.
       if (request.cookies.get(REFRESH_COOKIE)) {
-        const url = request.nextUrl.clone();
-        url.pathname = "/api/session/refresh";
-        url.search = `?next=${encodeURIComponent(p)}`;
-        return NextResponse.redirect(url);
+        return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(p)}`, base));
       }
-      return false;
+      // Otherwise send them to sign in — on the same domain.
+      return NextResponse.redirect(new URL(`/start?callbackUrl=${encodeURIComponent(p)}`, base));
     },
     jwt({ token, user }) {
       if (user) {
