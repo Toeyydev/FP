@@ -36,8 +36,10 @@ export const authConfig = {
 
       // No valid access session, but a "remember me" refresh token is present:
       // bounce through the refresh route to silently re-mint the access session.
+      // Pass the real host (Node routes only see Railway's internal host) so the
+      // re-minted Secure cookie + redirect stay on this domain (no redirect loop).
       if (request.cookies.get(REFRESH_COOKIE)) {
-        return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(p)}`, base));
+        return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(p)}&h=${encodeURIComponent(host)}`, base));
       }
       // Otherwise send them to sign in — on the same domain.
       return NextResponse.redirect(new URL(`/start?callbackUrl=${encodeURIComponent(p)}`, base));
