@@ -39,7 +39,8 @@ export default function BookingsInbox() {
     await load();
   }
   // manual-add form
-  const [m, setM] = useState({ tourId: "", date: "", slotIdx: 0, pax: "", confirmationCode: "", customerName: "", source: "viator" });
+  const [m, setM] = useState({ tourId: "", date: "", slotIdx: 0, pax: "", confirmationCode: "", customerName: "", source: "direct",
+    nationality: "", email: "", phone: "", specialRequests: "", notes: "", bookingDate: "", paymentStatus: "unpaid" });
 
   const load = useCallback(async () => {
     const r = await fetch("/api/bookings", { cache: "no-store" });
@@ -88,30 +89,40 @@ export default function BookingsInbox() {
         <div className="panel-head"><h2>Incoming bookings</h2>
           <div className="head-tools">
             <span style={{ color: "var(--ink-soft)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
-            <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add Viator / manual</button>
+            <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add booking</button>
           </div>
         </div>
 
         <div style={{ padding: 14 }}>
           {showAdd && (
             <div className="op-toolbar" style={{ borderRadius: 12, border: "1.5px solid var(--line)", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-              <select className="search" value={m.source} onChange={(e) => setM({ ...m, source: e.target.value })}>
-                <option value="viator">Viator</option><option value="gyg">GetYourGuide</option><option value="manual">Other</option>
+              <select className="search" style={{ flex: "none", width: 130 }} value={m.source} onChange={(e) => setM({ ...m, source: e.target.value })}>
+                <option value="direct">Direct</option><option value="agent">Agent</option><option value="referral">Referral</option>
+                <option value="viator">Viator</option><option value="gyg">GetYourGuide</option><option value="klook">Klook</option><option value="manual">Other</option>
               </select>
-              <select className="search" value={m.tourId} onChange={(e) => setM({ ...m, tourId: e.target.value })}>
+              <select className="search" style={{ flex: "none", width: 180 }} value={m.tourId} onChange={(e) => setM({ ...m, tourId: e.target.value })}>
+                <option value="">Tour…</option>
                 {tours.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.name}</option>)}
               </select>
-              <input className="search" type="date" value={m.date} onChange={(e) => setM({ ...m, date: e.target.value })} />
-              <select className="search" value={m.slotIdx} onChange={(e) => setM({ ...m, slotIdx: Number(e.target.value) })}>
+              <input className="search" style={{ flex: "none", width: 140 }} type="date" title="Tour date" value={m.date} onChange={(e) => setM({ ...m, date: e.target.value })} />
+              <select className="search" style={{ flex: "none", width: 90 }} value={m.slotIdx} onChange={(e) => setM({ ...m, slotIdx: Number(e.target.value) })}>
                 {SLOTS.map((s) => <option key={s.idx} value={s.idx}>{s.start}</option>)}
               </select>
-              <input className="search" style={{ width: 70 }} type="number" min={1} placeholder="pax" value={m.pax} onChange={(e) => setM({ ...m, pax: e.target.value })} />
-              <input className="search" placeholder="Booking ref" value={m.confirmationCode} onChange={(e) => setM({ ...m, confirmationCode: e.target.value })} />
-              <input className="search" placeholder="Customer" value={m.customerName} onChange={(e) => setM({ ...m, customerName: e.target.value })} />
+              <input className="search" style={{ flex: "none", width: 70 }} type="number" min={1} placeholder="pax" value={m.pax} onChange={(e) => setM({ ...m, pax: e.target.value })} />
+              <input className="search" style={{ flex: "none", width: 130 }} placeholder="Booking #" value={m.confirmationCode} onChange={(e) => setM({ ...m, confirmationCode: e.target.value })} />
+              <input className="search" style={{ flex: "none", width: 150 }} placeholder="Guest name" value={m.customerName} onChange={(e) => setM({ ...m, customerName: e.target.value })} />
+              <input className="search" style={{ flex: "none", width: 110 }} placeholder="Nationality" value={m.nationality} onChange={(e) => setM({ ...m, nationality: e.target.value })} />
+              <input className="search" style={{ flex: "none", width: 170 }} placeholder="Email" value={m.email} onChange={(e) => setM({ ...m, email: e.target.value })} />
+              <input className="search" style={{ flex: "none", width: 130 }} placeholder="Phone" value={m.phone} onChange={(e) => setM({ ...m, phone: e.target.value })} />
+              <select className="search" style={{ flex: "none", width: 120 }} title="Payment" value={m.paymentStatus} onChange={(e) => setM({ ...m, paymentStatus: e.target.value })}>
+                <option value="unpaid">Unpaid</option><option value="deposit">Deposit</option><option value="paid">Paid</option>
+              </select>
+              <input className="search" style={{ minWidth: 180, flex: 1 }} placeholder="Special requests" value={m.specialRequests} onChange={(e) => setM({ ...m, specialRequests: e.target.value })} />
+              <input className="search" style={{ minWidth: 160, flex: 1 }} placeholder="Notes" value={m.notes} onChange={(e) => setM({ ...m, notes: e.target.value })} />
               <button className="btn sm primary" onClick={async () => {
                 if (!m.tourId || !/^\d{4}-\d{2}-\d{2}$/.test(m.date)) { setMsg("Pick tour + date."); return; }
-                const r = await post({ action: "add", tourId: m.tourId, date: m.date, slotIdx: m.slotIdx, pax: m.pax ? Number(m.pax) : undefined, confirmationCode: m.confirmationCode || undefined, customerName: m.customerName || undefined, source: m.source });
-                if (r.ok) { setShowAdd(false); setM({ ...m, pax: "", confirmationCode: "", customerName: "" }); await load(); }
+                const r = await post({ action: "add", tourId: m.tourId, date: m.date, slotIdx: m.slotIdx, pax: m.pax ? Number(m.pax) : undefined, confirmationCode: m.confirmationCode || undefined, customerName: m.customerName || undefined, source: m.source, nationality: m.nationality || undefined, email: m.email || undefined, phone: m.phone || undefined, specialRequests: m.specialRequests || undefined, notes: m.notes || undefined, paymentStatus: m.paymentStatus });
+                if (r.ok) { setShowAdd(false); setM({ ...m, pax: "", confirmationCode: "", customerName: "", nationality: "", email: "", phone: "", specialRequests: "", notes: "" }); await load(); }
               }}>Add booking</button>
             </div>
           )}

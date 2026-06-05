@@ -74,11 +74,20 @@ export async function POST(req: NextRequest) {
       tourId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1), pax: z.number().int().min(1).max(50).optional(),
       customerName: z.string().max(160).optional(), source: z.string().max(20).optional(),
+      nationality: z.string().max(80).optional(), email: z.string().max(160).optional(), phone: z.string().max(40).optional(),
+      specialRequests: z.string().max(500).optional(), notes: z.string().max(500).optional(),
+      bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), paymentStatus: z.string().max(20).optional(),
     }).safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const d = parsed.data;
     const b = await prisma.booking.create({
-      data: { source: d.source || "manual", confirmationCode: d.confirmationCode ?? null, productName: d.productName ?? null, tourId: d.tourId, date: d.date, slotIdx: d.slotIdx, pax: d.pax ?? null, customerName: d.customerName ?? null, status: "PENDING" },
+      data: {
+        source: d.source || "manual", confirmationCode: d.confirmationCode ?? null, productName: d.productName ?? null,
+        tourId: d.tourId, date: d.date, slotIdx: d.slotIdx, pax: d.pax ?? null, customerName: d.customerName ?? null,
+        nationality: d.nationality ?? null, email: d.email ?? null, phone: d.phone ?? null,
+        specialRequests: d.specialRequests ?? null, notes: d.notes ?? null,
+        bookingDate: d.bookingDate ?? null, paymentStatus: d.paymentStatus || "unpaid", status: "PENDING",
+      },
     });
     await audit({ actorId, actorRole, action: "booking.added", entityType: "Booking", entityId: b.id });
     return NextResponse.json({ ok: true, booking: b });

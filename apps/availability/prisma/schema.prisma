@@ -296,6 +296,13 @@ model Booking {
   slotIdx          Int? // mapped slot index
   pax              Int?
   customerName     String?
+  nationality      String?
+  email            String?
+  phone            String?
+  specialRequests  String?
+  notes            String?
+  bookingDate      String? // "YYYY-MM-DD" when the booking was made
+  paymentStatus    String   @default("unpaid") // unpaid | paid | deposit
   status           String   @default("PENDING") // PENDING | OFFERED | ASSIGNED | CANCELLED | IGNORED
   raw              Json?
   createdAt        DateTime @default(now())
