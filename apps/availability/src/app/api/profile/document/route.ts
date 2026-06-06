@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 const isOps = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const KINDS = ["ID_CARD", "BANK_BOOK", "GUIDE_LICENSE", "OTHER"];
 const MAX = 12 * 1024 * 1024; // 12 MB
+const ALLOWED = ["application/pdf", "image/jpeg", "image/jpg", "image/png"]; // PDF, JPG, PNG only
 
 // POST multipart: file, kind, optional userId (operator). Stored AES-encrypted in the DB.
 export async function POST(req: NextRequest) {
@@ -20,6 +21,8 @@ export async function POST(req: NextRequest) {
   const requested = form.get("userId") ? String(form.get("userId")) : null;
   if (!KINDS.includes(kind)) return NextResponse.json({ error: "bad-kind" }, { status: 400 });
   if (!(file instanceof File)) return NextResponse.json({ error: "no-file" }, { status: 400 });
+  const mime = (file.type || "").toLowerCase();
+  if (!ALLOWED.includes(mime)) return NextResponse.json({ error: "bad-type" }, { status: 415 });
 
   const uid = isOps(session.user.role) && requested ? requested : session.user.id;
   if (!uid) return NextResponse.json({ error: "no-user" }, { status: 400 });

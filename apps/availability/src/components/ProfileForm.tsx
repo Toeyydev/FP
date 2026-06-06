@@ -80,6 +80,9 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
     return blob && blob.size < file.size ? blob : file;
   }
   async function upload(kind: string, file: File) {
+    // Only PDF / JPG / PNG are accepted.
+    const okType = ["application/pdf", "image/jpeg", "image/jpg", "image/png"].includes((file.type || "").toLowerCase()) || /\.(pdf|jpe?g|png)$/i.test(file.name);
+    if (!okType) { setDocMsg(t("docBadType")); return; }
     setDocMsg(t("uploading"));
     try {
       const blob = await shrink(file);
@@ -108,7 +111,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   const docBtn = (kind: "ID_CARD" | "BANK_BOOK" | "GUIDE_LICENSE" | "OTHER", label: string) => (
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       <button type="button" className="btn sm" onClick={() => fileRefs[kind].current?.click()}>{label} — {t("uploadFile")}</button>
-      <input ref={fileRefs[kind]} type="file" accept="image/*,application/pdf" hidden
+      <input ref={fileRefs[kind]} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" hidden
         onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(kind, f); e.target.value = ""; }} />
     </div>
   );
@@ -140,12 +143,17 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
             {p.documents.length > 0 && (
               <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
                 {p.documents.map((d) => (
-                  <div key={d.id} className="codeflash" style={{ background: "var(--grey-bg)", color: "var(--ink)" }}>
-                    <span><b>{d.kind === "ID_CARD" ? t("idCardDoc") : d.kind === "BANK_BOOK" ? t("bankBookDoc") : d.kind === "GUIDE_LICENSE" ? t("licenseDoc") : t("otherDoc")}</b> · {d.filename} · {(d.size / 1024).toFixed(0)} KB</span>
-                    <span style={{ display: "flex", gap: 8 }}>
-                      {Boolean(p.isOperator) && <a className="glink" href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer">{t("viewDoc")}</a>}
-                      <button className="btn sm danger" onClick={() => del(d.id)}>{t("deleteDoc")}</button>
-                    </span>
+                  <div key={d.id} className="doc-item">
+                    <div className="doc-row">
+                      <span><b>{d.kind === "ID_CARD" ? t("idCardDoc") : d.kind === "BANK_BOOK" ? t("bankBookDoc") : d.kind === "GUIDE_LICENSE" ? t("licenseDoc") : t("otherDoc")}</b> · {d.filename} · {(d.size / 1024).toFixed(0)} KB</span>
+                      <span style={{ display: "flex", gap: 8 }}>
+                        <a className="glink" href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer">{t("viewDoc")}</a>
+                        <button className="btn sm danger" onClick={() => del(d.id)}>{t("deleteDoc")}</button>
+                      </span>
+                    </div>
+                    {d.mimeType.startsWith("image/")
+                      ? <a href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer"><img className="doc-thumb" src={`/api/profile/document/${d.id}`} alt={d.filename} /></a>
+                      : <a className="doc-pdf" href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer">PDF · {t("viewDoc")}</a>}
                   </div>
                 ))}
               </div>

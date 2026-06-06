@@ -12,8 +12,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   const doc = await prisma.guideDocument.findUnique({ where: { id } });
   if (!doc) return NextResponse.json({ error: "not-found" }, { status: 404 });
-  // Documents are operator-only to view (the guide can upload/replace, not read back).
-  if (!isOps(session.user.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // The owner guide can view their own documents; operators/admins can view any.
+  if (!isOps(session.user.role) && doc.userId !== session.user.id) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const buf = decryptBuffer(Buffer.from(doc.data));
   return new Response(new Uint8Array(buf), {
