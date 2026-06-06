@@ -25,6 +25,22 @@ export default function BookingsInbox() {
   const [dur, setDur] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [tab, setTab] = useState<"inbox" | "all">("inbox");
+  const [guides, setGuides] = useState<{ guideId: string; displayName: string }[]>([]);
+  const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
+  useEffect(() => { fetch("/api/reference", { cache: "no-store" }).then((r) => r.json()).then((d) => setGuides(d.guides ?? [])).catch(() => {}); }, []);
+
+  // Assign a group directly to a chosen guide (no offer broadcast).
+  async function assignGroup(key: string, items: Booking[], guideId: string) {
+    const [date, slotIdxStr, tourId] = key.split("|");
+    const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
+    const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
+    const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx: Number(slotIdxStr), tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg(d.error === "date-blocked" ? "That day is blocked." : "Assign failed."); return; }
+    await post({ action: "markOffered", ids: items.map((b) => b.id) });
+    setMsg(`✅ Assigned to ${guideId}.`);
+    await load();
+  }
 
   async function openDetail(id: string) {
     const r = await fetch(`/api/bookings?id=${id}`, { cache: "no-store" });
@@ -200,8 +216,14 @@ export default function BookingsInbox() {
                       ))}
                     </div>
                   </div>
-                  <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 60, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
-                  <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📄 Create job sheet</button>
+                  <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
+                  <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
+                    <option value="">Offer to all available</option>
+                    {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
+                  </select>
+                  {grpGuide[key]
+                    ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
+                    : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer</button>}
                 </div>
               );
             })
