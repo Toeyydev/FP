@@ -514,6 +514,15 @@ export default function AppClient({
     START: { type: "COMPLETE", label: t("completeTour") },
     COMPLETE: null,
   };
+  // Check-in opens 90 min before the tour (prevents starting/completing days early).
+  const tourStartMs = (date: string, time: string) => {
+    const [y, mo, d] = date.split("-").map(Number); const [h, m] = (time || "00:00").split(":").map(Number);
+    return Date.UTC(y, mo - 1, d, h, m) - 7 * 3600 * 1000;
+  };
+  const checkInOpen = (date: string, time: string) => Date.now() >= tourStartMs(date, time) - 90 * 60 * 1000;
+  // Whether to show the lifecycle action: ARRIVE is time-gated; once started, always.
+  const showAction = (s: { date: string; time: string; checkinState: string | null }, next: { type: string } | null) =>
+    !!next && (next.type !== "ARRIVE" || checkInOpen(s.date, s.time));
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
     setRNoShow("0"); setRLeft("0"); setRComment(""); setReportFor(s);
   }
@@ -568,7 +577,8 @@ export default function AppClient({
         <h2>{s.tourName}</h2>
         <div className="nt-meta">🕐 {fmt(s.date)} · {s.time}{s.pax != null ? ` · 👥 ${s.pax} ${t("guests")}` : ""}</div>
         {s.meetingPoint && <div className="nt-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
-        {next && <button className="btn primary nt-action" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
+        {showAction(s, next) && next && <button className="btn primary nt-action" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
+        {next && next.type === "ARRIVE" && !checkInOpen(s.date, s.time) && <div className="nt-locked">🔒 {t("checkInOpens")} {s.time}</div>}
       </section>
     );
   }
@@ -591,7 +601,8 @@ export default function AppClient({
                 {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : `✓ ${t("tourDone")}`}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                {next && <button className="btn sm primary" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
+                {showAction(s, next) && next && <button className="btn sm primary" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
+                {next && next.type === "ARRIVE" && !checkInOpen(s.date, s.time) && <span style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>{t("checkInOpens")} {s.time}</span>}
                 <div style={{ display: "flex", gap: 6 }}>
                   <a className="btn sm" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>📄</a>
                   {!s.checkinState && <button className="btn sm danger" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>}

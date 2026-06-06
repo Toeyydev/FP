@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { SLOT_TIMES } from "@/lib/slots";
 
 // POST { date, slotIdx, bookedPax, noShow, leftEarly, comments? } — guide submits
 // the end-of-tour report for their assignment. Also records the COMPLETE check-in.
@@ -22,6 +23,10 @@ export async function POST(req: NextRequest) {
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { date, slotIdx, bookedPax, noShow, leftEarly, comments } = parsed.data;
+
+  const [sh, sm] = (SLOT_TIMES[slotIdx] ?? "00:00").split(":").map(Number);
+  const [yy, mm, dd] = date.split("-").map(Number);
+  if (Date.now() < Date.UTC(yy, mm - 1, dd, sh, sm) - 7 * 3600 * 1000 - 90 * 60 * 1000) return NextResponse.json({ error: "too-early" }, { status: 400 });
 
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
