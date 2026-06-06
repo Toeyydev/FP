@@ -15,13 +15,14 @@ export async function GET() {
   const today = bkk(0);
   const horizon = bkk(7);
 
-  const [assigns, bookings, tours, guides, checkins, reports] = await Promise.all([
+  const [assigns, bookings, tours, guides, checkins, reports, pendingLeaves] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: today, lte: horizon } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }),
     prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true } }),
     prisma.tour.findMany({ select: { id: true, name: true, durationMin: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.checkin.findMany({ where: { date: today }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
     prisma.tourReport.findMany({ where: { date: today }, select: { guideId: true, date: true, slotIdx: true, noShow: true, leftEarly: true, completedPax: true, comments: true } }),
+    prisma.leaveRequest.findMany({ where: { status: "PENDING" }, orderBy: { fromDate: "asc" }, take: 30 }),
   ]);
 
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
@@ -80,5 +81,6 @@ export async function GET() {
     if (bad.size) conflicts.push({ guideId, guide: gName(guideId), date, slots: [...bad].sort((a, b) => a - b).map((i) => `${SLOT_TIMES[iv[i].slotIdx]} ${iv[i].tour}`) });
   }
 
-  return NextResponse.json({ today, todayTours, upcomingTours, unassigned, understaffed, conflicts });
+  const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
+  return NextResponse.json({ today, todayTours, upcomingTours, unassigned, understaffed, conflicts, leaveRequests });
 }

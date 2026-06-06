@@ -71,6 +71,9 @@ export default function AppClient({
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; checkinState: string | null }[]>([]);
   const [reportFor, setReportFor] = useState<{ date: string; slotIdx: number; tourName: string; pax: number | null } | null>(null);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [lFrom, setLFrom] = useState(""); const [lTo, setLTo] = useState(""); const [lReason, setLReason] = useState("");
+  const [myLeaves, setMyLeaves] = useState<{ id: string; fromDate: string; toDate: string; status: string }[]>([]);
   const [rNoShow, setRNoShow] = useState("0");
   const [rLeft, setRLeft] = useState("0");
   const [rComment, setRComment] = useState("");
@@ -522,6 +525,18 @@ export default function AppClient({
     else toast(t("errGeneric"));
   }
 
+  const loadLeaves = useCallback(() => {
+    if (role !== "guide") return;
+    fetch("/api/leave", { cache: "no-store" }).then((r) => r.json()).then((d) => setMyLeaves(d.leaves ?? [])).catch(() => {});
+  }, [role]);
+  useEffect(() => { loadLeaves(); }, [loadLeaves]);
+  async function submitLeave() {
+    if (!lFrom || !lTo) { toast(t("pickDates")); return; }
+    const r = await fetch("/api/leave", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fromDate: lFrom, toDate: lTo, reason: lReason.trim() || undefined }) });
+    if (r.ok) { setLeaveOpen(false); setLFrom(""); setLTo(""); setLReason(""); toast(t("leaveRequested")); loadLeaves(); }
+    else toast(t("errGeneric"));
+  }
+
   // The 7:30 AM answer — the imminent tour, front and centre.
   function nextTourHero(): ReactNode {
     const s = schedule.find((x) => x.checkinState !== "COMPLETE");
@@ -587,6 +602,7 @@ export default function AppClient({
           <div className="head-tools">
             <button className="btn sm" onClick={() => weekBulk(true)}>{t("busyWeek")}</button>
             <button className="btn sm ghost" onClick={() => weekBulk(false)}>{t("clearWeek")}</button>
+            <button className="btn sm" onClick={() => setLeaveOpen(true)}>🏖 {t("requestLeave")}</button>
           </div>
         </div>
         <div className="weekwrap">
@@ -1097,6 +1113,26 @@ export default function AppClient({
             <div className="mfoot">
               <button className="btn" onClick={() => setReportFor(null)}>{t("cancel")}</button>
               <button className="btn primary" onClick={submitReport}>{t("submitComplete")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {leaveOpen && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setLeaveOpen(false); }}>
+          <div className="modal" style={{ maxWidth: 400 }}>
+            <div style={{ padding: "18px 20px" }}>
+              <h3 style={{ margin: "0 0 12px" }}>🏖 {t("requestLeave")}</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label className="fld" style={{ marginTop: 0 }}><label>{t("from")}</label><input type="date" value={lFrom} onChange={(e) => setLFrom(e.target.value)} /></label>
+                <label className="fld" style={{ marginTop: 0 }}><label>{t("to")}</label><input type="date" value={lTo} onChange={(e) => setLTo(e.target.value)} /></label>
+              </div>
+              <div className="fld"><label>{t("reasonOpt")}</label><input value={lReason} onChange={(e) => setLReason(e.target.value)} placeholder={t("reasonHint")} /></div>
+              {myLeaves.length > 0 && <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--ink-soft)" }}>{myLeaves.slice(0, 4).map((l) => <div key={l.id}>{l.fromDate}{l.toDate !== l.fromDate ? `–${l.toDate}` : ""} · <b style={{ color: l.status === "APPROVED" ? "var(--green)" : l.status === "REJECTED" ? "var(--danger)" : "var(--ink-soft)" }}>{l.status.toLowerCase()}</b></div>)}</div>}
+            </div>
+            <div className="mfoot">
+              <button className="btn" onClick={() => setLeaveOpen(false)}>{t("cancel")}</button>
+              <button className="btn primary" onClick={submitLeave}>{t("submitRequest")}</button>
             </div>
           </div>
         </div>

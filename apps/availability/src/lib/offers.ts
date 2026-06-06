@@ -68,18 +68,20 @@ export async function availableGuides(date: string, slotIdx: number) {
   const blocked = await prisma.blockedDate.findUnique({ where: { date } }).catch(() => null);
   if (blocked) return [];
 
-  const [guides, avail, assigned] = await Promise.all([
+  const [guides, avail, assigned, leaves] = await Promise.all([
     prisma.user.findMany({
       where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } },
       select: { id: true, guideId: true, displayName: true, lineUserId: true },
     }),
     prisma.availability.findMany({ where: { date }, select: { guideId: true, slots: true } }),
     prisma.assignment.findMany({ where: { date, slotIdx }, select: { guideId: true } }),
+    prisma.leaveRequest.findMany({ where: { status: "APPROVED", fromDate: { lte: date }, toDate: { gte: date } }, select: { guideId: true } }),
   ]);
 
   const busy = new Set(avail.filter((a) => a.slots[slotIdx] === true).map((a) => a.guideId));
   const taken = new Set(assigned.map((a) => a.guideId));
-  return guides.filter((g) => g.guideId && !busy.has(g.guideId) && !taken.has(g.guideId));
+  const onLeave = new Set(leaves.map((l) => l.guideId));
+  return guides.filter((g) => g.guideId && !busy.has(g.guideId) && !taken.has(g.guideId) && !onLeave.has(g.guideId));
 }
 
 export function slotLabel(slotIdx: number) {

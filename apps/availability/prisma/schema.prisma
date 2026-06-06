@@ -420,6 +420,23 @@ model TourPayment {
   @@index([status])
 }
 
+// Guide leave (holiday / unavailable range). Operator-approved; an approved leave
+// excludes the guide from job offers across the date range.
+model LeaveRequest {
+  id        String   @id @default(cuid())
+  guideId   String
+  fromDate  String // "YYYY-MM-DD"
+  toDate    String // "YYYY-MM-DD"
+  reason    String?
+  status    String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  decidedBy String?
+  decidedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([guideId])
+  @@index([status])
+}
+
 // WebAuthn passkey — true Face ID / fingerprint sign-in (one per device).
 model Passkey {
   id           String   @id @default(cuid())

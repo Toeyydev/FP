@@ -17,16 +17,21 @@ function StateTag({ t }: { t: Tour }) {
 type Unassigned = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number };
 type Understaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number };
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
-type Data = { today: string; todayTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[] };
+type Leave = { id: string; guideId: string; guide: string; fromDate: string; toDate: string; reason: string | null };
+type Data = { today: string; todayTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; leaveRequests: Leave[] };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
 export default function Dashboard() {
   const [d, setD] = useState<Data | null>(null);
+  const load = () => fetch("/api/dashboard", { cache: "no-store" }).then((r) => r.json()).then(setD).catch(() => {});
   useEffect(() => {
-    const f = () => fetch("/api/dashboard", { cache: "no-store" }).then((r) => r.json()).then(setD).catch(() => {});
-    f(); const id = window.setInterval(f, 20000); return () => window.clearInterval(id);
+    load(); const id = window.setInterval(load, 20000); return () => window.clearInterval(id);
   }, []);
+  async function decideLeave(id: string, status: "APPROVED" | "REJECTED") {
+    const r = await fetch("/api/leave", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, status }) });
+    if (r.ok) load();
+  }
 
   return (
     <div className="wrap">
@@ -46,10 +51,20 @@ export default function Dashboard() {
           </div>
 
           <div className="dash-main">
-            {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0) && (
+            {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || d.leaveRequests.length > 0) && (
               <section className="panel">
                 <div className="panel-head"><h2>Needs attention</h2></div>
                 <div className="dash-list">
+                  {d.leaveRequests.map((l) => (
+                    <div key={l.id} className="dash-row">
+                      <span className="tag" style={{ background: "#9CA3AF", color: "#fff" }}>Leave</span>
+                      <span className="dr-main"><b>{l.guide}</b> · {dShort(l.fromDate)}{l.toDate !== l.fromDate ? `–${dShort(l.toDate)}` : ""}<div className="dr-sub">{l.reason || "leave request"}</div></span>
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <button className="btn sm primary" onClick={() => decideLeave(l.id, "APPROVED")}>Approve</button>
+                        <button className="btn sm ghost" onClick={() => decideLeave(l.id, "REJECTED")}>Reject</button>
+                      </span>
+                    </div>
+                  ))}
                   {d.conflicts.map((c, i) => (
                     <a key={`c${i}`} className="dash-row bad" href="/">
                       <span className="tag bad">Conflict</span>
