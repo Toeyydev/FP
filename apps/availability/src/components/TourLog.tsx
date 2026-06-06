@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
-type Row = { date: string; time: string; tour: string; guideId: string; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; report: Report | null };
+type Row = { date: string; time: string; tour: string; guideId: string; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; report: Report | null };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -46,7 +46,7 @@ export default function TourLog() {
                   <td>{r.tour}</td>
                   <td style={{ whiteSpace: "nowrap" }}><span className="gid">{r.guideId}</span> {r.guide}</td>
                   <td>{r.pax ?? "—"}</td>
-                  <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.arrive ?? "—"}</td>
+                  <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.arrive ?? "—"}{r.offSiteM != null && <div style={{ color: "var(--danger)", fontSize: 11, fontWeight: 700 }}>⚠ {r.offSiteM}m off</div>}</td>
                   <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.start ?? "—"}</td>
                   <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.complete ?? "—"}</td>
                   <td style={{ fontSize: 12.5 }}>{r.report ? (

@@ -111,11 +111,14 @@ model Tour {
   time String
 
   // Operator-maintained tour info, shown to assigned guides.
-  meetingPoint String?
-  itinerary    String?
-  included     String?
-  bring        String?
-  durationMin  Int? // default tour length (prefills offer duration)
+  meetingPoint   String?
+  meetingLat     Float?
+  meetingLng     Float?
+  meetingRadiusM Int? // geofence radius for check-in (default 150m if coords set)
+  itinerary      String?
+  included       String?
+  bring          String?
+  durationMin    Int? // default tour length (prefills offer duration)
 
   assignments Assignment[]
 }
@@ -366,11 +369,13 @@ model Checkin {
   date      String // "YYYY-MM-DD"
   slotIdx   Int
   tourId    String
-  type      String // ARRIVE | START | COMPLETE
-  at        DateTime @default(now())
-  lat       Float?
-  lng       Float?
-  accuracyM Int?
+  type          String // ARRIVE | START | COMPLETE
+  at            DateTime @default(now())
+  lat           Float?
+  lng           Float?
+  accuracyM     Int?
+  distanceM     Int? // metres from the meeting point (if it has coords)
+  withinGeofence Boolean?
 
   @@index([guideId, date, slotIdx])
   @@index([date])

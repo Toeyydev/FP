@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 
   const [assigns, checkins, reports, guides] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: from, lte: to } }, include: { tour: true }, orderBy: [{ date: "desc" }, { slotIdx: "asc" }], take: 600 }),
-    prisma.checkin.findMany({ where: { date: { gte: from, lte: to } }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
+    prisma.checkin.findMany({ where: { date: { gte: from, lte: to } }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true, withinGeofence: true, distanceM: true } }),
     prisma.tourReport.findMany({ where: { date: { gte: from, lte: to } } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
   ]);
@@ -26,7 +26,12 @@ export async function GET(req: NextRequest) {
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
   const hhmm = (d: Date) => new Date(d).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
   const ck: Record<string, Record<string, string>> = {};
-  for (const c of checkins) { const k = `${c.guideId}|${c.date}|${c.slotIdx}`; (ck[k] ??= {})[c.type] = hhmm(c.at); }
+  const offSite: Record<string, number> = {}; // metres if any check-in was outside the geofence
+  for (const c of checkins) {
+    const k = `${c.guideId}|${c.date}|${c.slotIdx}`;
+    (ck[k] ??= {})[c.type] = hhmm(c.at);
+    if (c.withinGeofence === false && c.distanceM != null) offSite[k] = Math.max(offSite[k] ?? 0, c.distanceM);
+  }
   const rep = new Map(reports.map((r) => [`${r.guideId}|${r.date}|${r.slotIdx}`, r]));
 
   const rows = assigns.map((a) => {
@@ -36,7 +41,7 @@ export async function GET(req: NextRequest) {
     return {
       date: a.date, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId,
       guideId: a.guideId, guide: gName(a.guideId), pax: a.pax,
-      arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null,
+      arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null, offSiteM: offSite[k] ?? null,
       report: r ? { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments } : null,
     };
   });

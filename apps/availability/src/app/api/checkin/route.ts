@@ -6,6 +6,14 @@ import { audit } from "@/lib/audit";
 
 const TYPES = ["ARRIVE", "START", "COMPLETE"] as const;
 
+// Great-circle distance in metres.
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000, rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1), dLng = rad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)));
+}
+
 // POST { date, slotIdx, type, lat?, lng?, accuracyM? } — guide records a lifecycle
 // event for their own assignment. Server stores the moment + captured GPS.
 export async function POST(req: NextRequest) {
@@ -22,10 +30,18 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { date, slotIdx, type, lat, lng, accuracyM } = parsed.data;
 
-  const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
+  const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, include: { tour: { select: { meetingLat: true, meetingLng: true, meetingRadiusM: true } } } });
   if (!assignment) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
 
-  await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type, lat: lat ?? null, lng: lng ?? null, accuracyM: accuracyM ?? null } });
+  // Geofence: distance from the meeting point, if it has coordinates + we have GPS.
+  let distanceM: number | null = null, withinGeofence: boolean | null = null;
+  const mp = assignment.tour;
+  if (mp?.meetingLat != null && mp?.meetingLng != null && lat != null && lng != null) {
+    distanceM = haversineM(lat, lng, mp.meetingLat, mp.meetingLng);
+    withinGeofence = distanceM <= (mp.meetingRadiusM ?? 150);
+  }
+
+  await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type, lat: lat ?? null, lng: lng ?? null, accuracyM: accuracyM ?? null, distanceM, withinGeofence } });
   await audit({ actorId: session!.user!.id ?? null, actorRole: "GUIDE", action: `checkin.${type.toLowerCase()}`, entityType: "Assignment", detail: { date, slotIdx, tourId: assignment.tourId, lat, lng } });
   return NextResponse.json({ ok: true, type });
 }
