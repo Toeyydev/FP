@@ -475,3 +475,12 @@ a.dash-row:hover{background:var(--grey-bg)}
 .pay-row .pr-main{flex:1}
 .pay-row .pr-sub{font-size:12px;color:var(--ink-soft);margin-top:1px}
 .pay-row .pr-amt{font-weight:700;font-variant-numeric:tabular-nums}
+
+/* ---- Guide "next tour" hero ---- */
+.nexttour{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--primary);border-radius:14px;padding:18px 18px 16px;margin-bottom:16px}
+.nexttour .nt-kicker{font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--primary)}
+.nexttour h2{font-size:20px;margin:6px 0 8px;line-height:1.2}
+.nexttour .nt-meta{font-size:14px;color:var(--ink);font-weight:600}
+.nexttour .nt-meet{font-size:14px;margin-top:8px}
+.nexttour .nt-meet a{color:var(--assign);font-weight:600;text-decoration:none;white-space:nowrap}
+.nexttour .nt-action{width:100%;margin-top:14px;padding:13px;font-size:15px}

@@ -522,6 +522,31 @@ export default function AppClient({
     else toast(t("errGeneric"));
   }
 
+  // The 7:30 AM answer — the imminent tour, front and centre.
+  function nextTourHero(): ReactNode {
+    const s = schedule.find((x) => x.checkinState !== "COMPLETE");
+    if (!s) return null;
+    const [y, mo, d] = s.date.split("-").map(Number);
+    const [h, m] = (s.time || "00:00").split(":").map(Number);
+    const startMs = Date.UTC(y, mo - 1, d, h, m) - 7 * 3600 * 1000;
+    const diff = startMs - Date.now();
+    let when: string;
+    if (s.checkinState === "START") when = t("inProgress");
+    else if (diff <= 0) when = t("startingNow");
+    else { const mins = Math.round(diff / 60000); when = mins < 60 ? t("startsIn").replace("{x}", `${mins}m`) : t("startsIn").replace("{x}", `${Math.floor(mins / 60)}h ${mins % 60}m`); }
+    const next = CHECK_NEXT[s.checkinState ?? "none"];
+    const fmt = (x: string) => new Date(`${x}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+    return (
+      <section className="nexttour">
+        <div className="nt-kicker">{t("nextTour")} · {when}</div>
+        <h2>{s.tourName}</h2>
+        <div className="nt-meta">🕐 {fmt(s.date)} · {s.time}{s.pax != null ? ` · 👥 ${s.pax} ${t("guests")}` : ""}</div>
+        {s.meetingPoint && <div className="nt-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
+        {next && <button className="btn primary nt-action" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
+      </section>
+    );
+  }
+
   function guideSchedule(): ReactNode {
     const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
     return (
@@ -1017,6 +1042,8 @@ export default function AppClient({
           ))}
         </section>
       )}
+
+      {role === "guide" && view === "schedule" && nextTourHero()}
 
       <section className="panel">
         {role === "guide"
