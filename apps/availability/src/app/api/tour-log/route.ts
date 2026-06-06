@@ -22,6 +22,8 @@ export async function GET(req: NextRequest) {
     prisma.tourReport.findMany({ where: { date: { gte: from, lte: to } } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
   ]);
+  const ratings = await prisma.guideRating.findMany({ where: { date: { gte: from, lte: to } }, select: { guideId: true, date: true, slotIdx: true, stars: true } });
+  const rate = new Map(ratings.map((r) => [`${r.guideId}|${r.date}|${r.slotIdx}`, r.stars]));
 
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
   const hhmm = (d: Date) => new Date(d).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
@@ -40,8 +42,9 @@ export async function GET(req: NextRequest) {
     const r = rep.get(k);
     return {
       date: a.date, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId,
-      guideId: a.guideId, guide: gName(a.guideId), pax: a.pax,
+      guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, slotIdx: a.slotIdx,
       arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null, offSiteM: offSite[k] ?? null,
+      stars: rate.get(k) ?? null, completed: !!t.COMPLETE,
       report: r ? { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments } : null,
     };
   });

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
-type Row = { date: string; time: string; tour: string; guideId: string; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; report: Report | null };
+type Row = { date: string; time: string; tour: string; guideId: string; slotIdx: number; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; stars: number | null; completed: boolean; report: Report | null };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -20,6 +20,17 @@ export default function TourLog() {
     if (r.ok) { const d = await r.json(); setRows(d.rows ?? []); setFrom(d.from); setTo(d.to); }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  async function rate(r: Row, stars: number) {
+    const res = await fetch("/api/guides", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: r.guideId, date: r.date, slotIdx: r.slotIdx, stars }) });
+    if (res.ok) load(from, to);
+  }
+  function Stars({ r }: { r: Row }) {
+    if (!r.completed) return <span style={{ color: "var(--ink-soft)" }}>—</span>;
+    return <span style={{ whiteSpace: "nowrap" }}>{[1, 2, 3, 4, 5].map((n) => (
+      <button key={n} onClick={() => rate(r, n)} title={`${n} star`} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 15, padding: 0, color: (r.stars ?? 0) >= n ? "#f59e0b" : "var(--line-strong)" }}>★</button>
+    ))}</span>;
+  }
 
   return (
     <div className="wrap">
@@ -38,9 +49,9 @@ export default function TourLog() {
         </div>
         <div className="grid-scroll">
           <table className="acct-table">
-            <thead><tr><th>Date</th><th>Tour</th><th>Guide</th><th>Pax</th><th>Check-in</th><th>Started</th><th>Done</th><th>Report</th></tr></thead>
+            <thead><tr><th>Date</th><th>Tour</th><th>Guide</th><th>Pax</th><th>Check-in</th><th>Started</th><th>Done</th><th>Rating</th><th>Report</th></tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={8} className="op-empty">No tours in range.</td></tr> : rows.map((r, i) => (
+              {rows.length === 0 ? <tr><td colSpan={9} className="op-empty">No tours in range.</td></tr> : rows.map((r, i) => (
                 <tr key={i}>
                   <td style={{ whiteSpace: "nowrap" }}>{dShort(r.date)}<br /><small style={{ color: "var(--ink-soft)" }}>{r.time}</small></td>
                   <td>{r.tour}</td>
@@ -49,6 +60,7 @@ export default function TourLog() {
                   <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.arrive ?? "—"}{r.offSiteM != null && <div style={{ color: "var(--danger)", fontSize: 11, fontWeight: 700 }}>⚠ {r.offSiteM}m off</div>}</td>
                   <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.start ?? "—"}</td>
                   <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.complete ?? "—"}</td>
+                  <td><Stars r={r} /></td>
                   <td style={{ fontSize: 12.5 }}>{r.report ? (
                     <>
                       {r.report.completedPax != null ? `${r.report.completedPax} done` : "—"}

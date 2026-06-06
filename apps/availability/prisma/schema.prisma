@@ -437,6 +437,22 @@ model LeaveRequest {
   @@index([status])
 }
 
+// Operator's rating of a guide for a tour (1–5). Feeds the guide directory.
+model GuideRating {
+  id        String   @id @default(cuid())
+  guideId   String
+  date      String
+  slotIdx   Int
+  tourId    String
+  stars     Int // 1..5
+  note      String?
+  ratedBy   String?
+  createdAt DateTime @default(now())
+
+  @@unique([guideId, date, slotIdx])
+  @@index([guideId])
+}
+
 // WebAuthn passkey — true Face ID / fingerprint sign-in (one per device).
 model Passkey {
   id           String   @id @default(cuid())
