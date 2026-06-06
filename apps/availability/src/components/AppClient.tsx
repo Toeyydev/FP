@@ -74,6 +74,7 @@ export default function AppClient({
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [lFrom, setLFrom] = useState(""); const [lTo, setLTo] = useState(""); const [lReason, setLReason] = useState("");
   const [myLeaves, setMyLeaves] = useState<{ id: string; fromDate: string; toDate: string; status: string }[]>([]);
+  const [opLeaves, setOpLeaves] = useState<{ guideId: string; fromDate: string; toDate: string; status: string }[]>([]);
   const [rNoShow, setRNoShow] = useState("0");
   const [rLeft, setRLeft] = useState("0");
   const [rComment, setRComment] = useState("");
@@ -530,6 +531,11 @@ export default function AppClient({
     fetch("/api/leave", { cache: "no-store" }).then((r) => r.json()).then((d) => setMyLeaves(d.leaves ?? [])).catch(() => {});
   }, [role]);
   useEffect(() => { loadLeaves(); }, [loadLeaves]);
+  useEffect(() => {
+    if (role !== "operator") return;
+    fetch("/api/leave?view=ops", { cache: "no-store" }).then((r) => r.json()).then((d) => setOpLeaves((d.leaves ?? []).filter((l: { status: string }) => l.status === "APPROVED"))).catch(() => {});
+  }, [role]);
+  const onLeave = (gid: string, dateStr: string) => opLeaves.some((l) => l.guideId === gid && l.fromDate <= dateStr && l.toDate >= dateStr);
   async function submitLeave() {
     if (!lFrom || !lTo) { toast(t("pickDates")); return; }
     const r = await fetch("/api/leave", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fromDate: lFrom, toDate: lTo, reason: lReason.trim() || undefined }) });
@@ -753,12 +759,14 @@ export default function AppClient({
                 {rows.map((g) => {
                   const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
                   const conf = conflictSlots(g.guideId, d);
+                  const leave = onLeave(g.guideId, ymd(d));
                   return (
                     <tr key={g.guideId}>
-                      <td className="gname"><span className="gid">{g.guideId}</span>{g.displayName}</td>
+                      <td className="gname"><span className="gid">{g.guideId}</span>{g.displayName}{leave && <span className="leave-badge">{t("onLeave")}</span>}</td>
                       {SLOTS.map((s) => {
                         const a = asg[s.idx]; const nm = isToday && s.idx === nowIdx ? " now" : "";
                         if (a) { const c = conf.has(s.idx); return <td key={s.idx} className={`cell assigned${c ? " conflict" : ""}${nm}`} title={c ? t("conflictWarn") : (tourById[a.tour]?.name || a.tour)} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{c ? "⚠ " : ""}{a.tour}</span></td>; }
+                        if (leave) return <td key={s.idx} className={`cell leave${nm}`} title={t("onLeave")} />;
                         if (avd[s.idx]) return <td key={s.idx} className={`cell busy${nm}`} title={t("busy")} />;
                         return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
                       })}

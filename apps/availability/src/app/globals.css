@@ -484,3 +484,7 @@ a.dash-row:hover{background:var(--grey-bg)}
 .nexttour .nt-meet{font-size:14px;margin-top:8px}
 .nexttour .nt-meet a{color:var(--assign);font-weight:600;text-decoration:none;white-space:nowrap}
 .nexttour .nt-action{width:100%;margin-top:14px;padding:13px;font-size:15px}
+
+/* ---- Leave on the operator board ---- */
+.cell.leave{background:#eceef1;background-image:repeating-linear-gradient(45deg,#eceef1,#eceef1 5px,#e2e5ea 5px,#e2e5ea 10px);cursor:not-allowed}
+.leave-badge{margin-left:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#fff;background:#9CA3AF;border-radius:999px;padding:2px 7px}
