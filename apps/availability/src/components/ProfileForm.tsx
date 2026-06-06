@@ -29,7 +29,8 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   const [missing, setMissing] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [lineCode, setLineCode] = useState<{ code: string; addUrl: string | null } | null>(null);
-  const fileRefs = { ID_CARD: useRef<HTMLInputElement>(null), BANK_BOOK: useRef<HTMLInputElement>(null), OTHER: useRef<HTMLInputElement>(null) };
+  const [docMsg, setDocMsg] = useState("");
+  const fileRefs = { ID_CARD: useRef<HTMLInputElement>(null), BANK_BOOK: useRef<HTMLInputElement>(null), GUIDE_LICENSE: useRef<HTMLInputElement>(null), OTHER: useRef<HTMLInputElement>(null) };
   const qs = targetUserId ? `?userId=${targetUserId}` : "";
 
   const load = useCallback(async () => {
@@ -65,12 +66,32 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
     if (r.ok) load();
   }
 
+  // Downscale big photos in the browser so phone images don't hit the size limit.
+  async function shrink(file: File): Promise<Blob> {
+    if (!file.type.startsWith("image/")) return file; // PDFs etc. upload as-is
+    const bmp = await createImageBitmap(file).catch(() => null);
+    if (!bmp) return file;
+    const max = 1600, scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    const ctx = c.getContext("2d"); if (!ctx) return file;
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", 0.82));
+    return blob && blob.size < file.size ? blob : file;
+  }
   async function upload(kind: string, file: File) {
-    const fd = new FormData();
-    fd.append("kind", kind); fd.append("file", file);
-    if (targetUserId) fd.append("userId", targetUserId);
-    await fetch("/api/profile/document", { method: "POST", body: fd });
-    await load();
+    setDocMsg(t("uploading"));
+    try {
+      const blob = await shrink(file);
+      const fd = new FormData();
+      const name = blob.type === "image/jpeg" ? file.name.replace(/\.[^.]+$/, "") + ".jpg" : file.name;
+      fd.append("kind", kind); fd.append("file", blob, name || "upload");
+      if (targetUserId) fd.append("userId", targetUserId);
+      const r = await fetch("/api/profile/document", { method: "POST", body: fd });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); setDocMsg(e?.error === "too-large" ? t("docTooLarge") : t("docUploadFailed")); return; }
+      setDocMsg(t("uploaded"));
+      await load();
+    } catch { setDocMsg(t("docUploadFailed")); }
   }
   async function del(id: string) {
     await fetch(`/api/profile/document/${id}`, { method: "DELETE" });
@@ -84,7 +105,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
 
   if (!p) return <div className="wrap"><AuthHeader backHref="/" /><section className="panel"><div className="op-empty">…</div></section></div>;
 
-  const docBtn = (kind: "ID_CARD" | "BANK_BOOK" | "OTHER", label: string) => (
+  const docBtn = (kind: "ID_CARD" | "BANK_BOOK" | "GUIDE_LICENSE" | "OTHER", label: string) => (
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       <button type="button" className="btn sm" onClick={() => fileRefs[kind].current?.click()}>{label} — {t("uploadFile")}</button>
       <input ref={fileRefs[kind]} type="file" accept="image/*,application/pdf" hidden
@@ -120,7 +141,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
               <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
                 {p.documents.map((d) => (
                   <div key={d.id} className="codeflash" style={{ background: "var(--grey-bg)", color: "var(--ink)" }}>
-                    <span><b>{d.kind === "ID_CARD" ? t("idCardDoc") : d.kind === "BANK_BOOK" ? t("bankBookDoc") : t("otherDoc")}</b> · {d.filename} · {(d.size / 1024).toFixed(0)} KB</span>
+                    <span><b>{d.kind === "ID_CARD" ? t("idCardDoc") : d.kind === "BANK_BOOK" ? t("bankBookDoc") : d.kind === "GUIDE_LICENSE" ? t("licenseDoc") : t("otherDoc")}</b> · {d.filename} · {(d.size / 1024).toFixed(0)} KB</span>
                     <span style={{ display: "flex", gap: 8 }}>
                       {Boolean(p.isOperator) && <a className="glink" href={`/api/profile/document/${d.id}`} target="_blank" rel="noreferrer">{t("viewDoc")}</a>}
                       <button className="btn sm danger" onClick={() => del(d.id)}>{t("deleteDoc")}</button>
@@ -132,8 +153,10 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
             <div style={{ display: "grid", gap: 8 }}>
               {docBtn("ID_CARD", t("idCardDoc"))}
               {docBtn("BANK_BOOK", t("bankBookDoc"))}
+              {docBtn("GUIDE_LICENSE", t("licenseDoc"))}
               {docBtn("OTHER", t("otherDoc"))}
             </div>
+            {docMsg && <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: docMsg === t("uploaded") ? "var(--green)" : "#c0392b" }}>{docMsg}</div>}
           </div>
 
           <div className="fld" style={{ marginTop: 22 }}>

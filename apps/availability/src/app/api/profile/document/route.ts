@@ -5,8 +5,8 @@ import { encryptBuffer } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
 
 const isOps = (r?: string) => r === "OPERATOR" || r === "ADMIN";
-const KINDS = ["ID_CARD", "BANK_BOOK", "OTHER"];
-const MAX = 8 * 1024 * 1024; // 8 MB
+const KINDS = ["ID_CARD", "BANK_BOOK", "GUIDE_LICENSE", "OTHER"];
+const MAX = 12 * 1024 * 1024; // 12 MB
 
 // POST multipart: file, kind, optional userId (operator). Stored AES-encrypted in the DB.
 export async function POST(req: NextRequest) {
