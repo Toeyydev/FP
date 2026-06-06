@@ -455,3 +455,11 @@ a.dash-row:hover{background:var(--grey-bg)}
 .sched-meet{font-size:13px;color:var(--ink);margin-top:5px}
 .sched-meet a{color:var(--assign);font-weight:600;text-decoration:none;white-space:nowrap}
 .sched-state{font-size:12px;font-weight:700;color:var(--green);margin-top:4px}
+
+/* ---- On-tour check-in state tags ---- */
+.ck{font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.ck-done{background:var(--grey-bg);color:var(--ink-soft)}
+.ck-live{background:var(--green-bg);color:var(--green)}
+.ck-in{background:var(--assign-bg);color:var(--assign)}
+.ck-none{background:var(--grey-bg);color:var(--ink-soft)}
+.ck-late{background:var(--danger-bg);color:var(--danger)}

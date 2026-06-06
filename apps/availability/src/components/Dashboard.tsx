@@ -3,7 +3,16 @@
 import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
-type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null };
+type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean };
+
+const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
+function StateTag({ t }: { t: Tour }) {
+  if (t.state === "COMPLETE") return <span className="ck ck-done">✓ Done {hhmm(t.checkedAt)}</span>;
+  if (t.state === "START") return <span className="ck ck-live">● In progress</span>;
+  if (t.state === "ARRIVE") return <span className="ck ck-in">✓ Checked in {hhmm(t.checkedAt)}</span>;
+  if (t.overdue) return <span className="ck ck-late">⚠ Not checked in</span>;
+  return <span className="ck ck-none">Not checked in</span>;
+}
 type Unassigned = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number };
 type Understaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number };
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
@@ -63,10 +72,14 @@ export default function Dashboard() {
             )}
 
             <section className="panel">
-              <div className="panel-head"><h2>Today</h2><span className="hint">{dShort(d.today)}</span></div>
+              <div className="panel-head"><h2>On tour today</h2><span className="hint">{dShort(d.today)} · live check-ins</span></div>
               <div className="dash-list">
                 {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => (
-                  <div key={i} className="dash-row"><span className="dr-time">{a.time}</span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></div>
+                  <div key={i} className={`dash-row${a.overdue ? " warn" : ""}`}>
+                    <span className="dr-time">{a.time}</span>
+                    <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span>
+                    <StateTag t={a} />
+                  </div>
                 ))}
               </div>
             </section>
