@@ -22,11 +22,25 @@ export async function GET() {
     take: 200,
   });
 
+  // Reconcile pax to the SOURCE OF TRUTH (actual bookings for each tour instance),
+  // so My Tours matches the job sheet/summary instead of the free-hand offer number.
+  const bookedPax: Record<string, number> = {};
+  if (rows.length) {
+    const bookings = await prisma.booking.findMany({
+      where: { OR: rows.map((a) => ({ tourId: a.tourId, date: a.date, slotIdx: a.slotIdx })), status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+      select: { tourId: true, date: true, slotIdx: true, pax: true },
+    });
+    for (const b of bookings) { const k = `${b.tourId}|${b.date}|${b.slotIdx}`; bookedPax[k] = (bookedPax[k] ?? 0) + (b.pax ?? 0); }
+  }
+
   return NextResponse.json({
-    items: rows.map((a) => ({
-      date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
-      tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
-    })),
+    items: rows.map((a) => {
+      const real = bookedPax[`${a.tourId}|${a.date}|${a.slotIdx}`];
+      return {
+        date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
+        tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: real && real > 0 ? real : a.pax, note: a.note,
+      };
+    }),
   });
 }
 
