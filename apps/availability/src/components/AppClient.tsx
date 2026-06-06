@@ -75,6 +75,7 @@ export default function AppClient({
   const [lFrom, setLFrom] = useState(""); const [lTo, setLTo] = useState(""); const [lReason, setLReason] = useState("");
   const [myLeaves, setMyLeaves] = useState<{ id: string; fromDate: string; toDate: string; status: string }[]>([]);
   const [opLeaves, setOpLeaves] = useState<{ guideId: string; fromDate: string; toDate: string; status: string }[]>([]);
+  const [payDue, setPayDue] = useState<{ pending: number; approved: number }>({ pending: 0, approved: 0 });
   const [rNoShow, setRNoShow] = useState("0");
   const [rLeft, setRLeft] = useState("0");
   const [rComment, setRComment] = useState("");
@@ -534,6 +535,10 @@ export default function AppClient({
   useEffect(() => {
     if (role !== "operator") return;
     fetch("/api/leave?view=ops", { cache: "no-store" }).then((r) => r.json()).then((d) => setOpLeaves((d.leaves ?? []).filter((l: { status: string }) => l.status === "APPROVED"))).catch(() => {});
+  }, [role]);
+  useEffect(() => {
+    if (role !== "guide") return;
+    fetch("/api/pay", { cache: "no-store" }).then((r) => r.json()).then((d) => setPayDue({ pending: d.totals?.pending ?? 0, approved: d.totals?.approved ?? 0 })).catch(() => {});
   }, [role]);
   const onLeave = (gid: string, dateStr: string) => opLeaves.some((l) => l.guideId === gid && l.fromDate <= dateStr && l.toDate >= dateStr);
   async function submitLeave() {
@@ -1069,6 +1074,12 @@ export default function AppClient({
       )}
 
       {role === "guide" && view === "schedule" && nextTourHero()}
+      {role === "guide" && view === "schedule" && (payDue.pending > 0 || payDue.approved > 0) && (
+        <a className="needsyou" href="/pay">
+          <span>💰 <b>฿{(payDue.pending + payDue.approved).toLocaleString()}</b> {t("paymentDue")}</span>
+          <span className="ny-arrow">{payDue.approved > 0 ? `฿${payDue.approved.toLocaleString()} ${t("approvedLc")} · ` : ""}{t("viewPay")} ›</span>
+        </a>
+      )}
 
       <section className="panel">
         {role === "guide"
