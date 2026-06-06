@@ -679,11 +679,18 @@ export default function AppClient({
             if (isBlocked(d)) return <><div className="dn">{d.getDate()}</div><div className="blk" style={{ marginTop: "auto" }}>🚫 {t("blocked")}</div></>;
             const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d);
             const busyN = SLOTS.filter((s) => avd[s.idx] && !asg[s.idx]).length; const na = Object.keys(asg).length;
+            const dayOff = busyN === SLOTS.length && na === 0; // whole day blocked off
             return (
               <>
                 <div className="dn">{d.getDate()}</div>
-                <div className="fillbar"><i style={{ width: `${(busyN / SLOTS.length) * 100}%`, background: "#e07a6b" }} /></div>
-                <div className="meta"><span style={busyN ? { color: "#b23b2e", fontWeight: 700 } : undefined}>{busyN ? `${busyN} ${t("busy").toLowerCase()}` : "—"}</span>{na ? <span className="asg">{na}🔒</span> : null}</div>
+                {dayOff ? (
+                  <div className="dayoff-block">{t("dayOff")}</div>
+                ) : (
+                  <>
+                    <div className="fillbar"><i style={{ width: `${(busyN / SLOTS.length) * 100}%`, background: "#e07a6b" }} /></div>
+                    <div className="meta"><span style={busyN ? { color: "#b23b2e", fontWeight: 700 } : undefined}>{busyN ? `${busyN} ${t("busy").toLowerCase()}` : "—"}</span>{na ? <span className="asg">{na}</span> : null}</div>
+                  </>
+                )}
               </>
             );
           },

@@ -520,3 +520,7 @@ header.app{align-items:center;row-gap:10px}
   .topnav{width:100%;order:6;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;gap:4px}
   .navlink{background:var(--grey-bg);padding:8px 12px}
 }
+
+/* ---- Guide month: full day-off = clean red block (no number) ---- */
+.dayoff-block{margin-top:auto;background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);
+  border-radius:7px;text-align:center;font-size:10.5px;font-weight:700;padding:4px 2px;letter-spacing:.02em}
