@@ -22,5 +22,5 @@ export default function PasskeySetup() {
     } catch { setMsg("Cancelled"); }
     setBusy(false);
   }
-  return <button className="btn sm" disabled={busy} onClick={setup} title="Set up Face ID / fingerprint sign-in for this device">🔑 {msg || "Set up Face ID"}</button>;
+  return <button className="btn sm" disabled={busy} onClick={setup} title="Set up Face ID / fingerprint sign-in for this device">{msg || "Set up Face ID"}</button>;
 }

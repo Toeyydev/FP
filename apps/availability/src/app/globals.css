@@ -501,3 +501,22 @@ a.dash-row:hover{background:var(--grey-bg)}
 /* ---- In-app browser (LINE etc.) "open in Chrome" notice ---- */
 .inapp-notice{background:#fff7ed;border:1px solid #f59e0b;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.5;color:#7a4a05}
 .inapp-notice b{color:#7a4a05}
+
+/* ---- Premium navbar pass: icon button, clean nav links, glass live badge ---- */
+.iconbtn{width:36px;height:36px;border:1px solid var(--line-strong);background:var(--card);border-radius:10px;display:grid;place-items:center;color:var(--ink-soft);cursor:pointer;position:relative;transition:.15s}
+.iconbtn:hover{color:var(--ink);border-color:var(--ink-soft)}
+.topnav{display:flex;flex-wrap:wrap;gap:2px;align-items:center}
+.navlink{font-size:13px;font-weight:600;color:var(--ink-soft);text-decoration:none;padding:7px 11px;border-radius:8px;transition:.15s;white-space:nowrap;position:relative}
+.navlink:hover{color:var(--ink);background:var(--grey-bg)}
+.navlink:active{color:var(--primary)}
+/* glassmorphism live badge */
+.live{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#0e7a43;
+  background:rgba(22,163,74,.10);border:1px solid rgba(22,163,74,.18);padding:5px 11px;border-radius:999px;
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+/* keep header pills aligned, no chaotic wrap */
+header.app{align-items:center;row-gap:10px}
+.chip{align-self:center}
+@media (max-width:760px){
+  .topnav{width:100%;order:6;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;gap:4px}
+  .navlink{background:var(--grey-bg);padding:8px 12px}
+}

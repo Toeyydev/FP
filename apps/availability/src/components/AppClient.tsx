@@ -992,24 +992,29 @@ export default function AppClient({
         <div className="spacer" />
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
         <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
-        <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>
-        {role === "guide" && <a className="btn sm" href="/pay">💰 {t("payNav")}</a>}
-        {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
-        {role === "operator" && <a className="btn sm" href="/dashboard">{t("dashboardNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/jobs">{t("jobsNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/bookings">{t("bookings")}</a>}
-        {role === "operator" && <a className="btn sm" href="/payments">{t("paymentsNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/reports">{t("reportsNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/pay">{t("approvalsNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/tour-log">{t("tourLogNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/guides">{t("guidesNav")}</a>}
-        {role === "operator" && <a className="btn sm" href="/meeting-points">{t("meetingPtsNav")}</a>}
-        {role === "operator" && (
-          <a className="btn sm" href="/admin" style={{ position: "relative" }}>
-            {t("accountsTitle")}
-            {pendingCount > 0 && <span className="navbadge" title={`${pendingCount} pending sign-up(s)`}>{pendingCount}</span>}
-          </a>
-        )}
+        <button className="iconbtn" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")} aria-label={t("notifications")}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
+          {notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}
+        </button>
+        <nav className="topnav">
+          {role === "guide" && <a className="navlink" href="/pay">{t("payNav")}</a>}
+          {role === "guide" && <a className="navlink" href="/profile">{t("myDetails")}</a>}
+          {role === "operator" && <a className="navlink" href="/dashboard">{t("dashboardNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/jobs">{t("jobsNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/bookings">{t("bookings")}</a>}
+          {role === "operator" && <a className="navlink" href="/payments">{t("paymentsNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/reports">{t("reportsNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/pay">{t("approvalsNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/tour-log">{t("tourLogNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/guides">{t("guidesNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/meeting-points">{t("meetingPtsNav")}</a>}
+          {role === "operator" && (
+            <a className="navlink" href="/admin" style={{ position: "relative" }}>
+              {t("accountsTitle")}
+              {pendingCount > 0 && <span className="navbadge" title={`${pendingCount} pending sign-up(s)`}>{pendingCount}</span>}
+            </a>
+          )}
+        </nav>
         <PasskeySetup />
         <div className="chip">
           <div className="who"><small>{role === "guide" ? t("signedInGuide") : t("signedInOperator")}</small><span>{role === "guide" ? displayName : t("operations")}</span></div>
@@ -1033,7 +1038,7 @@ export default function AppClient({
 
       {role === "guide" && !alertsOn && (
         <section className="setup-card">
-          <div className="setup-head"><b>🔔 {t("setupTitle")}</b><span>{t("setupSub")}</span></div>
+          <div className="setup-head"><b>{t("setupTitle")}</b><span>{t("setupSub")}</span></div>
           <ol className="setup-steps">
             <li className={installed ? "done" : ""}>
               <span className="num">{installed ? "✓" : "1"}</span>
@@ -1087,7 +1092,7 @@ export default function AppClient({
       {role === "guide" && view === "schedule" && nextTourHero()}
       {role === "guide" && view === "schedule" && (payDue.pending > 0 || payDue.approved > 0) && (
         <a className="needsyou" href="/pay">
-          <span>💰 <b>฿{(payDue.pending + payDue.approved).toLocaleString()}</b> {t("paymentDue")}</span>
+          <span><b>฿{(payDue.pending + payDue.approved).toLocaleString()}</b> {t("paymentDue")}</span>
           <span className="ny-arrow">{payDue.approved > 0 ? `฿${payDue.approved.toLocaleString()} ${t("approvedLc")} · ` : ""}{t("viewPay")} ›</span>
         </a>
       )}
