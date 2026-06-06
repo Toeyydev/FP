@@ -467,3 +467,11 @@ a.dash-row:hover{background:var(--grey-bg)}
 /* ---- Dashboard tour report summary ---- */
 .dr-report{font-size:12px;color:var(--ink-soft);margin-top:3px;font-weight:600}
 .dr-report .dr-incident{color:var(--danger)}
+
+/* ---- Pay pipeline rows ---- */
+.pay-row{display:flex;align-items:center;gap:12px;padding:9px 10px;border-bottom:1px solid var(--line)}
+.pay-row:last-child{border-bottom:none}
+.pay-row .pr-when{font-weight:700;font-size:12.5px;min-width:64px;color:var(--ink-soft)}
+.pay-row .pr-main{flex:1}
+.pay-row .pr-sub{font-size:12px;color:var(--ink-soft);margin-top:1px}
+.pay-row .pr-amt{font-weight:700;font-variant-numeric:tabular-nums}

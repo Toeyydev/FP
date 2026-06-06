@@ -928,12 +928,14 @@ export default function AppClient({
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
         <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
         <button className="btn sm" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")}>🔔{notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}</button>
+        {role === "guide" && <a className="btn sm" href="/pay">💰 {t("payNav")}</a>}
         {role === "guide" && <a className="btn sm" href="/profile">{t("myDetails")}</a>}
         {role === "operator" && <a className="btn sm" href="/dashboard">{t("dashboardNav")}</a>}
         {role === "operator" && <a className="btn sm" href="/jobs">{t("jobsNav")}</a>}
         {role === "operator" && <a className="btn sm" href="/bookings">{t("bookings")}</a>}
         {role === "operator" && <a className="btn sm" href="/payments">{t("paymentsNav")}</a>}
         {role === "operator" && <a className="btn sm" href="/reports">{t("reportsNav")}</a>}
+        {role === "operator" && <a className="btn sm" href="/pay">{t("approvalsNav")}</a>}
         {role === "operator" && (
           <a className="btn sm" href="/admin" style={{ position: "relative" }}>
             {t("accountsTitle")}

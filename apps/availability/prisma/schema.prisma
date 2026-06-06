@@ -396,6 +396,25 @@ model TourReport {
   @@index([date])
 }
 
+// Per-tour payment state (Pending → Approved → Paid). The amount is computed
+// live from the job sheet (net fee + reimbursements); this just tracks the state.
+model TourPayment {
+  id         String    @id @default(cuid())
+  guideId    String
+  date       String // "YYYY-MM-DD"
+  slotIdx    Int
+  tourId     String
+  status     String    @default("PENDING") // PENDING | APPROVED | PAID
+  approvedBy String?
+  approvedAt DateTime?
+  paidAt     DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([guideId, date, slotIdx])
+  @@index([guideId])
+  @@index([status])
+}
+
 // WebAuthn passkey — true Face ID / fingerprint sign-in (one per device).
 model Passkey {
   id           String   @id @default(cuid())
