@@ -161,9 +161,18 @@ export default function AppClient({
   }, [role]);
 
   // Poll notifications — guides (date blocked, offers) and operators (a guide
-  // accepted a job, an offer expired).
+  // signed up / accepted a job, an offer expired). Operators get a chime on a NEW
+  // notification (e.g. a sign-up) so they can approve anytime the app is open.
+  const seenNotifRef = useRef<Set<string> | null>(null);
   useEffect(() => {
-    const f = () => fetch("/api/notifications", { cache: "no-store" }).then((r) => r.json()).then(setNotif).catch(() => {});
+    const f = () => fetch("/api/notifications", { cache: "no-store" }).then((r) => r.json()).then((d) => {
+      setNotif(d);
+      if (role === "operator") {
+        const ids: string[] = (d.items ?? []).map((i: { id: string }) => i.id);
+        if (seenNotifRef.current && ids.some((id) => !seenNotifRef.current!.has(id))) playChime();
+        seenNotifRef.current = new Set(ids);
+      }
+    }).catch(() => {});
     f();
     const id = window.setInterval(f, 15000);
     return () => window.clearInterval(id);
@@ -175,9 +184,9 @@ export default function AppClient({
     fetch("/api/profile/status", { cache: "no-store" }).then((r) => r.json()).then(setProfileGate).catch(() => {});
   }, [role]);
 
-  // Guide: are home-screen job alerts already on for this device?
+  // Are home-screen alerts already on for this device? (guides + operators)
   useEffect(() => {
-    if (role !== "guide") return;
+    if (!role) return;
     const supported = typeof window !== "undefined" && "Notification" in window && "PushManager" in window && "serviceWorker" in navigator;
     setAlertsOn(!supported || Notification.permission === "granted");
     const standalone = window.matchMedia?.("(display-mode: standalone)").matches
@@ -215,7 +224,7 @@ export default function AppClient({
   const seenOffersRef = useRef<Set<string> | null>(null);
   // Browsers block sound until the user interacts — unlock on the first tap.
   useEffect(() => {
-    if (role !== "guide") return;
+    if (!role) return;
     const unlock = () => {
       try {
         const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -1078,9 +1087,9 @@ export default function AppClient({
 
       {role === "guide" && <GuideWelcome />}
 
-      {role === "guide" && !alertsOn && (
+      {!alertsOn && (
         <section className="setup-card">
-          <div className="setup-head"><b>{t("setupTitle")}</b><span>{t("setupSub")}</span></div>
+          <div className="setup-head"><b>{role === "operator" ? t("setupTitleOps") : t("setupTitle")}</b><span>{role === "operator" ? t("setupSubOps") : t("setupSub")}</span></div>
           <ol className="setup-steps">
             <li className={installed ? "done" : ""}>
               <span className="num">{installed ? "✓" : "1"}</span>
