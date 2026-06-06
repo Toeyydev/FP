@@ -8,6 +8,7 @@ import { startAuthentication } from "@simplewebauthn/browser";
 import { AuthHeader } from "@/components/AuthHeader";
 import { useLang } from "@/components/Providers";
 import InstallPrompt from "@/components/InstallPrompt";
+import InAppNotice from "@/components/InAppNotice";
 
 type Tab = "login" | "signup";
 
@@ -79,6 +80,7 @@ export default function StartPage() {
   return (
     <div className="wrap">
       <AuthHeader />
+      <InAppNotice />
       <InstallPrompt />
       <section id="authView" className="panel">
         <div className="auth-card">

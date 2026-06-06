@@ -497,3 +497,7 @@ a.dash-row:hover{background:var(--grey-bg)}
 
 /* ---- Check-in time-lock ---- */
 .nt-locked{margin-top:12px;font-size:13px;font-weight:600;color:var(--ink-soft);text-align:center;padding:11px;background:var(--grey-bg);border-radius:10px}
+
+/* ---- In-app browser (LINE etc.) "open in Chrome" notice ---- */
+.inapp-notice{background:#fff7ed;border:1px solid #f59e0b;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.5;color:#7a4a05}
+.inapp-notice b{color:#7a4a05}
