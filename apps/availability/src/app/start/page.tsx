@@ -82,13 +82,7 @@ export default function StartPage() {
       <InstallPrompt />
       <section id="authView" className="panel">
         <div className="auth-card">
-          {sent ? (
-            <>
-              <h2>{t("signupSentTitle")}</h2>
-              <p className="sub">{t("signupSentBody")}</p>
-              <button className="btn" style={{ width: "100%", padding: 11 }} onClick={() => { setSent(false); setTab("login"); }}>{t("toLogin")}</button>
-            </>
-          ) : (
+          {(
             <>
               <div className="authtabs" role="tablist">
                 <button role="tab" aria-selected={tab === "login"} className={`authtab ${tab === "login" ? "active" : ""}`} onClick={() => setTab("login")}>{t("tabLogin")}</button>
@@ -151,6 +145,17 @@ export default function StartPage() {
         </div>
       </section>
       <div className="login-logo">FOLKPATHS</div>
+
+      {sent && (
+        <div className="scrim show">
+          <div className="modal" style={{ maxWidth: 380, padding: 28, textAlign: "center" }}>
+            <div style={{ fontSize: 46, lineHeight: 1 }}>⏳</div>
+            <h3 style={{ margin: "12px 0 8px", fontSize: 19 }}>{t("signupSentTitle")}</h3>
+            <p style={{ color: "var(--ink-soft)", fontSize: 14, lineHeight: 1.55, margin: 0 }}>{t("signupSentBody")}</p>
+            <button className="btn primary" style={{ width: "100%", marginTop: 20, padding: 11 }} onClick={() => { setSent(false); setTab("login"); }}>{t("toLogin")}</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
