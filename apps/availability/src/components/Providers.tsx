@@ -19,7 +19,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     if (saved === "th" || saved === "en") setLangState(saved);
     // Register the PWA service worker (installable to home screen).
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+      navigator.serviceWorker.register("/service-worker.js").catch(() => {});
     }
   }, []);
 
