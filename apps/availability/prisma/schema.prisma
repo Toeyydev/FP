@@ -376,6 +376,26 @@ model Checkin {
   @@index([date])
 }
 
+// End-of-tour report: what actually happened. Attendance (booked/arrived/left
+// early/no-show) + incidents. Recorded for quality & dispute protection; does NOT
+// change the guide's fee or reimbursements (work done + costs already incurred).
+model TourReport {
+  id           String   @id @default(cuid())
+  guideId      String
+  date         String // "YYYY-MM-DD"
+  slotIdx      Int
+  tourId       String
+  bookedPax    Int?
+  noShow       Int      @default(0)
+  leftEarly    Int      @default(0)
+  completedPax Int?
+  comments     String?
+  submittedAt  DateTime @default(now())
+
+  @@unique([guideId, date, slotIdx])
+  @@index([date])
+}
+
 // WebAuthn passkey — true Face ID / fingerprint sign-in (one per device).
 model Passkey {
   id           String   @id @default(cuid())

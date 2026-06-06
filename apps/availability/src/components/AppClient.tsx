@@ -70,6 +70,10 @@ export default function AppClient({
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; checkinState: string | null }[]>([]);
+  const [reportFor, setReportFor] = useState<{ date: string; slotIdx: number; tourName: string; pax: number | null } | null>(null);
+  const [rNoShow, setRNoShow] = useState("0");
+  const [rLeft, setRLeft] = useState("0");
+  const [rComment, setRComment] = useState("");
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [installed, setInstalled] = useState(true); // home-screen install state
@@ -505,6 +509,18 @@ export default function AppClient({
     START: { type: "COMPLETE", label: t("completeTour") },
     COMPLETE: null,
   };
+  function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
+    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportFor(s);
+  }
+  async function submitReport() {
+    if (!reportFor) return;
+    const r = await fetch("/api/report", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined }),
+    });
+    if (r.ok) { setReportFor(null); toast(t("reportSubmitted")); fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d) => setSchedule(d.items ?? [])); }
+    else toast(t("errGeneric"));
+  }
 
   function guideSchedule(): ReactNode {
     const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -524,7 +540,7 @@ export default function AppClient({
                 {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : `✓ ${t("tourDone")}`}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                {next && <button className="btn sm primary" onClick={() => doCheckin(s, next.type)}>{next.label}</button>}
+                {next && <button className="btn sm primary" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
                 <div style={{ display: "flex", gap: 6 }}>
                   <a className="btn sm" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>📄</a>
                   {!s.checkinState && <button className="btn sm danger" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>}
@@ -1026,6 +1042,30 @@ export default function AppClient({
             <div className="mfoot">
               {notif.items.length > 0 && <button className="btn ghost" onClick={clearNotif}>{t("clearAll")}</button>}
               <button className="btn dark" onClick={() => setShowNotif(false)}>{t("close")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportFor && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setReportFor(null); }}>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div style={{ padding: "18px 20px" }}>
+              <h3 style={{ margin: "0 0 2px" }}>{t("endTourReport")}</h3>
+              <p className="sub" style={{ color: "var(--ink-soft)", fontSize: 13, margin: "0 0 14px" }}>{reportFor.tourName} · {reportFor.pax ?? 0} {t("guestsBooked")}</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label className="fld" style={{ marginTop: 0 }}><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("noShowLabel")}</span>
+                  <input type="number" min={0} value={rNoShow} onChange={(e) => setRNoShow(e.target.value)} /></label>
+                <label className="fld" style={{ marginTop: 0 }}><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("leftEarlyLabel")}</span>
+                  <input type="number" min={0} value={rLeft} onChange={(e) => setRLeft(e.target.value)} /></label>
+              </div>
+              <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("incidentsLabel")}</span>
+                <input value={rComment} onChange={(e) => setRComment(e.target.value)} placeholder={t("incidentsHint")} /></label>
+              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 10 }}>✓ {t("completedShown")}: <b style={{ color: "var(--ink)" }}>{Math.max(0, (reportFor.pax ?? 0) - (Number(rNoShow) || 0) - (Number(rLeft) || 0))}</b> · {t("payNotAffected")}</div>
+            </div>
+            <div className="mfoot">
+              <button className="btn" onClick={() => setReportFor(null)}>{t("cancel")}</button>
+              <button className="btn primary" onClick={submitReport}>{t("submitComplete")}</button>
             </div>
           </div>
         </div>
