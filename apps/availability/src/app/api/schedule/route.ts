@@ -49,7 +49,7 @@ export async function GET() {
       return {
         date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
         tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: real && real > 0 ? real : a.pax, note: a.note,
-        meetingPoint: a.tour?.meetingPoint ?? null, checkinState: state[`${a.date}|${a.slotIdx}`] ?? null,
+        meetingPoint: a.tour?.meetingPoint ?? null, durationMin: a.tour?.durationMin ?? null, checkinState: state[`${a.date}|${a.slotIdx}`] ?? null,
       };
     }),
   });

@@ -7,6 +7,7 @@ import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
+import { gcalUrl } from "@/lib/gcal";
 import {
   DOW, MON, addDays, addMonths, currentSlotIdx, mkey, parseYMD,
   sameDay, todayD, uniq, weekStart, ymd,
@@ -73,7 +74,7 @@ export default function AppClient({
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
-  const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; checkinState: string | null }[]>([]);
+  const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; durationMin: number | null; checkinState: string | null }[]>([]);
   const [reportFor, setReportFor] = useState<{ date: string; slotIdx: number; tourName: string; pax: number | null } | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [lFrom, setLFrom] = useState(""); const [lTo, setLTo] = useState(""); const [lReason, setLReason] = useState("");
@@ -610,6 +611,7 @@ export default function AppClient({
         <h2>{s.tourName}</h2>
         <div className="nt-meta">🕐 {fmt(s.date)} · {s.time}{s.pax != null ? ` · 👥 ${s.pax} ${t("guests")}` : ""}</div>
         {s.meetingPoint && <div className="nt-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
+        <div className="nt-meet"><a href={gcalUrl({ title: `Folkpath — ${s.tourName}`, date: s.date, slotIdx: s.slotIdx, durationMin: s.durationMin, location: s.meetingPoint ?? undefined, details: `${s.pax != null ? `${s.pax} pax · ` : ""}Folkpath tour` })} target="_blank" rel="noreferrer">{t("addToCalendar")}</a></div>
         {showAction(s, next) && next && <button className="btn primary nt-action" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
         {next && next.type === "ARRIVE" && !checkInOpen(s.date, s.time) && <div className="nt-locked">🔒 {t("checkInOpens")} {s.time}</div>}
       </section>
@@ -631,6 +633,7 @@ export default function AppClient({
                 <b>{s.tourName}</b>
                 <div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div>
                 {s.meetingPoint && <div className="sched-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
+                <div className="sched-meet"><a href={gcalUrl({ title: `Folkpath — ${s.tourName}`, date: s.date, slotIdx: s.slotIdx, durationMin: s.durationMin, location: s.meetingPoint ?? undefined, details: `${s.pax != null ? `${s.pax} pax · ` : ""}Folkpath tour` })} target="_blank" rel="noreferrer">{t("addToCalendar")}</a></div>
                 {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : `✓ ${t("tourDone")}`}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
