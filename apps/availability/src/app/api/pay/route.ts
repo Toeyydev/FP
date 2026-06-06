@@ -7,6 +7,7 @@ import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const bkkToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
 // Net payout for one assignment, computed live from its job sheet (net fee after
 // WHT + reimbursable expenses). Falls back to the standard guide fee if no sheet.
@@ -24,11 +25,14 @@ export async function GET(req: NextRequest) {
   const isOps = ops(session.user.role);
   const opsView = isOps && req.nextUrl.searchParams.get("view") === "ops";
 
-  const where = opsView ? {} : { guideId: session.user.guideId ?? "__none__" };
+  // Only tours that have actually happened (≤ today) count as pay — never future.
+  const dateFilter = { date: { lte: bkkToday() } };
+  const where = opsView ? dateFilter : { guideId: session.user.guideId ?? "__none__", ...dateFilter };
+  const sheetWhere = opsView ? dateFilter : { guideId: session.user.guideId ?? "__none__", ...dateFilter };
   const [assigns, sheets, payments, guides] = await Promise.all([
     prisma.assignment.findMany({ where, include: { tour: true }, orderBy: [{ date: "desc" }, { slotIdx: "asc" }], take: 400 }),
-    prisma.jobSheet.findMany({ where, select: { guideId: true, date: true, slotIdx: true, expenses: true, guideFee: true } }),
-    prisma.tourPayment.findMany({ where }),
+    prisma.jobSheet.findMany({ where: sheetWhere, select: { guideId: true, date: true, slotIdx: true, expenses: true, guideFee: true } }),
+    prisma.tourPayment.findMany({ where: opsView ? {} : { guideId: session.user.guideId ?? "__none__" } }),
     opsView ? prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }) : Promise.resolve([]),
   ]);
   const sheetOf = new Map(sheets.map((s) => [`${s.guideId}|${s.date}|${s.slotIdx}`, s]));
