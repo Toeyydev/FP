@@ -69,7 +69,7 @@ export default function AppClient({
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
-  const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null }[]>([]);
+  const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; checkinState: string | null }[]>([]);
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [installed, setInstalled] = useState(true); // home-screen install state
@@ -486,22 +486,53 @@ export default function AppClient({
     toast(t("tourCancelled"));
     await load();
   }
+  // Capture GPS (best-effort) and record a lifecycle check-in for a tour.
+  async function doCheckin(s: { date: string; slotIdx: number }, type: "ARRIVE" | "START" | "COMPLETE") {
+    const refresh = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
+    const post = (lat?: number, lng?: number, accuracyM?: number) =>
+      fetch("/api/checkin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: s.date, slotIdx: s.slotIdx, type, lat, lng, accuracyM }) })
+        .then((r) => r.ok ? refresh() : toast(t("errGeneric")));
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (p) => post(p.coords.latitude, p.coords.longitude, Math.round(p.coords.accuracy)),
+        () => post(), { enableHighAccuracy: true, timeout: 8000 },
+      );
+    } else { await post(); }
+  }
+  const CHECK_NEXT: Record<string, { type: "ARRIVE" | "START" | "COMPLETE"; label: string } | null> = {
+    none: { type: "ARRIVE", label: t("checkIn") },
+    ARRIVE: { type: "START", label: t("startTour") },
+    START: { type: "COMPLETE", label: t("completeTour") },
+    COMPLETE: null,
+  };
+
   function guideSchedule(): ReactNode {
     const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
     return (
       <>
         <div className="panel-head"><h2>{t("myTours")}</h2><span className="hint">{t("scheduleHint")}</span></div>
         <div style={{ padding: 14 }}>
-          {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => (
+          {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => {
+            const next = CHECK_NEXT[s.checkinState ?? "none"];
+            return (
             <div key={i} className="sched-card" style={{ cursor: "default" }}>
               <div className="sched-when"><b>{fmt(s.date)}</b><span>{s.time}</span></div>
-              <div className="sched-mid"><b>{s.tourName}</b><div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div></div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <a className="btn sm" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>📄</a>
-                <button className="btn sm danger" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>
+              <div className="sched-mid">
+                <b>{s.tourName}</b>
+                <div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div>
+                {s.meetingPoint && <div className="sched-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
+                {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : `✓ ${t("tourDone")}`}</div>}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                {next && <button className="btn sm primary" onClick={() => doCheckin(s, next.type)}>{next.label}</button>}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <a className="btn sm" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>📄</a>
+                  {!s.checkinState && <button className="btn sm danger" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>}
+                </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </>
     );

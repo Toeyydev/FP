@@ -33,12 +33,23 @@ export async function GET() {
     for (const b of bookings) { const k = `${b.tourId}|${b.date}|${b.slotIdx}`; bookedPax[k] = (bookedPax[k] ?? 0) + (b.pax ?? 0); }
   }
 
+  // Current lifecycle state per tour instance (latest check-in event).
+  const state: Record<string, string> = {};
+  if (rows.length) {
+    const checkins = await prisma.checkin.findMany({
+      where: { guideId, OR: rows.map((a) => ({ date: a.date, slotIdx: a.slotIdx })) },
+      orderBy: { at: "asc" }, select: { date: true, slotIdx: true, type: true },
+    });
+    for (const c of checkins) state[`${c.date}|${c.slotIdx}`] = c.type; // ordered asc → last wins
+  }
+
   return NextResponse.json({
     items: rows.map((a) => {
       const real = bookedPax[`${a.tourId}|${a.date}|${a.slotIdx}`];
       return {
         date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
         tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: real && real > 0 ? real : a.pax, note: a.note,
+        meetingPoint: a.tour?.meetingPoint ?? null, checkinState: state[`${a.date}|${a.slotIdx}`] ?? null,
       };
     }),
   });

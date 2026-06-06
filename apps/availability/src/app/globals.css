@@ -450,3 +450,8 @@ a.dash-row:hover{background:var(--grey-bg)}
 .login-logo{ text-align:center; margin:26px auto 0; max-width:440px;
   font-family:"Inter",system-ui,sans-serif; font-weight:800; font-size:26px;
   letter-spacing:.04em; color:#2f343b; opacity:.85; }
+
+/* ---- Guide tour card: meeting point + lifecycle ---- */
+.sched-meet{font-size:13px;color:var(--ink);margin-top:5px}
+.sched-meet a{color:var(--assign);font-weight:600;text-decoration:none;white-space:nowrap}
+.sched-state{font-size:12px;font-weight:700;color:var(--green);margin-top:4px}

@@ -357,6 +357,25 @@ model JobSheet {
   @@index([date])
 }
 
+// Tour lifecycle proof-of-work: a guide's check-in / start / complete events for
+// an assignment, with the GPS captured at the moment (geofencing comes once
+// meeting points carry coordinates).
+model Checkin {
+  id        String   @id @default(cuid())
+  guideId   String
+  date      String // "YYYY-MM-DD"
+  slotIdx   Int
+  tourId    String
+  type      String // ARRIVE | START | COMPLETE
+  at        DateTime @default(now())
+  lat       Float?
+  lng       Float?
+  accuracyM Int?
+
+  @@index([guideId, date, slotIdx])
+  @@index([date])
+}
+
 // WebAuthn passkey — true Face ID / fingerprint sign-in (one per device).
 model Passkey {
   id           String   @id @default(cuid())
