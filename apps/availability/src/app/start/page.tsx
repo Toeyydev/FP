@@ -3,8 +3,7 @@
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { startAuthentication } from "@simplewebauthn/browser";
+import { useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { useLang } from "@/components/Providers";
 import InstallPrompt from "@/components/InstallPrompt";
@@ -21,23 +20,9 @@ export default function StartPage() {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true); // default on — the phone stays signed in
   const [loginMsg, setLoginMsg] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
-  const [pkSupported, setPkSupported] = useState(false);
-  const [pkBusy, setPkBusy] = useState(false);
-  useEffect(() => { setPkSupported(typeof window !== "undefined" && !!window.PublicKeyCredential); }, []);
-
-  async function passkeyLogin() {
-    setLoginMsg(""); setPkBusy(true);
-    try {
-      const opts = await fetch("/api/passkey/auth-options", { method: "POST" }).then((r) => r.json());
-      const assertion = await startAuthentication(opts);
-      const r = await fetch("/api/passkey/auth", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(assertion) });
-      if (!r.ok) { setPkBusy(false); setLoginMsg(t("passkeyFailed")); return; }
-      router.push("/"); router.refresh();
-    } catch { setPkBusy(false); setLoginMsg(t("passkeyCancelled")); }
-  }
 
   // signup state
   const [fullName, setFullName] = useState("");
@@ -108,11 +93,6 @@ export default function StartPage() {
                   </div>
                   <div className="auth-msg">{loginMsg}</div>
                   <button className="btn primary" type="submit" disabled={loginBusy} style={{ width: "100%", marginTop: 2, padding: 11 }}>{loginBusy ? "…" : t("signInBtn")}</button>
-                  {pkSupported && (
-                    <button type="button" className="btn" onClick={passkeyLogin} disabled={pkBusy} style={{ width: "100%", marginTop: 8, padding: 11 }}>
-                      🔑 {pkBusy ? "…" : t("signInPasskey")}
-                    </button>
-                  )}
                   <div className="switchline">{t("noAccountSignup").split("?")[0]}? <button type="button" onClick={() => setTab("signup")}>{t("tabSignup")}</button></div>
                 </form>
               ) : (
