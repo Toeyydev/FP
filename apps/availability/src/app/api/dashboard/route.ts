@@ -15,12 +15,13 @@ export async function GET() {
   const today = bkk(0);
   const horizon = bkk(7);
 
-  const [assigns, bookings, tours, guides, checkins] = await Promise.all([
+  const [assigns, bookings, tours, guides, checkins, reports] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: today, lte: horizon } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }),
     prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true } }),
     prisma.tour.findMany({ select: { id: true, name: true, durationMin: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.checkin.findMany({ where: { date: today }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
+    prisma.tourReport.findMany({ where: { date: today }, select: { guideId: true, date: true, slotIdx: true, noShow: true, leftEarly: true, completedPax: true, comments: true } }),
   ]);
 
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
@@ -29,13 +30,15 @@ export async function GET() {
   // latest check-in event per assignment (guide|date|slot)
   const ck: Record<string, { type: string; at: Date }> = {};
   for (const c of checkins) ck[`${c.guideId}|${c.date}|${c.slotIdx}`] = { type: c.type, at: c.at };
+  const rep: Record<string, { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null }> = {};
+  for (const r of reports) rep[`${r.guideId}|${r.date}|${r.slotIdx}`] = { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments };
   const nowMin = (() => { const d = new Date(Date.now() + 7 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes(); })();
   const startMin = (slot: number) => { const [h, m] = (SLOT_TIMES[slot] ?? "0:0").split(":").map(Number); return h * 60 + m; };
   const fmt = (a: (typeof assigns)[number]) => {
     const c = ck[`${a.guideId}|${a.date}|${a.slotIdx}`];
     const state = c ? c.type : "NONE";
     const overdue = a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx);
-    return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue };
+    return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue, report: rep[`${a.guideId}|${a.date}|${a.slotIdx}`] ?? null };
   };
 
   const todayTours = assigns.filter((a) => a.date === today).map(fmt);

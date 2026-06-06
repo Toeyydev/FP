@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
-type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean };
+type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
+type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null };
 
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 function StateTag({ t }: { t: Tour }) {
@@ -77,7 +78,17 @@ export default function Dashboard() {
                 {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => (
                   <div key={i} className={`dash-row${a.overdue ? " warn" : ""}`}>
                     <span className="dr-time">{a.time}</span>
-                    <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span>
+                    <span className="dr-main"><b>{a.tour}</b>
+                      <div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div>
+                      {a.report && (a.report.noShow > 0 || a.report.leftEarly > 0 || a.report.comments) && (
+                        <div className="dr-report">
+                          {a.report.completedPax != null ? `✓ ${a.report.completedPax} completed` : ""}
+                          {a.report.noShow > 0 ? ` · ${a.report.noShow} no-show` : ""}
+                          {a.report.leftEarly > 0 ? ` · ${a.report.leftEarly} left early` : ""}
+                          {a.report.comments ? <span className="dr-incident"> · ⚠ {a.report.comments}</span> : ""}
+                        </div>
+                      )}
+                    </span>
                     <StateTag t={a} />
                   </div>
                 ))}
