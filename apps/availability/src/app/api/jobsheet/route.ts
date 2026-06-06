@@ -22,16 +22,14 @@ function buildSheet(dateLabel: string, jobs: SheetJob[]) {
     .sort((a, b) => a.slotIdx - b.slotIdx)
     .map((j) => {
       const time = SLOT_TIMES[j.slotIdx] ?? "";
-      let s = `• ${time}  ${j.tourName}`;
-      const extra: string[] = [];
-      if (j.pax != null) extra.push(`👥 ${j.pax} pax`);
-      if (j.note) extra.push(`📝 ${j.note}`);
-      if (extra.length) s += `\n   ${extra.join(" · ")}`;
-      if (j.totalExpenses != null) s += `\n   💵 Expenses ${thb(j.totalExpenses)}`;
-      if (j.netGuideFee != null) s += ` · Net guide fee ${thb(j.netGuideFee)}`;
+      let s = `${time} • ${j.tourName}`;
+      if (j.pax != null) s += `\nTotal: ${j.pax} Pax · 1 Job`;
+      if (j.note) s += `\n${j.note}`;
+      if (j.totalExpenses != null) s += `\nExpenses ${thb(j.totalExpenses)}`;
+      if (j.netGuideFee != null) s += `\nNet guide fee ${thb(j.netGuideFee)}`;
       return s;
     });
-  return `📋 Folkpath job sheet — ${dateLabel}\n━━━━━━━━━━━━━━\n${lines.join("\n")}\n━━━━━━━━━━━━━━\n${jobs.length} job(s). Reply here if anything's unclear 🙏`;
+  return `Folkpath Job Sheet — ${dateLabel}\n${lines.join("\n\n")}\n${jobs.length} job(s)`;
 }
 
 // Header fields auto-pulled from the guide's profile (operator is authorized to see PII).

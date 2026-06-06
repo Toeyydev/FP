@@ -435,6 +435,35 @@ export default function AppClient({
     await fetch("/api/notifications", { method: "DELETE" });
     setNotif({ unread: 0, items: [] });
   }
+  // Render a notification as clean rows: bold header, plain rows, and a financial
+  // sub-card for any money lines (Net guide fee highlighted). Emojis stripped.
+  function notifCard(i: { id: string; message: string; createdAt: string }): ReactNode {
+    const lines = i.message
+      .replace(/[\p{Extended_Pictographic}─-╿]/gu, "") // emoji + box-drawing
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+    const money = lines.filter((l) => l.includes("฿"));
+    const text = lines.filter((l) => !l.includes("฿"));
+    const head = text[0] ?? "";
+    const rows = text.slice(1);
+    return (
+      <div key={i.id} className="notif-card">
+        {head && <div className="nc-head">{head}</div>}
+        {rows.map((r, n) => <div key={n} className="nc-row">{r}</div>)}
+        {money.length > 0 && (
+          <div className="nc-money">
+            {money.map((m, n) => {
+              const mt = m.match(/^(.*?)(฿\s?-?[\d,.]+)\s*$/);
+              const label = (mt ? mt[1] : m).replace(/[·•\s]+$/, "").trim();
+              const amount = mt ? mt[2] : "";
+              const net = /net|guide fee|รับ|ค่าตอบแทน/i.test(label);
+              return <div key={n} className={`nc-money-row${net ? " net" : ""}`}><span>{label}</span><span>{amount}</span></div>;
+            })}
+          </div>
+        )}
+        <div className="nc-time">{new Date(i.createdAt).toLocaleString()}</div>
+      </div>
+    );
+  }
 
   // ---- navigation ----
   function navBy(dir: number) {
@@ -1123,15 +1152,11 @@ export default function AppClient({
           <div className="modal">
             <h3>{t("notifications")}</h3>
             <div className="mbody">
-              {notif.items.length ? notif.items.map((i) => (
-                <div key={i.id} className="assigned-note" style={{ background: "var(--grey-bg)", borderColor: "var(--line)" }}>
-                  {i.message}<br /><small style={{ color: "var(--ink-soft)" }}>{new Date(i.createdAt).toLocaleString()}</small>
-                </div>
-              )) : <div className="op-empty">{t("noNotifications")}</div>}
+              {notif.items.length ? notif.items.map((i) => notifCard(i)) : <div className="op-empty">{t("noNotifications")}</div>}
             </div>
-            <div className="mfoot">
-              {notif.items.length > 0 && <button className="btn ghost" onClick={clearNotif}>{t("clearAll")}</button>}
-              <button className="btn dark" onClick={() => setShowNotif(false)}>{t("close")}</button>
+            <div className="mfoot notif-foot">
+              {notif.items.length > 0 && <button className="btn ghost notif-btn" onClick={clearNotif}>{t("clearAll")}</button>}
+              <button className="btn dark notif-btn" onClick={() => setShowNotif(false)}>{t("close")}</button>
             </div>
           </div>
         </div>

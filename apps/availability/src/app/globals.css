@@ -524,3 +524,16 @@ header.app{align-items:center;row-gap:10px}
 /* ---- Guide month: full day-off = clean red block (no number) ---- */
 .dayoff-block{margin-top:auto;background:var(--danger-bg);border:1px solid var(--danger-line);color:var(--danger);
   border-radius:7px;text-align:center;font-size:10.5px;font-weight:700;padding:4px 2px;letter-spacing:.02em}
+
+/* ---- Notifications: clean rows + financial sub-card + premium buttons ---- */
+.notif-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-bottom:8px}
+.notif-card .nc-head{font-weight:700;font-size:14.5px;line-height:1.35;margin-bottom:3px;color:var(--ink)}
+.notif-card .nc-row{font-size:13px;color:var(--ink-soft);line-height:1.55;word-break:break-word}
+.notif-card .nc-money{background:#f4f4f5;border-radius:10px;padding:9px 12px;margin-top:10px;display:flex;flex-direction:column;gap:5px}
+.notif-card .nc-money-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:13px;color:var(--ink)}
+.notif-card .nc-money-row > span:last-child{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.notif-card .nc-money-row.net{font-size:15px}
+.notif-card .nc-money-row.net > span{color:#0e3b2e;font-weight:800}
+.notif-card .nc-time{font-size:11px;color:var(--grey);margin-top:9px}
+.notif-foot{display:flex;gap:10px;justify-content:center}
+.notif-btn{flex:1;max-width:200px;border-radius:12px;padding:11px;text-align:center;display:flex;align-items:center;justify-content:center}
