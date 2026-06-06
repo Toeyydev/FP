@@ -50,6 +50,11 @@ export default function AppClient({
 }: { role: Role; isAdmin?: boolean; guideId: string | null; displayName: string }) {
   const { t, lang, setLang } = useLang();
   const [view, setView] = useState<string>(role === "guide" ? "schedule" : "day");
+  // Allow ?view=week deep-links (e.g. the mobile bottom-nav "Availability" tab).
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v && ["schedule", "week", "month", "year", "day"].includes(v)) setView(v);
+  }, []);
   const [anchor, setAnchor] = useState<Date>(() => todayD());
   const [ref, setRef] = useState<Ref | null>(null);
   const [av, setAv] = useState<AvMap>({});

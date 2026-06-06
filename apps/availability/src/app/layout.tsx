@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
+import BottomNav from "@/components/BottomNav";
+import { auth } from "@/auth";
 
 export const metadata: Metadata = {
   title: "Folkpath — Guide Availability",
@@ -16,7 +18,8 @@ export const viewport: Viewport = {
   themeColor: "#0e3b2e",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const session = await auth();
   return (
     <html lang="en">
       <head>
@@ -29,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <Providers>{children}</Providers>
+        <BottomNav role={session?.user?.role} />
       </body>
     </html>
   );
