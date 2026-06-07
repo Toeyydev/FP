@@ -30,16 +30,16 @@ export default function BookingsInbox() {
   useEffect(() => { fetch("/api/reference", { cache: "no-store" }).then((r) => r.json()).then((d) => setGuides(d.guides ?? [])).catch(() => {}); }, []);
 
   const csvRef = useRef<HTMLInputElement>(null);
-  // Import a Bokun/OTA CSV export (backfill without API keys).
+  // Import a Bokun/OTA booking export (.csv or .xlsx) — backfill without API keys.
   async function importCsv(file: File) {
-    setMsg("Importing CSV…");
+    setMsg(`Importing ${file.name}…`);
     try {
-      const text = await file.text();
-      const r = await fetch("/api/bookings/import-csv", { method: "POST", headers: { "content-type": "text/csv" }, body: text });
+      const fd = new FormData(); fd.append("file", file);
+      const r = await fetch("/api/bookings/import-csv", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) setMsg(d.hint || `CSV import failed (${r.status}).`);
+      if (!r.ok) setMsg(d.hint || d.detail || `Import failed (${r.status}).`);
       else { setMsg(`Imported: ${d.created} new, ${d.updated} updated, ${d.skipped} skipped (${d.rows} rows).`); await load(); }
-    } catch { setMsg("CSV import failed — couldn't read the file."); }
+    } catch { setMsg("Import failed — couldn't read the file."); }
   }
 
   const [syncing, setSyncing] = useState(false);
@@ -153,8 +153,8 @@ export default function BookingsInbox() {
           <div className="head-tools">
             <span style={{ color: "var(--ink-soft)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
             <button className="btn sm" disabled={syncing} onClick={syncBokun}>{syncing ? "Syncing…" : "↺ Sync from Bokun"}</button>
-            <button className="btn sm" onClick={() => csvRef.current?.click()}>⬆ Import CSV</button>
-            <input ref={csvRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} />
+            <button className="btn sm" onClick={() => csvRef.current?.click()}>⬆ Import CSV / Excel</button>
+            <input ref={csvRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} />
             <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add booking</button>
           </div>
         </div>

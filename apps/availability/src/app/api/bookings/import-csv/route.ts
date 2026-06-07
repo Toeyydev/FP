@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import ExcelJS from "exceljs";
 import { auth } from "@/auth";
 import { audit } from "@/lib/audit";
 import { parseCSV } from "@/lib/csv";
@@ -7,7 +8,6 @@ import { importParsed, type ImportResult } from "@/lib/booking-import";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
-// Pick the first column whose (lowercased) header contains any of the candidates.
 function col(row: Record<string, string>, cands: string[]): string {
   const keys = Object.keys(row);
   for (const cand of cands) {
@@ -16,27 +16,68 @@ function col(row: Record<string, string>, cands: string[]): string {
   }
   return "";
 }
-
-// Normalise a date cell to YYYY-MM-DD (handles ISO, "Jun 7, 2026", "2026/06/07").
 function toYMD(s: string): string | undefined {
   if (!s) return undefined;
   const iso = s.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const t = Date.parse(s);
-  if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
-  return undefined;
+  return Number.isNaN(t) ? undefined : new Date(t).toISOString().slice(0, 10);
+}
+function cellToStr(v: unknown): string {
+  if (v == null) return "";
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "object") {
+    const o = v as { text?: unknown; result?: unknown; richText?: { text: string }[] };
+    if (o.richText) return o.richText.map((t) => t.text).join("");
+    if (o.text != null) return String(o.text);
+    if (o.result != null) return String(o.result);
+    return "";
+  }
+  return String(v);
 }
 
-// POST (text/csv or text body) — import a Bokun/OTA booking export. Operator only.
+// Parse an .xlsx buffer → array of {header: value} rows (first row = headers).
+async function parseXlsx(buf: ArrayBuffer): Promise<Record<string, string>[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  if (!ws) return [];
+  const headers: string[] = [];
+  const rows: Record<string, string>[] = [];
+  ws.eachRow((row, n) => {
+    const vals = row.values as unknown[]; // 1-indexed
+    if (n === 1) { for (let i = 1; i < vals.length; i++) headers[i - 1] = cellToStr(vals[i]).trim(); return; }
+    const o: Record<string, string> = {};
+    headers.forEach((h, i) => { o[h] = cellToStr(vals[i + 1]).trim(); });
+    if (Object.values(o).some((v) => v)) rows.push(o);
+  });
+  return rows;
+}
+
+// POST multipart (file) OR raw text — import a Bokun/OTA booking export
+// (.csv or .xlsx). Operator only.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const text = await req.text();
-  if (!text.trim()) return NextResponse.json({ error: "empty" }, { status: 400 });
-  let rows: Record<string, string>[];
-  try { rows = parseCSV(text); } catch { return NextResponse.json({ error: "bad-csv" }, { status: 400 }); }
-  if (rows.length === 0) return NextResponse.json({ error: "no-rows", hint: "Need a header row + at least one booking." }, { status: 400 });
+  let rows: Record<string, string>[] = [];
+  const ctype = req.headers.get("content-type") || "";
+  try {
+    if (ctype.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return NextResponse.json({ error: "no-file" }, { status: 400 });
+      const name = file.name.toLowerCase();
+      const buf = await file.arrayBuffer();
+      const isXlsx = name.endsWith(".xlsx") || name.endsWith(".xls") || new Uint8Array(buf)[0] === 0x50; // "PK" zip header
+      rows = isXlsx ? await parseXlsx(buf) : parseCSV(new TextDecoder().decode(buf));
+    } else {
+      rows = parseCSV(await req.text());
+    }
+  } catch (e) {
+    return NextResponse.json({ error: "parse-failed", detail: (e as Error).message.slice(0, 200) }, { status: 400 });
+  }
+  if (rows.length === 0) return NextResponse.json({ error: "no-rows", hint: "Couldn't read any rows — make sure the first row has column headers." }, { status: 400 });
 
   const counts = { rows: rows.length, created: 0, updated: 0, skipped: 0 };
   for (const row of rows) {
@@ -46,21 +87,19 @@ export async function POST(req: NextRequest) {
     const time = normTime(col(row, ["start time", "departure", "pickup time", "time"]));
     const paxStr = col(row, ["total participants", "participants", "pax", "guests", "travelers", "travellers", "people", "seats"]);
     const name = col(row, ["lead", "customer name", "passenger", "guest name", "customer", "name"]);
-    const statusStr = col(row, ["status"]).toLowerCase();
+    const cancelled = /cancel/.test(col(row, ["status"]).toLowerCase());
     const channel = col(row, ["seller", "reseller", "channel", "agent", "vendor", "source", "marketplace"]) || "Bokun";
     const pax = paxStr ? parseInt(paxStr.replace(/\D+/g, ""), 10) || null : null;
-    const cancelled = /cancel/.test(statusStr);
 
-    if (!ref && !product && !date) { counts.skipped++; continue; } // junk row
+    if (!ref && !product && !date) { counts.skipped++; continue; }
     const p: ParsedBooking = {
-      externalId: undefined, confirmationCode: ref || undefined, externalRef: ref || undefined,
-      productName: product || undefined, date, startTime: time, slotIdx: timeToSlot(time),
-      pax: pax ?? undefined, customerName: name || undefined,
+      confirmationCode: ref || undefined, externalRef: ref || undefined, productName: product || undefined,
+      date, startTime: time, slotIdx: timeToSlot(time), pax: pax ?? undefined, customerName: name || undefined,
     };
     try { const r: ImportResult = await importParsed(p, { source: channel, cancelled }); counts[r]++; }
     catch { counts.skipped++; }
   }
 
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.csv-import", entityType: "Booking", detail: counts });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.import", entityType: "Booking", detail: counts });
   return NextResponse.json({ ok: true, ...counts });
 }
