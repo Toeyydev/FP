@@ -29,6 +29,19 @@ export default function BookingsInbox() {
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
   useEffect(() => { fetch("/api/reference", { cache: "no-store" }).then((r) => r.json()).then((d) => setGuides(d.guides ?? [])).catch(() => {}); }, []);
 
+  const [syncing, setSyncing] = useState(false);
+  // Pull historical bookings from Bokun into the inbox (one-off backfill).
+  async function syncBokun() {
+    setSyncing(true); setMsg("Syncing from Bokun…");
+    try {
+      const r = await fetch("/api/bokun/sync", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setMsg(d.error === "not-configured" ? "Bokun API keys not set on the server yet." : `Sync failed (${d.status ?? r.status}). ${d.detail ?? ""}`.slice(0, 160));
+      else { setMsg(`Synced: ${d.created} new, ${d.updated} updated, ${d.skipped} skipped (${d.fetched} checked).`); await load(); }
+    } catch { setMsg("Sync failed — network error."); }
+    setSyncing(false);
+  }
+
   // Assign a group directly to a chosen guide (no offer broadcast).
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
@@ -127,6 +140,7 @@ export default function BookingsInbox() {
         <div className="panel-head"><h2>Incoming bookings</h2>
           <div className="head-tools">
             <span style={{ color: "var(--ink-soft)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
+            <button className="btn sm" disabled={syncing} onClick={syncBokun}>{syncing ? "Syncing…" : "↺ Sync from Bokun"}</button>
             <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add booking</button>
           </div>
         </div>
