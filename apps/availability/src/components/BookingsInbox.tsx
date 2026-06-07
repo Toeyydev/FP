@@ -105,11 +105,10 @@ export default function BookingsInbox() {
   const needMap = bookings.filter((b) => b.status !== "OFFERED" && (!b.tourId || b.slotIdx == null || !b.date));
   const ready = bookings.filter((b) => b.status !== "OFFERED" && b.tourId && b.slotIdx != null && b.date);
 
-  // Group ready bookings by date + slot + TOUR NAME — same tour at the same time is
-  // one guide's job (combines even if the bookings arrived under different tour IDs
-  // from different channels, as long as the tour name matches).
+  // Group ready bookings by date + slot ONLY — everything at the same time slot is
+  // ONE job for one guide (regardless of tour/channel).
   const groups: Record<string, Booking[]> = {};
-  for (const b of ready) { const k = `${b.date}|${b.slotIdx}|${tourName(b.tourId).toLowerCase().trim()}`; (groups[k] ??= []).push(b); }
+  for (const b of ready) { const k = `${b.date}|${b.slotIdx}`; (groups[k] ??= []).push(b); }
 
   async function offerGroup(key: string, items: Booking[]) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
@@ -232,8 +231,8 @@ export default function BookingsInbox() {
                       {items.map((b) => (
                         <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
                           <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
-                          <select value={b.slotIdx ?? ""} title="Move to time slot" onChange={(e) => post({ action: "update", id: b.id, slotIdx: Number(e.target.value) }).then(load)} style={{ border: "none", background: "transparent", font: "inherit", fontSize: 11, fontWeight: 700, color: "var(--assign)", cursor: "pointer", padding: 0 }}>
-                            {SLOTS.map((s) => <option key={s.idx} value={s.idx}>⤴ {s.start}</option>)}
+                          <select value={b.slotIdx ?? ""} title="Move this booking to another time slot" onChange={(e) => post({ action: "update", id: b.id, slotIdx: Number(e.target.value) }).then(load)} style={{ border: "1px solid var(--assign)", background: "#eef4ff", font: "inherit", fontSize: 11, fontWeight: 700, color: "var(--assign)", cursor: "pointer", padding: "2px 4px", borderRadius: 12 }}>
+                            {SLOTS.map((s) => <option key={s.idx} value={s.idx}>{s.idx === b.slotIdx ? `Move · ${s.start}` : `→ ${s.start}`}</option>)}
                           </select>
                           <button title="Delete" onClick={() => removeBooking(b.id, b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
                         </span>
