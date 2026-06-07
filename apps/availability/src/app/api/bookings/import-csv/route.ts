@@ -65,9 +65,11 @@ export async function POST(req: NextRequest) {
   try {
     if (ctype.includes("multipart/form-data")) {
       const form = await req.formData();
-      const file = form.get("file");
-      if (!(file instanceof File)) return NextResponse.json({ error: "no-file" }, { status: 400 });
-      const name = file.name.toLowerCase();
+      // Duck-type instead of `instanceof File` (the File global isn't guaranteed
+      // in the Node server runtime — that was throwing "File is not defined").
+      const file = form.get("file") as unknown as { name?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+      if (!file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "no-file", hint: "No file received — pick a .csv or .xlsx and try again." }, { status: 400 });
+      const name = (file.name || "").toLowerCase();
       const buf = await file.arrayBuffer();
       const isXlsx = name.endsWith(".xlsx") || name.endsWith(".xls") || new Uint8Array(buf)[0] === 0x50; // "PK" zip header
       rows = isXlsx ? await parseXlsx(buf) : parseCSV(new TextDecoder().decode(buf));

@@ -17,10 +17,10 @@ export async function POST(req: NextRequest) {
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "bad-form" }, { status: 400 });
   const kind = String(form.get("kind") || "");
-  const file = form.get("file");
+  const file = form.get("file") as unknown as { name?: string; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
   const requested = form.get("userId") ? String(form.get("userId")) : null;
   if (!KINDS.includes(kind)) return NextResponse.json({ error: "bad-kind" }, { status: 400 });
-  if (!(file instanceof File)) return NextResponse.json({ error: "no-file" }, { status: 400 });
+  if (!file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "no-file" }, { status: 400 });
   const mime = (file.type || "").toLowerCase();
   if (!ALLOWED.includes(mime)) return NextResponse.json({ error: "bad-type" }, { status: 415 });
 
