@@ -47,6 +47,7 @@ export default function BottomNav({ role }: { role?: string }) {
     { href: "/tour-log", label: "Tour log", icon: "list" },
     { href: "/guides", label: "Guides", icon: "user" },
     { href: "/meeting-points", label: "Meeting points", icon: "dispatch" },
+    { href: "/product-map", label: "Product mapping", icon: "list" },
     { href: "/admin", label: "Accounts", icon: "user" },
   ];
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href.split("?")[0]);
