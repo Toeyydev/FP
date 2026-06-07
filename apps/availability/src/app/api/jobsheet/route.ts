@@ -66,13 +66,14 @@ export async function GET(req: NextRequest) {
 
   if (existing) return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing });
 
-  // No saved sheet yet — scaffold it, pre-filling Job Details from the channel
-  // bookings for this tour/date/slot (customer names, refs, pax).
-  const linked = tourId ? await prisma.booking.findMany({
-    where: { tourId, date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+  // No saved sheet yet — scaffold it, pre-filling Job Details from EVERY booking at
+  // this date + slot (one job per time slot), so separate bookings assigned to one
+  // guide show as a combined customer list — regardless of tour/channel.
+  const linked = await prisma.booking.findMany({
+    where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
     select: { customerName: true, externalRef: true, confirmationCode: true, pax: true },
     orderBy: { createdAt: "asc" },
-  }) : [];
+  });
   const bookings = linked.length
     ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
