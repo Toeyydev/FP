@@ -31,10 +31,10 @@ export default function BookingsInbox() {
 
   // Assign a group directly to a chosen guide (no offer broadcast).
   async function assignGroup(key: string, items: Booking[], guideId: string) {
-    const [date, slotIdxStr, tourId] = key.split("|");
+    const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
-    const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx: Number(slotIdxStr), tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
+    const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { setMsg(d.error === "date-blocked" ? "That day is blocked." : "Assign failed."); return; }
     await post({ action: "markOffered", ids: items.map((b) => b.id) });
@@ -83,16 +83,23 @@ export default function BookingsInbox() {
   useEffect(() => { load(); }, [load]);
 
   const tourName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? id ?? "—";
+  // The tour for a slot-group: the most common tourId among its bookings.
+  const groupTourId = (items: Booking[]) => {
+    const c: Record<string, number> = {};
+    for (const b of items) if (b.tourId) c[b.tourId] = (c[b.tourId] || 0) + 1;
+    return Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] ?? items[0]?.tourId ?? "";
+  };
   const needMap = bookings.filter((b) => b.status !== "OFFERED" && (!b.tourId || b.slotIdx == null || !b.date));
   const ready = bookings.filter((b) => b.status !== "OFFERED" && b.tourId && b.slotIdx != null && b.date);
 
-  // Group ready bookings by date|slot|tour.
+  // Group ready bookings by date + slot + TOUR NAME — same tour at the same time is
+  // one guide's job (combines even if the bookings arrived under different tour IDs
+  // from different channels, as long as the tour name matches).
   const groups: Record<string, Booking[]> = {};
-  for (const b of ready) { const k = `${b.date}|${b.slotIdx}|${b.tourId}`; (groups[k] ??= []).push(b); }
+  for (const b of ready) { const k = `${b.date}|${b.slotIdx}|${tourName(b.tourId).toLowerCase().trim()}`; (groups[k] ??= []).push(b); }
 
   async function offerGroup(key: string, items: Booking[]) {
-    const [date, slotIdxStr, tourId] = key.split("|");
-    const slotIdx = Number(slotIdxStr);
+    const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     const durMin = dur[key] && Number(dur[key]) > 0 ? Math.round(Number(dur[key]) * 60) : undefined;
     const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
@@ -197,8 +204,8 @@ export default function BookingsInbox() {
           <h3 style={{ fontSize: 14, margin: "16px 0 8px" }}>Ready to offer</h3>
           {Object.keys(groups).length === 0 ? <div className="op-empty">No bookings ready. New Bokun bookings will appear here automatically.</div> : (
             Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([key, items]) => {
-              const [date, slotIdxStr, tourId] = key.split("|");
-              const slot = SLOTS[Number(slotIdxStr)];
+              const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
+              const slot = SLOTS[slotIdx];
               const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0);
               return (
                 <div key={key} className="op-toolbar" style={{ borderRadius: 12, border: "1.5px solid var(--line)", marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
