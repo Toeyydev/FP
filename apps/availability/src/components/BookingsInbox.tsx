@@ -232,6 +232,9 @@ export default function BookingsInbox() {
                       {items.map((b) => (
                         <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
                           <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
+                          <select value={b.slotIdx ?? ""} title="Move to time slot" onChange={(e) => post({ action: "update", id: b.id, slotIdx: Number(e.target.value) }).then(load)} style={{ border: "none", background: "transparent", font: "inherit", fontSize: 11, fontWeight: 700, color: "var(--assign)", cursor: "pointer", padding: 0 }}>
+                            {SLOTS.map((s) => <option key={s.idx} value={s.idx}>⤴ {s.start}</option>)}
+                          </select>
                           <button title="Delete" onClick={() => removeBooking(b.id, b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
                         </span>
                       ))}
