@@ -23,7 +23,7 @@ export default function Payments() {
     if (r.ok) load(period);
   }
   async function removeRow(guideId: string, guide: string) {
-    if (!confirm(`Delete ${guide}'s pay for ${period}?\nThis removes their job sheets, per-tour payments and paid status for the month. Tour history is kept.`)) return;
+    if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports and payments. Cannot be undone.`)) return;
     const r = await fetch("/api/payments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId }) });
     if (r.ok) load(period);
   }
