@@ -6,6 +6,8 @@ import { audit } from "@/lib/audit";
 import { issueInvite } from "@/lib/provision";
 import { revokeAllForUser } from "@/lib/sessionTokens";
 import { randomBytes } from "crypto";
+import { sendPushToUser } from "@/lib/push";
+import { sendEmail } from "@/lib/email";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -118,6 +120,12 @@ export async function POST(req: NextRequest) {
       where: { id: reqRow.id }, data: { state: "APPROVED", linkedUserId: guide.id, reviewedById: actorId, reviewedAt: new Date() },
     });
     await audit({ actorId, actorRole, action: "request.approved", entityType: "AccessRequest", entityId: reqRow.id, detail: { guideId: guide.guideId } });
+    // Tell the new guide they're approved — in-app (seen on first login), push
+    // (if subscribed), and email (the channel that reaches them before login).
+    const firstName = (reqRow.name || "").split(" ")[0] || "there";
+    await prisma.notification.create({ data: { userId: guide.id, kind: "approved", message: `You're approved! Welcome to Folkpaths, ${firstName}. Log in to set your availability and start getting jobs.` } });
+    await sendPushToUser(guide.id, { title: "You're approved 🎉", body: "Welcome to Folkpaths — log in to set your availability.", url: "/", tag: "approved" });
+    await sendEmail({ to: reqRow.email, subject: "Your Folkpaths guide account is approved", text: `Hi ${firstName},\n\nGood news — your Folkpaths guide account (${guide.guideId}) has been approved.\n\nLog in at https://guide.folkpaths.com to set your availability and start receiving job offers.\n\nWelcome aboard!\nFolkpaths` });
     return NextResponse.json({ ok: true, guideId: guide.guideId });
   }
 

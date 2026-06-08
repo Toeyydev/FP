@@ -12,12 +12,15 @@ export async function GET(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const sp = req.nextUrl.searchParams;
-  const from = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(0).slice(0, 8) + "01";
+  // Reports reflect jobs that are DONE — default to the last 90 days up to today
+  // (never future). Operators can widen/narrow with the date pickers.
+  const from = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(-90);
   const to = DATE.test(sp.get("to") || "") ? sp.get("to")! : bkk(0);
 
-  const [bookings, assigns, tours, guides, trend] = await Promise.all([
+  const [bookings, assigns, reports, tours, guides, trend] = await Promise.all([
     prisma.booking.findMany({ where: { date: { gte: from, lte: to }, status: { not: "IGNORED" } }, select: { source: true, status: true, pax: true, tourId: true } }),
     prisma.assignment.findMany({ where: { date: { gte: from, lte: to } }, select: { guideId: true, pax: true } }),
+    prisma.tourReport.findMany({ where: { date: { gte: from, lte: to } }, select: { completedPax: true, noShow: true, leftEarly: true } }),
     prisma.tour.findMany({ select: { id: true, name: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.booking.findMany({ where: { date: { gte: bkk(-183) }, status: { not: "IGNORED" } }, select: { date: true } }),
@@ -49,7 +52,13 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     from, to,
-    summary: { total, cancelled, cancelRate: total ? Math.round((cancelled / total) * 1000) / 10 : 0, totalPax, toursAssigned: assigns.length },
+    summary: {
+      total, cancelled, cancelRate: total ? Math.round((cancelled / total) * 1000) / 10 : 0, totalPax,
+      toursAssigned: assigns.length,
+      toursCompleted: reports.length,
+      guestsServed: reports.reduce((s, r) => s + (r.completedPax ?? 0), 0),
+      noShow: reports.reduce((s, r) => s + (r.noShow ?? 0), 0),
+    },
     bySource, byTour, byGuide, byMonth,
   });
 }

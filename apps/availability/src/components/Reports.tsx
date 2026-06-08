@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
-type Sum = { total: number; cancelled: number; cancelRate: number; totalPax: number; toursAssigned: number };
+type Sum = { total: number; cancelled: number; cancelRate: number; totalPax: number; toursAssigned: number; toursCompleted: number; guestsServed: number; noShow: number };
 type Data = {
   from: string; to: string; summary: Sum;
   bySource: { source: string; count: number; pax: number }[];
@@ -63,7 +63,10 @@ export default function Reports() {
             <div className="rep-kpi">
               <div><b>{d.summary.total}</b><span>bookings</span></div>
               <div><b>{d.summary.totalPax}</b><span>pax</span></div>
+              <div><b>{d.summary.toursCompleted}</b><span>tours completed</span></div>
+              <div><b>{d.summary.guestsServed}</b><span>guests served</span></div>
               <div><b>{d.summary.toursAssigned}</b><span>tours assigned</span></div>
+              <div className={d.summary.noShow > 0 ? "warn" : ""}><b>{d.summary.noShow}</b><span>no-shows</span></div>
               <div className={d.summary.cancelRate > 0 ? "warn" : ""}><b>{d.summary.cancelRate}%</b><span>cancel rate ({d.summary.cancelled})</span></div>
             </div>
 
