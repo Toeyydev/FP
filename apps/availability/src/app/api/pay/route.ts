@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
     };
   });
   const totals = { pending: 0, approved: 0, paid: 0 };
-  for (const r of rows) { if (r.status === "PAID") totals.paid += r.amount; else if (r.status === "APPROVED") totals.approved += r.amount; else totals.pending += r.amount; }
+  for (const r of rows) { if (r.status === "PAID") totals.paid += r.amount; else if (r.status === "APPROVED") totals.approved += r.amount; else if (r.status === "CANCELLED") continue; else totals.pending += r.amount; }
   return NextResponse.json({ rows, totals: { pending: r2(totals.pending), approved: r2(totals.approved), paid: r2(totals.paid) } });
 }
 
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const parsed = z.object({ guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0), status: z.enum(["PENDING", "APPROVED", "PAID"]) }).safeParse(await req.json().catch(() => null));
+  const parsed = z.object({ guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0), status: z.enum(["PENDING", "APPROVED", "PAID", "CANCELLED"]) }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, date, slotIdx, status } = parsed.data;
   const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });

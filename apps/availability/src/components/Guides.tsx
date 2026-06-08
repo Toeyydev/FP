@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
-type Row = { guideId: string; name: string; languages: string; tours: number; rating: number | null; ratingCount: number; leave: string | null; lastSeenAt: string | null };
+type Row = { id: string; guideId: string; name: string; languages: string; tours: number; rating: number | null; ratingCount: number; leave: string | null; lastSeenAt: string | null };
 
 export default function Guides() {
   const [rows, setRows] = useState<Row[]>([]);
@@ -21,9 +21,9 @@ export default function Guides() {
         <div className="panel-head"><h2>Guide directory</h2><span className="hint">{rows.length} active · rated by completed tours</span></div>
         <div className="grid-scroll">
           <table className="acct-table">
-            <thead><tr><th>Guide</th><th>Presence</th><th>Languages</th><th className="r">Tours</th><th className="r">Rating</th><th>Status</th></tr></thead>
+            <thead><tr><th>Guide</th><th>Presence</th><th>Languages</th><th className="r">Tours</th><th className="r">Rating</th><th>Status</th><th /></tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={6} className="op-empty">No guides.</td></tr> : rows.map((g) => (
+              {rows.length === 0 ? <tr><td colSpan={7} className="op-empty">No guides.</td></tr> : rows.map((g) => (
                 <tr key={g.guideId}>
                   <td style={{ whiteSpace: "nowrap" }}><span className="gid">{g.guideId}</span> {g.name}</td>
                   <td style={{ whiteSpace: "nowrap" }}><span className={`presence-dot ${isOnline(g.lastSeenAt) ? "on" : "off"}`} />{isOnline(g.lastSeenAt) ? <b style={{ fontSize: 12, color: "var(--green)" }}>Online</b> : <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{lastSeenLabel(g.lastSeenAt)}</span>}</td>
@@ -31,6 +31,7 @@ export default function Guides() {
                   <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}>{g.tours}</td>
                   <td className="r">{g.rating != null ? <span style={{ fontWeight: 700 }}>★ {g.rating} <small style={{ color: "var(--ink-soft)", fontWeight: 400 }}>({g.ratingCount})</small></span> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
                   <td>{g.leave ? <span className="leave-badge">On leave {g.leave}</span> : <span style={{ color: "var(--green)", fontSize: 12, fontWeight: 600 }}>Active</span>}</td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><a className="btn sm" href={`/profile?userId=${g.id}`}>Profile &amp; docs</a></td>
                 </tr>
               ))}
             </tbody>

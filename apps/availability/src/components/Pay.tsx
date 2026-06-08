@@ -9,7 +9,7 @@ type Totals = { pending: number; approved: number; paid: number };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 const GROUPS: { key: string; label: string }[] = [
-  { key: "PENDING", label: "Pending" }, { key: "APPROVED", label: "Approved" }, { key: "PAID", label: "Paid" },
+  { key: "PENDING", label: "Pending" }, { key: "APPROVED", label: "Approved" }, { key: "PAID", label: "Paid" }, { key: "CANCELLED", label: "Cancelled" },
 ];
 
 export default function Pay({ isOperator }: { isOperator: boolean }) {
@@ -55,6 +55,8 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
                         {r.status === "PENDING" && <button className="btn sm primary" onClick={() => setStatus(r, "APPROVED")}>Approve</button>}
                         {r.status === "APPROVED" && <button className="btn sm primary" onClick={() => setStatus(r, "PAID")}>Mark paid</button>}
                         {r.status === "PAID" && <button className="btn sm ghost" onClick={() => setStatus(r, "APPROVED")}>Undo</button>}
+                        {(r.status === "PENDING" || r.status === "APPROVED") && <button className="btn sm ghost danger" onClick={() => { if (confirm("Cancel this payment? It won't be counted as owed.")) setStatus(r, "CANCELLED"); }}>Cancel</button>}
+                        {r.status === "CANCELLED" && <button className="btn sm ghost" onClick={() => setStatus(r, "PENDING")}>Restore</button>}
                       </span>
                     )}
                   </div>
