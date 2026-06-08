@@ -581,3 +581,8 @@ header.app{align-items:center;row-gap:10px}
 .avail-legend .al-off{background:#eceef1;color:#6b7280;font-weight:800}
 /* busy slot pills: a non-colour cue (strikethrough) so colour-blind guides can tell */
 .pill.busy{text-decoration:line-through;text-decoration-thickness:1.5px}
+
+/* ---- Presence dot (online / offline) ---- */
+.presence-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.presence-dot.on{background:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.18)}
+.presence-dot.off{background:var(--line-strong)}

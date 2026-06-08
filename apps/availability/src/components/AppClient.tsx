@@ -223,6 +223,15 @@ export default function AppClient({
   // A short chime when a new job offer arrives (Web Audio — no asset needed).
   const audioCtxRef = useRef<AudioContext | null>(null);
   const seenOffersRef = useRef<Set<string> | null>(null);
+  // Presence heartbeat — tell the server we're online while the app is open.
+  useEffect(() => {
+    if (!role) return;
+    const ping = () => { fetch("/api/presence/ping", { method: "POST" }).catch(() => {}); };
+    ping();
+    const id = window.setInterval(() => { if (!document.hidden) ping(); }, 60000);
+    return () => window.clearInterval(id);
+  }, [role]);
+
   // Browsers block sound until the user interacts — unlock on the first tap.
   useEffect(() => {
     if (!role) return;

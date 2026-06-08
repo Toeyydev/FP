@@ -39,6 +39,7 @@ model User {
   consentAt    DateTime? // acknowledged handling customer booking data
   claimedAt    DateTime?
   createdAt    DateTime     @default(now())
+  lastSeenAt   DateTime? // presence — updated while the app is open (online/offline)
 
   lineId       String? // LINE id/handle the guide typed (reference)
   lineUserId   String? @unique // real LINE Messaging API user id (captured on link)

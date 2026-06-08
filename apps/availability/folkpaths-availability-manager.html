@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Folkpaths — Guide Availability Manager (design reference)</title>
+<title>Folkpaths — Guide Availability (combined slot model)</title>
 <style>
   :root{
     --brand:#0e3b2e;
     --bg:#f4f5f3; --card:#ffffff; --line:#e4e7e3; --ink:#16201c; --muted:#6b746f; --faint:#9aa39d;
-    --ok-bg:#e7f4ec; --ok-bd:#bfe3cd; --ok-tx:#1d7a45;
-    --busy-bg:#fceceb; --busy-bd:#f2c4c2; --busy-tx:#c23b38;
-    --off-bg:#eef0ee; --off-bd:#dce0dd; --off-tx:#7a837e;
-    --info:#0e3b2e;
+    --ok:#1d7a45; --ok-bg:#e7f4ec; --ok-bd:#bfe3cd;
+    --busy:#c23b38; --busy-bg:#fceceb; --busy-bd:#f2c4c2;
+    --warn:#9a6a12; --warn-bg:#fbf0d8;
+    --off:#9aa39d; --off-bg:#eef0ee;
   }
   *{box-sizing:border-box;}
   body{margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif; background:var(--bg); color:var(--ink); display:flex; flex-direction:column; align-items:center; gap:18px; padding:24px 12px;}
@@ -24,22 +24,28 @@
   .lang .on{background:var(--brand); color:#fff; font-weight:600;}
   .month{display:flex; align-items:center; justify-content:space-between; margin-top:12px; font-size:14px; font-weight:600;}
   .month .nav{color:var(--muted); font-size:20px; cursor:pointer; user-select:none; padding:0 6px;}
-  .legend{display:flex; flex-wrap:wrap; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); font-size:11.5px;}
-  .legend i{display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px;}
+  .legend{display:flex; flex-wrap:wrap; gap:10px 14px; padding:10px 16px; border-bottom:1px solid var(--line); font-size:11px;}
+  .legend span{display:inline-flex; align-items:center; gap:5px;}
+  .sw{width:14px; height:10px; border-radius:3px; display:inline-flex; overflow:hidden;}
   .dow{display:grid; grid-template-columns:repeat(7,1fr); gap:5px; padding:12px 12px 4px;}
   .dow div{text-align:center; font-size:11px; color:var(--faint);}
   .grid{display:grid; grid-template-columns:repeat(7,1fr); gap:5px; padding:0 12px 10px;}
-  .cell{aspect-ratio:1; border-radius:9px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; font-size:13px; font-weight:600; cursor:pointer; border:1px solid transparent;}
-  .cell .ic{font-size:11px; line-height:1;}
-  .cell.past{opacity:.5; cursor:default;}
-  .cell.today{outline:2px solid var(--brand); outline-offset:-2px;}
-  .ok{background:var(--ok-bg); color:var(--ok-tx);}
-  .busy{background:var(--busy-bg); color:var(--busy-tx);}
-  .off{background:var(--off-bg); color:var(--off-tx);}
+  .cell{aspect-ratio:0.82; border:1px solid var(--line); border-radius:9px; display:flex; flex-direction:column; justify-content:space-between; padding:5px 4px 5px; cursor:pointer;}
+  .cell.empty{border:none; cursor:default;}
+  .cell.past{opacity:.45; cursor:default;}
+  .cell.sel{outline:2px solid var(--brand); outline-offset:-2px;}
+  .cell .num{font-size:12px; font-weight:600; text-align:center;}
+  .bars{display:flex; gap:2px;}
+  .seg{flex:1; height:7px; border-radius:2px; display:flex; overflow:hidden;}
+  .seg.free{background:var(--ok);}
+  .seg.full{background:var(--busy);}
+  .seg.off{background:var(--off); opacity:.5;}
+  .seg.part{background:var(--ok);}
+  .seg.part i{display:block; width:42%; background:var(--busy);}
   .summary{margin:6px 12px 12px; background:var(--bg); border-radius:10px; padding:10px 14px;}
   .summary .s1{font-size:11.5px; color:var(--muted); margin-bottom:3px;}
   .summary .s2{font-size:13.5px;}
-  .summary b.ok{background:none; color:var(--ok-tx);} .summary b.busy{background:none; color:var(--busy-tx);} .summary b.off{background:none; color:var(--off-tx);}
+  .summary b{font-weight:600;} .summary .o{color:var(--ok);} .summary .b{color:var(--busy);} .summary .g{color:var(--off);}
   .tabbar{display:flex; border-top:1px solid var(--line); font-size:11px; color:var(--faint);}
   .tabbar div{flex:1; text-align:center; padding:9px 0;}
   .tabbar .act{color:var(--brand); font-weight:600;}
@@ -48,17 +54,20 @@
   .sheet{width:360px; max-width:100%; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 8px 28px rgba(0,0,0,.08);}
   .sheet h3{margin:0; font-size:16px; font-weight:600; display:flex; justify-content:space-between; align-items:center;}
   .sheet .sub{font-size:13px; color:var(--muted); margin:4px 0 14px;}
-  .opt{display:flex; align-items:center; gap:12px; padding:13px 14px; border-radius:10px; border:1px solid var(--line); margin-bottom:8px; cursor:pointer;}
-  .opt .glyph{font-size:20px; width:22px; text-align:center;}
-  .opt .lbl{flex:1;}
-  .opt .lbl b{font-size:14px; font-weight:600;} .opt .lbl small{display:block; font-size:11.5px; color:var(--muted);}
-  .opt.sel{background:var(--ok-bg); border:2px solid var(--ok-bd);} .opt.sel b, .opt.sel .glyph, .opt.sel small{color:var(--ok-tx);}
-  .opt.locked{background:var(--bg); color:var(--muted);} .opt.locked b{color:var(--muted);}
-  .repeat{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin:14px 0 16px;}
-  .acts{display:flex; gap:8px;}
-  .acts button{flex:1; padding:11px; border-radius:9px; border:1px solid var(--line); background:#fff; font-size:14px; font-weight:600; cursor:pointer;}
-  .acts .save{flex:2; background:var(--brand); color:#fff; border-color:var(--brand);}
+  .slot{border-radius:10px; padding:12px 14px; margin-bottom:8px; border:1px solid var(--line);}
+  .slot .top{display:flex; align-items:center; gap:10px;}
+  .slot .hrs{width:48px; font-size:10px; line-height:1.3;}
+  .slot .nm{flex:1; font-size:14px; font-weight:600;}
+  .slot .det{margin:7px 0 0 58px; font-size:11.5px; line-height:1.6;}
+  .slot.full{background:var(--busy-bg); border-color:var(--busy-bd);} .slot.full .hrs,.slot.full .nm,.slot.full .det{color:var(--busy);}
+  .slot.part{background:var(--ok-bg); border:2px solid var(--ok-bd);} .slot.part .hrs,.slot.part .nm{color:var(--ok);} .slot.part .det{color:var(--ok);}
+  .slot.free{background:var(--ok-bg); border-color:var(--ok-bd);} .slot.free .hrs,.slot.free .nm,.slot.free .det{color:var(--ok);}
+  .chip{font-size:10px; padding:1px 7px; border-radius:6px; background:var(--warn-bg); color:var(--warn); font-weight:600;}
+  .acts{display:flex; gap:8px; margin-top:14px;}
+  .acts button{flex:1; padding:11px; border-radius:9px; border:1px solid var(--line); background:#fff; font-size:13px; font-weight:600; cursor:pointer;}
+  .acts .save{background:var(--brand); color:#fff; border-color:var(--brand);}
   .note{width:360px; max-width:100%; font-size:12px; color:var(--muted); line-height:1.6;}
+  .note b{color:var(--ink);}
 </style>
 </head>
 <body>
@@ -73,17 +82,18 @@
     </div>
 
     <div class="legend">
-      <span><i style="background:var(--ok-tx)"></i>Available · ว่าง</span>
-      <span><i style="background:var(--busy-tx)"></i>Booked · มีงาน</span>
-      <span><i style="background:var(--off-tx)"></i>Day off · วันหยุด</span>
+      <span><span class="sw" style="background:var(--ok)"></span>Free · ว่าง</span>
+      <span><span class="sw" style="background:var(--ok)"><i style="width:42%;background:var(--busy)"></i></span>Part-booked</span>
+      <span><span class="sw" style="background:var(--busy)"></span>Full · มีงาน</span>
+      <span><span class="sw" style="background:var(--off);opacity:.5"></span>Day off · วันหยุด</span>
     </div>
 
     <div class="dow"><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div><div>S</div></div>
     <div class="grid" id="grid"></div>
 
     <div class="summary">
-      <div class="s1">This week · 8–14 Jun</div>
-      <div class="s2"><b class="ok">5 available</b> · <b class="busy">1 booked</b> · <b class="off">1 day off</b></div>
+      <div class="s1">Sat 13 Jun · selected</div>
+      <div class="s2"><b class="b">Morning full</b> · <b class="o">afternoon part-booked</b> · <b class="o">evening free</b></div>
     </div>
 
     <div class="tabbar">
@@ -95,34 +105,61 @@
   </div>
 
   <div class="sheet">
-    <h3>Set status <span style="color:var(--faint); cursor:pointer;">×</span></h3>
-    <div class="sub">Thursday 11 June · พฤหัสบดี 11 มิ.ย.</div>
+    <h3>Saturday 13 June <span style="color:var(--faint);cursor:pointer;">×</span></h3>
+    <div class="sub">เสาร์ 13 มิ.ย. · tap a band to set Available or Day off</div>
 
-    <div class="opt sel"><span class="glyph">✓</span><span class="lbl"><b>Available</b><small>ว่าง — ready for jobs</small></span><span>✓</span></div>
-    <div class="opt"><span class="glyph">☾</span><span class="lbl"><b>Day off</b><small>วันหยุด — not working</small></span></div>
-    <div class="opt locked"><span class="glyph">🔒</span><span class="lbl"><b>Booked</b><small>มีงาน — set automatically when you accept a job</small></span></div>
+    <div class="slot full">
+      <div class="top"><span class="hrs">08:00–12:00</span><span class="nm">Morning · เช้า</span><span style="color:var(--busy)">🔒</span></div>
+      <div class="det">▮ Temple tour · 09:00–11:30 — full</div>
+    </div>
 
-    <label class="repeat"><input type="checkbox"> Apply to every Thursday this month · ทุกวันพฤหัสในเดือนนี้</label>
+    <div class="slot part">
+      <div class="top"><span class="hrs">12:00–17:00</span><span class="nm">Afternoon · บ่าย</span><span class="chip">part-booked</span></div>
+      <div class="det">▮ City walk · 13:00–15:00<br>✓ Still free 15:00–17:00 — can take another job</div>
+    </div>
 
-    <div class="acts"><button>Cancel</button><button class="save">Save</button></div>
+    <div class="slot free">
+      <div class="top"><span class="hrs">17:00–21:00</span><span class="nm">Evening · เย็น</span><span>✓ Available</span></div>
+    </div>
+
+    <div class="acts"><button>☾ Whole day off</button><button class="save">Save</button></div>
   </div>
 
   <div class="note">
-    Design reference for Folkpaths. Three states are carried by colour <em>and</em> a word <em>and</em> an icon, so meaning is clear even for colour-blind guides. "Booked" is read-only — it's set when a guide accepts a job, so they can't accidentally double-book. Past days are dimmed and locked.
+    <b>Combined model.</b> Guides set three simple bands (morning / afternoon / evening) as Available or Day off — that's all they touch. Booked jobs fill in automatically with their real times. A band that already holds a job but still has a gap reads <b>part-booked</b> and stays available for another non-overlapping job. The gap counts as sellable only if it's at least the <b>buffer (default 60 min)</b> — set in Operator settings.
   </div>
 
 <script>
 (function(){
-  var off=[7,14,21,28], booked=[3,12,18,25], today=8, past=[1,2,3,4,5,6,7];
-  var labels={ok:'✓', busy:'▮', off:'☾'};
+  var firstDow=0, daysInMonth=30, today=8, sel=13;
+  var data={};
+  function mk(m,a,e){return [m,a,e];}
+  for(var d=1; d<=daysInMonth; d++){
+    var dow=(firstDow + (d-1))%7;
+    if(dow===6){ data[d]=mk('off','off','off'); continue; }
+    data[d]=mk('free','free','free');
+  }
+  data[3]=mk('full','free','free');
+  data[5]=mk('free','full','free');
+  data[10]=mk('full','part','free');
+  data[12]=mk('full','full','part');
+  data[13]=mk('full','part','free');
+  data[18]=mk('part','free','full');
+  data[20]=mk('free','full','full');
+  data[25]=mk('full','part','part');
+  data[26]=mk('free','free','full');
+
   var g=document.getElementById('grid');
-  for(var d=1; d<=30; d++){
-    var cls='ok', ic=labels.ok;
-    if(off.indexOf(d)>-1){ cls='off'; ic=labels.off; }
-    else if(booked.indexOf(d)>-1){ cls='busy'; ic=labels.busy; }
+  for(var i=0;i<firstDow;i++){ var e=document.createElement('div'); e.className='cell empty'; g.appendChild(e); }
+  for(var d=1; d<=daysInMonth; d++){
     var c=document.createElement('div');
-    c.className='cell '+cls+(past.indexOf(d)>-1?' past':'')+(d===today?' today':'');
-    c.innerHTML='<span>'+d+'</span><span class="ic">'+ic+'</span>';
+    c.className='cell'+(d<today?' past':'')+(d===sel?' sel':'');
+    var segs='';
+    data[d].forEach(function(st){
+      if(st==='part'){ segs+='<div class="seg part"><i></i></div>'; }
+      else{ segs+='<div class="seg '+st+'"></div>'; }
+    });
+    c.innerHTML='<span class="num">'+d+'</span><div class="bars">'+segs+'</div>';
     g.appendChild(c);
   }
 })();
