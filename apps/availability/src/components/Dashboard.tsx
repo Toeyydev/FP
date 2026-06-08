@@ -18,7 +18,7 @@ type Unassigned = { date: string; slotIdx: number; time: string; tour: string; p
 type Understaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number };
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
 type Leave = { id: string; guideId: string; guide: string; fromDate: string; toDate: string; reason: string | null };
-type Data = { today: string; todayTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; leaveRequests: Leave[] };
+type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; leaveRequests: Leave[] };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -44,6 +44,7 @@ export default function Dashboard() {
         <div className="dash">
           <div className="dash-sum">
             <span><b>{d.todayTours.length}</b> today</span>
+            <span><b>{d.tomorrowTours.length}</b> tomorrow</span>
             <span className={d.unassigned.length ? "warn" : ""}><b>{d.unassigned.length}</b> unassigned</span>
             <span className={d.understaffed.length ? "bad" : ""}><b>{d.understaffed.length}</b> understaffed</span>
             <span className={d.conflicts.length ? "bad" : ""}><b>{d.conflicts.length}</b> conflicts</span>
@@ -106,6 +107,15 @@ export default function Dashboard() {
                     </span>
                     <StateTag t={a} />
                   </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-head"><h2>Tomorrow</h2><span className="hint">{d.tomorrowTours.length} tour(s)</span></div>
+              <div className="dash-list">
+                {d.tomorrowTours.length === 0 ? <div className="op-empty">No tours tomorrow.</div> : d.tomorrowTours.map((a, i) => (
+                  <div key={i} className="dash-row"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></div>
                 ))}
               </div>
             </section>

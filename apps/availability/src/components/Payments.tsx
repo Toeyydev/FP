@@ -22,6 +22,11 @@ export default function Payments() {
     const r = await fetch("/api/payments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, status }) });
     if (r.ok) load(period);
   }
+  async function removeRow(guideId: string, guide: string) {
+    if (!confirm(`Delete ${guide}'s pay for ${period}?\nThis removes their job sheets, per-tour payments and paid status for the month. Tour history is kept.`)) return;
+    const r = await fetch("/api/payments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId }) });
+    if (r.ok) load(period);
+  }
 
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -63,9 +68,10 @@ export default function Payments() {
                   <td className="r">{thb(r.expenses)}</td>
                   <td className="r"><b>{thb(r.payout)}</b></td>
                   <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
-                  <td>{r.status === "paid"
+                  <td style={{ display: "flex", gap: 6 }}>{r.status === "paid"
                     ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
-                    : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>}</td>
+                    : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>}
+                    <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>🗑</button></td>
                 </tr>
               ))}
             </tbody>

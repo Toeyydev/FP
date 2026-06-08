@@ -42,8 +42,10 @@ export async function GET() {
     return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue, report: rep[`${a.guideId}|${a.date}|${a.slotIdx}`] ?? null };
   };
 
+  const tomorrow = bkk(1);
   const todayTours = assigns.filter((a) => a.date === today).map(fmt);
-  const upcomingTours = assigns.filter((a) => a.date > today).map(fmt);
+  const tomorrowTours = assigns.filter((a) => a.date === tomorrow).map(fmt);
+  const upcomingTours = assigns.filter((a) => a.date > tomorrow).map(fmt);
 
   // Tour instances (date+slot+tour) from bookings, with how many guides are on
   // them vs. how many the pax needs. → unassigned (0 guides) + understaffed.
@@ -82,5 +84,5 @@ export async function GET() {
   }
 
   const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
-  return NextResponse.json({ today, todayTours, upcomingTours, unassigned, understaffed, conflicts, leaveRequests });
+  return NextResponse.json({ today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, leaveRequests });
 }

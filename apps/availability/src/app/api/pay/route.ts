@@ -83,6 +83,7 @@ export async function DELETE(req: NextRequest) {
   const where = { guideId, date, slotIdx };
   await prisma.$transaction([
     prisma.tourPayment.deleteMany({ where }),
+    prisma.jobSheet.deleteMany({ where }), // also clears it from the monthly payroll
     prisma.assignment.deleteMany({ where }),
   ]);
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "pay.deleted", entityType: "Assignment", detail: { guideId, date, slotIdx } });

@@ -54,3 +54,22 @@ export async function POST(req: NextRequest) {
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.marked", entityType: "PayrollStatus", detail: { period, guideId, status } });
   return NextResponse.json({ ok: true });
 }
+
+// DELETE { period, guideId } — remove a guide's pay for the month: deletes their
+// job sheets (the pay source) + per-tour payments + paid status for that period,
+// so the payroll row goes away. Tour assignments/history are kept. Operator only.
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/), guideId: z.string().min(1) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { period, guideId } = parsed.data;
+  const dateRange = { gte: `${period}-01`, lte: `${period}-31` };
+  await prisma.$transaction([
+    prisma.jobSheet.deleteMany({ where: { guideId, date: dateRange } }),
+    prisma.tourPayment.deleteMany({ where: { guideId, date: dateRange } }),
+    prisma.payrollStatus.deleteMany({ where: { guideId, period } }),
+  ]);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.deleted", entityType: "PayrollStatus", detail: { period, guideId } });
+  return NextResponse.json({ ok: true });
+}
