@@ -67,11 +67,11 @@ export async function GET(req: NextRequest) {
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
   body { font-family: "Inter","Noto Sans Thai",-apple-system,sans-serif; color: #16201c; font-size: 12px; margin: 0; }
-  .toolbar { background:#0e3b2e; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
-  .toolbar button { background:#fff; color:#0e3b2e; border:none; border-radius:7px; padding:7px 14px; font-weight:600; cursor:pointer; font-size:13px; }
+  .toolbar { background:#7e3a2c; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .toolbar button { background:#fff; color:#7e3a2c; border:none; border-radius:7px; padding:7px 14px; font-weight:600; cursor:pointer; font-size:13px; }
   .page { max-width: 800px; margin: 16px auto; padding: 0 16px; }
-  .head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0e3b2e; padding-bottom:10px; }
-  .brand { font-size:22px; font-weight:600; color:#0e3b2e; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #7e3a2c; padding-bottom:10px; }
+  .brand { font-size:22px; font-weight:600; color:#7e3a2c; }
   .brand small { display:block; font-size:12px; color:#6b746f; font-weight:400; }
   .meta { font-size:11px; }
   .meta div { margin-bottom:2px; } .meta b { display:inline-block; min-width:66px; color:#6b746f; font-weight:400; }

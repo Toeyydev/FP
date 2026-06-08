@@ -64,8 +64,8 @@ export async function GET(req: NextRequest) {
   @page { size: A4; margin: 16mm; }
   * { box-sizing: border-box; }
   body { font-family: "Sarabun","Noto Sans Thai",sans-serif; color:#000; font-size:13px; line-height:1.55; margin:0; }
-  .toolbar { background:#0e3b2e; color:#fff; padding:9px 16px; display:flex; justify-content:space-between; align-items:center; }
-  .toolbar button { background:#fff; color:#0e3b2e; border:none; border-radius:7px; padding:7px 14px; font-weight:600; cursor:pointer; }
+  .toolbar { background:#7e3a2c; color:#fff; padding:9px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .toolbar button { background:#fff; color:#7e3a2c; border:none; border-radius:7px; padding:7px 14px; font-weight:600; cursor:pointer; }
   .page { max-width:820px; margin:14px auto; padding:0 18px; }
   h1 { text-align:center; font-size:18px; margin:0; }
   h1 small { display:block; font-size:13px; font-weight:400; letter-spacing:2px; }

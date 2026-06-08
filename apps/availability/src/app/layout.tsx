@@ -18,7 +18,7 @@ export const viewport: Viewport = {
   // "cover" makes iOS expose the safe-area insets (env(safe-area-inset-*)) so the
   // bottom nav / sheets clear the iPhone notch + home indicator in standalone PWA.
   viewportFit: "cover",
-  themeColor: "#0e3b2e",
+  themeColor: "#7e3a2c",
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,8 +1,11 @@
 :root{
-  --ink:#1a1d21;--ink-soft:#6b7280;--paper:#f7f7f5;--card:#ffffff;--line:#e5e7eb;--line-strong:#d6d9de;
-  --primary:#0e3b2e;--green:#16a34a;--green-bg:#e9f6ef;--green-line:#bfe3cd;--grey:#aeb4bc;--grey-bg:#f1f3f5;
-  --assign:#2563eb;--assign-bg:#e8f0fd;--assign-line:#c3d8f7;--accent:#0e3b2e;
-  --danger:#ef4444;--danger-bg:#fdecec;--danger-line:#f6c9c9;
+  /* Folkpaths "clay lanes" palette — green-free: terracotta brand, saffron/clay
+     warmth on cream, with one cool indigo for "available". --green now = indigo
+     (free), --assign = saffron-gold (assigned), --danger = clay (busy/error). */
+  --ink:#2a2520;--ink-soft:#7a7166;--paper:#f6f1e6;--card:#fffcf6;--line:#e7ddcb;--line-strong:#d9cfbe;
+  --primary:#7e3a2c;--green:#2e4e8f;--green-bg:#e7ecf6;--green-line:#c9d5ec;--grey:#b8ae9e;--grey-bg:#efeadf;
+  --assign:#9c6a14;--assign-bg:#f6e8cc;--assign-line:#e6cc9a;--accent:#7e3a2c;
+  --danger:#c2604a;--danger-bg:#f6e5df;--danger-line:#e7c5ba;
   --shadow:none;
 }
 *{box-sizing:border-box}html,body{margin:0;padding:0}
