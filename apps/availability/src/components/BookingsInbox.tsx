@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { SLOTS } from "@/lib/slots";
+import { isOnline } from "@/lib/presence";
 import BookingsTable from "@/components/BookingsTable";
 
 type Booking = {
@@ -25,9 +26,18 @@ export default function BookingsInbox() {
   const [dur, setDur] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [tab, setTab] = useState<"inbox" | "all">("inbox");
-  const [guides, setGuides] = useState<{ guideId: string; displayName: string }[]>([]);
+  const [guides, setGuides] = useState<{ guideId: string; displayName: string; rating: number | null; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
-  useEffect(() => { fetch("/api/reference", { cache: "no-store" }).then((r) => r.json()).then((d) => setGuides(d.guides ?? [])).catch(() => {}); }, []);
+  // Load the enriched guide list (rating + presence) and rank best-match first:
+  // online before offline, then higher rating, then more tours.
+  useEffect(() => {
+    fetch("/api/guides", { cache: "no-store" }).then((r) => r.json()).then((d) => {
+      const rows = (d.rows ?? []) as { guideId: string; name: string; rating: number | null; lastSeenAt: string | null; languages: string | string[] }[];
+      const list = rows.map((g) => ({ guideId: g.guideId, displayName: g.name, rating: g.rating, online: isOnline(g.lastSeenAt), languages: Array.isArray(g.languages) ? g.languages.join(", ") : (g.languages ?? "") }));
+      list.sort((a, b) => Number(b.online) - Number(a.online) || (b.rating ?? -1) - (a.rating ?? -1));
+      setGuides(list);
+    }).catch(() => {});
+  }, []);
 
   const csvRef = useRef<HTMLInputElement>(null);
   // Import a Bokun/OTA booking export (.csv or .xlsx) — backfill without API keys.
@@ -254,7 +264,7 @@ export default function BookingsInbox() {
                   <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
                   <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
                     <option value="">Offer to all available</option>
-                    {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
+                    {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
                   </select>
                   {grpGuide[key]
                     ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
