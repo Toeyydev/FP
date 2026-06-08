@@ -88,6 +88,14 @@ export default function BookingsInbox() {
     setSplitFor(null); setMsg(`✅ Split into ${d.groups} guide job(s).`); await load();
   }
 
+  // Delete a whole incoming job (all its bookings) in one action.
+  async function deleteGroup(items: Booking[]) {
+    if (!confirm(`Delete this job and its ${items.length} booking(s)? This permanently removes them and cannot be undone.`)) return;
+    const r = await post({ action: "delete", ids: items.map((b) => b.id) });
+    if (r.ok) { setMsg(`Deleted ${items.length} booking(s).`); await load(); }
+    else setMsg("Delete failed.");
+  }
+
   // Assign a group directly to a chosen guide (no offer broadcast).
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
@@ -318,6 +326,7 @@ export default function BookingsInbox() {
                               : grpGuide[key]
                                 ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
                                 : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer</button>}
+                            <button className="btn sm danger" title="Delete this job and its bookings" onClick={() => deleteGroup(items)}>🗑</button>
                           </div>
                         );
                       })}

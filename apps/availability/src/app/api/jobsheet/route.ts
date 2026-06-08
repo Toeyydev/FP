@@ -80,9 +80,16 @@ export async function GET(req: NextRequest) {
     ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
 
+  // Pre-fill expense pax from the ACTUAL booked guests so reimbursements reflect
+  // reality the moment the guide is assigned. "(Inc. Guide)" items add +1 (guide).
+  const clientPax = linked.reduce((s, b) => s + (b.pax ?? 0), 0) || (assignment?.pax ?? 0);
+  const expenses = clientPax > 0
+    ? DEFAULT_EXPENSES.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
+    : DEFAULT_EXPENSES;
+
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps,
-    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }
 
