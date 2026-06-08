@@ -15,6 +15,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // "cover" makes iOS expose the safe-area insets (env(safe-area-inset-*)) so the
+  // bottom nav / sheets clear the iPhone notch + home indicator in standalone PWA.
+  viewportFit: "cover",
   themeColor: "#0e3b2e",
 };
 
