@@ -70,3 +70,21 @@ export async function POST(req: NextRequest) {
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: `pay.${status.toLowerCase()}`, entityType: "Assignment", detail: { guideId, date, slotIdx } });
   return NextResponse.json({ ok: true });
 }
+
+// DELETE { guideId, date, slotIdx } — remove a payment entry entirely: deletes the
+// tour's payment record AND its assignment (so it leaves the pay list + schedule).
+// The job sheet is kept as the financial record. Operator/admin only.
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { guideId, date, slotIdx } = parsed.data;
+  const where = { guideId, date, slotIdx };
+  await prisma.$transaction([
+    prisma.tourPayment.deleteMany({ where }),
+    prisma.assignment.deleteMany({ where }),
+  ]);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "pay.deleted", entityType: "Assignment", detail: { guideId, date, slotIdx } });
+  return NextResponse.json({ ok: true });
+}

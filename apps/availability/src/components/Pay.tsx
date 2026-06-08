@@ -26,6 +26,11 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
     const res = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: r.guideId, date: r.date, slotIdx: r.slotIdx, status }) });
     if (res.ok) load();
   }
+  async function remove(r: Row) {
+    if (!confirm(`Delete this payment?\n${dShort(r.date)} · ${r.tour}${r.guide ? ` · ${r.guide}` : ""}\nThis removes the tour from pay and the schedule (the job sheet is kept).`)) return;
+    const res = await fetch("/api/pay", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: r.guideId, date: r.date, slotIdx: r.slotIdx }) });
+    if (res.ok) load();
+  }
 
   return (
     <div className="wrap">
@@ -57,6 +62,7 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
                         {r.status === "PAID" && <button className="btn sm ghost" onClick={() => setStatus(r, "APPROVED")}>Undo</button>}
                         {(r.status === "PENDING" || r.status === "APPROVED") && <button className="btn sm ghost danger" onClick={() => { if (confirm("Cancel this payment? It won't be counted as owed.")) setStatus(r, "CANCELLED"); }}>Cancel</button>}
                         {r.status === "CANCELLED" && <button className="btn sm ghost" onClick={() => setStatus(r, "PENDING")}>Restore</button>}
+                        <button className="btn sm danger" title="Delete this payment entry" onClick={() => remove(r)}>🗑</button>
                       </span>
                     )}
                   </div>
