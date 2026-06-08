@@ -73,7 +73,9 @@ export async function POST(req: NextRequest) {
   await prisma.assignment.delete({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
 
   // Auto re-offer to the OTHER guides available for this same tour/date/slot.
-  const reoffer = await createOffer({ tourId: a.tourId, date, slotIdx, pax: a.pax, note: a.note, durationMin: a.tour?.durationMin, excludeGuideId: guideId });
+  // Re-offer to ALL available guides — INCLUDING the one who just cancelled, so a
+  // mistaken cancel can be undone by simply re-accepting the offer.
+  const reoffer = await createOffer({ tourId: a.tourId, date, slotIdx, pax: a.pax, note: a.note, durationMin: a.tour?.durationMin });
 
   const ops = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
   const who = session!.user!.name ?? "";
