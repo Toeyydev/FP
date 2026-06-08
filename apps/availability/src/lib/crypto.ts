@@ -3,6 +3,13 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypt
 // AES-256-GCM encryption for PII at rest (Tax ID, bank details, uploaded documents).
 // Key is derived from AUTH_SECRET so there's no extra env var to manage.
 // Format: base64(iv[12] | authTag[16] | ciphertext).
+//
+// Guard: in production we refuse to fall back to the hard-coded dev key, because
+// that would make all encrypted PII trivially decryptable. Set AUTH_SECRET
+// (openssl rand -base64 33) in the production environment.
+if (process.env.NODE_ENV === "production" && !process.env.AUTH_SECRET) {
+  throw new Error("AUTH_SECRET must be set in production — it derives the PII encryption key.");
+}
 const KEY = scryptSync(process.env.AUTH_SECRET || "dev-secret-change-me", "folkpath-enc-v1", 32);
 
 export function encrypt(plain: string): string {
