@@ -788,11 +788,20 @@ export default function AppClient({
 
   function opDay(): ReactNode {
     const d = anchor; const nowIdx = currentSlotIdx(); const isToday = sameDay(d, todayD()); const guides = ref?.guides ?? []; const blocked = isBlocked(d);
-    let availNow = 0, assignTot = 0, busyTot = 0, conflictTot = 0;
+    // Count GUIDES (not slots) for the day:
+    //   available = has ≥1 open slot · assigned = has a job ·
+    //   busy = some slots busy but not the whole day · day off = whole day blocked.
+    let availGuides = 0, assignGuides = 0, busyGuides = 0, dayOffGuides = 0, conflictTot = 0;
     for (const g of guides) {
       const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
-      for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busyTot++; else availNow++; }
-      assignTot += Object.keys(asg).length;
+      let busySlots = 0, free = 0;
+      for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busySlots++; else free++; }
+      const assignedN = Object.keys(asg).length;
+      const dayOff = busySlots === SLOTS.length && assignedN === 0; // whole day blocked → day off
+      if (!blocked && free > 0) availGuides++;
+      if (assignedN > 0) assignGuides++;
+      if (busySlots > 0 && !dayOff) busyGuides++;
+      if (dayOff) dayOffGuides++;
       if (conflictSlots(g.guideId, d).size) conflictTot++;
     }
     const ql = q.toLowerCase();
@@ -815,9 +824,10 @@ export default function AppClient({
         </div>
         {blocked && <div className="blockbanner">🚫 {t("dayBlocked")}</div>}
         <div className="op-toolbar">
-          <div className="stat g"><b>{availNow}</b><span>{t("freeSlots")}</span></div>
-          <div className="stat a"><b>{assignTot}</b><span>{t("assigned")}</span></div>
-          <div className="stat"><b>{busyTot}</b><span>{t("guidesPosted")}</span></div>
+          <div className="stat g"><b>{availGuides}</b><span>{t("guidesAvailable")}</span></div>
+          <div className="stat a"><b>{assignGuides}</b><span>{t("assigned")}</span></div>
+          <div className="stat"><b>{busyGuides}</b><span>{t("busy")}</span></div>
+          <div className="stat"><b>{dayOffGuides}</b><span>{t("dayOff")}</span></div>
           {conflictTot > 0 && <div className="stat c"><b>⚠ {conflictTot}</b><span>{t("conflicts")}</span></div>}
           <input className="search" placeholder={t("searchGuide")} value={q} onChange={(e) => setQ(e.target.value)} />
           <label style={{ fontSize: 12.5, fontWeight: 600, display: "flex", gap: 5, alignItems: "center" }}>

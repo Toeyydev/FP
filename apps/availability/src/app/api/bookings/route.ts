@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_COUNT } from "@/lib/slots";
 import { productKey } from "@/lib/bookings";
+import { todayD, ymd } from "@/lib/dates";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -48,9 +49,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ bookings, tours });
   }
 
+  // Hide bookings whose tour date has already passed (Bangkok civil date) from the
+  // incoming inbox — keep undated bookings (date == null) because those still need
+  // the operator to map a date. Past bookings remain in the full ?view=all history.
+  const today = ymd(todayD());
   const [bookings, tours] = await Promise.all([
     prisma.booking.findMany({
-      where: { status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+      where: {
+        status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
+        OR: [{ date: null }, { date: { gte: today } }],
+      },
       orderBy: [{ date: "asc" }, { slotIdx: "asc" }, { createdAt: "asc" }],
       take: 500,
       select: { id: true, source: true, confirmationCode: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true },

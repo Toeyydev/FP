@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { SLOTS } from "@/lib/slots";
 import { isOnline } from "@/lib/presence";
+import { DOW, MON, parseYMD } from "@/lib/dates";
 import BookingsTable from "@/components/BookingsTable";
 
 type Booking = {
@@ -28,6 +29,7 @@ export default function BookingsInbox() {
   const [tab, setTab] = useState<"inbox" | "all">("inbox");
   const [guides, setGuides] = useState<{ guideId: string; displayName: string; rating: number | null; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
+  const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
   // Load the enriched guide list (rating + presence) and rank best-match first:
   // online before offline, then higher rating, then more tours.
   useEffect(() => {
@@ -154,6 +156,14 @@ export default function BookingsInbox() {
   const groups: Record<string, Booking[]> = {};
   for (const b of ready) { const k = `${b.date}|${b.slotIdx}`; (groups[k] ??= []).push(b); }
 
+  // Modern inbox: group the slot-jobs by DATE so the operator sees one collapsible
+  // row per tour-day (only days that actually have tours appear).
+  const byDate: Record<string, [string, Booking[]][]> = {};
+  for (const [key, items] of Object.entries(groups)) { const d = items[0].date!; (byDate[d] ??= []).push([key, items]); }
+  for (const d of Object.keys(byDate)) byDate[d].sort(([, a], [, b]) => (a[0].slotIdx ?? 0) - (b[0].slotIdx ?? 0));
+  const readyDates = Object.keys(byDate).sort();
+  const fmtDay = (d: string) => { const dt = parseYMD(d); return `${DOW[(dt.getDay() + 6) % 7]} ${dt.getDate()} ${MON[dt.getMonth()].slice(0, 3)} ${dt.getFullYear()}`; };
+
   async function offerGroup(key: string, items: Booking[]) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
@@ -259,39 +269,60 @@ export default function BookingsInbox() {
             </>
           )}
 
-          {/* Ready, grouped */}
+          {/* Ready — one collapsible row per tour-day (only days with tours show) */}
           <h3 style={{ fontSize: 14, margin: "16px 0 8px" }}>Ready to offer</h3>
-          {Object.keys(groups).length === 0 ? <div className="op-empty">No bookings ready. New Bokun bookings will appear here automatically.</div> : (
-            Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([key, items]) => {
-              const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
-              const slot = SLOTS[slotIdx];
-              const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0);
+          {readyDates.length === 0 ? <div className="op-empty">No bookings ready. New Bokun bookings will appear here automatically.</div> : (
+            readyDates.map((date, di) => {
+              const dayGroups = byDate[date];
+              const dayPax = dayGroups.reduce((s, [, items]) => s + items.reduce((a, b) => a + (b.pax ?? 0), 0), 0);
+              const dayOver = dayGroups.some(([, items]) => items.reduce((a, b) => a + (b.pax ?? 0), 0) > 10);
+              const open = openDates[date] ?? (di === 0);
               return (
-                <div key={key} className="op-toolbar" style={{ borderRadius: 12, border: "1.5px solid var(--line)", marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={{ flex: 1, minWidth: 240 }}>
-                    <b>{date} · {slot?.start} · {tourName(tourId)}</b>
-                    <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 3 }}>
-                      {items.length} booking(s) · {pax} pax{pax > 10 ? " ⚠️ over 10 — split into separate jobs" : ""}
+                <div key={date} style={{ border: "1.5px solid var(--line)", borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+                  <button onClick={() => setOpenDates((o) => ({ ...o, [date]: !open }))} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: open ? "#f3f6f4" : "#fff", border: "none", borderBottom: open ? "1px solid var(--line)" : "none", cursor: "pointer", font: "inherit", textAlign: "left" }}>
+                    <span style={{ display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "var(--ink-soft)" }}>▸</span>
+                    <b style={{ flex: 1 }}>{fmtDay(date)}</b>
+                    {dayOver && <span className="badge" style={{ background: "#fbe6e2", color: "#b23b2e" }}>over 10</span>}
+                    <span className="badge">{dayGroups.length} tour{dayGroups.length > 1 ? "s" : ""}</span>
+                    <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{dayPax} pax</span>
+                  </button>
+                  {open && (
+                    <div style={{ padding: 12, display: "grid", gap: 10, background: "#fafbfa" }}>
+                      {dayGroups.map(([key, items]) => {
+                        const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
+                        const slot = SLOTS[slotIdx];
+                        const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0);
+                        return (
+                          <div key={key} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", background: "#fff", flexWrap: "wrap", alignItems: "center" }}>
+                            <div style={{ flex: 1, minWidth: 240 }}>
+                              <b>{slot?.start} · {tourName(tourId)}</b>
+                              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 3 }}>
+                                {items.length} booking(s) · {pax} pax{pax > 10 ? " ⚠️ over 10 — split into separate jobs" : ""}
+                              </div>
+                              <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
+                                {items.map((b) => (
+                                  <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
+                                    <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
+                                    <button title="Delete" onClick={() => removeBooking(b.id, b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
+                            <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
+                              <option value="">Offer to all available</option>
+                              {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
+                            </select>
+                            {pax > 10
+                              ? <button className="btn sm primary" onClick={() => openSplit(items)}>Split across guides</button>
+                              : grpGuide[key]
+                                ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
+                                : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer</button>}
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
-                      {items.map((b) => (
-                        <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
-                          <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
-                          <button title="Delete" onClick={() => removeBooking(b.id, b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
-                  <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
-                    <option value="">Offer to all available</option>
-                    {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
-                  </select>
-                  {pax > 10
-                    ? <button className="btn sm primary" onClick={() => openSplit(items)}>Split across guides</button>
-                    : grpGuide[key]
-                      ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
-                      : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer</button>}
+                  )}
                 </div>
               );
             })

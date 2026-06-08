@@ -60,6 +60,16 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
     setSel(new Set()); setMsg(`Created ${made} offer(s) from ${chosen.length} booking(s).`); await load();
   }
 
+  // Permanently delete the selected bookings (operator confirms once).
+  async function deleteSelected() {
+    const n = sel.size;
+    if (!n) return;
+    if (!confirm(`Delete ${n} booking(s)? This permanently removes them and cannot be undone.`)) return;
+    const r = await fetch("/api/bookings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "delete", ids: [...sel] }) });
+    if (r.ok) { setSel(new Set()); setMsg(`Deleted ${n} booking(s).`); await load(); }
+    else setMsg("Delete failed.");
+  }
+
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const head = ["Booking #", "Date", "Time", "Tour", "Guest", "Pax", "Source", "Status"];
@@ -89,6 +99,7 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
         <div className="bulkbar">
           {sel.size > 0 ? <><b>{sel.size} selected</b>
             <button className="btn sm primary" onClick={offerSelected}>Offer selected</button>
+            <button className="btn sm danger" onClick={deleteSelected}>🗑 Delete</button>
             <button className="btn sm ghost" onClick={() => setSel(new Set())}>Clear</button></> : null}
           {msg && <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--green)", fontWeight: 600 }}>{msg}</span>}
         </div>
