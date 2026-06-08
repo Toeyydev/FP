@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
+import AvailabilityLegend from "@/components/AvailabilityLegend";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import { gcalUrl } from "@/lib/gcal";
@@ -669,9 +670,10 @@ export default function AppClient({
           <div className="head-tools">
             <button className="btn sm" onClick={() => weekBulk(true)}>{t("busyWeek")}</button>
             <button className="btn sm ghost" onClick={() => weekBulk(false)}>{t("clearWeek")}</button>
-            <button className="btn sm" onClick={() => setLeaveOpen(true)}>🏖 {t("requestLeave")}</button>
+            <button className="btn sm" onClick={() => setLeaveOpen(true)}>{t("requestLeave")}</button>
           </div>
         </div>
+        <AvailabilityLegend />
         <div className="weekwrap">
           {Array.from({ length: 7 }, (_, i) => {
             const d = addDays(ws, i); const avd = getAvail(gid, d) ?? EMPTY; const asg = getAssign(gid, d); const isToday = sameDay(d, today); const blocked = isBlocked(d);
@@ -717,6 +719,7 @@ export default function AppClient({
     return (
       <>
         <div className="panel-head"><h2>{t("myMonth")}</h2><span className="hint">{t("monthHint")}</span></div>
+        <AvailabilityLegend />
         {calendar({
           onClick: (d) => { if (!isBlocked(d)) setModal({ kind: "dayedit", date: ymd(d) }); },
           tint: (d) => (isBlocked(d) ? "repeating-linear-gradient(45deg,#fbe6e2,#fbe6e2 5px,#f5d5cf 5px,#f5d5cf 10px)" : undefined),

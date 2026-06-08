@@ -569,3 +569,15 @@ header.app{align-items:center;row-gap:10px}
 .doc-thumb{max-height:120px;max-width:100%;border-radius:8px;border:1px solid var(--line);display:block;object-fit:contain;background:#fff}
 .doc-pdf{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--primary);text-decoration:none;
   border:1px dashed var(--line-strong);border-radius:8px;padding:8px 10px;width:max-content}
+
+/* ---- Availability legend (never rely on colour alone) ---- */
+.avail-legend{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;padding:10px 14px;margin:0 0 4px;
+  background:var(--grey-bg);border:1px solid var(--line);border-radius:10px;font-size:12.5px;font-weight:600;color:var(--ink)}
+.avail-legend .al-item{display:inline-flex;align-items:center;gap:6px}
+.avail-legend .al-sw{width:20px;height:20px;border-radius:6px;display:inline-grid;place-items:center;font-size:11px;line-height:1;border:1px solid var(--line-strong)}
+.avail-legend .al-free{background:#fff}
+.avail-legend .al-busy{background:#fde7e4;border-color:#f1b5ad;color:#b23b2e;font-weight:800}
+.avail-legend .al-booked{background:#e7eefb;border-color:#b9cdf3}
+.avail-legend .al-off{background:#eceef1;color:#6b7280;font-weight:800}
+/* busy slot pills: a non-colour cue (strikethrough) so colour-blind guides can tell */
+.pill.busy{text-decoration:line-through;text-decoration-thickness:1.5px}

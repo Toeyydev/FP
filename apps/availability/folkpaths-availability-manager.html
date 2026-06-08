@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Folkpaths — Guide Availability Manager (design reference)</title>
+<style>
+  :root{
+    --brand:#0e3b2e;
+    --bg:#f4f5f3; --card:#ffffff; --line:#e4e7e3; --ink:#16201c; --muted:#6b746f; --faint:#9aa39d;
+    --ok-bg:#e7f4ec; --ok-bd:#bfe3cd; --ok-tx:#1d7a45;
+    --busy-bg:#fceceb; --busy-bd:#f2c4c2; --busy-tx:#c23b38;
+    --off-bg:#eef0ee; --off-bd:#dce0dd; --off-tx:#7a837e;
+    --info:#0e3b2e;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif; background:var(--bg); color:var(--ink); display:flex; flex-direction:column; align-items:center; gap:18px; padding:24px 12px;}
+  .phone{width:360px; max-width:100%; background:var(--card); border:1px solid var(--line); border-radius:22px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,.08);}
+  .head{padding:16px 16px 12px; border-bottom:1px solid var(--line);}
+  .head-row{display:flex; align-items:center; justify-content:space-between;}
+  .title{font-size:17px; font-weight:600;}
+  .lang{display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; font-size:12px;}
+  .lang span{padding:4px 10px; color:var(--muted);}
+  .lang .on{background:var(--brand); color:#fff; font-weight:600;}
+  .month{display:flex; align-items:center; justify-content:space-between; margin-top:12px; font-size:14px; font-weight:600;}
+  .month .nav{color:var(--muted); font-size:20px; cursor:pointer; user-select:none; padding:0 6px;}
+  .legend{display:flex; flex-wrap:wrap; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); font-size:11.5px;}
+  .legend i{display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px;}
+  .dow{display:grid; grid-template-columns:repeat(7,1fr); gap:5px; padding:12px 12px 4px;}
+  .dow div{text-align:center; font-size:11px; color:var(--faint);}
+  .grid{display:grid; grid-template-columns:repeat(7,1fr); gap:5px; padding:0 12px 10px;}
+  .cell{aspect-ratio:1; border-radius:9px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; font-size:13px; font-weight:600; cursor:pointer; border:1px solid transparent;}
+  .cell .ic{font-size:11px; line-height:1;}
+  .cell.past{opacity:.5; cursor:default;}
+  .cell.today{outline:2px solid var(--brand); outline-offset:-2px;}
+  .ok{background:var(--ok-bg); color:var(--ok-tx);}
+  .busy{background:var(--busy-bg); color:var(--busy-tx);}
+  .off{background:var(--off-bg); color:var(--off-tx);}
+  .summary{margin:6px 12px 12px; background:var(--bg); border-radius:10px; padding:10px 14px;}
+  .summary .s1{font-size:11.5px; color:var(--muted); margin-bottom:3px;}
+  .summary .s2{font-size:13.5px;}
+  .summary b.ok{background:none; color:var(--ok-tx);} .summary b.busy{background:none; color:var(--busy-tx);} .summary b.off{background:none; color:var(--off-tx);}
+  .tabbar{display:flex; border-top:1px solid var(--line); font-size:11px; color:var(--faint);}
+  .tabbar div{flex:1; text-align:center; padding:9px 0;}
+  .tabbar .act{color:var(--brand); font-weight:600;}
+  .tabbar .glyph{display:block; font-size:17px; margin-bottom:2px;}
+
+  .sheet{width:360px; max-width:100%; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 8px 28px rgba(0,0,0,.08);}
+  .sheet h3{margin:0; font-size:16px; font-weight:600; display:flex; justify-content:space-between; align-items:center;}
+  .sheet .sub{font-size:13px; color:var(--muted); margin:4px 0 14px;}
+  .opt{display:flex; align-items:center; gap:12px; padding:13px 14px; border-radius:10px; border:1px solid var(--line); margin-bottom:8px; cursor:pointer;}
+  .opt .glyph{font-size:20px; width:22px; text-align:center;}
+  .opt .lbl{flex:1;}
+  .opt .lbl b{font-size:14px; font-weight:600;} .opt .lbl small{display:block; font-size:11.5px; color:var(--muted);}
+  .opt.sel{background:var(--ok-bg); border:2px solid var(--ok-bd);} .opt.sel b, .opt.sel .glyph, .opt.sel small{color:var(--ok-tx);}
+  .opt.locked{background:var(--bg); color:var(--muted);} .opt.locked b{color:var(--muted);}
+  .repeat{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin:14px 0 16px;}
+  .acts{display:flex; gap:8px;}
+  .acts button{flex:1; padding:11px; border-radius:9px; border:1px solid var(--line); background:#fff; font-size:14px; font-weight:600; cursor:pointer;}
+  .acts .save{flex:2; background:var(--brand); color:#fff; border-color:var(--brand);}
+  .note{width:360px; max-width:100%; font-size:12px; color:var(--muted); line-height:1.6;}
+</style>
+</head>
+<body>
+
+  <div class="phone">
+    <div class="head">
+      <div class="head-row">
+        <span class="title">My availability</span>
+        <span class="lang"><span class="on">EN</span><span>ไทย</span></span>
+      </div>
+      <div class="month"><span class="nav">‹</span><span>June 2026 · มิถุนายน</span><span class="nav">›</span></div>
+    </div>
+
+    <div class="legend">
+      <span><i style="background:var(--ok-tx)"></i>Available · ว่าง</span>
+      <span><i style="background:var(--busy-tx)"></i>Booked · มีงาน</span>
+      <span><i style="background:var(--off-tx)"></i>Day off · วันหยุด</span>
+    </div>
+
+    <div class="dow"><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div><div>S</div></div>
+    <div class="grid" id="grid"></div>
+
+    <div class="summary">
+      <div class="s1">This week · 8–14 Jun</div>
+      <div class="s2"><b class="ok">5 available</b> · <b class="busy">1 booked</b> · <b class="off">1 day off</b></div>
+    </div>
+
+    <div class="tabbar">
+      <div class="act"><span class="glyph">▦</span>Calendar</div>
+      <div><span class="glyph">▤</span>Jobs</div>
+      <div><span class="glyph">◔</span>Alerts</div>
+      <div><span class="glyph">◯</span>Profile</div>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <h3>Set status <span style="color:var(--faint); cursor:pointer;">×</span></h3>
+    <div class="sub">Thursday 11 June · พฤหัสบดี 11 มิ.ย.</div>
+
+    <div class="opt sel"><span class="glyph">✓</span><span class="lbl"><b>Available</b><small>ว่าง — ready for jobs</small></span><span>✓</span></div>
+    <div class="opt"><span class="glyph">☾</span><span class="lbl"><b>Day off</b><small>วันหยุด — not working</small></span></div>
+    <div class="opt locked"><span class="glyph">🔒</span><span class="lbl"><b>Booked</b><small>มีงาน — set automatically when you accept a job</small></span></div>
+
+    <label class="repeat"><input type="checkbox"> Apply to every Thursday this month · ทุกวันพฤหัสในเดือนนี้</label>
+
+    <div class="acts"><button>Cancel</button><button class="save">Save</button></div>
+  </div>
+
+  <div class="note">
+    Design reference for Folkpaths. Three states are carried by colour <em>and</em> a word <em>and</em> an icon, so meaning is clear even for colour-blind guides. "Booked" is read-only — it's set when a guide accepts a job, so they can't accidentally double-book. Past days are dimmed and locked.
+  </div>
+
+<script>
+(function(){
+  var off=[7,14,21,28], booked=[3,12,18,25], today=8, past=[1,2,3,4,5,6,7];
+  var labels={ok:'✓', busy:'▮', off:'☾'};
+  var g=document.getElementById('grid');
+  for(var d=1; d<=30; d++){
+    var cls='ok', ic=labels.ok;
+    if(off.indexOf(d)>-1){ cls='off'; ic=labels.off; }
+    else if(booked.indexOf(d)>-1){ cls='busy'; ic=labels.busy; }
+    var c=document.createElement('div');
+    c.className='cell '+cls+(past.indexOf(d)>-1?' past':'')+(d===today?' today':'');
+    c.innerHTML='<span>'+d+'</span><span class="ic">'+ic+'</span>';
+    g.appendChild(c);
+  }
+})();
+</script>
+</body>
+</html>
