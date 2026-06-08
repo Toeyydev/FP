@@ -65,6 +65,27 @@ export default function BookingsInbox() {
     setSyncing(false);
   }
 
+  // Over-capacity split editor: assign each booking to a guide, ≤10 pax per guide.
+  const [splitFor, setSplitFor] = useState<{ date: string; slotIdx: number; tourId: string; items: Booking[] } | null>(null);
+  const [splitMap, setSplitMap] = useState<Record<string, string>>({});
+  function openSplit(items: Booking[]) {
+    setSplitFor({ date: items[0].date!, slotIdx: items[0].slotIdx!, tourId: groupTourId(items), items });
+    setSplitMap({});
+  }
+  const splitPax = (guideId: string) => splitFor ? splitFor.items.filter((b) => splitMap[b.id] === guideId).reduce((s, b) => s + (b.pax ?? 0), 0) : 0;
+  async function submitSplit() {
+    if (!splitFor) return;
+    const unassigned = splitFor.items.filter((b) => !splitMap[b.id]);
+    if (unassigned.length) { setMsg("Assign every booking to a guide first."); return; }
+    const byGuide: Record<string, string[]> = {};
+    for (const b of splitFor.items) (byGuide[splitMap[b.id]] ??= []).push(b.id);
+    const groups = Object.entries(byGuide).map(([guideId, bookingIds]) => ({ guideId, bookingIds }));
+    const r = await fetch("/api/bookings/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: splitFor.date, slotIdx: splitFor.slotIdx, tourId: splitFor.tourId, groups }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg(d.error === "over-cap" ? `A group exceeds 10 pax — rebalance.` : "Split failed."); return; }
+    setSplitFor(null); setMsg(`✅ Split into ${d.groups} guide job(s).`); await load();
+  }
+
   // Assign a group directly to a chosen guide (no offer broadcast).
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
@@ -266,9 +287,11 @@ export default function BookingsInbox() {
                     <option value="">Offer to all available</option>
                     {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
                   </select>
-                  {grpGuide[key]
-                    ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
-                    : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer</button>}
+                  {pax > 10
+                    ? <button className="btn sm primary" onClick={() => openSplit(items)}>Split across guides</button>
+                    : grpGuide[key]
+                      ? <button className="btn sm primary" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign guide</button>
+                      : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer</button>}
                 </div>
               );
             })
@@ -317,6 +340,40 @@ export default function BookingsInbox() {
               <button className="btn ghost danger" onClick={() => removeBooking(String(detail.id), `${detail.source} · ${detail.confirmationCode || detail.customerName || "—"}`)}>🗑 Delete</button>
               <button className="btn" onClick={() => setDetail(null)}>Close</button>
               <button className="btn primary" onClick={saveDetail}>Save changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {splitFor && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setSplitFor(null); }}>
+          <div className="modal" style={{ maxWidth: 560 }}>
+            <div style={{ padding: "18px 20px" }}>
+              <h3 style={{ margin: "0 0 4px" }}>Split across guides</h3>
+              <p className="sub" style={{ margin: "0 0 14px" }}>{splitFor.date} · {SLOTS[splitFor.slotIdx]?.start} · {splitFor.items.reduce((s, b) => s + (b.pax ?? 0), 0)} pax over {splitFor.items.length} bookings. Assign each booking to a guide (max 10 pax each — families stay together).</p>
+              <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
+                {splitFor.items.map((b) => (
+                  <div key={b.id} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", alignItems: "center", gap: 8, padding: "7px 10px" }}>
+                    <span style={{ flex: 1, fontSize: 13 }}><b>{b.confirmationCode || b.customerName || "—"}</b> · {b.pax ?? "?"} pax</span>
+                    <select className="search" style={{ flex: "none", width: 220 }} value={splitMap[b.id] ?? ""} onChange={(e) => setSplitMap((m) => ({ ...m, [b.id]: e.target.value }))}>
+                      <option value="">Assign to guide…</option>
+                      {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              {Array.from(new Set(Object.values(splitMap).filter(Boolean))).length > 0 && (
+                <div style={{ display: "grid", gap: 4, marginBottom: 6 }}>
+                  {Array.from(new Set(Object.values(splitMap).filter(Boolean))).map((gid) => {
+                    const p = splitPax(gid); const over = p > 10;
+                    return <div key={gid} style={{ fontSize: 12.5, fontWeight: 600, color: over ? "var(--danger)" : "var(--green)" }}>{gid}: {p} / 10 pax {over ? "⚠️ over cap" : "✓"}</div>;
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="mfoot">
+              <button className="btn" onClick={() => setSplitFor(null)}>Cancel</button>
+              <button className="btn primary" onClick={submitSplit}>Assign split</button>
             </div>
           </div>
         </div>

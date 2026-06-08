@@ -308,6 +308,7 @@ model Booking {
   bookingDate      String? // "YYYY-MM-DD" when the booking was made
   paymentStatus    String   @default("unpaid") // unpaid | paid | deposit
   status           String   @default("PENDING") // PENDING | OFFERED | ASSIGNED | CANCELLED | IGNORED
+  assignedGuideId  String? // set when an over-capacity slot is split across guides
   raw              Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt

@@ -66,14 +66,16 @@ export async function GET(req: NextRequest) {
 
   if (existing) return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing });
 
-  // No saved sheet yet — scaffold it, pre-filling Job Details from EVERY booking at
-  // this date + slot (one job per time slot), so separate bookings assigned to one
-  // guide show as a combined customer list — regardless of tour/channel.
-  const linked = await prisma.booking.findMany({
+  // No saved sheet yet — scaffold it from the bookings at this date + slot. By
+  // default ALL of them combine into one job; but if the slot was SPLIT across
+  // guides, this guide sees only the bookings tagged to them (plus any untagged).
+  const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true },
     orderBy: { createdAt: "asc" },
   });
+  const splitHere = allAtSlot.some((b) => b.assignedGuideId);
+  const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
   const bookings = linked.length
     ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
