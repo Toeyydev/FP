@@ -30,6 +30,9 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   const [busy, setBusy] = useState(false);
   const [lineCode, setLineCode] = useState<{ code: string; addUrl: string | null } | null>(null);
   const [docMsg, setDocMsg] = useState("");
+  const [cal, setCal] = useState<{ enabled: boolean; connected: boolean; email: string | null }>({ enabled: false, connected: false, email: null });
+  useEffect(() => { fetch("/api/google/status", { cache: "no-store" }).then((r) => r.json()).then(setCal).catch(() => {}); }, []);
+  async function disconnectCal() { await fetch("/api/google/status", { method: "DELETE" }); setCal((c) => ({ ...c, connected: false, email: null })); }
   const fileRefs = { ID_CARD: useRef<HTMLInputElement>(null), BANK_BOOK: useRef<HTMLInputElement>(null), GUIDE_LICENSE: useRef<HTMLInputElement>(null), OTHER: useRef<HTMLInputElement>(null) };
   const qs = targetUserId ? `?userId=${targetUserId}` : "";
 
@@ -184,6 +187,21 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
               <button type="button" className="btn" onClick={connectLine}>{t("connectLine")}</button>
             )}
           </div>
+
+          {cal.enabled && (
+            <div className="fld" style={{ marginTop: 18 }}>
+              <label>{t("calSection")}</label>
+              <div className="auth-note" style={{ marginTop: 0, marginBottom: 8 }}>{t("calHint")}</div>
+              {cal.connected ? (
+                <div className="docrow" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <span style={{ color: "var(--green)", fontWeight: 700 }}>{t("calConnected")}{cal.email ? ` · ${cal.email}` : ""}</span>
+                  <button type="button" className="btn sm ghost" onClick={disconnectCal}>{t("calDisconnect")}</button>
+                </div>
+              ) : (
+                <a className="btn" href="/api/google/connect">{t("calConnect")}</a>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>

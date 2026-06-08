@@ -134,6 +134,8 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   await prisma.notification.deleteMany({ where: { offerId } });
   // Email the guide a calendar invite (with reminders).
   await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx);
+  // Push to connected Google Calendars (guide + operator master), if configured.
+  try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on calendar */ }
 
   return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
 }

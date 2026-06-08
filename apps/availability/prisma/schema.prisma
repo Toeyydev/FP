@@ -148,10 +148,24 @@ model Assignment {
   pax     Int?
   note    String?
 
+  googleEventId    String? // guide's Google Calendar event id (for patch/delete)
+  opsGoogleEventId String? // operator master-calendar event id
+
   createdAt DateTime @default(now())
 
   @@unique([guideId, date, slotIdx])
   @@index([date])
+}
+
+// A guide's (or operator's) connected Google Calendar — refresh token stored
+// AES-encrypted. Lets the app create/update/delete tour events automatically.
+model GoogleCalendar {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  refreshToken String // encrypted (lib/crypto)
+  calendarId   String   @default("primary")
+  email        String?
+  connectedAt  DateTime @default(now())
 }
 
 // Single-use, expiring invite. Code shown to the user is `selector-secret`;

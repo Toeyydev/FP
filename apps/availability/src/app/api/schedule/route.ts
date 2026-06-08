@@ -68,6 +68,8 @@ export async function POST(req: NextRequest) {
   const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, include: { tour: true } });
   if (!a) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
+  // Remove the guide's (+ operator's) Google Calendar events before freeing it.
+  try { await (await import("@/lib/tour-calendar-sync")).removeTourEvents(a); } catch { /* never block cancel on calendar */ }
   await prisma.assignment.delete({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
 
   // Auto re-offer to the OTHER guides available for this same tour/date/slot.
