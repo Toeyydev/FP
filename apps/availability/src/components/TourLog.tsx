@@ -25,6 +25,12 @@ export default function TourLog() {
     const res = await fetch("/api/guides", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: r.guideId, date: r.date, slotIdx: r.slotIdx, stars }) });
     if (res.ok) load(from, to);
   }
+  // Remove a tour-log entry (assignment + check-ins + report + rating).
+  async function removeRow(r: Row) {
+    if (!confirm(`Remove this tour log entry?\n${dShort(r.date)} · ${r.tour} · ${r.guide}\nThis deletes its check-ins, report and rating (the job sheet is kept).`)) return;
+    const res = await fetch("/api/tour-log", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: r.guideId, date: r.date, slotIdx: r.slotIdx }) });
+    if (res.ok) load(from, to);
+  }
   function Stars({ r }: { r: Row }) {
     if (!r.completed) return <span style={{ color: "var(--ink-soft)" }}>—</span>;
     return <span style={{ whiteSpace: "nowrap" }}>{[1, 2, 3, 4, 5].map((n) => (
@@ -49,9 +55,9 @@ export default function TourLog() {
         </div>
         <div className="grid-scroll">
           <table className="acct-table">
-            <thead><tr><th>Date</th><th>Tour</th><th>Guide</th><th>Pax</th><th>Check-in</th><th>Started</th><th>Done</th><th>Rating</th><th>Report</th></tr></thead>
+            <thead><tr><th>Date</th><th>Tour</th><th>Guide</th><th>Pax</th><th>Check-in</th><th>Started</th><th>Done</th><th>Rating</th><th>Report</th><th /></tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={9} className="op-empty">No tours in range.</td></tr> : rows.map((r, i) => (
+              {rows.length === 0 ? <tr><td colSpan={10} className="op-empty">No tours in range.</td></tr> : rows.map((r, i) => (
                 <tr key={i}>
                   <td style={{ whiteSpace: "nowrap" }}>{dShort(r.date)}<br /><small style={{ color: "var(--ink-soft)" }}>{r.time}</small></td>
                   <td>{r.tour}</td>
@@ -69,6 +75,9 @@ export default function TourLog() {
                       {r.report.comments ? <div style={{ color: "var(--danger)" }}>⚠ {r.report.comments}</div> : null}
                     </>
                   ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button className="btn sm danger" title="Remove this tour log entry" onClick={() => removeRow(r)}>🗑</button>
+                  </td>
                 </tr>
               ))}
             </tbody>

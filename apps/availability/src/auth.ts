@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
+import { loginLocked, recordLoginFail, recordLoginSuccess } from "@/lib/ratelimit";
 import { z } from "zod";
 import { authConfig } from "@/auth.config";
 import { prisma } from "@/lib/db";
@@ -19,10 +20,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const parsed = credsSchema.safeParse(raw);
         if (!parsed.success) return null;
         const email = parsed.data.email.toLowerCase().trim();
+        // Brute-force protection: lock an account after too many wrong attempts.
+        if (loginLocked(email)) return null;
         const user = await prisma.user.findUnique({ where: { email } });
-        if (!user || !user.passwordHash) return null; // unclaimed accounts have no password
+        if (!user || !user.passwordHash) { recordLoginFail(email); return null; } // unclaimed accounts have no password
         if (user.state !== "ACTIVE") return null; // invited / pending / suspended cannot log in
-        if (!bcrypt.compareSync(parsed.data.password, user.passwordHash)) return null;
+        if (!bcrypt.compareSync(parsed.data.password, user.passwordHash)) { recordLoginFail(email); return null; }
+        recordLoginSuccess(email);
         return {
           id: user.id,
           email: user.email,

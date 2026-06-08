@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -49,4 +50,26 @@ export async function GET(req: NextRequest) {
     };
   });
   return NextResponse.json({ from, to, rows });
+}
+
+// DELETE { guideId, date, slotIdx } — remove one tour-log entry and the records
+// that compose it (assignment + check-ins + end report + rating). The financial
+// job sheet is intentionally left untouched. Operator/admin only.
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const body = await req.json().catch(() => null);
+  const guideId = String(body?.guideId || "");
+  const date = String(body?.date || "");
+  const slotIdx = Number(body?.slotIdx);
+  if (!guideId || !DATE.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const where = { guideId, date, slotIdx };
+  await prisma.$transaction([
+    prisma.checkin.deleteMany({ where }),
+    prisma.tourReport.deleteMany({ where }),
+    prisma.guideRating.deleteMany({ where }),
+    prisma.assignment.deleteMany({ where }),
+  ]);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "tourlog.removed", entityType: "Assignment", detail: { guideId, date, slotIdx } });
+  return NextResponse.json({ ok: true });
 }
