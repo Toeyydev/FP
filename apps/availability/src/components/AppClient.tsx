@@ -216,7 +216,7 @@ export default function AppClient({
     if (role !== "guide") return;
     const f = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
     f();
-    const id = window.setInterval(f, 30000);
+    const id = window.setInterval(f, 15000);
     return () => window.clearInterval(id);
   }, [role]);
 

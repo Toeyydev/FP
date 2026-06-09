@@ -64,11 +64,9 @@ export async function GET(req: NextRequest) {
   const tourId = existing?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
-  if (existing) return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing });
-
-  // No saved sheet yet — scaffold it from the bookings at this date + slot. By
-  // default ALL of them combine into one job; but if the slot was SPLIT across
-  // guides, this guide sees only the bookings tagged to them (plus any untagged).
+  // Current bookings at this date + slot. By default ALL combine into one job; if
+  // the slot was SPLIT across guides, this guide sees only the bookings tagged to
+  // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
     select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true },
@@ -76,8 +74,24 @@ export async function GET(req: NextRequest) {
   });
   const splitHere = allAtSlot.some((b) => b.assignedGuideId);
   const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
-  const bookings = linked.length
-    ? linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }))
+  type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
+  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }));
+  const keyOf = (b: { bookingNo?: string; name?: string }) => (b.bookingNo || b.name || "").trim().toLowerCase();
+
+  // Saved sheet: keep it live. Surface any booking that arrived AFTER it was saved
+  // (e.g. a late add), so the assigned job always reflects the real guest list —
+  // while keeping the operator's edits to the rows already on the sheet.
+  if (existing) {
+    const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
+    const have = new Set(saved.map(keyOf).filter(Boolean));
+    const added = liveBookings.filter((b) => { const k = keyOf(b); return k && !have.has(k); });
+    const sheet = added.length ? { ...existing, bookings: saved.concat(added) } : existing;
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length });
+  }
+
+  // No saved sheet yet — scaffold from the current bookings.
+  const bookings = liveBookings.length
+    ? liveBookings
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
 
   // Pre-fill expense pax from the ACTUAL booked guests so reimbursements reflect
