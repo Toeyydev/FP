@@ -22,6 +22,10 @@ type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcoming
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
+function Kpi({ n, label, tone = "" }: { n: number; label: string; tone?: string }) {
+  return <div className={`kpi ${n > 0 ? tone : ""}`}><b>{n}</b><span>{label}</span></div>;
+}
+
 export default function Dashboard() {
   const [d, setD] = useState<Data | null>(null);
   const load = () => fetch("/api/dashboard", { cache: "no-store" }).then((r) => r.json()).then(setD).catch(() => {});
@@ -40,15 +44,20 @@ export default function Dashboard() {
         <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
 
-      {!d ? <section className="panel"><div className="op-empty">…</div></section> : (
+      {!d ? (
         <div className="dash">
-          <div className="dash-sum">
-            <span><b>{d.todayTours.length}</b> today</span>
-            <span><b>{d.tomorrowTours.length}</b> tomorrow</span>
-            <span className={d.unassigned.length ? "warn" : ""}><b>{d.unassigned.length}</b> unassigned</span>
-            <span className={d.understaffed.length ? "bad" : ""}><b>{d.understaffed.length}</b> understaffed</span>
-            <span className={d.conflicts.length ? "bad" : ""}><b>{d.conflicts.length}</b> conflicts</span>
-            <span><b>{d.upcomingTours.length}</b> upcoming (7d)</span>
+          <div className="kpi-row">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="kpi skel" />)}</div>
+          <section className="panel"><div style={{ padding: 14 }}>{Array.from({ length: 4 }).map((_, i) => <div key={i} className="skel-row" />)}</div></section>
+        </div>
+      ) : (
+        <div className="dash">
+          <div className="kpi-row">
+            <Kpi n={d.todayTours.length} label="Today" />
+            <Kpi n={d.tomorrowTours.length} label="Tomorrow" />
+            <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" />
+            <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" />
+            <Kpi n={d.conflicts.length} label="Conflicts" tone="bad" />
+            <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" />
           </div>
 
           <div className="dash-main">
@@ -58,7 +67,7 @@ export default function Dashboard() {
                 <div className="dash-list">
                   {d.leaveRequests.map((l) => (
                     <div key={l.id} className="dash-row">
-                      <span className="tag" style={{ background: "#9CA3AF", color: "#fff" }}>Leave</span>
+                      <span className="tag" style={{ background: "var(--grey)", color: "#fff" }}>Leave</span>
                       <span className="dr-main"><b>{l.guide}</b> · {dShort(l.fromDate)}{l.toDate !== l.fromDate ? `–${dShort(l.toDate)}` : ""}<div className="dr-sub">{l.reason || "leave request"}</div></span>
                       <span style={{ display: "flex", gap: 6 }}>
                         <button className="btn sm primary" onClick={() => decideLeave(l.id, "APPROVED")}>Approve</button>

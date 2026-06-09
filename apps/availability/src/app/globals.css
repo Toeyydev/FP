@@ -686,3 +686,17 @@ a:focus-visible,button:focus-visible,.subtab:focus-visible,.vtab:focus-visible,[
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
 .fld input:focus,.fld select:focus{border-color:var(--primary);box-shadow:var(--ring)}
+
+/* ---- Dashboard KPI cards + loading skeleton (ui-ux-pro-max: data-dense + loading states) ---- */
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 15px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:3px}
+.kpi b{font-size:25px;font-weight:800;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi span{font-size:11.5px;font-weight:600;color:var(--ink-soft)}
+.kpi.warn{background:var(--assign-bg);border-color:var(--assign-line)} .kpi.warn b{color:var(--assign)}
+.kpi.bad{background:var(--danger-bg);border-color:var(--danger-line)} .kpi.bad b{color:var(--danger)}
+.kpi.skel{height:64px}
+.kpi.skel,.skel-row{position:relative;overflow:hidden;background:var(--grey-bg);border:1px solid var(--line)}
+.skel-row{height:46px;border-radius:12px;margin-bottom:9px}
+.kpi.skel::after,.skel-row::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);animation:shimmer 1.3s infinite}
+@keyframes shimmer{100%{transform:translateX(100%)}}
