@@ -50,6 +50,24 @@ export default function JobSheetEditor() {
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
 
+  // Entrance-fee items (Grand Palace, Wat Pho, Wat Arun) are paid only for guests
+  // whose tickets are "Included". Keep their pax in sync with that count.
+  useEffect(() => {
+    setSheet((prev) => {
+      if (!prev) return prev;
+      const ATTRACTIONS = ["grand palace", "wat pho", "wat arun"];
+      const inclPax = prev.bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? b.bookedPax ?? 0) : 0), 0);
+      let changed = false;
+      const expenses = prev.expenses.map((e) => {
+        const isAttraction = ATTRACTIONS.some((a) => e.description.trim().toLowerCase().startsWith(a));
+        if (isAttraction && e.pax !== inclPax) { changed = true; return { ...e, pax: inclPax }; }
+        return e;
+      });
+      return changed ? { ...prev, expenses } : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(sheet?.bookings?.map((b) => [b.tickets, b.actualPax, b.bookedPax]))]);
+
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);

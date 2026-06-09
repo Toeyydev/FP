@@ -86,8 +86,8 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } }
 </style></head>
 <body>
-  <div class="toolbar"><span>ใบสั่งงานมัคคุเทศก์ · ${esc(ref)}</span><button onclick="window.print()">Save as PDF / Print</button></div>
-  <div class="page">
+  <div class="toolbar"><span>ใบสั่งงานมัคคุเทศก์ · ${esc(ref)} · แตะช่องว่างเพื่อกรอกข้อมูล (tap any blank to fill it in)</span><button onclick="window.print()">Save as PDF / Print</button></div>
+  <div class="page" contenteditable="true" spellcheck="false">
     <h1>ใบสั่งงานมัคคุเทศก์<small>GUIDE JOB ORDER</small></h1>
 
     <div class="sec">ส่วนที่ ๑ ข้อมูลใบสั่งงานและผู้ประกอบการ</div>
@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
       ผู้ประกอบธุรกิจนำเที่ยว / ผู้ได้รับมอบอำนาจ
     </div>
   </div>
-  <script>window.addEventListener("load", function () { setTimeout(function () { window.print(); }, 350); });</script>
+  <!-- No auto-print: fill in the blanks first, then use the Print button. -->
 </body></html>`;
 
   return new NextResponse(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
