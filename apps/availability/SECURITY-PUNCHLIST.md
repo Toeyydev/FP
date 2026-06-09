@@ -17,18 +17,22 @@ Review date: 2026-06-08. Checked against `folkpaths-dispatch-handoff-spec.md` §
 
 ## ⛔ Still TODO — need code design (do before launch)
 
-### 1. Rate-limit / lockout on password login
-The OTP/invite flow limits attempts, but the email+password login (`src/auth.ts`, `bcrypt.compareSync`) has no throttling — it's brute-forceable.
-- Add per-account + per-IP rate limiting (e.g. 5 failures / 15 min → temporary lock).
-- Options: a small `loginAttempt` table keyed by email+IP, or a rate-limit lib / Railway-level limit.
-- Return a generic "too many attempts, try later" (don't reveal whether the email exists).
-- Verify: 6 rapid wrong logins → blocked.
+### 1. Rate-limit / lockout on password login — ✅ DONE
+Implemented in `src/lib/ratelimit.ts`, wired into `src/auth.ts`: 8 failed attempts within
+15 min locks the account for 15 min, keyed by email; reset on success.
+- Caveat: in-memory (per-process) — correct for a single Railway instance. If you ever run
+  multiple instances, move the buckets to a shared store (Redis/DB).
+- Verify: 9 rapid wrong logins for one email → locked for 15 min.
 
-### 2. Require authentication on the Bokun webhook
-`src/app/api/bokun/webhook/route.ts` only checks a token **if** `BOKUN_WEBHOOK_TOKEN` is set, and it's a URL query token (can leak in logs/referrers). Unset = anyone can inject fake bookings.
-- Short term: set `BOKUN_WEBHOOK_TOKEN` in the Railway env now so the check is active.
-- Better: switch to Bokun's HMAC signature header (verify like the LINE webhook does) and move the secret out of the URL.
-- Verify: a POST without valid auth → 401/403, no booking created.
+### 2. Bokun webhook auth — ⚠️ NEEDS ENV VAR
+`src/app/api/bokun/webhook/route.ts` now accepts the token via the `x-webhook-token` header
+(preferred) or `?token=` query (compat), and logs a warning on every call when no token is set.
+- **Action:** set `BOKUN_WEBHOOK_TOKEN` in Railway and add the matching `x-webhook-token`
+  header (or `?token=`) to the Bokun webhook URL — until then the endpoint stays open.
+- Better (later): switch to Bokun's HMAC signature, like the LINE webhook.
+- A failed/unparsed import now stores a "⚠ Unparsed booking — needs attention" row in the
+  inbox instead of vanishing.
+- Verify: a POST without the token (once set) → 403, no booking created.
 
 ## 🔎 Verify (likely fine, confirm)
 - Unauthenticated health endpoints (`/api/*/health`, `/api/version`) should return only `{ ok }` / minimal status — confirm they don't leak config, tokens, or connection strings.

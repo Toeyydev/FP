@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { parseBokun, detectChannel } from "@/lib/bookings";
 import { importRawBooking } from "@/lib/booking-import";
@@ -10,9 +11,15 @@ import { importRawBooking } from "@/lib/booking-import";
 // Optional security: set BOKUN_WEBHOOK_TOKEN and add ?token=… to the webhook URL
 // in Bokun; if set, requests without the matching token are rejected.
 export async function POST(req: NextRequest) {
+  // Auth: prefer a header token (doesn't leak in URLs/logs), fall back to the
+  // ?token=… query param for compatibility. If BOKUN_WEBHOOK_TOKEN is unset the
+  // endpoint is open — warn loudly so it gets configured in production.
   const token = process.env.BOKUN_WEBHOOK_TOKEN;
-  if (token && req.nextUrl.searchParams.get("token") !== token) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (token) {
+    const provided = req.headers.get("x-webhook-token") || req.nextUrl.searchParams.get("token");
+    if (provided !== token) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  } else {
+    console.warn("[bokun:webhook] BOKUN_WEBHOOK_TOKEN is not set — this endpoint is UNAUTHENTICATED. Set it in the environment and add header x-webhook-token (or ?token=) to the Bokun webhook URL.");
   }
 
   const raw = await req.json().catch(() => null);
@@ -24,6 +31,16 @@ export async function POST(req: NextRequest) {
     await audit({ action: "booking.received", entityType: "Booking", detail: { source: detectChannel(raw), code: p.confirmationCode, date: p.date, slotIdx: p.slotIdx } });
   } catch (e) {
     console.error("[bokun:webhook] store failed", (e as Error).message);
+    // Don't lose the booking: store the raw payload as a "needs attention" row so
+    // it surfaces in the operator inbox (under Connect tour) instead of vanishing.
+    try {
+      await prisma.booking.create({
+        data: { source: detectChannel(raw) || "bokun", status: "PENDING", raw, productName: "⚠ Unparsed booking — needs attention" },
+      });
+      await audit({ action: "booking.import_failed", entityType: "Booking", detail: { error: (e as Error).message } });
+    } catch (e2) {
+      console.error("[bokun:webhook] fallback store also failed", (e2 as Error).message);
+    }
   }
 
   // Always 200 so Bokun doesn't retry endlessly.

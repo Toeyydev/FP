@@ -9,6 +9,8 @@
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
@@ -30,7 +32,7 @@
     "exceljs": "^4.4.0",
     "next": "^15.1.4",
     "next-auth": "5.0.0-beta.25",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^8.0.10",
     "prisma": "^6.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -40,6 +42,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/web-push": "^3.6.4"
+    "@types/web-push": "^3.6.4",
+    "vitest": "^4.1.8"
   }
 }

@@ -93,6 +93,7 @@ const delSchema = z.object({
   guideId: z.string().min(1),
   date: z.string().regex(dateRe),
   slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1),
+  release: z.boolean().optional(), // true (plain Remove) → return its bookings to the inbox
 });
 
 export async function DELETE(req: NextRequest) {
@@ -102,8 +103,13 @@ export async function DELETE(req: NextRequest) {
   }
   const parsed = delSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
-  const { guideId, date, slotIdx } = parsed.data;
+  const { guideId, date, slotIdx, release } = parsed.data;
 
   await prisma.assignment.deleteMany({ where: { guideId, date, slotIdx } });
+  // Plain Remove: send the slot's bookings back to the inbox (PENDING) so they can
+  // be re-dispatched instead of being stranded as "offered" with no job.
+  if (release) {
+    await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+  }
   return NextResponse.json({ ok: true });
 }

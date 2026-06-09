@@ -1,7 +1,82 @@
 import { prisma } from "@/lib/db";
 import { parseBokun, isCancellation, productKey, detectChannel, type ParsedBooking } from "@/lib/bookings";
+import { sendPushToUser } from "@/lib/push";
+import { todayD, ymd } from "@/lib/dates";
 
 export type ImportResult = "created" | "updated" | "skipped";
+
+const CAP = 10; // max pax per guide / job
+
+async function notifyOps(message: string, title: string, body: string) {
+  try {
+    const opsUsers = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
+    for (const o of opsUsers) {
+      await prisma.notification.create({ data: { userId: o.id, kind: "late-booking", message } });
+      await sendPushToUser(o.id, { title, body, url: "/", tag: "late-booking" });
+    }
+  } catch { /* alerts are best-effort; never block import */ }
+}
+
+async function notifyGuide(guideId: string, message: string, title: string, body: string) {
+  try {
+    const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true } });
+    if (!u) return;
+    await prisma.notification.create({ data: { userId: u.id, kind: "job-change", message } });
+    await sendPushToUser(u.id, { title, body, url: "/", tag: "job-change" });
+  } catch { /* best-effort */ }
+}
+
+// When a NEW booking lands for a slot already assigned to a guide: auto-add it to
+// that guide's job if it stays within the 10-pax cap, and ALWAYS alert the
+// operator to confirm. If it would breach the cap (or the slot is split across
+// guides), leave it pending and alert for a manual decision. Never throws.
+export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; status: string }): Promise<boolean> {
+  try {
+    if (b.status !== "PENDING" || !b.tourId || !b.date || b.slotIdx == null) return false;
+    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx } });
+    if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
+    const ref = b.confirmationCode || b.customerName || "a new booking";
+    if (assigns.length > 1) {
+      await notifyOps(`🆕 Late booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides — please assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`);
+      return false;
+    }
+    const a = assigns[0];
+    const addPax = b.pax ?? 0;
+    const newTotal = (a.pax ?? 0) + addPax;
+    if (newTotal > CAP) {
+      await notifyOps(`⚠️ Late booking ${ref} (+${addPax}) for ${b.date} would put ${a.guideId} over ${CAP} pax — left pending, needs a split.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`);
+      return false;
+    }
+    const key = { guideId_date_slotIdx: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx } };
+    // Mark OFFERED so it leaves the "ready to offer" inbox (same as a dispatched booking).
+    await prisma.booking.update({ where: { id: b.id }, data: { status: "OFFERED" } });
+    await prisma.assignment.update({ where: key, data: { pax: newTotal } });
+    const js = await prisma.jobSheet.findUnique({ where: key });
+    const list = Array.isArray(js?.bookings) ? (js!.bookings as unknown[]) : [];
+    list.push({ name: b.customerName ?? "", bookingNo: b.confirmationCode ?? "", bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: "" });
+    await prisma.jobSheet.upsert({
+      where: key,
+      create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object },
+      update: { bookings: list as object },
+    });
+    await notifyGuide(a.guideId, `Your tour on ${b.date} now has ${newTotal} guests — a new booking was added.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
+    await notifyOps(`✅ Booking ${ref} (+${addPax}) auto-combined into ${a.guideId}'s job on ${b.date} (now ${newTotal} pax).`, "Booking combined into a job", `${ref} → ${a.guideId} · ${b.date} · ${newTotal} pax`);
+    return true;
+  } catch { return false; /* import must succeed regardless of attach errors */ }
+}
+
+// Sweep existing PENDING bookings (today onward) and auto-combine any whose slot
+// is already assigned to a guide. Idempotent — safe to call on every inbox load.
+export async function reconcileAssignedBookings(): Promise<number> {
+  const today = ymd(todayD());
+  const pending = await prisma.booking.findMany({
+    where: { status: "PENDING", tourId: { not: null }, date: { gte: today }, slotIdx: { not: null } },
+    select: { id: true, tourId: true, date: true, slotIdx: true, pax: true, customerName: true, confirmationCode: true, status: true },
+  });
+  let combined = 0;
+  for (const b of pending) if (await autoAttachLate(b)) combined++;
+  return combined;
+}
 
 // Upsert one already-parsed booking. Dedupes by (source, externalId); when no
 // externalId, falls back to confirmationCode so re-imports don't duplicate.
@@ -18,7 +93,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
 
   if (p.externalId) {
     const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true } });
-    await prisma.booking.upsert({
+    const rec = await prisma.booking.upsert({
       where: { source_externalId: { source, externalId: p.externalId } },
       create: {
         source, externalId: p.externalId, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null,
@@ -32,6 +107,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
       },
     });
+    if (!existing) await autoAttachLate(rec);
     return existing ? "updated" : "created";
   }
 
@@ -44,13 +120,14 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       return "updated";
     }
   }
-  await prisma.booking.create({
+  const rec = await prisma.booking.create({
     data: {
       source, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null, productName: p.productName ?? null, tourId,
       date: p.date ?? null, startTime: p.startTime ?? null, slotIdx: p.slotIdx ?? null,
       pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING",
     },
   });
+  await autoAttachLate(rec);
   return "created";
 }
 
