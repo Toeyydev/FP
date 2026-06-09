@@ -3,10 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
-type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null };
+type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
 type Offer = { id: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number };
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
+function StateTag({ a }: { a: Assignment }) {
+  if (a.state === "COMPLETE") return <span className="ck ck-done">✓ Done {hhmm(a.checkedAt)}</span>;
+  if (a.state === "START") return <span className="ck ck-live">● On tour</span>;
+  if (a.state === "ARRIVE") return <span className="ck ck-in">✓ Checked in {hhmm(a.checkedAt)}</span>;
+  if (a.overdue) return <span className="ck ck-late">⚠ Not checked in</span>;
+  return <span className="ck ck-none">Scheduled</span>;
+}
 
 export default function Dispatch() {
   const [data, setData] = useState<{ assignments: Assignment[]; offers: Offer[] } | null>(null);
@@ -73,7 +81,7 @@ export default function Dispatch() {
                   {items.map((a, i) => (
                     <div key={i} className="sched-card" style={{ cursor: "default" }}>
                       <div className="sched-when"><b style={{ fontSize: 18 }}>{i + 1}</b><span>{a.time}</span></div>
-                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div></div>
+                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div><div style={{ marginTop: 4 }}><StateTag a={a} /></div></div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>Job sheet</a>
                         <button className="btn sm" onClick={() => reoffer(a)}>Re-offer</button>

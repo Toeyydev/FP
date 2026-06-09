@@ -29,19 +29,31 @@ export async function GET() {
     ...offers.map((o) => o.assignedGuideId).filter((x): x is string => !!x),
     ...assigns.map((a) => a.guideId),
   ])];
-  const [tours, guides] = await Promise.all([
+  const [tours, guides, checkins] = await Promise.all([
     prisma.tour.findMany({ where: { id: { in: tourIds } }, select: { id: true, name: true } }),
     prisma.user.findMany({ where: { guideId: { in: guideIds } }, select: { guideId: true, displayName: true } }),
+    prisma.checkin.findMany({ where: { date: { gte: today } }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
   ]);
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
   const gDisp = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? "";
   const gName = (gid: string | null) => (gid ? `${gid} ${gDisp(gid)}`.trim() : null);
+  // Latest check-in event per tour instance → lifecycle state.
+  const ck: Record<string, { type: string; at: Date }> = {};
+  for (const c of checkins) ck[`${c.guideId}|${c.date}|${c.slotIdx}`] = { type: c.type, at: c.at };
+  const nowD = new Date(Date.now() + 7 * 3600 * 1000);
+  const nowMin = nowD.getUTCHours() * 60 + nowD.getUTCMinutes();
+  const startMin = (i: number) => { const [h, m] = (SLOT_TIMES[i] || "00:00").split(":").map(Number); return h * 60 + m; };
 
   return NextResponse.json({
-    assignments: assigns.map((a) => ({
-      guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
-      time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
-    })),
+    assignments: assigns.map((a) => {
+      const c = ck[`${a.guideId}|${a.date}|${a.slotIdx}`];
+      const state = c ? c.type : "NONE";
+      return {
+        guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
+        time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
+        state, checkedAt: c ? c.at.toISOString() : null, overdue: a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx),
+      };
+    }),
     offers: offers.map((o) => ({
       id: o.id, tourName: tourName.get(o.tourId) ?? o.tourId, date: o.date, slotIdx: o.slotIdx,
       time: timeRangeLabel(o.slotIdx, o.durationMin), pax: o.pax, note: o.note, status: o.status, expiresAt: o.expiresAt,
