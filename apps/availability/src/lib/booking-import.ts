@@ -69,7 +69,9 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
 }
 
 // Sweep existing PENDING bookings (today onward) and auto-combine any whose slot
-// is already assigned to a guide. Idempotent — safe to call on every inbox load.
+// is already assigned to a guide, THEN re-sync every assignment's pax to the real
+// booking total so the operator's board/dashboard never shows a stale number.
+// Idempotent — safe to call on every inbox / dashboard load.
 export async function reconcileAssignedBookings(): Promise<number> {
   const today = ymd(todayD());
   const pending = await prisma.booking.findMany({
@@ -78,6 +80,16 @@ export async function reconcileAssignedBookings(): Promise<number> {
   });
   let combined = 0;
   for (const b of pending) if (await autoAttachLate(b)) combined++;
+
+  // Re-sync assignment.pax = the slot's live booking total (split-aware).
+  const assigns = await prisma.assignment.findMany({ where: { date: { gte: today } }, select: { id: true, guideId: true, date: true, slotIdx: true, pax: true } });
+  for (const a of assigns) {
+    const bks = await prisma.booking.findMany({ where: { date: a.date, slotIdx: a.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
+    const split = bks.some((b) => b.assignedGuideId);
+    const mine = split ? bks.filter((b) => !b.assignedGuideId || b.assignedGuideId === a.guideId) : bks;
+    const sum = mine.reduce((s, b) => s + (b.pax ?? 0), 0);
+    if (sum > 0 && sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
+  }
   return combined;
 }
 

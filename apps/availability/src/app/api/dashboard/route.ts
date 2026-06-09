@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { guidesNeeded } from "@/lib/capacity";
+import { reconcileAssignedBookings } from "@/lib/booking-import";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -11,6 +12,9 @@ const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDa
 export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+
+  // Pull in any late bookings + re-sync assignment pax so the board is current.
+  await reconcileAssignedBookings().catch(() => {});
 
   const today = bkk(0);
   const horizon = bkk(7);
