@@ -15,7 +15,7 @@ const esc = (s: string) => (s || "").replace(/\\/g, "\\\\").replace(/[,;]/g, (c)
 // the VALARMs and notifies the guide automatically once they add it.
 export function makeIcs(o: { uid: string; startMs: number; durationMin: number; summary: string; description?: string; location?: string; status?: "CONFIRMED" | "CANCELLED" }): string {
   const lines = [
-    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Folkpath//Guide//EN", "CALSCALE:GREGORIAN", "METHOD:REQUEST",
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Folkpaths//Guide//EN", "CALSCALE:GREGORIAN", "METHOD:REQUEST",
     "BEGIN:VEVENT",
     `UID:${o.uid}`,
     `DTSTAMP:${fmtUtc(o.startMs)}`,
@@ -25,8 +25,8 @@ export function makeIcs(o: { uid: string; startMs: number; durationMin: number; 
     o.description ? `DESCRIPTION:${esc(o.description)}` : "",
     o.location ? `LOCATION:${esc(o.location)}` : "",
     `STATUS:${o.status ?? "CONFIRMED"}`,
-    "BEGIN:VALARM", "TRIGGER:-PT12H", "ACTION:DISPLAY", "DESCRIPTION:Folkpath tour reminder", "END:VALARM",
-    "BEGIN:VALARM", "TRIGGER:-PT1H", "ACTION:DISPLAY", "DESCRIPTION:Folkpath tour reminder", "END:VALARM",
+    "BEGIN:VALARM", "TRIGGER:-PT12H", "ACTION:DISPLAY", "DESCRIPTION:Folkpaths tour reminder", "END:VALARM",
+    "BEGIN:VALARM", "TRIGGER:-PT1H", "ACTION:DISPLAY", "DESCRIPTION:Folkpaths tour reminder", "END:VALARM",
     "END:VEVENT", "END:VCALENDAR",
   ];
   return lines.filter(Boolean).join("\r\n");
@@ -45,14 +45,14 @@ export async function sendTourCalendarInvite(guideId: string, date: string, slot
   const durationMin = assignment.tour?.durationMin ?? 180;
   const time = SLOT_TIMES[slotIdx] ?? "";
   const tourName = assignment.tour?.name ?? assignment.tourId;
-  const summary = `Folkpath tour — ${tourName}`;
-  const description = `Guide: ${guide.displayName}\nTime: ${time}${assignment.pax != null ? `\nPax: ${assignment.pax}` : ""}${assignment.note ? `\nNote: ${assignment.note}` : ""}\nOpen the Folkpath app for full job details.`;
+  const summary = `Folkpaths tour — ${tourName}`;
+  const description = `Guide: ${guide.displayName}\nTime: ${time}${assignment.pax != null ? `\nPax: ${assignment.pax}` : ""}${assignment.note ? `\nNote: ${assignment.note}` : ""}\nOpen the Folkpaths app for full job details.`;
   const ics = makeIcs({ uid: `${guideId}-${date}-${slotIdx}@folkpaths.com`, startMs, durationMin, summary, description, location: assignment.tour?.meetingPoint ?? undefined });
 
   await sendEmail({
     to: guide.email,
     subject: `Tour confirmed: ${tourName} — ${date} ${time}`,
-    text: `Hi ${guide.displayName},\n\nYou're confirmed for:\n${tourName}\n${date} at ${time}${assignment.pax != null ? ` · ${assignment.pax} pax` : ""}\n\nAdd the attached calendar invite to get reminders. Full details are in the Folkpath app.`,
+    text: `Hi ${guide.displayName},\n\nYou're confirmed for:\n${tourName}\n${date} at ${time}${assignment.pax != null ? ` · ${assignment.pax} pax` : ""}\n\nAdd the attached calendar invite to get reminders. Full details are in the Folkpaths app.`,
     icalEvent: { method: "REQUEST", content: ics },
     attachments: [{ filename: "folkpath-tour.ics", content: ics, contentType: "text/calendar; method=REQUEST" }],
   });

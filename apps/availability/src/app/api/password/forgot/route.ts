@@ -26,8 +26,8 @@ export async function POST(req: NextRequest) {
     const link = new URL(`/reset?token=${tokenPlain}`, req.nextUrl.origin).toString();
     const res = await sendEmail({
       to: email,
-      subject: "Reset your Folkpath password",
-      text: `Reset your Folkpath password (link expires in 1 hour):\n${link}\n\nIf you didn't request this, ignore this email.`,
+      subject: "Reset your Folkpaths password",
+      text: `Reset your Folkpaths password (link expires in 1 hour):\n${link}\n\nIf you didn't request this, ignore this email.`,
     });
     await audit({ action: "password.reset_requested", entityType: "User", entityId: user.id });
     if (STUB && !res.sent) devLink = `/reset?token=${tokenPlain}`; // dev aid when no email provider configured

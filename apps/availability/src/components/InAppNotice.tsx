@@ -17,7 +17,7 @@ export default function InAppNotice() {
   return (
     <div className="inapp-notice">
       <b>⚠ Open in Chrome to install</b>
-      <div>You&apos;re in another app&apos;s browser (e.g. LINE) — it can&apos;t install Folkpath and may show &ldquo;not secure&rdquo;. Tap the <b>⋮</b> menu (top-right) → <b>Open in Chrome / browser</b>, then add to your home screen.</div>
+      <div>You&apos;re in another app&apos;s browser (e.g. LINE) — it can&apos;t install Folkpaths and may show &ldquo;not secure&rdquo;. Tap the <b>⋮</b> menu (top-right) → <b>Open in Chrome / browser</b>, then add to your home screen.</div>
     </div>
   );
 }

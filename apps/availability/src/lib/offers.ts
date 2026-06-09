@@ -32,7 +32,7 @@ export async function createOffer(o: {
   const ttl = o.ttlMinutes ?? 60;
   const dateLabel = new Date(`${o.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
   const timeLabel = timeRangeLabel(o.slotIdx, o.durationMin ?? undefined);
-  const summary = `Folkpath job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${o.pax != null ? `\nTotal: ${o.pax} Pax · 1 Job` : ""}${o.note ? `\n${o.note}` : ""}`;
+  const summary = `Folkpaths job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${o.pax != null ? `\nTotal: ${o.pax} Pax · 1 Job` : ""}${o.note ? `\n${o.note}` : ""}`;
   const btnText = `${tour.name} · ${dateLabel} · ${timeLabel}${o.pax != null ? ` · ${o.pax} pax` : ""}`;
 
   const offer = await prisma.jobOffer.create({
@@ -49,7 +49,7 @@ export async function createOffer(o: {
     await sendPushToUser(g.id, { title: "New job offer", body: btnText, url: "/", tag: `offer-${offer.id}` });
     if (lineEnabled && g.lineUserId) {
       const firstName = (g.displayName || "").split(" ")[0];
-      await linePushButtons(g.lineUserId, `Folkpath job offer for ${g.displayName}`, `${firstName ? firstName + ", " : ""}${btnText}`, [
+      await linePushButtons(g.lineUserId, `Folkpaths job offer for ${g.displayName}`, `${firstName ? firstName + ", " : ""}${btnText}`, [
         { label: "✅ Accept", data: `offer:accept:${offer.id}`, displayText: "Accept" },
         { label: "❌ Deny", data: `offer:deny:${offer.id}`, displayText: "Deny" },
       ]);

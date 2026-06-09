@@ -37,14 +37,14 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
     const ref = b.confirmationCode || b.customerName || "a new booking";
     if (assigns.length > 1) {
-      await notifyOps(`🆕 Late booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides — please assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`);
+      await notifyOps(`Booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides. Assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`);
       return false;
     }
     const a = assigns[0];
     const addPax = b.pax ?? 0;
     const newTotal = (a.pax ?? 0) + addPax;
     if (newTotal > CAP) {
-      await notifyOps(`⚠️ Late booking ${ref} (+${addPax}) for ${b.date} would put ${a.guideId} over ${CAP} pax — left pending, needs a split.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`);
+      await notifyOps(`Booking ${ref} (+${addPax}) for ${b.date} puts ${a.guideId} over ${CAP} guests. Held — split it across guides.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`);
       return false;
     }
     const key = { guideId_date_slotIdx: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx } };
@@ -59,8 +59,8 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
       create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object },
       update: { bookings: list as object },
     });
-    await notifyGuide(a.guideId, `Your tour on ${b.date} now has ${newTotal} guests — a new booking was added.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
-    await notifyOps(`✅ Booking ${ref} (+${addPax}) auto-combined into ${a.guideId}'s job on ${b.date} (now ${newTotal} pax).`, "Booking combined into a job", `${ref} → ${a.guideId} · ${b.date} · ${newTotal} pax`);
+    await notifyGuide(a.guideId, `A booking was added to your ${b.date} tour. You now have ${newTotal} guests.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
+    await notifyOps(`Booking ${ref} (+${addPax}) added to ${a.guideId}'s job on ${b.date} — now ${newTotal} guests.`, "Booking combined into a job", `${ref} → ${a.guideId} · ${b.date} · ${newTotal} pax`);
     return true;
   } catch { return false; /* import must succeed regardless of attach errors */ }
 }

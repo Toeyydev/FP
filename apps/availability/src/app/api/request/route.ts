@@ -51,15 +51,15 @@ export async function POST(req: NextRequest) {
   // Acknowledge the applicant (never blocks the request — sendEmail can't throw).
   await sendEmail({
     to: lower,
-    subject: "Folkpath — sign-up received",
-    text: `Hi ${fullName.trim()},\n\nWe've received your request to join Folkpath. An operator will review and activate your account, and you'll be able to log in once approved.`,
+    subject: "Folkpaths — sign-up received",
+    text: `Hi ${fullName.trim()},\n\nWe've received your request to join Folkpaths. An operator will review and activate your account, and you'll be able to log in once approved.`,
   });
   // Alert operators (in-app badge already polls the count; this is the email channel).
   const opsAlert = process.env.OPS_ALERT_EMAIL;
   if (opsAlert) {
     await sendEmail({
       to: opsAlert,
-      subject: "Folkpath — new guide sign-up pending",
+      subject: "Folkpaths — new guide sign-up pending",
       text: `New sign-up awaiting approval:\n${fullName.trim()} (${nickname.trim()}) <${lower}>\n\nReview it in the operator console → Accounts → Pending requests.`,
     });
   } else {

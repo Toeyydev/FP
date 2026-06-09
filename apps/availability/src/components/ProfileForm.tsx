@@ -181,7 +181,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
               <div className="note">
                 {t("lineConnectHint")}
                 <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800, letterSpacing: ".15em", fontFamily: '"Bricolage Grotesque"', color: "var(--ink)" }}>{lineCode.code}</div>
-                {lineCode.addUrl && <a className="glink" href={lineCode.addUrl} target="_blank" rel="noreferrer">Add the Folkpath LINE account →</a>}
+                {lineCode.addUrl && <a className="glink" href={lineCode.addUrl} target="_blank" rel="noreferrer">Add the Folkpaths LINE account →</a>}
               </div>
             ) : (
               <button type="button" className="btn" onClick={connectLine}>{t("connectLine")}</button>

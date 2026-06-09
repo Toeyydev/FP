@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     update: { userId: session.user.id, p256dh: s.keys.p256dh, auth: s.keys.auth },
   });
   // Instant confirmation so the guide sees a real notification right away.
-  const sent = await sendPushToUser(session.user.id, { title: "🔔 Folkpath alerts on", body: "You'll get job offers here — even with the app closed.", url: "/" });
+  const sent = await sendPushToUser(session.user.id, { title: "🔔 Folkpaths alerts on", body: "You'll get job offers here — even with the app closed.", url: "/" });
   return NextResponse.json({ ok: true, testSent: sent });
 }
 

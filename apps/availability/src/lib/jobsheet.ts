@@ -1,4 +1,4 @@
-// Job-sheet types, the default Folkpath expense catalogue, and the totals math.
+// Job-sheet types, the default Folkpaths expense catalogue, and the totals math.
 
 export type Booking = {
   name: string;

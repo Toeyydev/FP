@@ -8,7 +8,7 @@ const host = process.env.SMTP_HOST;
 const port = Number(process.env.SMTP_PORT || 587);
 const user = process.env.SMTP_USER;
 const pass = process.env.SMTP_PASS;
-const from = process.env.EMAIL_FROM || "Folkpath <no-reply@folkpath.local>";
+const from = process.env.EMAIL_FROM || "Folkpaths <no-reply@folkpath.local>";
 const secure = process.env.SMTP_SECURE === "true" || port === 465;
 
 export const emailEnabled = Boolean(host && user && pass);

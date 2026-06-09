@@ -16,7 +16,7 @@ function gcalUrl(tourName: string, date: string, slotIdx: number, durationMin: n
   const startMs = Date.UTC(y, m - 1, d, H, M) - 7 * 3600 * 1000;
   const f = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
   const dates = `${f(startMs)}/${f(startMs + durationMin * 60000)}`;
-  const params = new URLSearchParams({ action: "TEMPLATE", text: `Folkpath tour — ${tourName}`, dates, details });
+  const params = new URLSearchParams({ action: "TEMPLATE", text: `Folkpaths tour — ${tourName}`, dates, details });
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 type Sheet = {

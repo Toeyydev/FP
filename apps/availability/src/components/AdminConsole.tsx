@@ -9,8 +9,8 @@ type Req = { id: string; name: string; nickname: string | null; phone: string | 
 type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null };
 
 function lineInvite(name: string, code: string, oaUrl: string | null) {
-  return `Hi ${name}! To get Folkpath job offers & job sheets on LINE:\n` +
-    `1) Add our Folkpath Official Account${oaUrl ? `: ${oaUrl}` : " (search our OA)"}\n` +
+  return `Hi ${name}! To get Folkpaths job offers & job sheets on LINE:\n` +
+    `1) Add our Folkpaths Official Account${oaUrl ? `: ${oaUrl}` : " (search our OA)"}\n` +
     `2) Send this code in the chat: ${code}\n` +
     `You'll get a "✓ Connected" reply. 🙏`;
 }
@@ -167,7 +167,7 @@ export default function AdminConsole() {
         ) : (
           <div style={{ padding: 14 }}>
             <div className="fieldhelp" style={{ marginBottom: 10 }}>
-              Generate a guide&apos;s one-time code, then send them the invite. They add the Folkpath LINE Official Account and send the code to connect. (Sending offers/sheets over LINE also needs <code>LINE_CHANNEL_ACCESS_TOKEN</code> set.)
+              Generate a guide&apos;s one-time code, then send them the invite. They add the Folkpaths LINE Official Account and send the code to connect. (Sending offers/sheets over LINE also needs <code>LINE_CHANNEL_ACCESS_TOKEN</code> set.)
             </div>
             {guides.length === 0 ? <div className="op-empty">{t("noGuides")}</div> : (
               <table className="acct-table">

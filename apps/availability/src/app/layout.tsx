@@ -5,7 +5,7 @@ import BottomNav from "@/components/BottomNav";
 import { auth } from "@/auth";
 
 export const metadata: Metadata = {
-  title: "Folkpath — Guide Availability",
+  title: "Folkpaths — Guide Availability",
   description: "Guide availability & job dispatch board",
   manifest: "/manifest.json",
   appleWebApp: { capable: true, title: "Folkpaths", statusBarStyle: "default" },

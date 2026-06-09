@@ -29,7 +29,7 @@ function buildSheet(dateLabel: string, jobs: SheetJob[]) {
       if (j.netGuideFee != null) s += `\nNet guide fee ${thb(j.netGuideFee)}`;
       return s;
     });
-  return `Folkpath Job Sheet — ${dateLabel}\n${lines.join("\n\n")}\n${jobs.length} job(s)`;
+  return `Folkpaths Job Sheet — ${dateLabel}\n${lines.join("\n\n")}\n${jobs.length} job(s)`;
 }
 
 // Header fields auto-pulled from the guide's profile (operator is authorized to see PII).

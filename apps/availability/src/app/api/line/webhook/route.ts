@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (ev.type === "follow" && ev.replyToken) {
-      await lineReply(ev.replyToken, "Welcome to Folkpath 👋\nTo link your guide account, open the app → My details → Connect LINE, then send me the code shown there.");
+      await lineReply(ev.replyToken, "Welcome to Folkpaths 👋\nTo link your guide account, open the app → My details → Connect LINE, then send me the code shown there.");
     } else if (ev.type === "message" && ev.message?.type === "text") {
       const code = (ev.message.text || "").trim().toUpperCase();
       const looksLikeCode = /^[A-Z0-9]{6}$/.test(code);
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       if (user) {
         await prisma.user.update({ where: { id: user.id }, data: { lineUserId: userId, lineLinkCode: null } });
         await audit({ actorId: user.id, action: "line.linked", entityType: "User", entityId: user.id });
-        if (ev.replyToken) await lineReply(ev.replyToken, `✓ Connected, ${user.displayName}! You'll get Folkpath job offers and alerts here.`);
+        if (ev.replyToken) await lineReply(ev.replyToken, `✓ Connected, ${user.displayName}! You'll get Folkpaths job offers and alerts here.`);
       } else if (looksLikeCode && ev.replyToken) {
         await lineReply(ev.replyToken, "That code didn't work or has expired. In the app: My details → Connect LINE for a fresh code.");
       }

@@ -17,10 +17,10 @@ const STUB = process.env.STUB_DELIVERY !== "false";
 
 async function deliver(channel: string, to: string, what: string, value: string) {
   if (channel === "email") {
-    const subject = what === "verification code" ? "Your Folkpath verification code" : "Your Folkpath invite code";
+    const subject = what === "verification code" ? "Your Folkpaths verification code" : "Your Folkpaths invite code";
     const text = what === "verification code"
-      ? `Your Folkpath verification code is ${value}. It expires in 10 minutes.`
-      : `You've been invited to Folkpath. Use this single-use code to claim your account: ${value}`;
+      ? `Your Folkpaths verification code is ${value}. It expires in 10 minutes.`
+      : `You've been invited to Folkpaths. Use this single-use code to claim your account: ${value}`;
     await sendEmail({ to, subject, text });
     return;
   }

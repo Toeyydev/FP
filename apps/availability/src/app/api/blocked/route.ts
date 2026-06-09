@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     const guide = await prisma.user.findUnique({ where: { guideId: a.guideId }, select: { id: true, email: true, lineUserId: true } });
     if (!guide) continue;
     await prisma.notification.create({ data: { userId: guide.id, message: msg, kind: "block" } });
-    await sendEmail({ to: guide.email, subject: "Folkpath — a date was blocked", text: msg });
+    await sendEmail({ to: guide.email, subject: "Folkpaths — a date was blocked", text: msg });
     if (guide.lineUserId) await linePush(guide.lineUserId, msg);
   }
   await audit({ actorId: session!.user!.id, actorRole: session!.user!.role, action: "date.blocked", entityType: "BlockedDate", entityId: date, detail: { notified: affected.length } });
