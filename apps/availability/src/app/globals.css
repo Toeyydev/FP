@@ -291,11 +291,16 @@ a.glink:hover{text-decoration:underline}
 .td-val{ font-size:14.5px; margin-top:2px; }
 
 /* ---- Guide schedule ---- */
-.sched-card{ display:flex; align-items:center; gap:14px; text-decoration:none; color:inherit;
-  background:#fff; border:1px solid var(--line,#e3e0d8); border-radius:14px; padding:12px 14px; margin-bottom:10px; }
-.sched-card:hover{ border-color:#bcd8ff; background:#f7faff; }
-.sched-when{ text-align:center; min-width:60px; }
-.sched-when b{ display:block; font-size:14px; } .sched-when span{ font-size:12.5px; color:#1b4ef0; font-weight:700; }
+.sched-card{ display:flex; align-items:stretch; gap:14px; text-decoration:none; color:inherit;
+  background:var(--card); border:1px solid var(--line); border-radius:16px; padding:13px 15px; margin-bottom:11px;
+  box-shadow:var(--shadow-sm); transition:box-shadow .15s, transform .12s, border-color .15s; }
+.sched-card:hover{ border-color:var(--line-strong); box-shadow:var(--shadow); }
+/* The time block reads as a small day-coloured tile so each card is scannable. */
+.sched-when{ display:flex; flex-direction:column; justify-content:center; align-items:center; min-width:64px;
+  background:color-mix(in srgb, var(--day) 12%, transparent); border:1px solid color-mix(in srgb, var(--day) 22%, transparent);
+  border-radius:12px; padding:8px 6px; }
+.sched-when b{ display:block; font-size:13px; font-weight:700; }
+.sched-when span{ font-size:14px; font-weight:800; color:color-mix(in srgb, var(--day) 75%, var(--ink)); font-variant-numeric:tabular-nums; }
 .sched-mid{ flex:1; } .sched-mid b{ font-size:15px; }
 .sched-sub{ font-size:12.5px; color:var(--ink-soft,#777); margin-top:2px; }
 .sched-go{ font-size:18px; color:var(--ink-soft,#999); }
