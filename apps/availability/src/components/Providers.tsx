@@ -17,9 +17,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const saved = localStorage.getItem("folkpath:lang");
     if (saved === "th" || saved === "en") setLangState(saved);
-    // Register the PWA service worker (installable to home screen).
+    // Register the PWA service worker (installable to home screen). Check for a
+    // newer worker whenever the app regains focus, so a fresh deploy is picked up
+    // promptly (the worker's activate step reloads open clients onto it).
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+      navigator.serviceWorker.register("/service-worker.js").then((reg) => {
+        const poke = () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); };
+        document.addEventListener("visibilitychange", poke);
+      }).catch(() => {});
     }
   }, []);
 
@@ -51,7 +56,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     };
     document.addEventListener("visibilitychange", maybeReload);
     check();
-    const id = window.setInterval(check, 120000); // every 2 min
+    // Re-check every 2 min AND act on it, so an app left open in the foreground
+    // still picks up a new deploy (not only when the tab is re-focused).
+    const id = window.setInterval(() => { check().then(maybeReload); }, 120000);
     return () => { window.clearInterval(id); document.removeEventListener("visibilitychange", maybeReload); };
   }, []);
 
