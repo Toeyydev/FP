@@ -756,3 +756,29 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:4px;backgroun
 .guide-hero .gh-date{color:color-mix(in srgb, var(--day-ink) 78%, transparent)}
 .guide-hero::after{background:radial-gradient(circle, color-mix(in srgb, var(--day-ink) 16%, transparent), transparent 70%)}
 .guide-hero .gh-status{background:color-mix(in srgb, var(--day-ink) 15%, transparent);border-color:color-mix(in srgb, var(--day-ink) 28%, transparent);color:var(--day-ink)}
+
+/* ---- Lighter tone: day colour as a soft pastel on big surfaces ---- */
+:root{--day-deep:var(--primary)}
+[data-day="mon"]{--day-deep:#7a5200}
+[data-day="tue"]{--day-deep:#9d174d}
+[data-day="wed"]{--day-deep:#14532d}
+[data-day="thu"]{--day-deep:#9a3412}
+[data-day="fri"]{--day-deep:#075985}
+[data-day="sat"]{--day-deep:#5b21b6}
+[data-day="sun"]{--day-deep:#991b1b}
+
+.guide-hero{
+  color:var(--day-deep);
+  background:linear-gradient(135deg, color-mix(in srgb, var(--day) 24%, #fff), color-mix(in srgb, var(--day) 11%, #fff));
+  border:1px solid color-mix(in srgb, var(--day) 32%, #fff);
+  box-shadow:var(--shadow);
+}
+.guide-hero h2{color:var(--day-deep)}
+.guide-hero .gh-date{color:color-mix(in srgb, var(--day-deep) 72%, transparent)}
+.guide-hero::after{background:radial-gradient(circle, color-mix(in srgb, var(--day) 26%, transparent), transparent 70%)}
+.guide-hero .gh-status{background:color-mix(in srgb, var(--day) 16%, #fff);border:1px solid color-mix(in srgb, var(--day) 34%, #fff);color:var(--day-deep)}
+.guide-hero .gh-status b{color:var(--day-deep)}
+
+/* Softer top accent bar + deep-hue card time text. */
+body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
+.sched-when span{color:var(--day-deep)}

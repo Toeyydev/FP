@@ -1,7 +1,7 @@
 // Folkpaths PWA service worker — install + push + self-heal.
 // Navigation handling passes the ORIGINAL request to fetch() so auth redirects
 // (→ /start) work natively; offline falls back to the offline page.
-const CACHE = "folkpath-v12";
+const CACHE = "folkpath-v13";
 const OFFLINE = "/offline.html";
 
 self.addEventListener("install", (event) => {
