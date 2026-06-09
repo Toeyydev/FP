@@ -189,10 +189,25 @@ export default function AppClient({
   useEffect(() => {
     if (!role) return;
     const supported = typeof window !== "undefined" && "Notification" in window && "PushManager" in window && "serviceWorker" in navigator;
-    setAlertsOn(!supported || Notification.permission === "granted");
     const standalone = window.matchMedia?.("(display-mode: standalone)").matches
       || (window.navigator as unknown as { standalone?: boolean }).standalone === true;
     setInstalled(Boolean(standalone));
+    if (!supported) { setAlertsOn(true); return; }          // can't prompt on unsupported devices
+    if (Notification.permission !== "granted") { setAlertsOn(false); return; } // show the enable banner
+
+    // Permission is granted — but that alone doesn't guarantee a live subscription
+    // on the server (it can be dropped/expired, or an earlier POST failed). Re-sync
+    // it on every load so "granted" can never silently mean "no push gets through".
+    (async () => {
+      try {
+        const { key } = await fetch("/api/push/subscribe").then((r) => r.json());
+        const reg = await navigator.serviceWorker.ready;
+        const sub = (await reg.pushManager.getSubscription())
+          || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(key) as unknown as BufferSource }));
+        await fetch("/api/push/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ subscription: sub.toJSON() }) });
+        setAlertsOn(true);
+      } catch { setAlertsOn(true); }
+    })();
   }, [role]);
 
   async function enableAlerts() {
