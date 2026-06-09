@@ -705,3 +705,15 @@ a:focus-visible,button:focus-visible,.subtab:focus-visible,.vtab:focus-visible,[
 .rep-bars{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
 .rep-bar:hover .rb-track{background:var(--line-strong)}
 .rep-bar .rb-track i{transition:width .4s cubic-bezier(.22,1,.36,1)}
+
+/* ---- Guide welcome hero (bold, branded, first thing a guide sees) ---- */
+.guide-hero{position:relative;overflow:hidden;margin-bottom:16px;padding:22px 22px 20px;border-radius:20px;color:#fff;
+  background:radial-gradient(120% 140% at 100% 0%, #9a4a37 0%, #7e3a2c 45%, #6a3022 100%);
+  box-shadow:0 14px 34px -14px rgba(106,48,34,.6)}
+.guide-hero::after{content:"";position:absolute;right:-40px;top:-50px;width:180px;height:180px;border-radius:50%;
+  background:radial-gradient(circle, rgba(255,255,255,.16), transparent 70%);pointer-events:none}
+.guide-hero h2{margin:0;color:#fff;font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
+.guide-hero .gh-date{margin-top:4px;font-size:13.5px;color:rgba(255,255,255,.82);text-transform:capitalize}
+.guide-hero .gh-status{display:inline-flex;align-items:center;gap:7px;margin-top:15px;padding:7px 14px;
+  background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);border-radius:999px;font-size:13px;font-weight:600;backdrop-filter:blur(2px)}
+.guide-hero .gh-status b{font-size:16px;font-weight:800}

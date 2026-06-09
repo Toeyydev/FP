@@ -611,6 +611,27 @@ export default function AppClient({
   }
 
   // The 7:30 AM answer — the imminent tour, front and centre.
+  function guideHero(): ReactNode {
+    const now = new Date(Date.now() + 7 * 3600 * 1000);
+    const hr = now.getUTCHours();
+    const greet = hr < 12 ? t("greetMorning") : hr < 18 ? t("greetAfternoon") : t("greetEvening");
+    const first = (displayName || "").trim().split(" ")[0] || displayName;
+    const todayStr = now.toISOString().slice(0, 10);
+    const todayCount = schedule.filter((s) => s.date === todayStr).length;
+    const dateLabel = now.toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "long", day: "numeric", month: "long" });
+    return (
+      <section className="guide-hero">
+        <h2>{greet}{first ? `, ${first}` : ""}</h2>
+        <div className="gh-date">{dateLabel}</div>
+        <div className="gh-status">
+          {todayCount > 0
+            ? <><b>{todayCount}</b> <span>{t("heroToursToday")}</span></>
+            : <span>{t("heroNoTours")}</span>}
+        </div>
+      </section>
+    );
+  }
+
   function nextTourHero(): ReactNode {
     const s = schedule.find((x) => x.checkinState !== "COMPLETE");
     if (!s) return null;
@@ -1107,6 +1128,8 @@ export default function AppClient({
           <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
         </div>
       </div>
+
+      {role === "guide" && view === "schedule" && guideHero()}
 
       {/* Active-tour reminder: appears the moment a guide checks in / starts, and
           stays until they mark the tour done. */}
