@@ -22,7 +22,7 @@ function Bars({ rows, label, value }: { rows: { k: string; v: number }[]; label:
       {rows.length === 0 ? <div className="op-empty">No data.</div> : rows.map((r, i) => (
         <div key={i} className="rep-bar">
           <span className="rb-k" title={r.k}>{r.k}</span>
-          <span className="rb-track"><i style={{ width: `${(r.v / max) * 100}%` }} /></span>
+          <span className="rb-track"><i style={{ width: r.v > 0 ? `max(5px, ${(r.v / max) * 100}%)` : 0 }} /></span>
           <span className="rb-v">{r.v}</span>
         </div>
       ))}
@@ -58,16 +58,21 @@ export default function Reports() {
           <input className="search" style={{ flex: "none", width: 150 }} type="date" value={to} onChange={(e) => { setTo(e.target.value); load(from, e.target.value); }} />
         </div>
 
-        {!d ? <div className="op-empty">…</div> : (
+        {!d ? (
           <div style={{ padding: 16 }}>
-            <div className="rep-kpi">
-              <div><b>{d.summary.total}</b><span>bookings</span></div>
-              <div><b>{d.summary.totalPax}</b><span>pax</span></div>
-              <div><b>{d.summary.toursCompleted}</b><span>tours completed</span></div>
-              <div><b>{d.summary.guestsServed}</b><span>guests served</span></div>
-              <div><b>{d.summary.toursAssigned}</b><span>tours assigned</span></div>
-              <div className={d.summary.noShow > 0 ? "warn" : ""}><b>{d.summary.noShow}</b><span>no-shows</span></div>
-              <div className={d.summary.cancelRate > 0 ? "warn" : ""}><b>{d.summary.cancelRate}%</b><span>cancel rate ({d.summary.cancelled})</span></div>
+            <div className="kpi-row">{Array.from({ length: 7 }).map((_, i) => <div key={i} className="kpi skel" />)}</div>
+            <div className="rep-grid">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="skel-row" style={{ height: 140 }} />)}</div>
+          </div>
+        ) : (
+          <div style={{ padding: 16 }}>
+            <div className="kpi-row">
+              <div className="kpi"><b>{d.summary.total}</b><span>Bookings</span></div>
+              <div className="kpi"><b>{d.summary.totalPax}</b><span>Guests (pax)</span></div>
+              <div className="kpi"><b>{d.summary.toursCompleted}</b><span>Tours completed</span></div>
+              <div className="kpi"><b>{d.summary.guestsServed}</b><span>Guests served</span></div>
+              <div className="kpi"><b>{d.summary.toursAssigned}</b><span>Tours assigned</span></div>
+              <div className={`kpi ${d.summary.noShow > 0 ? "warn" : ""}`}><b>{d.summary.noShow}</b><span>No-shows</span></div>
+              <div className={`kpi ${d.summary.cancelRate > 0 ? "bad" : ""}`}><b>{d.summary.cancelRate}%</b><span>Cancel rate ({d.summary.cancelled})</span></div>
             </div>
 
             <div className="rep-grid">

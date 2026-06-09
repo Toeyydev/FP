@@ -700,3 +700,8 @@ a:focus-visible,button:focus-visible,.subtab:focus-visible,.vtab:focus-visible,[
 .kpi.skel::after,.skel-row::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
   background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);animation:shimmer 1.3s infinite}
 @keyframes shimmer{100%{transform:translateX(100%)}}
+
+/* ---- Reports: bar groups as cards + hover + smooth re-filter (ui-ux-pro-max) ---- */
+.rep-bars{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow-sm)}
+.rep-bar:hover .rb-track{background:var(--line-strong)}
+.rep-bar .rb-track i{transition:width .4s cubic-bezier(.22,1,.36,1)}
