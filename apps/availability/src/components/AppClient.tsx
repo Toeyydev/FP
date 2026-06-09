@@ -1112,7 +1112,7 @@ export default function AppClient({
           )}
         </nav>
         <div className="chip">
-          <div className="who"><small>{role === "guide" ? t("signedInGuide") : t("signedInOperator")}</small><span>{role === "guide" ? displayName : t("operations")}</span></div>
+          {role !== "guide" && <div className="who"><small>{t("signedInOperator")}</small><span>{t("operations")}</span></div>}
           <button className="btn sm ghost" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }} type="button">{t("signOut")}</button>
         </div>
       </header>

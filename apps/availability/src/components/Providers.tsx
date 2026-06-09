@@ -17,6 +17,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const saved = localStorage.getItem("folkpath:lang");
     if (saved === "th" || saved === "en") setLangState(saved);
+    // Thai day-of-week colour (สีประจำวัน): theme the app accent by today's day,
+    // recomputed in Bangkok time. Re-checked when the app regains focus so it
+    // rolls over at midnight without a manual reload.
+    const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const setDay = () => {
+      const bkk = new Date(Date.now() + 7 * 3600 * 1000);
+      document.documentElement.dataset.day = DAYS[bkk.getUTCDay()];
+    };
+    setDay();
+    document.addEventListener("visibilitychange", setDay);
     // Register the PWA service worker (installable to home screen). Check for a
     // newer worker whenever the app regains focus, so a fresh deploy is picked up
     // promptly (the worker's activate step reloads open clients onto it).

@@ -717,3 +717,37 @@ a:focus-visible,button:focus-visible,.subtab:focus-visible,.vtab:focus-visible,[
 .guide-hero .gh-status{display:inline-flex;align-items:center;gap:7px;margin-top:15px;padding:7px 14px;
   background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);border-radius:999px;font-size:13px;font-weight:600;backdrop-filter:blur(2px)}
 .guide-hero .gh-status b{font-size:16px;font-weight:800}
+
+/* =====================================================================
+   THAI DAY-OF-WEEK COLOUR (สีประจำวัน) — themes the accent by today's day.
+   Set as data-day on <html> in Providers; --day-ink keeps text readable.
+   ===================================================================== */
+:root{--day:var(--primary);--day-ink:#fff}
+[data-day="mon"]{--day:#f5b700;--day-ink:#2a2520}  /* Monday — yellow */
+[data-day="tue"]{--day:#ec4899;--day-ink:#ffffff}  /* Tuesday — pink */
+[data-day="wed"]{--day:#16a34a;--day-ink:#ffffff}  /* Wednesday — green */
+[data-day="thu"]{--day:#ea7317;--day-ink:#ffffff}  /* Thursday — orange */
+[data-day="fri"]{--day:#38bdf8;--day-ink:#0c3b52}  /* Friday — light blue */
+[data-day="sat"]{--day:#7c3aed;--day-ink:#ffffff}  /* Saturday — purple */
+[data-day="sun"]{--day:#dc2626;--day-ink:#ffffff}  /* Sunday — red */
+
+/* Full-width accent bar at the very top of every page — guide + operator. */
+body::before{content:"";position:fixed;left:0;right:0;top:0;height:4px;background:var(--day);z-index:60;pointer-events:none}
+/* The "live" pulse dot follows the day colour. */
+.dot,.dot::after{background:var(--day)}
+/* "Today" markers across calendars adopt the day colour. */
+.daylab.today b{color:var(--day)}
+.cell-day.today{border-color:var(--day)}
+.pill.now{box-shadow:0 0 0 2px var(--day)}
+
+/* Guide welcome hero adopts the day colour (readable via --day-ink). */
+.guide-hero{color:var(--day-ink);
+  background:radial-gradient(125% 145% at 100% 0%,
+    color-mix(in srgb, var(--day) 82%, #fff 18%) 0%,
+    var(--day) 52%,
+    color-mix(in srgb, var(--day) 80%, #000 20%) 100%);
+  box-shadow:0 14px 34px -14px color-mix(in srgb, var(--day) 60%, transparent)}
+.guide-hero h2{color:var(--day-ink)}
+.guide-hero .gh-date{color:color-mix(in srgb, var(--day-ink) 78%, transparent)}
+.guide-hero::after{background:radial-gradient(circle, color-mix(in srgb, var(--day-ink) 16%, transparent), transparent 70%)}
+.guide-hero .gh-status{background:color-mix(in srgb, var(--day-ink) 15%, transparent);border-color:color-mix(in srgb, var(--day-ink) 28%, transparent);color:var(--day-ink)}
