@@ -3,7 +3,6 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, type GuideFee, type Booking } from "@/lib/jobsheet";
-import { decrypt } from "@/lib/crypto";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 function esc(v: unknown): string {
@@ -45,7 +44,6 @@ export async function GET(req: NextRequest) {
   const adults = bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0) || (assignment?.pax ?? 0);
   const rate = guideFee.price != null ? guideFee.price.toLocaleString("en-US") : "............";
   const licenseNo = u?.licenseNo?.trim() || "";
-  const signatureImg = u?.signature ? decrypt(u.signature) : "";
 
   // Tourist rows: list known names; passport + nationality stay blank to fill in.
   let n = 0;
@@ -83,7 +81,9 @@ export async function GET(req: NextRequest) {
   td.c { text-align:center; width:34px; }
   .counts { display:flex; gap:22px; margin-top:6px; }
   .sign { margin-top:34px; text-align:right; }
-  @media print { .toolbar { display:none; } .page { margin:0; } }
+  .lic { border:none; border-bottom:1px solid #000; font:inherit; font-weight:600; width:210px; padding:0 3px; background:#fffcf0; }
+  .lic:focus { outline:none; background:#fff6d6; }
+  @media print { .toolbar { display:none; } .page { margin:0; } .lic { background:none; } }
 </style></head>
 <body>
   <div class="toolbar"><span>ใบสั่งงานมัคคุเทศก์ · ${esc(ref)} · แตะช่องว่างเพื่อกรอกข้อมูล (tap any blank to fill it in)</span><button onclick="window.print()">Save as PDF / Print</button></div>
@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
     <div class="row">๑. ชื่อผู้ประกอบธุรกิจนำเที่ยว: <b>${esc(OPERATOR_NAME)}</b></div>
     <div class="row indent">ใบอนุญาตประกอบธุรกิจนำเที่ยวเลขที่ <b>${esc(OPERATOR_LICENSE)}</b></div>
     <div class="row">๒. ขอมอบหมายให้</div>
-    <div class="row indent">๒.๑ <b>${esc(guideName)}</b> ใบอนุญาตเป็นมัคคุเทศก์เลขที่ ${licenseNo ? `<b>${esc(licenseNo)}</b>` : BLANK}</div>
+    <div class="row indent">๒.๑ <b>${esc(guideName)}</b> ใบอนุญาตเป็นมัคคุเทศก์เลขที่ <input id="licNo" class="lic" contenteditable="false" value="${esc(licenseNo)}" placeholder="เลขที่ใบอนุญาต" /></div>
     <div class="row indent">ปฏิบัติหน้าที่เป็นมัคคุเทศก์เพื่อให้บริการแก่นักท่องเที่ยวคณะนี้ ในอัตราค่าตอบแทนวันละ <b>${esc(rate)}</b> บาท</div>
     <div class="row indent">ทัวร์: <b>${esc(tour?.name ?? tourId)}</b> · เวลา ${esc(SLOT_TIMES[slotIdx] ?? tour?.time ?? "")}</div>
 
@@ -122,13 +122,24 @@ export async function GET(req: NextRequest) {
     </div>
 
     <div class="sign">
-      ${signatureImg ? `<img src="${signatureImg}" alt="signature" style="height:52px;display:block;margin:0 0 -8px auto" />` : ""}
+      <img src="/operator-signature.png" alt="ลายเซ็นผู้ประกอบการ" style="height:52px;display:block;margin:0 0 -8px auto" />
       ลงชื่อ .............................................<br>
       ( ${esc(SIGNATORY)} )<br>
       ผู้ประกอบธุรกิจนำเที่ยว / ผู้ได้รับมอบอำนาจ
     </div>
   </div>
-  <!-- No auto-print: fill in the blanks first, then use the Print button. -->
+  <!-- No auto-print: fill the blanks first, then use the Print button. The licence
+       number saves to this guide's profile so the next job order pre-fills it. -->
+  <script>
+    (function () {
+      var lic = document.getElementById("licNo"); if (!lic) return;
+      var last = lic.value;
+      lic.addEventListener("blur", function () {
+        if (lic.value === last) return; last = lic.value;
+        fetch("/api/jobsheet/license", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: ${JSON.stringify(guideId)}, licenseNo: lic.value }) }).catch(function () {});
+      });
+    })();
+  </script>
 </body></html>`;
 
   return new NextResponse(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
