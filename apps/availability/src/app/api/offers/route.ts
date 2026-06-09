@@ -94,3 +94,18 @@ export async function POST(req: NextRequest) {
   });
   return NextResponse.json({ ok: true, offerId: r.offerId, candidates: r.candidates, lineSent: r.lineSent });
 }
+
+// DELETE { id } — operator only. Cancels/removes a job offer and clears it from
+// every guide's bell. Does NOT touch an assignment already made from it.
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ id: z.string().min(1) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { id } = parsed.data;
+  await prisma.notification.deleteMany({ where: { offerId: id } });
+  await prisma.jobOfferResponse.deleteMany({ where: { offerId: id } });
+  await prisma.jobOffer.deleteMany({ where: { id } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "offer.deleted", entityType: "JobOffer", entityId: id });
+  return NextResponse.json({ ok: true });
+}

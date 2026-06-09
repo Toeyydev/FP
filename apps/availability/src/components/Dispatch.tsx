@@ -27,6 +27,11 @@ export default function Dispatch() {
   useEffect(() => { load(); const id = window.setInterval(load, 15000); return () => window.clearInterval(id); }, [load]);
 
   const [msg, setMsg] = useState("");
+  async function deleteOffer(o: Offer) {
+    if (!confirm(`Delete this job offer?\n${o.tourName} · ${o.date} ${o.time}\n\nIt's removed from every guide's notifications. Any tour already accepted stays assigned.`)) return;
+    const r = await fetch("/api/offers", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: o.id }) });
+    if (r.ok) await load();
+  }
   async function removeAssignment(a: Assignment) {
     if (!confirm(`Remove this tour?\n${a.tourName} · ${a.date} ${a.time} · ${a.guideId} ${a.guideName}\n\nIts bookings go back to the inbox to re-dispatch.`)) return;
     const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
@@ -100,7 +105,7 @@ export default function Dispatch() {
           <div style={{ padding: 14 }}>
             {data.offers.length === 0 ? <div className="op-empty">No offers sent yet. Send one from the board or the bookings inbox.</div> : (
               <table className="acct-table">
-                <thead><tr><th>When</th><th>Tour</th><th>Status</th><th>Responses</th></tr></thead>
+                <thead><tr><th>When</th><th>Tour</th><th>Status</th><th>Responses</th><th></th></tr></thead>
                 <tbody>
                   {data.offers.map((o) => (
                     <tr key={o.id}>
@@ -111,6 +116,7 @@ export default function Dispatch() {
                         {o.status === "OPEN" ? `${o.pending} waiting of ${o.candidates}` : `${o.candidates} offered`}
                         {o.denied.length > 0 && <div>declined: {o.denied.join(", ")}</div>}
                       </td>
+                      <td><button className="btn sm danger" title="Delete this job offer" onClick={() => deleteOffer(o)}>🗑</button></td>
                     </tr>
                   ))}
                 </tbody>

@@ -30,9 +30,7 @@ export async function POST(req: NextRequest) {
         if (res.ok) {
           await audit({ actorId: guide.id, action: "offer.accepted", entityType: "JobOffer", entityId: offerId });
           if (ev.replyToken) await lineReply(ev.replyToken, `✅ You got it, ${guide.displayName}! ${slotLabel(res.offer.slotIdx)} on ${res.offer.date}. It's now in your job sheet.`);
-          // Tell the operator who took it.
-          const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
-          if (offer?.createdById) await prisma.notification.create({ data: { userId: offer.createdById, kind: "offer", message: `✅ ${guide.guideId} ${guide.displayName} accepted: ${slotLabel(res.offer.slotIdx)} · ${res.offer.date}` } });
+          // The operator team is notified inside acceptOffer (covers app + LINE).
         } else if (ev.replyToken) {
           const msg = res.reason === "taken" ? "Sorry — another guide already took this one. 🙏"
             : res.reason === "expired" ? "This offer has expired."

@@ -137,6 +137,22 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   // Push to connected Google Calendars (guide + operator master), if configured.
   try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on calendar */ }
 
+  // Tell the operator team a guide took the job (in-app + push). Covers BOTH the
+  // in-app and LINE accept paths, and works even for auto re-offers (no creator).
+  try {
+    const [g, tour, opsUsers] = await Promise.all([
+      prisma.user.findFirst({ where: { guideId }, select: { displayName: true } }),
+      prisma.tour.findUnique({ where: { id: offer.tourId }, select: { name: true } }),
+      prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } }),
+    ]);
+    const who = `${guideId}${g?.displayName ? ` ${g.displayName}` : ""}`;
+    const msg = `${who} accepted ${tour?.name ?? offer.tourId} · ${slotLabel(offer.slotIdx)} · ${offer.date}`;
+    for (const o of opsUsers) {
+      await prisma.notification.create({ data: { userId: o.id, kind: "offer", message: msg } });
+      await sendPushToUser(o.id, { title: "Job accepted", body: msg, url: "/jobs", tag: `accepted-${offer.id}` });
+    }
+  } catch { /* never block accept on notifying the operator */ }
+
   return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
 }
 
