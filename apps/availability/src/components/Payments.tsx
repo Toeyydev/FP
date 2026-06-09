@@ -1,16 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
+import { SLOTS } from "@/lib/slots";
 
-type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null };
+type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
+type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
+
+const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
 export default function Payments() {
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (gid: string) => setOpen((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
+  // Mark a single tour paid/unpaid (per-tour TourPayment via the /pay endpoint).
+  async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING") {
+    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status }) });
+    if (r.ok) load(period);
+  }
 
   const load = useCallback(async (p?: string) => {
     const r = await fetch(`/api/payments${p ? `?period=${p}` : ""}`, { cache: "no-store" });
@@ -59,21 +70,40 @@ export default function Payments() {
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={7} className="op-empty">No job sheets in this month yet.</td></tr>
-              ) : rows.map((r) => (
-                <tr key={r.guideId}>
-                  <td><span className="gid">{r.guideId}</span> {r.guide}</td>
-                  <td className="r">{r.tours}</td>
+                <tr><td colSpan={7} className="op-empty">No tours assigned this month yet.</td></tr>
+              ) : rows.map((r) => {
+                const unpaid = r.jobs.filter((j) => !j.paid);
+                return (
+                <Fragment key={r.guideId}>
+                <tr style={{ cursor: "pointer" }} onClick={() => toggle(r.guideId)}>
+                  <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{open.has(r.guideId) ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
+                  <td className="r">{r.tours}{unpaid.length > 0 && <span className="badge invited" style={{ marginLeft: 6 }}>{unpaid.length} unpaid</span>}</td>
                   <td className="r">{thb(r.netFee)}</td>
                   <td className="r">{thb(r.expenses)}</td>
                   <td className="r"><b>{thb(r.payout)}</b></td>
                   <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
-                  <td style={{ display: "flex", gap: 6 }}>{r.status === "paid"
+                  <td style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>{r.status === "paid"
                     ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
                     : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>}
                     <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>🗑</button></td>
                 </tr>
-              ))}
+                {open.has(r.guideId) && (
+                  <tr className="pay-jobs-row"><td colSpan={7} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+                    {r.jobs.map((j, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
+                        <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
+                        <span style={{ flex: 1 }}>{j.tour}</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
+                        <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Unpaid"}</span>
+                        {j.paid
+                          ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
+                          : <button className="btn sm primary" onClick={() => setJobPaid(j, r.guideId, "PAID")}>Mark paid</button>}
+                      </div>
+                    ))}
+                  </td></tr>
+                )}
+                </Fragment>
+              );})}
             </tbody>
             {rows.length > 0 && (
               <tfoot>

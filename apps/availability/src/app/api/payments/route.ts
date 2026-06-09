@@ -19,31 +19,41 @@ export async function GET(req: NextRequest) {
   // Cap the month at today so future (not-yet-done) tours don't count as earned.
   const monthEnd = `${period}-31`;
   const cap = bkkToday() < monthEnd ? bkkToday() : monthEnd;
-  const [assigns, sheets, statuses, guides] = await Promise.all([
-    prisma.assignment.findMany({ where: { date: { gte: `${period}-01`, lte: cap } }, select: { guideId: true, date: true, slotIdx: true } }),
+  const [assigns, sheets, statuses, guides, tours, tourPays] = await Promise.all([
+    prisma.assignment.findMany({ where: { date: { gte: `${period}-01`, lte: cap } }, select: { guideId: true, date: true, slotIdx: true, tourId: true } }),
     prisma.jobSheet.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, expenses: true, guideFee: true } }),
     prisma.payrollStatus.findMany({ where: { period } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
+    prisma.tour.findMany({ select: { id: true, name: true } }),
+    prisma.tourPayment.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, status: true } }),
   ]);
 
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
+  const tName = (id: string) => tours.find((t) => t.id === id)?.name ?? id;
   const statusOf = (gid: string) => statuses.find((s) => s.guideId === gid);
   const sheetOf = new Map(sheets.map((s) => [`${s.guideId}|${s.date}|${s.slotIdx}`, s]));
+  const payStatusOf = new Map(tourPays.map((p) => [`${p.guideId}|${p.date}|${p.slotIdx}`, p.status]));
+  const r2 = (n: number) => Math.round(n * 100) / 100;
 
+  type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
-  const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number }> = {};
+  const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};
   for (const a of assigns) {
-    const s = sheetOf.get(`${a.guideId}|${a.date}|${a.slotIdx}`);
+    const k = `${a.guideId}|${a.date}|${a.slotIdx}`;
+    const s = sheetOf.get(k);
     const t = s
       ? computeTotals((s.expenses as unknown as Expense[]) ?? [], (s.guideFee as unknown as GuideFee) ?? DEFAULT_GUIDE_FEE)
       : computeTotals([], DEFAULT_GUIDE_FEE);
-    const g = (byGuide[a.guideId] ??= { guideId: a.guideId, guide: gName(a.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0 });
+    const g = (byGuide[a.guideId] ??= { guideId: a.guideId, guide: gName(a.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
+    const monthPaid = (statusOf(a.guideId)?.status ?? "pending") === "paid";
+    const ps = payStatusOf.get(k) ?? "PENDING";
+    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), amount: r2(t.grandTotal), paid: monthPaid || ps === "PAID", payStatus: monthPaid ? "PAID" : ps });
   }
 
   const rows = Object.values(byGuide)
-    .map((g) => ({ ...g, netFee: Math.round(g.netFee * 100) / 100, expenses: Math.round(g.expenses * 100) / 100, payout: Math.round(g.payout * 100) / 100, status: statusOf(g.guideId)?.status ?? "pending", paidAt: statusOf(g.guideId)?.paidAt ?? null }))
+    .map((g) => ({ ...g, netFee: r2(g.netFee), expenses: r2(g.expenses), payout: r2(g.payout), jobs: g.jobs.sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx), status: statusOf(g.guideId)?.status ?? "pending", paidAt: statusOf(g.guideId)?.paidAt ?? null }))
     .sort((a, b) => a.guide.localeCompare(b.guide));
 
   const totals = rows.reduce((s, r) => ({ tours: s.tours + r.tours, netFee: s.netFee + r.netFee, expenses: s.expenses + r.expenses, payout: s.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
