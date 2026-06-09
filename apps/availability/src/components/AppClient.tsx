@@ -1108,6 +1108,23 @@ export default function AppClient({
         </div>
       </div>
 
+      {/* Active-tour reminder: appears the moment a guide checks in / starts, and
+          stays until they mark the tour done. */}
+      {role === "guide" && (() => {
+        const active = schedule.find((s) => s.checkinState === "ARRIVE" || s.checkinState === "START");
+        if (!active) return null;
+        return (
+          <div className="active-tour" role="alert">
+            <span className="at-dot" />
+            <div className="at-text">
+              <b>{t("tourInProgress")}</b>
+              <span>{active.tourName} · {active.time}. {t("markDoneWhenEnds")}</span>
+            </div>
+            <button className="btn primary at-btn" onClick={() => openReport(active)}>{t("completeTour")}</button>
+          </div>
+        );
+      })()}
+
       {role === "guide" && <GuideWelcome />}
 
       {!alertsOn && (
