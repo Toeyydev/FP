@@ -782,3 +782,18 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:4px;backgroun
 /* Softer top accent bar + deep-hue card time text. */
 body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
 .sched-when span{color:var(--day-deep)}
+
+/* =====================================================================
+   EVERYTHING FOLLOWS THE DAY — retint the core surfaces, primary, and
+   borders from --day (light wash) and --day-deep (buttons/links/accent),
+   so the whole app takes today's colour while text stays readable.
+   ===================================================================== */
+[data-day]{
+  --paper: color-mix(in srgb, var(--day) 10%, #ffffff);   /* page background */
+  --card:  color-mix(in srgb, var(--day) 4%,  #ffffff);   /* cards / panels  */
+  --line:        color-mix(in srgb, var(--day) 18%, #e7ddcb);
+  --line-strong: color-mix(in srgb, var(--day) 26%, #d9cfbe);
+  --grey-bg:     color-mix(in srgb, var(--day) 12%, #efeadf);
+  --primary: var(--day-deep);     /* buttons, brand accents (white text reads) */
+  --accent:  var(--day-deep);
+}

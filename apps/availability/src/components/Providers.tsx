@@ -21,9 +21,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
     // recomputed in Bangkok time. Re-checked when the app regains focus so it
     // rolls over at midnight without a manual reload.
     const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const DEEP: Record<string, string> = { sun: "#991b1b", mon: "#7a5200", tue: "#9d174d", wed: "#14532d", thu: "#9a3412", fri: "#075985", sat: "#5b21b6" };
     const setDay = () => {
       const bkk = new Date(Date.now() + 7 * 3600 * 1000);
-      document.documentElement.dataset.day = DAYS[bkk.getUTCDay()];
+      const day = DAYS[bkk.getUTCDay()];
+      document.documentElement.dataset.day = day;
+      // Match the phone status bar (PWA theme colour) to the day too.
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute("content", DEEP[day]);
     };
     setDay();
     document.addEventListener("visibilitychange", setDay);
