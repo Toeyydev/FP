@@ -6,6 +6,7 @@ import { SLOT_COUNT } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { sendTourCalendarInvite } from "@/lib/calendar";
+import { removeTourEvents } from "@/lib/tour-calendar-sync";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -104,6 +105,11 @@ export async function DELETE(req: NextRequest) {
   const parsed = delSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
   const { guideId, date, slotIdx, release } = parsed.data;
+
+  // Clean up the Google Calendar events first (guide + operator master) so a
+  // removed/re-offered tour doesn't linger as a ghost event. Never blocks delete.
+  const existing = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
+  if (existing) { try { await removeTourEvents(existing); } catch { /* calendar cleanup is best-effort */ } }
 
   await prisma.assignment.deleteMany({ where: { guideId, date, slotIdx } });
   // Plain Remove: send the slot's bookings back to the inbox (PENDING) so they can
