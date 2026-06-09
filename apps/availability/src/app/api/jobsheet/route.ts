@@ -119,6 +119,12 @@ export async function PUT(req: NextRequest) {
     create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, createdById: session!.user!.id ?? null },
     update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee },
   });
+  // Keep the assignment's pax in sync with the job sheet's booking total, so the
+  // dispatch board ("On-going tours") and the LINE job sheet match the Job Details.
+  const paxTotal = d.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0);
+  if (paxTotal > 0) {
+    await prisma.assignment.updateMany({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, data: { pax: paxTotal } });
+  }
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref } });
   return NextResponse.json({ ok: true, sheet });
 }
