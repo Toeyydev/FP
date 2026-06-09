@@ -32,7 +32,9 @@ async function notifyGuide(guideId: string, message: string, title: string, body
 // guides), leave it pending and alert for a manual decision. Never throws.
 export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; status: string }): Promise<boolean> {
   try {
-    if (b.status !== "PENDING" || !b.tourId || !b.date || b.slotIdx == null) return false;
+    // Attach by date + slot — the assigned guide owns that time slot, so a new
+    // booking lands on their job even if it arrived without a tour mapping yet.
+    if (b.status !== "PENDING" || !b.date || b.slotIdx == null) return false;
     const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx } });
     if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
     const ref = b.confirmationCode || b.customerName || "a new booking";
@@ -48,8 +50,9 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
       return false;
     }
     const key = { guideId_date_slotIdx: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx } };
-    // Mark OFFERED so it leaves the "ready to offer" inbox (same as a dispatched booking).
-    await prisma.booking.update({ where: { id: b.id }, data: { status: "OFFERED" } });
+    // Mark OFFERED so it leaves the "ready to offer" inbox, and link it to the
+    // guide's tour if it arrived unmapped.
+    await prisma.booking.update({ where: { id: b.id }, data: { status: "OFFERED", tourId: b.tourId ?? a.tourId } });
     await prisma.assignment.update({ where: key, data: { pax: newTotal } });
     const js = await prisma.jobSheet.findUnique({ where: key });
     const list = Array.isArray(js?.bookings) ? (js!.bookings as unknown[]) : [];

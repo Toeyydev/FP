@@ -38,7 +38,7 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
     prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 4 }]);
     await autoAttachLate(booking({ pax: 2 })); // 4 + 2 = 6
 
-    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED" } }));
+    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
     expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 6 } }));
     expect(prismaMock.jobSheet.upsert).toHaveBeenCalled();
     // alerts both the guide and the operator
@@ -70,9 +70,17 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
     expect(prismaMock.notification.create).toHaveBeenCalled();
   });
 
-  it("ignores cancelled or unmapped bookings", async () => {
+  it("ignores cancelled bookings and ones with no date/slot", async () => {
     await autoAttachLate(booking({ status: "CANCELLED" }));
-    await autoAttachLate(booking({ tourId: null }));
+    await autoAttachLate(booking({ slotIdx: null }));
+    await autoAttachLate(booking({ date: null }));
     expect(prismaMock.assignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it("still attaches an UNMAPPED booking (no tourId) — the slot's guide owns it", async () => {
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 4 }]);
+    await autoAttachLate(booking({ tourId: null, pax: 2 }));
+    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
+    expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 6 } }));
   });
 });

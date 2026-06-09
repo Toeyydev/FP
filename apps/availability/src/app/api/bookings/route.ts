@@ -6,7 +6,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_COUNT } from "@/lib/slots";
 import { productKey } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
-import { reconcileAssignedBookings } from "@/lib/booking-import";
+import { reconcileAssignedBookings, autoAttachLate } from "@/lib/booking-import";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -102,6 +102,8 @@ export async function POST(req: NextRequest) {
         bookingDate: d.bookingDate ?? null, paymentStatus: d.paymentStatus || "unpaid", status: "PENDING",
       },
     });
+    // If the slot is already assigned to a guide, attach this booking to their job now.
+    await autoAttachLate(b);
     await audit({ actorId, actorRole, action: "booking.added", entityType: "Booking", entityId: b.id });
     return NextResponse.json({ ok: true, booking: b });
   }
@@ -134,6 +136,8 @@ export async function POST(req: NextRequest) {
         data: { tourId: rest.tourId },
       });
     }
+    // Setting a tour/slot may now match an assigned slot — attach to that guide.
+    await autoAttachLate(b);
     return NextResponse.json({ ok: true, booking: b });
   }
 
