@@ -47,6 +47,8 @@ model User {
   emergencyName     String?
   emergencyPhone    String?
   emergencyRelation String?
+  licenseNo       String? // tour-guide licence no. (manual) — printed on the job order
+  signature       String? // AES-encrypted PNG data-URI of the guide's signature
   // Verified profile (sensitive PII — stored AES-encrypted via lib/crypto).
   taxId           String?
   idCardAddress   String?

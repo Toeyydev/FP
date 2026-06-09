@@ -15,7 +15,7 @@ type Profile = {
 };
 
 const FIELDS = [
-  ["fullName", "fullName"], ["phone", "phoneLabel"], ["lineId", "lineIdLabel"],
+  ["fullName", "fullName"], ["phone", "phoneLabel"], ["lineId", "lineIdLabel"], ["licenseNo", "licenseNoLabel"],
   ["emergencyName", "emergencyNameLabel"], ["emergencyPhone", "emergencyPhoneLabel"], ["emergencyRelation", "emergencyRelationLabel"],
   ["taxId", "taxIdLabel"], ["idCardAddress", "idCardAddressLabel"], ["currentAddress", "currentAddressLabel"],
   ["bankName", "bankNameLabel"], ["bankAccountNo", "bankAccountNoLabel"], ["bankAccountName", "bankAccountNameLabel"], ["bankBranch", "bankBranchLabel"],
@@ -34,6 +34,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   useEffect(() => { fetch("/api/google/status", { cache: "no-store" }).then((r) => r.json()).then(setCal).catch(() => {}); }, []);
   async function disconnectCal() { await fetch("/api/google/status", { method: "DELETE" }); setCal((c) => ({ ...c, connected: false, email: null })); }
   const fileRefs = { ID_CARD: useRef<HTMLInputElement>(null), BANK_BOOK: useRef<HTMLInputElement>(null), GUIDE_LICENSE: useRef<HTMLInputElement>(null), OTHER: useRef<HTMLInputElement>(null) };
+  const sigRef = useRef<HTMLInputElement>(null);
   const qs = targetUserId ? `?userId=${targetUserId}` : "";
 
   const load = useCallback(async () => {
@@ -101,6 +102,28 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   }
   async function del(id: string) {
     await fetch(`/api/profile/document/${id}`, { method: "DELETE" });
+    await load();
+  }
+  // Signature: downscale the image and store it as a PNG data-URI for the job order.
+  async function uploadSignature(file: File) {
+    try {
+      setDocMsg(t("uploading"));
+      const bmp = await createImageBitmap(file).catch(() => null);
+      if (!bmp) { setDocMsg(t("docUploadFailed")); return; }
+      const max = 600, scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const ctx = c.getContext("2d"); if (!ctx) { setDocMsg(t("docUploadFailed")); return; }
+      ctx.drawImage(bmp, 0, 0, w, h);
+      const dataUri = c.toDataURL("image/png");
+      if (dataUri.length > 400_000) { setDocMsg(t("docTooLarge")); return; }
+      const r = await fetch("/api/profile/signature", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dataUri, ...(targetUserId ? { userId: targetUserId } : {}) }) });
+      setDocMsg(r.ok ? t("uploaded") : t("docUploadFailed"));
+      if (r.ok) await load();
+    } catch { setDocMsg(t("docUploadFailed")); }
+  }
+  async function removeSignature() {
+    await fetch("/api/profile/signature", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(targetUserId ? { userId: targetUserId } : {}) });
     await load();
   }
   async function connectLine() {
@@ -171,6 +194,17 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
               {docBtn("OTHER", t("otherDoc"))}
             </div>
             {docMsg && <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: docMsg === t("uploaded") ? "var(--green)" : "#c0392b" }}>{docMsg}</div>}
+          </div>
+
+          <div className="fld" style={{ marginTop: 22 }}>
+            <label>{t("signatureLabel")}</label>
+            <div className="auth-note" style={{ marginTop: 6, marginBottom: 10 }}>{t("signatureHint")}</div>
+            {(p.signature as string | null) && <div style={{ marginBottom: 10 }}><img src={p.signature as string} alt="signature" style={{ height: 64, background: "#fff", border: "1px solid var(--line)", borderRadius: 8, padding: 6 }} /></div>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="btn sm" onClick={() => sigRef.current?.click()}>{(p.signature as string | null) ? t("replaceSignature") : t("uploadSignature")}</button>
+              {(p.signature as string | null) && <button type="button" className="btn sm danger" onClick={removeSignature}>{t("deleteDoc")}</button>}
+              <input ref={sigRef} type="file" accept="image/png,image/jpeg" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadSignature(f); e.target.value = ""; }} />
+            </div>
           </div>
 
           <div className="fld" style={{ marginTop: 22 }}>

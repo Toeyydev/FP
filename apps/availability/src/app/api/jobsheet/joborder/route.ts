@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { decrypt } from "@/lib/crypto";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 function esc(v: unknown): string {
@@ -43,6 +44,8 @@ export async function GET(req: NextRequest) {
   const dateTH = `${dd}/${mm}/${yy}`;
   const adults = bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0) || (assignment?.pax ?? 0);
   const rate = guideFee.price != null ? guideFee.price.toLocaleString("en-US") : "............";
+  const licenseNo = u?.licenseNo?.trim() || "";
+  const signatureImg = u?.signature ? decrypt(u.signature) : "";
 
   // Tourist rows: list known names; passport + nationality stay blank to fill in.
   let n = 0;
@@ -92,7 +95,7 @@ export async function GET(req: NextRequest) {
     <div class="row">๑. ชื่อผู้ประกอบธุรกิจนำเที่ยว: <b>${esc(OPERATOR_NAME)}</b></div>
     <div class="row indent">ใบอนุญาตประกอบธุรกิจนำเที่ยวเลขที่ <b>${esc(OPERATOR_LICENSE)}</b></div>
     <div class="row">๒. ขอมอบหมายให้</div>
-    <div class="row indent">๒.๑ <b>${esc(guideName)}</b> ใบอนุญาตเป็นมัคคุเทศก์เลขที่ ${BLANK}</div>
+    <div class="row indent">๒.๑ <b>${esc(guideName)}</b> ใบอนุญาตเป็นมัคคุเทศก์เลขที่ ${licenseNo ? `<b>${esc(licenseNo)}</b>` : BLANK}</div>
     <div class="row indent">ปฏิบัติหน้าที่เป็นมัคคุเทศก์เพื่อให้บริการแก่นักท่องเที่ยวคณะนี้ ในอัตราค่าตอบแทนวันละ <b>${esc(rate)}</b> บาท</div>
     <div class="row indent">ทัวร์: <b>${esc(tour?.name ?? tourId)}</b> · เวลา ${esc(SLOT_TIMES[slotIdx] ?? tour?.time ?? "")}</div>
 
@@ -119,6 +122,7 @@ export async function GET(req: NextRequest) {
     </div>
 
     <div class="sign">
+      ${signatureImg ? `<img src="${signatureImg}" alt="signature" style="height:52px;display:block;margin:0 0 -8px auto" />` : ""}
       ลงชื่อ .............................................<br>
       ( ${esc(SIGNATORY)} )<br>
       ผู้ประกอบธุรกิจนำเที่ยว / ผู้ได้รับมอบอำนาจ

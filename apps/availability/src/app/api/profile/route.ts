@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
     emergencyName: u.emergencyName, emergencyPhone: u.emergencyPhone, emergencyRelation: u.emergencyRelation,
     taxId: decrypt(u.taxId), idCardAddress: decrypt(u.idCardAddress), currentAddress: decrypt(u.currentAddress), bankName: decrypt(u.bankName),
     bankAccountNo: decrypt(u.bankAccountNo), bankAccountName: decrypt(u.bankAccountName), bankBranch: decrypt(u.bankBranch),
+    licenseNo: u.licenseNo, signature: decrypt(u.signature),
     documents: u.documents,
     canEdit: true,
     isOperator: isOps(session.user.role),
@@ -43,6 +44,7 @@ const putSchema = z.object({
   emergencyName: z.string().max(120).optional(),
   emergencyPhone: z.string().max(40).optional(),
   emergencyRelation: z.string().max(60).optional(),
+  licenseNo: z.string().max(60).optional(),
   taxId: z.string().max(60).optional(),
   idCardAddress: z.string().max(600).optional(),
   currentAddress: z.string().max(600).optional(),
@@ -70,6 +72,7 @@ export async function PUT(req: NextRequest) {
   if (d.emergencyName !== undefined) data.emergencyName = d.emergencyName.trim() || null;
   if (d.emergencyPhone !== undefined) data.emergencyPhone = d.emergencyPhone.trim() || null;
   if (d.emergencyRelation !== undefined) data.emergencyRelation = d.emergencyRelation.trim() || null;
+  if (d.licenseNo !== undefined) data.licenseNo = d.licenseNo.trim() || null;
   if (d.taxId !== undefined) data.taxId = encOpt(d.taxId);
   if (d.idCardAddress !== undefined) data.idCardAddress = encOpt(d.idCardAddress);
   if (d.currentAddress !== undefined) data.currentAddress = encOpt(d.currentAddress);
