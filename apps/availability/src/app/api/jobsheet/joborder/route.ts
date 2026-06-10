@@ -123,9 +123,7 @@ export async function GET(req: NextRequest) {
 
     <div class="sign">
       <img src="/operator-signature.png" alt="ลายเซ็นผู้ประกอบการ" contenteditable="false" draggable="false" style="height:52px;display:block;margin:0 0 -8px auto;user-select:none;-webkit-user-select:none;pointer-events:none" />
-      ลงชื่อ .............................................<br>
-      ( ${esc(SIGNATORY)} )<br>
-      ผู้ประกอบธุรกิจนำเที่ยว / ผู้ได้รับมอบอำนาจ
+      ลงชื่อ .............................................
     </div>
   </div>
   <!-- No auto-print: fill the blanks first, then use the Print button. The licence
