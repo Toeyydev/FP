@@ -23,7 +23,7 @@ export const authConfig = {
         p.startsWith("/forgot") || p.startsWith("/reset") ||
         p.startsWith("/api/auth") || p.startsWith("/api/claim") || p.startsWith("/api/request") ||
         p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version") ||
-        p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/bokun/health" || p === "/api/bokun/channels" || p === "/api/google/health" ||
+        p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/bokun/health" || p === "/api/google/health" ||
         p.startsWith("/api/passkey");
       if (isPublic) return true;
       if (auth?.user) return true;

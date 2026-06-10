@@ -6,7 +6,12 @@ import crypto from "crypto";
 const BASE = process.env.BOKUN_API_URL || "https://api.bokun.io";
 const ACCESS = process.env.BOKUN_ACCESS_KEY;
 const SECRET = process.env.BOKUN_SECRET_KEY;
+// Every Bokun API action runs in the context of a booking channel. Set the
+// channel UUID (Bokun → Settings → Sales settings → Booking channels → copy UUID)
+// so product-booking-search is scoped correctly.
+const CHANNEL = process.env.BOKUN_BOOKING_CHANNEL_UUID;
 export const bokunApiEnabled = Boolean(ACCESS && SECRET);
+export const bokunChannelSet = Boolean(CHANNEL);
 
 function bokunDate(): string {
   // "yyyy-MM-dd HH:mm:ss" in UTC.
@@ -24,6 +29,7 @@ async function bokunFetch(method: string, path: string, body?: unknown): Promise
       "X-Bokun-Date": date,
       "X-Bokun-AccessKey": ACCESS!,
       "X-Bokun-Signature": sign(method, path, date),
+      ...(CHANNEL ? { "X-Bokun-BookingChannelUUID": CHANNEL } : {}),
       "Content-Type": "application/json;charset=UTF-8",
       Accept: "application/json",
     },
@@ -33,17 +39,6 @@ async function bokunFetch(method: string, path: string, body?: unknown): Promise
   let json: unknown = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
   return { status: res.status, json, text };
-}
-
-// TEMP diagnostic: signed GET/POST against a candidate path, returns status +
-// a short response snippet (no secrets) so we can discover the booking channel.
-export async function bokunProbe(method: string, path: string, body?: unknown): Promise<{ path: string; status: number; snippet: string }> {
-  try {
-    const { status, text } = await bokunFetch(method, path, body);
-    return { path, status, snippet: text.slice(0, 300) };
-  } catch (e) {
-    return { path, status: 0, snippet: String(e).slice(0, 200) };
-  }
 }
 
 // Search product bookings in a date window. Returns raw booking items (shape is
