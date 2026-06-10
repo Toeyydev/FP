@@ -146,7 +146,19 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   return "created";
 }
 
-// Import a raw Bokun/channel webhook payload (deep-parsed).
-export async function importRawBooking(raw: unknown): Promise<ImportResult> {
-  return importParsed(parseBokun(raw), { source: detectChannel(raw), cancelled: isCancellation(raw), raw });
+// A GetYourGuide booking reference looks like "GET-xxxx".
+function isGetYourGuideRef(p: { confirmationCode?: string; externalRef?: string }): boolean {
+  return [p.confirmationCode, p.externalRef].some((r) => /^GET-/i.test((r ?? "").trim()));
+}
+
+// Import a raw Bokun/channel payload (deep-parsed). With { getYourGuideOnly },
+// skips anything whose reference isn't GET-xxxx — used by the historical sync so
+// website / payment-link / test bookings never land in the inbox. The live
+// webhook leaves it off, so nothing real is missed in real time.
+export async function importRawBooking(raw: unknown, opts?: { getYourGuideOnly?: boolean }): Promise<ImportResult> {
+  const parsed = parseBokun(raw);
+  const source = detectChannel(raw);
+  // GetYourGuide = a GET-xxxx reference, OR Bokun tags the channel as GetYourGuide.
+  if (opts?.getYourGuideOnly && !isGetYourGuideRef(parsed) && source !== "GetYourGuide") return "skipped";
+  return importParsed(parsed, { source, cancelled: isCancellation(raw), raw });
 }
