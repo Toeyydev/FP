@@ -64,7 +64,9 @@ export default function Dispatch() {
       <div id="appBar"><div className="subtabs">
         <button className={`subtab ${tab === "assigned" ? "active" : ""}`} onClick={() => setTab("assigned")}>Assigned jobs ({data.assignments.length})</button>
         <button className={`subtab ${tab === "offers" ? "active" : ""}`} onClick={() => setTab("offers")}>Offers ({openOffers.length} waiting{unfilled.length ? `, ${unfilled.length} unfilled` : ""})</button>
-      </div></div>
+      </div>
+        <div className="nav"><a className="btn sm" href="/tour-log">📋 Past tours</a><a className="btn sm" href="/dashboard">Dashboard</a></div>
+      </div>
 
       {tab === "assigned" ? (
         <section className="panel">
