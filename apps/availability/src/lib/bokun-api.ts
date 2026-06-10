@@ -6,10 +6,10 @@ import crypto from "crypto";
 const BASE = process.env.BOKUN_API_URL || "https://api.bokun.io";
 const ACCESS = process.env.BOKUN_ACCESS_KEY;
 const SECRET = process.env.BOKUN_SECRET_KEY;
-// Every Bokun API action runs in the context of a booking channel. Set the
-// channel UUID (Bokun → Settings → Sales settings → Booking channels → copy UUID)
-// so product-booking-search is scoped correctly.
-const CHANNEL = process.env.BOKUN_BOOKING_CHANNEL_UUID;
+// Every Bokun API action runs in the context of a booking channel. The UUID is
+// not a secret (it's just a channel identifier, useless without the keys), so we
+// default to Folkpaths' channel and allow an env override.
+const CHANNEL = process.env.BOKUN_BOOKING_CHANNEL_UUID || "50154c56-a836-42af-a42c-cc99f1941b31";
 export const bokunApiEnabled = Boolean(ACCESS && SECRET);
 export const bokunChannelSet = Boolean(CHANNEL);
 
