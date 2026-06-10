@@ -166,21 +166,41 @@ export async function denyOffer(offerId: string, guideId: string): Promise<"ok" 
   return "ok";
 }
 
-// Expire OPEN offers past their deadline and alert the operator who made them,
-// so a job that nobody accepted never goes silently unfilled.
+// How many hours before the tour an unaccepted offer is handed back to operators.
+const ESCALATE_HOURS_BEFORE_TOUR = 5;
+
+// Bangkok start time (ms since epoch) of an offer's tour slot.
+function tourStartMs(date: string, slotIdx: number): number {
+  const [h, m] = (SLOT_TIMES[slotIdx] || "00:00").split(":").map(Number);
+  return Date.parse(`${date}T00:00:00Z`) + (h * 60 + m) * 60_000 - 7 * 3600 * 1000;
+}
+
+// Hand an OPEN offer back to the operators when nobody has accepted: either it
+// passed its TTL, or the tour is now within 5 hours. Alerts the whole operator
+// team (in-app + push) to assign a guide manually, and clears it from guides'
+// bells. Runs from the cron AND on every operator dashboard load, so it fires
+// even without a scheduler. Idempotent — an already-EXPIRED offer is skipped.
 export async function sweepExpiredOffers(): Promise<number> {
-  const stale = await prisma.jobOffer.findMany({ where: { status: "OPEN", expiresAt: { lt: new Date() } } });
-  if (stale.length === 0) return 0;
-  const tours = await prisma.tour.findMany({ where: { id: { in: stale.map((o) => o.tourId) } }, select: { id: true, name: true } });
+  const now = Date.now();
+  const open = await prisma.jobOffer.findMany({ where: { status: "OPEN" } });
+  const due = open.filter((o) => o.expiresAt.getTime() < now || tourStartMs(o.date, o.slotIdx) - now <= ESCALATE_HOURS_BEFORE_TOUR * 3600_000);
+  if (due.length === 0) return 0;
+
+  const [tours, opsUsers] = await Promise.all([
+    prisma.tour.findMany({ where: { id: { in: due.map((o) => o.tourId) } }, select: { id: true, name: true } }),
+    prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } }),
+  ]);
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
-  for (const o of stale) {
-    await prisma.jobOffer.updateMany({ where: { id: o.id, status: "OPEN" }, data: { status: "EXPIRED" } });
-    await prisma.notification.deleteMany({ where: { offerId: o.id } }); // clear the dead offer from guides' bells
-    if (o.createdById) {
-      await prisma.notification.create({
-        data: { userId: o.createdById, kind: "offer", message: `⏰ No one accepted: ${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}. Needs manual assignment.` },
-      });
+  for (const o of due) {
+    // Close the offer (race-safe) and clear it from every guide's bell.
+    const won = await prisma.jobOffer.updateMany({ where: { id: o.id, status: "OPEN" }, data: { status: "EXPIRED" } });
+    if (won.count !== 1) continue; // someone else handled it
+    await prisma.notification.deleteMany({ where: { offerId: o.id } });
+    const msg = `No guide accepted ${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}. Please assign a guide.`;
+    for (const op of opsUsers) {
+      await prisma.notification.create({ data: { userId: op.id, kind: "offer", message: msg } });
+      await sendPushToUser(op.id, { title: "Job needs assigning", body: msg, url: "/jobs", tag: `unfilled-${o.id}` });
     }
   }
-  return stale.length;
+  return due.length;
 }
