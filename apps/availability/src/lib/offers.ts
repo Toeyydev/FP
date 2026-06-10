@@ -20,7 +20,7 @@ export async function createOffer(o: {
     // Manual pick: offer to this one guide (operator override), unless they're
     // already booked that slot.
     const [g, assigned] = await Promise.all([
-      prisma.user.findFirst({ where: { guideId: o.onlyGuideId, role: "GUIDE", state: "ACTIVE" }, select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true } }),
+      prisma.user.findFirst({ where: { guideId: o.onlyGuideId, role: "GUIDE", state: "ACTIVE", offerBlocked: false }, select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true } }),
       prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: o.onlyGuideId, date: o.date, slotIdx: o.slotIdx } } }),
     ]);
     candidates = g && g.guideId && !assigned ? [g] : [];
@@ -78,7 +78,7 @@ export async function availableGuides(date: string, slotIdx: number) {
 
   const [guides, avail, assigned, leaves] = await Promise.all([
     prisma.user.findMany({
-      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } },
+      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null }, offerBlocked: false },
       select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true },
     }),
     prisma.availability.findMany({ where: { date }, select: { guideId: true, slots: true } }),

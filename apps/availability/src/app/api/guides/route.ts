@@ -14,7 +14,7 @@ export async function GET() {
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
   const [guides, assigns, ratings, leaves] = await Promise.all([
-    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true } }),
+    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true } }),
     prisma.assignment.groupBy({ by: ["guideId"], _count: { _all: true } }),
     prisma.guideRating.groupBy({ by: ["guideId"], _avg: { stars: true }, _count: { _all: true } }),
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", toDate: { gte: today } }, select: { guideId: true, fromDate: true, toDate: true } }),
@@ -26,7 +26,7 @@ export async function GET() {
   const rows = guides.map((g) => {
     const r = rate.get(g.guideId!);
     const l = leaveOf(g.guideId!);
-    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, rating: r?.avg ? Math.round(r.avg * 10) / 10 : null, ratingCount: r?.n ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null };
+    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, rating: r?.avg ? Math.round(r.avg * 10) / 10 : null, ratingCount: r?.n ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked };
   }).sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || b.tours - a.tours);
   return NextResponse.json({ rows });
 }
@@ -46,5 +46,16 @@ export async function POST(req: NextRequest) {
     update: { stars, note: note ?? null, ratedBy: session!.user!.id },
   });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "guide.rated", entityType: "Assignment", detail: { guideId, date, slotIdx, stars } });
+  return NextResponse.json({ ok: true });
+}
+
+// PATCH { id, offerBlocked } — operator blocks/unblocks a guide from job offers.
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ id: z.string().min(1), offerBlocked: z.boolean() }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const u = await prisma.user.update({ where: { id: parsed.data.id }, data: { offerBlocked: parsed.data.offerBlocked }, select: { guideId: true } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: parsed.data.offerBlocked ? "guide.offerBlocked" : "guide.offerUnblocked", entityType: "User", entityId: parsed.data.id, detail: { guideId: u.guideId } });
   return NextResponse.json({ ok: true });
 }

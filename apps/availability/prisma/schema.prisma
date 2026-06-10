@@ -36,6 +36,7 @@ model User {
   phone        String?
   languages    String[]     @default([])
   qualifications String[]   @default([]) // tour ids the guide can run
+  offerBlocked Boolean      @default(false) // operator blocked this guide from receiving job offers
   consentAt    DateTime? // acknowledged handling customer booking data
   claimedAt    DateTime?
   createdAt    DateTime     @default(now())

@@ -4,11 +4,17 @@ import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
-type Row = { id: string; guideId: string; name: string; languages: string; tours: number; rating: number | null; ratingCount: number; leave: string | null; lastSeenAt: string | null };
+type Row = { id: string; guideId: string; name: string; languages: string; tours: number; rating: number | null; ratingCount: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean };
 
 export default function Guides() {
   const [rows, setRows] = useState<Row[]>([]);
-  useEffect(() => { fetch("/api/guides", { cache: "no-store" }).then((r) => r.json()).then((d) => setRows(d.rows ?? [])).catch(() => {}); }, []);
+  const load = () => fetch("/api/guides", { cache: "no-store" }).then((r) => r.json()).then((d) => setRows(d.rows ?? [])).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function toggleBlock(g: Row) {
+    if (!g.offerBlocked && !confirm(`Block ${g.guideId} ${g.name} from receiving job offers?\n\nThey stay active and keep their current tours, but won't be offered new jobs until you unblock them.`)) return;
+    await fetch("/api/guides", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: g.id, offerBlocked: !g.offerBlocked }) });
+    await load();
+  }
 
   return (
     <div className="wrap">
@@ -30,8 +36,16 @@ export default function Guides() {
                   <td style={{ color: "var(--ink-soft)" }}>{g.languages || "—"}</td>
                   <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}>{g.tours}</td>
                   <td className="r">{g.rating != null ? <span style={{ fontWeight: 700 }}>★ {g.rating} <small style={{ color: "var(--ink-soft)", fontWeight: 400 }}>({g.ratingCount})</small></span> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
-                  <td>{g.leave ? <span className="leave-badge">On leave {g.leave}</span> : <span style={{ color: "var(--green)", fontSize: 12, fontWeight: 600 }}>Active</span>}</td>
-                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><a className="btn sm" href={`/profile?userId=${g.id}`}>Profile &amp; docs</a></td>
+                  <td>{g.offerBlocked
+                    ? <span className="leave-badge" style={{ background: "var(--danger-bg)", color: "var(--danger)", borderColor: "var(--danger-line)" }}>No offers</span>
+                    : g.leave ? <span className="leave-badge">On leave {g.leave}</span>
+                    : <span style={{ color: "var(--green)", fontSize: 12, fontWeight: 600 }}>Active</span>}</td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button className={`btn sm ${g.offerBlocked ? "primary" : "danger"}`} onClick={() => toggleBlock(g)}>{g.offerBlocked ? "Unblock" : "Block offers"}</button>
+                      <a className="btn sm" href={`/profile?userId=${g.id}`}>Profile</a>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
