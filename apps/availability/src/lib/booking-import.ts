@@ -26,6 +26,29 @@ async function notifyGuide(guideId: string, message: string, title: string, body
   } catch { /* best-effort */ }
 }
 
+// If the same booking number turns up from more than one channel (e.g. the same
+// ref on GetYourGuide AND Viator), it's likely a duplicate. Hold every copy as
+// PENDING (never auto-offer/attach) and alert the operator to double-check.
+// Returns true if it flagged a duplicate. Never throws.
+async function flagCrossChannelDuplicate(rec: { confirmationCode: string | null; externalRef: string | null }): Promise<boolean> {
+  try {
+    const ref = (rec.confirmationCode || rec.externalRef || "").trim();
+    if (!ref) return false;
+    const twins = await prisma.booking.findMany({
+      where: { OR: [{ confirmationCode: ref }, { externalRef: ref }], status: { notIn: ["CANCELLED", "IGNORED"] } },
+      select: { id: true, source: true },
+    });
+    const sources = [...new Set(twins.map((t) => (t.source || "").trim()).filter(Boolean))];
+    if (twins.length < 2 || sources.length < 2) return false;
+    await prisma.booking.updateMany({
+      where: { id: { in: twins.map((t) => t.id) } },
+      data: { status: "PENDING", notes: `⚠ Possible duplicate across ${sources.join(" + ")} — verify before dispatch` },
+    });
+    await notifyOps(`Possible duplicate booking ${ref} on ${sources.join(" + ")}. Held as pending — please double-check before dispatching.`, "Duplicate booking — verify", `${ref} · ${sources.join(" + ")}`);
+    return true;
+  } catch { return false; }
+}
+
 // When a NEW booking lands for a slot already assigned to a guide: auto-add it to
 // that guide's job if it stays within the 10-pax cap, and ALWAYS alert the
 // operator to confirm. If it would breach the cap (or the slot is split across
@@ -122,7 +145,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
       },
     });
-    if (!existing) await autoAttachLate(rec);
+    if (!existing && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
     return existing ? "updated" : "created";
   }
 
@@ -142,7 +165,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING",
     },
   });
-  await autoAttachLate(rec);
+  if (!(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
   return "created";
 }
 
