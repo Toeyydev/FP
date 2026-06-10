@@ -49,6 +49,25 @@ async function flagCrossChannelDuplicate(rec: { confirmationCode: string | null;
   } catch { return false; }
 }
 
+// If the SAME customer name is already booked on the SAME date + time slot, this
+// new copy is a true duplicate: auto-remove it (hidden from the inbox, recoverable)
+// and tell the operator. Scoped to date+slot so two different tours for the same
+// person are never touched. Returns true if it removed a duplicate. Never throws.
+async function autoRemoveNameDuplicate(rec: { id: string; customerName: string | null; date: string | null; slotIdx: number | null }): Promise<boolean> {
+  try {
+    const name = (rec.customerName || "").trim().toLowerCase();
+    if (!name || !rec.date || rec.slotIdx == null) return false;
+    const others = await prisma.booking.findMany({
+      where: { id: { not: rec.id }, date: rec.date, slotIdx: rec.slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } },
+      select: { id: true, customerName: true },
+    });
+    if (!others.some((o) => (o.customerName || "").trim().toLowerCase() === name)) return false;
+    await prisma.booking.update({ where: { id: rec.id }, data: { status: "IGNORED", notes: "Auto-removed: same name already booked on this slot" } });
+    await notifyOps(`Removed a duplicate booking for "${rec.customerName}" on ${rec.date} — that name was already booked on this slot.`, "Duplicate removed", `${rec.customerName} · ${rec.date}`);
+    return true;
+  } catch { return false; }
+}
+
 // When a NEW booking lands for a slot already assigned to a guide: auto-add it to
 // that guide's job if it stays within the 10-pax cap, and ALWAYS alert the
 // operator to confirm. If it would breach the cap (or the slot is split across
@@ -145,7 +164,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
       },
     });
-    if (!existing && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+    if (!existing && !(await autoRemoveNameDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
     return existing ? "updated" : "created";
   }
 
@@ -165,7 +184,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING",
     },
   });
-  if (!(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+  if (!(await autoRemoveNameDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
   return "created";
 }
 
