@@ -62,25 +62,26 @@ export async function GET(req: NextRequest) {
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600&family=Noto+Sans+Thai:wght@400;600&display=swap" rel="stylesheet">
 <style>
-  @page { size: A4; margin: 16mm; }
+  @page { size: A4; margin: 11mm; }
   * { box-sizing: border-box; }
-  body { font-family: "Sarabun","Noto Sans Thai",sans-serif; color:#000; font-size:13px; line-height:1.55; margin:0; }
+  body { font-family: "Sarabun","Noto Sans Thai",sans-serif; color:#000; font-size:13px; line-height:1.38; margin:0; }
   .toolbar { background:#7e3a2c; color:#fff; padding:9px 16px; display:flex; justify-content:space-between; align-items:center; }
   .toolbar button { background:#fff; color:#7e3a2c; border:none; border-radius:7px; padding:7px 14px; font-weight:600; cursor:pointer; }
-  .page { max-width:820px; margin:14px auto; padding:0 18px; }
+  .page { max-width:820px; margin:10px auto; padding:0 18px; }
+  @media print { body { font-size:12px; } .page { page-break-inside:avoid; } }
   h1 { text-align:center; font-size:18px; margin:0; }
   h1 small { display:block; font-size:13px; font-weight:400; letter-spacing:2px; }
-  .sec { background:#eef3ef; border:1px solid #cfd9d3; padding:5px 9px; font-weight:600; margin:14px 0 8px; }
-  .row { margin:4px 0; }
+  .sec { background:#eef3ef; border:1px solid #cfd9d3; padding:4px 9px; font-weight:600; margin:8px 0 5px; }
+  .row { margin:3px 0; }
   .meta { display:flex; justify-content:space-between; border:1px solid #cfd9d3; padding:6px 10px; }
   .indent { margin-left:22px; }
   .chk { margin-right:14px; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; margin-top:6px; font-size:12px; }
-  th,td { border:1px solid #999; padding:4px 6px; vertical-align:top; }
+  th,td { border:1px solid #999; padding:3px 6px; vertical-align:top; }
   th { background:#f2f2f2; font-weight:600; text-align:center; }
   td.c { text-align:center; width:34px; }
   .counts { display:flex; gap:22px; margin-top:6px; }
-  .sign { margin-top:34px; text-align:right; }
+  .sign { margin-top:18px; text-align:right; }
   .lic { border:none; border-bottom:1px solid #000; font:inherit; font-weight:600; width:210px; padding:0 3px; background:#fffcf0; }
   .lic:focus { outline:none; background:#fff6d6; }
   @media print { .toolbar { display:none; } .page { margin:0; } .lic { background:none; } }
@@ -122,8 +123,10 @@ export async function GET(req: NextRequest) {
     </div>
 
     <div class="sign">
-      <img src="/operator-signature.png" alt="ลายเซ็นผู้ประกอบการ" contenteditable="false" draggable="false" style="height:52px;display:block;margin:0 0 -8px auto;user-select:none;-webkit-user-select:none;pointer-events:none" />
-      ลงชื่อ .............................................
+      <img src="/operator-signature.png" alt="ลายเซ็นผู้ประกอบการ" contenteditable="false" draggable="false" style="height:46px;display:block;margin:0 0 -6px auto;user-select:none;-webkit-user-select:none;pointer-events:none" />
+      ลงชื่อ .............................................<br>
+      ( ${esc(SIGNATORY)} )<br>
+      ผู้ประกอบธุรกิจนำเที่ยว / ผู้ได้รับมอบอำนาจ
     </div>
   </div>
   <!-- No auto-print: fill the blanks first, then use the Print button. The licence
