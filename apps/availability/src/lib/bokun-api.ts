@@ -35,6 +35,17 @@ async function bokunFetch(method: string, path: string, body?: unknown): Promise
   return { status: res.status, json, text };
 }
 
+// TEMP diagnostic: signed GET/POST against a candidate path, returns status +
+// a short response snippet (no secrets) so we can discover the booking channel.
+export async function bokunProbe(method: string, path: string, body?: unknown): Promise<{ path: string; status: number; snippet: string }> {
+  try {
+    const { status, text } = await bokunFetch(method, path, body);
+    return { path, status, snippet: text.slice(0, 300) };
+  } catch (e) {
+    return { path, status: 0, snippet: String(e).slice(0, 200) };
+  }
+}
+
 // Search product bookings in a date window. Returns raw booking items (shape is
 // deep-parsed by parseBokun) plus a diagnostic on failure.
 export async function searchBookings(opts: { from: string; to: string; page?: number; pageSize?: number }): Promise<{ ok: boolean; items: unknown[]; status: number; error?: string }> {
