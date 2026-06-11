@@ -189,9 +189,12 @@ export async function POST(req: NextRequest) {
 
   let lineSent = 0;
   const lineSkipped: string[] = [];
+  const BASE = "https://guide.folkpaths.com";
   for (const g of guides) {
     const jobs = byGuide.get(g.guideId!) ?? [];
-    const text = buildSheet(dateLabel, jobs);
+    // Include a link to each tour's job order so the guide can open/print it.
+    const orderLinks = jobs.map((j) => `\n\nJob order ${SLOT_TIMES[j.slotIdx] ?? ""}:\n${BASE}/api/jobsheet/joborder?guideId=${g.guideId}&date=${date}&slotIdx=${j.slotIdx}`).join("");
+    const text = buildSheet(dateLabel, jobs) + orderLinks;
     // Always drop it in the in-app bell.
     await prisma.notification.create({ data: { userId: g.id, kind: "jobsheet", message: text } });
     // Push to LINE if the guide has linked their account.

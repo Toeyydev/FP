@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { parseBokun, isCancellation, productKey, detectChannel, type ParsedBooking } from "@/lib/bookings";
 import { sendPushToUser } from "@/lib/push";
+import { linePush, lineEnabled } from "@/lib/line";
 import { todayD, ymd } from "@/lib/dates";
 
 export type ImportResult = "created" | "updated" | "skipped";
@@ -19,10 +20,11 @@ async function notifyOps(message: string, title: string, body: string) {
 
 async function notifyGuide(guideId: string, message: string, title: string, body: string) {
   try {
-    const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true } });
+    const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true } });
     if (!u) return;
     await prisma.notification.create({ data: { userId: u.id, kind: "job-change", message } });
     await sendPushToUser(u.id, { title, body, url: "/", tag: "job-change" });
+    if (lineEnabled && u.lineUserId) await linePush(u.lineUserId, message);
   } catch { /* best-effort */ }
 }
 
