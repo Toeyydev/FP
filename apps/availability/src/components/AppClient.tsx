@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
+import InstallPrompt from "@/components/InstallPrompt";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
@@ -1183,6 +1184,11 @@ export default function AppClient({
           </ol>
         </section>
       )}
+
+      {/* Dedicated "add to home screen" nudge — only once alerts are on (so the
+          2-step setup card above isn't already covering install) and the app
+          isn't installed yet. Self-hides on desktop / in-app browsers / standalone. */}
+      {alertsOn && !installed && <InstallPrompt />}
 
       {role === "guide" && !profileGate.complete && (
         <section className="profile-gate">

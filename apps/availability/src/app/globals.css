@@ -314,6 +314,12 @@ a.glink:hover{text-decoration:underline}
 .install-card{ display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;
   background:#eef6ff; border:1px solid #bcd8ff; border-radius:14px; padding:12px 14px; margin-bottom:12px; }
 .install-card b{ color:#1b4ef0; }
+/* On narrow phones, drop the buttons below the text so the headline gets the
+   full width instead of wrapping into a tall, cramped column. */
+@media (max-width:380px){
+  .install-card{ flex-direction:column; align-items:stretch; }
+  .install-card > div:last-child{ justify-content:flex-start; }
+}
 
 /* ---- Guide welcome + touch targets ---- */
 .welcome-row{ display:flex; gap:12px; align-items:flex-start; }

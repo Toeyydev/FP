@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useLang } from "@/components/Providers";
 
 type BIPEvent = Event & { prompt: () => void; userChoice: Promise<unknown> };
 
 // A friendly, no-jargon "add to home screen" helper. Android shows a one-tap
-// Install button; iPhone shows the Share → Add to Home Screen steps. Guides
-// never NEED this (the app works in the browser) — it's just convenience.
+// Add button; iPhone shows the Share → Add to Home Screen steps. Guides never
+// NEED this (the app works in the browser) — it's just convenience. Copy is
+// bilingual via the shared i18n dictionary (useLang).
 export default function InstallPrompt() {
+  const { t } = useLang();
   const [deferred, setDeferred] = useState<BIPEvent | null>(null);
   const [show, setShow] = useState(false);
   const [ios, setIos] = useState(false);
@@ -37,14 +40,15 @@ export default function InstallPrompt() {
   return (
     <div className="install-card">
       <div style={{ flex: 1 }}>
-        <b>📲 Add Folkpaths to your home screen</b>
-        {ios && <div style={{ fontSize: 13, marginTop: 3 }}>Tap <b>Share</b> <span style={{ fontSize: 15 }}>⬆️</span> at the bottom of Safari, then <b>&ldquo;Add to Home Screen&rdquo;</b>.</div>}
-        {android && !deferred && <div style={{ fontSize: 13, marginTop: 3 }}>In <b>Chrome</b>, tap <b>⋮</b> (top-right) → <b>Install app</b> (or <b>Add to Home screen</b>).</div>}
-        {android && deferred && <div style={{ fontSize: 13, marginTop: 3 }}>One tap to keep it like an app.</div>}
+        <b>📲 {t("installTitle")}</b>
+        <div style={{ fontSize: 13, marginTop: 3 }}>{t("installBody")}</div>
+        {ios && <div style={{ fontSize: 13, marginTop: 3 }}>{t("installIos")}</div>}
+        {android && !deferred && <div style={{ fontSize: 13, marginTop: 3 }}>{t("installAndroidManual")}</div>}
+        {android && deferred && <div style={{ fontSize: 13, marginTop: 3 }}>{t("installAndroidOneTap")}</div>}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        {deferred && <button className="btn primary" onClick={async () => { deferred.prompt(); await deferred.userChoice; dismiss(); }}>Install</button>}
-        <button className="btn ghost" onClick={dismiss}>Later</button>
+        {deferred && <button className="btn primary" onClick={async () => { deferred.prompt(); await deferred.userChoice; dismiss(); }}>{t("installAdd")}</button>}
+        <button className="btn ghost" onClick={dismiss}>{t("installLater")}</button>
       </div>
     </div>
   );
