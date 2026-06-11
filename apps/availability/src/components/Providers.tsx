@@ -29,6 +29,22 @@ export function Providers({ children }: { children: React.ReactNode }) {
       // Match the phone status bar (PWA theme colour) to the day too.
       const meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", DEEP[day]);
+      // Recolour the browser-tab icon (favicon) to the day's colour.
+      try {
+        const c = document.createElement("canvas"); c.width = 64; c.height = 64;
+        const x = c.getContext("2d");
+        if (x) {
+          const r = 14;
+          x.beginPath();
+          x.moveTo(r, 0); x.arcTo(64, 0, 64, 64, r); x.arcTo(64, 64, 0, 64, r); x.arcTo(0, 64, 0, 0, r); x.arcTo(0, 0, 64, 0, r); x.closePath();
+          x.fillStyle = DEEP[day]; x.fill();
+          x.fillStyle = "#fff"; x.font = "700 40px Inter, system-ui, sans-serif"; x.textAlign = "center"; x.textBaseline = "middle";
+          x.fillText("F", 32, 35);
+          let link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+          if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
+          link.href = c.toDataURL("image/png");
+        }
+      } catch { /* favicon is cosmetic */ }
     };
     setDay();
     document.addEventListener("visibilitychange", setDay);
