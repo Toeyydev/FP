@@ -202,7 +202,7 @@ function isGetYourGuideRef(p: { confirmationCode?: string; externalRef?: string 
 export async function importRawBooking(raw: unknown, opts?: { getYourGuideOnly?: boolean }): Promise<ImportResult> {
   const parsed = parseBokun(raw);
   const source = detectChannel(raw);
-  // GetYourGuide = a GET-xxxx reference, OR Bokun tags the channel as GetYourGuide.
-  if (opts?.getYourGuideOnly && !isGetYourGuideRef(parsed) && source !== "GetYourGuide") return "skipped";
+  // Sync ONLY GetYourGuide GET-xxxx bookings; never FOLK-xxxx (avoids confusion).
+  if (opts?.getYourGuideOnly && !isGetYourGuideRef(parsed)) return "skipped";
   return importParsed(parsed, { source, cancelled: isCancellation(raw), raw });
 }
