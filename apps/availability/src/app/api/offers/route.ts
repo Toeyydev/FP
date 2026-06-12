@@ -55,13 +55,14 @@ export async function GET() {
       };
     }),
     offers: offers.map((o) => ({
-      id: o.id, tourName: tourName.get(o.tourId) ?? o.tourId, date: o.date, slotIdx: o.slotIdx,
+      id: o.id, tourId: o.tourId, tourName: tourName.get(o.tourId) ?? o.tourId, date: o.date, slotIdx: o.slotIdx,
       time: timeRangeLabel(o.slotIdx, o.durationMin), pax: o.pax, note: o.note, status: o.status, expiresAt: o.expiresAt,
       assignedGuide: gName(o.assignedGuideId),
       candidates: o.responses.length,
       accepted: o.responses.filter((r) => r.response === "ACCEPTED").map((r) => gName(r.guideId)),
       denied: o.responses.filter((r) => r.response === "DENIED").map((r) => gName(r.guideId)),
       pending: o.responses.filter((r) => r.response === "OFFERED").length,
+      awaiting: o.responses.filter((r) => r.response === "OFFERED").map((r) => gName(r.guideId)).filter((x): x is string => !!x),
     })),
   });
 }

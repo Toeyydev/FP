@@ -96,16 +96,17 @@ export default function BookingsInbox() {
     else setMsg("Delete failed.");
   }
 
-  // Assign a group directly to a chosen guide (no offer broadcast).
+  // Send a group to a chosen guide as a 2-hour job offer. They must accept; if
+  // they don't, it returns to the operator to reassign (no instant booking).
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
     const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { setMsg(d.error === "date-blocked" ? "That day is blocked." : "Assign failed."); return; }
+    if (!r.ok) { setMsg(d.error === "date-blocked" ? "That day is blocked." : d.error === "guide-unavailable" ? "That guide can't take this slot." : "Assign failed."); return; }
     await post({ action: "markOffered", ids: items.map((b) => b.id) });
-    setMsg(`✅ Assigned to ${guideId}.`);
+    setMsg(`📨 Sent to ${guideId} — awaiting acceptance (2h).`);
     await load();
   }
 

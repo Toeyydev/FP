@@ -30,7 +30,9 @@ export async function createOffer(o: {
   }
   if (candidates.length === 0) return { offerId: null, candidates: 0, lineSent: 0 };
 
-  const ttl = o.ttlMinutes ?? 60;
+  // A job offered to one specific guide gets a 2-hour accept-or-return window;
+  // a broadcast-to-all offer keeps the shorter default.
+  const ttl = o.ttlMinutes ?? (o.onlyGuideId ? 120 : 60);
   const dateLabel = new Date(`${o.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
   const timeLabel = timeRangeLabel(o.slotIdx, o.durationMin ?? undefined);
   const summary = `Folkpaths job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${o.pax != null ? `\nTotal: ${o.pax} Pax · 1 Job` : ""}${o.note ? `\n${o.note}` : ""}`;
@@ -176,8 +178,10 @@ export async function denyOffer(offerId: string, guideId: string): Promise<"ok" 
   return "ok";
 }
 
-// How many hours before the tour an unaccepted offer is handed back to operators.
-const ESCALATE_HOURS_BEFORE_TOUR = 5;
+// A pending (unaccepted) job must be locked in by this many hours before the
+// tour. If it's still open when the tour is this close, it's handed back to the
+// operators so they can assign someone in time.
+const ESCALATE_HOURS_BEFORE_TOUR = 2;
 
 // Bangkok start time (ms since epoch) of an offer's tour slot.
 function tourStartMs(date: string, slotIdx: number): number {
@@ -186,21 +190,25 @@ function tourStartMs(date: string, slotIdx: number): number {
 }
 
 // Hand an OPEN offer back to the operators when nobody has accepted: either it
-// passed its TTL, or the tour is now within 5 hours. Alerts the whole operator
+// passed its TTL, or the tour is now within 2 hours. Alerts the whole operator
 // team (in-app + push) to assign a guide manually, and clears it from guides'
 // bells. Runs from the cron AND on every operator dashboard load, so it fires
 // even without a scheduler. Idempotent — an already-EXPIRED offer is skipped.
 export async function sweepExpiredOffers(): Promise<number> {
   const now = Date.now();
-  const open = await prisma.jobOffer.findMany({ where: { status: "OPEN" } });
+  const open = await prisma.jobOffer.findMany({ where: { status: "OPEN" }, include: { responses: true } });
   const due = open.filter((o) => o.expiresAt.getTime() < now || tourStartMs(o.date, o.slotIdx) - now <= ESCALATE_HOURS_BEFORE_TOUR * 3600_000);
   if (due.length === 0) return 0;
 
-  const [tours, opsUsers] = await Promise.all([
+  // For single-guide offers (one candidate) we name the guide who didn't accept.
+  const soloGuideIds = [...new Set(due.filter((o) => o.responses.length === 1).map((o) => o.responses[0].guideId))];
+  const [tours, opsUsers, soloGuides] = await Promise.all([
     prisma.tour.findMany({ where: { id: { in: due.map((o) => o.tourId) } }, select: { id: true, name: true } }),
     prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } }),
+    soloGuideIds.length ? prisma.user.findMany({ where: { guideId: { in: soloGuideIds } }, select: { guideId: true, displayName: true } }) : Promise.resolve([]),
   ]);
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
+  const guideLabel = new Map(soloGuides.map((g) => [g.guideId, `${g.guideId}${g.displayName ? ` ${g.displayName}` : ""}`]));
   for (const o of due) {
     // Close the offer (race-safe) and clear it from every guide's bell.
     const won = await prisma.jobOffer.updateMany({ where: { id: o.id, status: "OPEN" }, data: { status: "EXPIRED" } });
@@ -209,7 +217,12 @@ export async function sweepExpiredOffers(): Promise<number> {
     // Nobody took it: return its bookings to the inbox as pending (if unassigned).
     const stillAssigned = await prisma.assignment.findFirst({ where: { date: o.date, slotIdx: o.slotIdx }, select: { id: true } });
     if (!stillAssigned) await prisma.booking.updateMany({ where: { date: o.date, slotIdx: o.slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
-    const msg = `No guide accepted ${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}. Please assign a guide.`;
+    const job = `${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}`;
+    // Single-guide offer → name them; broadcast offer → generic "nobody accepted".
+    const solo = o.responses.length === 1 ? guideLabel.get(o.responses[0].guideId) : null;
+    const msg = solo
+      ? `${solo} didn't accept ${job} within 2h — it's back with you to reassign.`
+      : `No guide accepted ${job}. Please assign a guide.`;
     for (const op of opsUsers) {
       await prisma.notification.create({ data: { userId: op.id, kind: "offer", message: msg } });
       await sendPushToUser(op.id, { title: "Job needs assigning", body: msg, url: "/jobs", tag: `unfilled-${o.id}` });

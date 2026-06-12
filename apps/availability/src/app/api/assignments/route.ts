@@ -4,9 +4,9 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_COUNT } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
-import { sweepExpiredOffers } from "@/lib/offers";
-import { sendTourCalendarInvite } from "@/lib/calendar";
+import { sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
+import { audit } from "@/lib/audit";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -78,15 +78,23 @@ export async function POST(req: NextRequest) {
   if (!guide) return NextResponse.json({ error: "unknown guide" }, { status: 400 });
   if (!tour) return NextResponse.json({ error: "unknown tour" }, { status: 400 });
 
-  const existed = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
-  await prisma.assignment.upsert({
-    where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-    create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
-    update: { tourId, pax: pax ?? null, note: note ?? null },
+  // Assigning a job no longer books the guide instantly: it sends them a job
+  // offer with a 2-hour accept window. The confirmed Assignment is created only
+  // when they accept (acceptOffer). If they don't, sweepExpiredOffers hands it
+  // back to the operator to reassign.
+  const r = await createOffer({
+    tourId, date, slotIdx, pax: pax ?? null, note: note ?? null,
+    ttlMinutes: 120, onlyGuideId: guideId, createdById: session!.user!.id ?? null,
   });
-  // Email the guide a calendar invite (with reminders) when first assigned.
-  if (!existed) await sendTourCalendarInvite(guideId, date, slotIdx);
-  return NextResponse.json({ ok: true });
+  // No candidate means this guide can't take the slot (already booked it, on
+  // leave, inactive, or offers-blocked) — surface that instead of silently no-op.
+  if (r.candidates === 0) return NextResponse.json({ error: "guide-unavailable" }, { status: 409 });
+  await audit({
+    actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
+    action: "assign.offered", entityType: "JobOffer", entityId: r.offerId ?? undefined,
+    detail: { guideId, date, slotIdx, tourId, ttlMinutes: 120 },
+  });
+  return NextResponse.json({ ok: true, pending: true, offerId: r.offerId, lineSent: r.lineSent });
 }
 
 // DELETE /api/assignments  { guideId, date, slotIdx }  — operator only

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
 type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
-type Offer = { id: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number };
+type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[] };
+type Candidate = { guideId: string; displayName: string };
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
@@ -27,6 +28,33 @@ export default function Dispatch() {
   useEffect(() => { load(); const id = window.setInterval(load, 15000); return () => window.clearInterval(id); }, [load]);
 
   const [msg, setMsg] = useState("");
+  // Hand an unfilled offer to a specific guide: pick from those free for the slot.
+  const [assignFor, setAssignFor] = useState<Offer | null>(null);
+  const [cands, setCands] = useState<Candidate[] | null>(null);
+  const [pick, setPick] = useState("");
+  const [saving, setSaving] = useState(false);
+  async function openAssign(o: Offer) {
+    setAssignFor(o); setCands(null); setPick(""); setMsg("");
+    const r = await fetch(`/api/offers/candidates?date=${o.date}&slotIdx=${o.slotIdx}`, { cache: "no-store" });
+    const j = await r.json().catch(() => ({ guides: [] }));
+    setCands(j.guides ?? []);
+    setPick(j.guides?.[0]?.guideId ?? "");
+  }
+  async function confirmAssign() {
+    if (!assignFor || !pick) return;
+    setSaving(true);
+    const o = assignFor;
+    const r = await fetch("/api/assignments", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: pick, date: o.date, slotIdx: o.slotIdx, tourId: o.tourId, pax: o.pax ?? undefined, note: o.note ?? undefined }),
+    });
+    const j = await r.json().catch(() => ({}));
+    setSaving(false);
+    if (!r.ok) { setMsg(j.error === "guide-unavailable" ? "That guide can't take this slot." : "Assign failed."); return; }
+    setAssignFor(null);
+    setMsg(`📨 Sent to ${pick} — awaiting acceptance (2h).`);
+    await load();
+  }
   async function deleteOffer(o: Offer) {
     if (!confirm(`Delete this job offer?\n${o.tourName} · ${o.date} ${o.time}\n\nIt's removed from every guide's notifications. Any tour already accepted stays assigned.`)) return;
     const r = await fetch("/api/offers", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: o.id }) });
@@ -115,10 +143,17 @@ export default function Dispatch() {
                       <td>{o.tourName}{o.pax != null ? <small style={{ color: "var(--ink-soft)" }}> · {o.pax} pax</small> : null}</td>
                       <td>{badge(o.status)}{o.assignedGuide && <div style={{ fontSize: 12, marginTop: 3, color: "var(--green)", fontWeight: 600 }}>{o.assignedGuide}</div>}</td>
                       <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
-                        {o.status === "OPEN" ? `${o.pending} waiting of ${o.candidates}` : `${o.candidates} offered`}
+                        {o.status === "OPEN"
+                          ? (o.candidates === 1 ? `Awaiting ${o.awaiting[0] ?? "guide"}` : `${o.pending} waiting of ${o.candidates}`)
+                          : `${o.candidates} offered`}
+                        {o.status === "OPEN" && <div>expires {hhmm(o.expiresAt)}</div>}
                         {o.denied.length > 0 && <div>declined: {o.denied.join(", ")}</div>}
                       </td>
-                      <td><button className="btn sm danger" title="Delete this job offer" onClick={() => deleteOffer(o)}>🗑</button></td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {o.status === "EXPIRED" && <button className="btn sm" title="Assign this job to a specific guide" onClick={() => openAssign(o)}>Assign</button>}
+                        {" "}
+                        <button className="btn sm danger" title="Delete this job offer" onClick={() => deleteOffer(o)}>🗑</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -126,6 +161,34 @@ export default function Dispatch() {
             )}
           </div>
         </section>
+      )}
+
+      {assignFor && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !saving) setAssignFor(null); }}>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <h3>Assign to a guide</h3>
+            <div className="mctx">{assignFor.tourName} · {fmt(assignFor.date)} · {assignFor.time}</div>
+            <div className="mbody">
+              {cands === null ? (
+                <div className="op-empty">Loading available guides…</div>
+              ) : cands.length === 0 ? (
+                <div className="op-empty">No guides are free for this slot. Free one up, or offer it from the Bookings inbox.</div>
+              ) : (
+                <div>
+                  <label className="fl">Guide</label>
+                  <select value={pick} onChange={(e) => setPick(e.target.value)}>
+                    {cands.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} {g.displayName}</option>)}
+                  </select>
+                  <div className="hint" style={{ marginTop: 8 }}>They get a 2-hour offer to accept. If they don&apos;t, it returns here.</div>
+                </div>
+              )}
+            </div>
+            <div className="mfoot">
+              <button className="btn ghost" disabled={saving} onClick={() => setAssignFor(null)}>Cancel</button>
+              <button className="btn primary" disabled={saving || !pick || !cands?.length} onClick={confirmAssign}>{saving ? "Sending…" : "Send offer"}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

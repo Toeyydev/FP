@@ -372,16 +372,21 @@ export default function AppClient({
     await load();
     toast(val ? t("weekAllFree") : t("weekCleared"));
   }
+  // Assigning sends the guide a 2-hour job offer (not an instant booking). The
+  // tour locks in only when they accept; otherwise it returns to the operator.
   async function doAssign() {
     if (modal?.kind !== "assign") return;
-    await fetch("/api/assignments", {
+    if (!fTour) { toast(t("tour")); return; }
+    const r = await fetch("/api/assignments", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ guideId: modal.gid, date: modal.date, slotIdx: modal.idx, tourId: fTour, pax: fPax ? Number(fPax) : null, note: fNote.trim() || null }),
     });
+    const j = await r.json().catch(() => ({}));
+    setModal(null);
+    if (!r.ok) { toast(j.error === "guide-unavailable" ? t("guideUnavailable") : t("errGeneric")); return; }
     await load();
     const name = ref?.guides.find((g) => g.guideId === modal.gid)?.displayName ?? modal.gid;
-    toast(`${t("assignBtn")} → ${name}`);
-    setModal(null);
+    toast(`${t("assignSent")} → ${name}`);
   }
   // Broadcast this slot as a job offer to every available guide (first to Accept wins).
   async function doOffer() {

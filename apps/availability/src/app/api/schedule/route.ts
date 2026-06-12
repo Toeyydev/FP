@@ -71,6 +71,9 @@ export async function POST(req: NextRequest) {
   // Remove the guide's (+ operator's) Google Calendar events before freeing it.
   try { await (await import("@/lib/tour-calendar-sync")).removeTourEvents(a); } catch { /* never block cancel on calendar */ }
   await prisma.assignment.delete({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
+  // Return the slot's bookings to the inbox (pending) so the operator sees the job
+  // to re-dispatch, in addition to the auto re-offer below.
+  await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
 
   // Auto re-offer to the OTHER guides available for this same tour/date/slot.
   // Re-offer to ALL available guides — INCLUDING the one who just cancelled, so a

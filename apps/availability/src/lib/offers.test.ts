@@ -1,18 +1,21 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
-  jobOffer: { findUnique: vi.fn(), updateMany: vi.fn() },
-  assignment: { upsert: vi.fn() },
+  jobOffer: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
+  assignment: { upsert: vi.fn(), findUnique: vi.fn() },
   jobOfferResponse: { updateMany: vi.fn() },
-  notification: { deleteMany: vi.fn() },
+  notification: { deleteMany: vi.fn(), create: vi.fn() },
+  tour: { findUnique: vi.fn() },
+  user: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/calendar", () => ({ sendTourCalendarInvite: vi.fn() }));
 vi.mock("@/lib/tour-calendar-sync", () => ({ pushTourToCalendars: vi.fn() }));
 vi.mock("@/lib/line", () => ({ linePushButtons: vi.fn(), lineEnabled: () => false }));
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
+vi.mock("@/lib/email", () => ({ sendEmail: vi.fn() }));
 
-import { acceptOffer, slotLabel, timeRangeLabel } from "@/lib/offers";
+import { acceptOffer, createOffer, slotLabel, timeRangeLabel } from "@/lib/offers";
 
 const openOffer = (over = {}) => ({
   id: "of1", status: "OPEN", expiresAt: new Date(Date.now() + 10 * 60_000),
@@ -32,6 +35,26 @@ describe("offers — labels", () => {
   it("timeRangeLabel adds the end time + duration", () => {
     expect(timeRangeLabel(1, 180)).toBe("10:00–13:00 (3h)");
     expect(timeRangeLabel(0)).toBe("08:30");
+  });
+});
+
+describe("offers — createOffer single-guide window", () => {
+  it("gives a job offered to one specific guide a 2-hour accept window", async () => {
+    prismaMock.tour.findUnique.mockResolvedValue({ id: "t1", name: "City Tour" });
+    prismaMock.user.findFirst.mockResolvedValue({ id: "u3", guideId: "G-003", displayName: "Somchai", lineUserId: null, email: null });
+    prismaMock.assignment.findUnique.mockResolvedValue(null); // not already booked that slot
+    prismaMock.jobOffer.create.mockResolvedValue({ id: "of-new" });
+
+    const before = Date.now();
+    const r = await createOffer({ tourId: "t1", date: "2026-06-20", slotIdx: 5, onlyGuideId: "G-003" });
+    const after = Date.now();
+
+    expect(r.candidates).toBe(1);
+    const data = prismaMock.jobOffer.create.mock.calls[0][0].data;
+    const windowMs = data.expiresAt.getTime() - before;
+    // ~120 minutes, allowing for the elapsed time between the two Date.now() reads.
+    expect(windowMs).toBeGreaterThanOrEqual(120 * 60_000 - 5_000);
+    expect(windowMs).toBeLessThanOrEqual(120 * 60_000 + (after - before) + 5_000);
   });
 });
 
