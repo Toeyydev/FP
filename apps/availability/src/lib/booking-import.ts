@@ -139,8 +139,10 @@ export async function reconcileAssignedBookings(): Promise<number> {
   // a guide. If the assignment was removed (re-offer / unassign), return it to
   // PENDING so the job reappears in the inbox instead of vanishing.
   const assignedSlots = new Set(assigns.map((a) => `${a.date}|${a.slotIdx}`));
+  const openOffers = await prisma.jobOffer.findMany({ where: { status: "OPEN", date: { gte: today } }, select: { date: true, slotIdx: true } });
+  const liveOfferSlots = new Set(openOffers.map((o) => `${o.date}|${o.slotIdx}`));
   const offered = await prisma.booking.findMany({ where: { status: "OFFERED", date: { gte: today }, slotIdx: { not: null } }, select: { id: true, date: true, slotIdx: true } });
-  const strand = offered.filter((b) => !assignedSlots.has(`${b.date}|${b.slotIdx}`)).map((b) => b.id);
+  const strand = offered.filter((b) => { const k = `${b.date}|${b.slotIdx}`; return !assignedSlots.has(k) && !liveOfferSlots.has(k); }).map((b) => b.id);
   if (strand.length) await prisma.booking.updateMany({ where: { id: { in: strand } }, data: { status: "PENDING" } });
 
   return combined;

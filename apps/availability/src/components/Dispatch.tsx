@@ -38,13 +38,13 @@ export default function Dispatch() {
     if (r.ok) await load();
   }
   // Reassign: unassign the current guide and re-offer to the others available.
+  // Return the job to the pending pool (Bookings inbox) so the operator can offer
+  // it directly to a guide. Unassigns the current guide and releases its bookings.
   async function reoffer(a: Assignment) {
-    if (!confirm(`Re-offer this tour to other available guides?\n${a.tourName} · ${a.date} ${a.time}\n(${a.guideId} will be unassigned)`)) return;
-    setMsg("Re-offering…");
-    await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
-    const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId: a.tourId, date: a.date, slotIdx: a.slotIdx, pax: a.pax && a.pax <= 10 ? a.pax : undefined }) });
-    const d = await r.json().catch(() => ({}));
-    setMsg(r.ok ? (d.candidates ? `🔁 Re-offered to ${d.candidates} guide(s)` : "No other guide available — assign manually") : "Re-offer failed");
+    if (!confirm(`Return this tour to pending?\n${a.tourName} · ${a.date} ${a.time}\n${a.guideId} is unassigned; offer it again from the Bookings inbox.`)) return;
+    setMsg("Returning to pending…");
+    const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
+    setMsg(r.ok ? "↩ Returned to pending — offer it in Bookings." : "Failed");
     await load();
   }
 
