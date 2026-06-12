@@ -79,6 +79,20 @@ model BlockedDate {
   createdAt   DateTime @default(now())
 }
 
+// Operator blocks a single time slot on a date (no guide can be offered/assigned
+// it). Finer-grained than BlockedDate, which blocks the whole day.
+model BlockedSlot {
+  id          String   @id @default(cuid())
+  date        String   // YYYY-MM-DD
+  slotIdx     Int
+  reason      String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([date, slotIdx])
+  @@index([date])
+}
+
 // In-app notification for a guide (e.g. operator blocked a date they were free).
 model Notification {
   id        String    @id @default(cuid())

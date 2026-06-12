@@ -79,6 +79,8 @@ export async function createOffer(o: {
 export async function availableGuides(date: string, slotIdx: number) {
   const blocked = await prisma.blockedDate.findUnique({ where: { date } }).catch(() => null);
   if (blocked) return [];
+  const slotBlocked = await prisma.blockedSlot.findUnique({ where: { date_slotIdx: { date, slotIdx } } }).catch(() => null);
+  if (slotBlocked) return [];
 
   const [guides, avail, assigned, leaves] = await Promise.all([
     prisma.user.findMany({
