@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { guidesNeeded } from "@/lib/capacity";
-import { reconcileAssignedBookings } from "@/lib/booking-import";
+import { reconcileAssignedBookings, autoSyncBokun } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -16,6 +16,7 @@ export async function GET() {
 
   // Pull in any late bookings + re-sync assignment pax so the board is current,
   // and hand back any unaccepted offer (TTL passed, or tour within 5h).
+  void autoSyncBokun(); // background: pull fresh Bokun bookings + cancellations (throttled), non-blocking
   await reconcileAssignedBookings().catch(() => {});
   await sweepExpiredOffers().catch(() => {});
 

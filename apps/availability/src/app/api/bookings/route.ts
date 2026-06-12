@@ -6,7 +6,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_COUNT } from "@/lib/slots";
 import { productKey } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
-import { reconcileAssignedBookings, autoAttachLate } from "@/lib/booking-import";
+import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
 
   // Auto-combine: fold any pending booking whose slot is already assigned into that
   // guide's job before listing, so the inbox self-reconciles with no manual step.
+  void autoSyncBokun(); // background: keep the inbox current with Bokun (throttled), non-blocking
   await reconcileAssignedBookings();
 
   // Hide bookings whose tour date has already passed (Bangkok civil date) from the
