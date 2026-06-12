@@ -15,13 +15,20 @@ export async function GET() {
   const ch = process.env.BOKUN_BOOKING_CHANNEL_UUID || "";
 
   // When did Bokun last POST the webhook, and how many events in the last 7 days?
+  // Also: when was the last manual sync, and how many bookings are CANCELLED now —
+  // so we can confirm a Sync actually pulled cancellations (counts only, no PII).
   let lastWebhookAt: string | null = null;
   let webhookEvents7d = 0;
+  let lastSyncAt: string | null = null;
+  let cancelledBookings = 0;
   try {
     const last = await prisma.auditLog.findFirst({ where: { action: "booking.received" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
     lastWebhookAt = last?.createdAt.toISOString() ?? null;
     const weekAgo = new Date(Date.now() - 7 * 86400_000);
     webhookEvents7d = await prisma.auditLog.count({ where: { action: "booking.received", createdAt: { gte: weekAgo } } });
+    const sync = await prisma.auditLog.findFirst({ where: { action: "bokun.sync" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    lastSyncAt = sync?.createdAt.toISOString() ?? null;
+    cancelledBookings = await prisma.booking.count({ where: { status: "CANCELLED" } });
   } catch { /* health must never throw */ }
 
   return NextResponse.json({
@@ -32,6 +39,8 @@ export async function GET() {
     webhookTokenSet: !!process.env.BOKUN_WEBHOOK_TOKEN,
     lastWebhookAt,
     webhookEvents7d,
+    lastSyncAt,
+    cancelledBookings,
     bokunVarNamesSeen: bokunVarNames,
   });
 }
