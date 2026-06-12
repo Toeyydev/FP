@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { SLOT_COUNT } from "@/lib/slots";
+import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
 import { sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
+import { sendPushToUser } from "@/lib/push";
+import { linePush, lineEnabled } from "@/lib/line";
 import { audit } from "@/lib/audit";
 
 const monthRe = /^\d{4}-\d{2}$/;
@@ -124,6 +126,24 @@ export async function DELETE(req: NextRequest) {
   // be re-dispatched instead of being stranded as "offered" with no job.
   if (release) {
     await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+  }
+
+  // Tell the guide their job was removed (in-app + push + LINE if linked).
+  if (existing) {
+    try {
+      const [g, tour] = await Promise.all([
+        prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true } }),
+        existing.tourId ? prisma.tour.findUnique({ where: { id: existing.tourId }, select: { name: true } }) : Promise.resolve(null),
+      ]);
+      if (g) {
+        const when = `${date} · ${SLOT_TIMES[slotIdx] ?? ""}`;
+        const tname = tour?.name ?? existing.tourId ?? "your tour";
+        const msg = `Your tour was removed: ${tname} · ${when}. You are no longer assigned to it.`;
+        await prisma.notification.create({ data: { userId: g.id, kind: "job-change", message: msg } });
+        await sendPushToUser(g.id, { title: "Tour removed", body: `${tname} · ${when}`, url: "/", tag: `removed-${date}-${slotIdx}` });
+        if (lineEnabled && g.lineUserId) await linePush(g.lineUserId, msg);
+      }
+    } catch { /* notifying the guide is best-effort */ }
   }
   return NextResponse.json({ ok: true });
 }
