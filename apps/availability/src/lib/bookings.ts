@@ -128,7 +128,21 @@ export function detectChannel(raw: unknown): string {
 }
 
 // Detect a cancellation from the event/action field.
+// Collect EVERY primitive value found under any of the given keys (deep).
+function collectAll(obj: unknown, keys: string[], out: string[], seen = new Set<unknown>()): void {
+  if (!obj || typeof obj !== "object" || seen.has(obj)) return;
+  seen.add(obj);
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (keys.includes(k) && v != null && typeof v !== "object") out.push(String(v));
+    else if (v && typeof v === "object") collectAll(v, keys, out, seen);
+  }
+}
+
 export function isCancellation(raw: unknown): boolean {
-  const action = String(deepFind(raw, ["action", "status", "eventType", "type"]) ?? "").toUpperCase();
-  return action.includes("CANCEL");
+  // Check ALL state/status/event fields (not just the first one deepFind hits), so
+  // a non-cancel field earlier in the payload can't mask a real CANCELLED status
+  // deeper down. "type" is intentionally excluded (cancellationPolicy.type etc.).
+  const vals: string[] = [];
+  collectAll(raw, ["action", "eventType", "status", "state", "bookingStatus", "confirmationStatus", "productConfirmationStatus"], vals);
+  return vals.some((v) => v.toUpperCase().includes("CANCEL"));
 }

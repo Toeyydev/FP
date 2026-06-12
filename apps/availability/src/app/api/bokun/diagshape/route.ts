@@ -1,47 +1,47 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
-import { detectChannel, isCancellation } from "@/lib/bookings";
+import { searchBookings, bokunApiEnabled } from "@/lib/bokun-api";
+import { isCancellation, detectChannel } from "@/lib/bookings";
 
 export const dynamic = "force-dynamic";
 
-// TEMP diagnostic — PII-FREE. Returns structural info only (key NAMES, types,
-// status-like values) so we can confirm cancellation detection against real
-// GYG/Viator data. Never returns names/emails/refs. DELETE after use.
-function collect(obj: unknown, keys: string[], out: string[], seen = new Set<unknown>()) {
+// TEMP diagnostic — PII-FREE. Does a live, READ-ONLY Bokun search (now including
+// CANCELLED) and reports only counts + status values — never names/emails/refs.
+// Proves whether Bokun has the cancellations (leg ①) and that detection works.
+// DELETE after use.
+function statusVals(obj: unknown, out: string[], seen = new Set<unknown>()) {
   if (!obj || typeof obj !== "object" || seen.has(obj)) return;
   seen.add(obj);
   for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-    if (keys.includes(k) && v != null && typeof v !== "object") out.push(`${k}=${String(v)}`.slice(0, 50));
-    else if (v && typeof v === "object") collect(v, keys, out, seen);
+    if (["status", "bookingStatus", "confirmationStatus", "productConfirmationStatus", "state"].includes(k) && v != null && typeof v !== "object") out.push(`${k}=${String(v)}`);
+    else if (v && typeof v === "object") statusVals(v, out, seen);
   }
 }
 
 export async function GET() {
-  const rows = await prisma.booking.findMany({
-    orderBy: { createdAt: "desc" }, take: 50,
-    select: { id: true, status: true, source: true, date: true, raw: true, createdAt: true },
-  });
-  const KEYS = ["status", "action", "type", "eventType", "state", "bookingStatus", "confirmationStatus", "productConfirmationStatus", "cancelled", "isCancelled"];
-  const withRaw = rows.filter((r) => r.raw != null && typeof r.raw === "object");
-  const sample = withRaw.map((r) => {
+  if (!bokunApiEnabled) return NextResponse.json({ error: "bokun-not-configured" });
+  const now = Date.now();
+  const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const from = fmt(now - 30 * 86400_000);
+  const to = fmt(now + 90 * 86400_000);
+
+  const res = await searchBookings({ from, to, page: 1, pageSize: 100 });
+  if (!res.ok) return NextResponse.json({ error: "bokun-api", status: res.status, detail: res.error });
+
+  const byStatus: Record<string, number> = {};
+  let detectedCancel = 0;
+  const channels: Record<string, number> = {};
+  for (const item of res.items) {
     const vals: string[] = [];
-    collect(r.raw, KEYS, vals, new Set());
-    return { source: r.source, channel: detectChannel(r.raw), dbStatus: r.status, detected: isCancellation(r.raw), statusFields: [...new Set(vals)] };
-  });
-  // Reveal the real shape of the 4 newest raw payloads — KEY NAMES ONLY (no values → PII-free).
-  const shapes = withRaw.slice(0, 4).map((r) => ({
-    source: r.source,
-    topKeys: Object.keys(r.raw as object),
-    hasActivityBookings: Array.isArray((r.raw as Record<string, unknown>).activityBookings),
-    hasProductBookings: Array.isArray((r.raw as Record<string, unknown>).productBookings),
-  }));
+    statusVals(item, vals);
+    for (const v of [...new Set(vals)]) byStatus[v] = (byStatus[v] || 0) + 1;
+    if (isCancellation(item)) detectedCancel++;
+    const ch = detectChannel(item); channels[ch] = (channels[ch] || 0) + 1;
+  }
   return NextResponse.json({
-    totalRows: rows.length,
-    rowsWithObjectRaw: withRaw.length,
-    rowsWithNullRaw: rows.length - withRaw.length,
-    cancelledInDb: rows.filter((r) => r.status === "CANCELLED").length,
-    statusBreakdown: rows.reduce((m: Record<string, number>, r) => ((m[r.status] = (m[r.status] || 0) + 1), m), {}),
-    sample,
-    shapes,
+    window: { from, to },
+    itemsReturned: res.items.length,
+    detectedAsCancellation: detectedCancel,
+    statusValueCounts: byStatus,
+    channelCounts: channels,
   });
 }

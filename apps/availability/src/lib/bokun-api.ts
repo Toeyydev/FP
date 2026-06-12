@@ -46,7 +46,7 @@ async function bokunFetch(method: string, path: string, body?: unknown): Promise
 export async function searchBookings(opts: { from: string; to: string; page?: number; pageSize?: number }): Promise<{ ok: boolean; items: unknown[]; status: number; error?: string }> {
   const path = "/booking.json/product-booking-search";
   const body = {
-    bookingStatuses: ["CONFIRMED", "ARRIVED", "NO_SHOW", "STARTED"],
+    bookingStatuses: ["CONFIRMED", "ARRIVED", "NO_SHOW", "STARTED", "CANCELLED"],
     startDateRange: { from: opts.from, to: opts.to, includeLower: true, includeUpper: true },
     page: opts.page ?? 1,
     pageSize: opts.pageSize ?? 100,
