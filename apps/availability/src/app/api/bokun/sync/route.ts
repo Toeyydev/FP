@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     if (res.items.length === 0) break;
     counts.fetched += res.items.length;
     for (const item of res.items) {
-      try { const r: ImportResult = await importRawBooking(item, { getYourGuideOnly: true }); counts[r]++; } catch { counts.skipped++; }
+      try { const r: ImportResult = await importRawBooking(item, { otaOnly: true }); counts[r]++; } catch { counts.skipped++; }
     }
     if (res.items.length < 100) break; // last page
   }

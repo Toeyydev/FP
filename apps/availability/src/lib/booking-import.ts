@@ -220,19 +220,25 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   return "created";
 }
 
-// A GetYourGuide booking reference looks like "GET-xxxx".
-function isGetYourGuideRef(p: { confirmationCode?: string; externalRef?: string }): boolean {
-  return [p.confirmationCode, p.externalRef].some((r) => /^GET-/i.test((r ?? "").trim()));
+// A direct/website Folkpaths booking reference looks like "FOLK-xxxx".
+function isDirectFolkRef(p: { confirmationCode?: string; externalRef?: string }): boolean {
+  return [p.confirmationCode, p.externalRef].some((r) => /^FOLK-/i.test((r ?? "").trim()));
 }
 
-// Import a raw Bokun/channel payload (deep-parsed). With { getYourGuideOnly },
-// skips anything whose reference isn't GET-xxxx — used by the historical sync so
-// website / payment-link / test bookings never land in the inbox. The live
-// webhook leaves it off, so nothing real is missed in real time.
-export async function importRawBooking(raw: unknown, opts?: { getYourGuideOnly?: boolean }): Promise<ImportResult> {
+// An OTA booking we want to sync: GetYourGuide (GET-xxxx) or Viator, i.e. anything
+// sold through a marketplace channel — but never a direct FOLK-xxxx website booking.
+function isOtaBooking(p: { confirmationCode?: string; externalRef?: string }, source: string): boolean {
+  if (isDirectFolkRef(p)) return false;                                  // never sync direct/website bookings
+  if ([p.confirmationCode, p.externalRef].some((r) => /^GET-/i.test((r ?? "").trim()))) return true; // GetYourGuide
+  return /viator|getyourguide/i.test(source);                           // Viator / GYG by channel
+}
+
+// Import a raw Bokun/channel payload (deep-parsed). With { otaOnly }, syncs only
+// marketplace bookings (GetYourGuide + Viator) and skips direct FOLK-xxxx website
+// bookings — so the inbox stays clean. The live webhook leaves it off.
+export async function importRawBooking(raw: unknown, opts?: { otaOnly?: boolean }): Promise<ImportResult> {
   const parsed = parseBokun(raw);
   const source = detectChannel(raw);
-  // Sync ONLY GetYourGuide GET-xxxx bookings; never FOLK-xxxx (avoids confusion).
-  if (opts?.getYourGuideOnly && !isGetYourGuideRef(parsed)) return "skipped";
+  if (opts?.otaOnly && !isOtaBooking(parsed, source)) return "skipped";
   return importParsed(parsed, { source, cancelled: isCancellation(raw), raw });
 }
