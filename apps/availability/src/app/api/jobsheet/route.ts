@@ -83,10 +83,17 @@ export async function GET(req: NextRequest) {
   // while keeping the operator's edits to the rows already on the sheet.
   if (existing) {
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
-    const have = new Set(saved.map(keyOf).filter(Boolean));
+    const liveKeys = new Set(liveBookings.map(keyOf).filter(Boolean));
+    // Drop rows that have a booking number but are no longer at THIS slot — they
+    // were re-slotted to another time or cancelled, so they must not linger here
+    // (that caused the same guest to appear on both the 08:30 and 13:30 sheets).
+    // Manual rows (no booking number) are always kept.
+    const kept = saved.filter((b) => !((b.bookingNo || "").trim()) || liveKeys.has(keyOf(b)));
+    const have = new Set(kept.map(keyOf).filter(Boolean));
     const added = liveBookings.filter((b) => { const k = keyOf(b); return k && !have.has(k); });
-    const sheet = added.length ? { ...existing, bookings: saved.concat(added) } : existing;
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length });
+    const changed = added.length > 0 || kept.length !== saved.length;
+    const sheet = changed ? { ...existing, bookings: kept.concat(added) } : existing;
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length, reconciledRemoved: saved.length - kept.length });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
