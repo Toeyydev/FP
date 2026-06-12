@@ -54,6 +54,12 @@ export default function BookingsInbox() {
     } catch { setMsg("Import failed — couldn't read the file."); }
   }
 
+  // Live-sync status: has Bokun's webhook fired recently? (PII-free health probe.)
+  const [wh, setWh] = useState<{ lastWebhookAt: string | null; webhookEvents7d: number } | null>(null);
+  useEffect(() => {
+    fetch("/api/bokun/health", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => d && setWh({ lastWebhookAt: d.lastWebhookAt ?? null, webhookEvents7d: d.webhookEvents7d ?? 0 })).catch(() => {});
+  }, []);
+
   const [syncing, setSyncing] = useState(false);
   // Pull historical bookings from Bokun into the inbox (one-off backfill).
   async function syncBokun() {
@@ -202,6 +208,19 @@ export default function BookingsInbox() {
         <div className="panel-head"><h2>Incoming bookings</h2>
           <div className="head-tools">
             <span style={{ color: "var(--ink-soft)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
+            {wh && (() => {
+              const last = wh.lastWebhookAt ? new Date(wh.lastWebhookAt).getTime() : 0;
+              const mins = last ? Math.floor((Date.now() - last) / 60000) : Infinity;
+              const live = last && mins < 60 * 24 * 3; // seen in the last 3 days
+              const ago = !last ? "never" : mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : mins < 60 * 24 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+              return (
+                <span title={live ? "Bokun's webhook is delivering bookings & cancellations automatically." : "No recent webhook events — bookings only update when you press Sync. Check the Bokun webhook URL."}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, padding: "3px 9px", borderRadius: 999, border: "1px solid", borderColor: live ? "var(--ok-line, var(--line))" : "var(--danger-line)", background: live ? "var(--ok-bg, var(--surface))" : "var(--danger-bg)", color: live ? "var(--ok, #2f7d4f)" : "var(--danger)" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: live ? "#2f9e54" : "var(--danger)" }} />
+                  {live ? `Live sync · last event ${ago}` : "Live sync off"}
+                </span>
+              );
+            })()}
             <button className="btn sm" disabled={syncing} onClick={syncBokun}>{syncing ? "Syncing…" : "↺ Sync from Bokun"}</button>
             <button className="btn sm" onClick={() => csvRef.current?.click()}>⬆ Import CSV / Excel</button>
             <input ref={csvRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} />
