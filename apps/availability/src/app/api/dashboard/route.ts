@@ -24,7 +24,7 @@ export async function GET() {
 
   const [assigns, bookings, tours, guides, checkins, reports, pendingLeaves] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: today, lte: horizon } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }),
-    prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true } }),
+    prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true, status: true } }),
     prisma.tour.findMany({ select: { id: true, name: true, durationMin: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.checkin.findMany({ where: { date: today }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
@@ -58,12 +58,13 @@ export async function GET() {
   // them vs. how many the pax needs. → unassigned (0 guides) + understaffed.
   const guidesByInst: Record<string, number> = {};
   for (const a of assigns) { const k = `${a.date}|${a.slotIdx}|${a.tourId}`; guidesByInst[k] = (guidesByInst[k] ?? 0) + 1; }
-  const inst: Record<string, { date: string; slotIdx: number; tourId: string; pax: number; count: number }> = {};
+  const inst: Record<string, { date: string; slotIdx: number; tourId: string; pax: number; count: number; pending: boolean }> = {};
   for (const b of bookings) {
     if (!b.tourId || b.slotIdx == null || !b.date) continue;
     const k = `${b.date}|${b.slotIdx}|${b.tourId}`;
-    (inst[k] ??= { date: b.date, slotIdx: b.slotIdx, tourId: b.tourId, pax: 0, count: 0 });
+    (inst[k] ??= { date: b.date, slotIdx: b.slotIdx, tourId: b.tourId, pax: 0, count: 0, pending: false });
     inst[k].pax += b.pax ?? 0; inst[k].count += 1;
+    if (b.status === "PENDING") inst[k].pending = true;
   }
   const sortKey = (a: { date: string; slotIdx: number }) => a.date + String(a.slotIdx).padStart(2, "0");
   const unassigned: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number }[] = [];
@@ -72,7 +73,7 @@ export async function GET() {
     const have = guidesByInst[`${i.date}|${i.slotIdx}|${i.tourId}`] ?? 0;
     const need = guidesNeeded(i.pax);
     const base = { date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "", tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax };
-    if (have === 0) unassigned.push({ ...base, count: i.count, need });
+    if (have === 0 && i.pending) unassigned.push({ ...base, count: i.count, need });
     else if (have < need) understaffed.push({ ...base, have, need });
   }
   unassigned.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));

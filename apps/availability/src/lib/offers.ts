@@ -204,6 +204,9 @@ export async function sweepExpiredOffers(): Promise<number> {
     const won = await prisma.jobOffer.updateMany({ where: { id: o.id, status: "OPEN" }, data: { status: "EXPIRED" } });
     if (won.count !== 1) continue; // someone else handled it
     await prisma.notification.deleteMany({ where: { offerId: o.id } });
+    // Nobody took it: return its bookings to the inbox as pending (if unassigned).
+    const stillAssigned = await prisma.assignment.findFirst({ where: { date: o.date, slotIdx: o.slotIdx }, select: { id: true } });
+    if (!stillAssigned) await prisma.booking.updateMany({ where: { date: o.date, slotIdx: o.slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
     const msg = `No guide accepted ${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}. Please assign a guide.`;
     for (const op of opsUsers) {
       await prisma.notification.create({ data: { userId: op.id, kind: "offer", message: msg } });

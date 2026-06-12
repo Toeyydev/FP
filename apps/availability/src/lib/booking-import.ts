@@ -134,6 +134,15 @@ export async function reconcileAssignedBookings(): Promise<number> {
     const sum = mine.reduce((s, b) => s + (b.pax ?? 0), 0);
     if (sum > 0 && sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
   }
+
+  // Heal stranded bookings: a booking is only OFFERED while its slot is assigned to
+  // a guide. If the assignment was removed (re-offer / unassign), return it to
+  // PENDING so the job reappears in the inbox instead of vanishing.
+  const assignedSlots = new Set(assigns.map((a) => `${a.date}|${a.slotIdx}`));
+  const offered = await prisma.booking.findMany({ where: { status: "OFFERED", date: { gte: today }, slotIdx: { not: null } }, select: { id: true, date: true, slotIdx: true } });
+  const strand = offered.filter((b) => !assignedSlots.has(`${b.date}|${b.slotIdx}`)).map((b) => b.id);
+  if (strand.length) await prisma.booking.updateMany({ where: { id: { in: strand } }, data: { status: "PENDING" } });
+
   return combined;
 }
 

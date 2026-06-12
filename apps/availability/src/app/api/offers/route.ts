@@ -103,9 +103,15 @@ export async function DELETE(req: NextRequest) {
   const parsed = z.object({ id: z.string().min(1) }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { id } = parsed.data;
+  const offer = await prisma.jobOffer.findUnique({ where: { id }, select: { date: true, slotIdx: true } });
   await prisma.notification.deleteMany({ where: { offerId: id } });
   await prisma.jobOfferResponse.deleteMany({ where: { offerId: id } });
   await prisma.jobOffer.deleteMany({ where: { id } });
+  // Return the slot's bookings to pending (if unassigned) so the job isn't stranded.
+  if (offer) {
+    const assigned = await prisma.assignment.findFirst({ where: { date: offer.date, slotIdx: offer.slotIdx }, select: { id: true } });
+    if (!assigned) await prisma.booking.updateMany({ where: { date: offer.date, slotIdx: offer.slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+  }
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "offer.deleted", entityType: "JobOffer", entityId: id });
   return NextResponse.json({ ok: true });
 }

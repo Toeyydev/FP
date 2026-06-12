@@ -88,7 +88,7 @@ export default function Dashboard() {
                     </a>
                   ))}
                   {d.unassigned.map((u, i) => (
-                    <a key={`u${i}`} className="dash-row warn" href="/bookings">
+                    <a key={`u${i}`} className="dash-row warn" href={`/bookings?focus=${u.date}`}>
                       <span className="tag warn">Unassigned</span>
                       <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.count} booking{u.count > 1 ? "s" : ""} · {u.pax} pax — needs {u.need} guide{u.need > 1 ? "s" : ""}</div></span>
                     </a>
