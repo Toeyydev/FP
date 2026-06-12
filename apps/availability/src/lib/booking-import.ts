@@ -152,6 +152,23 @@ export async function reconcileAssignedBookings(): Promise<number> {
 // externalId, falls back to confirmationCode so re-imports don't duplicate.
 // Auto-maps the tour from a learned product→tour mapping. Shared by the webhook,
 // the Bokun API sync, and the CSV import.
+// A live booking was cancelled (e.g. a GetYourGuide cancellation arriving via the
+// Bokun webhook). If its slot is assigned to a guide, re-sync the guide's pax and
+// tell them in real time so they aren't left expecting a guest who won't show.
+async function onBookingCancelled(b: { date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
+  try {
+    if (!b.date || b.slotIdx == null) return;
+    const a = await prisma.assignment.findFirst({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true } });
+    if (!a) return;
+    const bks = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true } });
+    const sum = bks.reduce((acc, x) => acc + (x.pax ?? 0), 0);
+    if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
+    const who = b.customerName ? `${b.customerName} ` : "";
+    await notifyGuide(a.guideId, `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`, "A guest cancelled", `${b.date} \u00b7 now ${sum} guests`);
+    await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`);
+  } catch { /* real-time alert is best-effort; the cancellation itself is already saved */ }
+}
+
 export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown }): Promise<ImportResult> {
   let tourId: string | null = null;
   if (p.productName) {
@@ -162,7 +179,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   const raw = (opts.raw ?? undefined) as object | undefined;
 
   if (p.externalId) {
-    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true } });
+    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true } });
     const rec = await prisma.booking.upsert({
       where: { source_externalId: { source, externalId: p.externalId } },
       create: {
@@ -178,15 +195,17 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       },
     });
     if (!existing && !(await autoRemoveNameDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+    if (cancelled && existing?.status !== "CANCELLED") await onBookingCancelled(rec);
     return existing ? "updated" : "created";
   }
 
   // No externalId: dedupe on confirmationCode / externalRef so re-import is safe.
   const ref = p.confirmationCode || p.externalRef;
   if (ref) {
-    const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true } });
+    const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true, status: true } });
     if (dup) {
-      await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, date: p.date ?? undefined, slotIdx: p.slotIdx ?? undefined, pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, date: p.date ?? undefined, slotIdx: p.slotIdx ?? undefined, pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
+      if (cancelled && dup.status !== "CANCELLED") await onBookingCancelled(updated);
       return "updated";
     }
   }
