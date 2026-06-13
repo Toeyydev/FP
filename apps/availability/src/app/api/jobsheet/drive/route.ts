@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
+import { notifyGuide } from "@/lib/booking-import";
 import { decrypt } from "@/lib/crypto";
 import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 
@@ -67,6 +68,16 @@ export async function POST(req: NextRequest) {
       if (eslipBase64) {
         const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         eslipLink = e.link;
+        // Daily pay: attaching this tour's slip means the guide was paid for the day.
+        const now = new Date();
+        await prisma.tourPayment.upsert({
+          where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
+          create: { guideId, date, slotIdx, tourId, status: "PAID", paidAt: now },
+          update: { status: "PAID", paidAt: now },
+        });
+        try {
+          await notifyGuide(guideId, `Your payment for the ${date} tour (${tour?.name ?? tourId}) has been transferred — ${thb(t.grandTotal)}. Thank you!`, "Payment transferred \ud83d\udcb8", `${date} \u00b7 ${thb(t.grandTotal)}`);
+        } catch { /* best-effort */ }
       }
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64 } });
       return NextResponse.json({ ok: true, link, eslipLink });
