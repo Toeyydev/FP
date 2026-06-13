@@ -16,24 +16,26 @@ export async function POST(req: NextRequest) {
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const form = await req.formData().catch(() => null);
-  const files = (form?.getAll("file") ?? []).filter((f): f is File => f instanceof File);
+  type Up = { name?: string; arrayBuffer?: () => Promise<ArrayBuffer> };
+  const files = ((form?.getAll("file") ?? []) as unknown[]).filter((f) => !!f && typeof (f as Up).arrayBuffer === "function") as Up[];
   if (!files.length) return NextResponse.json({ error: "no-file", hint: "Pick one or more .xlsx job sheets." }, { status: 400 });
 
   const results: { file: string; ok: boolean; detail: string }[] = [];
   for (const file of files) {
     try {
-      if (!/\.xlsx$/i.test(file.name)) { results.push({ file: file.name, ok: false, detail: "Not an .xlsx — re-save as Excel Workbook (.xlsx)." }); continue; }
-      const p = await parseJobSheetXlsx(await file.arrayBuffer());
+      const fname = file.name || "file";
+      if (!/\.xlsx$/i.test(fname)) { results.push({ file: fname, ok: false, detail: "Not an .xlsx — re-save as Excel Workbook (.xlsx)." }); continue; }
+      const p = await parseJobSheetXlsx(await file.arrayBuffer!());
       if (!p.tourId || !p.guideId || !p.date || p.slotIdx == null) {
-        results.push({ file: file.name, ok: false, detail: `Missing key fields (tour=${p.tourId || "?"}, guide=${p.guideId || "?"}, date=${p.date || "?"}, time=${p.slotIdx ?? "?"}).` });
+        results.push({ file: fname, ok: false, detail: `Missing key fields (tour=${p.tourId || "?"}, guide=${p.guideId || "?"}, date=${p.date || "?"}, time=${p.slotIdx ?? "?"}).` });
         continue;
       }
       const [tour, guide] = await Promise.all([
         prisma.tour.findUnique({ where: { id: p.tourId }, select: { id: true, name: true } }),
         prisma.user.findFirst({ where: { guideId: p.guideId }, select: { guideId: true } }),
       ]);
-      if (!tour) { results.push({ file: file.name, ok: false, detail: `Tour "${p.tourId}" doesn't exist — create it first.` }); continue; }
-      if (!guide) { results.push({ file: file.name, ok: false, detail: `Guide "${p.guideId}" doesn't exist — add the guide first.` }); continue; }
+      if (!tour) { results.push({ file: fname, ok: false, detail: `Tour "${p.tourId}" doesn't exist — create it first.` }); continue; }
+      if (!guide) { results.push({ file: fname, ok: false, detail: `Guide "${p.guideId}" doesn't exist — add the guide first.` }); continue; }
 
       const date = p.date, slotIdx = p.slotIdx, guideId = p.guideId, tourId = p.tourId;
       const totalPax = p.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0) || null;
@@ -66,9 +68,9 @@ export async function POST(req: NextRequest) {
       });
 
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length } });
-      results.push({ file: file.name, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}` });
+      results.push({ file: fname, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}` });
     } catch (e) {
-      results.push({ file: file.name, ok: false, detail: (e as Error).message.slice(0, 160) });
+      results.push({ file: file.name || "file", ok: false, detail: (e as Error).message.slice(0, 160) });
     }
   }
   const imported = results.filter((r) => r.ok).length;
