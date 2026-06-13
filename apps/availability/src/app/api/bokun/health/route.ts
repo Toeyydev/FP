@@ -21,6 +21,8 @@ export async function GET() {
   let webhookEvents7d = 0;
   let lastSyncAt: string | null = null;
   let cancelledBookings = 0;
+  let assignmentsToday = 0;
+  let assignmentsUpcoming = 0;
   try {
     const last = await prisma.auditLog.findFirst({ where: { action: "booking.received" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
     lastWebhookAt = last?.createdAt.toISOString() ?? null;
@@ -29,6 +31,9 @@ export async function GET() {
     const sync = await prisma.auditLog.findFirst({ where: { action: "bokun.sync" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
     lastSyncAt = sync?.createdAt.toISOString() ?? null;
     cancelledBookings = await prisma.booking.count({ where: { status: "CANCELLED" } });
+    const t0 = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    assignmentsToday = await prisma.assignment.count({ where: { date: t0 } });
+    assignmentsUpcoming = await prisma.assignment.count({ where: { date: { gte: t0 } } });
   } catch { /* health must never throw */ }
 
   return NextResponse.json({
@@ -41,6 +46,8 @@ export async function GET() {
     webhookEvents7d,
     lastSyncAt,
     cancelledBookings,
+    assignmentsToday,
+    assignmentsUpcoming,
     bokunVarNamesSeen: bokunVarNames,
   });
 }
