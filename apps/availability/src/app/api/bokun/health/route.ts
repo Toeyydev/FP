@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { auth } from "@/auth";
+
+const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
 export const dynamic = "force-dynamic"; // always read env at request time, never cache
 
@@ -7,8 +10,10 @@ export const dynamic = "force-dynamic"; // always read env at request time, neve
 // webhook actually fired recently? Reports only presence + length (never the
 // secret values) plus the timestamp/count of recent webhook events (PII-free —
 // derived from the audit log's "booking.received" rows). Lets the operator tell
-// "real-time webhook is wired up" from "only manual sync works".
+// "real-time webhook is wired up" from "only manual sync works". Operator-only.
 export async function GET() {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const a = process.env.BOKUN_ACCESS_KEY || "";
   const s = process.env.BOKUN_SECRET_KEY || "";
   const bokunVarNames = Object.keys(process.env).filter((k) => k.startsWith("BOKUN")).sort();
