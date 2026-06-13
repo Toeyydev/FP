@@ -78,7 +78,8 @@ export async function POST(req: NextRequest) {
       });
 
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length } });
-      results.push({ file: fname, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}` });
+      const parsedGuide = [p.guideName && "name", p.taxId && "tax", p.address && "addr", p.tel && "tel"].filter(Boolean).join("+") || "none-found";
+      results.push({ file: fname, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref} · guide-parsed:[${parsedGuide}]` });
     } catch (e) {
       results.push({ file: file.name || "file", ok: false, detail: (e as Error).message.slice(0, 160) });
     }
