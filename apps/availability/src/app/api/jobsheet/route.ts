@@ -114,7 +114,7 @@ export async function GET(req: NextRequest) {
   });
 }
 
-const bookingZ = z.object({ name: z.string().max(160), bookingNo: z.string().max(80), bookedPax: z.number().nullable(), actualPax: z.number().nullable(), tickets: z.string().max(20), status: z.string().max(40) });
+const bookingZ = z.object({ name: z.string().max(160), bookingNo: z.string().max(80), bookedPax: z.number().nullable(), actualPax: z.number().nullable(), tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
 const expenseZ = z.object({ description: z.string().max(120), price: z.number().nullable(), pax: z.number().nullable() });
 const guideFeeZ = z.object({ price: z.number().nullable(), time: z.number().nullable(), whtPct: z.number().nullable() });
 

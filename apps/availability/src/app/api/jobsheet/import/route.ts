@@ -70,11 +70,12 @@ export async function POST(req: NextRequest) {
 
       // job sheet
       const ref = p.ref || makeRef(date, (await prisma.jobSheet.count({ where: { date } })) + 1);
+      const sheetBookings = p.bookings.map((b) => ({ ...b, status: "" })); // save schema requires a status field
       const guideFee = { price: p.guideFee.price ?? 1000, time: p.guideFee.time ?? 1, whtPct: p.guideFee.whtPct ?? 3 };
       await prisma.jobSheet.upsert({
         where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-        create: { guideId, date, slotIdx, tourId, ref, status: p.status || "Confirmed", bookings: p.bookings, expenses: p.expenses, guideFee, createdById: session!.user!.id ?? null },
-        update: { tourId, ref, status: p.status || "Confirmed", bookings: p.bookings, expenses: p.expenses, guideFee },
+        create: { guideId, date, slotIdx, tourId, ref, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee, createdById: session!.user!.id ?? null },
+        update: { tourId, ref, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee },
       });
 
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length } });
