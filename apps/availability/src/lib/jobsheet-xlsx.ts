@@ -28,7 +28,7 @@ const num = (s: string): number | null => {
   const n = parseFloat(String(s).replace(/[^\d.-]/g, ""));
   return Number.isFinite(n) ? n : null;
 };
-const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
 async function toGrid(buf: ArrayBuffer): Promise<string[][]> {
   const wb = new ExcelJS.Workbook();
@@ -114,9 +114,9 @@ export async function parseJobSheetXlsx(buf: ArrayBuffer): Promise<ParsedJobShee
   if (bh) {
     const c = bh.cols;
     const cName = c["Name"], cBk = c["Booking No"];
-    const cBooked = grid[bh.row].findIndex((x) => norm(x).includes("booked"));
-    const cActual = grid[bh.row].findIndex((x) => norm(x).includes("actual"));
-    const cTick = grid[bh.row].findIndex((x) => norm(x).includes("ticket"));
+    const cBooked = (grid[bh.row] ?? []).findIndex((x) => norm(x).includes("booked"));
+    const cActual = (grid[bh.row] ?? []).findIndex((x) => norm(x).includes("actual"));
+    const cTick = (grid[bh.row] ?? []).findIndex((x) => norm(x).includes("ticket"));
     for (let r = bh.row + 1; r < grid.length; r++) {
       const row = grid[r] ?? [];
       const name = (row[cName] ?? "").trim();
@@ -139,8 +139,8 @@ export async function parseJobSheetXlsx(buf: ArrayBuffer): Promise<ParsedJobShee
   const eh = findHeader(grid, ["Description", "Amount"]);
   if (eh) {
     const cDesc = eh.cols["Description"];
-    const cPrice = grid[eh.row].findIndex((x) => norm(x) === "price" || norm(x).includes("price"));
-    const cPax = grid[eh.row].findIndex((x) => norm(x).includes("pax"));
+    const cPrice = (grid[eh.row] ?? []).findIndex((x) => norm(x) === "price" || norm(x).includes("price"));
+    const cPax = (grid[eh.row] ?? []).findIndex((x) => norm(x).includes("pax"));
     for (let r = eh.row + 1; r < grid.length; r++) {
       const row = grid[r] ?? [];
       const desc = (row[cDesc] ?? "").trim();
