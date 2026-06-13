@@ -79,18 +79,6 @@ export default function JobSheetEditor() {
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
 
-  async function saveToDrive() {
-    if (!saved) { const ok = await save(); if (!ok) return; }
-    setBusy(true); setMsg("Saving to Google Drive…");
-    try {
-      const r = await fetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx }) });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setMsg(d.hint || d.detail || "Drive save failed."); }
-      else { setMsg("Saved to Drive ✓"); if (d.link) window.open(d.link, "_blank", "noopener"); }
-    } catch { setMsg("Drive save failed — network error."); }
-    setBusy(false);
-  }
-
   async function save(): Promise<boolean> {
     setBusy(true); setMsg("");
     const r = await fetch("/api/jobsheet", {
@@ -129,9 +117,7 @@ export default function JobSheetEditor() {
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/pdf?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>PDF</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>Job order</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>Excel</button>}
-          {canEdit && drive.enabled && (drive.connected
-            ? <button className="btn" disabled={busy} onClick={saveToDrive} title="Save this job sheet to Google Drive">☁ Save to Drive</button>
-            : <a className="btn" href="/api/google/connect" title="Connect a Google account to enable saving to Drive">☁ Connect Google Drive</a>)}
+          {canEdit && drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>}
           {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}
         </div>
