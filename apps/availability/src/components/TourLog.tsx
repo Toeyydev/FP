@@ -75,7 +75,8 @@ export default function TourLog() {
                       {r.report.comments ? <div style={{ color: "var(--danger)" }}>⚠ {r.report.comments}</div> : null}
                     </>
                   ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
-                  <td style={{ textAlign: "right" }}>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${r.date}&slotIdx=${r.slotIdx}`} title="Open this tour's job sheet — full job details">📄 Job sheet</a>{" "}
                     <button className="btn sm danger" title="Remove this tour log entry" onClick={() => removeRow(r)}>🗑</button>
                   </td>
                 </tr>
