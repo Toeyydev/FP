@@ -50,13 +50,15 @@ export async function POST(req: NextRequest) {
   const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
   const guideName = u?.fullName || u?.displayName || guideId;
   const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim(); // e.g. "2026-06 June"
 
   // If the client sent a browser-rendered PDF (from the print page's "Share to
   // Drive"), store it verbatim — a pixel-perfect copy of the printed job sheet.
   const pdfBase64 = typeof body?.pdfBase64 === "string" ? body.pdfBase64 : "";
   if (pdfBase64) {
     try {
-      const { link } = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", date.slice(0, 7)] });
+      const { link } = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
       return NextResponse.json({ ok: true, link });
     } catch (e) {
@@ -103,7 +105,7 @@ export async function POST(req: NextRequest) {
   </body></html>`;
 
   try {
-    const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", date.slice(0, 7)] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {
