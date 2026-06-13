@@ -74,7 +74,9 @@ export default function JobSheetEditor() {
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);
   const ro = !canEdit; // read-only (guide view)
-  const up = (patch: Partial<Sheet>) => setSheet({ ...sheet, ...patch });
+  // Any edit marks the sheet dirty, so the PDF / Excel / e-slip buttons (which
+  // auto-save only when !saved) always persist the change before exporting/uploading.
+  const up = (patch: Partial<Sheet>) => { setSheet({ ...sheet, ...patch }); setSaved(false); if (msg) setMsg(""); };
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
