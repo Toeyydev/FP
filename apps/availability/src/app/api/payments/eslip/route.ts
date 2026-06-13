@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { decrypt } from "@/lib/crypto";
-import { googleDriveEnabled, saveBufferToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { notifyGuide } from "@/lib/booking-import";
 import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 
@@ -27,8 +26,8 @@ export async function POST(req: NextRequest) {
   if (!/^\d{4}-\d{2}$/.test(period) || !guideId || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
 
-  const conn = await prisma.googleCalendar.findUnique({ where: { userId: session!.user!.id ?? "" } }).catch(() => null);
-  if (!conn) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
+  const refreshToken = await folkpathsDriveToken();
+  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
 
   const u = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
   const guideName = u?.fullName || u?.displayName || guideId;
@@ -44,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   let link: string;
   try {
-    ({ link } = await saveBufferToDrive({ refreshToken: decrypt(conn.refreshToken), name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
+    ({ link } = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
   } catch (e) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
   }

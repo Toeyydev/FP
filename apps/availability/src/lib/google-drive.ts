@@ -1,10 +1,26 @@
 import { googleEnabled, googleAccessToken } from "@/lib/google-calendar";
+import { prisma } from "@/lib/db";
+import { decrypt } from "@/lib/crypto";
 
 // Save documents to Google Drive using the SAME OAuth connection as Calendar
 // (a per-user refresh token with the drive.file scope). Files are owned by the
 // connected Google account (e.g. admin@folkpaths.com). No service account, so no
 // org-policy/key hurdles. Drive is "available" whenever Google OAuth is configured.
 export const googleDriveEnabled = googleEnabled;
+
+// Every job sheet and e-slip belongs in ONE place — the Folkpaths company Drive —
+// no matter which operator is signed in. Resolve that single account's refresh
+// token here so all Drive saves land in the same Drive (never an operator's
+// personal one). Pin the company account with FOLKPATHS_DRIVE_EMAIL; otherwise
+// we use the earliest connection, which in practice is the owner connecting the
+// Folkpaths account. Returns null when no Google account is connected yet.
+export async function folkpathsDriveToken(): Promise<string | null> {
+  const want = process.env.FOLKPATHS_DRIVE_EMAIL?.trim().toLowerCase();
+  const conns = await prisma.googleCalendar.findMany({ orderBy: { connectedAt: "asc" } }).catch(() => []);
+  if (!conns.length) return null;
+  const chosen = (want && conns.find((c) => c.email?.toLowerCase() === want)) || conns[0];
+  return chosen.refreshToken ? decrypt(chosen.refreshToken) : null;
+}
 
 // Find a folder this app created (drive.file scope) by name under an optional
 // parent, creating it if missing.

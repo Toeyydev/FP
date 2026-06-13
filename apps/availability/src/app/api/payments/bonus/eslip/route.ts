@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { decrypt } from "@/lib/crypto";
-import { googleDriveEnabled, saveBufferToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { notifyGuide } from "@/lib/booking-import";
 import { thb } from "@/lib/jobsheet";
 
@@ -25,8 +24,8 @@ export async function POST(req: NextRequest) {
 
   const bonus = await prisma.bonus.findUnique({ where: { id: bonusId } });
   if (!bonus) return NextResponse.json({ error: "not-found" }, { status: 404 });
-  const conn = await prisma.googleCalendar.findUnique({ where: { userId: session!.user!.id ?? "" } }).catch(() => null);
-  if (!conn) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
+  const refreshToken = await folkpathsDriveToken();
+  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
 
   const u = await prisma.user.findFirst({ where: { guideId: bonus.guideId }, select: { displayName: true, fullName: true } });
   const guideName = u?.fullName || u?.displayName || bonus.guideId;
@@ -38,7 +37,7 @@ export async function POST(req: NextRequest) {
 
   let link: string;
   try {
-    ({ link } = await saveBufferToDrive({ refreshToken: decrypt(conn.refreshToken), name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
+    ({ link } = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
   } catch (e) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
   }

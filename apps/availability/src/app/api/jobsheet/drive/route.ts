@@ -3,20 +3,20 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
-import { googleDriveEnabled, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
 import { notifyGuide } from "@/lib/booking-import";
-import { decrypt } from "@/lib/crypto";
 import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
-// GET — is Drive saving configured? (drives the button's visibility)
+// GET — is Drive saving configured? "connected" reflects the shared Folkpaths
+// Drive (not the current operator's own account), since that's where saves go.
 export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const conn = session?.user?.id ? await prisma.googleCalendar.findUnique({ where: { userId: session.user.id }, select: { email: true } }).catch(() => null) : null;
-  return NextResponse.json({ enabled: googleDriveEnabled, connected: !!conn, email: conn?.email ?? null });
+  const connected = googleDriveEnabled ? !!(await folkpathsDriveToken()) : false;
+  return NextResponse.json({ enabled: googleDriveEnabled, connected });
 }
 
 // POST { guideId, date, slotIdx } — render the job sheet and save it as a Google
@@ -26,8 +26,8 @@ export async function POST(req: NextRequest) {
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   // Drive is optional here: marking the tour PAID from its e-slip must succeed even
   // if Drive isn't configured/connected. We attempt the Drive copy only when we can.
-  const conn = googleDriveEnabled && session?.user?.id ? await prisma.googleCalendar.findUnique({ where: { userId: session.user.id } }).catch(() => null) : null;
-  const refreshToken = conn ? decrypt(conn.refreshToken) : null;
+  // The copy always goes to the shared Folkpaths Drive, whoever the operator is.
+  const refreshToken = googleDriveEnabled ? await folkpathsDriveToken() : null;
 
   const body = await req.json().catch(() => null);
   const guideId = String(body?.guideId || "");
