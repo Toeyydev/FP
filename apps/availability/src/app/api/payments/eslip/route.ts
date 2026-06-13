@@ -47,13 +47,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
   }
 
+  // The e-slip uploaded successfully → it's evidence of payment, so mark the guide's
+  // month PAID, and flip each of that month's tours to PAID so the per-tour badges agree.
+  const now = new Date();
   await prisma.payrollStatus.upsert({
     where: { guideId_period: { guideId, period } },
-    create: { guideId, period, status: "pending", eslipUrl: link },
-    update: { eslipUrl: link },
+    create: { guideId, period, status: "paid", paidAt: now, eslipUrl: link },
+    update: { eslipUrl: link, status: "paid", paidAt: now },
   });
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.eslip_uploaded", entityType: "PayrollStatus", detail: { period, guideId } });
-  return NextResponse.json({ ok: true, link });
+  const assigns = await prisma.assignment.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { date: true, slotIdx: true, tourId: true } });
+  for (const a of assigns) {
+    await prisma.tourPayment.upsert({
+      where: { guideId_date_slotIdx: { guideId, date: a.date, slotIdx: a.slotIdx } },
+      create: { guideId, date: a.date, slotIdx: a.slotIdx, tourId: a.tourId, status: "PAID", paidAt: now },
+      update: { status: "PAID", paidAt: now },
+    });
+  }
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.eslip_uploaded_paid", entityType: "PayrollStatus", detail: { period, guideId, tours: assigns.length } });
+  return NextResponse.json({ ok: true, link, markedPaid: true });
 }
 
 // DELETE { period, guideId } — clear the e-slip link (the file stays in Drive).
