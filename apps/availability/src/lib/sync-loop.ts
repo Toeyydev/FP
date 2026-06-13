@@ -19,4 +19,3 @@ export function startSyncLoop(): void {
   setInterval(() => { void tick(); }, 5 * 60_000);     // then every 5 minutes
 }
 
-// deploy-pipeline test: c2aa5a6

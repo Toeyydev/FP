@@ -43,6 +43,7 @@ export default function BookingsInbox() {
   }, []);
 
   const csvRef = useRef<HTMLInputElement>(null);
+  const jsRef = useRef<HTMLInputElement>(null);
   // Import a Bokun/OTA booking export (.csv or .xlsx) — backfill without API keys.
   async function importCsv(file: File) {
     setMsg(`Importing ${file.name}…`);
@@ -53,6 +54,22 @@ export default function BookingsInbox() {
       if (!r.ok) setMsg(d.hint || d.detail || `Import failed (${r.status}).`);
       else { setMsg(`Imported: ${d.created} new, ${d.updated} updated, ${d.skipped} skipped (${d.rows} rows).`); await load(); }
     } catch { setMsg("Import failed — couldn't read the file."); }
+  }
+
+  // Import filled FOLKPATHS job-sheet .xlsx files (non-Bokun tours) — each becomes
+  // a booking + assignment + job sheet. Supports selecting many at once.
+  async function importJobSheets(files: FileList) {
+    setMsg(`Importing ${files.length} job sheet${files.length === 1 ? "" : "s"}…`);
+    try {
+      const fd = new FormData();
+      for (const f of Array.from(files)) fd.append("file", f);
+      const r = await fetch("/api/jobsheet/import", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(d.hint || d.detail || `Import failed (${r.status}).`); return; }
+      const fails = (d.results || []).filter((x: { ok: boolean }) => !x.ok);
+      setMsg(`Job sheets: ${d.imported} imported${d.failed ? `, ${d.failed} failed` : ""}.` + (fails.length ? ` First issue: ${fails[0].file} — ${fails[0].detail}` : ""));
+      await load();
+    } catch { setMsg("Job-sheet import failed — network error."); }
   }
 
   // Live-sync status: has Bokun's webhook fired recently? (PII-free health probe.)
@@ -235,6 +252,8 @@ export default function BookingsInbox() {
             <button className="btn sm" disabled={syncing} onClick={syncBokun}>{syncing ? "Syncing…" : "↺ Sync from Bokun"}</button>
             <button className="btn sm" onClick={() => csvRef.current?.click()}>⬆ Import CSV / Excel</button>
             <input ref={csvRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} />
+            <button className="btn sm" onClick={() => jsRef.current?.click()} title="Upload filled FOLKPATHS job-sheet .xlsx files (non-Bokun tours)">📋 Import job sheets</button>
+            <input ref={jsRef} type="file" accept=".xlsx" multiple hidden onChange={(e) => { const fl = e.target.files; if (fl && fl.length) importJobSheets(fl); e.target.value = ""; }} />
             <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add booking</button>
           </div>
         </div>
