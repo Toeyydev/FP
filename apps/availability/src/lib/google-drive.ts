@@ -48,11 +48,36 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
 
 // Upload raw bytes (e.g. a PDF rendered in the browser) to the connected account's
 // Drive without any conversion. `base64` is the file content base64-encoded.
+// Find an existing file (any type) by exact name in a folder, so a re-save can
+// replace it instead of creating a duplicate. drive.file scope sees app-created files.
+async function findFileInFolder(token: string, name: string, parentId?: string): Promise<string | null> {
+  const safe = name.replace(/'/g, "\\'");
+  const q = [`name = '${safe}'`, "mimeType != 'application/vnd.google-apps.folder'", "trashed = false"];
+  if (parentId) q.push(`'${parentId}' in parents`);
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive&orderBy=modifiedTime desc`;
+  const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  const j = await r.json().catch(() => ({}));
+  return j.files?.[0]?.id ?? null;
+}
+
 export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
   const token = await googleAccessToken(opts.refreshToken);
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
   let parent: string | undefined;
   for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
+
+  // Replace mode: if a same-named file already exists in this folder, update its
+  // bytes in place (no duplicate) and keep the same Drive link.
+  const existingId = await findFileInFolder(token, opts.name, parent);
+  if (existingId) {
+    const ur = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media&fields=id,webViewLink`, {
+      method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": opts.mimeType }, body: Buffer.from(opts.base64, "base64"),
+    });
+    const uj = await ur.json().catch(() => ({}));
+    if (ur.ok && uj.id) return { id: uj.id as string, link: (uj.webViewLink as string) ?? `https://drive.google.com/file/d/${uj.id}/view` };
+    // if the update failed, fall through and create a fresh file
+  }
+
   const meta = { name: opts.name, parents: parent ? [parent] : undefined };
   const boundary = `folkpaths-${Math.random().toString(36).slice(2)}`;
   const body =
