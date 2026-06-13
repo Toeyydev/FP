@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { SLOTS } from "@/lib/slots";
 
 type Row = {
   id: string; source: string; confirmationCode: string | null; externalRef: string | null;
   productName: string | null; tourId: string | null; date: string | null; startTime: string | null;
-  slotIdx: number | null; pax: number | null; customerName: string | null; status: string;
+  slotIdx: number | null; pax: number | null; customerName: string | null; status: string; guide?: string | null;
 };
 type Tour = { id: string; name: string };
 
@@ -72,8 +73,8 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
 
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ["Booking #", "Date", "Time", "Tour", "Guest", "Pax", "Source", "Status"];
-    const lines = [head.join(",")].concat(rows.map((b) => [b.confirmationCode || b.externalRef || "", b.date || "", b.startTime || "", b.tourId ? tourName(b.tourId) : (b.productName || ""), b.customerName || "", b.pax ?? "", b.source, b.status].map(cell).join(",")));
+    const head = ["Booking #", "Date", "Time", "Tour", "Guest", "Pax", "Source", "Status", "Guide"];
+    const lines = [head.join(",")].concat(rows.map((b) => [b.confirmationCode || b.externalRef || "", b.date || "", b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start ?? "" : ""), b.tourId ? tourName(b.tourId) : (b.productName || ""), b.customerName || "", b.pax ?? "", b.source, b.status, b.guide || ""].map(cell).join(",")));
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "folkpaths-bookings.csv"; a.click();
@@ -109,21 +110,22 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
           <thead>
             <tr>
               <th style={{ width: 30 }}><input type="checkbox" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
-              <th>Booking&nbsp;#</th><th>Date</th><th>Tour</th><th>Guest</th><th>Pax</th><th>Source</th><th>Status</th></tr>
+              <th>Booking&nbsp;#</th><th>Date</th><th>Tour</th><th>Guest</th><th>Pax</th><th>Source</th><th>Status</th><th>Guide</th></tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={8} className="op-empty">No bookings match.</td></tr>
+              <tr><td colSpan={9} className="op-empty">No bookings match.</td></tr>
             ) : rows.map((b) => (
               <tr key={b.id} onClick={() => onOpen?.(b.id)} style={{ cursor: onOpen ? "pointer" : "default" }} className={sel.has(b.id) ? "sel" : ""}>
                 <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}><input type="checkbox" checked={sel.has(b.id)} onChange={() => toggle(b.id)} /></td>
                 <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{b.confirmationCode || b.externalRef || "—"}</td>
-                <td style={{ whiteSpace: "nowrap" }}>{b.date ?? "—"}{b.startTime ? <span style={{ color: "var(--ink-soft)" }}> · {b.startTime}</span> : ""}</td>
+                <td style={{ whiteSpace: "nowrap" }}>{b.date ?? "—"}{(b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start : "")) ? <span style={{ color: "var(--ink-soft)" }}> · {b.startTime || SLOTS[b.slotIdx!]?.start}</span> : ""}</td>
                 <td>{b.tourId ? tourName(b.tourId) : <span style={{ color: "var(--ink-soft)" }}>{b.productName ?? "unmapped"}</span>}</td>
                 <td>{b.customerName ?? "—"}</td>
                 <td>{b.pax ?? "—"}</td>
                 <td><span className="badge muted">{b.source}</span></td>
                 <td>{statusBadge(b.status)}</td>
+                <td style={{ whiteSpace: "nowrap" }}>{b.guide ? <span style={{ fontWeight: 600 }}>{b.guide}</span> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
               </tr>
             ))}
           </tbody>

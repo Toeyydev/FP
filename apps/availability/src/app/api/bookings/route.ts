@@ -47,7 +47,19 @@ export async function GET(req: NextRequest) {
       }),
       prisma.tour.findMany({ orderBy: { id: "asc" }, select: { id: true, name: true } }),
     ]);
-    return NextResponse.json({ bookings, tours });
+    // Attach the assigned guide (if any) so the All-bookings view tracks who is
+    // handling each tour — turning the list into a follow-everything board.
+    const dates = [...new Set(bookings.filter((b) => b.date && b.slotIdx != null).map((b) => b.date!))];
+    const assigns = dates.length ? await prisma.assignment.findMany({ where: { date: { in: dates } }, select: { date: true, slotIdx: true, guideId: true } }) : [];
+    const guideIds = [...new Set(assigns.map((a) => a.guideId))];
+    const guideUsers = guideIds.length ? await prisma.user.findMany({ where: { guideId: { in: guideIds } }, select: { guideId: true, displayName: true } }) : [];
+    const gName = new Map(guideUsers.map((g) => [g.guideId, g.displayName]));
+    const aMap = new Map(assigns.map((a) => [`${a.date}|${a.slotIdx}`, a.guideId]));
+    const withGuide = bookings.map((b) => {
+      const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined;
+      return { ...b, guideId: gid ?? null, guide: gid ? (gName.get(gid) ?? gid) : null };
+    });
+    return NextResponse.json({ bookings: withGuide, tours });
   }
 
   // Auto-combine: fold any pending booking whose slot is already assigned into that
