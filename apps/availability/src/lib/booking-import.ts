@@ -4,6 +4,7 @@ import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { todayD, ymd } from "@/lib/dates";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
+import { removeTourEvents } from "@/lib/tour-calendar-sync";
 
 export type ImportResult = "created" | "updated" | "skipped";
 
@@ -127,13 +128,18 @@ export async function reconcileAssignedBookings(): Promise<number> {
   for (const b of pending) if (await autoAttachLate(b)) combined++;
 
   // Re-sync assignment.pax = the slot's live booking total (split-aware).
-  const assigns = await prisma.assignment.findMany({ where: { date: { gte: today } }, select: { id: true, guideId: true, date: true, slotIdx: true, pax: true } });
+  const assigns = await prisma.assignment.findMany({ where: { date: { gte: today } }, select: { id: true, guideId: true, date: true, slotIdx: true, pax: true, googleEventId: true, opsGoogleEventId: true } });
   for (const a of assigns) {
     const bks = await prisma.booking.findMany({ where: { date: a.date, slotIdx: a.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
     const split = bks.some((b) => b.assignedGuideId);
     const mine = split ? bks.filter((b) => !b.assignedGuideId || b.assignedGuideId === a.guideId) : bks;
     const sum = mine.reduce((s, b) => s + (b.pax ?? 0), 0);
     if (sum > 0 && sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
+    // Safety net: a fully-cancelled slot (0 guests) loses its calendar events.
+    else if (sum === 0 && (a.googleEventId || a.opsGoogleEventId)) {
+      try { await removeTourEvents(a); } catch { /* best-effort */ }
+      await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
+    }
   }
 
   // Heal stranded bookings: a booking is only OFFERED while its slot is assigned to
@@ -159,15 +165,26 @@ export async function reconcileAssignedBookings(): Promise<number> {
 async function onBookingCancelled(b: { date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
   try {
     if (!b.date || b.slotIdx == null) return;
-    const a = await prisma.assignment.findFirst({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true } });
-    if (!a) return;
+    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true, googleEventId: true, opsGoogleEventId: true } });
+    if (!assigns.length) return;
     const bks = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true } });
     const sum = bks.reduce((acc, x) => acc + (x.pax ?? 0), 0);
-    if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
     const who = b.customerName ? `${b.customerName} ` : "";
-    await notifyGuide(a.guideId, `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`, "A guest cancelled", `${b.date} \u00b7 now ${sum} guests`);
-    await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`);
-  } catch { /* real-time alert is best-effort; the cancellation itself is already saved */ }
+    for (const a of assigns) {
+      if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
+      // Whole tour cancelled (no guests left) -> delete its Google Calendar events
+      // from the guide + operator calendars so it doesn't linger.
+      if (sum === 0 && (a.googleEventId || a.opsGoogleEventId)) {
+        try { await removeTourEvents(a); } catch { /* calendar cleanup is best-effort */ }
+        await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
+      }
+      const msg = sum === 0
+        ? `Your ${b.date} tour was cancelled \u2014 all guests cancelled. It has been removed from your calendar.`
+        : `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`;
+      await notifyGuide(a.guideId, msg, sum === 0 ? "Tour cancelled" : "A guest cancelled", `${b.date} \u00b7 ${sum} guests`);
+      await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.${sum === 0 ? " Calendar event removed." : ""}`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`);
+    }
+  } catch { /* real-time alert + calendar sync are best-effort; the cancellation is already saved */ }
 }
 
 export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown }): Promise<ImportResult> {
