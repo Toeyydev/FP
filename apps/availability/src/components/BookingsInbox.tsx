@@ -27,6 +27,7 @@ export default function BookingsInbox() {
   const [dur, setDur] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [tab, setTab] = useState<"inbox" | "all">("inbox");
+  const [monthFilter, setMonthFilter] = useState(""); // YYYY-MM filter for the inbox
   const [guides, setGuides] = useState<{ guideId: string; displayName: string; rating: number | null; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
   const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
@@ -185,6 +186,8 @@ export default function BookingsInbox() {
     monthSummary[m].tours += byDate[d].length;
     monthSummary[m].pax += byDate[d].reduce((sum, [, items]) => sum + items.reduce((a, b) => a + (b.pax ?? 0), 0), 0);
   }
+  const readyMonths = [...new Set(readyDates.map((d) => d.slice(0, 7)))].sort();
+  const shownDates = monthFilter ? readyDates.filter((d) => d.slice(0, 7) === monthFilter) : readyDates;
   const fmtDay = (d: string) => { const dt = parseYMD(d); return `${DOW[(dt.getDay() + 6) % 7]} ${dt.getDate()} ${MON[dt.getMonth()].slice(0, 3)} ${dt.getFullYear()}`; };
 
   async function offerGroup(key: string, items: Booking[], guideId?: string) {
@@ -321,15 +324,23 @@ export default function BookingsInbox() {
           )}
 
           {/* Ready — one collapsible row per tour-day (only days with tours show) */}
-          <h3 style={{ fontSize: 14, margin: "16px 0 8px" }}>Ready to offer</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 8px" }}>
+            <h3 style={{ fontSize: 14, margin: 0 }}>Ready to offer</h3>
+            {readyMonths.length > 1 && (
+              <select className="search" style={{ flex: "none", width: 160, marginLeft: "auto" }} value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} title="Filter by month">
+                <option value="">All months</option>
+                {readyMonths.map((m) => <option key={m} value={m}>{new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</option>)}
+              </select>
+            )}
+          </div>
           {readyDates.length === 0 ? <div className="op-empty">No bookings ready. New Bokun bookings will appear here automatically.</div> : (
-            readyDates.map((date, di) => {
+            shownDates.map((date, di) => {
               const dayGroups = byDate[date];
               const dayPax = dayGroups.reduce((s, [, items]) => s + items.reduce((a, b) => a + (b.pax ?? 0), 0), 0);
               const dayOver = dayGroups.some(([, items]) => items.reduce((a, b) => a + (b.pax ?? 0), 0) > 10);
               const open = openDates[date] ?? (di === 0);
               const month = date.slice(0, 7);
-              const showMonth = di === 0 || readyDates[di - 1].slice(0, 7) !== month;
+              const showMonth = di === 0 || shownDates[di - 1].slice(0, 7) !== month;
               const monthLabel = new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
               const ms = monthSummary[month];
               return (
