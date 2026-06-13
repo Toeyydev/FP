@@ -12,6 +12,13 @@ const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-G
 const GROUPS: { key: string; label: string }[] = [
   { key: "PENDING", label: "Pending" }, { key: "APPROVED", label: "Approved" }, { key: "PAID", label: "Paid" }, { key: "CANCELLED", label: "Cancelled" },
 ];
+const mLabelFull = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+// Collect tours into month buckets, newest month first.
+function byMonthDesc(rows: Row[]): [string, Row[]][] {
+  const map: Record<string, Row[]> = {};
+  for (const r of rows) { const m = (r.date || "").slice(0, 7); (map[m] ??= []).push(r); }
+  return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
+}
 
 export default function Pay({ isOperator }: { isOperator: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
@@ -45,12 +52,18 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
           <div className="stat"><b style={{ color: "var(--green)" }}>{thb(totals.paid)}</b><span>Paid</span></div>
         </div>
         <div style={{ padding: 14 }}>
-          {rows.length === 0 ? <div className="op-empty">No tours yet.</div> : GROUPS.map((g) => {
-            const items = rows.filter((r) => r.status === g.key);
-            if (!items.length) return null;
-            return (
-              <div key={g.key} style={{ marginBottom: 18 }}>
-                <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: ".4px", color: "var(--ink-soft)", margin: "0 0 8px" }}>{g.label} ({items.length})</h3>
+          {rows.length === 0 ? <div className="op-empty">No tours yet.</div> : byMonthDesc(rows).map(([month, mrows]) => (
+            <div key={month} style={{ marginBottom: 24 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, borderBottom: "2px solid var(--line)", paddingBottom: 6, marginBottom: 12 }}>
+                <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-0.01em" }}>{mLabelFull(month)}</span>
+                <span style={{ fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{mrows.length} tour{mrows.length === 1 ? "" : "s"} · {thb(mrows.filter((r) => r.status !== "CANCELLED").reduce((sum, r) => sum + (r.amount || 0), 0))}</span>
+              </div>
+              {GROUPS.map((g) => {
+                const items = mrows.filter((r) => r.status === g.key);
+                if (!items.length) return null;
+                return (
+                  <div key={g.key} style={{ marginBottom: 14 }}>
+                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: ".4px", color: "var(--ink-soft)", margin: "0 0 8px" }}>{g.label} ({items.length})</h3>
                 {items.map((r, i) => (
                   <div key={i} className="pay-row">
                     <span className="pr-when">{dShort(r.date)}</span>
@@ -73,9 +86,11 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
                     )}
                   </div>
                 ))}
-              </div>
-            );
-          })}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       </section>
     </div>
