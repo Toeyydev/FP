@@ -64,6 +64,14 @@ export default function Payments() {
     const r = await fetch("/api/payments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, status }) });
     if (r.ok) load(period);
   }
+  // Upload a bank payment slip (e-slip) for a guide's month. The slip IS proof of
+  // payment, so the backend flips the month — and all its tours — to PAID on upload.
+  async function uploadEslip(guideId: string, file: File) {
+    const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", file);
+    const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) load(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
+  }
   async function removeRow(guideId: string, guide: string) {
     if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports and payments. Cannot be undone.`)) return;
     const r = await fetch("/api/payments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId }) });
@@ -114,6 +122,12 @@ export default function Payments() {
                   <td className="r"><b>{thb(r.payout)}</b></td>
                   <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
                   <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
+                    {r.eslipUrl
+                      ? <span style={{ display: "inline-flex", gap: 6 }}>
+                          <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">📎 E-slip</a>
+                          <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace e-slip">↻<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>
+                        </span>
+                      : <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
                     {r.status === "paid"
                     ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
                     : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>}

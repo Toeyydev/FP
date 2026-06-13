@@ -82,6 +82,13 @@ export async function GET(req: NextRequest) {
   // (e.g. a late add), so the assigned job always reflects the real guest list —
   // while keeping the operator's edits to the rows already on the sheet.
   if (existing) {
+    // A past tour is a finished record: never auto-add or drop its bookings, so the
+    // operator's curated sheet stays exactly as saved. Only upcoming/today sheets get
+    // reconciled against live bookings (to surface late adds / re-slots).
+    const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    if (date < todayBKK) {
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing, reconciledAdded: 0, reconciledRemoved: 0 });
+    }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
     const liveKeys = new Set(liveBookings.map(keyOf).filter(Boolean));
     // A saved row is removed ONLY if its booking was genuinely RE-SLOTTED — i.e. it
