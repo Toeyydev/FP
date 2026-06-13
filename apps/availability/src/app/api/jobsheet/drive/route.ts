@@ -61,29 +61,43 @@ export async function POST(req: NextRequest) {
     const eslipBase64 = typeof body?.eslipBase64 === "string" ? body.eslipBase64 : "";
     const eslipMime = typeof body?.eslipMime === "string" ? body.eslipMime : "image/jpeg";
     const eslipExt = eslipMime.includes("png") ? "png" : eslipMime.includes("pdf") ? "pdf" : eslipMime.includes("webp") ? "webp" : "jpg";
-    try {
-      const { link } = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
-      // If an e-slip was attached, save it beside the job sheet (paired name).
-      let eslipLink: string | undefined;
-      if (eslipBase64) {
-        const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
-        eslipLink = e.link;
-        // Daily pay: attaching this tour's slip means the guide was paid for the day.
+    // Mark the tour PAID first, independently of Drive. Attaching this tour's
+    // e-slip IS the proof of (daily) payment — that business fact must land
+    // even if the Drive copy hiccups (PDF e-slips, token refresh, large files).
+    let paid = false;
+    if (eslipBase64) {
+      try {
         const now = new Date();
         await prisma.tourPayment.upsert({
           where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
           create: { guideId, date, slotIdx, tourId, status: "PAID", paidAt: now },
           update: { status: "PAID", paidAt: now },
         });
+        paid = true;
         try {
-          await notifyGuide(guideId, `Your payment for the ${date} tour (${tour?.name ?? tourId}) has been transferred — ${thb(t.grandTotal)}. Thank you!`, "Payment transferred \ud83d\udcb8", `${date} \u00b7 ${thb(t.grandTotal)}`);
+          await notifyGuide(guideId, `Your payment for the ${date} tour (${tour?.name ?? tourId}) has been transferred — ${thb(t.grandTotal)}. Thank you!`, "Payment transferred 💸", `${date} · ${thb(t.grandTotal)}`);
         } catch { /* best-effort */ }
-      }
-      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64 } });
-      return NextResponse.json({ ok: true, link, eslipLink });
-    } catch (e) {
-      return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
+      } catch { /* if this throws, paid stays false and is reported back */ }
     }
+
+    // Save the job-sheet PDF + e-slip to Drive (best effort — must not block paid).
+    let link: string | undefined;
+    let eslipLink: string | undefined;
+    let driveError: string | undefined;
+    try {
+      const r = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+      link = r.link;
+    } catch (e) { driveError = (e as Error).message.slice(0, 200); }
+    if (eslipBase64) {
+      try {
+        const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        eslipLink = e.link;
+      } catch (e) { driveError = driveError || (e as Error).message.slice(0, 200); }
+    }
+    await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64, paid, drive: !!link } });
+    // Only a hard failure (nothing saved AND payment didn't land) is an error.
+    if (!link && !eslipLink && !paid) return NextResponse.json({ error: "drive-failed", detail: driveError ?? "Drive save failed." }, { status: 502 });
+    return NextResponse.json({ ok: true, link, eslipLink, paid, driveError });
   }
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 

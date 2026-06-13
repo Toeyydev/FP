@@ -162,7 +162,9 @@ export async function GET(req: NextRequest) {
         var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
         var d=await r.json().catch(function(){return {};});
         if(!r.ok){ alert(d.hint||d.detail||"Drive save failed."); btn.textContent=old; btn.disabled=false; return; }
-        btn.textContent=eslipFile?"Saved sheet + e-slip \u2713":"Saved \u2713"; if(d.link) window.open(d.link,"_blank","noopener");
+        btn.textContent=d.paid?"Saved + marked paid \u2713":(eslipFile?"Saved sheet + e-slip \u2713":"Saved \u2713");
+        if(d.driveError){ alert((d.paid?"Payment marked paid. ":"")+"But the Drive copy failed: "+d.driveError+"\nTry Share to Drive again."); }
+        else if(d.link) window.open(d.link,"_blank","noopener");
       }catch(e){ alert("Could not save PDF: "+((e&&e.message)||e)); btn.textContent=old; btn.disabled=false; }
     }
   </script>

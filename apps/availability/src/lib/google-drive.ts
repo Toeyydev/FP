@@ -32,6 +32,8 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
   let parent: string | undefined;
   for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
+  // Resave should replace, not pile up: trash any existing same-named copies first.
+  for (const d of await findFilesInFolder(token, opts.name, parent)) await trashFile(token, d);
   const meta = { name: opts.name, mimeType: "application/vnd.google-apps.document", parents: parent ? [parent] : undefined };
   const boundary = `folkpaths-${Math.random().toString(36).slice(2)}`;
   const body =
@@ -50,14 +52,20 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
 // Drive without any conversion. `base64` is the file content base64-encoded.
 // Find an existing file (any type) by exact name in a folder, so a re-save can
 // replace it instead of creating a duplicate. drive.file scope sees app-created files.
-async function findFileInFolder(token: string, name: string, parentId?: string): Promise<string | null> {
+async function findFilesInFolder(token: string, name: string, parentId?: string): Promise<string[]> {
   const safe = name.replace(/'/g, "\\'");
   const q = [`name = '${safe}'`, "mimeType != 'application/vnd.google-apps.folder'", "trashed = false"];
   if (parentId) q.push(`'${parentId}' in parents`);
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive&orderBy=modifiedTime desc`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   const j = await r.json().catch(() => ({}));
-  return j.files?.[0]?.id ?? null;
+  return (j.files ?? []).map((f: { id: string }) => f.id);
+}
+
+async function trashFile(token: string, id: string): Promise<void> {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${id}`, {
+    method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ trashed: true }),
+  }).catch(() => {});
 }
 
 export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
@@ -66,11 +74,14 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   let parent: string | undefined;
   for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
 
-  // Replace mode: if a same-named file already exists in this folder, update its
-  // bytes in place (no duplicate) and keep the same Drive link.
-  const existingId = await findFileInFolder(token, opts.name, parent);
-  if (existingId) {
-    const ur = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media&fields=id,webViewLink`, {
+  // Replace mode: if same-named file(s) already exist in this folder, update the
+  // newest in place (no duplicate, same link) and trash any older duplicates so a
+  // re-save always overwrites the one canonical copy.
+  const existing = await findFilesInFolder(token, opts.name, parent);
+  if (existing.length) {
+    const [keep, ...dupes] = existing;
+    for (const d of dupes) await trashFile(token, d);
+    const ur = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${keep}?uploadType=media&fields=id,webViewLink`, {
       method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": opts.mimeType }, body: Buffer.from(opts.base64, "base64"),
     });
     const uj = await ur.json().catch(() => ({}));
