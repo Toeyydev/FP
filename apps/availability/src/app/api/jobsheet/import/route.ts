@@ -5,6 +5,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { parseJobSheetXlsx } from "@/lib/jobsheet-xlsx";
 import { makeRef } from "@/lib/jobsheet";
+import { encrypt } from "@/lib/crypto";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -32,10 +33,19 @@ export async function POST(req: NextRequest) {
       }
       const [tour, guide] = await Promise.all([
         prisma.tour.findUnique({ where: { id: p.tourId }, select: { id: true, name: true } }),
-        prisma.user.findFirst({ where: { guideId: p.guideId }, select: { guideId: true } }),
+        prisma.user.findFirst({ where: { guideId: p.guideId }, select: { id: true, guideId: true, fullName: true, phone: true, taxId: true, currentAddress: true } }),
       ]);
       if (!tour) { results.push({ file: fname, ok: false, detail: `Tour "${p.tourId}" doesn't exist — create it first.` }); continue; }
       if (!guide) { results.push({ file: fname, ok: false, detail: `Guide "${p.guideId}" doesn't exist — add the guide first.` }); continue; }
+
+      // Fill the guide's profile from the sheet — ONLY empty fields, so a guide's
+      // own completed details are never overwritten. Tax ID / address are PII (encrypted).
+      const gUpd: Record<string, string> = {};
+      if (!guide.fullName && p.guideName) gUpd.fullName = p.guideName;
+      if (!guide.phone && p.tel) gUpd.phone = p.tel;
+      if (!guide.taxId && p.taxId) gUpd.taxId = encrypt(p.taxId);
+      if (!guide.currentAddress && p.address) gUpd.currentAddress = encrypt(p.address);
+      if (Object.keys(gUpd).length) await prisma.user.update({ where: { id: guide.id }, data: gUpd });
 
       const date = p.date, slotIdx = p.slotIdx, guideId = p.guideId, tourId = p.tourId;
       const totalPax = p.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0) || null;

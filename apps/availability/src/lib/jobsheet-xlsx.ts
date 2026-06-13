@@ -10,6 +10,7 @@ export type ParsedJobSheet = {
   bookings: { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: "included" | "not" | "" }[];
   expenses: { description: string; price: number | null; pax: number | null }[];
   guideFee: { price: number | null; time: number | null; whtPct: number };
+  guideName: string; taxId: string; address: string; tel: string;
 };
 
 function cellStr(v: unknown): string {
@@ -107,6 +108,10 @@ export async function parseJobSheetXlsx(buf: ArrayBuffer): Promise<ParsedJobShee
   const date = parseDate(rightOf(grid, "Tour Date"));
   const time = parseTime(rightOf(grid, "Time"));
   const slotIdx = timeToSlot(time) ?? null;
+  const guideName = rightOf(grid, "Guide name");
+  const taxId = rightOf(grid, "Tax ID");
+  const address = rightOf(grid, "Address");
+  const tel = rightOf(grid, "Tel");
 
   // Bookings (Job Details table)
   const bookings: ParsedJobSheet["bookings"] = [];
@@ -167,5 +172,5 @@ export async function parseJobSheetXlsx(buf: ArrayBuffer): Promise<ParsedJobShee
     }
   }
 
-  return { ref, tourId, guideId, status, date, slotIdx, bookings, expenses, guideFee };
+  return { ref, tourId, guideId, status, date, slotIdx, bookings, expenses, guideFee, guideName, taxId, address, tel };
 }
