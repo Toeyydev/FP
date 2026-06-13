@@ -508,6 +508,7 @@ model PayrollStatus {
   period    String // "YYYY-MM"
   status    String    @default("pending") // pending | paid
   paidAt    DateTime?
+  eslipUrl  String? // Google Drive link to the uploaded bank payment slip (evidence)
   note      String?
   updatedAt DateTime  @updatedAt
 

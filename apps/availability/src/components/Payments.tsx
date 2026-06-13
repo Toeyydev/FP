@@ -6,7 +6,7 @@ import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
 type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
-type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; jobs: Job[] };
+type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -21,6 +21,14 @@ export default function Payments() {
   async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING") {
     const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status }) });
     if (r.ok) load(period);
+  }
+
+  // Upload a bank payment slip (e-slip) as evidence → straight to Google Drive.
+  async function uploadEslip(guideId: string, file: File) {
+    const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", file);
+    const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) load(period); else alert(d.hint || d.detail || "E-slip upload failed.");
   }
 
   const load = useCallback(async (p?: string) => {
@@ -82,7 +90,11 @@ export default function Payments() {
                   <td className="r">{thb(r.expenses)}</td>
                   <td className="r"><b>{thb(r.payout)}</b></td>
                   <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
-                  <td style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>{r.status === "paid"
+                  <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
+                    {r.eslipUrl
+                      ? <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Google Drive">📎 E-slip</a>
+                      : <label className="btn sm" style={{ cursor: "pointer" }} title="Upload bank payment slip (evidence) to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
+                    {r.status === "paid"
                     ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
                     : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>}
                     <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>🗑</button></td>
