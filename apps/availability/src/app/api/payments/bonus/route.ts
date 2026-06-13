@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
   ]);
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
-  const rows = bonuses.map((b) => ({ id: b.id, guideId: b.guideId, guide: gName(b.guideId), amount: b.amount, reason: b.reason ?? "" }));
+  const rows = bonuses.map((b) => ({ id: b.id, guideId: b.guideId, guide: gName(b.guideId), amount: b.amount, reason: b.reason ?? "", eslipUrl: b.eslipUrl ?? null }));
   const total = rows.reduce((s, b) => s + b.amount, 0);
   return NextResponse.json({ period, rows, total: Math.round(total * 100) / 100 });
 }

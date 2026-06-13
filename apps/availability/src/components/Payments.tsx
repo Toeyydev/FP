@@ -8,7 +8,7 @@ import { SLOTS } from "@/lib/slots";
 type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
-type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string };
+type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; eslipUrl: string | null };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -56,6 +56,12 @@ export default function Payments() {
   async function delBonus(id: string) {
     const r = await fetch("/api/payments/bonus", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
     if (r.ok) loadBonuses(period);
+  }
+  async function uploadBonusEslip(bonusId: string, file: File) {
+    const fd = new FormData(); fd.append("bonusId", bonusId); fd.append("file", file);
+    const r = await fetch("/api/payments/bonus/eslip", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) loadBonuses(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
   }
 
   async function mark(guideId: string, status: "pending" | "paid") {
@@ -163,18 +169,26 @@ export default function Payments() {
         <div style={{ padding: 14 }}>
           {bonuses.rows.length === 0 ? <div className="op-empty">No bonuses this month.</div> : (
             <table className="acct-table" style={{ marginBottom: 12 }}>
-              <thead><tr><th>Guide</th><th>Reason</th><th className="r">Amount</th><th /></tr></thead>
+              <thead><tr><th>Guide</th><th>Reason</th><th className="r">Amount</th><th>E-slip</th><th /></tr></thead>
               <tbody>
                 {bonuses.rows.map((b) => (
                   <tr key={b.id}>
                     <td style={{ whiteSpace: "nowrap" }}><span className="gid">{b.guideId}</span> {b.guide}</td>
                     <td style={{ color: "var(--ink-soft)" }}>{b.reason || "—"}</td>
                     <td className="r" style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>+{thb(b.amount)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {b.eslipUrl
+                        ? <span style={{ display: "inline-flex", gap: 6 }}>
+                            <a className="btn sm" href={b.eslipUrl} target="_blank" rel="noopener noreferrer" title="View bonus slip in Drive">📎 E-slip</a>
+                            <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace">↻<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>
+                          </span>
+                        : <label className="btn sm" style={{ cursor: "pointer" }} title="Upload bonus payment slip">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>}
+                    </td>
                     <td style={{ textAlign: "right" }}><button className="btn sm danger" title="Remove bonus" onClick={() => delBonus(b.id)}>×</button></td>
                   </tr>
                 ))}
               </tbody>
-              <tfoot><tr className="pay-foot"><td colSpan={2}><b>Total bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td /></tr></tfoot>
+              <tfoot><tr className="pay-foot"><td colSpan={2}><b>Total bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td colSpan={2} /></tr></tfoot>
             </table>
           )}
           <div className="op-toolbar" style={{ gap: 8, flexWrap: "wrap" }}>

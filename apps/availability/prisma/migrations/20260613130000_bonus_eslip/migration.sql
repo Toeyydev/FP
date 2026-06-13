@@ -1,0 +1,1 @@
+ALTER TABLE "Bonus" ADD COLUMN "eslipUrl" TEXT;

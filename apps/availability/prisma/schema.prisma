@@ -536,6 +536,7 @@ model Bonus {
   period      String // "YYYY-MM"
   amount      Float
   reason      String?
+  eslipUrl    String? // Google Drive link to the bonus payment slip (evidence)
   createdById String?
   createdAt   DateTime @default(now())
 
