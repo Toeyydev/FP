@@ -23,6 +23,7 @@ export async function GET() {
   let cancelledBookings = 0;
   let assignmentsToday = 0;
   let assignmentsUpcoming = 0;
+  let lastAutoSyncAt: string | null = null;
   try {
     const last = await prisma.auditLog.findFirst({ where: { action: "booking.received" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
     lastWebhookAt = last?.createdAt.toISOString() ?? null;
@@ -34,6 +35,8 @@ export async function GET() {
     const t0 = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     assignmentsToday = await prisma.assignment.count({ where: { date: t0 } });
     assignmentsUpcoming = await prisma.assignment.count({ where: { date: { gte: t0 } } });
+    const auto = await prisma.auditLog.findFirst({ where: { action: "bokun.autosync" }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    lastAutoSyncAt = auto?.createdAt.toISOString() ?? null;
   } catch { /* health must never throw */ }
 
   return NextResponse.json({
@@ -48,6 +51,7 @@ export async function GET() {
     cancelledBookings,
     assignmentsToday,
     assignmentsUpcoming,
+    lastAutoSyncAt,
     bokunVarNamesSeen: bokunVarNames,
   });
 }
