@@ -1,0 +1,39 @@
+name: Deploy to Railway
+
+# Auto-deploys the availability app to Railway on every push to main.
+# Setup (one time): create a Railway project token (Railway → project →
+# Settings → Tokens), then add it to GitHub → repo Settings → Secrets and
+# variables → Actions → new secret named RAILWAY_TOKEN. Until that secret
+# exists, this workflow skips the deploy step (no failure).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/availability/**"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Deploy to Railway
+        run: |
+          if [ -z "${RAILWAY_TOKEN}" ]; then
+            echo "::warning::RAILWAY_TOKEN secret not set yet — add it in repo Settings → Secrets → Actions. Skipping deploy."
+            exit 0
+          fi
+          npm i -g @railway/cli
+          railway up --service FP --detach
