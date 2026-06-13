@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } }
 </style></head>
 <body>
-  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span id="eslipName" style="font-size:12px;opacity:.9"></span><label style="background:#fff;color:#7e3a2c;border-radius:7px;padding:7px 12px;font-weight:600;cursor:pointer;font-size:13px">\ud83d\udcce Attach e-slip<input type="file" id="eslipInput" accept="image/*,application/pdf" hidden onchange="eslipChosen(this)"></label><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
+  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span style="font-size:12px;opacity:.9">\ud83d\udcce e-slip:</span><input type="file" id="eslipInput" accept="image/*,application/pdf" onchange="eslipChosen(this)" style="background:#fff;color:#7e3a2c;border-radius:7px;padding:6px 8px;font-size:12px;max-width:210px"><span id="eslipName" style="font-size:12px;opacity:.9"></span><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
   <div class="page">
     <div class="head">
       <div class="brand">FOLKPATHS<small>บริษัท โฟล์คพาธส์ จำกัด</small></div>
