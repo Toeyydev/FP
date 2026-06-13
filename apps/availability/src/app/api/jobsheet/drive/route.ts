@@ -50,19 +50,29 @@ export async function POST(req: NextRequest) {
   const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
   const guideName = u?.fullName || u?.displayName || guideId;
   const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
+  const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 
   const bookingRows = bookings.map((b) => `<tr><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${b.actualPax ?? ""}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
   const expenseRows = expenses.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="3" style="color:#888">No expenses.</td></tr>`;
 
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#111;font-size:13px">
-    <h2 style="margin:0">Folkpaths — Job Sheet</h2>
-    <p style="margin:2px 0 10px;color:#555">${esc(ref)} · ${esc(sheet.status)}</p>
-    <table style="border-collapse:collapse;margin-bottom:6px"><tbody>
-      <tr><td style="padding:2px 12px 2px 0;color:#555">Date</td><td><b>${esc(date)}</b> · ${esc(time)}</td></tr>
-      <tr><td style="padding:2px 12px 2px 0;color:#555">Tour</td><td><b>${esc(tour?.name ?? tourId)}</b></td></tr>
-      <tr><td style="padding:2px 12px 2px 0;color:#555">Guide</td><td><b>${esc(guideId)} ${esc(guideName)}</b></td></tr>
-    </tbody></table>
-    <h3 style="margin:14px 0 4px">Bookings</h3>
+    <div style="font-size:24px;font-weight:800;letter-spacing:1px">FOLKPATHS</div>
+    <div style="color:#666;font-size:12px;margin-bottom:12px">บริษัท โฟล์คพาธส์ จำกัด · Job Sheet</div>
+    <table border="1" cellpadding="6" style="border-collapse:collapse;margin-bottom:10px;font-size:12.5px">
+      <tr><td style="color:#555">No.</td><td><b>${esc(ref)}</b></td></tr>
+      <tr><td style="color:#555">Updated</td><td>${esc(updated)}</td></tr>
+      <tr><td style="color:#555">Tour ID</td><td><b>${esc(tourId)}</b></td></tr>
+      <tr><td style="color:#555">Guide ID</td><td>${esc(guideId)}</td></tr>
+      <tr><td style="color:#555">Status</td><td>${esc(sheet.status)}</td></tr>
+    </table>
+    <table border="1" cellpadding="6" style="border-collapse:collapse;margin-bottom:14px;font-size:12.5px">
+      <tr><td style="color:#555">Tour Date</td><td><b>${esc(date)}</b> · ${esc(time)}</td></tr>
+      <tr><td style="color:#555">Tour Name</td><td><b>${esc(tour?.name ?? tourId)}</b></td></tr>
+      <tr><td style="color:#555">Guide name</td><td>${esc(guideId)} ${esc(guideName)}</td></tr>
+      ${u?.email ? `<tr><td style="color:#555">E-mail</td><td>${esc(u.email)}</td></tr>` : ""}
+      ${u?.phone ? `<tr><td style="color:#555">Tel no.</td><td>${esc(u.phone)}</td></tr>` : ""}
+    </table>
+    <h3 style="margin:16px 0 4px">Job Details</h3>
     <table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">
       <thead><tr style="background:#f2f2f2"><th align="left">Name</th><th align="left">Booking no.</th><th>Booked</th><th>Actual</th><th align="left">Tickets</th></tr></thead>
       <tbody>${bookingRows}</tbody>
