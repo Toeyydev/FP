@@ -57,8 +57,8 @@ export async function POST(req: NextRequest) {
   // If the client sent a browser-rendered PDF (from the print page's "Share to
   // Drive"), store it verbatim — a pixel-perfect copy of the printed job sheet.
   const pdfBase64 = typeof body?.pdfBase64 === "string" ? body.pdfBase64 : "";
-  if (pdfBase64) {
-    const eslipBase64 = typeof body?.eslipBase64 === "string" ? body.eslipBase64 : "";
+  const eslipBase64 = typeof body?.eslipBase64 === "string" ? body.eslipBase64 : "";
+  if (pdfBase64 || eslipBase64) {
     const eslipMime = typeof body?.eslipMime === "string" ? body.eslipMime : "image/jpeg";
     const eslipExt = eslipMime.includes("png") ? "png" : eslipMime.includes("pdf") ? "pdf" : eslipMime.includes("webp") ? "webp" : "jpg";
     // Mark the tour PAID first, independently of Drive. Attaching this tour's
@@ -84,10 +84,12 @@ export async function POST(req: NextRequest) {
     let link: string | undefined;
     let eslipLink: string | undefined;
     let driveError: string | undefined;
-    try {
-      const r = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
-      link = r.link;
-    } catch (e) { driveError = (e as Error).message.slice(0, 200); }
+    if (pdfBase64) {
+      try {
+        const r = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        link = r.link;
+      } catch (e) { driveError = (e as Error).message.slice(0, 200); }
+    }
     if (eslipBase64) {
       try {
         const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });

@@ -150,15 +150,19 @@ export async function GET(req: NextRequest) {
   <script>
     var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx};
     var eslipFile=null;
-    function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; }
+    function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; if(eslipFile){ var b=document.getElementById("driveBtn"); if(b) shareToDrive(b); } }
     function readB64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ var u=String(fr.result); res(u.substring(u.indexOf(",")+1)); }; fr.onerror=rej; fr.readAsDataURL(file); }); }
     async function shareToDrive(btn){
       var old=btn.textContent; btn.disabled=true; btn.textContent="Saving\u2026";
       try{
-        var opt={margin:8,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true,backgroundColor:"#ffffff"},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},pagebreak:{mode:["css","legacy"]}};
-        var uri=await html2pdf().set(opt).from(document.querySelector(".page")).outputPdf("datauristring");
-        var payload={guideId:GID,date:DATE,slotIdx:SLOT,pdfBase64:uri.substring(uri.indexOf(",")+1)};
+        var payload={guideId:GID,date:DATE,slotIdx:SLOT};
+        try{
+          var opt={margin:8,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true,backgroundColor:"#ffffff"},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},pagebreak:{mode:["css","legacy"]}};
+          var uri=await html2pdf().set(opt).from(document.querySelector(".page")).outputPdf("datauristring");
+          payload.pdfBase64=uri.substring(uri.indexOf(",")+1);
+        }catch(pe){ /* PDF render is best-effort; e-slip + paid still go through */ }
         if(eslipFile){ payload.eslipBase64=await readB64(eslipFile); payload.eslipMime=eslipFile.type||"image/jpeg"; }
+        if(!payload.pdfBase64 && !payload.eslipBase64){ alert("Nothing to save."); btn.textContent=old; btn.disabled=false; return; }
         var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
         var d=await r.json().catch(function(){return {};});
         if(!r.ok){ alert(d.hint||d.detail||"Drive save failed."); btn.textContent=old; btn.disabled=false; return; }
