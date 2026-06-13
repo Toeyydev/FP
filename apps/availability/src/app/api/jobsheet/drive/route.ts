@@ -24,10 +24,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", hint: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on Railway." }, { status: 400 });
-  const conn = await prisma.googleCalendar.findUnique({ where: { userId: session!.user!.id ?? "" } }).catch(() => null);
-  if (!conn) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
-  const refreshToken = decrypt(conn.refreshToken);
+  // Drive is optional here: marking the tour PAID from its e-slip must succeed even
+  // if Drive isn't configured/connected. We attempt the Drive copy only when we can.
+  const conn = googleDriveEnabled && session?.user?.id ? await prisma.googleCalendar.findUnique({ where: { userId: session.user.id } }).catch(() => null) : null;
+  const refreshToken = conn ? decrypt(conn.refreshToken) : null;
 
   const body = await req.json().catch(() => null);
   const guideId = String(body?.guideId || "");
@@ -84,13 +84,14 @@ export async function POST(req: NextRequest) {
     let link: string | undefined;
     let eslipLink: string | undefined;
     let driveError: string | undefined;
-    if (pdfBase64) {
+    if (!refreshToken && (pdfBase64 || eslipBase64)) driveError = "Google Drive isn't connected, so the copy wasn't saved.";
+    if (pdfBase64 && refreshToken) {
       try {
         const r = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
         link = r.link;
       } catch (e) { driveError = (e as Error).message.slice(0, 200); }
     }
-    if (eslipBase64) {
+    if (eslipBase64 && refreshToken) {
       try {
         const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         eslipLink = e.link;
@@ -99,8 +100,10 @@ export async function POST(req: NextRequest) {
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64, paid, drive: !!link } });
     // Only a hard failure (nothing saved AND payment didn't land) is an error.
     if (!link && !eslipLink && !paid) return NextResponse.json({ error: "drive-failed", detail: driveError ?? "Drive save failed." }, { status: 502 });
+    // paid landed: that's success even if Drive was skipped/failed (reported in driveError).
     return NextResponse.json({ ok: true, link, eslipLink, paid, driveError });
   }
+  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 
   const bookingRows = bookings.map((b) => `<tr><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${b.actualPax ?? ""}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;

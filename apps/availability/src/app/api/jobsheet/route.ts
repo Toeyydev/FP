@@ -84,11 +84,22 @@ export async function GET(req: NextRequest) {
   if (existing) {
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
     const liveKeys = new Set(liveBookings.map(keyOf).filter(Boolean));
-    // Drop rows that have a booking number but are no longer at THIS slot — they
-    // were re-slotted to another time or cancelled, so they must not linger here
-    // (that caused the same guest to appear on both the 08:30 and 13:30 sheets).
-    // Manual rows (no booking number) are always kept.
-    const kept = saved.filter((b) => !((b.bookingNo || "").trim()) || liveKeys.has(keyOf(b)));
+    // A saved row is removed ONLY if its booking was genuinely RE-SLOTTED — i.e. it
+    // is now active at a DIFFERENT slot on this date (that caused the same guest to
+    // appear on both the 08:30 and 13:30 sheets). Bookings that are simply no longer
+    // "active" (past / completed tours) are KEPT, so editing a past job sheet never
+    // loses its rows. Manual rows (no booking number) are always kept.
+    const elsewhere = await prisma.booking.findMany({
+      where: { date, slotIdx: { not: slotIdx }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+      select: { customerName: true, externalRef: true, confirmationCode: true },
+    });
+    const movedKeys = new Set(elsewhere.map((b) => keyOf({ bookingNo: b.externalRef || b.confirmationCode || "", name: b.customerName || "" })).filter(Boolean));
+    const kept = saved.filter((b) => {
+      if (!((b.bookingNo || "").trim())) return true;     // manual row — always keep
+      const k = keyOf(b);
+      if (liveKeys.has(k)) return true;                    // still active at this slot
+      return !movedKeys.has(k);                            // drop only if re-slotted elsewhere
+    });
     const have = new Set(kept.map(keyOf).filter(Boolean));
     const added = liveBookings.filter((b) => { const k = keyOf(b); return k && !have.has(k); });
     const changed = added.length > 0 || kept.length !== saved.length;
