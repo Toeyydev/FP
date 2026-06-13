@@ -33,7 +33,12 @@ export async function POST(req: NextRequest) {
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const mime = file.type || "image/jpeg";
   const monthFolder = `${period} ${MONTHS[Number(period.slice(5, 7)) - 1] ?? ""}`.trim();
-  const name = `${guideId} ${guideName} ${period}.${extOf(mime)}`;
+  // Name the e-slip by the job sheet no. so it's easy to match later. The monthly
+  // payout may cover several tours; use the single ref when there's one, else list.
+  const sheets = await prisma.jobSheet.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` }, ref: { not: null } }, select: { ref: true }, orderBy: { date: "asc" } });
+  const refs = sheets.map((sh) => sh.ref).filter((r): r is string => !!r);
+  const base = refs.length === 1 ? `${refs[0]} — ${guideName}` : refs.length > 1 ? `${refs[0]} +${refs.length - 1} more — ${guideName}` : `${guideId} ${guideName} ${period}`;
+  const name = `${base} — e-slip.${extOf(mime)}`;
 
   let link: string;
   try {
