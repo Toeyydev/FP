@@ -31,12 +31,31 @@ export async function POST(req: NextRequest) {
         results.push({ file: fname, ok: false, detail: `Missing key fields (tour=${p.tourId || "?"}, guide=${p.guideId || "?"}, date=${p.date || "?"}, time=${p.slotIdx ?? "?"}).` });
         continue;
       }
-      const [tour, guide] = await Promise.all([
+      let [tour, guide] = await Promise.all([
         prisma.tour.findUnique({ where: { id: p.tourId }, select: { id: true, name: true } }),
         prisma.user.findFirst({ where: { guideId: p.guideId }, select: { id: true, guideId: true, fullName: true, phone: true, taxId: true, currentAddress: true } }),
       ]);
-      if (!tour) { results.push({ file: fname, ok: false, detail: `Tour "${p.tourId}" doesn't exist — create it first.` }); continue; }
-      if (!guide) { results.push({ file: fname, ok: false, detail: `Guide "${p.guideId}" doesn't exist — add the guide first.` }); continue; }
+      const created: string[] = [];
+      // Auto-create a missing tour / guide so a backlog of past tours imports without
+      // hand-setup. Both are placeholders the operator can flesh out later; the guide
+      // is an INVITED account (no login) that the real guide can claim by guideId.
+      if (!tour) {
+        tour = await prisma.tour.create({ data: { id: p.tourId, name: p.tourId, time: SLOT_TIMES[p.slotIdx] ?? "09:00" }, select: { id: true, name: true } });
+        created.push(`tour ${p.tourId}`);
+      }
+      if (!guide) {
+        const email = `imported-${p.guideId.toLowerCase()}@folkpaths.invalid`;
+        const u = await prisma.user.create({ data: {
+          email, guideId: p.guideId, role: "GUIDE", state: "INVITED",
+          displayName: p.guideName?.trim() || p.guideId,
+          fullName: p.guideName?.trim() || null,
+          phone: p.tel || null,
+          taxId: p.taxId ? encrypt(p.taxId) : null,
+          currentAddress: p.address ? encrypt(p.address) : null,
+        }, select: { id: true, guideId: true, fullName: true, phone: true, taxId: true, currentAddress: true } });
+        guide = u;
+        created.push(`guide ${p.guideId}`);
+      }
 
       // Fill the guide's profile from the sheet — ONLY empty fields, so a guide's
       // own completed details are never overwritten. Tax ID / address are PII (encrypted).
@@ -80,7 +99,7 @@ export async function POST(req: NextRequest) {
 
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length } });
       const parsedGuide = [p.guideName && "name", p.taxId && "tax", p.address && "addr", p.tel && "tel"].filter(Boolean).join("+") || "none-found";
-      results.push({ file: fname, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref} · guide-parsed:[${parsedGuide}]` });
+      results.push({ file: fname, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
     } catch (e) {
       results.push({ file: file.name || "file", ok: false, detail: (e as Error).message.slice(0, 160) });
     }
