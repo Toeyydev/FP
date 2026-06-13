@@ -20,7 +20,7 @@ export async function notifyOps(message: string, title: string, body: string) {
   } catch { /* alerts are best-effort; never block import */ }
 }
 
-async function notifyGuide(guideId: string, message: string, title: string, body: string) {
+export async function notifyGuide(guideId: string, message: string, title: string, body: string) {
   try {
     const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true } });
     if (!u) return;

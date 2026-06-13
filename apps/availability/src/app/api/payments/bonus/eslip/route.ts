@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { decrypt } from "@/lib/crypto";
 import { googleDriveEnabled, saveBufferToDrive } from "@/lib/google-drive";
+import { notifyGuide } from "@/lib/booking-import";
+import { thb } from "@/lib/jobsheet";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -41,6 +43,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
   }
   await prisma.bonus.update({ where: { id: bonusId }, data: { eslipUrl: link } });
+  try {
+    await notifyGuide(bonus.guideId, `Your bonus${bonus.reason ? ` (${bonus.reason})` : ""} has been transferred — ${thb(bonus.amount)}. 🎁`, "Bonus transferred \ud83c\udf81", `${thb(bonus.amount)}${bonus.reason ? ` · ${bonus.reason}` : ""}`);
+  } catch { /* best-effort */ }
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bonus.eslip_uploaded", entityType: "Bonus", entityId: bonusId, detail: { period: bonus.period, guideId: bonus.guideId } });
   return NextResponse.json({ ok: true, link });
 }
