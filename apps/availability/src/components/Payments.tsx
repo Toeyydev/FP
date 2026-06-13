@@ -8,7 +8,7 @@ import { SLOTS } from "@/lib/slots";
 type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
-type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; eslipUrl: string | null };
+type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -62,6 +62,10 @@ export default function Payments() {
     const r = await fetch("/api/payments/bonus/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (r.ok) loadBonuses(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
+  }
+  async function editBonusRef(id: string, ref: string) {
+    await fetch("/api/payments/bonus", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, ref }) });
+    loadBonuses(period);
   }
 
   async function mark(guideId: string, status: "pending" | "paid") {
@@ -169,11 +173,12 @@ export default function Payments() {
         <div style={{ padding: 14 }}>
           {bonuses.rows.length === 0 ? <div className="op-empty">No bonuses this month.</div> : (
             <table className="acct-table" style={{ marginBottom: 12 }}>
-              <thead><tr><th>Guide</th><th>Reason</th><th className="r">Amount</th><th>E-slip</th><th /></tr></thead>
+              <thead><tr><th>Guide</th><th>Ref no.</th><th>Reason</th><th className="r">Amount</th><th>E-slip</th><th /></tr></thead>
               <tbody>
                 {bonuses.rows.map((b) => (
                   <tr key={b.id}>
                     <td style={{ whiteSpace: "nowrap" }}><span className="gid">{b.guideId}</span> {b.guide}</td>
+                    <td><input className="search" style={{ width: 150, fontSize: 12, fontVariantNumeric: "tabular-nums" }} defaultValue={b.ref} title="Bonus reference no. (e.g. PEAK job no.)" onBlur={(e) => { if (e.target.value.trim() !== b.ref) editBonusRef(b.id, e.target.value.trim()); }} /></td>
                     <td style={{ color: "var(--ink-soft)" }}>{b.reason || "—"}</td>
                     <td className="r" style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>+{thb(b.amount)}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
@@ -188,7 +193,7 @@ export default function Payments() {
                   </tr>
                 ))}
               </tbody>
-              <tfoot><tr className="pay-foot"><td colSpan={2}><b>Total bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td colSpan={2} /></tr></tfoot>
+              <tfoot><tr className="pay-foot"><td colSpan={3}><b>Total bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td colSpan={2} /></tr></tfoot>
             </table>
           )}
           <div className="op-toolbar" style={{ gap: 8, flexWrap: "wrap" }}>

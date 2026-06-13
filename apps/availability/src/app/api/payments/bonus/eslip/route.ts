@@ -31,8 +31,8 @@ export async function POST(req: NextRequest) {
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const mime = file.type || "image/jpeg";
   const monthFolder = `${bonus.period} ${MONTHS[Number(bonus.period.slice(5, 7)) - 1] ?? ""}`.trim();
-  const tag = (bonus.reason || `bonus ${bonus.amount}`).replace(/[\\/:*?"<>|]/g, " ").slice(0, 40).trim();
-  const name = `Bonus — ${bonus.guideId} ${guideName} — ${tag} [${bonusId.slice(-6)}].${extOf(mime)}`;
+  const tag = (bonus.ref || `Bonus ${bonusId.slice(-6)}`).replace(/[\\/:*?"<>|]/g, " ").trim();
+  const name = `${tag} — ${guideName} — bonus.${extOf(mime)}`;
 
   let link: string;
   try {

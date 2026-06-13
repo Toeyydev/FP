@@ -535,6 +535,7 @@ model Bonus {
   guideId     String
   period      String // "YYYY-MM"
   amount      Float
+  ref         String? // distinct bonus reference (own no., e.g. for PEAK) — not the job sheet ref
   reason      String?
   eslipUrl    String? // Google Drive link to the bonus payment slip (evidence)
   createdById String?

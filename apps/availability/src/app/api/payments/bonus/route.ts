@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
   ]);
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
-  const rows = bonuses.map((b) => ({ id: b.id, guideId: b.guideId, guide: gName(b.guideId), amount: b.amount, reason: b.reason ?? "", eslipUrl: b.eslipUrl ?? null }));
+  const rows = bonuses.map((b) => ({ id: b.id, guideId: b.guideId, guide: gName(b.guideId), amount: b.amount, reason: b.reason ?? "", ref: b.ref ?? "", eslipUrl: b.eslipUrl ?? null }));
   const total = rows.reduce((s, b) => s + b.amount, 0);
   return NextResponse.json({ period, rows, total: Math.round(total * 100) / 100 });
 }
@@ -33,8 +33,20 @@ export async function POST(req: NextRequest) {
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const d = parsed.data;
-  const b = await prisma.bonus.create({ data: { period: d.period, guideId: d.guideId, amount: d.amount, reason: d.reason?.trim() || null, createdById: session!.user!.id ?? null } });
+  const seq = (await prisma.bonus.count({ where: { period: d.period } })) + 1;
+  const ref = `FOLK-BNS-${d.period.replace("-", "")}-${String(seq).padStart(2, "0")}`;
+  const b = await prisma.bonus.create({ data: { period: d.period, guideId: d.guideId, amount: d.amount, reason: d.reason?.trim() || null, ref, createdById: session!.user!.id ?? null } });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bonus.added", entityType: "Bonus", entityId: b.id, detail: { period: d.period, guideId: d.guideId, amount: d.amount } });
+  return NextResponse.json({ ok: true });
+}
+
+// PATCH { id, ref } — set the bonus reference no. (e.g. to match the PEAK job no.).
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ id: z.string().min(1), ref: z.string().max(60) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  await prisma.bonus.update({ where: { id: parsed.data.id }, data: { ref: parsed.data.ref.trim() || null } });
   return NextResponse.json({ ok: true });
 }
 
