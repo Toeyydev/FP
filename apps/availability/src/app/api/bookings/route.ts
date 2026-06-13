@@ -64,6 +64,14 @@ export async function GET(req: NextRequest) {
       where: {
         status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
         OR: [{ date: null }, { date: { gte: today } }],
+        // Incoming bookings are OTA only (GetYourGuide GET-xxxx, Viator). Hide direct
+        // FOLK-xxxx website bookings so they never clutter the dispatch inbox.
+        NOT: {
+          OR: [
+            { confirmationCode: { startsWith: "FOLK-", mode: "insensitive" } },
+            { externalRef: { startsWith: "FOLK-", mode: "insensitive" } },
+          ],
+        },
       },
       orderBy: [{ date: "asc" }, { slotIdx: "asc" }, { createdAt: "asc" }],
       take: 500,
