@@ -18,3 +18,5 @@ export function startSyncLoop(): void {
   setTimeout(() => { void tick(); }, 30_000);          // shortly after boot
   setInterval(() => { void tick(); }, 5 * 60_000);     // then every 5 minutes
 }
+
+// deploy-pipeline test: c2aa5a6
