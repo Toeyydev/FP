@@ -347,6 +347,7 @@ model Booking {
   @@unique([source, externalId])
   @@index([date])
   @@index([status])
+  noShow      Boolean  @default(false) // guest didn't arrive (set by operator or guide)
 }
 
 // Web Push subscription (one per browser/device) for home-screen job alerts.

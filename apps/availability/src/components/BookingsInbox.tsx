@@ -441,6 +441,10 @@ export default function BookingsInbox() {
               <div className="bk-form">
                 <label>Status<select value={str(detail.status) || "PENDING"} onChange={(e) => setField("status", e.target.value)}>
                   {["PENDING", "OFFERED", "ASSIGNED", "CANCELLED", "IGNORED"].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+                <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "end", color: detail.noShow ? "var(--danger)" : undefined, fontWeight: detail.noShow ? 700 : undefined }}>
+                  <input type="checkbox" checked={!!detail.noShow} onChange={async (e) => { const v = e.target.checked; setField("noShow", v); await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v }) }); load(); }} />
+                  No-show (guest didn&apos;t arrive)
+                </label>
                 <label>Payment<select value={str(detail.paymentStatus) || "unpaid"} onChange={(e) => setField("paymentStatus", e.target.value)}>
                   {["unpaid", "deposit", "paid"].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
                 <label>Tour<select value={str(detail.tourId)} onChange={(e) => setField("tourId", e.target.value)}>

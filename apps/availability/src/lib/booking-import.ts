@@ -10,7 +10,7 @@ export type ImportResult = "created" | "updated" | "skipped";
 
 const CAP = 10; // max pax per guide / job
 
-async function notifyOps(message: string, title: string, body: string) {
+export async function notifyOps(message: string, title: string, body: string) {
   try {
     const opsUsers = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
     for (const o of opsUsers) {
