@@ -8,6 +8,7 @@ import { SLOTS } from "@/lib/slots";
 type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
+type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -16,6 +17,8 @@ export default function Payments() {
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
+  const [bForm, setBForm] = useState({ guideId: "", amount: "", reason: "" });
   const toggle = (gid: string) => setOpen((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
   // Mark a single tour paid/unpaid (per-tour TourPayment via the /pay endpoint).
   async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING") {
@@ -36,6 +39,24 @@ export default function Payments() {
     if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const loadBonuses = useCallback(async (p: string) => {
+    if (!p) return;
+    const r = await fetch(`/api/payments/bonus?period=${p}`, { cache: "no-store" });
+    if (r.ok) { const d = await r.json(); setBonuses({ rows: d.rows ?? [], total: d.total ?? 0 }); }
+  }, []);
+  useEffect(() => { loadBonuses(period); }, [period, loadBonuses]);
+
+  async function addBonus() {
+    const amt = parseFloat(bForm.amount);
+    if (!bForm.guideId || !(amt > 0)) return;
+    const r = await fetch("/api/payments/bonus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId: bForm.guideId, amount: amt, reason: bForm.reason }) });
+    if (r.ok) { setBForm({ guideId: "", amount: "", reason: "" }); loadBonuses(period); }
+  }
+  async function delBonus(id: string) {
+    const r = await fetch("/api/payments/bonus", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
+    if (r.ok) loadBonuses(period);
+  }
 
   async function mark(guideId: string, status: "pending" | "paid") {
     const r = await fetch("/api/payments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, status }) });
@@ -134,6 +155,37 @@ export default function Payments() {
               </tfoot>
             )}
           </table>
+        </div>
+      </section>
+
+      <section className="panel" style={{ marginTop: 14 }}>
+        <div className="panel-head"><h2>Bonuses &amp; adjustments</h2><span className="hint">e.g. 5★ review rewards · {bonuses.rows.length} this month</span></div>
+        <div style={{ padding: 14 }}>
+          {bonuses.rows.length === 0 ? <div className="op-empty">No bonuses this month.</div> : (
+            <table className="acct-table" style={{ marginBottom: 12 }}>
+              <thead><tr><th>Guide</th><th>Reason</th><th className="r">Amount</th><th /></tr></thead>
+              <tbody>
+                {bonuses.rows.map((b) => (
+                  <tr key={b.id}>
+                    <td style={{ whiteSpace: "nowrap" }}><span className="gid">{b.guideId}</span> {b.guide}</td>
+                    <td style={{ color: "var(--ink-soft)" }}>{b.reason || "—"}</td>
+                    <td className="r" style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>+{thb(b.amount)}</td>
+                    <td style={{ textAlign: "right" }}><button className="btn sm danger" title="Remove bonus" onClick={() => delBonus(b.id)}>×</button></td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr className="pay-foot"><td colSpan={2}><b>Total bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td /></tr></tfoot>
+            </table>
+          )}
+          <div className="op-toolbar" style={{ gap: 8, flexWrap: "wrap" }}>
+            <select className="search" style={{ flex: "none", width: 200 }} value={bForm.guideId} onChange={(e) => setBForm((x) => ({ ...x, guideId: e.target.value }))}>
+              <option value="">Choose guide…</option>
+              {rows.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.guide}</option>)}
+            </select>
+            <input className="search" style={{ flex: 1, minWidth: 180 }} placeholder="Reason (e.g. 5★ review – Omari)" value={bForm.reason} onChange={(e) => setBForm((x) => ({ ...x, reason: e.target.value }))} />
+            <input className="search" style={{ flex: "none", width: 120 }} type="number" min={0} placeholder="฿ amount" value={bForm.amount} onChange={(e) => setBForm((x) => ({ ...x, amount: e.target.value }))} />
+            <button className="btn primary" disabled={!bForm.guideId || !(parseFloat(bForm.amount) > 0)} onClick={addBonus}>+ Add bonus</button>
+          </div>
         </div>
       </section>
     </div>

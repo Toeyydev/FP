@@ -527,3 +527,17 @@ model JobOfferResponse {
   @@unique([offerId, guideId])
   @@index([offerId])
 }
+
+// Ad-hoc bonus / adjustment paid to a guide in a month (e.g. a 5-star review reward).
+// Tracked separately from tour pay; shown in the Payments "Bonuses" panel.
+model Bonus {
+  id          String   @id @default(cuid())
+  guideId     String
+  period      String // "YYYY-MM"
+  amount      Float
+  reason      String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([period])
+}
