@@ -26,14 +26,6 @@ export default function Payments() {
     if (r.ok) load(period);
   }
 
-  // Upload a bank payment slip (e-slip) as evidence → straight to Google Drive.
-  async function uploadEslip(guideId: string, file: File) {
-    const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", file);
-    const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) { alert(d.markedPaid ? "E-slip saved — guide marked PAID ✓" : "E-slip saved ✓"); load(period); } else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
-  }
-
   const load = useCallback(async (p?: string) => {
     const r = await fetch(`/api/payments${p ? `?period=${p}` : ""}`, { cache: "no-store" });
     if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); }
@@ -122,12 +114,6 @@ export default function Payments() {
                   <td className="r"><b>{thb(r.payout)}</b></td>
                   <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
                   <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
-                    {r.eslipUrl
-                      ? <>
-                          <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Google Drive">📎 E-slip</a>
-                          <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace the e-slip (re-upload)">↻<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>
-                        </>
-                      : <label className="btn sm" style={{ cursor: "pointer" }} title="Upload bank payment slip (evidence) to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
                     {r.status === "paid"
                     ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
                     : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>}
