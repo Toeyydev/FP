@@ -20,16 +20,17 @@ export async function POST(req: NextRequest) {
   const form = await req.formData().catch(() => null);
   const period = String(form?.get("period") || "");
   const guideId = String(form?.get("guideId") || "");
-  const file = form?.get("file");
-  if (!/^\d{4}-\d{2}$/.test(period) || !guideId || !(file instanceof File)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  if (file.size > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
+  // Duck-type the file: the File global isn't defined in the Node server runtime.
+  const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+  if (!/^\d{4}-\d{2}$/.test(period) || !guideId || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
 
   const conn = await prisma.googleCalendar.findUnique({ where: { userId: session!.user!.id ?? "" } }).catch(() => null);
   if (!conn) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
 
   const u = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
   const guideName = u?.fullName || u?.displayName || guideId;
-  const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+  const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const mime = file.type || "image/jpeg";
   const monthFolder = `${period} ${MONTHS[Number(period.slice(5, 7)) - 1] ?? ""}`.trim();
   const name = `${guideId} ${guideName} ${period}.${extOf(mime)}`;
