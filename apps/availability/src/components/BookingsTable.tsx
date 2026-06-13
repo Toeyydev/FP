@@ -27,6 +27,7 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [source, setSource] = useState("");
+  const [month, setMonth] = useState(""); // YYYY-MM filter
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState("");
 
@@ -34,10 +35,11 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
     const p = new URLSearchParams({ view: "all" });
     if (status) p.set("status", status);
     if (source) p.set("source", source);
+    if (month) p.set("month", month);
     if (q.trim()) p.set("q", q.trim());
     const r = await fetch(`/api/bookings?${p.toString()}`, { cache: "no-store" });
     if (r.ok) { const d = await r.json(); setRows(d.bookings ?? []); setTours(d.tours ?? []); }
-  }, [q, status, source]);
+  }, [q, status, source, month]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); }, [load]);
 
   const tourName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? (id ?? "—");
@@ -93,6 +95,8 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
           <option value="">All sources</option>
           {SOURCE_LIST.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        <input className="search" style={{ flex: "none", width: 150 }} type="month" value={month} onChange={(e) => setMonth(e.target.value)} title="Show one month" />
+        {month && <button className="btn sm ghost" onClick={() => setMonth("")} title="Clear month filter">✕ month</button>}
         <button className="btn sm" onClick={exportCsv}>↓ Export CSV</button>
         <span style={{ fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{rows.length} bookings</span>
       </div>

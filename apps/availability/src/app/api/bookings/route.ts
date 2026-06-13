@@ -28,10 +28,12 @@ export async function GET(req: NextRequest) {
   if (sp.get("view") === "all") {
     const status = sp.get("status") || "";
     const source = sp.get("source") || "";
+    const month = sp.get("month") || ""; // YYYY-MM — show only that month's bookings
     const q = (sp.get("q") || "").trim();
     const where: Record<string, unknown> = {};
     if (status) where.status = status;
     if (source) where.source = source;
+    if (/^\d{4}-\d{2}$/.test(month)) where.date = { gte: `${month}-01`, lte: `${month}-31` };
     if (q) where.OR = [
       { customerName: { contains: q, mode: "insensitive" } },
       { confirmationCode: { contains: q, mode: "insensitive" } },
