@@ -66,8 +66,8 @@ export default function BookingsInbox() {
       const r = await fetch("/api/jobsheet/import", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg(d.hint || d.detail || `Import failed (${r.status}).`); return; }
-      const fails = (d.results || []).filter((x: { ok: boolean }) => !x.ok);
-      setMsg(`Job sheets: ${d.imported} imported${d.failed ? `, ${d.failed} failed` : ""}.` + (fails.length ? ` First issue: ${fails[0].file} — ${fails[0].detail}` : ""));
+      const lines = (d.results || []).map((x: { ok: boolean; file: string; detail: string }) => `${x.ok ? "✓" : "✗"} ${x.detail}`);
+      setMsg(`Job sheets: ${d.imported} imported${d.failed ? `, ${d.failed} failed` : ""}. ` + lines.join(" | "));
       await load();
     } catch { setMsg("Job-sheet import failed — network error."); }
   }
