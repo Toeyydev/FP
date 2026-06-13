@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { SLOTS } from "@/lib/slots";
 import { isOnline } from "@/lib/presence";
@@ -177,6 +177,14 @@ export default function BookingsInbox() {
   for (const [key, items] of Object.entries(groups)) { const d = items[0].date!; (byDate[d] ??= []).push([key, items]); }
   for (const d of Object.keys(byDate)) byDate[d].sort(([, a], [, b]) => (a[0].slotIdx ?? 0) - (b[0].slotIdx ?? 0));
   const readyDates = Object.keys(byDate).sort();
+  // Month summaries so the inbox can break a long list into "June 2026" sections.
+  const monthSummary: Record<string, { tours: number; pax: number }> = {};
+  for (const d of readyDates) {
+    const m = d.slice(0, 7);
+    (monthSummary[m] ??= { tours: 0, pax: 0 });
+    monthSummary[m].tours += byDate[d].length;
+    monthSummary[m].pax += byDate[d].reduce((sum, [, items]) => sum + items.reduce((a, b) => a + (b.pax ?? 0), 0), 0);
+  }
   const fmtDay = (d: string) => { const dt = parseYMD(d); return `${DOW[(dt.getDay() + 6) % 7]} ${dt.getDate()} ${MON[dt.getMonth()].slice(0, 3)} ${dt.getFullYear()}`; };
 
   async function offerGroup(key: string, items: Booking[], guideId?: string) {
@@ -320,8 +328,19 @@ export default function BookingsInbox() {
               const dayPax = dayGroups.reduce((s, [, items]) => s + items.reduce((a, b) => a + (b.pax ?? 0), 0), 0);
               const dayOver = dayGroups.some(([, items]) => items.reduce((a, b) => a + (b.pax ?? 0), 0) > 10);
               const open = openDates[date] ?? (di === 0);
+              const month = date.slice(0, 7);
+              const showMonth = di === 0 || readyDates[di - 1].slice(0, 7) !== month;
+              const monthLabel = new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+              const ms = monthSummary[month];
               return (
-                <div key={date} style={{ border: "1.5px solid var(--line)", borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+                <Fragment key={date}>
+                {showMonth && (
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: di === 0 ? "4px 2px 8px" : "20px 2px 8px", paddingBottom: 6, borderBottom: "2px solid var(--line)" }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-0.01em" }}>{monthLabel}</span>
+                    <span style={{ fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{ms.tours} tour{ms.tours === 1 ? "" : "s"} · {ms.pax} pax</span>
+                  </div>
+                )}
+                <div style={{ border: "1.5px solid var(--line)", borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
                   <button onClick={() => setOpenDates((o) => ({ ...o, [date]: !open }))} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: open ? "#f3f6f4" : "#fff", border: "none", borderBottom: open ? "1px solid var(--line)" : "none", cursor: "pointer", font: "inherit", textAlign: "left" }}>
                     <span style={{ display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "var(--ink-soft)" }}>▸</span>
                     <b style={{ flex: 1 }}>{fmtDay(date)}</b>
@@ -371,6 +390,7 @@ export default function BookingsInbox() {
                     </div>
                   )}
                 </div>
+                </Fragment>
               );
             })
           )}
