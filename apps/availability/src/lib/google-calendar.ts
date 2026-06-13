@@ -6,7 +6,9 @@ const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 export const googleEnabled = Boolean(CLIENT_ID && CLIENT_SECRET);
 
-const SCOPE = "https://www.googleapis.com/auth/calendar.events";
+// calendar.events for Calendar sync + drive.file so we can save job sheets into
+// the connected account's Drive (drive.file = only files this app creates).
+const SCOPE = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file";
 const REDIRECT = (host: string) => `https://${host}/api/google/callback`;
 
 export function authUrl(host: string, state: string): string {
@@ -29,7 +31,7 @@ export async function exchangeCode(host: string, code: string): Promise<{ refres
   return { refreshToken: j.refresh_token ?? null, accessToken: j.access_token, email };
 }
 
-async function accessToken(refreshToken: string): Promise<string | null> {
+export async function googleAccessToken(refreshToken: string): Promise<string | null> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: CLIENT_ID!, client_secret: CLIENT_SECRET!, refresh_token: refreshToken, grant_type: "refresh_token" }),
@@ -45,7 +47,7 @@ export type CalEvent = {
 };
 
 export async function insertEvent(refreshToken: string, calendarId: string, event: CalEvent): Promise<string | null> {
-  const tok = await accessToken(refreshToken); if (!tok) return null;
+  const tok = await googleAccessToken(refreshToken); if (!tok) return null;
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, {
     method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify(event),
   });
@@ -54,7 +56,7 @@ export async function insertEvent(refreshToken: string, calendarId: string, even
 }
 
 export async function patchEvent(refreshToken: string, calendarId: string, eventId: string, event: Partial<CalEvent>): Promise<boolean> {
-  const tok = await accessToken(refreshToken); if (!tok) return false;
+  const tok = await googleAccessToken(refreshToken); if (!tok) return false;
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, {
     method: "PATCH", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify(event),
   });
@@ -62,7 +64,7 @@ export async function patchEvent(refreshToken: string, calendarId: string, event
 }
 
 export async function deleteEvent(refreshToken: string, calendarId: string, eventId: string): Promise<boolean> {
-  const tok = await accessToken(refreshToken); if (!tok) return false;
+  const tok = await googleAccessToken(refreshToken); if (!tok) return false;
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, {
     method: "DELETE", headers: { authorization: `Bearer ${tok}` },
   });

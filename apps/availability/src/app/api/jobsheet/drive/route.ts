@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, saveHtmlToDrive } from "@/lib/google-drive";
+import { decrypt } from "@/lib/crypto";
 import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -13,7 +14,8 @@ const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "
 export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  return NextResponse.json({ enabled: googleDriveEnabled });
+  const conn = session?.user?.id ? await prisma.googleCalendar.findUnique({ where: { userId: session.user.id }, select: { email: true } }).catch(() => null) : null;
+  return NextResponse.json({ enabled: googleDriveEnabled, connected: !!conn, email: conn?.email ?? null });
 }
 
 // POST { guideId, date, slotIdx } — render the job sheet and save it as a Google
@@ -21,7 +23,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", hint: "Set GOOGLE_SA_EMAIL, GOOGLE_SA_PRIVATE_KEY and GOOGLE_DRIVE_SUBJECT on Railway." }, { status: 400 });
+  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", hint: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on Railway." }, { status: 400 });
+  const conn = await prisma.googleCalendar.findUnique({ where: { userId: session!.user!.id ?? "" } }).catch(() => null);
+  if (!conn) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
+  const refreshToken = decrypt(conn.refreshToken);
 
   const body = await req.json().catch(() => null);
   const guideId = String(body?.guideId || "");
@@ -75,7 +80,7 @@ export async function POST(req: NextRequest) {
   </body></html>`;
 
   try {
-    const { link } = await saveHtmlToDrive({ name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", date.slice(0, 7)] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", date.slice(0, 7)] });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {
