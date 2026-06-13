@@ -58,6 +58,25 @@ function rightOf(grid: string[][], label: string): string {
   }
   return "";
 }
+// Value for a labelled field: tries each label (in priority order), returning the
+// first non-empty cell to its RIGHT, else the cell directly BELOW it. Tolerates both
+// horizontal (label | value) and vertical (label over value) job-sheet layouts.
+function labelValue(grid: string[][], labels: string[]): string {
+  for (const label of labels) {
+    const L = norm(label);
+    for (let r = 0; r < grid.length; r++) {
+      const row = grid[r] ?? [];
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] && norm(row[c]).includes(L)) {
+          for (let cc = c + 1; cc < row.length; cc++) if (row[cc] && row[cc].trim()) return row[cc].trim();
+          const below = (grid[r + 1] ?? [])[c];
+          if (below && below.trim()) return below.trim();
+        }
+      }
+    }
+  }
+  return "";
+}
 // Row index + column map for a table whose header row contains all `headers`.
 function findHeader(grid: string[][], headers: string[]): { row: number; cols: Record<string, number> } | null {
   for (let r = 0; r < grid.length; r++) {
@@ -82,6 +101,12 @@ function parseTime(s: string): string | undefined {
   if (/am/i.test(s) && h === 12) h = 0;
   return `${String(h).padStart(2, "0")}:${min}`;
 }
+// A cell that IS a time (optionally a range / am-pm / Thai), so scanning for a stray
+// time token never mistakes a price like "1,000.00" for one.
+function parseTimeStrict(s: string): string | undefined {
+  const v = String(s ?? "").trim();
+  return /^\d{1,2}[.:]\d{2}(\s*-\s*\d{1,2}[.:]\d{2})?\s*(am|pm|น\.?)?$/i.test(v) ? parseTime(v) : undefined;
+}
 function parseDate(s: string): string | null {
   const dmy = s.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/); // 13/06/2026
   if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
@@ -102,16 +127,24 @@ export async function parseJobSheetXlsx(buf: ArrayBuffer): Promise<ParsedJobShee
   const grid = await toGrid(buf);
 
   const ref = rightOf(grid, "No.") || rightOf(grid, "ref");
-  const tourId = rightOf(grid, "Tour ID");
-  const guideId = rightOf(grid, "Guide ID");
-  const status = rightOf(grid, "Status") || "Confirmed";
-  const date = parseDate(rightOf(grid, "Tour Date"));
-  const time = parseTime(rightOf(grid, "Time"));
+  const tourId = labelValue(grid, ["Tour ID", "Tour No", "Tour code"]);
+  const guideId = labelValue(grid, ["Guide ID", "Guide No", "Guide code"]);
+  const status = labelValue(grid, ["Status"]) || "Confirmed";
+  const rawDate = labelValue(grid, ["Tour Date", "Date"]);
+  const date = parseDate(rawDate);
+  // Time can live under several labels, be combined into the Tour Date cell, or sit
+  // loose in the header — try each, in order, so real sheets aren't rejected.
+  let time = parseTime(labelValue(grid, ["Time", "Tour Time", "Start time", "Start", "Departure", "Pickup", "Pick up", "Round"]));
+  if (!time) time = parseTime(rawDate);
+  if (!time) {
+    for (let r = 0; r < Math.min(grid.length, 18) && !time; r++)
+      for (const cell of (grid[r] ?? [])) { const t = parseTimeStrict(cell); if (t) { time = t; break; } }
+  }
   const slotIdx = timeToSlot(time) ?? null;
-  const guideName = rightOf(grid, "Guide name");
-  const taxId = rightOf(grid, "Tax ID");
-  const address = rightOf(grid, "Address");
-  const tel = rightOf(grid, "Tel");
+  const guideName = labelValue(grid, ["Guide name", "Guide Name"]);
+  const taxId = labelValue(grid, ["Tax ID", "Tax No"]);
+  const address = labelValue(grid, ["Address"]);
+  const tel = labelValue(grid, ["Tel", "Phone", "Mobile"]);
 
   // Bookings (Job Details table)
   const bookings: ParsedJobSheet["bookings"] = [];
