@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance } from "@/lib/jobsheet";
 
 describe("jobsheet — money math", () => {
   it("expenseAmount = price × pax, guarding nulls", () => {
@@ -34,5 +34,34 @@ describe("jobsheet — money math", () => {
   it("thb formats Thai baht with two decimals", () => {
     expect(thb(1030)).toBe("฿1,030.00");
     expect(thb(0)).toBe("฿0.00");
+  });
+});
+
+describe("applyReportedAttendance", () => {
+  const mk = (rows: [number, "included" | "not" | ""][]) =>
+    rows.map(([p, t], i) => ({ name: `b${i}`, bookingNo: `B${i}`, bookedPax: p, actualPax: null, tickets: t, status: "" }));
+
+  it("removes absent guests from the largest group first and re-syncs included tickets", () => {
+    const bookings = mk([[5, "included"], [3, "included"]]);
+    const expenses = [{ description: "Grand Palace entrance", price: 500, pax: 8 }, { description: "Lunch", price: 200, pax: 8 }];
+    const out = applyReportedAttendance(bookings, expenses, 2);
+    const total = out.bookings.reduce((s, b) => s + (b.actualPax ?? 0), 0);
+    expect(total).toBe(6); // 8 booked - 2 absent
+    const gp = out.expenses.find((e) => e.description.startsWith("Grand Palace"))!;
+    expect(gp.pax).toBe(6); // attraction tickets follow actual attendance
+    const lunch = out.expenses.find((e) => e.description === "Lunch")!;
+    expect(lunch.pax).toBe(8); // non-attraction expense untouched
+  });
+
+  it("only counts included-ticket guests for attraction pax", () => {
+    const bookings = mk([[4, "included"], [4, "not"]]);
+    const out = applyReportedAttendance(bookings, [{ description: "Wat Pho fee", price: 100, pax: 0 }], 0);
+    const wp = out.expenses[0];
+    expect(wp.pax).toBe(4); // only the 'included' group
+  });
+
+  it("never drives a group below zero", () => {
+    const out = applyReportedAttendance(mk([[2, "included"]]), [], 10);
+    expect(out.bookings[0].actualPax).toBe(0);
   });
 });

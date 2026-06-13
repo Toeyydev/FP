@@ -45,3 +45,25 @@ export const thb = (v: number) =>
 export function makeRef(date: string, seq: number) {
   return `FOLK-BKK-${date.replace(/-/g, "")}-${String(seq).padStart(2, "0")}`;
 }
+
+// Apply a guide's reported attendance to a job sheet: remove `absent` guests
+// (no-show + left-early) from the booking rows — taking them from the largest
+// groups first — then re-sync the attraction (Grand Palace / Wat Pho / Wat Arun)
+// ticket expenses to who actually showed up. The fixed guide fee is untouched.
+const ATTRACTION_PREFIXES = ["grand palace", "wat pho", "wat arun"];
+export function applyReportedAttendance(bookings: Booking[], expenses: Expense[], absent: number): { bookings: Booking[]; expenses: Expense[] } {
+  const rows = bookings.map((b) => ({ ...b, actualPax: b.actualPax ?? b.bookedPax ?? 0 }));
+  let remaining = Math.max(0, Math.floor(absent));
+  while (remaining > 0) {
+    let idx = -1, max = 0;
+    rows.forEach((b, i) => { const p = b.actualPax ?? 0; if (p > max) { max = p; idx = i; } });
+    if (idx < 0) break; // nobody left to remove
+    rows[idx].actualPax = (rows[idx].actualPax ?? 0) - 1;
+    remaining--;
+  }
+  const inclPax = rows.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
+  const newExpenses = expenses.map((e) =>
+    ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,
+  );
+  return { bookings: rows, expenses: newExpenses };
+}

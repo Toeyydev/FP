@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
+import { applyReportedAttendance, type Booking, type Expense } from "@/lib/jobsheet";
 
 // POST { date, slotIdx, bookedPax, noShow, leftEarly, comments? } — guide submits
 // the end-of-tour report for their assignment. Also records the COMPLETE check-in.
@@ -39,6 +40,20 @@ export async function POST(req: NextRequest) {
   });
   // Completing the report completes the tour.
   await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type: "COMPLETE" } });
+
+  // Auto-update the job sheet to match the reported attendance: drop the absent
+  // guests (no-show + left-early) from the booking rows, re-sync the attraction
+  // ticket expenses to who actually showed, and flag the sheet so the operator
+  // confirms the money before it's paid. The guide's fixed fee is never changed.
+  const absent = noShow + leftEarly;
+  if (absent > 0) {
+    const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
+    if (sheet) {
+      const applied = applyReportedAttendance((sheet.bookings as Booking[]) ?? [], (sheet.expenses as Expense[]) ?? [], absent);
+      await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings, expenses: applied.expenses, status: "Review: no-show" } });
+      await audit({ actorId: session!.user!.id ?? null, actorRole: "GUIDE", action: "jobsheet.attendance_synced", entityType: "JobSheet", detail: { date, slotIdx, absent } });
+    }
+  }
   await audit({ actorId: session!.user!.id ?? null, actorRole: "GUIDE", action: "tour.reported", entityType: "Assignment", detail: { date, slotIdx, noShow, leftEarly } });
   return NextResponse.json({ ok: true });
 }
