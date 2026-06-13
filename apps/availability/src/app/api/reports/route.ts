@@ -14,8 +14,13 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   // Reports reflect jobs that are DONE — default to the last 90 days up to today
   // (never future). Operators can widen/narrow with the date pickers.
-  const from = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(-90);
-  const to = DATE.test(sp.get("to") || "") ? sp.get("to")! : bkk(0);
+  // Clamp everything to today — reports reflect work up to the current date, never
+  // future-scheduled tours, no matter what range is requested.
+  const today = bkk(0);
+  const rawFrom = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(-90);
+  const rawTo = DATE.test(sp.get("to") || "") ? sp.get("to")! : today;
+  const to = rawTo > today ? today : rawTo;
+  const from = rawFrom > to ? to : rawFrom;
 
   const [bookings, assigns, reports, tours, guides, trend] = await Promise.all([
     prisma.booking.findMany({ where: { date: { gte: from, lte: to }, status: { not: "IGNORED" } }, select: { source: true, status: true, pax: true, tourId: true } }),
@@ -23,7 +28,7 @@ export async function GET(req: NextRequest) {
     prisma.tourReport.findMany({ where: { date: { gte: from, lte: to } }, select: { completedPax: true, noShow: true, leftEarly: true } }),
     prisma.tour.findMany({ select: { id: true, name: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
-    prisma.booking.findMany({ where: { date: { gte: bkk(-183) }, status: { not: "IGNORED" } }, select: { date: true } }),
+    prisma.booking.findMany({ where: { date: { gte: bkk(-183), lte: today }, status: { not: "IGNORED" } }, select: { date: true } }),
   ]);
 
   const tourName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? (id ?? "—");
