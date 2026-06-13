@@ -5,12 +5,10 @@ name: Deploy to Railway
 # Settings → Tokens), then add it to GitHub → repo Settings → Secrets and
 # variables → Actions → new secret named RAILWAY_TOKEN. Until that secret
 # exists, this workflow skips the deploy step (no failure).
+# Manual fallback only: Railway's native GitHub integration handles auto-deploys
+# on push. Run this from the Actions tab if native deploys ever stop working.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/availability/**"
-      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
