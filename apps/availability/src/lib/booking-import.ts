@@ -280,13 +280,27 @@ export async function autoSyncBokun(): Promise<void> {
     const from = fmt(now - 14 * 86400_000);
     const to = fmt(now + 120 * 86400_000);
     let synced = 0;
+    let firstPageFailed: { status: number; error?: string } | null = null;
     for (let page = 1; page <= 10; page++) {
       const res = await searchBookings({ from, to, page, pageSize: 100 });
-      if (!res.ok || res.items.length === 0) break;
+      if (!res.ok) { if (page === 1) firstPageFailed = { status: res.status, error: res.error }; break; }
+      if (res.items.length === 0) break;
       for (const item of res.items) { try { await importRawBooking(item, { otaOnly: true }); synced++; } catch { /* skip a bad item */ } }
       if (res.items.length < 100) break;
     }
-    if (synced) await prisma.auditLog.create({ data: { action: "bokun.autosync.done", entityType: "Booking", detail: { synced } } });
+    if (firstPageFailed) {
+      // Don't fail silently: record the error, and if Bokun has been failing for a
+      // while, alert the operators (at most once every 2h so it never spams).
+      await prisma.auditLog.create({ data: { action: "bokun.autosync.error", entityType: "Booking", detail: firstPageFailed } });
+      const fails = await prisma.auditLog.count({ where: { action: "bokun.autosync.error", createdAt: { gte: new Date(Date.now() - 30 * 60_000) } } });
+      const alerted = await prisma.auditLog.findFirst({ where: { action: "bokun.alert", createdAt: { gte: new Date(Date.now() - 2 * 3600_000) } }, select: { id: true } });
+      if (fails >= 3 && !alerted) {
+        await notifyOps(`Bokun sync has been failing (${fails}\\u00d7 in 30 min, last status ${firstPageFailed.status}). Bookings & cancellations may be out of date \\u2014 check the Bokun connection.`, "\\u26a0\\ufe0f Bokun sync failing", `${fails} failures \\u00b7 status ${firstPageFailed.status}`);
+        await prisma.auditLog.create({ data: { action: "bokun.alert", entityType: "Booking", detail: { fails, status: firstPageFailed.status } } });
+      }
+    } else if (synced) {
+      await prisma.auditLog.create({ data: { action: "bokun.autosync.done", entityType: "Booking", detail: { synced } } });
+    }
   } catch { /* auto-sync is best-effort */ }
   finally { autoSyncInFlight = false; }
 }
