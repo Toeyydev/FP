@@ -28,7 +28,7 @@ export default function Payments() {
     const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", file);
     const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
-    if (r.ok) load(period); else alert(d.hint || d.detail || "E-slip upload failed.");
+    if (r.ok) { alert(d.markedPaid ? "E-slip saved — guide marked PAID ✓" : "E-slip saved ✓"); load(period); } else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
   }
 
   const load = useCallback(async (p?: string) => {
