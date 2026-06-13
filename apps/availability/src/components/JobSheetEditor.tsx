@@ -41,6 +41,7 @@ export default function JobSheetEditor() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
+  const [driveOn, setDriveOn] = useState(false); // Google Drive save configured?
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -49,6 +50,7 @@ export default function JobSheetEditor() {
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false);
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
+  useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDriveOn(!!d.enabled)).catch(() => {}); }, []);
 
   // Entrance-fee items (Grand Palace, Wat Pho, Wat Arun) are paid only for guests
   // whose tickets are "Included". Keep their pax in sync with that count.
@@ -76,6 +78,18 @@ export default function JobSheetEditor() {
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
+
+  async function saveToDrive() {
+    if (!saved) { const ok = await save(); if (!ok) return; }
+    setBusy(true); setMsg("Saving to Google Drive…");
+    try {
+      const r = await fetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(d.hint || d.detail || "Drive save failed."); }
+      else { setMsg("Saved to Drive ✓"); if (d.link) window.open(d.link, "_blank", "noopener"); }
+    } catch { setMsg("Drive save failed — network error."); }
+    setBusy(false);
+  }
 
   async function save(): Promise<boolean> {
     setBusy(true); setMsg("");
@@ -115,6 +129,7 @@ export default function JobSheetEditor() {
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/pdf?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>PDF</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>Job order</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>Excel</button>}
+          {canEdit && driveOn && <button className="btn" disabled={busy} onClick={saveToDrive} title="Save this job sheet to Google Drive (admin@folkpaths.com)">☁ Save to Drive</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>}
           {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}
         </div>
