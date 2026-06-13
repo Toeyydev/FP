@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } }
 </style></head>
 <body>
-  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px">${isOps ? `<button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
+  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span id="eslipName" style="font-size:12px;opacity:.9"></span><label style="background:#fff;color:#7e3a2c;border-radius:7px;padding:7px 12px;font-weight:600;cursor:pointer;font-size:13px">\ud83d\udcce Attach e-slip<input type="file" id="eslipInput" accept="image/*,application/pdf" hidden onchange="eslipChosen(this)"></label><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
   <div class="page">
     <div class="head">
       <div class="brand">FOLKPATHS<small>บริษัท โฟล์คพาธส์ จำกัด</small></div>
@@ -149,16 +149,20 @@ export async function GET(req: NextRequest) {
   </div>
   <script>
     var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx};
+    var eslipFile=null;
+    function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; }
+    function readB64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ var u=String(fr.result); res(u.substring(u.indexOf(",")+1)); }; fr.onerror=rej; fr.readAsDataURL(file); }); }
     async function shareToDrive(btn){
       var old=btn.textContent; btn.disabled=true; btn.textContent="Saving\u2026";
       try{
         var opt={margin:8,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true,backgroundColor:"#ffffff"},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},pagebreak:{mode:["css","legacy"]}};
         var uri=await html2pdf().set(opt).from(document.querySelector(".page")).outputPdf("datauristring");
-        var b64=uri.substring(uri.indexOf(",")+1);
-        var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,pdfBase64:b64})});
+        var payload={guideId:GID,date:DATE,slotIdx:SLOT,pdfBase64:uri.substring(uri.indexOf(",")+1)};
+        if(eslipFile){ payload.eslipBase64=await readB64(eslipFile); payload.eslipMime=eslipFile.type||"image/jpeg"; }
+        var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
         var d=await r.json().catch(function(){return {};});
         if(!r.ok){ alert(d.hint||d.detail||"Drive save failed."); btn.textContent=old; btn.disabled=false; return; }
-        btn.textContent="Saved \u2713"; if(d.link) window.open(d.link,"_blank","noopener");
+        btn.textContent=eslipFile?"Saved sheet + e-slip \u2713":"Saved \u2713"; if(d.link) window.open(d.link,"_blank","noopener");
       }catch(e){ alert("Could not save PDF: "+((e&&e.message)||e)); btn.textContent=old; btn.disabled=false; }
     }
   </script>

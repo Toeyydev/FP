@@ -57,10 +57,19 @@ export async function POST(req: NextRequest) {
   // Drive"), store it verbatim — a pixel-perfect copy of the printed job sheet.
   const pdfBase64 = typeof body?.pdfBase64 === "string" ? body.pdfBase64 : "";
   if (pdfBase64) {
+    const eslipBase64 = typeof body?.eslipBase64 === "string" ? body.eslipBase64 : "";
+    const eslipMime = typeof body?.eslipMime === "string" ? body.eslipMime : "image/jpeg";
+    const eslipExt = eslipMime.includes("png") ? "png" : eslipMime.includes("pdf") ? "pdf" : eslipMime.includes("webp") ? "webp" : "jpg";
     try {
       const { link } = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
-      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
-      return NextResponse.json({ ok: true, link });
+      // If an e-slip was attached, save it beside the job sheet (paired name).
+      let eslipLink: string | undefined;
+      if (eslipBase64) {
+        const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        eslipLink = e.link;
+      }
+      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64 } });
+      return NextResponse.json({ ok: true, link, eslipLink });
     } catch (e) {
       return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
     }
