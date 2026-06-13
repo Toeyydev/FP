@@ -114,9 +114,13 @@ export async function GET(req: NextRequest) {
   });
 }
 
-const bookingZ = z.object({ name: z.string().max(160), bookingNo: z.string().max(80), bookedPax: z.number().nullable(), actualPax: z.number().nullable(), tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
-const expenseZ = z.object({ description: z.string().max(120), price: z.number().nullable(), pax: z.number().nullable() });
-const guideFeeZ = z.object({ price: z.number().nullable(), time: z.number().nullable(), whtPct: z.number().nullable() });
+// Numeric fields are .nullish() (null OR undefined -> null): imported/edge sheets can
+// store gaps, and JSON.stringify drops undefined keys on re-save, so requiring a
+// present number would reject an otherwise-valid save. Strings/extra keys are lenient.
+const num = z.number().nullish().transform((v) => v ?? null);
+const bookingZ = z.object({ name: z.string().max(200).optional().default(""), bookingNo: z.string().max(120).optional().default(""), bookedPax: num, actualPax: num, tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
+const expenseZ = z.object({ description: z.string().max(160).optional().default(""), price: num, pax: num });
+const guideFeeZ = z.object({ price: num, time: num, whtPct: num }).nullish().transform((v) => v ?? { price: null, time: null, whtPct: null });
 
 // PUT — operator only. Upserts the sheet; assigns a FOLK-BKK-… ref on first save.
 export async function PUT(req: NextRequest) {

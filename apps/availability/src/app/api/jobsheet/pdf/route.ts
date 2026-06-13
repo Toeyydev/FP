@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } }
 </style></head>
 <body>
-  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span id="eslipName" style="font-size:12px;opacity:.9"></span><label style="background:#fff;color:#7e3a2c;border-radius:7px;padding:7px 12px;font-weight:600;cursor:pointer;font-size:13px">\ud83d\udcce Attach e-slip<input type="file" id="eslipInput" accept="image/*,application/pdf" hidden onchange="eslipChosen(this)"></label><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
+  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span id="eslipName" style="font-size:12px;opacity:.9"></span><button type="button" id="eslipBtn" onclick="document.getElementById('eslipInput').click()" style="background:#fff;color:#7e3a2c;border:none;border-radius:7px;padding:7px 12px;font-weight:600;cursor:pointer;font-size:13px">\ud83d\udcce Attach e-slip &amp; mark paid</button><input type="file" id="eslipInput" accept="image/*,application/pdf" onchange="eslipChosen(this)" style="position:absolute;width:1px;height:1px;opacity:0;left:-9999px"><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
   <div class="page">
     <div class="head">
       <div class="brand">FOLKPATHS<small>บริษัท โฟล์คพาธส์ จำกัด</small></div>
@@ -150,7 +150,7 @@ export async function GET(req: NextRequest) {
   <script>
     var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx};
     var eslipFile=null;
-    function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; }
+    function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; if(eslipFile){ var b=document.getElementById("driveBtn"); if(b) shareToDrive(b); } }
     function readB64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ var u=String(fr.result); res(u.substring(u.indexOf(",")+1)); }; fr.onerror=rej; fr.readAsDataURL(file); }); }
     async function shareToDrive(btn){
       var old=btn.textContent; btn.disabled=true; btn.textContent="Saving\u2026";
