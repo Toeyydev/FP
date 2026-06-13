@@ -124,10 +124,10 @@ export async function PUT(req: NextRequest) {
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = z.object({
     guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0),
-    tourId: z.string().min(1), status: z.string().max(40).default("Confirmed"),
+    tourId: z.string().default(""), status: z.string().max(40).default("Confirmed"),
     bookings: z.array(bookingZ).max(20), expenses: z.array(expenseZ).max(40), guideFee: guideFeeZ,
   }).safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: "bad-body", detail: parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : undefined }, { status: 400 });
   const d = parsed.data;
   const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
 

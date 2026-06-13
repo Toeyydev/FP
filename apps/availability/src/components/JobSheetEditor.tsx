@@ -24,7 +24,7 @@ type Sheet = {
   bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee; updatedAt?: string | null;
 };
 
-const numOrNull = (v: string): number | null => (v.trim() === "" ? null : Number(v));
+const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 
 export default function JobSheetEditor() {
   const router = useRouter();
@@ -87,7 +87,7 @@ export default function JobSheetEditor() {
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "bad-body" ? "Please check the values." : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
+    if (!r.ok) { setMsg(d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
     setSheet(d.sheet); setSaved(true); setMsg("Saved ✓"); return true;
   }
   async function sendToGuide() {
