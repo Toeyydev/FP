@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
+import { SLOTS } from "@/lib/slots";
 
-type Row = { guideId: string; guide?: string; date: string; slotIdx: number; tour: string; amount: number; status: string };
+type Row = { guideId: string; guide?: string; date: string; slotIdx: number; tour: string; pax?: number | null; fee: number; expenses: number; amount: number; status: string };
 type Totals = { pending: number; approved: number; paid: number };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -53,7 +54,12 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
                 {items.map((r, i) => (
                   <div key={i} className="pay-row">
                     <span className="pr-when">{dShort(r.date)}</span>
-                    <span className="pr-main"><b>{r.tour}</b>{isOperator && r.guide ? <div className="pr-sub">{r.guideId} {r.guide}</div> : null}</span>
+                    <span className="pr-main">
+                      <b>{r.tour}</b>
+                      <div className="pr-sub">{dShort(r.date)}{SLOTS[r.slotIdx]?.start ? ` · ${SLOTS[r.slotIdx].start}` : ""}{r.pax != null ? ` · ${r.pax} pax` : ""}</div>
+                      <div className="pr-sub">Guide fee {thb(r.fee)}{r.expenses > 0 ? ` + expenses ${thb(r.expenses)}` : ""}</div>
+                      {isOperator && r.guide ? <div className="pr-sub">{r.guideId} {r.guide}</div> : null}
+                    </span>
                     <span className="pr-amt">{thb(r.amount)}</span>
                     {isOperator && (
                       <span style={{ display: "flex", gap: 6 }}>

@@ -9,12 +9,11 @@ function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const bkkToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
-// Net payout for one assignment, computed live from its job sheet (net fee after
+// Live pay breakdown for one assignment, from its job sheet (net guide fee after
 // WHT + reimbursable expenses). Falls back to the standard guide fee if no sheet.
-function payoutOf(sheet: { expenses: unknown; guideFee: unknown } | undefined): number {
-  if (!sheet) return computeTotals([], DEFAULT_GUIDE_FEE).grandTotal;
-  const t = computeTotals((sheet.expenses as Expense[]) ?? [], (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
-  return t.grandTotal;
+function breakdownOf(sheet: { expenses: unknown; guideFee: unknown } | undefined) {
+  if (!sheet) return computeTotals([], DEFAULT_GUIDE_FEE);
+  return computeTotals((sheet.expenses as Expense[]) ?? [], (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
 }
 
 // GET — guide: their own tours' pay + status. operator (?view=ops): all tours
@@ -41,10 +40,12 @@ export async function GET(req: NextRequest) {
 
   const rows = assigns.map((a) => {
     const k = `${a.guideId}|${a.date}|${a.slotIdx}`;
+    const t = breakdownOf(sheetOf.get(k));
     return {
       guideId: a.guideId, guide: opsView ? gName(a.guideId) : undefined,
-      date: a.date, slotIdx: a.slotIdx, tour: a.tour?.name ?? a.tourId,
-      amount: r2(payoutOf(sheetOf.get(k))), status: payOf.get(k)?.status ?? "PENDING",
+      date: a.date, slotIdx: a.slotIdx, tour: a.tour?.name ?? a.tourId, pax: a.pax ?? null,
+      fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses),
+      amount: r2(t.grandTotal), status: payOf.get(k)?.status ?? "PENDING",
     };
   });
   const totals = { pending: 0, approved: 0, paid: 0 };
