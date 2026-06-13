@@ -14,11 +14,11 @@ export async function GET(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const sp = req.nextUrl.searchParams;
-  const from = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(-14);
+  const from = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(-186); // default ~6 months back so imported past tours show
   const to = DATE.test(sp.get("to") || "") ? sp.get("to")! : bkk(0);
 
   const [assigns, checkins, reports, guides] = await Promise.all([
-    prisma.assignment.findMany({ where: { date: { gte: from, lte: to } }, include: { tour: true }, orderBy: [{ date: "desc" }, { slotIdx: "asc" }], take: 600 }),
+    prisma.assignment.findMany({ where: { date: { gte: from, lte: to } }, include: { tour: true }, orderBy: [{ date: "desc" }, { slotIdx: "asc" }], take: 2000 }),
     prisma.checkin.findMany({ where: { date: { gte: from, lte: to } }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true, withinGeofence: true, distanceM: true } }),
     prisma.tourReport.findMany({ where: { date: { gte: from, lte: to } } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
