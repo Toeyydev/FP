@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
   const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
   if (!ops(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const isOps = ops(session.user.role);
 
   const [u, existing, assignment] = await Promise.all([
     prisma.user.findUnique({ where: { guideId } }),
@@ -63,6 +64,7 @@ export async function GET(req: NextRequest) {
 <html lang="en"><head><meta charset="UTF-8"><title>${esc(ref)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
@@ -91,7 +93,7 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } }
 </style></head>
 <body>
-  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><button onclick="window.print()">Save as PDF / Print</button></div>
+  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px">${isOps ? `<button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
   <div class="page">
     <div class="head">
       <div class="brand">FOLKPATHS<small>บริษัท โฟล์คพาธส์ จำกัด</small></div>
@@ -145,7 +147,21 @@ export async function GET(req: NextRequest) {
       <div class="grand"><span>Total</span><b>${thb(t.grandTotal)}</b></div>
     </div>
   </div>
-  <script>window.addEventListener("load", function () { setTimeout(function () { window.print(); }, 350); });</script>
+  <script>
+    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx};
+    async function shareToDrive(btn){
+      var old=btn.textContent; btn.disabled=true; btn.textContent="Saving\u2026";
+      try{
+        var opt={margin:8,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true,backgroundColor:"#ffffff"},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},pagebreak:{mode:["css","legacy"]}};
+        var uri=await html2pdf().set(opt).from(document.querySelector(".page")).outputPdf("datauristring");
+        var b64=uri.substring(uri.indexOf(",")+1);
+        var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,pdfBase64:b64})});
+        var d=await r.json().catch(function(){return {};});
+        if(!r.ok){ alert(d.hint||d.detail||"Drive save failed."); btn.textContent=old; btn.disabled=false; return; }
+        btn.textContent="Saved \u2713"; if(d.link) window.open(d.link,"_blank","noopener");
+      }catch(e){ alert("Could not save PDF: "+((e&&e.message)||e)); btn.textContent=old; btn.disabled=false; }
+    }
+  </script>
 </body></html>`;
 
   return new NextResponse(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });

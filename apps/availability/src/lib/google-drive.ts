@@ -44,3 +44,24 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
   if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
   return { id: j.id as string, link: (j.webViewLink as string) ?? `https://docs.google.com/document/d/${j.id}/edit` };
 }
+
+
+// Upload raw bytes (e.g. a PDF rendered in the browser) to the connected account's
+// Drive without any conversion. `base64` is the file content base64-encoded.
+export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
+  const token = await googleAccessToken(opts.refreshToken);
+  if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
+  let parent: string | undefined;
+  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
+  const meta = { name: opts.name, parents: parent ? [parent] : undefined };
+  const boundary = `folkpaths-${Math.random().toString(36).slice(2)}`;
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
+    `--${boundary}\r\nContent-Type: ${opts.mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${opts.base64}\r\n--${boundary}--`;
+  const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
+  return { id: j.id as string, link: (j.webViewLink as string) ?? `https://drive.google.com/file/d/${j.id}/view` };
+}

@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
-import { googleDriveEnabled, saveHtmlToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
 import { decrypt } from "@/lib/crypto";
 import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 
@@ -50,6 +50,19 @@ export async function POST(req: NextRequest) {
   const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
   const guideName = u?.fullName || u?.displayName || guideId;
   const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
+
+  // If the client sent a browser-rendered PDF (from the print page's "Share to
+  // Drive"), store it verbatim — a pixel-perfect copy of the printed job sheet.
+  const pdfBase64 = typeof body?.pdfBase64 === "string" ? body.pdfBase64 : "";
+  if (pdfBase64) {
+    try {
+      const { link } = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", date.slice(0, 7)] });
+      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
+      return NextResponse.json({ ok: true, link });
+    } catch (e) {
+      return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
+    }
+  }
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 
   const bookingRows = bookings.map((b) => `<tr><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${b.actualPax ?? ""}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
