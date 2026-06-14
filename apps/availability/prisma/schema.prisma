@@ -510,6 +510,7 @@ model PayrollStatus {
   status    String    @default("pending") // pending | paid
   paidAt    DateTime?
   eslipUrl  String? // Google Drive link to the uploaded bank payment slip (evidence)
+  peakRef   String? // PEAK accounting expense ref (e.g. EXP-xxxxxxx) for the combined payout
   note      String?
   updatedAt DateTime  @updatedAt
 

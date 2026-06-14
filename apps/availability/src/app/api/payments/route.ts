@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
   }
 
   const rows = Object.values(byGuide)
-    .map((g) => ({ ...g, netFee: r2(g.netFee), expenses: r2(g.expenses), payout: r2(g.payout), jobs: g.jobs.sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx), status: statusOf(g.guideId)?.status ?? "pending", paidAt: statusOf(g.guideId)?.paidAt ?? null, eslipUrl: statusOf(g.guideId)?.eslipUrl ?? null }))
+    .map((g) => ({ ...g, netFee: r2(g.netFee), expenses: r2(g.expenses), payout: r2(g.payout), jobs: g.jobs.sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx), status: statusOf(g.guideId)?.status ?? "pending", paidAt: statusOf(g.guideId)?.paidAt ?? null, eslipUrl: statusOf(g.guideId)?.eslipUrl ?? null, peakRef: statusOf(g.guideId)?.peakRef ?? null }))
     .sort((a, b) => a.guide.localeCompare(b.guide));
 
   const totals = rows.reduce((s, r) => ({ tours: s.tours + r.tours, netFee: s.netFee + r.netFee, expenses: s.expenses + r.expenses, payout: s.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
@@ -73,6 +73,24 @@ export async function POST(req: NextRequest) {
     update: { status, paidAt: status === "paid" ? new Date() : null },
   });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.marked", entityType: "PayrollStatus", detail: { period, guideId, status } });
+  return NextResponse.json({ ok: true });
+}
+
+// PATCH { period, guideId, peakRef } — set the PEAK accounting ref for a guide's
+// combined monthly payout (one bank transfer covering several job sheets).
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/), guideId: z.string().min(1), peakRef: z.string().max(60) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { period, guideId } = parsed.data;
+  const peakRef = parsed.data.peakRef.trim() || null;
+  await prisma.payrollStatus.upsert({
+    where: { guideId_period: { guideId, period } },
+    create: { guideId, period, peakRef },
+    update: { peakRef },
+  });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.peakref", entityType: "PayrollStatus", detail: { period, guideId, peakRef } });
   return NextResponse.json({ ok: true });
 }
 

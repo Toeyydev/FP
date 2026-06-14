@@ -6,7 +6,7 @@ import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
 type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
-type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; jobs: Job[] };
+type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
 
@@ -26,6 +26,11 @@ export default function Payments() {
   async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING") {
     const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status }) });
     if (r.ok) load(period);
+  }
+  // Save the PEAK accounting ref (EXP-…) for a guide's combined monthly payout.
+  async function savePeakRef(guideId: string, peakRef: string) {
+    await fetch("/api/payments", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, peakRef }) });
+    load(period);
   }
 
   const load = useCallback(async (p?: string) => {
@@ -82,8 +87,8 @@ export default function Payments() {
 
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ["Guide ID", "Guide", "Tours", "Guide fee (net)", "Expenses", "Total payout", "Status"];
-    const lines = [head.join(",")].concat(rows.map((r) => [r.guideId, r.guide, r.tours, r.netFee, r.expenses, r.payout, r.status].map(cell).join(",")));
+    const head = ["Guide ID", "Guide", "Job sheets", "Guide fee (net)", "Expenses", "Total payout", "Status", "PEAK ref"];
+    const lines = [head.join(",")].concat(rows.map((r) => [r.guideId, r.guide, r.tours, r.netFee, r.expenses, r.payout, r.status, r.peakRef ?? ""].map(cell).join(",")));
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `folkpaths-payroll-${period}.csv`; a.click();
@@ -117,11 +122,11 @@ export default function Payments() {
         <div className="grid-scroll">
           <table className="acct-table pay-table">
             <thead>
-              <tr><th>Guide</th><th className="r">Tours</th><th className="r">Guide fee (net)</th><th className="r">Expenses</th><th className="r">Total payout</th><th>Status</th><th></th></tr>
+              <tr><th>Guide</th><th className="r">Tours</th><th className="r">Guide fee (net)</th><th className="r">Expenses</th><th className="r">Total payout</th><th>PEAK ref</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
-                <tr><td colSpan={7} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
+                <tr><td colSpan={8} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
               ) : visible.map((r) => {
                 const unpaid = r.jobs.filter((j) => !j.paid);
                 return (
@@ -132,6 +137,10 @@ export default function Payments() {
                   <td className="r">{thb(r.netFee)}</td>
                   <td className="r">{thb(r.expenses)}</td>
                   <td className="r"><b>{thb(r.payout)}</b></td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input className="search" style={{ width: 130, fontSize: 12, fontVariantNumeric: "tabular-nums" }} defaultValue={r.peakRef ?? ""} placeholder="EXP-…" title="PEAK accounting ref for the combined payout" onBlur={(e) => { if ((e.target.value.trim() || null) !== (r.peakRef ?? null)) savePeakRef(r.guideId, e.target.value); }} />
+                    <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>covers {r.tours} job sheet{r.tours === 1 ? "" : "s"}</div>
+                  </td>
                   <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
                   <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
                     {r.eslipUrl
@@ -146,7 +155,7 @@ export default function Payments() {
                     <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>🗑</button></td>
                 </tr>
                 {open.has(r.guideId) && (
-                  <tr className="pay-jobs-row"><td colSpan={7} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+                  <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
                     {r.jobs.map((j, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
                         <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
@@ -172,7 +181,7 @@ export default function Payments() {
                   <td className="r">{thb(vTotals.netFee)}</td>
                   <td className="r">{thb(vTotals.expenses)}</td>
                   <td className="r"><b>{thb(vTotals.payout)}</b></td>
-                  <td colSpan={2}></td>
+                  <td colSpan={3}></td>
                 </tr>
               </tfoot>
             )}
