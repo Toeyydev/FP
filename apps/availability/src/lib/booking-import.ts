@@ -271,7 +271,7 @@ export async function autoSyncBokun(): Promise<void> {
   if (!bokunApiEnabled || autoSyncInFlight) return;
   autoSyncInFlight = true;
   try {
-    const throttleAgo = new Date(Date.now() - 4 * 60_000); // de-dupe across page-loads + the background loop / replicas
+    const throttleAgo = new Date(Date.now() - 2 * 60_000); // de-dupe across page-loads + the background loop / replicas
     const recent = await prisma.auditLog.findFirst({ where: { action: "bokun.autosync", createdAt: { gte: throttleAgo } }, select: { id: true } });
     if (recent) return; // synced within the throttle window — skip
     await prisma.auditLog.create({ data: { action: "bokun.autosync", entityType: "Booking" } });
