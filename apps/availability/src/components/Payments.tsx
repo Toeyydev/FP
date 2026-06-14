@@ -17,6 +17,8 @@ export default function Payments() {
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "paid">("all");
+  const [q, setQ] = useState(""); // filter by guide id / name
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
   const [bForm, setBForm] = useState({ guideId: "", amount: "", reason: "" });
   const toggle = (gid: string) => setOpen((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
@@ -88,6 +90,10 @@ export default function Payments() {
     URL.revokeObjectURL(url);
   }
 
+  const ql = q.trim().toLowerCase();
+  const visible = rows.filter((r) => (statusFilter === "all" || r.status === statusFilter) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)));
+  const vTotals = visible.reduce((a, r) => ({ tours: a.tours + r.tours, netFee: a.netFee + r.netFee, expenses: a.expenses + r.expenses, payout: a.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
+
   return (
     <div className="wrap">
       <AuthHeader backHref="/" />
@@ -99,8 +105,14 @@ export default function Payments() {
         <div className="op-toolbar" style={{ gap: 10 }}>
           <label style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-soft)" }}>Month</label>
           <input className="search" style={{ flex: "none", width: 160 }} type="month" value={period} onChange={(e) => { setPeriod(e.target.value); load(e.target.value); }} />
+          <select className="search" style={{ flex: "none", width: 150 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "pending" | "paid")} title="Filter by approval status">
+            <option value="all">All statuses</option>
+            <option value="pending">Pending only</option>
+            <option value="paid">Paid only</option>
+          </select>
+          <input className="search" style={{ flex: "none", width: 180 }} placeholder="Search guide…" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn sm" onClick={exportCsv}>↓ Export payroll CSV</button>
-          <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600 }}>Total: {thb(totals.payout)}</span>
+          <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600 }}>Month total: {thb(totals.payout)}</span>
         </div>
         <div className="grid-scroll">
           <table className="acct-table pay-table">
@@ -108,9 +120,9 @@ export default function Payments() {
               <tr><th>Guide</th><th className="r">Tours</th><th className="r">Guide fee (net)</th><th className="r">Expenses</th><th className="r">Total payout</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
-                <tr><td colSpan={7} className="op-empty">No tours assigned this month yet.</td></tr>
-              ) : rows.map((r) => {
+              {visible.length === 0 ? (
+                <tr><td colSpan={7} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
+              ) : visible.map((r) => {
                 const unpaid = r.jobs.filter((j) => !j.paid);
                 return (
                 <Fragment key={r.guideId}>
@@ -152,14 +164,14 @@ export default function Payments() {
                 </Fragment>
               );})}
             </tbody>
-            {rows.length > 0 && (
+            {visible.length > 0 && (
               <tfoot>
                 <tr className="pay-foot">
-                  <td><b>Total ({rows.length} guides)</b></td>
-                  <td className="r">{totals.tours}</td>
-                  <td className="r">{thb(totals.netFee)}</td>
-                  <td className="r">{thb(totals.expenses)}</td>
-                  <td className="r"><b>{thb(totals.payout)}</b></td>
+                  <td><b>{statusFilter !== "all" || ql ? `Shown (${visible.length} of ${rows.length})` : `Total (${rows.length} guides)`}</b></td>
+                  <td className="r">{vTotals.tours}</td>
+                  <td className="r">{thb(vTotals.netFee)}</td>
+                  <td className="r">{thb(vTotals.expenses)}</td>
+                  <td className="r"><b>{thb(vTotals.payout)}</b></td>
                   <td colSpan={2}></td>
                 </tr>
               </tfoot>
