@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { canViewFinance } from "@/lib/roles";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 function esc(v: unknown): string {
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
   const date = req.nextUrl.searchParams.get("date") || "";
   const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
-  if (!ops(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const [u, sheet, assignment] = await Promise.all([
     prisma.user.findUnique({ where: { guideId } }),

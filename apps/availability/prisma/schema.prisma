@@ -15,6 +15,7 @@ enum Role {
   GUIDE
   OPERATOR
   ADMIN
+  ACCOUNTANT
 }
 
 enum AccountState {

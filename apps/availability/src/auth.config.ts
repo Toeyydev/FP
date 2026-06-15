@@ -26,7 +26,18 @@ export const authConfig = {
         p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/google/health" ||
         p.startsWith("/api/passkey");
       if (isPublic) return true;
-      if (auth?.user) return true;
+      if (auth?.user) {
+        // Accountant is a finance-only role: confine page navigation to the money
+        // screens (APIs enforce their own per-action role checks).
+        const role = (auth.user as { role?: string }).role;
+        if (role === "ACCOUNTANT" && !p.startsWith("/api") &&
+            !(p.startsWith("/payments") || p.startsWith("/tour-log") || p.startsWith("/job-sheet"))) {
+          const h = request.headers.get("x-forwarded-host") || request.headers.get("host") || request.nextUrl.host;
+          const pr = request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "") || "https";
+          return NextResponse.redirect(new URL("/payments", `${pr}://${h}`));
+        }
+        return true;
+      }
 
       // Build redirects from the REAL public host (the browser's Host header), so
       // the user is never bounced onto the Railway upstream hostname / AUTH_URL —

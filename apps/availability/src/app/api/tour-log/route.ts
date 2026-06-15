@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
+import { canViewFinance } from "@/lib/roles";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -12,7 +13,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 // guide, pax, check-in timeline (arrive/start/complete) and the end report.
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const sp = req.nextUrl.searchParams;
   const from = DATE.test(sp.get("from") || "") ? sp.get("from")! : bkk(-186); // default ~6 months back so imported past tours show
   const to = DATE.test(sp.get("to") || "") ? sp.get("to")! : bkk(0);

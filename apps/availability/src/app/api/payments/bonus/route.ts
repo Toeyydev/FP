@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { canViewFinance } from "@/lib/roles";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const PERIOD = /^\d{4}-\d{2}$/;
@@ -10,7 +11,7 @@ const PERIOD = /^\d{4}-\d{2}$/;
 // GET ?period=YYYY-MM — bonuses/adjustments for the month (with guide names).
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const period = req.nextUrl.searchParams.get("period") || "";
   if (!PERIOD.test(period)) return NextResponse.json({ error: "bad-period" }, { status: 400 });
   const [bonuses, guides] = await Promise.all([

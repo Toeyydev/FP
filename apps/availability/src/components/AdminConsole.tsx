@@ -27,7 +27,8 @@ export default function AdminConsole() {
   const [flash, setFlash] = useState<{ msg: string; copy?: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showOp, setShowOp] = useState(false);
-  const [opEmail, setOpEmail] = useState(""); const [opName, setOpName] = useState("");
+  const [opEmail, setOpEmail] = useState("");
+  const [opRole, setOpRole] = useState<"OPERATOR" | "ACCOUNTANT">("OPERATOR"); const [opName, setOpName] = useState("");
   const [linkSel, setLinkSel] = useState<Record<string, string>>({}); // requestId -> existing guide userId to link
   const [lineCodes, setLineCodes] = useState<Record<string, string>>({}); // userId -> freshly generated code
   const [copiedId, setCopiedId] = useState("");
@@ -122,7 +123,11 @@ export default function AdminConsole() {
               <div className="op-toolbar" style={{ borderRadius: 12, border: "1.5px solid var(--line)", marginBottom: 12 }}>
                 <input className="search" placeholder="operator@email" value={opEmail} onChange={(e) => setOpEmail(e.target.value)} />
                 <input className="search" placeholder="Display name" value={opName} onChange={(e) => setOpName(e.target.value)} />
-                <button className="btn sm primary" onClick={async () => { await act({ action: "inviteOperator", email: opEmail, displayName: opName }, opEmail); setOpEmail(""); setOpName(""); setShowOp(false); }}>{t("inviteOperatorBtn")}</button>
+                <select className="search" style={{ flex: "none", width: 160 }} value={opRole} onChange={(e) => setOpRole(e.target.value as "OPERATOR" | "ACCOUNTANT")} title="Operator = full ops; Accountant = finance read-only + PEAK refs">
+                  <option value="OPERATOR">Operator</option>
+                  <option value="ACCOUNTANT">Accountant</option>
+                </select>
+                <button className="btn sm primary" onClick={async () => { await act({ action: "inviteOperator", email: opEmail, displayName: opName, role: opRole }, opEmail); setOpEmail(""); setOpName(""); setOpRole("OPERATOR"); setShowOp(false); }}>Send invite</button>
               </div>
             )}
             <table className="acct-table">

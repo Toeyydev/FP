@@ -49,18 +49,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, code });
   }
 
-  // Invite a new operator (ADMIN only).
+  // Invite a new operator or accountant (ADMIN only). Accountant = freelance
+  // finance role: views the money screens + records PEAK refs, no operations.
   if (action === "inviteOperator") {
     if (actorRole !== "ADMIN") return NextResponse.json({ error: "admin-only" }, { status: 403 });
-    const schema = z.object({ email: z.string().email(), displayName: z.string().min(1).max(120) });
+    const schema = z.object({ email: z.string().email(), displayName: z.string().min(1).max(120), role: z.enum(["OPERATOR", "ACCOUNTANT"]).optional().default("OPERATOR") });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const email = parsed.data.email.toLowerCase().trim();
+    const newRole = parsed.data.role;
     if (await prisma.user.findUnique({ where: { email } })) return NextResponse.json({ error: "email-exists" }, { status: 400 });
     const user = await prisma.user.create({
-      data: { email, displayName: parsed.data.displayName.trim(), role: "OPERATOR", state: "INVITED" },
+      data: { email, displayName: parsed.data.displayName.trim(), role: newRole, state: "INVITED" },
     });
-    const { code } = await issueInvite({ userId: user.id, role: "OPERATOR", email, actorId, actorRole });
+    const { code } = await issueInvite({ userId: user.id, role: newRole, email, actorId, actorRole });
     return NextResponse.json({ ok: true, code });
   }
 

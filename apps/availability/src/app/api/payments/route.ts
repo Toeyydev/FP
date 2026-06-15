@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { canViewFinance } from "@/lib/roles";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const thisMonth = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
@@ -13,7 +14,7 @@ const bkkToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slic
 // sheets (net fee after WHT + reimbursable expenses), joined with paid status.
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const period = /^\d{4}-\d{2}$/.test(req.nextUrl.searchParams.get("period") || "") ? req.nextUrl.searchParams.get("period")! : thisMonth();
 
   // Cap the month at today so future (not-yet-done) tours don't count as earned.
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
 // combined monthly payout (one bank transfer covering several job sheets).
 export async function PATCH(req: NextRequest) {
   const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/), guideId: z.string().min(1), peakRef: z.string().max(60) }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { period, guideId } = parsed.data;

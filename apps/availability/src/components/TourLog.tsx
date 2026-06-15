@@ -8,7 +8,7 @@ type Row = { date: string; time: string; tour: string; guideId: string; slotIdx:
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
-export default function TourLog() {
+export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
@@ -34,7 +34,7 @@ export default function TourLog() {
   function Stars({ r }: { r: Row }) {
     if (!r.completed) return <span style={{ color: "var(--ink-soft)" }}>—</span>;
     return <span style={{ whiteSpace: "nowrap" }}>{[1, 2, 3, 4, 5].map((n) => (
-      <button key={n} onClick={() => rate(r, n)} title={`${n} star`} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 15, padding: 0, color: (r.stars ?? 0) >= n ? "#f59e0b" : "var(--line-strong)" }}>★</button>
+      <button key={n} onClick={() => canEdit && rate(r, n)} disabled={!canEdit} title={`${n} star`} style={{ border: "none", background: "none", cursor: canEdit ? "pointer" : "default", fontSize: 15, padding: 0, color: (r.stars ?? 0) >= n ? "#f59e0b" : "var(--line-strong)" }}>★</button>
     ))}</span>;
   }
 
@@ -77,7 +77,7 @@ export default function TourLog() {
                   ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${r.date}&slotIdx=${r.slotIdx}`} title="Open this tour's job sheet — full job details">📄 Job sheet</a>{" "}
-                    <button className="btn sm danger" title="Remove this tour log entry" onClick={() => removeRow(r)}>🗑</button>
+                    {canEdit && <button className="btn sm danger" title="Remove this tour log entry" onClick={() => removeRow(r)}>🗑</button>}
                   </td>
                 </tr>
               ))}

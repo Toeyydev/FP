@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, computeTotals, expenseAmount, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { canViewFinance } from "@/lib/roles";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
   const date = req.nextUrl.searchParams.get("date") || "";
   const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
-  if (!ops(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const isOps = ops(session.user.role);
 
   const [u, existing, assignment] = await Promise.all([

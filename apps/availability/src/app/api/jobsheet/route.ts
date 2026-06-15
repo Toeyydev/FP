@@ -7,6 +7,7 @@ import { linePush, lineEnabled } from "@/lib/line";
 import { SLOT_TIMES } from "@/lib/slots";
 import { decrypt } from "@/lib/crypto";
 import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, makeRef, computeTotals, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { canViewFinance } from "@/lib/roles";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest) {
 
   // Operators/admin edit any sheet; a guide may only VIEW their own.
   const isOps = ops(session.user.role);
-  if (!isOps && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canViewFinance(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const [header, existing, assignment] = await Promise.all([
     guideHeader(guideId),
