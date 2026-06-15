@@ -66,6 +66,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, code });
   }
 
+  // Change an existing account's role (ADMIN only). Used to make a self-signed-up
+  // user an Accountant or Operator. Cannot touch ADMIN accounts or escalate to ADMIN.
+  if (action === "setRole") {
+    if (actorRole !== "ADMIN") return NextResponse.json({ error: "admin-only" }, { status: 403 });
+    const parsed = z.object({ userId: z.string().min(1), role: z.enum(["GUIDE", "OPERATOR", "ACCOUNTANT"]) }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const user = await prisma.user.findUnique({ where: { id: parsed.data.userId }, select: { id: true, role: true } });
+    if (!user) return NextResponse.json({ error: "no-user" }, { status: 404 });
+    if (user.role === "ADMIN") return NextResponse.json({ error: "cannot-change-admin" }, { status: 400 });
+    await prisma.user.update({ where: { id: user.id }, data: { role: parsed.data.role } });
+    await audit({ actorId, actorRole, action: "account.role_changed", entityType: "User", entityId: user.id, detail: { from: user.role, to: parsed.data.role } });
+    return NextResponse.json({ ok: true });
+  }
+
   // Approve a pending sign-up and ACTIVATE it, auto-assigning the next available
   // guide id (first-come-first-serve). The guide never picks an id — it's internal.
   // An explicit guideUserId can still be passed to override the auto-pick.

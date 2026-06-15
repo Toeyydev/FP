@@ -58,7 +58,13 @@ export default function AdminConsole() {
     <tr key={a.id}>
       <td>{a.guideId && <span className="gid">{a.guideId}</span>}{a.displayName}</td>
       <td style={{ color: "var(--ink-soft)" }}>{a.email}</td>
-      <td>{a.role}</td>
+      <td>{data.isAdmin && a.role !== "ADMIN"
+        ? <select className="search" style={{ fontSize: 12, padding: "2px 6px", width: 130 }} value={a.role} onChange={(e) => act({ action: "setRole", userId: a.id, role: e.target.value }, `${a.displayName} → ${e.target.value}`)} title="Change this account's role">
+            <option value="GUIDE">GUIDE</option>
+            <option value="OPERATOR">OPERATOR</option>
+            <option value="ACCOUNTANT">ACCOUNTANT</option>
+          </select>
+        : a.role}</td>
       <td>{badge(a.state)}</td>
       <td style={{ textAlign: "right" }}>
         {a.role === "GUIDE" && <a className="btn sm" href={`/profile?userId=${a.id}`}>{t("details")}</a>}{" "}
