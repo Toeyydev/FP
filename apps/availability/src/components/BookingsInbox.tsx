@@ -45,6 +45,15 @@ export default function BookingsInbox() {
   const jsRef = useRef<HTMLInputElement>(null);
   // Import filled FOLKPATHS job-sheet .xlsx files (non-Bokun tours) — each becomes
   // a booking + assignment + job sheet. Supports selecting many at once.
+  async function archiveStale() {
+    if (!confirm("Archive all PAST unassigned bookings?\n\nThese are already-passed tours that were never assigned to a guide. They'll be hidden from the inbox and Reports. Upcoming and dispatched bookings are NOT touched.")) return;
+    setMsg("Archiving past unassigned bookings…");
+    const r = await fetch("/api/bookings/archive-stale", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsg("Archive failed."); return; }
+    setMsg(d.count ? `Archived ${d.count} past unassigned booking${d.count === 1 ? "" : "s"}.` : "Nothing to archive — no past unassigned bookings.");
+    await load();
+  }
   async function importJobSheets(files: FileList) {
     setMsg(`Importing ${files.length} job sheet${files.length === 1 ? "" : "s"}…`);
     try {
@@ -238,6 +247,7 @@ export default function BookingsInbox() {
             })()}
             <button className="btn sm" disabled={syncing} onClick={syncBokun}>{syncing ? "Syncing…" : "↺ Sync from Bokun"}</button>
             <button className="btn sm" onClick={() => jsRef.current?.click()} title="Upload filled FOLKPATHS job-sheet .xlsx files (non-Bokun tours)">📋 Import job sheets</button>
+            <button className="btn sm" onClick={archiveStale} title="Hide past unassigned bookings (already-passed tours that were never dispatched) from the inbox + reports">🗄 Archive past unassigned</button>
             <input ref={jsRef} type="file" accept=".xlsx" multiple hidden onChange={(e) => { const fl = e.target.files; if (fl && fl.length) importJobSheets(fl); e.target.value = ""; }} />
             <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add booking</button>
           </div>
