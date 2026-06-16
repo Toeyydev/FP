@@ -20,6 +20,8 @@ function StateTag({ a }: { a: Assignment }) {
 export default function Dispatch() {
   const [data, setData] = useState<{ assignments: Assignment[]; offers: Offer[] } | null>(null);
   const [tab, setTab] = useState<"assigned" | "offers">("assigned");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const load = useCallback(async () => {
     const r = await fetch("/api/offers", { cache: "no-store" });
@@ -59,6 +61,15 @@ export default function Dispatch() {
     if (!confirm(`Delete this job offer?\n${o.tourName} · ${o.date} ${o.time}\n\nIt's removed from every guide's notifications. Any tour already accepted stays assigned.`)) return;
     const r = await fetch("/api/offers", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: o.id }) });
     if (r.ok) await load();
+  }
+  // Bulk-remove the selected job offers in one action.
+  async function removeSelected() {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} job offer${ids.length === 1 ? "" : "s"}?\n\nThey're removed from every guide's notifications. Any tour already accepted stays assigned.`)) return;
+    await Promise.all(ids.map((id) => fetch("/api/offers", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) })));
+    setSelected(new Set());
+    await load();
   }
   async function removeAssignment(a: Assignment) {
     if (!confirm(`Remove this tour?\n${a.tourName} · ${a.date} ${a.time} · ${a.guideId} ${a.guideName}\n\nIts bookings go back to the inbox to re-dispatch.`)) return;
@@ -131,14 +142,15 @@ export default function Dispatch() {
         </section>
       ) : (
         <section className="panel">
-          <div className="panel-head"><h2>Job offers</h2><span className="hint">Live status of what you've sent out</span></div>
+          <div className="panel-head"><h2>Job offers</h2>{selected.size > 0 ? <button className="btn sm danger" onClick={removeSelected}>🗑 Remove selected ({selected.size})</button> : <span className="hint">Tick the tours to remove several at once</span>}</div>
           <div style={{ padding: 14 }}>
             {data.offers.length === 0 ? <div className="op-empty">No offers sent yet. Send one from the board or the bookings inbox.</div> : (
               <table className="acct-table">
-                <thead><tr><th>When</th><th>Tour</th><th>Status</th><th>Responses</th><th></th></tr></thead>
+                <thead><tr><th style={{ width: 28 }}><input type="checkbox" title="Select all" checked={data.offers.length > 0 && selected.size === data.offers.length} onChange={(e) => setSelected(e.target.checked ? new Set(data.offers.map((o) => o.id)) : new Set())} /></th><th>When</th><th>Tour</th><th>Status</th><th>Responses</th><th></th></tr></thead>
                 <tbody>
                   {data.offers.map((o) => (
                     <tr key={o.id}>
+                      <td><input type="checkbox" checked={selected.has(o.id)} onChange={() => toggleSel(o.id)} /></td>
                       <td style={{ whiteSpace: "nowrap" }}>{fmt(o.date)}<br /><small style={{ color: "var(--ink-soft)" }}>{o.time}</small></td>
                       <td>{o.tourName}{o.pax != null ? <small style={{ color: "var(--ink-soft)" }}> · {o.pax} pax</small> : null}</td>
                       <td>{badge(o.status)}{o.assignedGuide && <div style={{ fontSize: 12, marginTop: 3, color: "var(--green)", fontWeight: 600 }}>{o.assignedGuide}</div>}</td>
