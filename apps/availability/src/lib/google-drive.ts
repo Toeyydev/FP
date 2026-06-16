@@ -10,15 +10,20 @@ export const googleDriveEnabled = googleEnabled;
 
 // Every job sheet and e-slip belongs in ONE place — the Folkpaths company Drive —
 // no matter which operator is signed in. Resolve that single account's refresh
-// token here so all Drive saves land in the same Drive (never an operator's
-// personal one). Pin the company account with FOLKPATHS_DRIVE_EMAIL; otherwise
-// we use the earliest connection, which in practice is the owner connecting the
-// Folkpaths account. Returns null when no Google account is connected yet.
-export async function folkpathsDriveToken(): Promise<string | null> {
+// token here so all Drive saves land in the same Drive. Resolution order:
+//   1. the account pinned by FOLKPATHS_DRIVE_EMAIL (the canonical company Drive),
+//   2. the acting operator's OWN connection (preserves the behaviour that worked
+//      before centralising — never a regression),
+//   3. the earliest connection (typically the owner's Folkpaths account).
+// Returns null only when no Google account is connected at all.
+export async function folkpathsDriveToken(actingUserId?: string): Promise<string | null> {
   const want = process.env.FOLKPATHS_DRIVE_EMAIL?.trim().toLowerCase();
   const conns = await prisma.googleCalendar.findMany({ orderBy: { connectedAt: "asc" } }).catch(() => []);
   if (!conns.length) return null;
-  const chosen = (want && conns.find((c) => c.email?.toLowerCase() === want)) || conns[0];
+  const chosen =
+    (want && conns.find((c) => c.email?.toLowerCase() === want)) ||
+    (actingUserId && conns.find((c) => c.userId === actingUserId)) ||
+    conns[0];
   return chosen.refreshToken ? decrypt(chosen.refreshToken) : null;
 }
 

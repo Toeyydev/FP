@@ -23,6 +23,7 @@ export default function BookingsInbox() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [tours, setTours] = useState<Tour[]>([]);
   const [msg, setMsg] = useState("");
+  const [importing, setImporting] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [dur, setDur] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
@@ -55,6 +56,7 @@ export default function BookingsInbox() {
     await load();
   }
   async function importJobSheets(files: FileList) {
+    setImporting(true);
     setMsg(`Importing ${files.length} job sheet${files.length === 1 ? "" : "s"}…`);
     try {
       const fd = new FormData();
@@ -66,6 +68,7 @@ export default function BookingsInbox() {
       setMsg(`Job sheets: ${d.imported} imported${d.failed ? `, ${d.failed} failed` : ""}. ` + lines.join(" | "));
       await load();
     } catch { setMsg("Job-sheet import failed — network error."); }
+    finally { setImporting(false); }
   }
 
   // Live-sync status: has Bokun's webhook fired recently? (PII-free health probe.)
@@ -246,7 +249,7 @@ export default function BookingsInbox() {
               );
             })()}
             <button className="btn sm" disabled={syncing} onClick={syncBokun}>{syncing ? "Syncing…" : "↺ Sync from Bokun"}</button>
-            <button className="btn sm" onClick={() => jsRef.current?.click()} title="Upload filled FOLKPATHS job-sheet .xlsx files (non-Bokun tours)">📋 Import job sheets</button>
+            <button className="btn sm" disabled={importing} onClick={() => jsRef.current?.click()} title="Upload one or more filled FOLKPATHS job-sheet .xlsx files at once (non-Bokun tours) — saved immediately, no refresh needed">{importing ? "Importing…" : "📋 Import job sheets"}</button>
             <button className="btn sm" onClick={archiveStale} title="Hide past unassigned bookings (already-passed tours that were never dispatched) from the inbox + reports">🗄 Archive past unassigned</button>
             <input ref={jsRef} type="file" accept=".xlsx" multiple hidden onChange={(e) => { const fl = e.target.files; if (fl && fl.length) importJobSheets(fl); e.target.value = ""; }} />
             <button className="btn sm" onClick={() => setShowAdd((s) => !s)}>+ Add booking</button>

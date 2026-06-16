@@ -27,6 +27,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status }) });
     if (r.ok) load(period);
   }
+  // Remove a single uploaded job sheet + its tour records (operators only).
+  async function removeJob(j: Job, guideId: string, guide: string) {
+    if (!confirm(`Remove this job sheet?\n${guide} · ${dShort(j.date)} ${SLOTS[j.slotIdx]?.start} · ${j.tour}\n\nDeletes the job sheet, assignment, payment and any check-in/report for this tour. Cannot be undone.`)) return;
+    const r = await fetch("/api/jobsheet", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx }) });
+    if (r.ok) load(period);
+  }
   // Save the PEAK accounting ref (EXP-…) for a guide's combined monthly payout.
   async function savePeakRef(guideId: string, peakRef: string) {
     await fetch("/api/payments", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, peakRef }) });
@@ -166,6 +172,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                         {canEdit && (j.paid
                           ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
                           : <button className="btn sm primary" onClick={() => setJobPaid(j, r.guideId, "PAID")}>Mark paid</button>)}
+                        {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>🗑</button>}
                       </div>
                     ))}
                   </td></tr>

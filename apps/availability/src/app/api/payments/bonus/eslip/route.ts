@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
   const bonus = await prisma.bonus.findUnique({ where: { id: bonusId } });
   if (!bonus) return NextResponse.json({ error: "not-found" }, { status: 404 });
-  const refreshToken = await folkpathsDriveToken();
+  const refreshToken = await folkpathsDriveToken(session!.user!.id ?? undefined);
   if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
 
   const u = await prisma.user.findFirst({ where: { guideId: bonus.guideId }, select: { displayName: true, fullName: true } });

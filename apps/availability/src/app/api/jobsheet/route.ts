@@ -244,3 +244,30 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true, count: guides.length, lineSent, lineSkipped });
 }
+
+
+// DELETE { guideId, date, slotIdx } — operator/admin only. Remove a single uploaded
+// job sheet and the tour records tied to that slot (assignment, payment, check-ins,
+// report, rating, and any manually-imported bookings for it). For undoing a bad
+// import or a one-off tour from the Payments screen. Real (Bokun) bookings are kept.
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const body = await req.json().catch(() => null);
+  const guideId = String(body?.guideId || "");
+  const date = String(body?.date || "");
+  const slotIdx = Number(body?.slotIdx);
+  if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const where = { guideId, date, slotIdx };
+  await prisma.$transaction([
+    prisma.checkin.deleteMany({ where }),
+    prisma.tourReport.deleteMany({ where }),
+    prisma.guideRating.deleteMany({ where }),
+    prisma.tourPayment.deleteMany({ where }),
+    prisma.assignment.deleteMany({ where }),
+    prisma.jobSheet.deleteMany({ where }),
+    prisma.booking.deleteMany({ where: { date, slotIdx, source: "manual" } }),
+  ]);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx } });
+  return NextResponse.json({ ok: true });
+}

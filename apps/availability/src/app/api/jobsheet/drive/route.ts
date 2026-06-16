@@ -15,7 +15,7 @@ const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "
 export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const connected = googleDriveEnabled ? !!(await folkpathsDriveToken()) : false;
+  const connected = googleDriveEnabled ? !!(await folkpathsDriveToken(session?.user?.id)) : false;
   return NextResponse.json({ enabled: googleDriveEnabled, connected });
 }
 
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   // Drive is optional here: marking the tour PAID from its e-slip must succeed even
   // if Drive isn't configured/connected. We attempt the Drive copy only when we can.
   // The copy always goes to the shared Folkpaths Drive, whoever the operator is.
-  const refreshToken = googleDriveEnabled ? await folkpathsDriveToken() : null;
+  const refreshToken = googleDriveEnabled ? await folkpathsDriveToken(session?.user?.id) : null;
 
   const body = await req.json().catch(() => null);
   const guideId = String(body?.guideId || "");

@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   const files = ((form?.getAll("file") ?? []) as unknown[]).filter((f) => !!f && typeof (f as Up).arrayBuffer === "function") as Up[];
   if (!files.length) return NextResponse.json({ error: "no-file", hint: "Pick one or more .xlsx job sheets." }, { status: 400 });
 
-  const results: { file: string; ok: boolean; detail: string }[] = [];
+  const results: { file: string; ok: boolean; detail: string; guideId?: string; date?: string; slotIdx?: number; ref?: string }[] = [];
   for (const file of files) {
     try {
       const fname = file.name || "file";
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
 
       await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length } });
       const parsedGuide = [p.guideName && "name", p.taxId && "tax", p.address && "addr", p.tel && "tel"].filter(Boolean).join("+") || "none-found";
-      results.push({ file: fname, ok: true, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
+      results.push({ file: fname, ok: true, guideId, date, slotIdx, ref, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
     } catch (e) {
       results.push({ file: file.name || "file", ok: false, detail: (e as Error).message.slice(0, 160) });
     }

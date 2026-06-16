@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   if (!/^\d{4}-\d{2}$/.test(period) || !guideId || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
 
-  const refreshToken = await folkpathsDriveToken();
+  const refreshToken = await folkpathsDriveToken(session!.user!.id ?? undefined);
   if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
 
   const u = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
