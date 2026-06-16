@@ -803,3 +803,7 @@ body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
   --primary: var(--day-deep);     /* buttons, brand accents (white text reads) */
   --accent:  var(--day-deep);
 }
+
+/* Payments dashboard KPI cards */
+.pay-kpi { background: var(--grey-bg, #f6f5f3); border: 1px solid var(--line, #e7e4e0); border-radius: 12px; padding: 12px 14px; }
+.pay-kpi-l { font-size: 12px; color: var(--ink-soft, #8a8378); font-weight: 600; margin-top: 2px; }

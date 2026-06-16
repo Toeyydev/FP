@@ -104,6 +104,15 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const ql = q.trim().toLowerCase();
   const visible = rows.filter((r) => (statusFilter === "all" || r.status === statusFilter) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)));
   const vTotals = visible.reduce((a, r) => ({ tours: a.tours + r.tours, netFee: a.netFee + r.netFee, expenses: a.expenses + r.expenses, payout: a.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
+  // Month-overview figures for the dashboard band (whole month, not the filtered view).
+  const allJobs = rows.flatMap((r) => r.jobs);
+  const paidAmt = allJobs.filter((j) => j.paid).reduce((sum, j) => sum + (j.amount || 0), 0);
+  const unpaidJobs = allJobs.filter((j) => !j.paid);
+  const outstanding = unpaidJobs.reduce((sum, j) => sum + (j.amount || 0), 0);
+  const paidFrac = totals.payout > 0 ? paidAmt / totals.payout : 0;
+  const DC = 2 * Math.PI * 42; // donut circumference (r=42)
+  const topGuides = [...rows].sort((a, b) => b.payout - a.payout).slice(0, 8);
+  const maxPayout = Math.max(1, ...topGuides.map((g) => g.payout));
 
   return (
     <div className="wrap">
@@ -111,6 +120,46 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       <div id="appBar"><div className="subtabs"><span className="subtab active">Payments</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
+
+      <section className="panel" style={{ marginBottom: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12, padding: 14 }}>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(totals.payout)}</div><div className="pay-kpi-l">Total payout</div></div>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: "var(--green)" }}>{thb(paidAmt)}</div><div className="pay-kpi-l">Paid</div></div>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: outstanding > 0 ? "#b45309" : "var(--ink-soft)" }}>{thb(outstanding)}</div><div className="pay-kpi-l">Outstanding{unpaidJobs.length ? ` · ${unpaidJobs.length} job${unpaidJobs.length === 1 ? "" : "s"}` : ""}</div></div>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{rows.length}</div><div className="pay-kpi-l">Guides</div></div>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{totals.tours}</div><div className="pay-kpi-l">Job sheets</div></div>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(totals.expenses)}</div><div className="pay-kpi-l">Expenses</div></div>
+          {bonuses.total > 0 && <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(bonuses.total)}</div><div className="pay-kpi-l">Bonuses</div></div>}
+        </div>
+        {rows.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(150px, auto) 1fr", gap: 22, padding: "4px 16px 18px", alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <svg viewBox="0 0 100 100" width="124" height="124" role="img" aria-label="Paid vs outstanding">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#e8b06b" strokeWidth="15" />
+                <circle cx="50" cy="50" r="42" fill="none" stroke="var(--green, #1a7f37)" strokeWidth="15" strokeLinecap="round" strokeDasharray={`${paidFrac * DC} ${DC}`} transform="rotate(-90 50 50)" />
+                <text x="50" y="49" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--ink, #222)">{Math.round(paidFrac * 100)}%</text>
+                <text x="50" y="63" textAnchor="middle" fontSize="8" fill="var(--ink-soft, #888)">paid</text>
+              </svg>
+              <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+                <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "var(--green)" }}>●</span> Paid {thb(paidAmt)}</span>
+                <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "#e8b06b" }}>●</span> Outstanding {thb(outstanding)}</span>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink-soft)", margin: "0 0 8px" }}>Payout by guide</div>
+              {topGuides.map((g) => (
+                <div key={g.guideId} style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", fontSize: 12.5 }}>
+                  <span style={{ width: 100, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={g.guide}>{g.guide}</span>
+                  <div style={{ flex: 1, background: "var(--line, #eee)", borderRadius: 6, height: 14, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.max(2, (g.payout / maxPayout) * 100)}%`, background: "var(--primary, #7e3a2c)", height: "100%", borderRadius: 6 }} />
+                  </div>
+                  <span style={{ width: 84, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{thb(g.payout)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
 
       <section className="panel">
         <div className="op-toolbar" style={{ gap: 10 }}>
