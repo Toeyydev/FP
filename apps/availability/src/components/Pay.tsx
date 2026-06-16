@@ -58,6 +58,22 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
                 <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-0.01em" }}>{mLabelFull(month)}</span>
                 <span style={{ fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{mrows.length} tour{mrows.length === 1 ? "" : "s"} · {thb(mrows.filter((r) => r.status !== "CANCELLED").reduce((sum, r) => sum + (r.amount || 0), 0))}</span>
               </div>
+              {(() => {
+                const live = mrows.filter((r) => r.status !== "CANCELLED");
+                const pax = live.reduce((sum, r) => sum + (r.pax ?? 0), 0);
+                const fee = live.reduce((sum, r) => sum + (r.fee || 0), 0);
+                const exp = live.reduce((sum, r) => sum + (r.expenses || 0), 0);
+                const tot = live.reduce((sum, r) => sum + (r.amount || 0), 0);
+                return (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "baseline", margin: "0 0 14px", padding: "10px 12px", background: "var(--grey-bg, #f6f5f3)", borderRadius: 10, fontSize: 12.5 }}>
+                    <span><b style={{ fontSize: 16 }}>{live.length}</b> job{live.length === 1 ? "" : "s"}</span>
+                    <span><b style={{ fontSize: 16 }}>{pax}</b> pax hosted</span>
+                    <span>Guide fee <b>{thb(fee)}</b></span>
+                    <span>Expenses <b>{thb(exp)}</b></span>
+                    <span style={{ marginLeft: "auto" }}>Total <b style={{ fontSize: 16, color: "var(--green)" }}>{thb(tot)}</b></span>
+                  </div>
+                );
+              })()}
               {GROUPS.map((g) => {
                 const items = mrows.filter((r) => r.status === g.key);
                 if (!items.length) return null;
