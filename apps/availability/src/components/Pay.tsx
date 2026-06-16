@@ -23,6 +23,7 @@ function byMonthDesc(rows: Row[]): [string, Row[]][] {
 export default function Pay({ isOperator }: { isOperator: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ pending: 0, approved: 0, paid: 0 });
+  const [monthFilter, setMonthFilter] = useState("all");
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/pay${isOperator ? "?view=ops" : ""}`, { cache: "no-store" });
@@ -50,9 +51,13 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
           <div className="stat"><b style={{ color: "#b45309" }}>{thb(totals.pending)}</b><span>Pending</span></div>
           <div className="stat"><b style={{ color: "var(--assign)" }}>{thb(totals.approved)}</b><span>Approved</span></div>
           <div className="stat"><b style={{ color: "var(--green)" }}>{thb(totals.paid)}</b><span>Paid</span></div>
+          <select className="search" style={{ flex: "none", width: 170, marginLeft: "auto" }} value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} title="Filter by month">
+            <option value="all">All months</option>
+            {byMonthDesc(rows).map(([m]) => <option key={m} value={m}>{mLabelFull(m)}</option>)}
+          </select>
         </div>
         <div style={{ padding: 14 }}>
-          {rows.length === 0 ? <div className="op-empty">No tours yet.</div> : byMonthDesc(rows).map(([month, mrows]) => (
+          {rows.length === 0 ? <div className="op-empty">No tours yet.</div> : byMonthDesc(rows).filter(([m]) => monthFilter === "all" || m === monthFilter).map(([month, mrows]) => (
             <div key={month} style={{ marginBottom: 24 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, borderBottom: "2px solid var(--line)", paddingBottom: 6, marginBottom: 12 }}>
                 <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-0.01em" }}>{mLabelFull(month)}</span>
