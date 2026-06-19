@@ -124,6 +124,7 @@ export default function BookingsInbox() {
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
+    if ((pax ?? 0) > 10 && !confirm(`${pax} pax is over the 10-pax cap.\nAssign all of them to ${guideId} anyway?`)) return;
     const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
     const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
     const d = await r.json().catch(() => ({}));
@@ -211,7 +212,7 @@ export default function BookingsInbox() {
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     const durMin = dur[key] && Number(dur[key]) > 0 ? Math.round(Number(dur[key]) * 60) : undefined;
     const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
-    const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx, pax: pax && pax <= 10 ? pax : undefined, durationMin: durMin, note, ...(guideId ? { guideId } : {}) }) });
+    const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx, pax: pax && pax <= 50 ? pax : undefined, durationMin: durMin, note, ...(guideId ? { guideId } : {}) }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { setMsg("Offer failed."); return; }
     if (!d.candidates) { setMsg(guideId ? "⚠️ That guide isn\u2019t available for this slot." : "⚠️ No available guides for that slot."); return; }
@@ -403,14 +404,13 @@ export default function BookingsInbox() {
                               <option value="">Offer to all available</option>
                               {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
                             </select>
-                            {pax > 10
-                              ? <button className="btn sm primary" onClick={() => openSplit(items)}>Split across guides</button>
-                              : grpGuide[key]
-                                ? <>
-                                    <button className="btn sm primary" onClick={() => offerGroup(key, items, grpGuide[key])}>📨 Offer to guide</button>
-                                    <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>Assign now</button>
-                                  </>
-                                : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
+                            {grpGuide[key]
+                              ? <>
+                                  <button className="btn sm primary" onClick={() => offerGroup(key, items, grpGuide[key])}>📨 Offer to guide</button>
+                                  <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > 10 ? "Assign all (over cap)" : "Assign now"}</button>
+                                </>
+                              : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
+                            {pax > 10 && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
                             <button className="btn sm danger" title="Delete this job and its bookings" onClick={() => deleteGroup(items)}>🗑</button>
                           </div>
                         );
