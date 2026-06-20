@@ -27,6 +27,17 @@ export async function GET(req: NextRequest) {
   const ratings = await prisma.guideRating.findMany({ where: { date: { gte: from, lte: to } }, select: { guideId: true, date: true, slotIdx: true, stars: true } });
   const rate = new Map(ratings.map((r) => [`${r.guideId}|${r.date}|${r.slotIdx}`, r.stars]));
 
+  // Which specific bookings the guide flagged as no-shows, so the operator sees WHO
+  // (not just a count). Keyed by date|slot; matched to the guide for split slots.
+  const nsRows = await prisma.booking.findMany({ where: { date: { gte: from, lte: to }, noShow: true }, select: { date: true, slotIdx: true, assignedGuideId: true, customerName: true, externalRef: true, confirmationCode: true, pax: true } });
+  const nsMap = new Map<string, { name: string; ref: string; pax: number; g: string | null }[]>();
+  for (const b of nsRows) {
+    if (b.slotIdx == null || !b.date) continue;
+    const k = `${b.date}|${b.slotIdx}`;
+    const list = nsMap.get(k) ?? []; list.push({ name: b.customerName || b.externalRef || b.confirmationCode || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, g: b.assignedGuideId ?? null });
+    nsMap.set(k, list);
+  }
+
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
   const hhmm = (d: Date) => new Date(d).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
   const ck: Record<string, Record<string, string>> = {};
@@ -48,6 +59,7 @@ export async function GET(req: NextRequest) {
       arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null, offSiteM: offSite[k] ?? null,
       stars: rate.get(k) ?? null, completed: !!t.COMPLETE,
       report: r ? { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments } : null,
+      noShows: (nsMap.get(`${a.date}|${a.slotIdx}`) ?? []).filter((n) => !n.g || n.g === a.guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax })),
     };
   });
   return NextResponse.json({ from, to, rows });

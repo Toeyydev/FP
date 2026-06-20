@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
-type Row = { date: string; time: string; tour: string; guideId: string; slotIdx: number; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; stars: number | null; completed: boolean; report: Report | null };
+type Row = { date: string; time: string; tour: string; guideId: string; slotIdx: number; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; stars: number | null; completed: boolean; report: Report | null; noShows?: { name: string; ref: string; pax: number }[] };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -73,6 +73,15 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
                       {r.report.noShow > 0 ? ` · ${r.report.noShow} no-show` : ""}
                       {r.report.leftEarly > 0 ? ` · ${r.report.leftEarly} left` : ""}
                       {r.report.comments ? <div style={{ color: "var(--danger)" }}>⚠ {r.report.comments}</div> : null}
+                      {r.noShows && r.noShows.length > 0 && (
+                        <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                          {r.noShows.map((n, i) => (
+                            <span key={i} title="Reported no-show" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: "var(--danger)", background: "var(--danger-bg)", border: "1px solid var(--danger-line)", borderRadius: 7, padding: "2px 7px" }}>
+                              ✗ {n.name}{n.ref ? ` · ${n.ref}` : ""}{n.pax ? ` · ${n.pax} pax` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </>
                   ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
