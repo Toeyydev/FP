@@ -13,9 +13,10 @@ vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
 
 import { autoAttachLate } from "@/lib/booking-import";
+const FUTURE = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10); // keep test tours in the future (past-tour alerts are suppressed)
 
 const booking = (over: Partial<Parameters<typeof autoAttachLate>[0]> = {}) => ({
-  id: "bk1", tourId: "t1", date: "2026-06-13", slotIdx: 5, pax: 2,
+  id: "bk1", tourId: "t1", date: FUTURE, slotIdx: 5, pax: 2,
   customerName: "Anna P", confirmationCode: "ABC123", status: "PENDING", ...over,
 });
 
@@ -35,7 +36,7 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
   });
 
   it("auto-adds to the guide when total stays within 10", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 4 }]);
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
     await autoAttachLate(booking({ pax: 2 })); // 4 + 2 = 6
 
     expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
@@ -46,13 +47,13 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
   });
 
   it("works for a reserved host with no bookings yet (pax 0/null)", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: null }]);
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: null }]);
     await autoAttachLate(booking({ pax: 3 }));
     expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 3 } }));
   });
 
   it("holds and alerts when it would exceed 10", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 9 }]);
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 9 }]);
     await autoAttachLate(booking({ pax: 4 })); // 9 + 4 = 13
 
     expect(prismaMock.booking.update).not.toHaveBeenCalled();
@@ -62,8 +63,8 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
 
   it("alerts to assign manually when the slot is split across guides", async () => {
     prismaMock.assignment.findMany.mockResolvedValue([
-      { guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 6 },
-      { guideId: "G-007", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 4 },
+      { guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 6 },
+      { guideId: "G-007", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 },
     ]);
     await autoAttachLate(booking({ pax: 2 }));
     expect(prismaMock.booking.update).not.toHaveBeenCalled();
@@ -78,7 +79,7 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
   });
 
   it("still attaches an UNMAPPED booking (no tourId) — the slot's guide owns it", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: "2026-06-13", slotIdx: 5, tourId: "t1", pax: 4 }]);
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
     await autoAttachLate(booking({ tourId: null, pax: 2 }));
     expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
     expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 6 } }));

@@ -10,12 +10,17 @@ export type ImportResult = "created" | "updated" | "skipped";
 
 const CAP = 10; // max pax per guide / job
 
-export async function notifyOps(message: string, title: string, body: string) {
+export async function notifyOps(message: string, title: string, body: string, opts?: { push?: boolean; date?: string }) {
+  // A finished job shouldn't alert: skip entirely if the tour date is in the past.
+  if (opts?.date) { const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); if (opts.date < today) return; }
   try {
     const opsUsers = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
     for (const o of opsUsers) {
+      // Always record it in the in-app inbox; only PUSH (phone/browser ping) for
+      // actionable alerts. Routine auto-handled events pass { push: false } so the
+      // operator isn't pinged constantly.
       await prisma.notification.create({ data: { userId: o.id, kind: "late-booking", message } });
-      await sendPushToUser(o.id, { title, body, url: "/", tag: "late-booking" });
+      if (opts?.push !== false) await sendPushToUser(o.id, { title, body, url: "/", tag: "late-booking" });
     }
   } catch { /* alerts are best-effort; never block import */ }
 }
@@ -67,7 +72,7 @@ async function autoRemoveNameDuplicate(rec: { id: string; customerName: string |
     });
     if (!others.some((o) => (o.customerName || "").trim().toLowerCase() === name)) return false;
     await prisma.booking.update({ where: { id: rec.id }, data: { status: "IGNORED", notes: "Auto-removed: same name already booked on this slot" } });
-    await notifyOps(`Removed a duplicate booking for "${rec.customerName}" on ${rec.date} — that name was already booked on this slot.`, "Duplicate removed", `${rec.customerName} · ${rec.date}`);
+    await notifyOps(`Removed a duplicate booking for "${rec.customerName}" on ${rec.date} — that name was already booked on this slot.`, "Duplicate removed", `${rec.customerName} · ${rec.date}`, { push: false, date: rec.date });
     return true;
   } catch { return false; }
 }
@@ -85,14 +90,14 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
     const ref = b.confirmationCode || b.customerName || "a new booking";
     if (assigns.length > 1) {
-      await notifyOps(`Booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides. Assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`);
+      await notifyOps(`Booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides. Assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`, { date: b.date });
       return false;
     }
     const a = assigns[0];
     const addPax = b.pax ?? 0;
     const newTotal = (a.pax ?? 0) + addPax;
     if (newTotal > CAP) {
-      await notifyOps(`Booking ${ref} (+${addPax}) for ${b.date} puts ${a.guideId} over ${CAP} guests. Held — split it across guides.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`);
+      await notifyOps(`Booking ${ref} (+${addPax}) for ${b.date} puts ${a.guideId} over ${CAP} guests. Held — split it across guides.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`, { date: b.date });
       return false;
     }
     const key = { guideId_date_slotIdx: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx } };
@@ -109,7 +114,7 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
       update: { bookings: list as object },
     });
     await notifyGuide(a.guideId, `A booking was added to your ${b.date} tour. You now have ${newTotal} guests.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
-    await notifyOps(`Booking ${ref} (+${addPax}) added to ${a.guideId}'s job on ${b.date} — now ${newTotal} guests.`, "Booking combined into a job", `${ref} → ${a.guideId} · ${b.date} · ${newTotal} pax`);
+    await notifyOps(`Booking ${ref} (+${addPax}) added to ${a.guideId}'s job on ${b.date} — now ${newTotal} guests.`, "Booking combined into a job", `${ref} → ${a.guideId} · ${b.date} · ${newTotal} pax`, { push: false, date: b.date });
     return true;
   } catch { return false; /* import must succeed regardless of attach errors */ }
 }
@@ -182,7 +187,7 @@ async function onBookingCancelled(b: { date: string | null; slotIdx: number | nu
         ? `Your ${b.date} tour was cancelled \u2014 all guests cancelled. It has been removed from your calendar.`
         : `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`;
       await notifyGuide(a.guideId, msg, sum === 0 ? "Tour cancelled" : "A guest cancelled", `${b.date} \u00b7 ${sum} guests`);
-      await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.${sum === 0 ? " Calendar event removed." : ""}`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`);
+      await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.${sum === 0 ? " Calendar event removed." : ""}`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`, { push: false, date: b.date });
     }
   } catch { /* real-time alert + calendar sync are best-effort; the cancellation is already saved */ }
 }
