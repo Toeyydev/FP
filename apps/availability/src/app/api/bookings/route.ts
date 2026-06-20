@@ -3,7 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { SLOT_COUNT } from "@/lib/slots";
+import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { productKey } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
@@ -102,7 +102,12 @@ export async function GET(req: NextRequest) {
   const aName = new Map(aUsers.map((g) => [g.guideId, g.displayName]));
   const aMap = new Map(aRows.map((a) => [`${a.date}|${a.slotIdx}`, a.guideId]));
   const withGuide = bookings.map((b) => { const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined; return { ...b, guideId: gid ?? null, guide: gid ? (aName.get(gid) ?? gid) : null }; });
-  return NextResponse.json({ bookings: withGuide, tours });
+  // "Incoming" = tours still to come: drop today's slots whose start time has already
+  // passed (e.g. this morning's 08:30 once it's run). Future + undated bookings stay.
+  const nowMin = (() => { const d = new Date(Date.now() + 7 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes(); })();
+  const slotMin = (i: number | null) => { const t = i != null ? SLOT_TIMES[i] : undefined; if (!t) return 24 * 60; const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+  const upcoming = withGuide.filter((b) => !(b.date === today && slotMin(b.slotIdx) <= nowMin));
+  return NextResponse.json({ bookings: upcoming, tours });
 }
 
 export async function POST(req: NextRequest) {
