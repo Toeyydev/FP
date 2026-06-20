@@ -82,7 +82,11 @@ export function parseBokun(raw: unknown): ParsedBooking {
   // Bokun encodes the local wall-clock start time as a UTC epoch — read it back
   // with UTC so 08:30 stays 08:30. Prefer the product-invoice timestamp (has the
   // time); fall back to the activity date.
-  const startMs = pi.timestamp ?? abInv.timestamp ?? ab.startDate ?? ab.date ?? deepFind(raw, ["startDate", "startDateTime", "date"]);
+  // Prefer any field that carries the TIME (product-invoice timestamp /
+  // startDateTime) over date-only fields — startDate is midnight, so reading it
+  // first dropped every booking-search tour into 00:00 -> the 08:30 slot.
+  const startRaw = pi.timestamp ?? abInv.timestamp ?? deepFind(raw, ["startDateTime"]) ?? ab.startDate ?? ab.date ?? deepFind(raw, ["startDate", "date"]);
+  const startMs = typeof startRaw === "string" && /^\d{10,}$/.test(startRaw) ? Number(startRaw) : startRaw;
   let date: string | undefined, startTime: string | undefined;
   if (typeof startMs === "number") {
     const iso = new Date(startMs).toISOString();
