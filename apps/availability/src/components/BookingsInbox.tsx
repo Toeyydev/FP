@@ -11,6 +11,7 @@ type Booking = {
   id: string; source: string; confirmationCode: string | null; productName: string | null;
   tourId: string | null; date: string | null; startTime: string | null; slotIdx: number | null;
   pax: number | null; customerName: string | null; status: string;
+  guideId?: string | null; guide?: string | null;
 };
 type Tour = { id: string; name: string; time: string };
 
@@ -383,8 +384,10 @@ export default function BookingsInbox() {
                         const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
                         const slot = SLOTS[slotIdx];
                         const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0);
+                        const assignedGuide = items.find((b) => b.guideId)?.guideId ?? null;
+                        const assignedName = items.find((b) => b.guide)?.guide ?? null;
                         return (
-                          <div key={key} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", background: "#fff", flexWrap: "wrap", alignItems: "center" }}>
+                          <div key={key} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", background: assignedGuide ? "var(--grey-bg, #f6f5f3)" : "#fff", flexWrap: "wrap", alignItems: "center" }}>
                             <div style={{ flex: 1, minWidth: 240 }}>
                               <b>{slot?.start} · {tourName(tourId)}</b>
                               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 3 }}>
@@ -399,18 +402,24 @@ export default function BookingsInbox() {
                                 ))}
                               </div>
                             </div>
-                            <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
-                            <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
-                              <option value="">Offer to all available</option>
-                              {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
-                            </select>
-                            {grpGuide[key]
-                              ? <>
-                                  <button className="btn sm primary" onClick={() => offerGroup(key, items, grpGuide[key])}>📨 Offer to guide</button>
-                                  <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > 10 ? "Assign all (over cap)" : "Assign now"}</button>
-                                </>
-                              : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
-                            {pax > 10 && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
+                            {assignedGuide ? (
+                              <span className="badge active" title="This slot is already dispatched to a guide" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700 }}>✓ Assigned to <span className="gid">{assignedGuide}</span>{assignedName && assignedName !== assignedGuide ? ` · ${assignedName}` : ""}</span>
+                            ) : (
+                              <>
+                                <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
+                                <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
+                                  <option value="">Offer to all available</option>
+                                  {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
+                                </select>
+                                {grpGuide[key]
+                                  ? <>
+                                      <button className="btn sm primary" onClick={() => offerGroup(key, items, grpGuide[key])}>📨 Offer to guide</button>
+                                      <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > 10 ? "Assign all (over cap)" : "Assign now"}</button>
+                                    </>
+                                  : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
+                                {pax > 10 && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
+                              </>
+                            )}
                             <button className="btn sm danger" title="Delete this job and its bookings" onClick={() => deleteGroup(items)}>🗑</button>
                           </div>
                         );
