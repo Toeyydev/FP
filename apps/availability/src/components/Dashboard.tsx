@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import LiveSyncBadge from "@/components/LiveSyncBadge";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
 type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null };
@@ -41,7 +42,7 @@ export default function Dashboard() {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Dashboard</span></div>
-        <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
+        <div className="nav"><LiveSyncBadge /><a className="btn sm" href="/">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
 
       {!d ? (
