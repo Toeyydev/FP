@@ -11,9 +11,6 @@ export async function GET(req: NextRequest) {
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || req.nextUrl.host;
   const proto = req.headers.get("x-forwarded-proto") || "https";
   const base = `${proto}://${host}`;
-  if (req.nextUrl.searchParams.get("debug") === "1") {
-    return NextResponse.json({ redirectUri: `${base}/api/line/login/callback`, host, proto, xForwardedHost: req.headers.get("x-forwarded-host"), rawHost: req.headers.get("host"), enabled: lineLoginEnabled });
-  }
   const session = await auth();
   if (!session?.user?.id) return NextResponse.redirect(new URL("/start", req.url));
   if (!lineLoginEnabled) return NextResponse.json({ error: "line-login-not-configured" }, { status: 400 });
