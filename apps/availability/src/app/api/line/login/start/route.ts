@@ -17,6 +17,9 @@ export async function GET(req: NextRequest) {
   const state = randomBytes(16).toString("hex");
   const { id } = lineLoginConfig();
   const redirectUri = `${base}/api/line/login/callback`;
+  if (req.nextUrl.searchParams.get("debug") === "1") {
+    return NextResponse.json({ redirectUri, host, proto, xForwardedHost: req.headers.get("x-forwarded-host"), rawHost: req.headers.get("host"), channelIdSet: !!id });
+  }
   const url = `https://access.line.me/oauth2/v2.1/authorize?response_type=code&client_id=${encodeURIComponent(id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent("profile openid")}`;
   const res = NextResponse.redirect(url);
   res.cookies.set("line_oauth_state", state, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 600 });
