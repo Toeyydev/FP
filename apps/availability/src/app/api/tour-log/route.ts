@@ -62,6 +62,34 @@ export async function GET(req: NextRequest) {
       noShows: (nsMap.get(`${a.date}|${a.slotIdx}`) ?? []).filter((n) => !n.g || n.g === a.guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax })),
     };
   });
+  // Also surface tours that were reported / checked in but whose assignment was later
+  // removed — so a guide's report (and its no-shows) never disappears from the log.
+  const haveKey = new Set(assigns.map((a) => `${a.guideId}|${a.date}|${a.slotIdx}`));
+  const orphanKeys = new Set<string>();
+  for (const r of reports) { const k = `${r.guideId}|${r.date}|${r.slotIdx}`; if (!haveKey.has(k)) orphanKeys.add(k); }
+  for (const c of checkins) { const k = `${c.guideId}|${c.date}|${c.slotIdx}`; if (!haveKey.has(k)) orphanKeys.add(k); }
+  if (orphanKeys.size) {
+    const oDates = [...new Set([...orphanKeys].map((k) => k.split("|")[1]))];
+    const oBk = await prisma.booking.findMany({ where: { date: { in: oDates } }, select: { date: true, slotIdx: true, tourId: true, pax: true } });
+    const tourAll = await prisma.tour.findMany({ select: { id: true, name: true } });
+    const tName2 = (id: string | null) => tourAll.find((t) => t.id === id)?.name ?? (id ?? "—");
+    const slotInfo = new Map<string, { tourId: string | null; pax: number }>();
+    for (const b of oBk) { if (b.slotIdx == null || !b.date) continue; const k = `${b.date}|${b.slotIdx}`; const e = slotInfo.get(k) ?? { tourId: b.tourId, pax: 0 }; e.pax += b.pax ?? 0; if (!e.tourId) e.tourId = b.tourId; slotInfo.set(k, e); }
+    for (const key of orphanKeys) {
+      const [guideId, date, slotS] = key.split("|"); const slotIdx = Number(slotS);
+      const t = ck[key] ?? {}; const r = rep.get(key); const si = slotInfo.get(`${date}|${slotIdx}`);
+      rows.push({
+        date, time: SLOT_TIMES[slotIdx] ?? "", tour: tName2(si?.tourId ?? null),
+        guideId, guide: gName(guideId), pax: si?.pax ?? r?.completedPax ?? null, slotIdx,
+        arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null, offSiteM: offSite[key] ?? null,
+        stars: rate.get(key) ?? null, completed: !!t.COMPLETE,
+        report: r ? { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments } : null,
+        noShows: (nsMap.get(`${date}|${slotIdx}`) ?? []).filter((n) => !n.g || n.g === guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax })),
+      });
+    }
+    rows.sort((a, b) => b.date.localeCompare(a.date) || a.slotIdx - b.slotIdx);
+  }
+
   return NextResponse.json({ from, to, rows });
 }
 
