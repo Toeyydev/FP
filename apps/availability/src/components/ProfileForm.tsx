@@ -9,6 +9,7 @@ const REQUIRED = new Set(REQUIRED_PROFILE_FIELDS);
 
 type Doc = { id: string; kind: string; filename: string; mimeType: string; size: number; uploadedAt: string };
 type Profile = {
+  lineLoginEnabled?: boolean;
   guideId: string | null; displayName: string; email: string;
   documents: Doc[];
   [k: string]: unknown;
@@ -211,6 +212,8 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
             <label>{t("lineSection")}</label>
             {p.lineLinked ? (
               <div className="docrow" style={{ color: "var(--green)", fontWeight: 700 }}>{t("lineConnected")}</div>
+            ) : p.lineLoginEnabled ? (
+              <a className="btn" style={{ display: "inline-block" }} href="/api/line/login/start">{t("connectLine")}</a>
             ) : lineCode ? (
               <div className="note">
                 {t("lineConnectHint")}

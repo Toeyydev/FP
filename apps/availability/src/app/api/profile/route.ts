@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt, encOpt } from "@/lib/crypto";
 import { audit } from "@/lib/audit";
+import { lineLoginEnabled } from "@/lib/line";
 
 const isOps = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     id: u.id, guideId: u.guideId, role: u.role, displayName: u.displayName, fullName: u.fullName,
-    email: u.email, phone: u.phone, lineId: u.lineId, lineLinked: !!u.lineUserId, languages: u.languages, qualifications: u.qualifications,
+    email: u.email, phone: u.phone, lineId: u.lineId, lineLinked: !!u.lineUserId, lineLoginEnabled, languages: u.languages, qualifications: u.qualifications,
     emergencyName: u.emergencyName, emergencyPhone: u.emergencyPhone, emergencyRelation: u.emergencyRelation,
     taxId: decrypt(u.taxId), idCardAddress: decrypt(u.idCardAddress), currentAddress: decrypt(u.currentAddress), bankName: decrypt(u.bankName),
     bankAccountNo: decrypt(u.bankAccountNo), bankAccountName: decrypt(u.bankAccountName), bankBranch: decrypt(u.bankBranch),

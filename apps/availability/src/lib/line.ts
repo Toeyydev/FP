@@ -7,6 +7,14 @@ const SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
 export const lineEnabled = Boolean(SECRET && TOKEN);
 
+// LINE Login (separate channel) — lets a guide link in one tap via OAuth instead of
+// sending a code. Set LINE_LOGIN_CHANNEL_ID + LINE_LOGIN_CHANNEL_SECRET on Railway,
+// and register the callback https://<host>/api/line/login/callback in the channel.
+const LOGIN_ID = process.env.LINE_LOGIN_CHANNEL_ID || "";
+const LOGIN_SECRET = process.env.LINE_LOGIN_CHANNEL_SECRET || "";
+export const lineLoginEnabled = Boolean(LOGIN_ID && LOGIN_SECRET);
+export function lineLoginConfig(): { id: string; secret: string } { return { id: LOGIN_ID, secret: LOGIN_SECRET }; }
+
 export function verifyLineSignature(rawBody: string, signature: string | null): boolean {
   if (!SECRET || !signature) return false;
   const hash = createHmac("sha256", SECRET).update(rawBody).digest("base64");
