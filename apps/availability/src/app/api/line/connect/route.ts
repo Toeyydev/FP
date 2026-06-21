@@ -10,5 +10,5 @@ export async function POST() {
   if (!session?.user?.id) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const code = randomBytes(4).toString("hex").toUpperCase().slice(0, 6);
   await prisma.user.update({ where: { id: session.user.id }, data: { lineLinkCode: code } });
-  return NextResponse.json({ ok: true, code, addUrl: process.env.LINE_ADD_FRIEND_URL || null });
+  return NextResponse.json({ ok: true, code, addUrl: process.env.LINE_ADD_FRIEND_URL || process.env.NEXT_PUBLIC_LINE_ADD_URL || null });
 }

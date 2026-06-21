@@ -214,8 +214,9 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
             ) : lineCode ? (
               <div className="note">
                 {t("lineConnectHint")}
-                <div style={{ marginTop: 8, fontSize: 20, fontWeight: 800, letterSpacing: ".15em", fontFamily: '"Bricolage Grotesque"', color: "var(--ink)" }}>{lineCode.code}</div>
-                {lineCode.addUrl && <a className="glink" href={lineCode.addUrl} target="_blank" rel="noreferrer">Add the Folkpaths LINE account →</a>}
+                {lineCode.addUrl && <a className="btn" style={{ display: "inline-block", margin: "10px 0 4px" }} href={lineCode.addUrl} target="_blank" rel="noreferrer">➕ Add Folkpaths on LINE</a>}
+                <div style={{ marginTop: 8, fontSize: 22, fontWeight: 800, letterSpacing: ".18em", fontFamily: '"Bricolage Grotesque"', color: "var(--ink)", background: "var(--grey-bg)", borderRadius: 10, padding: "8px 12px", textAlign: "center", userSelect: "all" }}>{lineCode.code}</div>
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 8 }}>↳ Open the Folkpaths LINE chat and <b>send this code</b> — it connects automatically. (Don't type it here.)</div>
               </div>
             ) : (
               <button type="button" className="btn" onClick={connectLine}>{t("connectLine")}</button>
