@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
   const cap = bkkToday() < monthEnd ? bkkToday() : monthEnd;
   const [assigns, sheets, statuses, guides, tours, tourPays] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: `${period}-01`, lte: cap } }, select: { guideId: true, date: true, slotIdx: true, tourId: true } }),
-    prisma.jobSheet.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, expenses: true, guideFee: true } }),
+    prisma.jobSheet.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, tourId: true, expenses: true, guideFee: true } }),
     prisma.payrollStatus.findMany({ where: { period } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.tour.findMany({ select: { id: true, name: true } }),
@@ -51,6 +51,22 @@ export async function GET(req: NextRequest) {
     const monthPaid = (statusOf(a.guideId)?.status ?? "pending") === "paid";
     const ps = payStatusOf.get(k) ?? "PENDING";
     g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), amount: r2(t.grandTotal), paid: monthPaid || ps === "PAID", payStatus: monthPaid ? "PAID" : ps });
+  }
+
+  // Imported / orphan job sheets — a sheet exists but no assignment row (e.g. a
+  // manually-imported past tour, or one created from a no-show review). It's still
+  // real work the guide is owed, so include it on Payments.
+  const assignKeys = new Set(assigns.map((a) => `${a.guideId}|${a.date}|${a.slotIdx}`));
+  for (const s of sheets) {
+    const k = `${s.guideId}|${s.date}|${s.slotIdx}`;
+    if (assignKeys.has(k)) continue;       // already counted via its assignment
+    if (s.date > cap) continue;            // future tour, not yet earned
+    const t = computeTotals((s.expenses as unknown as Expense[]) ?? [], (s.guideFee as unknown as GuideFee) ?? DEFAULT_GUIDE_FEE);
+    const g = (byGuide[s.guideId] ??= { guideId: s.guideId, guide: gName(s.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
+    g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
+    const monthPaid = (statusOf(s.guideId)?.status ?? "pending") === "paid";
+    const ps = payStatusOf.get(k) ?? "PENDING";
+    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), amount: r2(t.grandTotal), paid: monthPaid || ps === "PAID", payStatus: monthPaid ? "PAID" : ps });
   }
 
   const rows = Object.values(byGuide)
