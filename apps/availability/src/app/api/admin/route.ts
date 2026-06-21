@@ -8,6 +8,7 @@ import { revokeAllForUser } from "@/lib/sessionTokens";
 import { randomBytes } from "crypto";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
+import { lineLoginEnabled } from "@/lib/line";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -26,7 +27,7 @@ export async function GET() {
   ]);
   // Don't leak the raw LINE user id — just whether they're linked.
   const accounts = rows.map(({ lineUserId, ...a }) => ({ ...a, lineLinked: Boolean(lineUserId) }));
-  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null });
+  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null, lineLoginEnabled });
 }
 
 export async function POST(req: NextRequest) {

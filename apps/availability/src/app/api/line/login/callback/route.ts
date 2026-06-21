@@ -14,8 +14,11 @@ export async function GET(req: NextRequest) {
   const base = `${proto}://${host}`;
   const fail = (why: string) => NextResponse.redirect(new URL(`/profile?line=err&why=${encodeURIComponent(why)}`, base));
   if (!lineLoginEnabled) return fail("not-configured");
+  // Who to link: the operator-link target (cookie set in /start) or the signed-in user.
+  const linkUid = req.cookies.get("line_link_uid")?.value || null;
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.redirect(new URL("/start", base));
+  const uid = linkUid || session?.user?.id || null;
+  if (!uid) return NextResponse.redirect(new URL("/start", base));
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   const cookieState = req.cookies.get("line_oauth_state")?.value;
@@ -44,11 +47,15 @@ export async function GET(req: NextRequest) {
   if (!userId) return fail("profile");
 
   // Move the LINE id off any other account, then link it here.
-  await prisma.user.updateMany({ where: { lineUserId: userId, NOT: { id: session.user.id } }, data: { lineUserId: null } });
-  await prisma.user.update({ where: { id: session.user.id }, data: { lineUserId: userId, lineLinkCode: null } });
-  await audit({ actorId: session.user.id ?? null, actorRole: session.user.role ?? null, action: "line.linked_oauth", entityType: "User", entityId: session.user.id });
+  await prisma.user.updateMany({ where: { lineUserId: userId, NOT: { id: uid } }, data: { lineUserId: null } });
+  await prisma.user.update({ where: { id: uid }, data: { lineUserId: userId, lineLinkCode: null } });
+  await audit({ actorId: uid, actorRole: session?.user?.role ?? null, action: "line.linked_oauth", entityType: "User", entityId: uid });
 
-  const res = NextResponse.redirect(new URL("/profile?line=ok", base));
-  res.cookies.set("line_oauth_state", "", { path: "/", maxAge: 0 });
-  return res;
+  const clear = (r: NextResponse) => { r.cookies.set("line_oauth_state", "", { path: "/", maxAge: 0 }); r.cookies.set("line_link_uid", "", { path: "/", maxAge: 0 }); return r; };
+  // Operator-link flow has no app session — show a simple success page they can close.
+  if (linkUid && !session?.user?.id) {
+    const html = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><div style="font-family:system-ui,sans-serif;max-width:420px;margin:18vh auto;padding:0 24px;text-align:center;color:#2a2520"><div style="font-size:40px">\u2705</div><h1 style="font-size:21px;margin:12px 0 6px">LINE connected</h1><p style="color:#6f665b;font-size:15px;line-height:1.5">You\u2019ll now get Folkpaths job offers and updates here on LINE. You can close this page.</p></div>`;
+    return clear(new NextResponse(html, { headers: { "content-type": "text/html; charset=utf-8" } }));
+  }
+  return clear(NextResponse.redirect(new URL("/profile?line=ok", base)));
 }

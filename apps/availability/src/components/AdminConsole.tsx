@@ -6,9 +6,12 @@ import { useLang } from "@/components/Providers";
 
 type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null; lineLinked?: boolean; lineId?: string | null; lineLinkCode?: string | null };
 type Req = { id: string; name: string; nickname: string | null; phone: string | null; email: string; believedGuideId: string | null; createdAt: string };
-type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null };
+type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null; lineLoginEnabled?: boolean };
 
-function lineInvite(name: string, code: string, oaUrl: string | null) {
+function lineInvite(name: string, code: string, oaUrl: string | null, connectLink: string | null) {
+  if (connectLink) {
+    return `Hi ${name}! Connect Folkpaths to your LINE in one tap:\n${connectLink}\n\nOpen the link, tap "Allow", and you're done — you'll get job offers & job sheets on LINE. 🙏`;
+  }
   return `Hi ${name}! To get Folkpaths job offers & job sheets on LINE:\n` +
     `1) Add our Folkpaths Official Account${oaUrl ? `: ${oaUrl}` : " (search our OA)"}\n` +
     `2) Send this code in the chat: ${code}\n` +
@@ -203,7 +206,7 @@ export default function AdminConsole() {
                               }}>{code ? "New code" : "Generate code"}</button>{" "}
                               {code && (
                                 <button className="btn sm primary" onClick={() => {
-                                  navigator.clipboard?.writeText(lineInvite(g.displayName, code, data.lineOaUrl));
+                                  navigator.clipboard?.writeText(lineInvite(g.displayName, code, data.lineOaUrl, data.lineLoginEnabled && code ? `${window.location.origin}/api/line/login/start?token=${code}` : null));
                                   setCopiedId(g.id);
                                 }}>{copiedId === g.id ? t("copied") : "Copy invite"}</button>
                               )}
