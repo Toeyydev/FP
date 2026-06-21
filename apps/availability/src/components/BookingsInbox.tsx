@@ -32,6 +32,7 @@ export default function BookingsInbox() {
   const [monthFilter, setMonthFilter] = useState(""); // YYYY-MM filter for the inbox
   const [guides, setGuides] = useState<{ guideId: string; displayName: string; rating: number | null; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
+  const [availMap, setAvailMap] = useState<Record<string, string[]>>({}); // "date|slot" -> available guideIds
   const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
   // Load the enriched guide list (rating + presence) and rank best-match first:
   // online before offline, then higher rating, then more tours.
@@ -174,6 +175,18 @@ export default function BookingsInbox() {
     if (!m.tourId && d.tours[0]) setM((x) => ({ ...x, tourId: d.tours[0].id }));
   }, [m.tourId]);
   useEffect(() => { load(); }, [load]);
+
+  // For each unassigned slot in the inbox, fetch who is actually free — so the
+  // per-group picker can hide guides who blocked that slot (or are on leave/taken).
+  useEffect(() => {
+    const open = bookings.filter((b) => b.status !== "OFFERED" && b.tourId && b.slotIdx != null && b.date && !b.guideId);
+    const slots = [...new Map(open.map((b) => [`${b.date}|${b.slotIdx}`, { date: b.date!, slotIdx: b.slotIdx! }])).values()];
+    if (!slots.length) { setAvailMap({}); return; }
+    fetch("/api/offers/candidates", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slots }) })
+      .then((r) => (r.ok ? r.json() : { map: {} }))
+      .then((d) => setAvailMap(d.map ?? {}))
+      .catch(() => {});
+  }, [bookings]);
 
   const tourName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? id ?? "—";
   // The tour for a slot-group: the most common tourId among its bookings.
@@ -409,7 +422,7 @@ export default function BookingsInbox() {
                                 <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
                                 <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
                                   <option value="">Offer to all available</option>
-                                  {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
+                                  {guides.filter((g) => !availMap[key] || availMap[key].includes(g.guideId)).map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
                                 </select>
                                 {grpGuide[key]
                                   ? <>

@@ -17,3 +17,19 @@ export async function GET(req: NextRequest) {
   const guides = await availableGuides(date, slotIdx);
   return NextResponse.json({ guides: guides.map((g) => ({ guideId: g.guideId, displayName: g.displayName })) });
 }
+
+// POST { slots: [{date, slotIdx}] } — available guide IDs for each slot at once,
+// so the Bookings inbox can hide guides who blocked that slot from its picker.
+export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const body = await req.json().catch(() => null) as { slots?: { date: string; slotIdx: number }[] } | null;
+  const slots = (body?.slots ?? [])
+    .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s?.date) && Number.isInteger(s?.slotIdx) && s.slotIdx >= 0)
+    .slice(0, 200);
+  const uniq = [...new Map(slots.map((s) => [`${s.date}|${s.slotIdx}`, s])).values()];
+  const lists = await Promise.all(uniq.map((s) => availableGuides(s.date, s.slotIdx)));
+  const map: Record<string, string[]> = {};
+  uniq.forEach((s, i) => { map[`${s.date}|${s.slotIdx}`] = lists[i].map((g) => g.guideId!).filter(Boolean); });
+  return NextResponse.json({ map });
+}

@@ -17,13 +17,12 @@ export async function createOffer(o: {
 
   let candidates;
   if (o.onlyGuideId) {
-    // Manual pick: offer to this one guide (operator override), unless they're
-    // already booked that slot.
-    const [g, assigned] = await Promise.all([
-      prisma.user.findFirst({ where: { guideId: o.onlyGuideId, role: "GUIDE", state: "ACTIVE", offerBlocked: false }, select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true } }),
-      prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: o.onlyGuideId, date: o.date, slotIdx: o.slotIdx } } }),
-    ]);
-    candidates = g && g.guideId && !assigned ? [g] : [];
+    // Manual pick: offer to this one guide — but only if they're genuinely free
+    // for the slot (not busy/blocked, not on leave, not already assigned). Same
+    // rule as a broadcast, so a guide who blocked the slot can't be offered it.
+    const free = await availableGuides(o.date, o.slotIdx);
+    const g = free.find((x) => x.guideId === o.onlyGuideId);
+    candidates = g ? [g] : [];
   } else {
     candidates = await availableGuides(o.date, o.slotIdx);
     if (o.excludeGuideId) candidates = candidates.filter((g) => g.guideId !== o.excludeGuideId);

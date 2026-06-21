@@ -2,11 +2,15 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
   jobOffer: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
-  assignment: { upsert: vi.fn(), findUnique: vi.fn() },
+  assignment: { upsert: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
   jobOfferResponse: { updateMany: vi.fn() },
   notification: { deleteMany: vi.fn(), create: vi.fn() },
   tour: { findUnique: vi.fn() },
-  user: { findFirst: vi.fn() },
+  user: { findFirst: vi.fn(), findMany: vi.fn() },
+  blockedDate: { findUnique: vi.fn() },
+  blockedSlot: { findUnique: vi.fn() },
+  availability: { findMany: vi.fn() },
+  leaveRequest: { findMany: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/calendar", () => ({ sendTourCalendarInvite: vi.fn() }));
@@ -41,8 +45,13 @@ describe("offers — labels", () => {
 describe("offers — createOffer single-guide window", () => {
   it("gives a job offered to one specific guide a 2-hour accept window", async () => {
     prismaMock.tour.findUnique.mockResolvedValue({ id: "t1", name: "City Tour" });
-    prismaMock.user.findFirst.mockResolvedValue({ id: "u3", guideId: "G-003", displayName: "Somchai", lineUserId: null, email: null });
-    prismaMock.assignment.findUnique.mockResolvedValue(null); // not already booked that slot
+    // availableGuides() inputs: G-003 is active, free, not on leave, day not blocked
+    prismaMock.blockedDate.findUnique.mockResolvedValue(null);
+    prismaMock.blockedSlot.findUnique.mockResolvedValue(null);
+    prismaMock.user.findMany.mockResolvedValue([{ id: "u3", guideId: "G-003", displayName: "Somchai", lineUserId: null, email: null }]);
+    prismaMock.availability.findMany.mockResolvedValue([]);
+    prismaMock.assignment.findMany.mockResolvedValue([]);
+    prismaMock.leaveRequest.findMany.mockResolvedValue([]);
     prismaMock.jobOffer.create.mockResolvedValue({ id: "of-new" });
 
     const before = Date.now();
