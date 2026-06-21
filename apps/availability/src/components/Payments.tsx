@@ -123,7 +123,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12, padding: 14 }}>
           <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(totals.payout)}</div><div className="pay-kpi-l">Total payout</div></div>
           <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: "var(--green)" }}>{thb(paidAmt)}</div><div className="pay-kpi-l">Paid</div></div>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: outstanding > 0 ? "#b45309" : "var(--ink-soft)" }}>{thb(outstanding)}</div><div className="pay-kpi-l">Outstanding{unpaidJobs.length ? ` · ${unpaidJobs.length} job${unpaidJobs.length === 1 ? "" : "s"}` : ""}</div></div>
+          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: outstanding > 0 ? "#b45309" : "var(--ink-soft)" }}>{thb(outstanding)}</div><div className="pay-kpi-l">Pending{unpaidJobs.length ? ` · ${unpaidJobs.length} job${unpaidJobs.length === 1 ? "" : "s"}` : ""}</div></div>
           <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{rows.length}</div><div className="pay-kpi-l">Guides</div></div>
           <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{totals.tours}</div><div className="pay-kpi-l">Job sheets</div></div>
           <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(totals.expenses)}</div><div className="pay-kpi-l">Expenses</div></div>
@@ -132,7 +132,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         {rows.length > 0 && (
           <div style={{ display: "flex", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "4px 16px 18px", alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <svg viewBox="0 0 100 100" width="150" height="150" role="img" aria-label="Paid vs outstanding">
+              <svg viewBox="0 0 100 100" width="150" height="150" role="img" aria-label="Paid vs pending">
                 <circle cx="50" cy="50" r="42" fill="none" stroke="#e8b06b" strokeWidth="15" />
                 <circle cx="50" cy="50" r="42" fill="none" stroke="var(--green, #1a7f37)" strokeWidth="15" strokeLinecap="round" strokeDasharray={`${paidFrac * DC} ${DC}`} transform="rotate(-90 50 50)" />
                 <text x="50" y="49" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--ink, #222)">{Math.round(paidFrac * 100)}%</text>
@@ -140,7 +140,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               </svg>
               <div style={{ display: "flex", gap: 14, fontSize: 12.5, flexWrap: "wrap", justifyContent: "center" }}>
                 <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "var(--green)" }}>●</span> Paid <b style={{ color: "var(--ink)" }}>{thb(paidAmt)}</b></span>
-                <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "#e8b06b" }}>●</span> Outstanding <b style={{ color: "var(--ink)" }}>{thb(outstanding)}</b></span>
+                <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "#e8b06b" }}>●</span> Pending <b style={{ color: "var(--ink)" }}>{thb(outstanding)}</b></span>
               </div>
             </div>
           </div>
@@ -174,7 +174,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 <Fragment key={r.guideId}>
                 <tr style={{ cursor: "pointer" }} onClick={() => toggle(r.guideId)}>
                   <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{open.has(r.guideId) ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
-                  <td className="r">{r.tours}{unpaid.length > 0 && <span className="badge invited" style={{ marginLeft: 6 }}>{unpaid.length} unpaid</span>}</td>
+                  <td className="r">{r.tours}{unpaid.length > 0 && <span className="badge invited" style={{ marginLeft: 6 }}>{unpaid.length} pending</span>}</td>
                   <td className="r">{thb(r.netFee)}</td>
                   <td className="r">{thb(r.expenses)}</td>
                   <td className="r"><b>{thb(r.payout)}</b></td>
@@ -202,7 +202,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                         <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
                         <span style={{ flex: 1 }}>{j.tour}</span>
                         <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
-                        <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Unpaid"}</span>
+                        <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>
                         <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">📄 Job sheet</a>
                         {canEdit && (j.paid
                           ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
