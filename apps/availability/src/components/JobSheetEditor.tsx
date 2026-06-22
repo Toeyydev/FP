@@ -78,6 +78,13 @@ export default function JobSheetEditor() {
   // auto-save only when !saved) always persist the change before exporting/uploading.
   const up = (patch: Partial<Sheet>) => { setSheet({ ...sheet, ...patch }); setSaved(false); if (msg) setMsg(""); };
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
+  // Guide (or operator) taps a guest's no-show box — persists to the Booking so it
+  // shows in the operator's Tour Log; updates the row locally without dirtying the sheet.
+  const markNoShow = (i: number, b: Booking, on: boolean) => {
+    setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, status: on ? "no-show" : "" } : x) } : s);
+    if (!b.bookingNo) return;
+    fetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShow: on }) }).catch(() => {});
+  };
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
 
@@ -138,9 +145,18 @@ export default function JobSheetEditor() {
                 <h3>👥 Your customers ({sheet.bookings.length})</h3>
                 {sheet.bookings.length ? (
                   <ol className="gs-cust">
-                    {sheet.bookings.map((b, i) => (
-                      <li key={i}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{b.tickets === "included" ? " 🎫 tickets incl." : b.tickets === "not" ? " 🎫 no tickets" : ""}</li>
-                    ))}
+                    {sheet.bookings.map((b, i) => {
+                      const ns = b.status === "no-show";
+                      return (
+                      <li key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ flex: 1, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{b.tickets === "included" ? " 🎫 tickets incl." : b.tickets === "not" ? " 🎫 no tickets" : ""}</span>
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title={b.bookingNo ? "Mark this guest as a no-show" : "No reference to mark"}>
+                          <input type="checkbox" checked={ns} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
+                          No-show
+                        </label>
+                      </li>
+                      );
+                    })}
                   </ol>
                 ) : <div className="gs-empty">No customer list yet.</div>}
               </div>

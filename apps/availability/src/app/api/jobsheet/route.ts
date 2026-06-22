@@ -70,13 +70,13 @@ export async function GET(req: NextRequest) {
   // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true },
     orderBy: { createdAt: "asc" },
   });
   const splitHere = allAtSlot.some((b) => b.assignedGuideId);
   const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
   type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
-  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: "" }));
+  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
   const keyOf = (b: { bookingNo?: string; name?: string }) => (b.bookingNo || b.name || "").trim().toLowerCase();
 
   // Saved sheet: keep it live. Surface any booking that arrived AFTER it was saved
