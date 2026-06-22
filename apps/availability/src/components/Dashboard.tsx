@@ -99,10 +99,10 @@ export default function Dashboard() {
             )}
 
             <section className="panel">
-              <div className="panel-head"><h2>On tour today</h2><span className="hint">{dShort(d.today)} · live check-ins</span></div>
+              <div className="panel-head"><h2>On tour today</h2><span className="hint">{dShort(d.today)} · live check-ins · tap a tour for details</span></div>
               <div className="dash-list">
                 {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => (
-                  <div key={i} className={`dash-row${a.overdue ? " warn" : ""}`}>
+                  <a key={i} className={`dash-row${a.overdue ? " warn" : ""}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details">
                     <span className="dr-time">{a.time}</span>
                     <span className="dr-main"><b>{a.tour}</b>
                       <div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div>
@@ -116,7 +116,7 @@ export default function Dashboard() {
                       )}
                     </span>
                     <StateTag t={a} />
-                  </div>
+                  </a>
                 ))}
               </div>
             </section>
@@ -125,7 +125,7 @@ export default function Dashboard() {
               <div className="panel-head"><h2>Tomorrow</h2><span className="hint">{d.tomorrowTours.length} tour(s)</span></div>
               <div className="dash-list">
                 {d.tomorrowTours.length === 0 ? <div className="op-empty">No tours tomorrow.</div> : d.tomorrowTours.map((a, i) => (
-                  <div key={i} className="dash-row"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></div>
+                  <a key={i} className="dash-row" href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></a>
                 ))}
               </div>
             </section>
@@ -134,7 +134,7 @@ export default function Dashboard() {
               <div className="panel-head"><h2>Upcoming · next 7 days</h2></div>
               <div className="dash-list">
                 {d.upcomingTours.length === 0 ? <div className="op-empty">Nothing scheduled.</div> : d.upcomingTours.map((a, i) => (
-                  <div key={i} className="dash-row"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></div>
+                  <a key={i} className="dash-row" href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></a>
                 ))}
               </div>
             </section>
