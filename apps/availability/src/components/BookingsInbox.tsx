@@ -8,7 +8,7 @@ import { DOW, MON, parseYMD } from "@/lib/dates";
 import BookingsTable from "@/components/BookingsTable";
 
 type Booking = {
-  id: string; source: string; confirmationCode: string | null; productName: string | null;
+  id: string; source: string; confirmationCode: string | null; externalRef: string | null; productName: string | null;
   tourId: string | null; date: string | null; startTime: string | null; slotIdx: number | null;
   pax: number | null; customerName: string | null; status: string;
   guideId?: string | null; guide?: string | null;
@@ -127,7 +127,7 @@ export default function BookingsInbox() {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     if ((pax ?? 0) > 10 && !confirm(`${pax} pax is over the 10-pax cap.\nAssign all of them to ${guideId} anyway?`)) return;
-    const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
+    const note = `${items.length} booking(s): ${items.map((b) => b.externalRef || b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
     const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { setMsg(d.error === "date-blocked" ? "That day is blocked." : d.error === "guide-unavailable" ? "That guide can't take this slot." : "Assign failed."); return; }
@@ -225,7 +225,7 @@ export default function BookingsInbox() {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     const durMin = dur[key] && Number(dur[key]) > 0 ? Math.round(Number(dur[key]) * 60) : undefined;
-    const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
+    const note = `${items.length} booking(s): ${items.map((b) => b.externalRef || b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
     const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx, pax: pax && pax <= 50 ? pax : undefined, durationMin: durMin, note, ...(guideId ? { guideId } : {}) }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { setMsg("Offer failed."); return; }
@@ -330,7 +330,7 @@ export default function BookingsInbox() {
                   {needMap.map((b) => (
                     <tr key={b.id}>
                       <td><span className="badge">{b.source}</span></td>
-                      <td>{b.confirmationCode || b.customerName || "—"}</td>
+                      <td>{b.externalRef || b.confirmationCode || b.customerName || "—"}</td>
                       <td><input type="date" className="search" style={{ width: 140 }} defaultValue={b.date ?? ""} onBlur={(e) => e.target.value && post({ action: "update", id: b.id, date: e.target.value }).then(load)} /></td>
                       <td>
                         <select className="search" defaultValue={b.tourId ?? ""} onChange={(e) => post({ action: "update", id: b.id, tourId: e.target.value }).then(load)}>
@@ -346,7 +346,7 @@ export default function BookingsInbox() {
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                         <button className="btn sm" onClick={() => openDetail(b.id)}>ℹ️ Details</button>{" "}
-                        <button className="btn sm danger" onClick={() => removeBooking(b.id, `${b.source} · ${b.confirmationCode || b.customerName || "—"}`)}>🗑 Delete</button>
+                        <button className="btn sm danger" onClick={() => removeBooking(b.id, `${b.source} · ${b.externalRef || b.confirmationCode || b.customerName || "—"}`)}>🗑 Delete</button>
                       </td>
                     </tr>
                   ))}
@@ -409,8 +409,8 @@ export default function BookingsInbox() {
                               <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
                                 {items.map((b) => (
                                   <span key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid var(--line,#ddd)", borderRadius: 20, padding: "2px 6px 2px 10px", fontSize: 12 }}>
-                                    <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
-                                    <button title="Delete" onClick={() => removeBooking(b.id, b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
+                                    <button onClick={() => openDetail(b.id)} title="Details" style={{ border: "none", background: "none", cursor: "pointer", padding: 0, font: "inherit" }}>{b.externalRef || b.confirmationCode || b.customerName || "—"} ×{b.pax ?? "?"} ℹ️</button>
+                                    <button title="Delete" onClick={() => removeBooking(b.id, b.externalRef || b.confirmationCode || b.customerName || "—")} style={{ border: "none", background: "#fbe6e2", color: "#b23b2e", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", lineHeight: 1, fontWeight: 700 }}>×</button>
                                   </span>
                                 ))}
                               </div>
@@ -451,7 +451,7 @@ export default function BookingsInbox() {
       {detail && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
           <div className="modal" style={{ maxWidth: 560, width: "92%" }}>
-            <h3>Booking · {str(detail.confirmationCode || detail.externalRef) || "—"}</h3>
+            <h3>Booking · {str(detail.externalRef || detail.confirmationCode) || "—"}</h3>
             <div className="mbody">
               <div className="bk-meta">
                 <span><b>Source</b> {str(detail.source)}</span>
@@ -506,7 +506,7 @@ export default function BookingsInbox() {
               <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
                 {splitFor.items.map((b) => (
                   <div key={b.id} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", alignItems: "center", gap: 8, padding: "7px 10px" }}>
-                    <span style={{ flex: 1, fontSize: 13 }}><b>{b.confirmationCode || b.customerName || "—"}</b> · {b.pax ?? "?"} pax</span>
+                    <span style={{ flex: 1, fontSize: 13 }}><b>{b.externalRef || b.confirmationCode || b.customerName || "—"}</b> · {b.pax ?? "?"} pax</span>
                     <select className="search" style={{ flex: "none", width: 220 }} value={splitMap[b.id] ?? ""} onChange={(e) => setSplitMap((m) => ({ ...m, [b.id]: e.target.value }))}>
                       <option value="">Assign to guide…</option>
                       {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}

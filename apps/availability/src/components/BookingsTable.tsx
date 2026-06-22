@@ -56,7 +56,7 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
     for (const [k, items] of Object.entries(groups)) {
       const [tourId, date, slotIdx] = k.split("|");
       const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
-      const note = `${items.length} booking(s): ${items.map((b) => b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
+      const note = `${items.length} booking(s): ${items.map((b) => b.externalRef || b.confirmationCode || b.customerName || "—").join(", ")}`.slice(0, 280);
       const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx: Number(slotIdx), pax: pax && pax <= 10 ? pax : undefined, note }) });
       if (r.ok) made++;
     }
@@ -76,7 +76,7 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const head = ["Booking #", "Date", "Time", "Tour", "Guest", "Pax", "Source", "Status", "Guide"];
-    const lines = [head.join(",")].concat(rows.map((b) => [b.confirmationCode || b.externalRef || "", b.date || "", b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start ?? "" : ""), b.tourId ? tourName(b.tourId) : (b.productName || ""), b.customerName || "", b.pax ?? "", b.source, b.status, b.guide || ""].map(cell).join(",")));
+    const lines = [head.join(",")].concat(rows.map((b) => [b.externalRef || b.confirmationCode || "", b.date || "", b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start ?? "" : ""), b.tourId ? tourName(b.tourId) : (b.productName || ""), b.customerName || "", b.pax ?? "", b.source, b.status, b.guide || ""].map(cell).join(",")));
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "folkpaths-bookings.csv"; a.click();
@@ -122,7 +122,7 @@ export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => voi
             ) : rows.map((b) => (
               <tr key={b.id} onClick={() => onOpen?.(b.id)} style={{ cursor: onOpen ? "pointer" : "default" }} className={sel.has(b.id) ? "sel" : ""}>
                 <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}><input type="checkbox" checked={sel.has(b.id)} onChange={() => toggle(b.id)} /></td>
-                <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{b.confirmationCode || b.externalRef || "—"}</td>
+                <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{b.externalRef || b.confirmationCode || "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{b.date ?? "—"}{(b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start : "")) ? <span style={{ color: "var(--ink-soft)" }}> · {b.startTime || SLOTS[b.slotIdx!]?.start}</span> : ""}</td>
                 <td>{b.tourId ? tourName(b.tourId) : <span style={{ color: "var(--ink-soft)" }}>{b.productName ?? "unmapped"}</span>}</td>
                 <td>{b.customerName ?? "—"}</td>

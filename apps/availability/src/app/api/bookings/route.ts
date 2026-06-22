@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ date: "asc" }, { slotIdx: "asc" }, { createdAt: "asc" }],
       take: 500,
-      select: { id: true, source: true, confirmationCode: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true },
+      select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true },
     }),
     prisma.tour.findMany({ orderBy: { id: "asc" } }),
   ]);

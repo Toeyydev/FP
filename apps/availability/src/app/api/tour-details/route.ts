@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     prisma.tour.findUnique({ where: { id: assignment.tourId } }),
     prisma.booking.findMany({
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
-      select: { customerName: true, confirmationCode: true, pax: true, source: true },
+      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true },
     }),
   ]);
 
