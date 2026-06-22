@@ -101,7 +101,12 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     }
     const a = assigns[0];
     const addPax = b.pax ?? 0;
-    const newTotal = (a.pax ?? 0) + addPax;
+    // The job's true total if this booking joins = every non-cancelled booking at the
+    // slot (this PENDING one is already part of it), NOT assignment.pax + this booking
+    // — which double-counts once assignment.pax has been re-synced to include it, and
+    // wrongly holds a booking that actually fits under the cap.
+    const slotBookings = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } }, select: { pax: true } });
+    const newTotal = slotBookings.reduce((s, x) => s + (x.pax ?? 0), 0) || ((a.pax ?? 0) + addPax);
     if (newTotal > CAP) {
       await notifyOps(`Booking ${ref} (+${addPax}) for ${b.date} puts ${a.guideId} over ${CAP} guests. Held — split it across guides.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`, { date: b.date });
       return false;
