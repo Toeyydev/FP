@@ -86,14 +86,14 @@ async function autoRemoveNameDuplicate(rec: { id: string; customerName: string |
 // that guide's job if it stays within the 10-pax cap, and ALWAYS alert the
 // operator to confirm. If it would breach the cap (or the slot is split across
 // guides), leave it pending and alert for a manual decision. Never throws.
-export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; status: string }): Promise<boolean> {
+export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; externalRef?: string | null; status: string }): Promise<boolean> {
   try {
     // Attach by date + slot — the assigned guide owns that time slot, so a new
     // booking lands on their job even if it arrived without a tour mapping yet.
     if (b.status !== "PENDING" || !b.date || b.slotIdx == null) return false;
     const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx } });
     if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
-    const ref = b.confirmationCode || b.customerName || "a new booking";
+    const ref = b.externalRef || b.confirmationCode || b.customerName || "a new booking";
     if (assigns.length > 1) {
       await notifyOps(`Booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides. Assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`, { date: b.date });
       return false;
@@ -132,7 +132,7 @@ export async function reconcileAssignedBookings(): Promise<number> {
   const today = ymd(todayD());
   const pending = await prisma.booking.findMany({
     where: { status: "PENDING", tourId: { not: null }, date: { gte: today }, slotIdx: { not: null } },
-    select: { id: true, tourId: true, date: true, slotIdx: true, pax: true, customerName: true, confirmationCode: true, status: true },
+    select: { id: true, tourId: true, date: true, slotIdx: true, pax: true, customerName: true, confirmationCode: true, externalRef: true, status: true },
   });
   let combined = 0;
   for (const b of pending) if (await autoAttachLate(b)) combined++;

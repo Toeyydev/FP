@@ -75,7 +75,7 @@ export default function AppClient({
   const [onlyAvail, setOnlyAvail] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
-  const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
+  const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; kind?: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; durationMin: number | null; checkinState: string | null }[]>([]);
   const [reportFor, setReportFor] = useState<{ date: string; slotIdx: number; tourName: string; pax: number | null } | null>(null);
@@ -483,9 +483,20 @@ export default function AppClient({
     await fetch("/api/notifications", { method: "DELETE" });
     setNotif({ unread: 0, items: [] });
   }
+  // Where a notification leads when tapped, so the operator can act on it from the
+  // alert: an over-capacity / late booking → the Bookings inbox (to split/dispatch),
+  // an offer update → Dispatch. The date in the message focuses the inbox.
+  function notifHref(kind: string | undefined, message: string): string | null {
+    if (role === "guide") return null;
+    const date = (message.match(/\d{4}-\d{2}-\d{2}/) || [])[0];
+    if (kind === "late-booking") return `/bookings${date ? `?focus=${date}` : ""}`;
+    if (kind === "offer") return "/jobs";
+    return null;
+  }
+
   // Render a notification as clean rows: bold header, plain rows, and a financial
   // sub-card for any money lines (Net guide fee highlighted). Emojis stripped.
-  function notifCard(i: { id: string; message: string; createdAt: string }): ReactNode {
+  function notifCard(i: { id: string; message: string; kind?: string; createdAt: string }): ReactNode {
     const lines = i.message
       .replace(/[\p{Extended_Pictographic}─-╿]/gu, "") // emoji + box-drawing
       .split("\n").map((s) => s.trim()).filter(Boolean);
@@ -493,8 +504,10 @@ export default function AppClient({
     const text = lines.filter((l) => !l.includes("฿"));
     const head = text[0] ?? "";
     const rows = text.slice(1);
+    const href = notifHref(i.kind, i.message);
+    const Card = (href ? "a" : "div") as "a";
     return (
-      <div key={i.id} className="notif-card">
+      <Card key={i.id} {...(href ? { href } : {})} className={`notif-card${href ? " notif-link" : ""}`} style={href ? { cursor: "pointer", textDecoration: "none", color: "inherit", display: "block" } : undefined}>
         {head && <div className="nc-head">{head}</div>}
         {rows.map((r, n) => <div key={n} className="nc-row">{r}</div>)}
         {money.length > 0 && (
@@ -509,7 +522,8 @@ export default function AppClient({
           </div>
         )}
         <div className="nc-time">{new Date(i.createdAt).toLocaleString()}</div>
-      </div>
+        {href && <div style={{ marginTop: 6, fontSize: 12.5, fontWeight: 700, color: "var(--primary)" }}>Tap to open & resolve ›</div>}
+      </Card>
     );
   }
 
