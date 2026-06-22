@@ -16,6 +16,11 @@ export async function notifyOps(message: string, title: string, body: string, op
   try {
     const opsUsers = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
     for (const o of opsUsers) {
+      // De-dupe: an unresolved alert (e.g. an over-capacity booking re-seen on every
+      // 2.5-min auto-sync) must not stack up. If this exact message is already in the
+      // operator's inbox, skip it — no second row, no second push.
+      const dup = await prisma.notification.findFirst({ where: { userId: o.id, kind: "late-booking", message }, select: { id: true } });
+      if (dup) continue;
       // Always record it in the in-app inbox; only PUSH (phone/browser ping) for
       // actionable alerts. Routine auto-handled events pass { push: false } so the
       // operator isn't pinged constantly.

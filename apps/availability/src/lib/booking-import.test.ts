@@ -7,7 +7,7 @@ const prismaMock = vi.hoisted(() => ({
   booking: { update: vi.fn() },
   jobSheet: { findUnique: vi.fn(), upsert: vi.fn() },
   user: { findMany: vi.fn(), findFirst: vi.fn() },
-  notification: { create: vi.fn() },
+  notification: { create: vi.fn(), findFirst: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
@@ -26,6 +26,7 @@ beforeEach(() => {
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
   prismaMock.user.findMany.mockResolvedValue([{ id: "op1" }]);
   prismaMock.user.findFirst.mockResolvedValue({ id: "guideUser1" });
+  prismaMock.notification.findFirst.mockResolvedValue(null);
 });
 
 describe("autoAttachLate — late booking onto a reserved/assigned guide", () => {
