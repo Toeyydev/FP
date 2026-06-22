@@ -38,6 +38,22 @@ export default function Dashboard() {
     if (r.ok) load();
   }
 
+  // Broadcast a short message to every guide with an upcoming tour (in-app + push + LINE).
+  const [bcOpen, setBcOpen] = useState(false);
+  const [bcText, setBcText] = useState("");
+  const [bcMsg, setBcMsg] = useState("");
+  const [bcBusy, setBcBusy] = useState(false);
+  async function sendBroadcast() {
+    const message = bcText.trim();
+    if (!message) return;
+    setBcBusy(true); setBcMsg("");
+    const r = await fetch("/api/broadcast", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message }) });
+    const j = await r.json().catch(() => ({}));
+    setBcBusy(false);
+    if (r.ok) { setBcMsg(j.count ? `✅ Sent to ${j.count} guide${j.count === 1 ? "" : "s"}${j.lineSent ? ` · LINE ${j.lineSent}` : ""}` : "No guides have an upcoming tour."); setBcText(""); }
+    else setBcMsg("Failed to send.");
+  }
+
   return (
     <div className="wrap">
       <AuthHeader backHref="/" />
@@ -62,6 +78,23 @@ export default function Dashboard() {
           </div>
 
           <div className="dash-main">
+            <section className="panel">
+              <button onClick={() => setBcOpen((o) => !o)} style={{ width: "100%", border: "none", background: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, font: "inherit", textAlign: "left", padding: "12px 14px" }}>
+                <h2 style={{ margin: 0, flex: 1 }}>📢 Broadcast to guides</h2>
+                <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>upcoming tours</span>
+                <span style={{ color: "var(--ink-soft)", display: "inline-block", transform: bcOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+              </button>
+              {bcOpen && (
+                <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <textarea value={bcText} onChange={(e) => setBcText(e.target.value)} maxLength={500} rows={3} placeholder="Message to all guides with an upcoming tour — e.g. Heavy rain expected today, please bring umbrellas for guests." className="search" style={{ width: "100%", resize: "vertical", font: "inherit", lineHeight: 1.5 }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{bcText.length}/500 · in-app + push + LINE</span>
+                    <button className="btn sm primary" style={{ marginLeft: "auto" }} disabled={bcBusy || !bcText.trim()} onClick={sendBroadcast}>{bcBusy ? "Sending…" : "Send broadcast"}</button>
+                  </div>
+                  {bcMsg && <div style={{ fontSize: 13, fontWeight: 600, color: bcMsg.startsWith("✅") ? "var(--green)" : "var(--danger)" }}>{bcMsg}</div>}
+                </div>
+              )}
+            </section>
             {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || d.leaveRequests.length > 0) && (
               <section className="panel">
                 <div className="panel-head"><h2>Needs attention</h2></div>
