@@ -194,7 +194,7 @@ export default function JobSheetEditor() {
         <div className="js-head">
           <div className="js-brand"><b>FOLKPATHS</b><div style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>บริษัท โฟล์คพาธส์ จำกัด</div></div>
           <table className="js-meta"><tbody>
-            <tr><td>No.</td><td>{sheet.ref ?? <i style={{ color: "#aaa" }}>auto on save</i>}</td></tr>
+            <tr><td>No.</td><td>{sheet.ref ?? <span style={{ color: "#aaa" }}>—</span>}</td></tr>
             <tr><td>Updated</td><td>{sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <i style={{ color: "#aaa" }}>not saved yet</i>}</td></tr>
             <tr><td>Tour ID</td><td><b>{sheet.tourId || "—"}</b></td></tr>
             <tr><td>Guide ID</td><td>{sheet.guideId}</td></tr>

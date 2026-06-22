@@ -65,6 +65,32 @@ export async function GET(req: NextRequest) {
   const tourId = existing?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
+  // Give every saved sheet a job number. Sheets auto-created from a late-booking
+  // combine never got one (ref stayed null → "auto on save"); assign the next ref
+  // for the date the first time it's opened so the "No." always shows.
+  if (existing && !existing.ref) {
+    try {
+      const seq = (await prisma.jobSheet.count({ where: { date, NOT: { ref: null } } })) + 1;
+      const newRef = makeRef(date, seq);
+      await prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, data: { ref: newRef } });
+      existing.ref = newRef;
+    } catch { /* ref is best-effort; never block opening the sheet */ }
+  }
+
+  // Collapse repeated guests to a single row — the same name must appear only once
+  // (a re-import or combine can leave a guest listed twice). Keeps the first; blank
+  // (manual) rows are never merged.
+  const dedupeByName = <T extends { name?: string }>(rows: T[]): T[] => {
+    const seen = new Set<string>(); const out: T[] = [];
+    for (const r of rows) {
+      const nm = (r?.name || "").trim().toLowerCase();
+      if (nm && seen.has(nm)) continue;
+      if (nm) seen.add(nm);
+      out.push(r);
+    }
+    return out;
+  };
+
   // Current bookings at this date + slot. By default ALL combine into one job; if
   // the slot was SPLIT across guides, this guide sees only the bookings tagged to
   // them (plus any untagged).
@@ -102,7 +128,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: fill(existing), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -136,7 +162,7 @@ export async function GET(req: NextRequest) {
       .filter((lb) => !coveredLive.has(lb))
       .map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
-    const sheet = fill({ ...existing, bookings: kept.concat(added) });
+    const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
     return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
@@ -147,7 +173,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps,
-    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }
 
