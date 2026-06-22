@@ -3,7 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { acceptOffer, denyOffer, slotLabel, timeRangeLabel } from "@/lib/offers";
+import { acceptOffer, denyOffer, timeRangeLabel } from "@/lib/offers";
 
 // GET — the open job offers this guide can act on (in-app Accept/Deny).
 export async function GET() {
@@ -51,10 +51,7 @@ export async function POST(req: NextRequest) {
   const res = await acceptOffer(offerId, guideId);
   if (!res.ok) return NextResponse.json({ ok: false, reason: res.reason }, { status: 409 });
   await audit({ actorId: session!.user!.id ?? null, action: "offer.accepted", entityType: "JobOffer", entityId: offerId });
-  // Tell the operator who took it.
-  const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
-  if (offer?.createdById) {
-    await prisma.notification.create({ data: { userId: offer.createdById, kind: "offer", message: `✅ ${guideId} ${session!.user!.name ?? ""} accepted: ${slotLabel(res.offer.slotIdx)} · ${res.offer.date}` } });
-  }
+  // acceptOffer() already notifies the whole operator team (in-app + push) with the
+  // tour name — no second notification here, or the creator gets it twice.
   return NextResponse.json({ ok: true });
 }
