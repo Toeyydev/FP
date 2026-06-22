@@ -74,7 +74,8 @@ export default function Dispatch() {
   async function removeAssignment(a: Assignment) {
     if (!confirm(`Remove this tour?\n${a.tourName} · ${a.date} ${a.time} · ${a.guideId} ${a.guideName}\n\nIts bookings go back to the inbox to re-dispatch.`)) return;
     const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
-    if (r.ok) await load();
+    if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(d.error === "tour-in-progress" ? "Can't remove — the guide already checked into this tour. Undo it from the Tour Log instead." : "Remove failed."); return; }
+    await load();
   }
   // Reassign: unassign the current guide and re-offer to the others available.
   // Return the job to the pending pool (Bookings inbox) so the operator can offer
@@ -83,7 +84,8 @@ export default function Dispatch() {
     if (!confirm(`Return this tour to pending?\n${a.tourName} · ${a.date} ${a.time}\n${a.guideId} is unassigned; offer it again from the Bookings inbox.`)) return;
     setMsg("Returning to pending…");
     const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
-    setMsg(r.ok ? "↩ Returned to pending — offer it in Bookings." : "Failed");
+    const d = r.ok ? null : await r.json().catch(() => ({}));
+    setMsg(r.ok ? "↩ Returned to pending — offer it in Bookings." : (d?.error === "tour-in-progress" ? "Can't re-offer — the guide already checked into this tour." : "Failed"));
     await load();
   }
 

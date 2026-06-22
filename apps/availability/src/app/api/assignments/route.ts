@@ -116,6 +116,13 @@ export async function DELETE(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
   const { guideId, date, slotIdx, release } = parsed.data;
 
+  // Safety guard: once the guide has checked in (arrived/started/completed), the
+  // tour is in progress or done — it must not be re-offered or removed from
+  // Dispatch by accident (that's what stranded a live tour before). To undo a
+  // started/completed tour, remove it from the Tour Log instead.
+  const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
+  if (started > 0) return NextResponse.json({ error: "tour-in-progress" }, { status: 409 });
+
   // Clean up the Google Calendar events first (guide + operator master) so a
   // removed/re-offered tour doesn't linger as a ghost event. Never blocks delete.
   const existing = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
