@@ -77,7 +77,21 @@ export async function GET(req: NextRequest) {
   const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
   type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
   const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
-  const keyOf = (b: { bookingNo?: string; name?: string }) => (b.bookingNo || b.name || "").trim().toLowerCase();
+
+  // Standard expense template scaled to the actual guests. Used for a fresh sheet,
+  // AND to backfill a saved sheet that has none (e.g. one auto-created from a late
+  // add, which writes only bookings). "(Inc. Guide)" items add +1 (the guide).
+  const clientPax = linked.reduce((s, b) => s + (b.pax ?? 0), 0) || (assignment?.pax ?? 0);
+  const defaultExpenses = clientPax > 0
+    ? DEFAULT_EXPENSES.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
+    : DEFAULT_EXPENSES;
+  // Never show an empty expense table / blank fee for a real tour — fall back to the
+  // standard template + guide fee when the saved sheet has none.
+  const fill = <T extends { expenses?: unknown; guideFee?: unknown }>(sheet: T) => ({
+    ...sheet,
+    expenses: Array.isArray(sheet.expenses) && sheet.expenses.length > 0 ? sheet.expenses : defaultExpenses,
+    guideFee: sheet.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? sheet.guideFee : DEFAULT_GUIDE_FEE,
+  });
 
   // Saved sheet: keep it live. Surface any booking that arrived AFTER it was saved
   // (e.g. a late add), so the assigned job always reflects the real guest list —
@@ -88,31 +102,42 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: existing, reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: fill(existing), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
-    const liveKeys = new Set(liveBookings.map(keyOf).filter(Boolean));
-    // A saved row is removed ONLY if its booking was genuinely RE-SLOTTED — i.e. it
-    // is now active at a DIFFERENT slot on this date (that caused the same guest to
-    // appear on both the 08:30 and 13:30 sheets). Bookings that are simply no longer
-    // "active" (past / completed tours) are KEPT, so editing a past job sheet never
-    // loses its rows. Manual rows (no booking number) are always kept.
+
+    // Match a saved row to a live booking by ANY identifier (GYG ref, GET code, OR
+    // name). This lets an old sheet that stored the GET- code still line up with the
+    // same guest's GYG ref — so we refresh the row to the GYG ref and never duplicate.
+    const idKeys = (b: { externalRef?: string | null; confirmationCode?: string | null; customerName?: string | null }) =>
+      [b.externalRef, b.confirmationCode, b.customerName].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
+    const canonRef = (b: { externalRef?: string | null; confirmationCode?: string | null }) => b.externalRef || b.confirmationCode || "";
+    const rowKeys = (r: SheetBooking) => [r.bookingNo, r.name].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
+    const matchLive = (r: SheetBooking) => linked.find((lb) => { const lk = idKeys(lb); return rowKeys(r).some((k) => lk.includes(k)); });
+
+    // Same guest now active at a DIFFERENT slot on this date = genuinely re-slotted.
     const elsewhere = await prisma.booking.findMany({
       where: { date, slotIdx: { not: slotIdx }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
       select: { customerName: true, externalRef: true, confirmationCode: true },
     });
-    const movedKeys = new Set(elsewhere.map((b) => keyOf({ bookingNo: b.externalRef || b.confirmationCode || "", name: b.customerName || "" })).filter(Boolean));
-    const kept = saved.filter((b) => {
-      if (!((b.bookingNo || "").trim())) return true;     // manual row — always keep
-      const k = keyOf(b);
-      if (liveKeys.has(k)) return true;                    // still active at this slot
-      return !movedKeys.has(k);                            // drop only if re-slotted elsewhere
-    });
-    const have = new Set(kept.map(keyOf).filter(Boolean));
-    const added = liveBookings.filter((b) => { const k = keyOf(b); return k && !have.has(k); });
-    const changed = added.length > 0 || kept.length !== saved.length;
-    const sheet = changed ? { ...existing, bookings: kept.concat(added) } : existing;
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length, reconciledRemoved: saved.length - kept.length });
+    const movedKeySet = new Set(elsewhere.flatMap(idKeys));
+
+    const matched = new Map<SheetBooking, (typeof linked)[number]>();
+    for (const r of saved) { const lb = matchLive(r); if (lb) matched.set(r, lb); }
+    const coveredLive = new Set(matched.values());
+    const kept = saved
+      .filter((r) => {
+        if (matched.has(r)) return true;                    // still active at this slot
+        if (!((r.bookingNo || "").trim())) return true;     // manual row — always keep
+        return !rowKeys(r).some((k) => movedKeySet.has(k)); // drop only if re-slotted elsewhere
+      })
+      .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
+    const added = linked
+      .filter((lb) => !coveredLive.has(lb))
+      .map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
+    const reconciledRemoved = saved.length - kept.length;
+    const sheet = fill({ ...existing, bookings: kept.concat(added) });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -120,16 +145,9 @@ export async function GET(req: NextRequest) {
     ? liveBookings
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
 
-  // Pre-fill expense pax from the ACTUAL booked guests so reimbursements reflect
-  // reality the moment the guide is assigned. "(Inc. Guide)" items add +1 (guide).
-  const clientPax = linked.reduce((s, b) => s + (b.pax ?? 0), 0) || (assignment?.pax ?? 0);
-  const expenses = clientPax > 0
-    ? DEFAULT_EXPENSES.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
-    : DEFAULT_EXPENSES;
-
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps,
-    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings, expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }
 
