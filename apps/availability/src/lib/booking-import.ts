@@ -209,6 +209,17 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
 
   if (p.externalId) {
     const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true } });
+    // The SAME OTA booking can re-arrive under a different Bokun externalId (a
+    // re-issue / channel remap). If we already hold this externalRef, update THAT
+    // record in place instead of creating a duplicate.
+    if (!existing && p.externalRef) {
+      const byRef = await prisma.booking.findFirst({ where: { externalRef: p.externalRef }, select: { id: true, status: true } });
+      if (byRef) {
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined, pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw } });
+        if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
+        return "updated";
+      }
+    }
     const rec = await prisma.booking.upsert({
       where: { source_externalId: { source, externalId: p.externalId } },
       create: {
