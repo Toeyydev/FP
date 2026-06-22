@@ -77,19 +77,19 @@ export default function Dashboard() {
                     </div>
                   ))}
                   {d.conflicts.map((c, i) => (
-                    <a key={`c${i}`} className="dash-row bad" href="/">
+                    <a key={`c${i}`} className="dash-row bad" href="/jobs" title="Open Dispatch to resolve the clash">
                       <span className="tag bad">Conflict</span>
                       <span className="dr-main"><b>{c.guide}</b> · {dShort(c.date)}<div className="dr-sub">{c.slots.join("  ·  ")}</div></span>
                     </a>
                   ))}
                   {d.understaffed.map((u, i) => (
-                    <a key={`s${i}`} className="dash-row bad" href="/">
+                    <a key={`s${i}`} className="dash-row bad" href={`/bookings?focus=${u.date}`} title="Open Bookings to add a guide">
                       <span className="tag bad">Understaffed</span>
                       <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.pax} pax · {u.have}/{u.need} guides — add {u.need - u.have} more</div></span>
                     </a>
                   ))}
                   {d.unassigned.map((u, i) => (
-                    <a key={`u${i}`} className="dash-row warn" href={`/bookings?focus=${u.date}`}>
+                    <a key={`u${i}`} className="dash-row warn" href={`/bookings?focus=${u.date}`} title="Open Bookings to dispatch this tour">
                       <span className="tag warn">Unassigned</span>
                       <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.count} booking{u.count > 1 ? "s" : ""} · {u.pax} pax — needs {u.need} guide{u.need > 1 ? "s" : ""}</div></span>
                     </a>
