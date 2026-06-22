@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
-  jobOffer: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
+  jobOffer: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   assignment: { upsert: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
   jobOfferResponse: { updateMany: vi.fn() },
   notification: { deleteMany: vi.fn(), create: vi.fn() },
@@ -29,6 +29,7 @@ const openOffer = (over = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 1 });
+  prismaMock.jobOffer.findMany.mockResolvedValue([]);
 });
 
 describe("offers — labels", () => {

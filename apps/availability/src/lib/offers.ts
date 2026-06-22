@@ -37,8 +37,16 @@ export async function createOffer(o: {
   const summary = `Folkpaths job offer\n${tour.name}\n${dateLabel} · ${timeLabel}${o.pax != null ? `\nTotal: ${o.pax} Pax · 1 Job` : ""}${o.note ? `\n${o.note}` : ""}`;
   const btnText = `${tour.name} · ${dateLabel} · ${timeLabel}${o.pax != null ? ` · ${o.pax} pax` : ""}`;
 
-  // Never leave two open offers on one slot: close any existing one first.
-  await prisma.jobOffer.updateMany({ where: { date: o.date, slotIdx: o.slotIdx, status: "OPEN" }, data: { status: "EXPIRED" } });
+  // Never leave two open offers on one slot: close any existing one first AND clear
+  // it from the previously-offered guides' bells, so a later action (e.g. assign to a
+  // specific guide after an "offer to all") fully supersedes the earlier broadcast —
+  // the other guides no longer see a stale offer they can't take.
+  const superseded = await prisma.jobOffer.findMany({ where: { date: o.date, slotIdx: o.slotIdx, status: "OPEN" }, select: { id: true } });
+  if (superseded.length) {
+    const ids = superseded.map((x) => x.id);
+    await prisma.jobOffer.updateMany({ where: { id: { in: ids } }, data: { status: "EXPIRED" } });
+    await prisma.notification.deleteMany({ where: { offerId: { in: ids } } });
+  }
   const offer = await prisma.jobOffer.create({
     data: {
       tourId: o.tourId, date: o.date, slotIdx: o.slotIdx, durationMin: o.durationMin ?? null, pax: o.pax ?? null, note: o.note ?? null,
