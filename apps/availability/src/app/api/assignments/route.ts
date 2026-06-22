@@ -122,6 +122,20 @@ export async function DELETE(req: NextRequest) {
   if (existing) { try { await removeTourEvents(existing); } catch { /* calendar cleanup is best-effort */ } }
 
   await prisma.assignment.deleteMany({ where: { guideId, date, slotIdx } });
+  // Removing the assignment un-does the guide's work on this slot: clear the
+  // leftover job sheet, check-ins, report and rating so the tour doesn't linger
+  // in the Tour Log or show as a phantom payable on Payments, and cancel any
+  // offer this guide had accepted for the slot. (Completed tours are removed from
+  // the Tour Log instead, which keeps the sheet for the payment record.)
+  if (existing) {
+    await Promise.all([
+      prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } }),
+      prisma.checkin.deleteMany({ where: { guideId, date, slotIdx } }),
+      prisma.tourReport.deleteMany({ where: { guideId, date, slotIdx } }),
+      prisma.guideRating.deleteMany({ where: { guideId, date, slotIdx } }),
+      prisma.jobOffer.updateMany({ where: { date, slotIdx, assignedGuideId: guideId, status: { not: "EXPIRED" } }, data: { status: "CANCELLED", assignedGuideId: null } }),
+    ]);
+  }
   // Plain Remove: send the slot's bookings back to the inbox (PENDING) so they can
   // be re-dispatched instead of being stranded as "offered" with no job.
   if (release) {
