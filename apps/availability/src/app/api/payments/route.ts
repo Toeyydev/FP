@@ -35,6 +35,9 @@ export async function GET(req: NextRequest) {
   const sheetOf = new Map(sheets.map((s) => [`${s.guideId}|${s.date}|${s.slotIdx}`, s]));
   const payStatusOf = new Map(tourPays.map((p) => [`${p.guideId}|${p.date}|${p.slotIdx}`, p.status]));
   const r2 = (n: number) => Math.round(n * 100) / 100;
+  // An auto-created sheet can have an empty guideFee ({}); ?? won't catch that, so a
+  // missing price must fall back to the standard fee or the guide shows ฿0 unpaid.
+  const gfOf = (gf: unknown): GuideFee => (gf && typeof gf === "object" && (gf as GuideFee).price != null ? (gf as GuideFee) : DEFAULT_GUIDE_FEE);
   const bkkDate = (d: Date) => new Date(new Date(d).getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   // A whole-month "paid" only covers tours up to the day it was actually paid, so a
   // tour added AFTER payment (e.g. a late no-show sheet) correctly shows unpaid again.
@@ -53,7 +56,7 @@ export async function GET(req: NextRequest) {
     const k = `${a.guideId}|${a.date}|${a.slotIdx}`;
     const s = sheetOf.get(k);
     const t = s
-      ? computeTotals((s.expenses as unknown as Expense[]) ?? [], (s.guideFee as unknown as GuideFee) ?? DEFAULT_GUIDE_FEE)
+      ? computeTotals((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee))
       : computeTotals([], DEFAULT_GUIDE_FEE);
     const g = (byGuide[a.guideId] ??= { guideId: a.guideId, guide: gName(a.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
@@ -70,7 +73,7 @@ export async function GET(req: NextRequest) {
     const k = `${s.guideId}|${s.date}|${s.slotIdx}`;
     if (assignKeys.has(k)) continue;       // already counted via its assignment
     if (s.date > cap) continue;            // future tour, not yet earned
-    const t = computeTotals((s.expenses as unknown as Expense[]) ?? [], (s.guideFee as unknown as GuideFee) ?? DEFAULT_GUIDE_FEE);
+    const t = computeTotals((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
     const g = (byGuide[s.guideId] ??= { guideId: s.guideId, guide: gName(s.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
     const covered = coveredByMonth(s.guideId, s.date);
