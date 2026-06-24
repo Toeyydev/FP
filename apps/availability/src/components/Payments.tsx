@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
-type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null };
+type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -172,7 +172,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             <option value="paid">Paid only</option>
           </select>
           <input className="search" style={{ flex: "none", width: 180 }} placeholder="Search guide…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <button className="btn sm" onClick={exportCsv}>↓ Export payroll CSV</button>
+          <button className="btn sm" onClick={exportCsv}>Export payroll CSV</button>
           <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600 }}>Month total: {thb(totals.payout)}</span>
         </div>
         <div className="grid-scroll">
@@ -183,10 +183,15 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             <tbody>
               {visible.length === 0 ? (
                 <tr><td colSpan={8} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
-              ) : visible.map((r) => {
+              ) : visible.map((r, idx) => {
                 const unpaid = r.jobs.filter((j) => !j.paid);
+                const prevPending = idx > 0 && visible[idx - 1].jobs.some((j) => !j.paid);
+                const showUnpaidHd = unpaid.length > 0 && idx === 0;
+                const showPaidHd = unpaid.length === 0 && (idx === 0 || prevPending);
                 return (
                 <Fragment key={r.guideId}>
+                {showUnpaidHd && <tr><td colSpan={8} style={{ padding: "8px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "#b45309", background: "#fbf4e8" }}>Unpaid — needs payment</td></tr>}
+                {showPaidHd && <tr><td colSpan={8} style={{ padding: "12px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>Paid</td></tr>}
                 <tr style={{ cursor: "pointer", background: unpaid.length > 0 ? "#fbf4e8" : undefined }} onClick={() => toggle(r.guideId)}>
                   <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{open.has(r.guideId) ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
                   <td className="r">{r.tours}{unpaid.length > 0 && <span className="badge invited" style={{ marginLeft: 6 }}>{unpaid.length} pending</span>}</td>
@@ -201,30 +206,30 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
                     {r.eslipUrl
                       ? <span style={{ display: "inline-flex", gap: 6 }}>
-                          <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">📎 E-slip</a>
-                          {canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace e-slip">↻<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
+                          <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">E-slip</a>{r.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
+                          {canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace e-slip">Replace<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
                         </span>
-                      : (canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>)}
+                      : (canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>)}
                     {canEdit && (r.status === "paid"
                     ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
                     : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>)}
-                    {canEdit && <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>🗑</button>}</td>
+                    {canEdit && <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>Delete</button>}</td>
                 </tr>
                 {open.has(r.guideId) && (
                   <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
-                    {canEdit && unpaid.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, unpaid)}>💳 Pay {unpaid.length} unpaid job{unpaid.length === 1 ? "" : "s"} together · one ref</button></div>}
+                    {canEdit && unpaid.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, unpaid)}>Pay {unpaid.length} unpaid job{unpaid.length === 1 ? "" : "s"} together · one ref</button></div>}
                     {[...r.jobs].sort((a, b) => (a.paid ? 1 : 0) - (b.paid ? 1 : 0)).map((j, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
                         <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
                         <span style={{ flex: 1 }}>{j.tour}</span>
                         <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
                         {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
-                        <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>
-                        <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">📄 Job sheet</a>
+                        <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
+                        <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                         {canEdit && (j.paid
                           ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
                           : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
-                        {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>🗑</button>}
+                        {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
                       </div>
                     ))}
                   </td></tr>
@@ -264,10 +269,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                     <td style={{ whiteSpace: "nowrap" }}>
                       {b.eslipUrl
                         ? <span style={{ display: "inline-flex", gap: 6 }}>
-                            <a className="btn sm" href={b.eslipUrl} target="_blank" rel="noopener noreferrer" title="View bonus slip in Drive">📎 E-slip</a>
-                            {canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace">↻<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>}
+                            <a className="btn sm" href={b.eslipUrl} target="_blank" rel="noopener noreferrer" title="View bonus slip in Drive">E-slip</a>
+                            {canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace">Replace<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>}
                           </span>
-                        : (canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload bonus payment slip">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>)}
+                        : (canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload bonus payment slip">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>)}
                     </td>
                     <td style={{ textAlign: "right" }}>{canEdit && <button className="btn sm danger" title="Remove bonus" onClick={() => delBonus(b.id)}>×</button>}</td>
                   </tr>
