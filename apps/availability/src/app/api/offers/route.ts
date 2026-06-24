@@ -15,12 +15,24 @@ export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   await sweepExpiredOffers(); // expire + alert on anything past its deadline
-  const offers = await prisma.jobOffer.findMany({ orderBy: { createdAt: "desc" }, take: 80, include: { responses: true } });
+  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const allOffers = await prisma.jobOffer.findMany({ where: { date: { gte: today } }, orderBy: { createdAt: "desc" }, take: 200, include: { responses: true } });
 
   // Upcoming assigned jobs (all guides), so the operator sees what's booked.
-  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   const assigns = await prisma.assignment.findMany({
     where: { date: { gte: today } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }], take: 200,
+  });
+
+  // One row per tour-slot: keep only the most recent offer, and hide offers for slots
+  // already filled (those show under assignments). Stops a slot's repeated re-offers
+  // from stacking up as many duplicate UNFILLED rows.
+  const assignedKey = new Set(assigns.map((a) => `${a.date}|${a.slotIdx}|${a.tourId}`));
+  const seenSlot = new Set<string>();
+  const offers = allOffers.filter((o) => {
+    const k = `${o.date}|${o.slotIdx}|${o.tourId}`;
+    if (assignedKey.has(k) || seenSlot.has(k)) return false;
+    seenSlot.add(k);
+    return true;
   });
 
   const tourIds = [...new Set(offers.map((o) => o.tourId))];
