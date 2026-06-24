@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
-type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null };
+type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -114,10 +114,58 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
 
   const ql = q.trim().toLowerCase();
   // Guides with unpaid jobs float to the top so the operator sees who's still owed.
-  const hasUnpaid = (r: Row) => r.jobs.some((j) => !j.paid);
   const visible = rows
     .filter((r) => (statusFilter === "all" || r.status === statusFilter) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)))
-    .sort((a, b) => (hasUnpaid(a) ? 0 : 1) - (hasUnpaid(b) ? 0 : 1) || a.guide.localeCompare(b.guide));
+    .sort((a, b) => a.guide.localeCompare(b.guide));
+  // Split BY TOUR: a guide appears under Unpaid for their unpaid tours and under Paid
+  // for their paid tours — so a single tour moves to Paid the moment it's paid.
+  const unpaidGuides = visible.filter((r) => r.jobs.some((j) => !j.paid));
+  const paidGuides = visible.filter((r) => r.jobs.some((j) => j.paid));
+  const sumBy = (jobs: Job[], k: "amount" | "fee" | "expenses") => jobs.reduce((s, j) => s + (j[k] ?? 0), 0);
+
+  function renderGuideRow(r: Row, jobs: Job[], mode: "unpaid" | "paid") {
+    const okey = `${mode}|${r.guideId}`;
+    const isOpen = open.has(okey);
+    const refs = [...new Set(jobs.map((j) => j.peakRef).filter(Boolean))];
+    return (
+      <Fragment key={okey}>
+        <tr style={{ cursor: "pointer", background: mode === "unpaid" ? "#fbf4e8" : undefined }} onClick={() => toggle(okey)}>
+          <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{isOpen ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
+          <td className="r">{jobs.length}</td>
+          <td className="r">{thb(sumBy(jobs, "fee"))}</td>
+          <td className="r">{thb(sumBy(jobs, "expenses"))}</td>
+          <td className="r"><b>{thb(sumBy(jobs, "amount"))}</b></td>
+          <td style={{ fontSize: 11.5, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }}>{refs.join(", ")}</td>
+          <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>
+          <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
+            {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">E-slip</a>}
+            {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+            {mode === "unpaid" && canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
+            {mode === "paid" && canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace the uploaded slip">Replace slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
+          </td>
+        </tr>
+        {isOpen && (
+          <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+            {mode === "unpaid" && canEdit && jobs.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length} unpaid job{jobs.length === 1 ? "" : "s"} together · one ref</button></div>}
+            {jobs.map((j, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
+                <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
+                <span style={{ flex: 1 }}>{j.tour}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
+                {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
+                <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
+                <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
+                {canEdit && (j.paid
+                  ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
+                  : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
+                {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
+              </div>
+            ))}
+          </td></tr>
+        )}
+      </Fragment>
+    );
+  }
   const vTotals = visible.reduce((a, r) => ({ tours: a.tours + r.tours, netFee: a.netFee + r.netFee, expenses: a.expenses + r.expenses, payout: a.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
   // Month-overview figures for the dashboard band (whole month, not the filtered view).
   const allJobs = rows.flatMap((r) => r.jobs);
@@ -183,59 +231,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             <tbody>
               {visible.length === 0 ? (
                 <tr><td colSpan={8} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
-              ) : visible.map((r, idx) => {
-                const unpaid = r.jobs.filter((j) => !j.paid);
-                const prevPending = idx > 0 && visible[idx - 1].jobs.some((j) => !j.paid);
-                const showUnpaidHd = unpaid.length > 0 && idx === 0;
-                const showPaidHd = unpaid.length === 0 && (idx === 0 || prevPending);
-                return (
-                <Fragment key={r.guideId}>
-                {showUnpaidHd && <tr><td colSpan={8} style={{ padding: "8px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "#b45309", background: "#fbf4e8" }}>Unpaid — needs payment</td></tr>}
-                {showPaidHd && <tr><td colSpan={8} style={{ padding: "12px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>Paid</td></tr>}
-                <tr style={{ cursor: "pointer", background: unpaid.length > 0 ? "#fbf4e8" : undefined }} onClick={() => toggle(r.guideId)}>
-                  <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{open.has(r.guideId) ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
-                  <td className="r">{r.tours}{unpaid.length > 0 && <span className="badge invited" style={{ marginLeft: 6 }}>{unpaid.length} pending</span>}</td>
-                  <td className="r">{thb(r.netFee)}</td>
-                  <td className="r">{thb(r.expenses)}</td>
-                  <td className="r"><b>{thb(r.payout)}</b></td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input className="search" style={{ width: 130, fontSize: 12, fontVariantNumeric: "tabular-nums" }} defaultValue={r.peakRef ?? ""} placeholder="EXP-…" title="PEAK accounting ref for the combined payout" onBlur={(e) => { if ((e.target.value.trim() || null) !== (r.peakRef ?? null)) savePeakRef(r.guideId, e.target.value); }} />
-                    <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>covers {r.tours} job sheet{r.tours === 1 ? "" : "s"}</div>
-                  </td>
-                  <td><span className={`badge ${r.status === "paid" ? "active" : "invited"}`}>{r.status === "paid" ? "Paid" : "Pending"}</span></td>
-                  <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
-                    {r.eslipUrl
-                      ? <span style={{ display: "inline-flex", gap: 6 }}>
-                          <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">E-slip</a>{r.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
-                          {canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace e-slip">Replace<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
-                        </span>
-                      : (canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>)}
-                    {canEdit && (r.status === "paid"
-                    ? <button className="btn sm ghost" onClick={() => mark(r.guideId, "pending")}>Undo</button>
-                    : <button className="btn sm primary" onClick={() => mark(r.guideId, "paid")}>Mark paid</button>)}
-                    {canEdit && <button className="btn sm danger" title="Delete this guide's pay for the month" onClick={() => removeRow(r.guideId, r.guide)}>Delete</button>}</td>
-                </tr>
-                {open.has(r.guideId) && (
-                  <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
-                    {canEdit && unpaid.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, unpaid)}>Pay {unpaid.length} unpaid job{unpaid.length === 1 ? "" : "s"} together · one ref</button></div>}
-                    {[...r.jobs].sort((a, b) => (a.paid ? 1 : 0) - (b.paid ? 1 : 0)).map((j, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
-                        <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
-                        <span style={{ flex: 1 }}>{j.tour}</span>
-                        <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
-                        {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
-                        <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
-                        <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
-                        {canEdit && (j.paid
-                          ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
-                          : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
-                        {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
-                      </div>
-                    ))}
-                  </td></tr>
-                )}
-                </Fragment>
-              );})}
+              ) : (<>
+                {unpaidGuides.length > 0 && <tr><td colSpan={8} style={{ padding: "8px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "#b45309", background: "#fbf4e8" }}>Unpaid — needs payment</td></tr>}
+                {unpaidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => !j.paid), "unpaid"))}
+                {paidGuides.length > 0 && <tr><td colSpan={8} style={{ padding: "12px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>Paid</td></tr>}
+                {paidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => j.paid), "paid"))}
+              </>)}
             </tbody>
             {visible.length > 0 && (
               <tfoot>

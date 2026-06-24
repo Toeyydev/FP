@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
     return !pd || date <= pd;
   };
 
-  type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null };
+  type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; fee: number; expenses: number };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
   const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};
@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
     const covered = coveredByMonth(a.guideId, a.date);
     const ps = payStatusOf.get(k) ?? "PENDING";
-    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null });
+    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses) });
   }
 
   // Imported / orphan job sheets — a sheet exists but no assignment row (e.g. a
@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
     const covered = coveredByMonth(s.guideId, s.date);
     const ps = payStatusOf.get(k) ?? "PENDING";
-    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null });
+    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses) });
   }
 
   const rows = Object.values(byGuide)
