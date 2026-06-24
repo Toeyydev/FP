@@ -24,6 +24,8 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ pending: 0, approved: 0, paid: 0 });
   const [monthFilter, setMonthFilter] = useState("all");
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const toggleGrp = (k: string) => setHidden((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/pay${isOperator ? "?view=ops" : ""}`, { cache: "no-store" });
@@ -82,10 +84,11 @@ export default function Pay({ isOperator }: { isOperator: boolean }) {
               {GROUPS.map((g) => {
                 const items = mrows.filter((r) => r.status === g.key);
                 if (!items.length) return null;
+                const gkey = `${month}|${g.key}`; const isHid = hidden.has(gkey);
                 return (
                   <div key={g.key} style={{ marginBottom: 14 }}>
-                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: ".4px", color: "var(--ink-soft)", margin: "0 0 8px" }}>{g.label} ({items.length})</h3>
-                {items.map((r, i) => (
+                    <h3 onClick={() => toggleGrp(gkey)} style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: ".4px", color: "var(--ink-soft)", margin: "0 0 8px", cursor: "pointer" }}>{isHid ? "▸ " : "▾ "}{g.label} ({items.length})</h3>
+                {!isHid && items.map((r, i) => (
                   <div key={i} className="pay-row">
                     <span className="pr-when">{dShort(r.date)}</span>
                     <span className="pr-main">
