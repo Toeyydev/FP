@@ -24,7 +24,7 @@ export const authConfig = {
         p.startsWith("/api/auth") || p.startsWith("/api/claim") || p.startsWith("/api/request") ||
         p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version") ||
         p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/google/health" ||
-        p.startsWith("/api/passkey");
+        p.startsWith("/api/passkey") || p.startsWith("/api/offers/respond");
       if (isPublic) return true;
       if (auth?.user) {
         // Accountant is a finance-only role: confine page navigation to the money

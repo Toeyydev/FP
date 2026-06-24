@@ -4,6 +4,7 @@ import { sendTourCalendarInvite } from "@/lib/calendar";
 import { linePushButtons, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
+import { signOfferAction } from "@/lib/offer-token";
 
 // Create and broadcast a job offer to every available guide (in-app + push +
 // LINE buttons). Reused by the operator endpoint and by auto re-offer on cancel.
@@ -60,12 +61,16 @@ export async function createOffer(o: {
     await prisma.notification.create({ data: { userId: g.id, kind: "offer", offerId: offer.id, message: `${summary}\n(open the app to Accept or Deny)` } });
     await sendPushToUser(g.id, { title: "New job offer", body: btnText, url: "/", tag: `offer-${offer.id}` });
     // Email is the catch-all channel: reaches guides with no app install / no LINE.
-    if (g.email) await sendEmail({
-      to: g.email,
-      subject: `New job offer \u2014 ${tour.name}`,
-      text: `${summary}\n\nOpen the app to accept or pass: https://guide.folkpaths.com/`,
-      html: `<p>You have a new job offer:</p><p><b>${tour.name}</b><br>${dateLabel} \u00b7 ${timeLabel}${o.pax != null ? ` \u00b7 ${o.pax} pax` : ""}${o.note ? `<br>${o.note}` : ""}</p><p><a href="https://guide.folkpaths.com/">Open the app to accept or pass</a></p>`,
-    }).catch(() => {});
+    if (g.email) {
+      const acceptUrl = `https://guide.folkpaths.com/api/offers/respond?token=${signOfferAction(offer.id, g.guideId!, "accept")}`;
+      const denyUrl = `https://guide.folkpaths.com/api/offers/respond?token=${signOfferAction(offer.id, g.guideId!, "deny")}`;
+      await sendEmail({
+        to: g.email,
+        subject: `New job offer \u2014 ${tour.name}`,
+        text: `${summary}\n\n\u2705 Accept this job: ${acceptUrl}\n\u274c Pass: ${denyUrl}\n\n(or open the app: https://guide.folkpaths.com/)`,
+        html: `<p>You have a new job offer:</p><p><b>${tour.name}</b><br>${dateLabel} \u00b7 ${timeLabel}${o.pax != null ? ` \u00b7 ${o.pax} pax` : ""}${o.note ? `<br>${o.note}` : ""}</p><p><a href="${acceptUrl}" style="display:inline-block;background:#2e7d4f;color:#fff;text-decoration:none;font-weight:700;padding:11px 20px;border-radius:10px">\u2705 Accept this job</a>&nbsp;&nbsp;<a href="${denyUrl}" style="color:#c2604a">Pass</a></p><p style="font-size:13px;color:#888">One tap \u2014 no login needed. Or <a href="https://guide.folkpaths.com/">open the app</a>.</p>`,
+      }).catch(() => {});
+    }
     if (lineEnabled && g.lineUserId) {
       const firstName = (g.displayName || "").split(" ")[0];
       await linePushButtons(g.lineUserId, `Folkpaths job offer for ${g.displayName}`, `${firstName ? firstName + ", " : ""}${btnText}`, [
