@@ -17,6 +17,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [hideSec, setHideSec] = useState<Set<string>>(new Set());
+  const toggleSec = (s: string) => setHideSec((p) => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; });
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "paid">("all");
   const [q, setQ] = useState(""); // filter by guide id / name
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
@@ -232,10 +234,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               {visible.length === 0 ? (
                 <tr><td colSpan={8} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
               ) : (<>
-                {unpaidGuides.length > 0 && <tr><td colSpan={8} style={{ padding: "8px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "#b45309", background: "#fbf4e8" }}>Unpaid — needs payment</td></tr>}
-                {unpaidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => !j.paid), "unpaid"))}
-                {paidGuides.length > 0 && <tr><td colSpan={8} style={{ padding: "12px 12px 4px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>Paid</td></tr>}
-                {paidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => j.paid), "paid"))}
+                {unpaidGuides.length > 0 && <tr><td colSpan={8} onClick={() => toggleSec("unpaid")} style={{ cursor: "pointer", padding: "8px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "#b45309", background: "#fbf4e8" }}>{hideSec.has("unpaid") ? "▸" : "▾"} Unpaid — needs payment ({unpaidGuides.length}) · {thb(unpaidGuides.reduce((s, r) => s + r.jobs.filter((j) => !j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
+                {!hideSec.has("unpaid") && unpaidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => !j.paid), "unpaid"))}
+                {paidGuides.length > 0 && <tr><td colSpan={8} onClick={() => toggleSec("paid")} style={{ cursor: "pointer", padding: "12px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>{hideSec.has("paid") ? "▸" : "▾"} Paid ({paidGuides.length}) · {thb(paidGuides.reduce((s, r) => s + r.jobs.filter((j) => j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
+                {!hideSec.has("paid") && paidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => j.paid), "paid"))}
               </>)}
             </tbody>
             {visible.length > 0 && (
