@@ -199,11 +199,13 @@ export default function Dispatch() {
             </div>
             <div className="mfoot">
               <button className="btn ghost" disabled={saving} onClick={() => setAssignFor(null)}>Cancel</button>
-              <button className="btn" disabled={!pick || !cands?.length} title="Copy a one-tap accept link to send this guide" onClick={async () => {
+              <button className="btn" disabled={!pick || !cands?.length} title="Copy a one-tap accept link to send this guide (re-offers if needed so it works)" onClick={async () => {
                 const r = await fetch(`/api/offers/link?offerId=${assignFor.id}&guideId=${pick}`);
                 const j = await r.json().catch(() => ({}));
-                if (r.ok && j.acceptUrl) { try { await navigator.clipboard.writeText(j.acceptUrl); setMsg(`✅ Accept link copied — paste it to ${pick}.`); } catch { setMsg(j.acceptUrl); } }
-                else setMsg("Couldn't get the link.");
+                if (r.ok && j.acceptUrl) {
+                  try { await navigator.clipboard.writeText(j.acceptUrl); setMsg(`✅ Accept link copied${j.reoffered ? " (fresh offer made to " + pick + ")" : ""} — paste it to the guide.`); } catch { setMsg(j.acceptUrl); }
+                  setAssignFor(null); await load();
+                } else setMsg(j.error === "guide-unavailable" ? "That guide can't take this slot." : "Couldn't get the link.");
               }}>🔗 Copy accept link</button>
               <button className="btn primary" disabled={saving || !pick || !cands?.length} onClick={confirmAssign}>{saving ? "Sending…" : "Send offer"}</button>
             </div>
