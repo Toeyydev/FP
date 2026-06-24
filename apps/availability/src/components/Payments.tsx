@@ -101,8 +101,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
 
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ["Guide ID", "Guide", "Job sheets", "Guide fee (net)", "Expenses", "Total payout", "Status", "PEAK ref"];
-    const lines = [head.join(",")].concat(rows.map((r) => [r.guideId, r.guide, r.tours, r.netFee, r.expenses, r.payout, r.status, r.peakRef ?? ""].map(cell).join(",")));
+    // Per-JOB rows so each tour reconciles to the PEAK ref of the transfer that paid it.
+    const head = ["Guide ID", "Guide", "Date", "Tour", "Amount", "Paid", "PEAK ref"];
+    const lines = [head.join(",")].concat(
+      rows.flatMap((r) => r.jobs.map((j) => [r.guideId, r.guide, j.date, j.tour, j.amount, j.paid ? "PAID" : "PENDING", j.peakRef ?? r.peakRef ?? ""].map(cell).join(",")))
+    );
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `folkpaths-payroll-${period}.csv`; a.click();
@@ -110,7 +113,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   }
 
   const ql = q.trim().toLowerCase();
-  const visible = rows.filter((r) => (statusFilter === "all" || r.status === statusFilter) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)));
+  // Guides with unpaid jobs float to the top so the operator sees who's still owed.
+  const hasUnpaid = (r: Row) => r.jobs.some((j) => !j.paid);
+  const visible = rows
+    .filter((r) => (statusFilter === "all" || r.status === statusFilter) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)))
+    .sort((a, b) => (hasUnpaid(a) ? 0 : 1) - (hasUnpaid(b) ? 0 : 1) || a.guide.localeCompare(b.guide));
   const vTotals = visible.reduce((a, r) => ({ tours: a.tours + r.tours, netFee: a.netFee + r.netFee, expenses: a.expenses + r.expenses, payout: a.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
   // Month-overview figures for the dashboard band (whole month, not the filtered view).
   const allJobs = rows.flatMap((r) => r.jobs);
@@ -180,7 +187,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 const unpaid = r.jobs.filter((j) => !j.paid);
                 return (
                 <Fragment key={r.guideId}>
-                <tr style={{ cursor: "pointer" }} onClick={() => toggle(r.guideId)}>
+                <tr style={{ cursor: "pointer", background: unpaid.length > 0 ? "#fbf4e8" : undefined }} onClick={() => toggle(r.guideId)}>
                   <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{open.has(r.guideId) ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
                   <td className="r">{r.tours}{unpaid.length > 0 && <span className="badge invited" style={{ marginLeft: 6 }}>{unpaid.length} pending</span>}</td>
                   <td className="r">{thb(r.netFee)}</td>
@@ -206,7 +213,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 {open.has(r.guideId) && (
                   <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
                     {canEdit && unpaid.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, unpaid)}>💳 Pay {unpaid.length} unpaid job{unpaid.length === 1 ? "" : "s"} together · one ref</button></div>}
-                    {r.jobs.map((j, i) => (
+                    {[...r.jobs].sort((a, b) => (a.paid ? 1 : 0) - (b.paid ? 1 : 0)).map((j, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
                         <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
                         <span style={{ flex: 1 }}>{j.tour}</span>
