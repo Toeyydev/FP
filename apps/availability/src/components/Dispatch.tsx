@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
 type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
-type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[] };
+type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
 type Candidate = { guideId: string; displayName: string };
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -164,6 +164,7 @@ export default function Dispatch() {
                         {o.denied.length > 0 && <div>declined: {o.denied.join(", ")}</div>}
                       </td>
                       <td style={{ whiteSpace: "nowrap" }}>
+                        {o.soloGuideId && o.status !== "ASSIGNED" && <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(o.soloGuideId)}&date=${o.date}&slotIdx=${o.slotIdx}`} title="Prepare this job sheet before the guide accepts">📄 Sheet</a>}{" "}
                         {(o.status === "EXPIRED" || o.status === "OPEN") && <button className="btn sm" title="Hand this job straight to a specific guide (replaces the open offer to everyone)" onClick={() => openAssign(o)}>Assign to guide</button>}
                         {" "}
                         <button className="btn sm danger" title="Delete this job offer" onClick={() => deleteOffer(o)}>🗑</button>

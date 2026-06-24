@@ -70,6 +70,7 @@ export async function GET() {
       id: o.id, tourId: o.tourId, tourName: tourName.get(o.tourId) ?? o.tourId, date: o.date, slotIdx: o.slotIdx,
       time: timeRangeLabel(o.slotIdx, o.durationMin), pax: o.pax, note: o.note, status: o.status, expiresAt: o.expiresAt,
       assignedGuide: gName(o.assignedGuideId),
+      soloGuideId: o.responses.length === 1 ? o.responses[0].guideId : null, // single-guide offer → prep its sheet
       candidates: o.responses.length,
       accepted: o.responses.filter((r) => r.response === "ACCEPTED").map((r) => gName(r.guideId)),
       denied: o.responses.filter((r) => r.response === "DENIED").map((r) => gName(r.guideId)),
