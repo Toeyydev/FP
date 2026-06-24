@@ -53,23 +53,45 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ rows, totals: { pending: r2(totals.pending), approved: r2(totals.approved), paid: r2(totals.paid) } });
 }
 
-// POST { guideId, date, slotIdx, status } — operator sets a tour's payment state.
+// POST { guideId, status, peakRef?, (date,slotIdx) | jobs[] } — operator sets a tour's
+// (or a batch of tours') payment state. The PEAK ref applies to the WHOLE batch — one
+// transfer covering several tours — so each tour carries the ref of its own payment.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const parsed = z.object({ guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0), status: z.enum(["PENDING", "APPROVED", "PAID", "CANCELLED"]) }).safeParse(await req.json().catch(() => null));
+  const job = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) });
+  const parsed = z.object({
+    guideId: z.string().min(1),
+    status: z.enum(["PENDING", "APPROVED", "PAID", "CANCELLED"]),
+    peakRef: z.string().max(60).optional(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    slotIdx: z.number().int().min(0).optional(),
+    jobs: z.array(job).max(60).optional(),
+  }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { guideId, date, slotIdx, status } = parsed.data;
-  const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
-  if (!a) return NextResponse.json({ error: "not-found" }, { status: 404 });
+  const { guideId, status, peakRef } = parsed.data;
+  const list = parsed.data.jobs?.length ? parsed.data.jobs : (parsed.data.date && parsed.data.slotIdx != null ? [{ date: parsed.data.date, slotIdx: parsed.data.slotIdx }] : []);
+  if (!list.length) return NextResponse.json({ error: "no-jobs" }, { status: 400 });
+  const ref = peakRef?.trim() || null;
   const now = new Date();
-  await prisma.tourPayment.upsert({
-    where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-    create: { guideId, date, slotIdx, tourId: a.tourId, status, approvedBy: status !== "PENDING" ? session!.user!.id : null, approvedAt: status === "APPROVED" ? now : null, paidAt: status === "PAID" ? now : null },
-    update: { status, approvedBy: status !== "PENDING" ? session!.user!.id : null, approvedAt: status === "APPROVED" ? now : null, paidAt: status === "PAID" ? now : null },
-  });
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: `pay.${status.toLowerCase()}`, entityType: "Assignment", detail: { guideId, date, slotIdx } });
-  return NextResponse.json({ ok: true });
+  const uid = session!.user!.id ?? null;
+  for (const j of list) {
+    const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } } });
+    const data = {
+      status,
+      approvedBy: status !== "PENDING" ? uid : null,
+      approvedAt: status === "APPROVED" ? now : null,
+      paidAt: status === "PAID" ? now : null,
+      peakRef: status === "PAID" ? ref : null, // ref belongs to this payment; cleared if un-paid
+    };
+    await prisma.tourPayment.upsert({
+      where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
+      create: { guideId, date: j.date, slotIdx: j.slotIdx, tourId: a?.tourId ?? "", ...data },
+      update: data,
+    });
+  }
+  await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: `pay.${status.toLowerCase()}`, entityType: "Assignment", detail: { guideId, count: list.length, peakRef: ref } });
+  return NextResponse.json({ ok: true, count: list.length });
 }
 
 // DELETE { guideId, date, slotIdx } — remove a payment entry entirely: deletes the

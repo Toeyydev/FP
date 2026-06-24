@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
-type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string };
+type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -23,8 +23,16 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [bForm, setBForm] = useState({ guideId: "", amount: "", reason: "" });
   const toggle = (gid: string) => setOpen((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
   // Mark a single tour paid/unpaid (per-tour TourPayment via the /pay endpoint).
-  async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING") {
-    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status }) });
+  async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING", peakRef?: string) {
+    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status, ...(peakRef ? { peakRef } : {}) }) });
+    if (r.ok) load(period);
+  }
+  // Pay several tours in ONE transfer with ONE PEAK ref — each tour carries that ref.
+  async function payBatch(guideId: string, jobs: Job[]) {
+    if (!jobs.length) return;
+    const ref = prompt(`PEAK ref for this payment (covers ${jobs.length} job${jobs.length === 1 ? "" : "s"}):`, "EXP-");
+    if (ref === null) return;
+    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, status: "PAID", peakRef: ref.trim() || undefined, jobs: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }) });
     if (r.ok) load(period);
   }
   // Remove a single uploaded job sheet + its tour records (operators only).
@@ -197,16 +205,18 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 </tr>
                 {open.has(r.guideId) && (
                   <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+                    {canEdit && unpaid.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, unpaid)}>💳 Pay {unpaid.length} unpaid job{unpaid.length === 1 ? "" : "s"} together · one ref</button></div>}
                     {r.jobs.map((j, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
                         <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
                         <span style={{ flex: 1 }}>{j.tour}</span>
                         <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
+                        {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                         <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>
                         <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">📄 Job sheet</a>
                         {canEdit && (j.paid
                           ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
-                          : <button className="btn sm primary" onClick={() => setJobPaid(j, r.guideId, "PAID")}>Mark paid</button>)}
+                          : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
                         {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>🗑</button>}
                       </div>
                     ))}

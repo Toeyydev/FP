@@ -448,6 +448,7 @@ model TourPayment {
   approvedBy String?
   approvedAt DateTime?
   paidAt     DateTime?
+  peakRef    String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
   updatedAt  DateTime  @updatedAt
 
   @@unique([guideId, date, slotIdx])
