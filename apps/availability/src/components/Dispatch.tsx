@@ -164,7 +164,7 @@ export default function Dispatch() {
                         {o.denied.length > 0 && <div>declined: {o.denied.join(", ")}</div>}
                       </td>
                       <td style={{ whiteSpace: "nowrap" }}>
-                        {o.status === "EXPIRED" && <button className="btn sm" title="Assign this job to a specific guide" onClick={() => openAssign(o)}>Assign</button>}
+                        {(o.status === "EXPIRED" || o.status === "OPEN") && <button className="btn sm" title="Hand this job straight to a specific guide (replaces the open offer to everyone)" onClick={() => openAssign(o)}>Assign to guide</button>}
                         {" "}
                         <button className="btn sm danger" title="Delete this job offer" onClick={() => deleteOffer(o)}>🗑</button>
                       </td>

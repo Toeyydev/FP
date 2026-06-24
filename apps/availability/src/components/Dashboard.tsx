@@ -116,7 +116,7 @@ export default function Dashboard() {
                     </a>
                   ))}
                   {d.understaffed.map((u, i) => (
-                    <a key={`s${i}`} className="dash-row bad" href={`/bookings?focus=${u.date}`} title="Open Bookings to add a guide">
+                    <a key={`s${i}`} className="dash-row bad" href="/jobs" title="Open Dispatch to assign a guide">
                       <span className="tag bad">Understaffed</span>
                       <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.pax} pax · {u.have}/{u.need} guides — add {u.need - u.have} more</div></span>
                     </a>
