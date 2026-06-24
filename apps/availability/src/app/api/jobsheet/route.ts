@@ -77,6 +77,9 @@ export async function GET(req: NextRequest) {
     } catch { /* ref is best-effort; never block opening the sheet */ }
   }
 
+  // Whether this guide has checked in for the tour — gates the guide's no-show boxes.
+  const checkedIn = (await prisma.checkin.count({ where: { guideId, date, slotIdx } })) > 0;
+
   // Collapse repeated guests to a single row — the same name must appear only once
   // (a re-import or combine can leave a guest listed twice). Keeps the first; blank
   // (manual) rows are never merged.
@@ -128,7 +131,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -163,7 +166,7 @@ export async function GET(req: NextRequest) {
       .map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -172,7 +175,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps,
+    header, tour, saved: false, canEdit: isOps, checkedIn,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }

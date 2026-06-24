@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { SLOT_TIMES } from "@/lib/slots";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -20,6 +21,15 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, date, slotIdx, bookingNo, noShow } = parsed.data;
   if (!ops(role) && myGuideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // A guide may report a no-show only AFTER checking in and within 30 min of the tour
+  // start (operators are exempt — they can correct any time).
+  if (!ops(role)) {
+    const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
+    const [h, m] = (SLOT_TIMES[slotIdx] || "00:00").split(":").map(Number);
+    const startMs = Date.parse(`${date}T00:00:00Z`) + (h * 60 + m) * 60_000 - 7 * 3600 * 1000;
+    const inWindow = Date.now() >= startMs && Date.now() <= startMs + 30 * 60_000;
+    if (!started || !inWindow) return NextResponse.json({ error: "not-in-window" }, { status: 403 });
+  }
 
   await prisma.booking.updateMany({
     where: { date, slotIdx, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] },

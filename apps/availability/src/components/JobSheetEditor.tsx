@@ -38,6 +38,7 @@ export default function JobSheetEditor() {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
+  const [checkedIn, setCheckedIn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
@@ -47,7 +48,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn);
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
   useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected })).catch(() => {}); }, []);
@@ -74,6 +75,11 @@ export default function JobSheetEditor() {
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);
   const ro = !canEdit; // read-only (guide view)
+  // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
+  // tour start (that's when who turned up is known). Operators can mark any time.
+  const startMs = Date.parse(`${sheet.date}T00:00:00Z`) + (((SLOT_TIMES[sheet.slotIdx] || "00:00").split(":").map(Number).reduce((h, m) => h * 60 + m, 0)) * 60_000) - 7 * 3600 * 1000;
+  const inNoShowWindow = Date.now() >= startMs && Date.now() <= startMs + 30 * 60_000;
+  const canMarkNoShow = canEdit || (checkedIn && inNoShowWindow);
   // Any edit marks the sheet dirty, so the PDF / Excel / e-slip buttons (which
   // auto-save only when !saved) always persist the change before exporting/uploading.
   const up = (patch: Partial<Sheet>) => { setSheet({ ...sheet, ...patch }); setSaved(false); if (msg) setMsg(""); };
@@ -144,6 +150,7 @@ export default function JobSheetEditor() {
             <div className="gs-grid">
               <div>
                 <h3>👥 Your customers ({sheet.bookings.length})</h3>
+                {ro && !canMarkNoShow && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", margin: "2px 0 6px" }}>{!checkedIn ? "Check in to report no-shows." : "No-show reporting is open for 30 minutes after the tour starts."}</div>}
                 {sheet.bookings.length ? (
                   <ol className="gs-cust">
                     {sheet.bookings.map((b, i) => {
@@ -151,10 +158,12 @@ export default function JobSheetEditor() {
                       return (
                       <li key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <span style={{ flex: 1, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{b.tickets === "included" ? " 🎫 tickets incl." : b.tickets === "not" ? " 🎫 no tickets" : ""}</span>
-                        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title={b.bookingNo ? "Mark this guest as a no-show" : "No reference to mark"}>
-                          <input type="checkbox" checked={ns} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
-                          No-show
-                        </label>
+                        {canMarkNoShow ? (
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title={b.bookingNo ? "Mark this guest as a no-show" : "No reference to mark"}>
+                            <input type="checkbox" checked={ns} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
+                            No-show
+                          </label>
+                        ) : (ns && <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--danger)", whiteSpace: "nowrap" }}>✗ No-show</span>)}
                       </li>
                       );
                     })}
