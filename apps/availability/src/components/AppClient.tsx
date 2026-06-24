@@ -1147,6 +1147,7 @@ export default function AppClient({
           {role === "operator" && <a className="navlink" href="/tour-log">{t("tourLogNav")}</a>}
           {role === "operator" && <a className="navlink" href="/guides">{t("guidesNav")}</a>}
           {role === "operator" && <a className="navlink" href="/meeting-points">{t("meetingPtsNav")}</a>}
+          {role === "operator" && <a className="navlink" href="/tours">Tours</a>}
           {role === "operator" && <a className="navlink" href="/product-map">{t("productMapNav")}</a>}
           {role === "operator" && (
             <a className="navlink" href="/admin" style={{ position: "relative" }}>
