@@ -8,6 +8,20 @@ import { signOfferAction } from "@/lib/offer-token";
 
 // Create and broadcast a job offer to every available guide (in-app + push +
 // LINE buttons). Reused by the operator endpoint and by auto re-offer on cancel.
+// Delete a "prepped" job sheet (one the operator made before a guide accepted) once
+// that guide is out of the running — only if they have NO assignment and NO check-in
+// for the slot, so a real or imported sheet is never touched.
+async function cleanupPreppedSheet(guideId: string, date: string, slotIdx: number) {
+  try {
+    const [assigned, checked] = await Promise.all([
+      prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true } }),
+      prisma.checkin.count({ where: { guideId, date, slotIdx } }),
+    ]);
+    if (assigned || checked > 0) return;
+    await prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } });
+  } catch { /* best-effort cleanup */ }
+}
+
 export async function createOffer(o: {
   tourId: string; date: string; slotIdx: number; pax?: number | null; note?: string | null;
   durationMin?: number | null; ttlMinutes?: number; createdById?: string | null; excludeGuideId?: string | null;
@@ -179,6 +193,12 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
     }
   } catch { /* never block accept on notifying the operator */ }
 
+  // The other candidates didn't get it — clear any sheet they had prepped for the slot.
+  try {
+    const others = await prisma.jobOfferResponse.findMany({ where: { offerId, guideId: { not: guideId } }, select: { guideId: true } });
+    for (const r of others) await cleanupPreppedSheet(r.guideId, offer.date, offer.slotIdx);
+  } catch { /* best-effort */ }
+
   return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
 }
 
@@ -189,6 +209,7 @@ export async function denyOffer(offerId: string, guideId: string): Promise<"ok" 
   // Remove the offer from the denying guide's bell.
   const u = await prisma.user.findUnique({ where: { guideId }, select: { id: true } });
   if (u) await prisma.notification.deleteMany({ where: { offerId, userId: u.id } });
+  await cleanupPreppedSheet(guideId, offer.date, offer.slotIdx);
   return "ok";
 }
 
@@ -230,7 +251,10 @@ export async function sweepExpiredOffers(): Promise<number> {
     await prisma.notification.deleteMany({ where: { offerId: o.id } });
     // Nobody took it: return its bookings to the inbox as pending (if unassigned).
     const stillAssigned = await prisma.assignment.findFirst({ where: { date: o.date, slotIdx: o.slotIdx }, select: { id: true } });
-    if (!stillAssigned) await prisma.booking.updateMany({ where: { date: o.date, slotIdx: o.slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+    if (!stillAssigned) {
+      await prisma.booking.updateMany({ where: { date: o.date, slotIdx: o.slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+      for (const r of o.responses) await cleanupPreppedSheet(r.guideId, o.date, o.slotIdx);
+    }
     const job = `${tourName.get(o.tourId) ?? o.tourId} · ${slotLabel(o.slotIdx)} · ${o.date}`;
     // Single-guide offer → name them; broadcast offer → generic "nobody accepted".
     const solo = o.responses.length === 1 ? guideLabel.get(o.responses[0].guideId) : null;

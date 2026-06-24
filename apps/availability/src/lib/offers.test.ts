@@ -3,7 +3,9 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   jobOffer: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   assignment: { upsert: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
-  jobOfferResponse: { updateMany: vi.fn() },
+  jobOfferResponse: { updateMany: vi.fn(), findMany: vi.fn() },
+  jobSheet: { deleteMany: vi.fn() },
+  checkin: { count: vi.fn() },
   notification: { deleteMany: vi.fn(), create: vi.fn() },
   tour: { findUnique: vi.fn() },
   user: { findFirst: vi.fn(), findMany: vi.fn() },
@@ -30,6 +32,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 1 });
   prismaMock.jobOffer.findMany.mockResolvedValue([]);
+  prismaMock.jobOfferResponse.findMany.mockResolvedValue([]);
+  prismaMock.checkin.count.mockResolvedValue(0);
+  prismaMock.assignment.findUnique.mockResolvedValue(null);
 });
 
 describe("offers — labels", () => {
