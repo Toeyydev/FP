@@ -6,6 +6,7 @@ import { linePush, lineEnabled } from "@/lib/line";
 import { todayD, ymd } from "@/lib/dates";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
+import { bookingRef } from "@/lib/booking-ref";
 
 export type ImportResult = "created" | "updated" | "skipped";
 
@@ -94,7 +95,7 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     if (b.status !== "PENDING" || !b.date || b.slotIdx == null) return false;
     const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx } });
     if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
-    const ref = b.externalRef || b.confirmationCode || b.customerName || "a new booking";
+    const ref = bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "a new booking";
     if (assigns.length > 1) {
       await notifyOps(`Booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides. Assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`, { date: b.date });
       return false;

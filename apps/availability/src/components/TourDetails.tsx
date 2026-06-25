@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { bookingRef } from "@/lib/booking-ref";
 
 type Data = {
   date: string; slotIdx: number; time: string; pax: number | null; note: string | null;
@@ -61,7 +62,7 @@ export default function TourDetails() {
           <thead><tr><th>No.</th><th>Name</th><th>Booking ref</th><th>Pax</th><th>Channel</th></tr></thead>
           <tbody>
             {d.bookings.length ? d.bookings.map((b, i) => (
-              <tr key={i}><td>{i + 1}</td><td>{b.customerName || "—"}</td><td>{b.externalRef || b.confirmationCode || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td></tr>
+              <tr key={i}><td>{i + 1}</td><td>{b.customerName || "—"}</td><td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td></tr>
             )) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
           </tbody>
         </table>

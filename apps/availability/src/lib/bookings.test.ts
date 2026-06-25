@@ -47,7 +47,8 @@ describe("bookings — parseBokun", () => {
     expect(p.confirmationCode).toBe("ABC123");
     expect(p.productName).toBe("Old Town Food Walk");
     expect(p.date).toBe("2026-06-13");
-    expect(p.startTime).toBe("17:00");
+    expect(p.startTime).toBe("16:30"); // 17:00 snaps to the nearest fixed slot, and startTime mirrors it
+    expect(p.slotIdx).toBe(5);
     expect(p.pax).toBe(6);
     expect(p.customerName).toBe("Anna P");
     expect(p.durationMin).toBe(180);

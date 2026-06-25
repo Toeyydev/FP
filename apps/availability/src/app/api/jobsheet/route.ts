@@ -8,6 +8,7 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { decrypt } from "@/lib/crypto";
 import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, makeRef, computeTotals, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { bookingRef } from "@/lib/booking-ref";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -105,7 +106,7 @@ export async function GET(req: NextRequest) {
   const splitHere = allAtSlot.some((b) => b.assignedGuideId);
   const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
   type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
-  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
+  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
 
   // Standard expense template scaled to the actual guests. Used for a fresh sheet,
   // AND to backfill a saved sheet that has none (e.g. one auto-created from a late
@@ -140,15 +141,22 @@ export async function GET(req: NextRequest) {
     // same guest's GYG ref — so we refresh the row to the GYG ref and never duplicate.
     const idKeys = (b: { externalRef?: string | null; confirmationCode?: string | null; customerName?: string | null }) =>
       [b.externalRef, b.confirmationCode, b.customerName].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
-    const canonRef = (b: { externalRef?: string | null; confirmationCode?: string | null }) => b.externalRef || b.confirmationCode || "";
+    const canonRef = (b: { externalRef?: string | null; confirmationCode?: string | null }) => bookingRef(b.externalRef, b.confirmationCode);
     const rowKeys = (r: SheetBooking) => [r.bookingNo, r.name].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
     const matchLive = (r: SheetBooking) => linked.find((lb) => { const lk = idKeys(lb); return rowKeys(r).some((k) => lk.includes(k)); });
 
-    // Same guest now active at a DIFFERENT slot on this date = genuinely re-slotted.
-    const elsewhere = await prisma.booking.findMany({
-      where: { date, slotIdx: { not: slotIdx }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    // A saved row whose guest is now active at a DIFFERENT date OR slot was re-slotted
+    // (incl. a Bokun date change, e.g. 26→27 Jun) — drop it. Scoped to the saved rows'
+    // own refs/names so it's a small, precise query (no name-collision sweep of the DB).
+    const savedIds = [...new Set(saved.flatMap((r) => [r.bookingNo, r.name]).map((x) => (x || "").trim()).filter(Boolean))];
+    const elsewhere = savedIds.length ? await prisma.booking.findMany({
+      where: {
+        status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
+        NOT: { date, slotIdx },
+        OR: [{ externalRef: { in: savedIds } }, { confirmationCode: { in: savedIds } }, { customerName: { in: savedIds } }],
+      },
       select: { customerName: true, externalRef: true, confirmationCode: true },
-    });
+    }) : [];
     const movedKeySet = new Set(elsewhere.flatMap(idKeys));
 
     const matched = new Map<SheetBooking, (typeof linked)[number]>();
@@ -163,7 +171,7 @@ export async function GET(req: NextRequest) {
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked
       .filter((lb) => !coveredLive.has(lb))
-      .map((b) => ({ name: b.customerName ?? "", bookingNo: b.externalRef || b.confirmationCode || "", bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
+      .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
     return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet, reconciledAdded: added.length, reconciledRemoved });

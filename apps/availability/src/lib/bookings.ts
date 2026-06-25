@@ -107,13 +107,17 @@ export function parseBokun(raw: unknown): ParsedBooking {
   const customerName = (first || last) ? `${first ?? ""} ${last ?? ""}`.trim() : undefined;
 
   const durHours = Number(product.duration ?? obj(ab.activity).durationHours) || 0;
+  // Snap to a fixed slot, and make startTime mirror that slot so the two never diverge
+  // (the slot is the operative time; a stale raw startTime must not contradict it).
+  const slotIdx = timeToSlot(startTime);
+  const slotTime = slotIdx != null ? (SLOT_TIMES[slotIdx] ?? startTime) : startTime;
 
   return {
     externalId: externalId != null ? String(externalId) : undefined,
     confirmationCode: confirmationCode != null ? String(confirmationCode) : undefined,
     externalRef: externalRef != null ? String(externalRef) : undefined,
     productName: productName != null ? String(productName) : undefined,
-    date, startTime, slotIdx: timeToSlot(startTime),
+    date, startTime: slotTime, slotIdx,
     pax: pax || undefined, customerName,
     durationMin: durHours ? durHours * 60 : undefined,
   };
