@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { sendTourCalendarInvite } from "@/lib/calendar";
-import { linePushButtons, lineEnabled } from "@/lib/line";
+import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
 import { signOfferAction } from "@/lib/offer-token";
@@ -181,8 +181,8 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   // in-app and LINE accept paths, and works even for auto re-offers (no creator).
   try {
     const [g, tour, opsUsers] = await Promise.all([
-      prisma.user.findFirst({ where: { guideId }, select: { displayName: true } }),
-      prisma.tour.findUnique({ where: { id: offer.tourId }, select: { name: true } }),
+      prisma.user.findFirst({ where: { guideId }, select: { displayName: true, lineUserId: true } }),
+      prisma.tour.findUnique({ where: { id: offer.tourId }, select: { name: true, meetingPoint: true } }),
       prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } }),
     ]);
     const who = `${guideId}${g?.displayName ? ` ${g.displayName}` : ""}`;
@@ -191,7 +191,23 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
       await prisma.notification.create({ data: { userId: o.id, kind: "offer", message: msg } });
       await sendPushToUser(o.id, { title: "Job accepted", body: msg, url: "/jobs", tag: `accepted-${offer.id}` });
     }
-  } catch { /* never block accept on notifying the operator */ }
+
+    // Congratulate the guide on LINE — mirrors the in-app celebration.
+    if (lineEnabled && g?.lineUserId) {
+      const first = (g.displayName ?? "").trim().split(/\s+/)[0];
+      const dateLabel = new Date(`${offer.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+      const lines = [
+        `🎉 Congratulations${first ? ` ${first}` : ""}! You've got the job.`,
+        ``,
+        `${tour?.name ?? offer.tourId}`,
+        `${dateLabel} · ${slotLabel(offer.slotIdx)}${offer.pax != null ? ` · ${offer.pax} pax` : ""}`,
+        ...(tour?.meetingPoint ? [`📍 ${tour.meetingPoint}`] : []),
+        ``,
+        `It's now in your schedule. See you there!`,
+      ];
+      await linePush(g.lineUserId, lines.join("\n"));
+    }
+  } catch { /* never block accept on notifying the operator/guide */ }
 
   // The other candidates didn't get it — clear any sheet they had prepped for the slot.
   try {

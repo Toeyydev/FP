@@ -65,6 +65,8 @@ export default function AppClient({
   const [clock, setClock] = useState("");
   const [changed, setChanged] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
+  // Celebration shown to a guide the moment they win a job offer.
+  const [congrats, setCongrats] = useState<{ tourName: string; date: string; time: string; pax: number | null; meetingPoint: string | null } | null>(null);
   const [modal, setModal] = useState<
     | { kind: "assign"; gid: string; idx: number; date: string }
     | { kind: "dayedit"; date: string }
@@ -306,8 +308,11 @@ export default function AppClient({
     const r = await fetch("/api/offers/mine", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ offerId, action }) });
     const d = await r.json().catch(() => ({}));
     if (action === "accept") {
-      if (r.ok) toast(t("offerAccepted"));
-      else toast(d.reason === "taken" ? t("offerTaken") : d.reason === "expired" ? t("offerExpired") : t("errGeneric"));
+      if (r.ok) {
+        const won = offers.find((o) => o.id === offerId);
+        if (won) setCongrats({ tourName: won.tourName, date: won.date, time: won.time, pax: won.pax, meetingPoint: won.meetingPoint });
+        else toast(t("offerAccepted"));
+      } else toast(d.reason === "taken" ? t("offerTaken") : d.reason === "expired" ? t("offerExpired") : t("errGeneric"));
     } else {
       toast(t("offerDenied"));
     }
@@ -1347,6 +1352,23 @@ export default function AppClient({
               <button className="btn" onClick={() => setLeaveOpen(false)}>{t("cancel")}</button>
               <button className="btn primary" onClick={submitLeave}>{t("submitRequest")}</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {congrats && (
+        <div className="scrim show congrats-scrim" onClick={(e) => { if (e.target === e.currentTarget) setCongrats(null); }}>
+          <div className="congrats-confetti" aria-hidden="true">{Array.from({ length: 18 }).map((_, i) => <i key={i} style={{ left: `${(i * 5.5 + 4) % 100}%`, animationDelay: `${(i % 6) * 0.12}s`, background: ["#e6b85c", "#2e4e8f", "#c2604a", "#7e3a2c"][i % 4] }} />)}</div>
+          <div className="congrats-card" role="dialog" aria-modal="true">
+            <div className="congrats-badge"><svg viewBox="0 0 100 100" width="56" height="56"><path d="M28 52 l15 15 l30 -34" fill="none" stroke="#f6f1e6" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" /></svg></div>
+            <h3>{t("congratsTitle")}</h3>
+            <p>{t("congratsSub")}</p>
+            <div className="congrats-tour">
+              <b>{congrats.tourName}</b>
+              <span>{new Date(`${congrats.date}T00:00:00`).toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "short", day: "numeric", month: "short" })} · {congrats.time}{congrats.pax != null ? ` · ${congrats.pax} ${t("pax")}` : ""}</span>
+              {congrats.meetingPoint ? <small>{t("ofMeet")}: {congrats.meetingPoint}</small> : null}
+            </div>
+            <button className="btn primary congrats-go" onClick={() => { setView("schedule"); setCongrats(null); }}>{t("congratsView")}</button>
           </div>
         </div>
       )}
