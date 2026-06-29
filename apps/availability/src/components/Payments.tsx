@@ -23,6 +23,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [q, setQ] = useState(""); // filter by guide id / name
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
   const [bForm, setBForm] = useState({ guideId: "", amount: "", reason: "" });
+  // Draft PEAK ref typed against a still-pending guide (keyed by guideId) — shown on
+  // the row so the operator can record it before paying the guide's jobs together.
+  const [payRef, setPayRef] = useState<Record<string, string>>({});
   const toggle = (gid: string) => setOpen((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
   // Mark a single tour paid/unpaid (per-tour TourPayment via the /pay endpoint).
   async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING", peakRef?: string) {
@@ -30,12 +33,14 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     if (r.ok) load(period);
   }
   // Pay several tours in ONE transfer with ONE PEAK ref — each tour carries that ref.
+  // Uses the ref already typed on the row when present; otherwise prompts for it.
   async function payBatch(guideId: string, jobs: Job[]) {
     if (!jobs.length) return;
-    const ref = prompt(`PEAK ref for this payment (covers ${jobs.length} job${jobs.length === 1 ? "" : "s"}):`, "EXP-");
+    const typed = (payRef[guideId] ?? "").trim();
+    const ref = typed || prompt(`PEAK ref for this payment (covers ${jobs.length} job${jobs.length === 1 ? "" : "s"}):`, "EXP-");
     if (ref === null) return;
     const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, status: "PAID", peakRef: ref.trim() || undefined, jobs: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }) });
-    if (r.ok) load(period);
+    if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); }
   }
   // Remove a single uploaded job sheet + its tour records (operators only).
   async function removeJob(j: Job, guideId: string, guide: string) {
@@ -137,11 +142,16 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           <td className="r">{thb(sumBy(jobs, "fee"))}</td>
           <td className="r">{thb(sumBy(jobs, "expenses"))}</td>
           <td className="r"><b>{thb(sumBy(jobs, "amount"))}</b></td>
-          <td style={{ fontSize: 11.5, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }}>{refs.join(", ")}</td>
+          <td style={{ fontSize: 11.5, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} onClick={(e) => e.stopPropagation()}>
+            {mode === "unpaid" && canEdit
+              ? <input className="peak-ref-in" value={payRef[r.guideId] ?? ""} placeholder="EXP-…" title={`PEAK ref for paying ${jobs.length} job${jobs.length === 1 ? "" : "s"} together`} onChange={(e) => setPayRef((p) => ({ ...p, [r.guideId]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && (payRef[r.guideId] ?? "").trim()) payBatch(r.guideId, jobs); }} />
+              : refs.join(", ")}
+          </td>
           <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>
           <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
             {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">E-slip</a>}
             {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+            {mode === "unpaid" && canEdit && jobs.length > 0 && <button className="btn sm primary" title={`Pay ${jobs.length} job${jobs.length === 1 ? "" : "s"} together and tag them with the PEAK ref`} onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length}</button>}
             {mode === "unpaid" && canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
             {mode === "paid" && canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace the uploaded slip">Replace slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
           </td>
