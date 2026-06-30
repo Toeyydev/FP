@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
-type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; fee: number; expenses: number };
+type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -101,6 +101,20 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (r.ok) load(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
+  }
+  // Upload ONE slip that covers one or several tours paid in a single transfer
+  // (the "merged payment"). Marks each listed tour paid + tags it with the slip.
+  async function uploadTourSlip(guideId: string, jobs: Job[], file: File) {
+    if (!jobs.length) return;
+    const fd = new FormData();
+    fd.append("guideId", guideId);
+    fd.append("jobs", JSON.stringify(jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx }))));
+    const ref = (payRef[guideId] ?? "").trim(); if (ref) fd.append("peakRef", ref);
+    fd.append("file", file);
+    const r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); }
+    else alert(d.hint || d.detail || `Slip upload failed (${r.status}).`);
   }
   async function removeRow(guideId: string, guide: string) {
     if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports and payments. Cannot be undone.`)) return;
@@ -216,7 +230,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         </tr>
         {isOpen && (
           <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
-            {mode === "unpaid" && canEdit && jobs.length > 0 && <div style={{ padding: "2px 0 8px" }}><button className="btn sm primary" title="Pay these jobs in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length} unpaid job{jobs.length === 1 ? "" : "s"} together · one ref</button></div>}
+            {mode === "unpaid" && canEdit && jobs.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
+              <button className="btn sm primary" title="Mark these jobs paid in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length} job{jobs.length === 1 ? "" : "s"} together · one ref</button>
+              <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {jobs.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, jobs, f); e.target.value = ""; }} /></label>
+              <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>or use the per-tour Slip below for separate transfers</span>
+            </div>}
             {jobs.map((j, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
                 <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
@@ -225,6 +243,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                 <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
                 <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
+                {j.paid && j.eslipUrl && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
+                {canEdit && !j.paid && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload the bank slip for THIS tour (separate transfer) — marks just this tour paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
                 {canEdit && (j.paid
                   ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
                   : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}

@@ -86,10 +86,19 @@ export default function JobSheetEditor() {
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
   // Guide (or operator) taps a guest's no-show box — persists to the Booking so it
   // shows in the operator's Tour Log; updates the row locally without dirtying the sheet.
-  const markNoShow = (i: number, b: Booking, on: boolean) => {
+  const markNoShow = async (i: number, b: Booking, on: boolean) => {
     setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, status: on ? "no-show" : "" } : x) } : s);
     if (!b.bookingNo) return;
-    fetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShow: on }) }).catch(() => {});
+    // Record the no-show first — the API also mirrors it onto the saved job sheet.
+    await fetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShow: on }) }).catch(() => {});
+    // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
+    // record reflects the no-show immediately (best-effort; needs a saved sheet + Drive).
+    if (drive.enabled && drive.connected) {
+      try {
+        const r = await fetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx }) });
+        setMsg(r.ok ? (on ? "No-show saved & uploaded to Drive ✓" : "Updated & uploaded to Drive ✓") : "No-show saved ✓");
+      } catch { setMsg("No-show saved ✓"); }
+    } else setMsg("No-show saved ✓");
   };
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);

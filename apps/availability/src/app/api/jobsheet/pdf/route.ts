@@ -192,7 +192,7 @@ export async function GET(req: NextRequest) {
     }
     document.addEventListener("input",recompute);
     var eslipFile=null;
-    async function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; if(!eslipFile) return; var btn=document.getElementById("driveBtn"); var old=btn?btn.textContent:""; if(btn){ btn.disabled=true; btn.textContent="Uploading\u2026"; } try{ var b64=await readB64(eslipFile); var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,eslipBase64:b64,eslipMime:eslipFile.type||"image/jpeg"})}); var d=await r.json().catch(function(){return {};}); if(!r.ok){ alert(d.hint||d.detail||("Upload failed ("+r.status+")")); if(btn){btn.textContent=old;btn.disabled=false;} return; } if(btn){ btn.textContent=d.paid?"Marked paid \u2713":"Uploaded \u2713"; btn.disabled=false; } if(d.driveError){ alert((d.paid?"Tour marked paid. ":"")+"Note: "+d.driveError); } }catch(e){ alert("Upload failed: "+((e&&e.message)||e)); if(btn){btn.textContent=old;btn.disabled=false;} } }
+    async function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; if(!eslipFile) return; var btn=document.getElementById("driveBtn"); var old=btn?btn.textContent:""; if(btn){ btn.disabled=true; btn.textContent="Uploading\u2026"; } try{ var b64=await readB64(eslipFile); var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,eslipBase64:b64,eslipMime:eslipFile.type||"image/jpeg"})}); var d=await r.json().catch(function(){return {};}); if(!r.ok){ alert(d.hint||d.detail||("Upload failed ("+r.status+")")); if(btn){btn.textContent=old;btn.disabled=false;} return; } if(btn){ btn.textContent=d.paid?"Marked paid \u2713":"Uploaded \u2713"; btn.disabled=false; } if(d.driveError){ alert((d.paid?"Tour marked paid. ":"")+"Note: "+d.driveError); } if(d.paid){ setTimeout(function(){ location.reload(); }, 1200); } }catch(e){ alert("Upload failed: "+((e&&e.message)||e)); if(btn){btn.textContent=old;btn.disabled=false;} } }
     function readB64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ var u=String(fr.result); res(u.substring(u.indexOf(",")+1)); }; fr.onerror=rej; fr.readAsDataURL(file); }); }
     async function shareToDrive(btn){
       var old=btn.textContent; btn.disabled=true; btn.textContent="Saving\u2026";
@@ -211,6 +211,7 @@ export async function GET(req: NextRequest) {
         btn.textContent=d.paid?"Saved + marked paid \u2713":(eslipFile?"Saved sheet + e-slip \u2713":"Saved \u2713");
         if(d.driveError){ alert((d.paid?"Payment marked paid. ":"")+"But the Drive copy failed: "+d.driveError+"\nTry Share to Drive again."); }
         else if(d.link) window.open(d.link,"_blank","noopener");
+        if(d.paid){ setTimeout(function(){ location.reload(); }, 1500); }
       }catch(e){ alert("Could not save PDF: "+((e&&e.message)||e)); btn.textContent=old; btn.disabled=false; }
     }
   </script>
