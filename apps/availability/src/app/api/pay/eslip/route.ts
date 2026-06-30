@@ -4,9 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
-import { notifyGuide } from "@/lib/booking-import";
-import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
-import { SLOT_TIMES } from "@/lib/slots";
+import { sendPaymentNotice } from "@/lib/jobsheet-send";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -66,27 +64,8 @@ export async function POST(req: NextRequest) {
   }
   await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: "pay.eslip", entityType: "Assignment", detail: { guideId, count: jobs.length, peakRef, drive: true } });
 
-  // Tell the guide their payment landed — one notification (LINE + in-app) with a
-  // short summary AND the completed tour details that were just paid.
-  try {
-    const [sheets, asgs] = await Promise.all([
-      prisma.jobSheet.findMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, select: { date: true, slotIdx: true, expenses: true, guideFee: true } }),
-      prisma.assignment.findMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, include: { tour: true } }),
-    ]);
-    const sheetMap = new Map(sheets.map((s) => [`${s.date}|${s.slotIdx}`, s]));
-    const tourName = (d: string, s: number) => asgs.find((a) => a.date === d && a.slotIdx === s)?.tour?.name ?? "Tour";
-    const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
-    let total = 0;
-    const lines = sorted.map((j) => {
-      const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
-      const amt = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal : 0;
-      total += amt;
-      const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-      return `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}${amt > 0 ? ` · ${thb(amt)}` : ""}`;
-    });
-    const head = `💸 Your payment has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
-    await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}`, "Payment transferred 💸", `${jobs.length} tour${jobs.length === 1 ? "" : "s"}${total > 0 ? ` · ${thb(total)}` : ""}`);
-  } catch { /* notifying the guide is best-effort */ }
+  // Tell the guide their payment landed — short summary + completed tour details.
+  try { await sendPaymentNotice(guideId, jobs); } catch { /* best-effort */ }
 
   return NextResponse.json({ ok: true, link, count: jobs.length });
 }

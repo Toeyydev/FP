@@ -3,9 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
-import { notifyGuide } from "@/lib/booking-import";
-import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
-import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { sendPaymentNotice } from "@/lib/jobsheet-send";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -75,13 +73,8 @@ export async function POST(req: NextRequest) {
   // Let the guide know their payment was transferred (in-app + push + LINE).
   // Only on the FIRST time the month flips to paid — never on a slip replacement.
   if (!alreadyPaid) try {
-    const jobSheets = await prisma.jobSheet.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { expenses: true, guideFee: true } });
-    const payout = jobSheets.reduce((sum, sh) => sum + computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal, 0);
     const monthLabel = `${MONTHS[Number(period.slice(5, 7)) - 1] ?? ""} ${period.slice(0, 4)}`.trim();
-    await notifyGuide(guideId, `Your payment for ${monthLabel} has been transferred${payout > 0 ? ` — ${thb(payout)}` : ""}. Thank you! 💸`, "Payment transferred \ud83d\udcb8", `${monthLabel}${payout > 0 ? ` · ${thb(payout)}` : ""}`);
-    // …and send the guide their saved job sheet for each day worked, for reference.
-    const days = [...new Set(assigns.map((a) => a.date))].sort();
-    for (const day of days) await sendJobSheetsForDate(day, guideId);
+    await sendPaymentNotice(guideId, assigns.map((a) => ({ date: a.date, slotIdx: a.slotIdx })), monthLabel);
   } catch { /* notifying the guide is best-effort */ }
   return NextResponse.json({ ok: true, link, markedPaid: true });
 }

@@ -1,9 +1,39 @@
 import { prisma } from "@/lib/db";
 import { linePush, lineEnabled } from "@/lib/line";
+import { notifyGuide } from "@/lib/booking-import";
 import { SLOT_TIMES } from "@/lib/slots";
-import { computeTotals, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 const BASE = "https://guide.folkpaths.com";
+
+// One payment notification (LINE + in-app): a short summary plus the completed
+// tours just paid (date · time · tour · amount). Shared by the monthly e-slip
+// and the per-tour / merged-batch slip so both read identically.
+export async function sendPaymentNotice(
+  guideId: string,
+  jobs: { date: string; slotIdx: number }[],
+  scope?: string, // e.g. "June 2026" for a monthly slip; omit for a per-tour batch
+): Promise<void> {
+  if (!jobs.length) return;
+  const where = { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) };
+  const [sheets, asgs] = await Promise.all([
+    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true, expenses: true, guideFee: true } }),
+    prisma.assignment.findMany({ where, include: { tour: true } }),
+  ]);
+  const sheetMap = new Map(sheets.map((s) => [`${s.date}|${s.slotIdx}`, s]));
+  const tourName = (d: string, s: number) => asgs.find((a) => a.date === d && a.slotIdx === s)?.tour?.name ?? "Tour";
+  const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
+  let total = 0;
+  const lines = sorted.map((j) => {
+    const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
+    const amt = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal : 0;
+    total += amt;
+    const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+    return `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}${amt > 0 ? ` · ${thb(amt)}` : ""}`;
+  });
+  const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
+  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
+}
 
 type SheetJob = {
   slotIdx: number; tourName: string; pax: number | null; note: string | null;
