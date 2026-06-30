@@ -1,0 +1,92 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/db";
+import { audit } from "@/lib/audit";
+import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { notifyGuide } from "@/lib/booking-import";
+import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { SLOT_TIMES } from "@/lib/slots";
+
+function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
+
+// POST (multipart) { guideId, jobs, peakRef? , file } — pay ONE or SEVERAL of a
+// guide's tours in a single transfer: upload one bank slip, push it to Drive once,
+// and mark every listed tour PAID with that slip + the shared PEAK ref. This is the
+// "merged payment" path (e.g. a guide's 2-3 pending jobs paid together). Ops only.
+export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", hint: "Connect Google Drive first." }, { status: 400 });
+
+  const form = await req.formData().catch(() => null);
+  const guideId = String(form?.get("guideId") || "");
+  const peakRef = String(form?.get("peakRef") || "").trim() || null;
+  const jobsRaw = String(form?.get("jobs") || "[]");
+  const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+
+  const jobsParsed = z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).max(60).safeParse(JSON.parse(jobsRaw || "[]"));
+  if (!guideId || !jobsParsed.success || jobsParsed.data.length === 0 || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
+  const jobs = jobsParsed.data;
+
+  const refreshToken = await folkpathsDriveToken(session!.user!.id ?? undefined);
+  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
+
+  const u = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
+  const guideName = u?.fullName || u?.displayName || guideId;
+  const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
+  const mime = file.type || "image/jpeg";
+  const dates = [...new Set(jobs.map((j) => j.date))].sort();
+  const earliest = dates[0];
+  const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
+  const dateLabel = dates.length === 1 ? dates[0] : `${dates[0]}+${dates.length - 1}`;
+  const name = `${guideId} ${guideName} — ${dateLabel} (${jobs.length} tour${jobs.length === 1 ? "" : "s"})${peakRef ? ` — ${peakRef}` : ""} — e-slip.${extOf(mime)}`;
+
+  let link: string;
+  try {
+    ({ link } = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
+  } catch (e) {
+    return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
+  }
+
+  // Mark every listed tour PAID, tagged with the one slip + shared ref.
+  const now = new Date();
+  const uid = session!.user!.id ?? null;
+  for (const j of jobs) {
+    const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } } });
+    const data = { status: "PAID", approvedBy: uid, approvedAt: null, paidAt: now, peakRef, eslipUrl: link };
+    await prisma.tourPayment.upsert({
+      where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
+      create: { guideId, date: j.date, slotIdx: j.slotIdx, tourId: a?.tourId ?? "", ...data },
+      update: data,
+    });
+  }
+  await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: "pay.eslip", entityType: "Assignment", detail: { guideId, count: jobs.length, peakRef, drive: true } });
+
+  // Tell the guide their payment landed — one notification (LINE + in-app) with a
+  // short summary AND the completed tour details that were just paid.
+  try {
+    const [sheets, asgs] = await Promise.all([
+      prisma.jobSheet.findMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, select: { date: true, slotIdx: true, expenses: true, guideFee: true } }),
+      prisma.assignment.findMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, include: { tour: true } }),
+    ]);
+    const sheetMap = new Map(sheets.map((s) => [`${s.date}|${s.slotIdx}`, s]));
+    const tourName = (d: string, s: number) => asgs.find((a) => a.date === d && a.slotIdx === s)?.tour?.name ?? "Tour";
+    const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
+    let total = 0;
+    const lines = sorted.map((j) => {
+      const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
+      const amt = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal : 0;
+      total += amt;
+      const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+      return `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}${amt > 0 ? ` · ${thb(amt)}` : ""}`;
+    });
+    const head = `💸 Your payment has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
+    await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}`, "Payment transferred 💸", `${jobs.length} tour${jobs.length === 1 ? "" : "s"}${total > 0 ? ` · ${thb(total)}` : ""}`);
+  } catch { /* notifying the guide is best-effort */ }
+
+  return NextResponse.json({ ok: true, link, count: jobs.length });
+}
