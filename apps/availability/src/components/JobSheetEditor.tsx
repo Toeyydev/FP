@@ -93,14 +93,6 @@ export default function JobSheetEditor() {
   // auto-save only when !saved) always persist the change before exporting/uploading.
   const up = (patch: Partial<Sheet>) => { setSheet({ ...sheet, ...patch }); setSaved(false); if (msg) setMsg(""); };
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
-  // Guide (or operator) ticks whether a guest's tickets are included — mirrors onto
-  // the saved job sheet so the operator's sheet + expenses agree.
-  const markTickets = async (i: number, b: Booking, included: boolean) => {
-    const tickets: Booking["tickets"] = included ? "included" : "not";
-    setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, tickets } : x) } : s);
-    if (!b.bookingNo) return;
-    await fetch("/api/jobsheet/tickets", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, tickets }) }).catch(() => {});
-  };
   // Guide (or operator) taps a guest's no-show box — persists to the Booking so it
   // shows in the operator's Tour Log; updates the row locally without dirtying the sheet.
   const markNoShow = async (i: number, b: Booking, on: boolean) => {
@@ -221,13 +213,8 @@ export default function JobSheetEditor() {
                       const ns = b.status === "no-show";
                       return (
                       <li key={i} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                        <span style={{ flex: 1, minWidth: 130, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{!canReport ? (b.tickets === "included" ? " · tickets incl." : b.tickets === "not" ? " · no tickets" : "") : ""}</span>
-                        {canReport && (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: b.tickets === "included" ? "#2e7d4f" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title="Tick if this guest's tour tickets are included">
-                            <input type="checkbox" checked={b.tickets === "included"} disabled={!b.bookingNo} onChange={(e) => markTickets(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "#2e7d4f" }} />
-                            Tickets
-                          </label>
-                        )}
+                        <span style={{ flex: 1, minWidth: 130, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}</span>
+                        {b.tickets && <span style={{ fontSize: 11, fontWeight: 700, color: b.tickets === "included" ? "#2e7d4f" : "var(--ink-soft)", whiteSpace: "nowrap" }} title="Set by the operator">{b.tickets === "included" ? "Tickets incl." : "No tickets"}</span>}
                         {canMarkNoShow ? (
                           <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title={b.bookingNo ? "Mark this guest as a no-show" : "No reference to mark"}>
                             <input type="checkbox" checked={ns} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
