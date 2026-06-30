@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
 import { SLOTS } from "@/lib/slots";
 
-type Job = { date: string; slotIdx: number; tour: string; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; fee: number; expenses: number };
+type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -133,9 +133,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     // Per-JOB rows so each tour reconciles to the PEAK ref of the transfer that paid it.
-    const head = ["Guide ID", "Guide", "Date", "Tour", "Amount", "Paid", "PEAK ref"];
+    const head = ["Guide ID", "Guide", "Date", "Job sheet no.", "Tour", "Amount", "Paid", "PEAK ref"];
     const lines = [head.join(",")].concat(
-      rows.flatMap((r) => r.jobs.map((j) => [r.guideId, r.guide, j.date, j.tour, j.amount, j.paid ? "PAID" : "PENDING", j.peakRef ?? r.peakRef ?? ""].map(cell).join(",")))
+      rows.flatMap((r) => r.jobs.map((j) => [r.guideId, r.guide, j.date, j.ref ?? "", j.tour, j.amount, j.paid ? "PAID" : "PENDING", j.peakRef ?? r.peakRef ?? ""].map(cell).join(",")))
     );
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -159,7 +159,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const sections = guides.map((r) => {
       const sub = r.ujobs.reduce((a, j) => a + j.amount, 0);
       const ref = (payRef[r.guideId] ?? "").trim();
-      const body = r.ujobs.map((j) => `<tr><td>${esc(dShort(j.date))} · ${esc(SLOTS[j.slotIdx]?.start ?? "")}</td><td>${esc(j.tour)}</td><td class="r">${esc(thb(j.fee))}</td><td class="r">${esc(thb(j.expenses))}</td><td class="r b">${esc(thb(j.amount))}</td></tr>`).join("");
+      const body = r.ujobs.map((j) => `<tr><td>${esc(dShort(j.date))} · ${esc(SLOTS[j.slotIdx]?.start ?? "")}</td><td>${esc(j.tour)}${j.ref ? `<br><span style="color:#888;font-size:10.5px">${esc(j.ref)}</span>` : ""}</td><td class="r">${esc(thb(j.fee))}</td><td class="r">${esc(thb(j.expenses))}</td><td class="r b">${esc(thb(j.amount))}</td></tr>`).join("");
       return `<section><h2><span class="gid">${esc(r.guideId)}</span> ${esc(r.guide)}${ref ? `<span class="ref">PEAK ref: ${esc(ref)}</span>` : ""}</h2>
         <table><thead><tr><th>Date</th><th>Tour</th><th class="r">Guide fee</th><th class="r">Expenses</th><th class="r">Amount</th></tr></thead>
         <tbody>${body}</tbody>
@@ -246,7 +246,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             {jobs.map((j, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
                 <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
-                <span style={{ flex: 1 }}>{j.tour}</span>
+                <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
                 <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
                 {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                 <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
