@@ -222,6 +222,16 @@ export default function BookingsInbox() {
   const shownDates = monthFilter ? readyDates.filter((d) => d.slice(0, 7) === monthFilter) : readyDates;
   const fmtDay = (d: string) => { const dt = parseYMD(d); return `${DOW[(dt.getDay() + 6) % 7]} ${dt.getDate()} ${MON[dt.getMonth()].slice(0, 3)} ${dt.getFullYear()}`; };
 
+  // Open this slot's job sheet as a print-ready PDF (Save as PDF in the dialog).
+  // Works before the tour is assigned — the route fills it from live bookings.
+  function openJobSheetPdf(items: Booking[], guideId?: string) {
+    const date = items[0].date!, slotIdx = items[0].slotIdx!, tourId = groupTourId(items);
+    const qs = new URLSearchParams({ date, slotIdx: String(slotIdx) });
+    if (tourId) qs.set("tourId", tourId);
+    if (guideId) qs.set("guideId", guideId);
+    window.open(`/api/jobsheet/pdf?${qs.toString()}`, "_blank");
+  }
+
   async function offerGroup(key: string, items: Booking[], guideId?: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
@@ -434,6 +444,7 @@ export default function BookingsInbox() {
                                 {pax > 10 && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
                               </>
                             )}
+                            <button className="btn sm" title="Export this tour's job sheet as a PDF (Save as PDF in the print dialog)" onClick={() => openJobSheetPdf(items, assignedGuide || grpGuide[key])}>📄 Job sheet PDF</button>
                             <button className="btn sm danger" title="Delete this job and its bookings" onClick={() => deleteGroup(items)}>🗑</button>
                           </div>
                         );

@@ -5,6 +5,7 @@ import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, computeTotals, expenseAmount, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { bookingRef } from "@/lib/booking-ref";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -25,20 +26,33 @@ export async function GET(req: NextRequest) {
   const guideId = req.nextUrl.searchParams.get("guideId") || "";
   const date = req.nextUrl.searchParams.get("date") || "";
   const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
-  if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
+  const qTourId = req.nextUrl.searchParams.get("tourId") || "";
+  // guideId is optional: the Incoming-bookings page exports a prep sheet for a
+  // slot that isn't assigned yet (bookings come straight from the live table).
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
   if (!canViewFinance(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const isOps = ops(session.user.role);
 
   const [u, existing, assignment] = await Promise.all([
-    prisma.user.findUnique({ where: { guideId } }),
-    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
-    prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
+    guideId ? prisma.user.findUnique({ where: { guideId } }) : Promise.resolve(null),
+    guideId ? prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }) : Promise.resolve(null),
+    guideId ? prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }) : Promise.resolve(null),
   ]);
-  const tourId = existing?.tourId || assignment?.tourId || "";
+  const tourId = existing?.tourId || assignment?.tourId || qTourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
   const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null as Date | null };
-  const bookings = (sheet.bookings as Booking[]) ?? [];
+  let bookings = (sheet.bookings as Booking[]) ?? [];
+  // No saved sheet yet → pull the slot's live bookings so the prep PDF still
+  // lists every guest (name + OTA ref + pax) for the operator to work from.
+  if (bookings.length === 0) {
+    const live = await prisma.booking.findMany({
+      where: { date, slotIdx, ...(tourId ? { tourId } : {}), status: { notIn: ["CANCELLED", "IGNORED"] } },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true },
+      orderBy: { customerName: "asc" },
+    });
+    bookings = live.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "" })) as Booking[];
+  }
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
@@ -48,7 +62,7 @@ export async function GET(req: NextRequest) {
   const taxId = decrypt(u?.taxId);
   const address = decrypt(u?.currentAddress) || decrypt(u?.idCardAddress);
   const updated = (sheet as { updatedAt?: Date | null }).updatedAt;
-  const ref = sheet.ref || `job-sheet-${guideId}-${date}`;
+  const ref = sheet.ref || `job-sheet-${guideId || tourId || "slot"}-${date}`;
 
   let bookedSum = 0, actualSum = 0;
   const bookingRows = bookings.map((b, i) => {

@@ -119,6 +119,62 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     URL.revokeObjectURL(url);
   }
 
+  // Print-ready PDF of everything still owed (unpaid jobs), grouped by guide.
+  // Same no-dependency approach as the job sheet: open an HTML doc and let the
+  // browser "Save as PDF". Thai tour names render natively.
+  function exportPendingPdf() {
+    const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+    const guides = rows
+      .map((r) => ({ ...r, ujobs: r.jobs.filter((j) => !j.paid) }))
+      .filter((r) => r.ujobs.length > 0)
+      .sort((a, b) => a.guideId.localeCompare(b.guideId));
+    if (guides.length === 0) { alert("No pending jobs to export — everyone is paid for this period."); return; }
+    const grand = guides.reduce((s, r) => s + r.ujobs.reduce((a, j) => a + j.amount, 0), 0);
+    const jobCount = guides.reduce((s, r) => s + r.ujobs.length, 0);
+    const genDate = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    const sections = guides.map((r) => {
+      const sub = r.ujobs.reduce((a, j) => a + j.amount, 0);
+      const ref = (payRef[r.guideId] ?? "").trim();
+      const body = r.ujobs.map((j) => `<tr><td>${esc(dShort(j.date))} · ${esc(SLOTS[j.slotIdx]?.start ?? "")}</td><td>${esc(j.tour)}</td><td class="r">${esc(thb(j.fee))}</td><td class="r">${esc(thb(j.expenses))}</td><td class="r b">${esc(thb(j.amount))}</td></tr>`).join("");
+      return `<section><h2><span class="gid">${esc(r.guideId)}</span> ${esc(r.guide)}${ref ? `<span class="ref">PEAK ref: ${esc(ref)}</span>` : ""}</h2>
+        <table><thead><tr><th>Date</th><th>Tour</th><th class="r">Guide fee</th><th class="r">Expenses</th><th class="r">Amount</th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr><td colspan="4" class="r b">Subtotal · ${r.ujobs.length} job${r.ujobs.length === 1 ? "" : "s"}</td><td class="r b">${esc(thb(sub))}</td></tr></tfoot></table></section>`;
+    }).join("");
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Folkpaths pending payments ${esc(period)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Helvetica Neue",Arial,"Noto Sans Thai",sans-serif;color:#2a2520;padding:28px 30px;font-size:13px}
+  .toolbar{position:sticky;top:0;background:#7e3a2c;color:#fff;display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-radius:9px;margin-bottom:22px}
+  .toolbar button{background:#fff;color:#7e3a2c;border:none;border-radius:7px;padding:8px 14px;font-weight:700;font-size:13px;cursor:pointer}
+  h1{font-size:21px;font-weight:800}
+  .meta{color:#6f665b;font-size:12.5px;margin:3px 0 18px}
+  .summary{background:#fbf4e8;border:1px solid #ecd9bf;border-radius:10px;padding:12px 16px;margin-bottom:22px;display:flex;justify-content:space-between;font-weight:700}
+  .summary .tot{color:#7e3a2c;font-size:17px}
+  section{margin-bottom:20px;break-inside:avoid}
+  h2{font-size:15px;font-weight:800;margin-bottom:7px;padding-bottom:5px;border-bottom:2px solid #ecd9bf;display:flex;align-items:baseline;gap:8px}
+  h2 .gid{color:#7e3a2c;font-family:monospace}
+  h2 .ref{margin-left:auto;font-size:11.5px;color:#6f665b;font-weight:600}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;font-size:12.5px}
+  th{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#6f665b}
+  .r{text-align:right}.b{font-weight:700}
+  tfoot td{border-top:2px solid #ddd;border-bottom:none;padding-top:8px}
+  @media print{.toolbar{display:none}body{padding:0}}
+</style></head>
+<body>
+  <div class="toolbar"><span>Pending payments · ${esc(period)}</span><button onclick="window.print()">Save as PDF / Print</button></div>
+  <h1>Folkpaths — Pending payments</h1>
+  <div class="meta">${esc(period)} · generated ${esc(genDate)}</div>
+  <div class="summary"><span>${jobCount} pending job${jobCount === 1 ? "" : "s"} · ${guides.length} guide${guides.length === 1 ? "" : "s"}</span><span class="tot">Total owed: ${esc(thb(grand))}</span></div>
+  ${sections}
+  <script>window.onload=function(){setTimeout(function(){window.print();},350);};</script>
+</body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { alert("Please allow pop-ups to export the PDF."); return; }
+    w.document.write(html); w.document.close();
+  }
+
   const ql = q.trim().toLowerCase();
   // Guides with unpaid jobs float to the top so the operator sees who's still owed.
   const visible = rows
@@ -233,6 +289,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           </select>
           <input className="search" style={{ flex: "none", width: 180 }} placeholder="Search guide…" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn sm" onClick={exportCsv}>Export payroll CSV</button>
+          <button className="btn sm" onClick={exportPendingPdf} title="Print-ready list of every unpaid job, grouped by guide — Save as PDF">Export pending PDF</button>
           <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600 }}>Month total: {thb(totals.payout)}</span>
         </div>
         <div className="grid-scroll">

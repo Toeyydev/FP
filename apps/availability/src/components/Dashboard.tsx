@@ -38,6 +38,56 @@ export default function Dashboard() {
     if (r.ok) load();
   }
 
+  // Print-ready PDF of every tour that has bookings but no guide yet, so the
+  // operator can work the list offline. Each row has an editable "Guide" field
+  // (type a name or pick from the roster) that prints onto the saved PDF. Same
+  // no-dependency approach as the job sheet — open an HTML doc, "Save as PDF".
+  async function exportUnassignedPdf() {
+    if (!d) return;
+    const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+    const list = [...d.unassigned].sort((a, b) => `${a.date}-${String(a.slotIdx).padStart(2, "0")}`.localeCompare(`${b.date}-${String(b.slotIdx).padStart(2, "0")}`));
+    if (list.length === 0) { alert("No unassigned tours — every tour with bookings has a guide."); return; }
+    // Roster for the pick-or-type datalist (best-effort — typing still works without it).
+    let guides: { guideId: string; name: string }[] = [];
+    try { const gr = await fetch("/api/guides", { cache: "no-store" }); if (gr.ok) guides = ((await gr.json()).rows ?? []).map((g: { guideId: string; name: string }) => ({ guideId: g.guideId, name: g.name })); } catch { /* offline-friendly */ }
+    const opts = guides.map((g) => `<option value="${esc(g.guideId)} ${esc(g.name)}"></option>`).join("");
+    const totalPax = list.reduce((s, u) => s + (u.pax || 0), 0);
+    const genDate = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    const body = list.map((u) => `<tr><td>${esc(dShort(u.date))}</td><td>${esc(u.time)}</td><td>${esc(u.tour)}</td><td class="r">${esc(u.count)}</td><td class="r">${esc(u.pax)}</td><td class="r b">${esc(u.need)}</td><td class="gcell"><input class="g-in" list="guides" placeholder="type or choose…"></td></tr>`).join("");
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Folkpaths unassigned tours</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Helvetica Neue",Arial,"Noto Sans Thai",sans-serif;color:#2a2520;padding:28px 30px;font-size:13px}
+  .toolbar{position:sticky;top:0;background:#7e3a2c;color:#fff;display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-radius:9px;margin-bottom:22px}
+  .toolbar button{background:#fff;color:#7e3a2c;border:none;border-radius:7px;padding:8px 14px;font-weight:700;font-size:13px;cursor:pointer}
+  h1{font-size:21px;font-weight:800}
+  .meta{color:#6f665b;font-size:12.5px;margin:3px 0 18px}
+  .summary{background:#fbf4e8;border:1px solid #ecd9bf;border-radius:10px;padding:12px 16px;margin-bottom:8px;display:flex;justify-content:space-between;font-weight:700}
+  .summary .tot{color:#7e3a2c;font-size:16px}
+  .hint{color:#6f665b;font-size:11.5px;margin:0 2px 18px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #eee;font-size:12.5px;vertical-align:bottom}
+  th{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#6f665b}
+  .r{text-align:right}.b{font-weight:700}
+  .gcell{width:170px}
+  .g-in{width:100%;border:none;border-bottom:1px solid #b9ae9a;background:transparent;font:inherit;font-size:12.5px;color:#7e3a2c;font-weight:700;padding:2px 1px;outline:none}
+  .g-in::placeholder{color:#c8bda9;font-weight:400}
+  @media print{.toolbar{display:none}body{padding:0}.g-in{border-bottom:1px solid #999}.g-in::placeholder{color:transparent}}
+</style></head>
+<body>
+  <div class="toolbar"><span>Unassigned tours</span><button onclick="window.print()">Save as PDF / Print</button></div>
+  <h1>Folkpaths — Unassigned tours</h1>
+  <div class="meta">Tours with bookings but no guide · generated ${esc(genDate)}</div>
+  <div class="summary"><span>${list.length} unassigned tour${list.length === 1 ? "" : "s"}</span><span class="tot">${totalPax} pax waiting on a guide</span></div>
+  <div class="hint">Assign a guide in the last column — type a name or pick from the roster, then Save as PDF / Print.</div>
+  <table><thead><tr><th>Date</th><th>Time</th><th>Tour</th><th class="r">Bookings</th><th class="r">Pax</th><th class="r">Need</th><th>Assign guide</th></tr></thead><tbody>${body}</tbody></table>
+  <datalist id="guides">${opts}</datalist>
+</body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { alert("Please allow pop-ups to export the PDF."); return; }
+    w.document.write(html); w.document.close();
+  }
+
   // Broadcast a short message to every guide with an upcoming tour (in-app + push + LINE).
   const [bcOpen, setBcOpen] = useState(false);
   const [bcText, setBcText] = useState("");
@@ -100,7 +150,7 @@ export default function Dashboard() {
             </section>
             {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || d.leaveRequests.length > 0) && (
               <section className="panel">
-                <div className="panel-head"><h2>Needs attention</h2></div>
+                <div className="panel-head"><h2>Needs attention</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">Export unassigned PDF</button>}</div>
                 <div className="dash-list">
                   {d.leaveRequests.map((l) => (
                     <div key={l.id} className="dash-row">
