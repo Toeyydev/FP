@@ -9,6 +9,17 @@ import { encrypt } from "@/lib/crypto";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
+// Significant name tokens (drop titles + punctuation) for matching a sheet's guide
+// name against the platform record — used to catch Guide-ID collisions on import.
+function nameTokens(s: string | null | undefined): string[] {
+  return (s || "")
+    .toLowerCase()
+    .replace(/\b(miss|mrs|mr|ms|khun|k|dr)\.?\b/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 2);
+}
+
 // POST (multipart, one or more `file`) — import filled FOLKPATHS job-sheet .xlsx
 // files. Each becomes a booking(s) + assignment + job sheet so non-Bokun tours
 // land in the system without retyping. Operator/admin only.
@@ -33,8 +44,19 @@ export async function POST(req: NextRequest) {
       }
       let [tour, guide] = await Promise.all([
         prisma.tour.findUnique({ where: { id: p.tourId }, select: { id: true, name: true } }),
-        prisma.user.findFirst({ where: { guideId: p.guideId }, select: { id: true, guideId: true, fullName: true, phone: true, taxId: true, currentAddress: true } }),
+        prisma.user.findFirst({ where: { guideId: p.guideId }, select: { id: true, guideId: true, displayName: true, fullName: true, phone: true, taxId: true, currentAddress: true } }),
       ]);
+      // Guard against a GuideMaster ID collision: if this Guide ID already belongs to a
+      // clearly DIFFERENT-named guide on the platform, skip rather than attach the tour
+      // to the wrong person (a re-import would otherwise create a duplicate sheet).
+      if (guide && p.guideName?.trim()) {
+        const want = nameTokens(p.guideName);
+        const have = new Set([...nameTokens(guide.fullName), ...nameTokens(guide.displayName)]);
+        if (want.length && have.size && !want.some((w) => have.has(w))) {
+          results.push({ file: fname, ok: false, detail: `Guide ID ${p.guideId} is "${guide.displayName || guide.fullName || p.guideId}" here, but the sheet says "${p.guideName.trim()}". Skipped — set the file's Guide ID to this guide's platform ID.` });
+          continue;
+        }
+      }
       const created: string[] = [];
       // Auto-create a missing tour / guide so a backlog of past tours imports without
       // hand-setup. Both are placeholders the operator can flesh out later; the guide
@@ -52,7 +74,7 @@ export async function POST(req: NextRequest) {
           phone: p.tel || null,
           taxId: p.taxId ? encrypt(p.taxId) : null,
           currentAddress: p.address ? encrypt(p.address) : null,
-        }, select: { id: true, guideId: true, fullName: true, phone: true, taxId: true, currentAddress: true } });
+        }, select: { id: true, guideId: true, displayName: true, fullName: true, phone: true, taxId: true, currentAddress: true } });
         guide = u;
         created.push(`guide ${p.guideId}`);
       }

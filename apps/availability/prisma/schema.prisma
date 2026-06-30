@@ -385,8 +385,10 @@ model JobSheet {
   tourId    String
   status    String   @default("Confirmed")
   bookings  Json     @default("[]") // [{name, bookingNo, bookedPax, actualPax, tickets, status}]
-  expenses  Json     @default("[]") // [{description, price, pax}]
+  expenses  Json     @default("[]") // [{description, price, pax}] — operator's official set
   guideFee  Json     @default("{}") // {price, time, whtPct}
+  guideExpenses   Json?     // [{description, price, pax}] — guide's own report, to cross-check
+  guideExpensesAt DateTime? // when the guide last submitted their expense report
   createdById String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

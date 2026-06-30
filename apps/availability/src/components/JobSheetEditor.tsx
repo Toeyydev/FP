@@ -22,6 +22,7 @@ function gcalUrl(tourName: string, date: string, slotIdx: number, durationMin: n
 type Sheet = {
   ref: string | null; guideId: string; date: string; slotIdx: number; tourId: string; status: string;
   bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee; updatedAt?: string | null;
+  guideExpenses?: Expense[] | null; guideExpensesAt?: string | null;
 };
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -43,12 +44,18 @@ export default function JobSheetEditor() {
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
   const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
+  const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
+  const [expBusy, setExpBusy] = useState(false);
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn);
+    // Seed the guide's expense report: their last submission if any, else the standard
+    // expense lines (with prices) as a starting template to fill in.
+    const s = d.sheet as Sheet;
+    setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).map((e: Expense) => ({ ...e })));
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
   useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected })).catch(() => {}); }, []);
@@ -102,6 +109,40 @@ export default function JobSheetEditor() {
   };
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
+
+  // ---- Guide's own expense report (separate from the operator's official set) ----
+  const setGExp = (i: number, p: Partial<Expense>) => setGuideExp((arr) => arr.map((e, j) => j === i ? { ...e, ...p } : e));
+  const addGExp = () => setGuideExp((arr) => [...arr, { description: "", price: null, pax: null }]);
+  const rmGExp = (i: number) => setGuideExp((arr) => arr.filter((_, j) => j !== i));
+  const guideExpTotal = guideExp.reduce((s, e) => s + expenseAmount(e), 0);
+  async function submitGuideExpenses() {
+    if (!sheet) return;
+    setExpBusy(true); setMsg("");
+    const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
+    const r = await fetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean }) });
+    setExpBusy(false);
+    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
+  }
+  // Operator: copy the guide's reported figures into the official expenses (then Save).
+  function acceptGuideExpenses() {
+    if (!sheet?.guideExpenses) return;
+    up({ expenses: sheet.guideExpenses.map((e) => ({ ...e })) });
+    setMsg("Guide's figures copied in — review and Save.");
+  }
+  // Cross-check rows: merge official + guide-reported by description.
+  const crossRows = (() => {
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const op = sheet?.expenses ?? [], gd = sheet?.guideExpenses ?? [];
+    const keys = [...new Set([...op.map((e) => norm(e.description)), ...gd.map((e) => norm(e.description))])];
+    return keys.map((k) => {
+      const o = op.find((e) => norm(e.description) === k), g = gd.find((e) => norm(e.description) === k);
+      const oa = o ? expenseAmount(o) : null, ga = g ? expenseAmount(g) : null;
+      const desc = (o?.description || g?.description || "").trim();
+      let flag: "match" | "differ" | "added" | "removed" = "match";
+      if (oa == null) flag = "added"; else if (ga == null) flag = "removed"; else if (Math.round(oa) !== Math.round(ga)) flag = "differ";
+      return { desc, oa, ga, flag };
+    });
+  })();
 
   async function save(): Promise<boolean> {
     setBusy(true); setMsg("");
@@ -199,6 +240,34 @@ export default function JobSheetEditor() {
                 </div>
               </div>
             </div>
+            {(checkedIn || sheet.date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)) && (
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+                <h3 style={{ margin: "0 0 2px" }}>💵 Report your expenses</h3>
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Enter what you actually paid on tour, then submit — the operator cross-checks it against the sheet.</div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead><tr style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--ink-soft)" }}>
+                    <th style={{ textAlign: "left", padding: "2px 4px" }}>Description</th><th style={{ width: 72, padding: "2px 4px" }}>Price</th><th style={{ width: 56, padding: "2px 4px" }}>Pax</th><th style={{ width: 84, textAlign: "right", padding: "2px 4px" }}>Amount</th><th style={{ width: 24 }}></th>
+                  </tr></thead>
+                  <tbody>
+                    {guideExp.map((e, i) => (
+                      <tr key={i}>
+                        <td style={{ padding: "3px 4px" }}><input style={L} value={e.description} placeholder="e.g. Grand Palace ticket" onChange={(ev) => setGExp(i, { description: ev.target.value })} /></td>
+                        <td style={{ padding: "3px 4px" }}><input style={{ ...L, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setGExp(i, { price: numOrNull(ev.target.value) })} /></td>
+                        <td style={{ padding: "3px 4px" }}><input style={{ ...L, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setGExp(i, { pax: numOrNull(ev.target.value) })} /></td>
+                        <td style={{ padding: "3px 4px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(expenseAmount(e))}</td>
+                        <td style={{ textAlign: "center" }}><button onClick={() => rmGExp(i)} title="Remove" style={{ border: "none", background: "none", color: "var(--ink-soft)", cursor: "pointer", fontSize: 14 }}>✕</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot><tr style={{ borderTop: "1.5px solid var(--line)" }}><td colSpan={3} style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>Total expenses</td><td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 800, color: "var(--primary)" }}>{thb(guideExpTotal)}</td><td></td></tr></tfoot>
+                </table>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+                  <button className="btn sm" onClick={addGExp}>+ Add expense</button>
+                  <button className="btn primary" disabled={expBusy} onClick={submitGuideExpenses} style={{ marginLeft: "auto" }}>{expBusy ? "Sending…" : "Submit expenses to operator"}</button>
+                </div>
+                {sheet.guideExpensesAt && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 8 }}>✓ Last sent {new Date(sheet.guideExpensesAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.</div>}
+              </div>
+            )}
             <div style={{ marginTop: 14, textAlign: "center" }}>
               <button className="btn" onClick={() => setShowFull((s) => !s)}>{showFull ? "Hide full details" : "📄 See full details"}</button>
             </div>
@@ -282,6 +351,45 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
+
+        {/* Guide-reported expenses — cross-check (operator only) */}
+        {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && (() => {
+          const opTot = sheet.expenses.reduce((s, e) => s + expenseAmount(e), 0);
+          const gdTot = sheet.guideExpenses!.reduce((s, e) => s + expenseAmount(e), 0);
+          return (
+            <div className="no-print" style={{ marginTop: 18, border: "1px solid #ecd9bf", borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ background: "#fff8c4", padding: "7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <b style={{ fontSize: 13 }}>Guide-reported expenses · cross-check</b>
+                <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{sheet.guideExpensesAt ? `reported ${new Date(sheet.guideExpensesAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead><tr style={{ background: "#f4f4f4", fontSize: 10.5, textTransform: "uppercase", color: "var(--ink-soft)" }}>
+                  <th style={{ textAlign: "left", padding: "5px 10px" }}>Description</th><th style={{ textAlign: "right", padding: "5px 10px" }}>Operator</th><th style={{ textAlign: "right", padding: "5px 10px", color: "var(--primary)" }}>Guide</th><th style={{ textAlign: "right", padding: "5px 10px" }}>Check</th>
+                </tr></thead>
+                <tbody>
+                  {crossRows.map((r, i) => (
+                    <tr key={i} style={{ borderTop: "1px solid #eee", background: r.flag === "differ" ? "#fdf3e7" : r.flag === "added" ? "#eef4ec" : undefined }}>
+                      <td style={{ padding: "5px 10px" }}>{r.desc}</td>
+                      <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.oa == null ? "—" : thb(r.oa)}</td>
+                      <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: r.flag === "differ" || r.flag === "added" ? 700 : 400, color: r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "inherit" }}>{r.ga == null ? "—" : thb(r.ga)}</td>
+                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>{r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : "− removed"}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: "2px solid #ddd", background: "#fafafa", fontWeight: 800 }}>
+                    <td style={{ padding: "6px 10px" }}>Total</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{thb(opTot)}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: "var(--primary)" }}>{thb(gdTot)}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: Math.round(opTot) === Math.round(gdTot) ? "#2e7d4f" : "#b45309" }}>{Math.round(opTot) === Math.round(gdTot) ? "✓" : `Δ ${thb(Math.abs(gdTot - opTot))}`}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style={{ padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button className="btn sm primary" onClick={acceptGuideExpenses}>Accept guide&apos;s figures</button>
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>copies them into the official expenses above — then Save</span>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Guide fee */}
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide</h3>
