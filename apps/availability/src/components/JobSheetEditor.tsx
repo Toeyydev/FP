@@ -191,15 +191,19 @@ export default function JobSheetEditor() {
       {ro && (() => {
         const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
         const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0);
+        const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+        const canReport = checkedIn || sheet.date <= today; // tour done → guide reports expenses
+        const expShown = canReport ? guideExpTotal : t.totalExpenses;
+        const grandShown = t.netGuideFee + expShown;
         return (
           <section className="panel guide-sum">
             <div className="gs-head">
               <h2>{tour?.name ?? "Your tour"}</h2>
-              <div className="gs-when">📅 {sheet.date} · {SLOT_TIMES[sheet.slotIdx] ?? ""}{totalPax ? ` · 👥 ${totalPax} pax` : ""}</div>
+              <div className="gs-when">{sheet.date} · {SLOT_TIMES[sheet.slotIdx] ?? ""}{totalPax ? ` · ${totalPax} pax` : ""}</div>
             </div>
             <div className="gs-grid">
               <div>
-                <h3>👥 Your customers ({sheet.bookings.length})</h3>
+                <h3>Your customers ({sheet.bookings.length})</h3>
                 {ro && !canMarkNoShow && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", margin: "2px 0 6px" }}>{!checkedIn ? "Check in to report no-shows." : "No-show reporting is open for 30 minutes after the tour starts."}</div>}
                 {sheet.bookings.length ? (
                   <ol className="gs-cust">
@@ -207,7 +211,7 @@ export default function JobSheetEditor() {
                       const ns = b.status === "no-show";
                       return (
                       <li key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ flex: 1, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{b.tickets === "included" ? " 🎫 tickets incl." : b.tickets === "not" ? " 🎫 no tickets" : ""}</span>
+                        <span style={{ flex: 1, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}{b.tickets === "included" ? " · tickets incl." : b.tickets === "not" ? " · no tickets" : ""}</span>
                         {canMarkNoShow ? (
                           <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title={b.bookingNo ? "Mark this guest as a no-show" : "No reference to mark"}>
                             <input type="checkbox" checked={ns} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
@@ -221,8 +225,8 @@ export default function JobSheetEditor() {
                 ) : <div className="gs-empty">No customer list yet.</div>}
               </div>
               <div>
-                <h3>💵 Expenses</h3>
-                {exp.length ? (
+                <h3>Payout</h3>
+                {!canReport && (exp.length ? (
                   <ul className="gs-exp">
                     {exp.map((e, i) => (
                       <li key={i}>
@@ -232,17 +236,18 @@ export default function JobSheetEditor() {
                     ))}
                     <li className="gs-total"><span>Total expenses</span><b>{thb(t.totalExpenses)}</b></li>
                   </ul>
-                ) : <div className="gs-empty">No expenses recorded.</div>}
+                ) : <div className="gs-empty">No expenses recorded.</div>)}
                 <div className="gs-payout">
-                  <div className="gs-payout-row"><span>Expenses (reimbursed)</span><b>{thb(t.totalExpenses)}</b></div>
+                  <div className="gs-payout-row"><span>Expenses{canReport ? " (your report)" : " (reimbursed)"}</span><b>{thb(expShown)}</b></div>
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
-                  <div className="gs-payout-row gs-grand"><span>💰 You&apos;ll receive</span><b>{thb(t.grandTotal)}</b></div>
+                  <div className="gs-payout-row gs-grand"><span>You&apos;ll receive</span><b>{thb(grandShown)}</b></div>
                 </div>
+                {canReport && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below · confirmed by the operator.</div>}
               </div>
             </div>
-            {(checkedIn || sheet.date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)) && (
+            {canReport && (
               <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-                <h3 style={{ margin: "0 0 2px" }}>💵 Report your expenses</h3>
+                <h3 style={{ margin: "0 0 2px" }}>Report your expenses</h3>
                 <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Enter what you actually paid on tour, then submit — the operator cross-checks it against the sheet.</div>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead><tr style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--ink-soft)" }}>

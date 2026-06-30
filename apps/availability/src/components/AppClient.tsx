@@ -1200,9 +1200,9 @@ export default function AppClient({
 
       {role === "guide" && <GuideWelcome />}
 
-      {!alertsOn && (
+      {!alertsOn && role === "guide" && (
         <section className="setup-card">
-          <div className="setup-head"><b>{role === "operator" ? t("setupTitleOps") : t("setupTitle")}</b><span>{role === "operator" ? t("setupSubOps") : t("setupSub")}</span></div>
+          <div className="setup-head"><b>{t("setupTitle")}</b><span>{t("setupSub")}</span></div>
           <ol className="setup-steps">
             <li className={installed ? "done" : ""}>
               <span className="num">{installed ? "✓" : "1"}</span>

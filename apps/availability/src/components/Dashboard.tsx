@@ -94,7 +94,7 @@ export default function Dashboard() {
   const [bcMsg, setBcMsg] = useState("");
   const [bcBusy, setBcBusy] = useState(false);
   // Collapsible dashboard sections — default shows Tomorrow, hides Today + Upcoming.
-  const [hidden, setHidden] = useState<Set<string>>(new Set(["today", "upcoming"]));
+  const [hidden, setHidden] = useState<Set<string>>(new Set(["tomorrow", "upcoming"]));
   const toggleSec = (k: string) => setHidden((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
   async function sendBroadcast() {
     const message = bcText.trim();
