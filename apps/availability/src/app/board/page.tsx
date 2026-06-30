@@ -3,18 +3,20 @@ import { auth } from "@/auth";
 import { isAccountant } from "@/lib/roles";
 import AppClient from "@/components/AppClient";
 
-export default async function Home() {
+// The availability / dispatch board. Operators reach it from the Dashboard's
+// "Board" link; "/" sends operators to the Dashboard instead, so this route lets
+// them open the board without bouncing back.
+export default async function BoardPage() {
   const session = await auth();
   if (!session?.user) redirect("/start");
   if (isAccountant(session.user.role)) redirect("/payments");
-  // Operators/admins land on the Dashboard (control tower); the board lives at /board.
-  if (session.user.role === "OPERATOR" || session.user.role === "ADMIN") redirect("/dashboard");
 
-  // Only guides reach here — operators/admins/accountants were redirected above.
+  const r = session.user.role;
+  const role = r === "OPERATOR" || r === "ADMIN" ? "operator" : "guide";
   return (
     <AppClient
-      role="guide"
-      isAdmin={false}
+      role={role}
+      isAdmin={r === "ADMIN"}
       guideId={session.user.guideId ?? null}
       displayName={session.user.displayName ?? session.user.name ?? ""}
     />

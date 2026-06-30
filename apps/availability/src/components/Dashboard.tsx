@@ -109,9 +109,9 @@ export default function Dashboard() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader backHref="/board" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Dashboard</span></div>
-        <div className="nav"><LiveSyncBadge /><a className="btn sm" href="/">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
+        <div className="nav"><LiveSyncBadge /><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
 
       {!d ? (
