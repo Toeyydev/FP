@@ -106,10 +106,18 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // (the "merged payment"). Marks each listed tour paid + tags it with the slip.
   async function uploadTourSlip(guideId: string, jobs: Job[], file: File) {
     if (!jobs.length) return;
+    // A merged payment (2+ tours in one transfer) sticks together under ONE PEAK
+    // ref — use the one typed on the row, else ask for it. A single tour needs none.
+    let ref = (payRef[guideId] ?? "").trim();
+    if (jobs.length > 1 && !ref) {
+      const p = prompt(`PEAK ref for this payment (covers ${jobs.length} jobs in one transfer):`, "EXP-");
+      if (p === null) return;
+      ref = p.trim();
+    }
     const fd = new FormData();
     fd.append("guideId", guideId);
     fd.append("jobs", JSON.stringify(jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx }))));
-    const ref = (payRef[guideId] ?? "").trim(); if (ref) fd.append("peakRef", ref);
+    if (ref) fd.append("peakRef", ref);
     fd.append("file", file);
     const r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
