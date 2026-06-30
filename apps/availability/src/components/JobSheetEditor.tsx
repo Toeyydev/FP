@@ -22,7 +22,7 @@ function gcalUrl(tourName: string, date: string, slotIdx: number, durationMin: n
 type Sheet = {
   ref: string | null; guideId: string; date: string; slotIdx: number; tourId: string; status: string;
   bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee; updatedAt?: string | null;
-  guideExpenses?: Expense[] | null; guideExpensesAt?: string | null;
+  guideExpenses?: Expense[] | null; guideExpensesAt?: string | null; guideExpensesNote?: string | null;
 };
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -45,6 +45,7 @@ export default function JobSheetEditor() {
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
   const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
+  const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
   const [expBusy, setExpBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -56,6 +57,7 @@ export default function JobSheetEditor() {
     // expense lines (with prices) as a starting template to fill in.
     const s = d.sheet as Sheet;
     setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).map((e: Expense) => ({ ...e })));
+    setGuideNote(s?.guideExpensesNote ?? "");
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
   useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected })).catch(() => {}); }, []);
@@ -119,7 +121,7 @@ export default function JobSheetEditor() {
     if (!sheet) return;
     setExpBusy(true); setMsg("");
     const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
-    const r = await fetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean }) });
+    const r = await fetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
     if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
   }
@@ -266,6 +268,10 @@ export default function JobSheetEditor() {
                   </tbody>
                   <tfoot><tr style={{ borderTop: "1.5px solid var(--line)" }}><td colSpan={3} style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>Total expenses</td><td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 800, color: "var(--primary)" }}>{thb(guideExpTotal)}</td><td></td></tr></tfoot>
                 </table>
+                <div style={{ marginTop: 10 }}>
+                  <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Note (optional)</label>
+                  <textarea value={guideNote} maxLength={500} onChange={(e) => setGuideNote(e.target.value)} placeholder="e.g. bought extra water — very hot day" rows={2} style={{ width: "100%", boxSizing: "border-box", marginTop: 3, padding: "6px 8px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
+                </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
                   <button className="btn sm" onClick={addGExp}>+ Add expense</button>
                   <button className="btn primary" disabled={expBusy} onClick={submitGuideExpenses} style={{ marginLeft: "auto" }}>{expBusy ? "Sending…" : "Submit expenses to operator"}</button>
@@ -367,6 +373,7 @@ export default function JobSheetEditor() {
                 <b style={{ fontSize: 13 }}>Guide-reported expenses · cross-check</b>
                 <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{sheet.guideExpensesAt ? `reported ${new Date(sheet.guideExpensesAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</span>
               </div>
+              {sheet.guideExpensesNote && <div style={{ padding: "8px 12px", fontSize: 12.5, color: "var(--ink)", background: "#fffdf4", borderBottom: "1px solid #f0e6cf" }}><b style={{ color: "var(--ink-soft)", fontWeight: 600 }}>Guide note: </b>{sheet.guideExpensesNote}</div>}
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                 <thead><tr style={{ background: "#f4f4f4", fontSize: 10.5, textTransform: "uppercase", color: "var(--ink-soft)" }}>
                   <th style={{ textAlign: "left", padding: "5px 10px" }}>Description</th><th style={{ textAlign: "right", padding: "5px 10px" }}>Operator</th><th style={{ textAlign: "right", padding: "5px 10px", color: "var(--primary)" }}>Guide</th><th style={{ textAlign: "right", padding: "5px 10px" }}>Check</th>

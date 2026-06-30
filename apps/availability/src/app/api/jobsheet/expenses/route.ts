@@ -23,21 +23,23 @@ export async function POST(req: NextRequest) {
       price: z.number().nullable(),
       pax: z.number().nullable(),
     })).max(40),
+    note: z.string().max(500).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, date, slotIdx, expenses } = parsed.data;
+  const note = parsed.data.note?.trim() || null;
   if (!ops(role) && myGuideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const now = new Date();
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
   const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true } });
   if (existing) {
-    await prisma.jobSheet.update({ where: key, data: { guideExpenses: expenses, guideExpensesAt: now } });
+    await prisma.jobSheet.update({ where: key, data: { guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note } });
   } else {
     // No saved sheet yet — scaffold one that carries the guide's report.
     const a = await prisma.assignment.findUnique({ where: key, select: { tourId: true } });
     const ref = makeRef(date, (await prisma.jobSheet.count({ where: { date } })) + 1);
-    await prisma.jobSheet.create({ data: { ref, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: [], expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, createdById: session.user.id ?? null } });
+    await prisma.jobSheet.create({ data: { ref, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: [], expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: session.user.id ?? null } });
   }
 
   // Tell the operators a guide reported expenses to cross-check.
