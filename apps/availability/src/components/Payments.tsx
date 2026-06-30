@@ -37,9 +37,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   async function payBatch(guideId: string, jobs: Job[]) {
     if (!jobs.length) return;
     const typed = (payRef[guideId] ?? "").trim();
-    const ref = typed || prompt(`PEAK ref for this payment (covers ${jobs.length} job${jobs.length === 1 ? "" : "s"}):`, "EXP-");
-    if (ref === null) return;
-    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, status: "PAID", peakRef: ref.trim() || undefined, jobs: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }) });
+    // A single pending job doesn't need a combined PEAK ref — pay it straight
+    // through. Only the multi-job batch asks for one ref to tag them all.
+    let ref: string | null = typed;
+    if (!typed && jobs.length > 1) { ref = prompt(`PEAK ref for this payment (covers ${jobs.length} jobs):`, "EXP-"); if (ref === null) return; }
+    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, status: "PAID", peakRef: (ref ?? "").trim() || undefined, jobs: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }) });
     if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); }
   }
   // Remove a single uploaded job sheet + its tour records (operators only).
@@ -199,8 +201,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           <td className="r">{thb(sumBy(jobs, "expenses"))}</td>
           <td className="r"><b>{thb(sumBy(jobs, "amount"))}</b></td>
           <td style={{ fontSize: 11.5, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} onClick={(e) => e.stopPropagation()}>
-            {mode === "unpaid" && canEdit
-              ? <input className="peak-ref-in" value={payRef[r.guideId] ?? ""} placeholder="EXP-…" title={`PEAK ref for paying ${jobs.length} job${jobs.length === 1 ? "" : "s"} together`} onChange={(e) => setPayRef((p) => ({ ...p, [r.guideId]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && (payRef[r.guideId] ?? "").trim()) payBatch(r.guideId, jobs); }} />
+            {mode === "unpaid" && canEdit && jobs.length > 1
+              ? <input className="peak-ref-in" value={payRef[r.guideId] ?? ""} placeholder="EXP-…" title={`PEAK ref for paying ${jobs.length} jobs together`} onChange={(e) => setPayRef((p) => ({ ...p, [r.guideId]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && (payRef[r.guideId] ?? "").trim()) payBatch(r.guideId, jobs); }} />
               : refs.join(", ")}
           </td>
           <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>

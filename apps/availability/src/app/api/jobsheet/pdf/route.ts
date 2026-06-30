@@ -56,6 +56,11 @@ export async function GET(req: NextRequest) {
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
+  // No saved sheet (e.g. exported from Incoming bookings before assignment) →
+  // make the guest list, expenses and guide details fillable on the page so the
+  // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
+  const editable = !existing;
+  const ce = editable ? ' contenteditable="true"' : '';
 
   const time = SLOT_TIMES[slotIdx] || tour?.time || "";
   const guideName = u?.fullName || u?.displayName || "";
@@ -65,15 +70,18 @@ export async function GET(req: NextRequest) {
   const ref = sheet.ref || `job-sheet-${guideId || tourId || "slot"}-${date}`;
 
   let bookedSum = 0, actualSum = 0;
-  const bookingRows = bookings.map((b, i) => {
+  let bookingRows = bookings.map((b, i) => {
     bookedSum += b.bookedPax ?? 0; actualSum += b.actualPax ?? 0;
     const tickets = b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "";
-    return `<tr><td>${i + 1}</td><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td class="n">${b.bookedPax ?? ""}</td><td class="n">${b.actualPax ?? ""}</td><td>${tickets}</td></tr>`;
+    return `<tr><td>${i + 1}</td><td${ce}>${esc(b.name)}</td><td${ce}>${esc(b.bookingNo)}</td><td class="n" data-bpax>${b.bookedPax ?? ""}</td><td class="n"${ce} data-apax>${b.actualPax ?? ""}</td><td${ce}>${tickets}</td></tr>`;
   }).join("");
+  if (editable) for (let k = 0; k < 4; k++) bookingRows += `<tr><td>${bookings.length + k + 1}</td><td contenteditable="true"></td><td contenteditable="true"></td><td class="n" contenteditable="true" data-bpax></td><td class="n" contenteditable="true" data-apax></td><td contenteditable="true"></td></tr>`;
 
-  const expenseRows = expenses.map((e) =>
-    `<tr><td>${esc(e.description)}</td><td class="n">${e.price != null ? thb(e.price) : ""}</td><td class="c">×</td><td class="n">${e.pax ?? ""}</td><td class="n">${thb(expenseAmount(e))}</td></tr>`
-  ).join("");
+  const expRow = (desc: string, price: string, pax: string, amt: string) => editable
+    ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="n" data-eamt>${amt}</td></tr>`
+    : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="n">${amt}</td></tr>`;
+  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", thb(expenseAmount(e)))).join("");
+  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "");
 
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${esc(ref)}</title>
@@ -105,11 +113,16 @@ export async function GET(req: NextRequest) {
   .summary { margin-top:16px; margin-left:auto; width:280px; }
   .summary div { display:flex; justify-content:space-between; padding:5px 8px; }
   .summary .grand { background:#bfe3bf; font-weight:600; border-radius:4px; font-size:14px; }
-  @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } }
+  .prepnote { background:#fbf4e8; border:1px solid #ecd9bf; color:#7e3a2c; border-radius:8px; padding:8px 12px; font-size:11.5px; margin:14px 0 2px; }
+  [contenteditable="true"] { background:#fff7e8; outline:none; border-radius:3px; min-width:18px; }
+  [contenteditable="true"]:focus { background:#fff2cf; box-shadow:0 0 0 2px #e9c98a inset; }
+  .guide [contenteditable="true"] { display:inline-block; min-width:120px; }
+  @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
 </style></head>
 <body>
   <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span style="font-size:12px;opacity:.9">\ud83d\udcce e-slip:</span><input type="file" id="eslipInput" accept="image/*,application/pdf" onchange="eslipChosen(this)" style="background:#fff;color:#7e3a2c;border-radius:7px;padding:6px 8px;font-size:12px;max-width:210px"><span id="eslipName" style="font-size:12px;opacity:.9"></span><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
   <div class="page">
+    ${editable ? `<div class="prepnote">📝 Prep sheet — no guide assigned yet. Fill in the highlighted fields, then <b>Save as PDF / Print</b>. Totals update as you type.</div>` : ""}
     <div class="head">
       <div class="brand">FOLKPATHS<small>บริษัท โฟล์คพาธส์ จำกัด</small></div>
       <div class="meta">
@@ -125,18 +138,18 @@ export async function GET(req: NextRequest) {
       <div><span>Tour Date</span><b>${esc(date)}</b></div>
       <div><span>Time</span><b>${esc(time)}</b></div>
       <div><span>Tour Name</span><b>${esc(tour?.name || "")}</b></div>
-      <div><span>Guide name</span>${esc(guideName)}</div>
-      <div><span>Tax ID</span>${esc(taxId || "—")}</div>
-      <div><span>Address</span>${esc(address || "—")}</div>
-      <div><span>E-mail</span>${esc(u?.email || "")}</div>
-      <div><span>Tel no.</span>${esc(u?.phone || "—")}</div>
+      <div><span>Guide name</span><b${ce}>${esc(guideName)}</b></div>
+      <div><span>Tax ID</span><span${ce}>${esc(taxId || (editable ? "" : "—"))}</span></div>
+      <div><span>Address</span><span${ce}>${esc(address || (editable ? "" : "—"))}</span></div>
+      <div><span>E-mail</span><span${ce}>${esc(u?.email || "")}</span></div>
+      <div><span>Tel no.</span><span${ce}>${esc(u?.phone || (editable ? "" : "—"))}</span></div>
     </div>
 
     <h3>Job Details</h3>
     <table>
       <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th class="n">Booked Pax</th><th class="n">Actual Pax</th><th>Tickets</th></tr></thead>
       <tbody>${bookingRows || '<tr><td colspan="6" style="color:#aaa">No bookings listed.</td></tr>'}
-        <tr class="tot"><td></td><td colspan="2" style="text-align:right">Total</td><td class="n">${bookedSum}</td><td class="n">${actualSum}</td><td></td></tr>
+        <tr class="tot"><td></td><td colspan="2" style="text-align:right">Total</td><td class="n" id="bookedTot">${bookedSum}</td><td class="n" id="actualTot">${actualSum}</td><td></td></tr>
       </tbody>
     </table>
 
@@ -144,7 +157,7 @@ export async function GET(req: NextRequest) {
     <table>
       <thead><tr><th>Description</th><th class="n">Price</th><th class="c"></th><th class="n">Pax</th><th class="n">Amount</th></tr></thead>
       <tbody>${expenseRows}
-        <tr class="tot"><td colspan="4" style="text-align:right">Total Expenses</td><td class="n">${thb(t.totalExpenses)}</td></tr>
+        <tr class="tot"><td colspan="4" style="text-align:right">Total Expenses</td><td class="n" id="expTot">${thb(t.totalExpenses)}</td></tr>
       </tbody>
     </table>
 
@@ -157,13 +170,27 @@ export async function GET(req: NextRequest) {
     </table>
 
     <div class="summary">
-      <div><span>Total Expenses</span><b>${thb(t.totalExpenses)}</b></div>
+      <div><span>Total Expenses</span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
       <div><span>Net Guide Fee</span><b>${thb(t.netGuideFee)}</b></div>
-      <div class="grand"><span>Total</span><b>${thb(t.grandTotal)}</b></div>
+      <div class="grand"><span>Total</span><b id="grandTot">${thb(t.grandTotal)}</b></div>
     </div>
   </div>
   <script>
-    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx};
+    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0};
+    // Live totals for the fillable prep sheet — sum pax + expense lines as you type.
+    function jnum(t){ var n=parseFloat(String(t==null?"":t).replace(/[^0-9.\\-]/g,"")); return isFinite(n)?n:0; }
+    function baht(n){ return "฿"+Math.round(n).toLocaleString(); }
+    function recompute(){
+      var bt=0; document.querySelectorAll("[data-bpax]").forEach(function(c){bt+=jnum(c.textContent);});
+      var at=0; document.querySelectorAll("[data-apax]").forEach(function(c){at+=jnum(c.textContent);});
+      var be=document.getElementById("bookedTot"); if(be) be.textContent=bt;
+      var ae=document.getElementById("actualTot"); if(ae) ae.textContent=at;
+      var et=0; document.querySelectorAll("tr[data-exp]").forEach(function(r){ var p=jnum((r.querySelector("[data-eprice]")||{}).textContent); var px=jnum((r.querySelector("[data-epax]")||{}).textContent); var amt=p*px; var ac=r.querySelector("[data-eamt]"); if(ac) ac.textContent=amt?baht(amt):""; et+=amt; });
+      var ete=document.getElementById("expTot"); if(ete) ete.textContent=baht(et);
+      var se=document.getElementById("sumExp"); if(se) se.textContent=baht(et);
+      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+NETFEE);
+    }
+    document.addEventListener("input",recompute);
     var eslipFile=null;
     async function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; if(!eslipFile) return; var btn=document.getElementById("driveBtn"); var old=btn?btn.textContent:""; if(btn){ btn.disabled=true; btn.textContent="Uploading\u2026"; } try{ var b64=await readB64(eslipFile); var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,eslipBase64:b64,eslipMime:eslipFile.type||"image/jpeg"})}); var d=await r.json().catch(function(){return {};}); if(!r.ok){ alert(d.hint||d.detail||("Upload failed ("+r.status+")")); if(btn){btn.textContent=old;btn.disabled=false;} return; } if(btn){ btn.textContent=d.paid?"Marked paid \u2713":"Uploaded \u2713"; btn.disabled=false; } if(d.driveError){ alert((d.paid?"Tour marked paid. ":"")+"Note: "+d.driveError); } }catch(e){ alert("Upload failed: "+((e&&e.message)||e)); if(btn){btn.textContent=old;btn.disabled=false;} } }
     function readB64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ var u=String(fr.result); res(u.substring(u.indexOf(",")+1)); }; fr.onerror=rej; fr.readAsDataURL(file); }); }

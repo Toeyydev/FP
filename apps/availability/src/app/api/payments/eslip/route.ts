@@ -51,6 +51,11 @@ export async function POST(req: NextRequest) {
   // The e-slip uploaded successfully → it's evidence of payment, so mark the guide's
   // month PAID, and flip each of that month's tours to PAID so the per-tour badges agree.
   const now = new Date();
+  // Was this month already paid? If so, this is a re-upload / "Replace slip" — we
+  // refresh the file but must NOT notify the guide again (caused duplicate
+  // "payment transferred" messages).
+  const prior = await prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true } });
+  const alreadyPaid = prior?.status === "paid";
   await prisma.payrollStatus.upsert({
     where: { guideId_period: { guideId, period } },
     create: { guideId, period, status: "paid", paidAt: now, eslipUrl: link },
@@ -67,7 +72,8 @@ export async function POST(req: NextRequest) {
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.eslip_uploaded_paid", entityType: "PayrollStatus", detail: { period, guideId, tours: assigns.length } });
 
   // Let the guide know their payment was transferred (in-app + push + LINE).
-  try {
+  // Only on the FIRST time the month flips to paid — never on a slip replacement.
+  if (!alreadyPaid) try {
     const jobSheets = await prisma.jobSheet.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { expenses: true, guideFee: true } });
     const payout = jobSheets.reduce((sum, sh) => sum + computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal, 0);
     const monthLabel = `${MONTHS[Number(period.slice(5, 7)) - 1] ?? ""} ${period.slice(0, 4)}`.trim();
