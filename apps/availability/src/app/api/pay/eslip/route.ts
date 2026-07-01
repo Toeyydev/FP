@@ -5,6 +5,8 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
+import { peakEnabled } from "@/lib/peak-api";
+import { postGuidePayout, peakPayoutReady } from "@/lib/peak-payout";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -64,8 +66,22 @@ export async function POST(req: NextRequest) {
   }
   await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: "pay.eslip", entityType: "Assignment", detail: { guideId, count: jobs.length, peakRef, drive: true } });
 
+  // Auto-post this transfer to PEAK as one expense and adopt its EXP- code as the
+  // ref — dormant until PEAK is connected + account-chart config is set, so this is
+  // a no-op today. Never blocks the payment.
+  let peakCode: string | null = null;
+  try {
+    if (peakEnabled && peakPayoutReady && !peakRef) {
+      const r = await postGuidePayout(guideId, jobs, now.toISOString().slice(0, 10));
+      if (r.ok && r.code) {
+        peakCode = r.code;
+        await prisma.tourPayment.updateMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, data: { peakRef: r.code } });
+      }
+    }
+  } catch { /* PEAK posting is best-effort; payment already recorded */ }
+
   // Tell the guide their payment landed — short summary + completed tour details.
   try { await sendPaymentNotice(guideId, jobs); } catch { /* best-effort */ }
 
-  return NextResponse.json({ ok: true, link, count: jobs.length });
+  return NextResponse.json({ ok: true, link, count: jobs.length, peakRef: peakCode ?? peakRef });
 }
