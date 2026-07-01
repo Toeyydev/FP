@@ -74,13 +74,14 @@ export default function BookingsInbox() {
     finally { setImporting(false); }
   }
 
-  // Live-sync status: has Bokun's webhook fired recently? (PII-free health probe.)
+
+  const [syncing, setSyncing] = useState(false);
+  // Subtle live-sync status pill in the header (the big "silent for N days" banner was
+  // removed — auto-sync keeps bookings current, and a real sync failure alerts ops).
   const [wh, setWh] = useState<{ lastWebhookAt: string | null; webhookEvents7d: number } | null>(null);
   useEffect(() => {
     fetch("/api/bokun/health", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((d) => d && setWh({ lastWebhookAt: d.lastWebhookAt ?? null, webhookEvents7d: d.webhookEvents7d ?? 0 })).catch(() => {});
   }, []);
-
-  const [syncing, setSyncing] = useState(false);
   // Pull historical bookings from Bokun into the inbox (one-off backfill).
   async function syncBokun() {
     setSyncing(true); setMsg("Syncing from Bokun…");
@@ -283,21 +284,6 @@ export default function BookingsInbox() {
         </div>
 
         <div style={{ padding: 14 }}>
-          {wh && (() => {
-            const last = wh.lastWebhookAt ? new Date(wh.lastWebhookAt).getTime() : 0;
-            const hrs = last ? (Date.now() - last) / 3600000 : Infinity;
-            if (hrs < 24) return null; // webhook healthy — no banner
-            const ago = !last ? "ever" : hrs < 48 ? `${Math.floor(hrs)} hours` : `${Math.floor(hrs / 24)} days`;
-            return (
-              <div role="alert" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 14px", marginBottom: 14, borderRadius: 12, border: "1.5px solid var(--danger-line)", background: "var(--danger-bg)", color: "var(--danger)" }}>
-                <span style={{ fontSize: 18 }}>⚠️</span>
-                <div style={{ flex: 1, minWidth: 220, fontSize: 13.5, fontWeight: 600, lineHeight: 1.4 }}>
-                  Live sync from Bokun has been silent for {ago === "ever" ? "a while" : ago}. New bookings &amp; cancellations may be out of date — press Sync to catch up, and check the Bokun webhook is still connected.
-                </div>
-                <button className="btn sm" disabled={syncing} onClick={syncBokun} style={{ borderColor: "var(--danger-line)", color: "var(--danger)", fontWeight: 700 }}>{syncing ? "Syncing…" : "↺ Sync now"}</button>
-              </div>
-            );
-          })()}
           {showAdd && (
             <div className="op-toolbar" style={{ borderRadius: 12, border: "1.5px solid var(--line)", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
               <select className="search" style={{ flex: "none", width: 130 }} value={m.source} onChange={(e) => setM({ ...m, source: e.target.value })}>
