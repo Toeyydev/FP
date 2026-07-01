@@ -291,6 +291,7 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+  @@index([action, createdAt]) // action-filtered "last X" lookups (health, sync throttle)
 }
 
 // A job offered to the available guides. Broadcast to everyone marked available

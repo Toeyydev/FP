@@ -303,6 +303,12 @@ export async function autoSyncBokun(): Promise<void> {
     const recent = await prisma.auditLog.findFirst({ where: { action: "bokun.autosync", createdAt: { gte: throttleAgo } }, select: { id: true } });
     if (recent) return; // synced within the throttle window — skip
     await prisma.auditLog.create({ data: { action: "bokun.autosync", entityType: "Booking" } });
+    // Occasionally prune the sync-log noise so the audit table stays small (keep 3
+    // days — enough for the throttle + a little history). The action index keeps the
+    // "last X" lookups fast regardless, this just bounds growth.
+    if (Math.random() < 0.05) {
+      await prisma.auditLog.deleteMany({ where: { action: { in: ["bokun.autosync", "bokun.autosync.done"] }, createdAt: { lt: new Date(Date.now() - 3 * 86400_000) } } }).catch(() => {});
+    }
     const now = Date.now();
     const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 10);
     const from = fmt(now - 14 * 86400_000);
@@ -326,9 +332,8 @@ export async function autoSyncBokun(): Promise<void> {
         await notifyOps(`Bokun sync has been failing (${fails}\\u00d7 in 30 min, last status ${firstPageFailed.status}). Bookings & cancellations may be out of date \\u2014 check the Bokun connection.`, "\\u26a0\\ufe0f Bokun sync failing", `${fails} failures \\u00b7 status ${firstPageFailed.status}`);
         await prisma.auditLog.create({ data: { action: "bokun.alert", entityType: "Booking", detail: { fails, status: firstPageFailed.status } } });
       }
-    } else if (synced) {
-      await prisma.auditLog.create({ data: { action: "bokun.autosync.done", entityType: "Booking", detail: { synced } } });
     }
+    // (No per-tick "done" row — it was pure noise; the throttle marker above is enough.)
   } catch { /* auto-sync is best-effort */ }
   finally { autoSyncInFlight = false; }
 }
