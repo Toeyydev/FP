@@ -23,8 +23,12 @@ type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcoming
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
-function Kpi({ n, label, tone = "" }: { n: number; label: string; tone?: string }) {
-  return <div className={`kpi ${n > 0 ? tone : ""}`}><b>{n}</b><span>{label}</span></div>;
+function Kpi({ n, label, tone = "", sub, onClick }: { n: number; label: string; tone?: string; sub?: string; onClick?: () => void }) {
+  return (
+    <div className={`kpi ${n > 0 ? tone : ""}${onClick ? " kpi-click" : ""}`} onClick={onClick} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}>
+      <b>{n}</b><span>{label}</span>{sub ? <small className="kpi-sub">{sub}</small> : null}
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -96,6 +100,11 @@ export default function Dashboard() {
   // Collapsible dashboard sections — default shows Tomorrow, hides Today + Upcoming.
   const [hidden, setHidden] = useState<Set<string>>(new Set(["tomorrow", "upcoming"]));
   const toggleSec = (k: string) => setHidden((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // Tap a KPI → expand its section (if collapsible) and scroll to it.
+  const jumpTo = (id: string, section?: string) => {
+    if (section) setHidden((p) => { const n = new Set(p); n.delete(section); return n; });
+    setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  };
   async function sendBroadcast() {
     const message = bcText.trim();
     if (!message) return;
@@ -119,15 +128,21 @@ export default function Dashboard() {
           <div className="kpi-row">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="kpi skel" />)}</div>
           <section className="panel"><div style={{ padding: 14 }}>{Array.from({ length: 4 }).map((_, i) => <div key={i} className="skel-row" />)}</div></section>
         </div>
-      ) : (
+      ) : ((() => {
+          const done = ["ARRIVE", "START", "COMPLETE"];
+          const todayPax = d.todayTours.reduce((s, t) => s + (t.pax ?? 0), 0);
+          const todayIn = d.todayTours.filter((t) => done.includes(t.state)).length;
+          const todayOverdue = d.todayTours.filter((t) => t.overdue).length;
+          const attention = d.unassigned.length + d.understaffed.length + d.conflicts.length + d.leaveRequests.length;
+          return (
         <div className="dash">
           <div className="kpi-row">
-            <Kpi n={d.todayTours.length} label="Today" />
-            <Kpi n={d.tomorrowTours.length} label="Tomorrow" />
-            <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" />
-            <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" />
-            <Kpi n={d.conflicts.length} label="Conflicts" tone="bad" />
-            <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" />
+            <Kpi n={d.todayTours.length} label="Today" sub={d.todayTours.length ? `${todayIn}/${d.todayTours.length} in · ${todayPax} guests` : undefined} onClick={() => jumpTo("today", "today")} />
+            <Kpi n={d.tomorrowTours.length} label="Tomorrow" onClick={() => jumpTo("tomorrow", "tomorrow")} />
+            <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" onClick={() => jumpTo("attention")} />
+            <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" onClick={() => jumpTo("attention")} />
+            <Kpi n={d.conflicts.length} label="Conflicts" tone="bad" onClick={() => jumpTo("attention")} />
+            <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" onClick={() => jumpTo("upcoming", "upcoming")} />
           </div>
 
           <div className="dash-main">
@@ -149,8 +164,8 @@ export default function Dashboard() {
               )}
             </section>
             {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || d.leaveRequests.length > 0) && (
-              <section className="panel">
-                <div className="panel-head"><h2>Needs attention</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">Export unassigned PDF</button>}</div>
+              <section className="panel" id="attention">
+                <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">Export unassigned PDF</button>}</div>
                 <div className="dash-list">
                   {d.leaveRequests.map((l) => (
                     <div key={l.id} className="dash-row">
@@ -184,8 +199,8 @@ export default function Dashboard() {
               </section>
             )}
 
-            <section className="panel">
-              <div className="panel-head" onClick={() => toggleSec("today")} style={{ cursor: "pointer" }}><h2>{hidden.has("today") ? "▸ " : "▾ "}On tour today</h2><span className="hint">{dShort(d.today)} · live check-ins · tap a tour for details</span></div>
+            <section className="panel" id="today">
+              <div className="panel-head" onClick={() => toggleSec("today")} style={{ cursor: "pointer" }}><h2>{hidden.has("today") ? "▸ " : "▾ "}On tour today</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${todayIn}/${d.todayTours.length} checked in · ${todayPax} guests${todayOverdue ? ` · ⚠ ${todayOverdue} not checked in` : ""}` : " · no tours"}</span></div>
               <div className="dash-list" style={{ display: hidden.has("today") ? "none" : undefined }}>
                 {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => (
                   <a key={i} className={`dash-row${a.overdue ? " warn" : ""}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details">
@@ -207,7 +222,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section className="panel">
+            <section className="panel" id="tomorrow">
               <div className="panel-head" onClick={() => toggleSec("tomorrow")} style={{ cursor: "pointer" }}><h2>{hidden.has("tomorrow") ? "▸ " : "▾ "}Tomorrow</h2><span className="hint">{d.tomorrowTours.length} tour(s)</span></div>
               <div className="dash-list" style={{ display: hidden.has("tomorrow") ? "none" : undefined }}>
                 {d.tomorrowTours.length === 0 ? <div className="op-empty">No tours tomorrow.</div> : d.tomorrowTours.map((a, i) => (
@@ -216,7 +231,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section className="panel">
+            <section className="panel" id="upcoming">
               <div className="panel-head" onClick={() => toggleSec("upcoming")} style={{ cursor: "pointer" }}><h2>{hidden.has("upcoming") ? "▸ " : "▾ "}Upcoming · next 7 days</h2></div>
               <div className="dash-list" style={{ display: hidden.has("upcoming") ? "none" : undefined }}>
                 {d.upcomingTours.length === 0 ? <div className="op-empty">Nothing scheduled.</div> : d.upcomingTours.map((a, i) => (
@@ -226,7 +241,8 @@ export default function Dashboard() {
             </section>
           </div>
         </div>
-      )}
+        );
+      })())}
     </div>
   );
 }

@@ -726,6 +726,11 @@ a:focus-visible,button:focus-visible,.subtab:focus-visible,.vtab:focus-visible,[
 .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 15px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:3px}
 .kpi b{font-size:25px;font-weight:800;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .kpi span{font-size:11.5px;font-weight:600;color:var(--ink-soft)}
+.kpi .kpi-sub{font-size:10.5px;font-weight:600;color:var(--ink-soft);opacity:.85;margin-top:1px}
+.kpi-click{cursor:pointer;transition:transform .12s,border-color .12s,box-shadow .12s}
+.kpi-click:hover{border-color:var(--ink-soft);box-shadow:var(--shadow)}
+.kpi-click:active{transform:translateY(1px)}
+.kpi-click:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .kpi.warn{background:var(--assign-bg);border-color:var(--assign-line)} .kpi.warn b{color:var(--assign)}
 .kpi.bad{background:var(--danger-bg);border-color:var(--danger-line)} .kpi.bad b{color:var(--danger)}
 .kpi.skel{height:64px}
