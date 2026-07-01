@@ -94,10 +94,12 @@ export async function sendJobSheetsForDate(
   const lineSkipped: string[] = [];
   for (const g of guides) {
     const jobs = byGuide.get(g.guideId!) ?? [];
+    const base = buildSheet(dateLabel, jobs);
+    // In-app keeps the tappable job-order links. LINE does NOT — a raw link makes
+    // LINE render a preview card of the site; without a URL there's no card.
     const orderLinks = jobs.map((j) => `\n\nJob order ${SLOT_TIMES[j.slotIdx] ?? ""}:\n${BASE}/api/jobsheet/joborder?guideId=${g.guideId}&date=${date}&slotIdx=${j.slotIdx}`).join("");
-    const text = buildSheet(dateLabel, jobs) + orderLinks;
-    await prisma.notification.create({ data: { userId: g.id, kind: "jobsheet", message: text } });
-    if (lineEnabled && g.lineUserId) { await linePush(g.lineUserId, text); lineSent++; }
+    await prisma.notification.create({ data: { userId: g.id, kind: "jobsheet", message: base + orderLinks } });
+    if (lineEnabled && g.lineUserId) { await linePush(g.lineUserId, `${base}\n\nOpen the Folkpaths app to view the job order.`); lineSent++; }
     else lineSkipped.push(g.guideId!);
   }
   return { count: guides.length, lineSent, lineSkipped };
