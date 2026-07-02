@@ -432,14 +432,19 @@ export default function AppClient({
     setModal({ kind: "newoffer" });
   }
   // How many guides are free for a date+slot (client-side preview before sending).
-  function availCountFor(dateStr: string, slotIdx: number): number {
+  // Guides free for a slot: not marked busy, not already assigned, date not blocked.
+  function availGuidesFor(dateStr: string, slotIdx: number) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return ref?.guides ?? [];
     const d = new Date(`${dateStr}T00:00:00`);
-    if (isBlocked(d)) return 0;
+    if (isBlocked(d)) return [];
     return (ref?.guides ?? []).filter((g) => {
       const avd = getAvail(g.guideId, d) ?? EMPTY;
       const asg = getAssign(g.guideId, d);
       return !avd[slotIdx] && !asg[slotIdx];
-    }).length;
+    });
+  }
+  function availCountFor(dateStr: string, slotIdx: number): number {
+    return availGuidesFor(dateStr, slotIdx).length;
   }
   // "10:00–13:00" preview for the offer form (start slot + duration hours).
   function timeRange(slotIdx: number, hoursStr: string): string {
@@ -1056,7 +1061,7 @@ export default function AppClient({
             <div><label className="fl">{t("sendTo")}</label>
               <select value={oGuide} onChange={(e) => setOGuide(e.target.value)}>
                 <option value="">{t("allAvailableGuides")}</option>
-                {(ref?.guides ?? []).map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
+                {availGuidesFor(oDate, oSlot).map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
               </select>
             </div>
             <div><label className="fl">{t("paxOpt")}</label><input type="number" min={1} max={50} value={fPax} onChange={(e) => setFPax(e.target.value)} placeholder="e.g. 4" /></div>
