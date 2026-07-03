@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { makeRef, thb, DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { makeRef, thb, defaultExpensesForTour, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -32,14 +32,27 @@ export async function POST(req: NextRequest) {
 
   const now = new Date();
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
-  const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true } });
+  const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true } });
+
+  // Submitting the report is the moment Actual Pax becomes real: fill each booking
+  // row = Booked Pax minus no-shows (a no-show guest → 0). Blank before this, so a
+  // number only appears once the guide has reported. Operators can still override.
+  const slotBookings = await prisma.booking.findMany({ where: { date, slotIdx }, select: { externalRef: true, confirmationCode: true, noShow: true } });
+  const noShowRefs = new Set(slotBookings.filter((b) => b.noShow).flatMap((b) => [b.externalRef, b.confirmationCode]).filter(Boolean) as string[]);
+  const fillActualPax = (rows: unknown): object[] => (Array.isArray(rows) ? rows : []).map((row) => {
+    const r = row as { bookingNo?: string; status?: string; bookedPax?: number | null; actualPax?: number | null };
+    const isNo = r?.status === "no-show" || (!!r?.bookingNo && noShowRefs.has(r.bookingNo));
+    return { ...r, status: isNo ? "no-show" : (r?.status ?? ""), actualPax: isNo ? 0 : (r?.actualPax ?? r?.bookedPax ?? null) };
+  });
+
   if (existing) {
-    await prisma.jobSheet.update({ where: key, data: { guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note } });
+    await prisma.jobSheet.update({ where: key, data: { guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, bookings: fillActualPax(existing.bookings) } });
   } else {
     // No saved sheet yet — scaffold one that carries the guide's report.
     const a = await prisma.assignment.findUnique({ where: key, select: { tourId: true } });
+    const tour = a?.tourId ? await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } }) : null;
     const ref = makeRef(date, (await prisma.jobSheet.count({ where: { date } })) + 1);
-    await prisma.jobSheet.create({ data: { ref, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: [], expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: session.user.id ?? null } });
+    await prisma.jobSheet.create({ data: { ref, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: [], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: session.user.id ?? null } });
   }
 
   // Tell the operators a guide reported expenses to cross-check.

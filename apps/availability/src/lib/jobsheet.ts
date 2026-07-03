@@ -14,7 +14,7 @@ export type GuideFee = { price: number | null; time: number | null; whtPct: numb
 // The standard items that appear on every new sheet (prices editable per job).
 export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Water (Inc. Guide)", price: 10, pax: null },
-  { description: "Ferry (Inc. Guide)", price: 12, pax: null },
+  { description: "Ferry (Inc. Guide)", price: 11, pax: null },
   { description: "Grand Palace", price: 500, pax: null },
   { description: "Wat Pho", price: 300, pax: null },
   { description: "Wat Arun", price: 200, pax: null },
@@ -22,6 +22,19 @@ export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Bus (Inc. Guide)", price: 15, pax: null },
 ];
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
+
+// The lotus offering (dok bua) is only bought on tours that visit Wat Pho & Wat Arun.
+// Grand-Palace-only, Wat Pho evening, and food tours never carry a lotus fee.
+export function tourHasLotus(tourName?: string | null): boolean {
+  const nm = (tourName ?? "").toLowerCase();
+  return nm.includes("wat pho") && nm.includes("wat arun");
+}
+
+// The standard expense catalogue for a specific tour — drops the Lotus line when the
+// tour doesn't visit Wat Pho & Wat Arun.
+export function defaultExpensesForTour(tourName?: string | null): Expense[] {
+  return tourHasLotus(tourName) ? DEFAULT_EXPENSES : DEFAULT_EXPENSES.filter((e) => !/lotus/i.test(e.description));
+}
 
 const n = (v: number | null | undefined) => (typeof v === "number" && isFinite(v) ? v : 0);
 

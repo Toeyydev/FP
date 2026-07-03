@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, computeTotals, expenseAmount, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 
 function ops(role?: string) {
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   const tourId = existing?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
-  const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: DEFAULT_EXPENSES, guideFee: DEFAULT_GUIDE_FEE };
+  const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE };
   const bookings = (sheet.bookings as Booking[]) ?? [];
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;

@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE, makeRef, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, makeRef, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
@@ -85,15 +85,18 @@ export async function GET(req: NextRequest) {
   const splitHere = allAtSlot.some((b) => b.assignedGuideId);
   const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
   type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
-  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
+  // Actual Pax stays blank until the guide reports after the tour (a no-show → 0,
+  // everyone else → their booked count). Booked Pax is always shown alongside.
+  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
 
   // Standard expense template scaled to the actual guests. Used for a fresh sheet,
   // AND to backfill a saved sheet that has none (e.g. one auto-created from a late
   // add, which writes only bookings). "(Inc. Guide)" items add +1 (the guide).
   const clientPax = linked.reduce((s, b) => s + (b.pax ?? 0), 0) || (assignment?.pax ?? 0);
+  const catalogue = defaultExpensesForTour(tour?.name);
   const defaultExpenses = clientPax > 0
-    ? DEFAULT_EXPENSES.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
-    : DEFAULT_EXPENSES;
+    ? catalogue.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
+    : catalogue;
   // Never show an empty expense table / blank fee for a real tour — fall back to the
   // standard template + guide fee when the saved sheet has none.
   const fill = <T extends { expenses?: unknown; guideFee?: unknown }>(sheet: T) => ({
@@ -150,7 +153,7 @@ export async function GET(req: NextRequest) {
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked
       .filter((lb) => !coveredLive.has(lb))
-      .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "", status: b.noShow ? "no-show" : "" }));
+      .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
     return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet, reconciledAdded: added.length, reconciledRemoved });
@@ -159,7 +162,7 @@ export async function GET(req: NextRequest) {
   // No saved sheet yet — scaffold from the current bookings.
   const bookings = liveBookings.length
     ? liveBookings
-    : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: assignment?.pax ?? null, tickets: "", status: "" }];
+    : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps, checkedIn,

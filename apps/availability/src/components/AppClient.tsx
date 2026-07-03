@@ -19,7 +19,7 @@ import {
 type Role = "guide" | "operator";
 type Job = { tour: string; pax: number | null; note: string | null };
 type Ref = {
-  guides: { guideId: string; displayName: string }[];
+  guides: { guideId: string; displayName: string; phone?: string | null }[];
   tours: { id: string; name: string; time: string; durationMin?: number | null }[];
 };
 type AvMap = Record<string, Record<string, Record<number, boolean[]>>>; // mkey -> gid -> day -> [10]
@@ -877,6 +877,17 @@ export default function AppClient({
       if (dayOff) dayOffGuides++;
       if (conflictSlots(g.guideId, d).size) conflictTot++;
     }
+    // Guides who blocked their own time that day (marked ≥1 slot busy) — surfaced so
+    // the operator can see who's out at a glance and call them in one tap.
+    const blockedList = guides
+      .map((g) => {
+        const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
+        const busyIdxs: number[] = [];
+        for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busyIdxs.push(i); }
+        const dayOff = busyIdxs.length === SLOTS.length && Object.keys(asg).length === 0;
+        return { g, busyIdxs, dayOff };
+      })
+      .filter((x) => x.busyIdxs.length > 0);
     const ql = q.toLowerCase();
     const rows = guides.filter((g) => {
       if (ql && !g.displayName.toLowerCase().includes(ql) && !g.guideId.toLowerCase().includes(ql)) return false;
@@ -912,6 +923,25 @@ export default function AppClient({
             <span><i className="la" />{t("legendAssigned")}</span>
           </div>
         </div>
+        {!blocked && blockedList.length > 0 && (
+          <div className="blocked-strip">
+            <div className="bs-head">{t("blockedTheirTime")} · {blockedList.length}</div>
+            {blockedList.map(({ g, busyIdxs, dayOff }) => {
+              const when = dayOff ? t("dayOff") : busyIdxs.map((i) => SLOTS[i].start).join(", ");
+              const phone = (g.phone || "").trim();
+              return (
+                <div className="bs-row" key={g.guideId}>
+                  <span className="bs-who"><b>{g.displayName}</b> <span className="bs-gid">{g.guideId}</span>
+                    <span className={`bs-when${dayOff ? " off" : ""}`}>{when}</span>
+                  </span>
+                  {phone
+                    ? <a className="btn sm primary" href={`tel:${phone.replace(/\s+/g, "")}`}>{t("callGuide")}</a>
+                    : <span className="bs-nophone">{t("noPhoneOnFile")}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div className="grid-scroll">
           {rows.length ? (
             <table className="grid">

@@ -6,6 +6,7 @@ const prismaMock = vi.hoisted(() => ({
   assignment: { findMany: vi.fn(), update: vi.fn() },
   booking: { update: vi.fn(), findMany: vi.fn() },
   jobSheet: { findUnique: vi.fn(), upsert: vi.fn() },
+  tour: { findUnique: vi.fn() },
   user: { findMany: vi.fn(), findFirst: vi.fn() },
   notification: { create: vi.fn(), findFirst: vi.fn() },
 }));
@@ -24,6 +25,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.assignment.findMany.mockResolvedValue([]);
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
+  prismaMock.tour.findUnique.mockResolvedValue({ name: "Wat Pho & Wat Arun Guided Tour" });
   prismaMock.user.findMany.mockResolvedValue([{ id: "op1" }]);
   prismaMock.user.findFirst.mockResolvedValue({ id: "guideUser1" });
   prismaMock.notification.findFirst.mockResolvedValue(null);

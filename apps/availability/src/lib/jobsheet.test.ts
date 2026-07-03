@@ -1,5 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour } from "@/lib/jobsheet";
+
+describe("jobsheet — lotus fee only for Wat Pho & Wat Arun tours", () => {
+  const hasLotus = (name: string) => defaultExpensesForTour(name).some((e) => /lotus/i.test(e.description));
+  it("includes the lotus fee when the tour visits both Wat Pho and Wat Arun", () => {
+    expect(hasLotus("Wat Phra Kaew & Grand Palace, Wat Pho & Wat Arun")).toBe(true);
+    expect(hasLotus("Wat Pho & Wat Arun Guided Tour")).toBe(true);
+  });
+  it("drops the lotus fee for tours that don't visit both temples", () => {
+    expect(hasLotus("Wat Phra Kaew & Grand Palace")).toBe(false); // no Wat Arun
+    expect(hasLotus("Wat Pho Evening Visit with Temple Cats")).toBe(false); // no Wat Arun
+    expect(hasLotus("Eat Like a Local — China Town")).toBe(false);
+    expect(hasLotus("")).toBe(false);
+  });
+});
 
 describe("jobsheet — money math", () => {
   it("expenseAmount = price × pax, guarding nulls", () => {

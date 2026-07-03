@@ -14,7 +14,7 @@ export async function GET() {
   const guides = isOps
     ? await prisma.user.findMany({
         where: { role: "GUIDE", guideId: { not: null } },
-        select: { guideId: true, displayName: true },
+        select: { guideId: true, displayName: true, phone: true },
         orderBy: { guideId: "asc" },
       })
     : [];

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { DEFAULT_EXPENSES, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour } from "@/lib/jobsheet";
 import { parseBokun, isCancellation, productKey, detectChannel, type ParsedBooking } from "@/lib/bookings";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
@@ -120,9 +120,10 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     const js = await prisma.jobSheet.findUnique({ where: key });
     const list = Array.isArray(js?.bookings) ? (js!.bookings as unknown[]) : [];
     list.push({ name: b.customerName ?? "", bookingNo: b.confirmationCode ?? "", bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: "" });
+    const tour = await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } });
     await prisma.jobSheet.upsert({
       where: key,
-      create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object, expenses: DEFAULT_EXPENSES.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? newTotal + 1 : newTotal })) as object, guideFee: DEFAULT_GUIDE_FEE as object },
+      create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object, expenses: defaultExpensesForTour(tour?.name).map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? newTotal + 1 : newTotal })) as object, guideFee: DEFAULT_GUIDE_FEE as object },
       update: { bookings: list as object },
     });
     await notifyGuide(a.guideId, `A booking was added to your ${b.date} tour. You now have ${newTotal} guests.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
