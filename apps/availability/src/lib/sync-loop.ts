@@ -16,6 +16,6 @@ export function startSyncLoop(): void {
     try { await sweepExpiredOffers(); } catch { /* keep looping */ }
   };
   setTimeout(() => { void tick(); }, 30_000);          // shortly after boot
-  setInterval(() => { void tick(); }, 150_000);        // then every 2.5 min (webhook is the realtime path; this is the catch-up)
+  setInterval(() => { void tick(); }, 300_000);        // then every 5 min (matches the Bokun cache window; manual Sync is the instant path)
 }
 

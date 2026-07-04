@@ -21,24 +21,35 @@ function bokunDate(): string {
 function sign(method: string, path: string, date: string): string {
   return crypto.createHmac("sha1", SECRET!).update(date + ACCESS + method + path, "utf8").digest("base64");
 }
+// Bokun has no client-side timeout of its own; without a cap a slow/hung request
+// would tie up a sync indefinitely. 15s is generous for a paged search yet bounded.
+const BOKUN_TIMEOUT_MS = 15_000;
 async function bokunFetch(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown; text: string }> {
   const date = bokunDate();
-  const res = await fetch(BASE + path, {
-    method,
-    headers: {
-      "X-Bokun-Date": date,
-      "X-Bokun-AccessKey": ACCESS!,
-      "X-Bokun-Signature": sign(method, path, date),
-      ...(CHANNEL ? { "X-Bokun-BookingChannelUUID": CHANNEL } : {}),
-      "Content-Type": "application/json;charset=UTF-8",
-      Accept: "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let json: unknown = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
-  return { status: res.status, json, text };
+  try {
+    const res = await fetch(BASE + path, {
+      method,
+      headers: {
+        "X-Bokun-Date": date,
+        "X-Bokun-AccessKey": ACCESS!,
+        "X-Bokun-Signature": sign(method, path, date),
+        ...(CHANNEL ? { "X-Bokun-BookingChannelUUID": CHANNEL } : {}),
+        "Content-Type": "application/json;charset=UTF-8",
+        Accept: "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(BOKUN_TIMEOUT_MS),
+    });
+    const text = await res.text();
+    let json: unknown = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
+    return { status: res.status, json, text };
+  } catch (e) {
+    // Timeout or network error — surface as a clean failure (status 0) rather than
+    // throwing, so callers report it and move on instead of hanging.
+    const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+    return { status: 0, json: null, text: timedOut ? `bokun-timeout after ${BOKUN_TIMEOUT_MS}ms` : String((e as Error)?.message || e) };
+  }
 }
 
 // Search product bookings in a date window. Returns raw booking items (shape is

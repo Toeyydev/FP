@@ -292,17 +292,20 @@ export async function importRawBooking(raw: unknown, opts?: { otaOnly?: boolean 
 
 
 // Background safety net: pull recent Bokun bookings (incl. CANCELLED) so the board
-// stays current even when the live webhook is down. Throttled to once / 10 min via
-// the audit log (works across instances) plus a per-instance in-flight guard.
+// stays current even when the live webhook is down. Cached to once / 5 min via the
+// audit log (works across instances) plus a per-instance in-flight guard.
 // Best-effort and meant to be fire-and-forget — never throws into the caller.
 let autoSyncInFlight = false;
 export async function autoSyncBokun(): Promise<void> {
   if (!bokunApiEnabled || autoSyncInFlight) return;
   autoSyncInFlight = true;
   try {
-    const throttleAgo = new Date(Date.now() - 2 * 60_000); // de-dupe across page-loads + the background loop / replicas
+    // Cache Bokun for 5 min: if we pulled within the last 5 min, serve the board
+    // from the DB and don't hit Bokun again. The operator's manual "Sync" button
+    // (/api/bokun/sync) bypasses this for a last-minute booking that can't wait.
+    const throttleAgo = new Date(Date.now() - 5 * 60_000); // dedupes page-loads + the background loop / replicas
     const recent = await prisma.auditLog.findFirst({ where: { action: "bokun.autosync", createdAt: { gte: throttleAgo } }, select: { id: true } });
-    if (recent) return; // synced within the throttle window — skip
+    if (recent) return; // pulled within the 5-min cache window — skip
     await prisma.auditLog.create({ data: { action: "bokun.autosync", entityType: "Booking" } });
     // Occasionally prune the sync-log noise so the audit table stays small (keep 3
     // days — enough for the throttle + a little history). The action index keeps the
