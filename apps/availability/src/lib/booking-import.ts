@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour } from "@/lib/jobsheet";
-import { parseBokun, isCancellation, productKey, detectChannel, type ParsedBooking } from "@/lib/bookings";
+import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, type ParsedBooking } from "@/lib/bookings";
+import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { todayD, ymd } from "@/lib/dates";
@@ -209,7 +210,14 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   let tourId: string | null = null;
   if (p.productName) {
     const map = await prisma.productMap.findUnique({ where: { productKey: productKey(p.productName) } }).catch(() => null);
-    if (map) tourId = map.tourId;
+    if (map) {
+      // A channel-only "product" (e.g. "GetYourGuide") maps to the daytime default
+      // (Grand Palace). That's wrong for an evening slot (16:30+) — those are the
+      // China Town food tours — so leave it UNMAPPED for the operator to connect,
+      // rather than silently filing it under Grand Palace.
+      const eveningChannelOnly = isChannelProductName(p.productName) && isEveningSlot(p.slotIdx);
+      if (!eveningChannelOnly) tourId = map.tourId;
+    }
   }
   const { source, cancelled } = opts;
   const raw = (opts.raw ?? undefined) as object | undefined;

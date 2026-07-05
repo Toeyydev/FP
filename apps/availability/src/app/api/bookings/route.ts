@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
-import { productKey } from "@/lib/bookings";
+import { productKey, isChannelProductName } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
 
@@ -160,8 +160,11 @@ export async function POST(req: NextRequest) {
     const { id, ...rest } = parsed.data;
     const b = await prisma.booking.update({ where: { id }, data: rest });
     // Learn the product → tour mapping so future bookings of this product auto-map,
-    // and back-apply it to other pending bookings of the same product.
-    if (rest.tourId && b.productName) {
+    // and back-apply it to other pending bookings of the same product. NEVER learn
+    // from a bare channel name (e.g. "GetYourGuide") — that would overwrite the
+    // channel default and re-file every booking of that channel onto one tour. For
+    // those, we just set this single booking's tour.
+    if (rest.tourId && b.productName && !isChannelProductName(b.productName)) {
       const key = productKey(b.productName);
       await prisma.productMap.upsert({
         where: { productKey: key },

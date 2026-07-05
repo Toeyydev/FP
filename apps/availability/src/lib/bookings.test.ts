@@ -1,5 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation } from "@/lib/bookings";
+import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName } from "@/lib/bookings";
+import { isEveningSlot } from "@/lib/slots";
+
+describe("channel-only bookings — don't default evening tours to Grand Palace", () => {
+  it("isChannelProductName flags bare channel names, not real titles", () => {
+    expect(isChannelProductName("GetYourGuide")).toBe(true);
+    expect(isChannelProductName("Viator.com")).toBe(true);
+    expect(isChannelProductName("bokun")).toBe(true);
+    expect(isChannelProductName("Eat Like a Local — China Town")).toBe(false);
+    expect(isChannelProductName("Bangkok's Classic : Grand Palace , Wat Pho and Wat Arun Guided Tour")).toBe(false);
+    expect(isChannelProductName(null)).toBe(false);
+  });
+  it("isEveningSlot is true only for 16:30+ departures", () => {
+    expect(isEveningSlot(0)).toBe(false);  // 08:30
+    expect(isEveningSlot(2)).toBe(false);  // 13:30
+    expect(isEveningSlot(4)).toBe(false);  // 15:00
+    expect(isEveningSlot(5)).toBe(true);   // 16:30 China Town
+    expect(isEveningSlot(7)).toBe(true);   // 18:30 China Town
+    expect(isEveningSlot(null)).toBe(false);
+  });
+});
 
 describe("bookings — helpers", () => {
   it("productKey normalizes whitespace + case", () => {

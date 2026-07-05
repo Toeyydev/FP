@@ -37,6 +37,15 @@ export function productKey(name: string): string {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+// Sales-channel labels that sometimes arrive INSTEAD of a real product title (the
+// OTA feed can carry only the channel). We never learn a channel→tour rule from
+// these — doing so would re-file every booking of that channel — and we don't
+// trust a channel default for evening tours.
+const CHANNEL_PRODUCT_KEYS = new Set(["getyourguide", "gyg", "viator", "viator.com", "bokun", "folkpaths", "direct"]);
+export function isChannelProductName(name?: string | null): boolean {
+  return !!name && CHANNEL_PRODUCT_KEYS.has(productKey(name));
+}
+
 export function normTime(v: unknown): string | undefined {
   if (v == null) return undefined;
   const s = String(v).replace(".", ":");

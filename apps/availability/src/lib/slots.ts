@@ -7,3 +7,9 @@ export const SLOT_TIMES = ["08:30", "10:00", "13:30", "14:00", "15:00", "16:30",
 export const SLOTS: Slot[] = SLOT_TIMES.map((t, idx) => ({ idx, start: t, end: t, label: t }));
 
 export const SLOT_COUNT = SLOTS.length;
+
+// Evening departures (16:00+): the China Town food tours run here; the daytime
+// Grand Palace / temple tours never do. Used to reject a daytime channel default
+// (e.g. "GetYourGuide" → Grand Palace) for an evening booking.
+export const isEveningSlot = (idx: number | null | undefined): boolean =>
+  typeof idx === "number" && idx >= 0 && idx < SLOT_TIMES.length && parseInt(SLOT_TIMES[idx], 10) >= 16;
