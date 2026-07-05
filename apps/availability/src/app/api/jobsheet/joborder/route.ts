@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { bookingRef } from "@/lib/booking-ref";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 function esc(v: unknown): string {
@@ -36,7 +37,20 @@ export async function GET(req: NextRequest) {
   const tourId = sheet?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
-  const bookings = ((sheet?.bookings as Booking[]) ?? []);
+  // A guide can open their job order before the operator has saved a sheet — so
+  // when the sheet has no rows yet, fall back to the live bookings for this slot.
+  // Split-aware: on a split slot the guide sees only the guests tagged to them.
+  let bookings = ((sheet?.bookings as Booking[]) ?? []);
+  if (bookings.length === 0) {
+    const live = await prisma.booking.findMany({
+      where: { date, slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true },
+      orderBy: { customerName: "asc" },
+    });
+    const splitHere = live.some((b) => b.assignedGuideId);
+    const mine = splitHere ? live.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : live;
+    bookings = mine.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
+  }
   const guideFee = ((sheet?.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
   const guideName = u?.fullName || u?.displayName || "";
   const ref = sheet?.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
