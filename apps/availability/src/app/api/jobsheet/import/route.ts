@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { parseJobSheetXlsx } from "@/lib/jobsheet-xlsx";
-import { makeRef } from "@/lib/jobsheet";
+import { nextJobRef } from "@/lib/jobref";
 import { encrypt } from "@/lib/crypto";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
       });
 
       // job sheet
-      const ref = p.ref || makeRef(date, (await prisma.jobSheet.count({ where: { date } })) + 1);
+      const ref = p.ref || (await nextJobRef(date));
       const sheetBookings = p.bookings.map((b) => ({ ...b, status: "" })); // save schema requires a status field
       const guideFee = { price: p.guideFee.price ?? 1000, time: p.guideFee.time ?? 1, whtPct: p.guideFee.whtPct ?? 3 };
       await prisma.jobSheet.upsert({

@@ -4,7 +4,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, makeRef, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { nextJobRef } from "@/lib/jobref";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
@@ -50,8 +51,7 @@ export async function GET(req: NextRequest) {
   // for the date the first time it's opened so the "No." always shows.
   if (existing && !existing.ref) {
     try {
-      const seq = (await prisma.jobSheet.count({ where: { date, NOT: { ref: null } } })) + 1;
-      const newRef = makeRef(date, seq);
+      const newRef = await nextJobRef(date);
       await prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, data: { ref: newRef } });
       existing.ref = newRef;
     } catch { /* ref is best-effort; never block opening the sheet */ }
@@ -193,7 +193,7 @@ export async function PUT(req: NextRequest) {
 
   const existing = await prisma.jobSheet.findUnique({ where: key });
   let ref = existing?.ref ?? null;
-  if (!ref) ref = makeRef(d.date, (await prisma.jobSheet.count({ where: { date: d.date } })) + 1);
+  if (!ref) ref = await nextJobRef(d.date);
 
   const sheet = await prisma.jobSheet.upsert({
     where: key,

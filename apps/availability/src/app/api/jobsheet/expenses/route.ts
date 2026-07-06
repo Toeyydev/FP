@@ -4,7 +4,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { makeRef, thb, defaultExpensesForTour, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { thb, defaultExpensesForTour, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { nextJobRef } from "@/lib/jobref";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
     // No saved sheet yet — scaffold one that carries the guide's report.
     const a = await prisma.assignment.findUnique({ where: key, select: { tourId: true } });
     const tour = a?.tourId ? await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } }) : null;
-    const ref = makeRef(date, (await prisma.jobSheet.count({ where: { date } })) + 1);
+    const ref = await nextJobRef(date);
     await prisma.jobSheet.create({ data: { ref, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: [], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: session.user.id ?? null } });
   }
 
