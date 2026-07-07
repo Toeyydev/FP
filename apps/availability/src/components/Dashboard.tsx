@@ -31,6 +31,24 @@ function Kpi({ n, label, tone = "", sub, onClick }: { n: number; label: string; 
   );
 }
 
+// Google Drive connection — where job sheets + e-slips are saved. A visible button
+// so the operator can (re)connect the company Drive account without hunting for a URL.
+function DriveCard() {
+  const [g, setG] = useState<{ enabled: boolean; connected: boolean; email: string | null } | null>(null);
+  useEffect(() => { fetch("/api/google/status", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then(setG).catch(() => {}); }, []);
+  if (!g || !g.enabled) return null;
+  const ok = !!(g.connected && g.email);
+  return (
+    <div className={`drive-card${ok ? "" : " warn"}`}>
+      <div className="dc-main">
+        <b>☁ Google Drive</b>
+        <span className="dc-status">{ok ? <>Saving to <b>{g.email}</b></> : "Not connected — job sheets & e-slips aren’t being saved to Drive"}</span>
+      </div>
+      <a className={`btn sm ${ok ? "" : "primary"}`} href="/api/google/connect">{ok ? "Switch account" : "Connect Google Drive"}</a>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [d, setD] = useState<Data | null>(null);
   const load = () => fetch("/api/dashboard", { cache: "no-store" }).then((r) => r.json()).then(setD).catch(() => {});
@@ -122,6 +140,8 @@ export default function Dashboard() {
       <div id="appBar"><div className="subtabs"><span className="subtab active">Dashboard</span></div>
         <div className="nav"><LiveSyncBadge /><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
+
+      <DriveCard />
 
       {!d ? (
         <div className="dash">
