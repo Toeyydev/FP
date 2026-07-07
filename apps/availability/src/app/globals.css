@@ -497,6 +497,14 @@ a.dash-row:hover{background:var(--grey-bg)}
 .rep-bar .rb-track{height:14px;background:var(--grey-bg);border-radius:4px;overflow:hidden}
 .rep-bar .rb-track i{display:block;height:100%;background:var(--primary);border-radius:4px}
 .rep-bar .rb-v{font-size:12.5px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+.rep-sec{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-soft);margin:22px 0 10px}
+.rep-sec:first-child{margin-top:2px}
+.rep-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:420px}
+.rep-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);font-weight:700;padding:7px 12px;border-bottom:1px solid var(--line)}
+.rep-table th.n,.rep-table td.n{text-align:right;font-variant-numeric:tabular-nums}
+.rep-table td{padding:9px 12px;border-bottom:1px solid var(--line)}
+.rep-table tbody tr:last-child td{border-bottom:none}
+.rep-table tbody tr:nth-child(even){background:color-mix(in srgb,var(--ink) 3%,transparent)}
 
 /* ---- Job offer card: clear data ---- */
 .offer-tour{font-size:15px;display:block;margin-bottom:8px}
