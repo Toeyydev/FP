@@ -27,8 +27,29 @@ export async function folkpathsDriveToken(actingUserId?: string): Promise<string
   return chosen.refreshToken ? decrypt(chosen.refreshToken) : null;
 }
 
+// Accounting / partner accounts that must be able to SEE every job sheet + e-slip.
+// Comma-separated in FOLKPATHS_DRIVE_SHARE (e.g. "account@folkpaths.com"). They get
+// reader access to the TOP-LEVEL company folders, so all files inside are visible.
+const SHARE_EMAILS = (process.env.FOLKPATHS_DRIVE_SHARE || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+const sharedFolders = new Set<string>(); // per-process cache — share each folder once
+
+async function shareFolderWith(token: string, folderId: string): Promise<void> {
+  for (const email of SHARE_EMAILS) {
+    const cacheKey = `${folderId}:${email}`;
+    if (sharedFolders.has(cacheKey)) continue;
+    try {
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions?sendNotificationEmail=false&fields=id`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ role: "reader", type: "user", emailAddress: email }),
+      });
+      if (r.ok) sharedFolders.add(cacheKey); // only cache on success, so a failure retries next save
+    } catch { /* best-effort */ }
+  }
+}
+
 // Find a folder this app created (drive.file scope) by name under an optional
-// parent, creating it if missing.
+// parent, creating it if missing. Top-level company folders are shared with the
+// accounting account(s) so they can see all job sheets + e-slips.
 async function findOrCreateFolder(token: string, name: string, parentId?: string): Promise<string> {
   const safe = name.replace(/'/g, "\\'");
   const q = [`name = '${safe}'`, "mimeType = 'application/vnd.google-apps.folder'", "trashed = false"];
@@ -36,14 +57,21 @@ async function findOrCreateFolder(token: string, name: string, parentId?: string
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   const j = await r.json().catch(() => ({}));
-  if (j.files?.[0]?.id) return j.files[0].id as string;
-  const cr = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
-    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: parentId ? [parentId] : undefined }),
-  });
-  const cj = await cr.json().catch(() => ({}));
-  if (!cr.ok || !cj.id) throw new Error(`drive-folder ${cr.status}: ${JSON.stringify(cj).slice(0, 160)}`);
-  return cj.id as string;
+  let id: string;
+  if (j.files?.[0]?.id) id = j.files[0].id as string;
+  else {
+    const cr = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: parentId ? [parentId] : undefined }),
+    });
+    const cj = await cr.json().catch(() => ({}));
+    if (!cr.ok || !cj.id) throw new Error(`drive-folder ${cr.status}: ${JSON.stringify(cj).slice(0, 160)}`);
+    id = cj.id as string;
+  }
+  // Give the accounting account(s) reader access to the top-level company folders
+  // ("Folkpaths Job Sheets" / "Folkpaths E-slips"), so every file inside is visible.
+  if (!parentId && SHARE_EMAILS.length) await shareFolderWith(token, id);
+  return id;
 }
 
 // Upload HTML, converting it to a native Google Doc, into the nested folderPath
