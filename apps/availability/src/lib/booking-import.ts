@@ -4,6 +4,7 @@ import { parseBokun, isCancellation, productKey, detectChannel, isChannelProduct
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
+import { sendEmail } from "@/lib/email";
 import { todayD, ymd } from "@/lib/dates";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
@@ -35,11 +36,15 @@ export async function notifyOps(message: string, title: string, body: string, op
 
 export async function notifyGuide(guideId: string, message: string, title: string, body: string) {
   try {
-    const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true } });
+    const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true, email: true } });
     if (!u) return;
     await prisma.notification.create({ data: { userId: u.id, kind: "job-change", message } });
     await sendPushToUser(u.id, { title, body, url: "/", tag: "job-change" });
     if (lineEnabled && u.lineUserId) await linePush(u.lineUserId, message);
+    // Email is the catch-all: most guides have no push or LINE, so without this a
+    // cancellation / group-change notice would never reach them. Skip placeholders.
+    const realEmail = u.email && !/@(?:guides\.)?folkpath\.local$/i.test(u.email);
+    if (realEmail) await sendEmail({ to: u.email!, subject: title, text: message, html: `<p>${message}</p><p style="font-size:13px;color:#888"><a href="https://guide.folkpaths.com/">Open Folkpaths</a></p>` }).catch(() => {});
   } catch { /* best-effort */ }
 }
 
@@ -184,24 +189,42 @@ export async function reconcileAssignedBookings(): Promise<number> {
 async function onBookingCancelled(b: { date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
   try {
     if (!b.date || b.slotIdx == null) return;
-    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true, googleEventId: true, opsGoogleEventId: true } });
+    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true, googleEventId: true, opsGoogleEventId: true, date: true, slotIdx: true } });
     if (!assigns.length) return;
-    const bks = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true } });
-    const sum = bks.reduce((acc, x) => acc + (x.pax ?? 0), 0);
+    const bks = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
+    const split = bks.some((x) => x.assignedGuideId);
+    const upcoming = b.date >= ymd(todayD());
     const who = b.customerName ? `${b.customerName} ` : "";
     for (const a of assigns) {
-      if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
-      // Whole tour cancelled (no guests left) -> delete its Google Calendar events
-      // from the guide + operator calendars so it doesn't linger.
-      if (sum === 0 && (a.googleEventId || a.opsGoogleEventId)) {
+      // Split-aware: this guide's remaining guests (on a split slot, only theirs).
+      const mine = split ? bks.filter((x) => !x.assignedGuideId || x.assignedGuideId === a.guideId) : bks;
+      const sum = mine.reduce((acc, x) => acc + (x.pax ?? 0), 0);
+
+      if (sum === 0 && upcoming) {
+        // Whole tour cancelled \u2014 remove it from the guide entirely (calendar, job
+        // sheet, check-ins, any open offer, and the assignment) so it disappears
+        // from their schedule. Never touch a tour that's already been paid.
+        const paid = await prisma.tourPayment.findFirst({ where: { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, status: "PAID" }, select: { id: true } });
         try { await removeTourEvents(a); } catch { /* calendar cleanup is best-effort */ }
-        await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
+        if (!paid) {
+          const where = { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx };
+          await prisma.$transaction([
+            prisma.jobOffer.updateMany({ where: { date: a.date, slotIdx: a.slotIdx, status: "OPEN" }, data: { status: "EXPIRED" } }),
+            prisma.checkin.deleteMany({ where }),
+            prisma.tourReport.deleteMany({ where }),
+            prisma.guideRating.deleteMany({ where }),
+            prisma.tourPayment.deleteMany({ where }),
+            prisma.jobSheet.deleteMany({ where }),
+            prisma.assignment.deleteMany({ where }),
+          ]);
+        }
+        await notifyGuide(a.guideId, `Your ${b.date} tour was cancelled \u2014 all guests cancelled. It has been removed from your schedule.`, "Tour cancelled", `${b.date} \u00b7 removed`);
+        await notifyOps(`Cancellation on ${b.date}: ${who}was the last guest \u2014 ${a.guideId}'s tour removed from the board.`, "Tour cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 removed`, { push: false, date: b.date });
+      } else {
+        if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
+        await notifyGuide(a.guideId, `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`, "A guest cancelled", `${b.date} \u00b7 ${sum} guests`);
+        await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`, { push: false, date: b.date });
       }
-      const msg = sum === 0
-        ? `Your ${b.date} tour was cancelled \u2014 all guests cancelled. It has been removed from your calendar.`
-        : `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`;
-      await notifyGuide(a.guideId, msg, sum === 0 ? "Tour cancelled" : "A guest cancelled", `${b.date} \u00b7 ${sum} guests`);
-      await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.${sum === 0 ? " Calendar event removed." : ""}`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`, { push: false, date: b.date });
     }
   } catch { /* real-time alert + calendar sync are best-effort; the cancellation is already saved */ }
 }
@@ -300,7 +323,7 @@ export async function importRawBooking(raw: unknown, opts?: { otaOnly?: boolean 
 
 
 // Background safety net: pull recent Bokun bookings (incl. CANCELLED) so the board
-// stays current even when the live webhook is down. Cached to once / 5 min via the
+// stays current even when the live webhook is down. Cached to once / 30 min via the
 // audit log (works across instances) plus a per-instance in-flight guard.
 // Best-effort and meant to be fire-and-forget — never throws into the caller.
 let autoSyncInFlight = false;
@@ -308,12 +331,12 @@ export async function autoSyncBokun(): Promise<void> {
   if (!bokunApiEnabled || autoSyncInFlight) return;
   autoSyncInFlight = true;
   try {
-    // Cache Bokun for 5 min: if we pulled within the last 5 min, serve the board
-    // from the DB and don't hit Bokun again. The operator's manual "Sync" button
-    // (/api/bokun/sync) bypasses this for a last-minute booking that can't wait.
-    const throttleAgo = new Date(Date.now() - 5 * 60_000); // dedupes page-loads + the background loop / replicas
+    // Refresh Bokun every 30 min: if we pulled within the last 30 min, serve the
+    // board from the DB and don't hit Bokun again. The operator's manual "Sync"
+    // button (/api/bokun/sync) bypasses this for anything that can't wait.
+    const throttleAgo = new Date(Date.now() - 30 * 60_000); // dedupes page-loads + the background loop / replicas
     const recent = await prisma.auditLog.findFirst({ where: { action: "bokun.autosync", createdAt: { gte: throttleAgo } }, select: { id: true } });
-    if (recent) return; // pulled within the 5-min cache window — skip
+    if (recent) return; // pulled within the 30-min refresh window — skip
     await prisma.auditLog.create({ data: { action: "bokun.autosync", entityType: "Booking" } });
     // Occasionally prune the sync-log noise so the audit table stays small (keep 3
     // days — enough for the throttle + a little history). The action index keeps the
