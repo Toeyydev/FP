@@ -7,6 +7,7 @@ import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
 import LiveSyncBadge from "@/components/LiveSyncBadge";
 import InstallPrompt from "@/components/InstallPrompt";
+import { GuideTabs } from "@/components/GuideTabs";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
@@ -1175,8 +1176,6 @@ export default function AppClient({
         </button>
         <nav className="topnav">
           {role === "operator" && <LiveSyncBadge />}
-          {role === "guide" && <a className="navlink" href="/pay">{t("payNav")}</a>}
-          {role === "guide" && <a className="navlink" href="/profile">{t("myDetails")}</a>}
           {role === "operator" && <a className="navlink" href="/dashboard">{t("dashboardNav")}</a>}
           {role === "operator" && <a className="navlink" href="/jobs">{t("jobsNav")}</a>}
           {role === "operator" && <a className="navlink" href="/bookings">{t("bookings")}</a>}
@@ -1202,17 +1201,34 @@ export default function AppClient({
         </div>
       </header>
 
-      <div id="appBar">
-        <div className="vtabs">
-          {tabs.map(([v, label]) => <button key={v} className={`vtab ${v === view ? "active" : ""}`} onClick={() => setView(v)}>{label}</button>)}
+      {role === "guide" ? (
+        // Guides get the same tab bar as their Pay / Me pages — one consistent app.
+        <>
+          <GuideTabs active={view === "week" ? "week" : "schedule"} />
+          {view === "week" && (
+            <div id="appBar">
+              <div className="nav" style={{ marginLeft: "auto" }}>
+                <button className="btn ico-btn" onClick={() => navBy(-1)}>‹</button>
+                <span className="period">{periodLabel()}</span>
+                <button className="btn ico-btn" onClick={() => navBy(1)}>›</button>
+                <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div id="appBar">
+          <div className="vtabs">
+            {tabs.map(([v, label]) => <button key={v} className={`vtab ${v === view ? "active" : ""}`} onClick={() => setView(v)}>{label}</button>)}
+          </div>
+          <div className="nav">
+            <button className="btn ico-btn" onClick={() => navBy(-1)}>‹</button>
+            <span className="period">{periodLabel()}</span>
+            <button className="btn ico-btn" onClick={() => navBy(1)}>›</button>
+            <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
+          </div>
         </div>
-        <div className="nav">
-          <button className="btn ico-btn" onClick={() => navBy(-1)}>‹</button>
-          <span className="period">{periodLabel()}</span>
-          <button className="btn ico-btn" onClick={() => navBy(1)}>›</button>
-          <button className="btn sm" onClick={() => setAnchor(todayD())}>{t("today")}</button>
-        </div>
-      </div>
+      )}
 
       {role === "guide" && view === "schedule" && guideHero()}
 

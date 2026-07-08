@@ -268,6 +268,12 @@ a.glink:hover{text-decoration:underline}
 .drive-card .dc-main b{font-size:13.5px}
 .drive-card .dc-status{font-size:12.5px;color:var(--ink-soft)}
 .drive-card.warn .dc-status{color:#9a6a00}
+/* ---- Guide tab bar (consistent across all guide screens) ---- */
+.gtabs{display:flex;gap:4px;background:var(--grey-bg,#efe6d4);border-radius:12px;padding:4px;margin:0 0 14px}
+.gtabs .gtab{flex:1;text-align:center;font-size:13.5px;font-weight:700;padding:10px 6px;border-radius:9px;color:var(--ink-soft);text-decoration:none;white-space:nowrap;}
+.gtabs .gtab.on{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+@media (pointer:coarse){.gtabs .gtab{padding:12px 6px}}
+
 /* ---- Guide "My Pay" ---- */
 .pay-tot{display:flex;justify-content:space-between;align-items:baseline;padding:2px 2px 12px}
 .pay-tot .k{display:block;font-size:12.5px;color:var(--ink-soft);font-weight:600}

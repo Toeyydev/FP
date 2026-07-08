@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { GuideTabs } from "@/components/GuideTabs";
 
 type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; paid: boolean; paidAt: string | null; slip: string | null };
 type Month = { period: string; label: string; tourCount: number; total: number; paidCount: number; monthly: { paid: boolean; paidAt: string | null; slip: string | null }; tours: Tour[] };
@@ -33,7 +34,7 @@ export default function MyPay() {
   return (
     <div className="wrap">
       <AuthHeader backHref="/" />
-      <div id="appBar"><div className="subtabs"><span className="subtab active">My Pay</span></div></div>
+      <GuideTabs active="pay" />
 
       <section className="panel" style={{ padding: 16 }}>
         {!d ? (

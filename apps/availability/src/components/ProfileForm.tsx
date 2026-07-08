@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { GuideTabs } from "@/components/GuideTabs";
 import { useLang } from "@/components/Providers";
 import { REQUIRED_PROFILE_FIELDS } from "@/lib/profile";
 
@@ -22,7 +23,7 @@ const FIELDS = [
   ["bankName", "bankNameLabel"], ["bankAccountNo", "bankAccountNoLabel"], ["bankAccountName", "bankAccountNameLabel"], ["bankBranch", "bankBranchLabel"],
 ] as const;
 
-export default function ProfileForm({ targetUserId }: { targetUserId: string | null }) {
+export default function ProfileForm({ targetUserId, isGuideOwn = false }: { targetUserId: string | null; isGuideOwn?: boolean }) {
   const { t } = useLang();
   const [p, setP] = useState<Profile | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
@@ -146,6 +147,7 @@ export default function ProfileForm({ targetUserId }: { targetUserId: string | n
   return (
     <div className="wrap">
       <AuthHeader backHref="/" />
+      {isGuideOwn && <GuideTabs active="me" />}
       <section className="panel narrow">
         <div className="auth-card">
           <h2>{t("profileTitle")}</h2>
