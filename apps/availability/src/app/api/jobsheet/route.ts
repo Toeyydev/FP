@@ -122,28 +122,37 @@ export async function GET(req: NextRequest) {
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
-    // Match a saved row to a live booking by ANY identifier (GYG ref, GET code, OR
-    // name). This lets an old sheet that stored the GET- code still line up with the
-    // same guest's GYG ref — so we refresh the row to the GYG ref and never duplicate.
-    const idKeys = (b: { externalRef?: string | null; confirmationCode?: string | null; customerName?: string | null }) =>
-      [b.externalRef, b.confirmationCode, b.customerName].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
+    // Match a saved row to a live booking by BOOKING NUMBER only — the sole trustworthy
+    // identity. A GYG ref and its GET- confirmation code both count as that booking's
+    // number, so an old sheet that stored the GET- code still lines up with the same
+    // guest's GYG ref (and we refresh the row to the GYG ref). We deliberately do NOT
+    // bridge by name: two different guests can share a name under different booking
+    // numbers (e.g. two "John Smith" on the 10 Jul tour), and those MUST stay two rows.
+    // Name is a fallback only for a manual row that carries no booking number at all.
+    const refKeys = (b: { externalRef?: string | null; confirmationCode?: string | null }) =>
+      [b.externalRef, b.confirmationCode].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
     const canonRef = (b: { externalRef?: string | null; confirmationCode?: string | null }) => bookingRef(b.externalRef, b.confirmationCode);
-    const rowKeys = (r: SheetBooking) => [r.bookingNo, r.name].map((x) => (x || "").trim().toLowerCase()).filter(Boolean);
-    const matchLive = (r: SheetBooking) => linked.find((lb) => { const lk = idKeys(lb); return rowKeys(r).some((k) => lk.includes(k)); });
+    const rowRef = (r: SheetBooking) => (r.bookingNo || "").trim().toLowerCase();
+    const matchLive = (r: SheetBooking) => {
+      const rRef = rowRef(r);
+      if (rRef) return linked.find((lb) => refKeys(lb).includes(rRef));  // numbered row: its number only
+      const rName = (r.name || "").trim().toLowerCase();                 // manual row (no number): by name
+      return rName ? linked.find((lb) => (lb.customerName || "").trim().toLowerCase() === rName) : undefined;
+    };
 
-    // A saved row whose guest is now active at a DIFFERENT date OR slot was re-slotted
-    // (incl. a Bokun date change, e.g. 26→27 Jun) — drop it. Scoped to the saved rows'
-    // own refs/names so it's a small, precise query (no name-collision sweep of the DB).
-    const savedIds = [...new Set(saved.flatMap((r) => [r.bookingNo, r.name]).map((x) => (x || "").trim()).filter(Boolean))];
-    const elsewhere = savedIds.length ? await prisma.booking.findMany({
+    // A saved (numbered) row whose booking is now active at a DIFFERENT date OR slot was
+    // re-slotted (incl. a Bokun date change, e.g. 26→27 Jun) — drop it. Matched strictly
+    // by booking number so a same-name guest elsewhere never drags this row off the sheet.
+    const savedRefs = [...new Set(saved.map((r) => (r.bookingNo || "").trim()).filter(Boolean))];
+    const elsewhere = savedRefs.length ? await prisma.booking.findMany({
       where: {
         status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
         NOT: { date, slotIdx },
-        OR: [{ externalRef: { in: savedIds } }, { confirmationCode: { in: savedIds } }, { customerName: { in: savedIds } }],
+        OR: [{ externalRef: { in: savedRefs } }, { confirmationCode: { in: savedRefs } }],
       },
-      select: { customerName: true, externalRef: true, confirmationCode: true },
+      select: { externalRef: true, confirmationCode: true },
     }) : [];
-    const movedKeySet = new Set(elsewhere.flatMap(idKeys));
+    const movedRefSet = new Set(elsewhere.flatMap(refKeys));
 
     const matched = new Map<SheetBooking, (typeof linked)[number]>();
     for (const r of saved) { const lb = matchLive(r); if (lb) matched.set(r, lb); }
@@ -151,8 +160,9 @@ export async function GET(req: NextRequest) {
     const kept = saved
       .filter((r) => {
         if (matched.has(r)) return true;                    // still active at this slot
-        if (!((r.bookingNo || "").trim())) return true;     // manual row — always keep
-        return !rowKeys(r).some((k) => movedKeySet.has(k)); // drop only if re-slotted elsewhere
+        const rRef = rowRef(r);
+        if (!rRef) return true;                             // manual row — always keep
+        return !movedRefSet.has(rRef);                      // drop only if THIS booking # re-slotted elsewhere
       })
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked
