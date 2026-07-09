@@ -124,8 +124,18 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     await prisma.booking.update({ where: { id: b.id }, data: { status: "OFFERED", tourId: b.tourId ?? a.tourId } });
     await prisma.assignment.update({ where: key, data: { pax: newTotal } });
     const js = await prisma.jobSheet.findUnique({ where: key });
-    const list = Array.isArray(js?.bookings) ? (js!.bookings as unknown[]) : [];
-    list.push({ name: b.customerName ?? "", bookingNo: b.confirmationCode ?? "", bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: "" });
+    const list = Array.isArray(js?.bookings) ? (js!.bookings as Array<{ bookingNo?: string; name?: string; bookedPax?: number | null; actualPax?: number | null; tickets?: string; status?: string }>) : [];
+    // Don't append a guest who's already a row. A re-import / re-slot can arrive with a
+    // different name spelling ("Romel Sierra" vs "Sierra, Romel"), so match on the
+    // booking ref (stable) first, then name — otherwise the sheet double-lists the guest
+    // and inflates the booked pax.
+    const newRef = (bookingRef(b.externalRef, b.confirmationCode) || "").trim().toLowerCase();
+    const newName = (b.customerName || "").trim().toLowerCase();
+    const already = list.some((r) => {
+      const rRef = (r.bookingNo || "").trim().toLowerCase();
+      return newRef ? rRef === newRef : newName ? (r.name || "").trim().toLowerCase() === newName : false;
+    });
+    if (!already) list.push({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: "" });
     const tour = await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } });
     await prisma.jobSheet.upsert({
       where: key,

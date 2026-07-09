@@ -60,15 +60,19 @@ export async function GET(req: NextRequest) {
   // Whether this guide has checked in for the tour — gates the guide's no-show boxes.
   const checkedIn = (await prisma.checkin.count({ where: { guideId, date, slotIdx } })) > 0;
 
-  // Collapse repeated guests to a single row — the same name must appear only once
-  // (a re-import or combine can leave a guest listed twice). Keeps the first; blank
-  // (manual) rows are never merged.
-  const dedupeByName = <T extends { name?: string }>(rows: T[]): T[] => {
+  // Collapse repeated guests to a single row — the same booking must appear only once
+  // (a re-import or combine can leave a guest listed twice). The SAME booking can
+  // arrive under two name spellings ("Romel Sierra" vs "Sierra, Romel"), so dedupe by
+  // booking ref (the stable identity) first, then fall back to name for manual rows
+  // with no ref. Keeps the first; blank (manual) rows are never merged.
+  const dedupeByName = <T extends { name?: string; bookingNo?: string }>(rows: T[]): T[] => {
     const seen = new Set<string>(); const out: T[] = [];
     for (const r of rows) {
+      const ref = (r?.bookingNo || "").trim().toLowerCase();
       const nm = (r?.name || "").trim().toLowerCase();
-      if (nm && seen.has(nm)) continue;
-      if (nm) seen.add(nm);
+      const key = ref ? `ref:${ref}` : nm ? `nm:${nm}` : "";
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
       out.push(r);
     }
     return out;
