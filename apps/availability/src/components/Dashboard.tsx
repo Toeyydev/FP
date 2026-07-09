@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import LiveSyncBadge from "@/components/LiveSyncBadge";
 
@@ -51,10 +51,32 @@ function DriveCard() {
 
 export default function Dashboard() {
   const [d, setD] = useState<Data | null>(null);
-  const load = () => fetch("/api/dashboard", { cache: "no-store" }).then((r) => r.json()).then(setD).catch(() => {});
-  useEffect(() => {
-    load(); const id = window.setInterval(load, 20000); return () => window.clearInterval(id);
+  const acRef = useRef<AbortController | null>(null);
+  // One dashboard fetch. Aborts any request still in flight before starting a new one,
+  // so a manual refresh or the next poll can never overlap the previous call.
+  const load = useCallback(async () => {
+    acRef.current?.abort();
+    const ac = new AbortController();
+    acRef.current = ac;
+    try {
+      const r = await fetch("/api/dashboard", { cache: "no-store", signal: ac.signal });
+      setD(await r.json());
+    } catch { /* aborted or network blip — the next tick retries */ }
   }, []);
+  useEffect(() => {
+    // Self-scheduling poll: finish the previous response, wait the interval, THEN poll
+    // again (setTimeout chain, not setInterval). Slow responses can't stack up and
+    // hammer the server. Skips polling while the tab is hidden.
+    let stopped = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      if (stopped) return;
+      if (!document.hidden) await load();
+      if (!stopped) timer = window.setTimeout(tick, 60000);
+    };
+    tick();
+    return () => { stopped = true; if (timer) window.clearTimeout(timer); acRef.current?.abort(); };
+  }, [load]);
   async function decideLeave(id: string, status: "APPROVED" | "REJECTED") {
     const r = await fetch("/api/leave", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, status }) });
     if (r.ok) load();

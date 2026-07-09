@@ -5,21 +5,44 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { guidesNeeded } from "@/lib/capacity";
 import { reconcileAssignedBookings, autoSyncBokun } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
+import { cached, withTimeout } from "@/lib/api-cache";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
+
+// The dashboard shows the SAME operational board to every operator/admin (it is not
+// per-user), so one shared cache entry is safe — no per-user data is mixed. Guides
+// never reach this route (403 below), so nothing sensitive is cross-served.
+const DASH_KEY = "dashboard:v1";
+const DASH_TTL_MS = 60_000; // serve a cached board for up to 60s
+const FRESHEN_TIMEOUT_MS = 5_000; // cap how long we wait on best-effort reconcile/sweep
 
 // Operator control tower: only actionable operational state — no vanity metrics.
 export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  // Pull in any late bookings + re-sync assignment pax so the board is current,
-  // and hand back any unaccepted offer (TTL passed, or tour within 5h).
-  void autoSyncBokun(); // background: pull fresh Bokun bookings + cancellations (throttled), non-blocking
-  await reconcileAssignedBookings().catch(() => {});
-  await sweepExpiredOffers().catch(() => {});
+  // Cache hit within the TTL returns immediately — no DB queries, no external calls,
+  // no reconcile/sweep. On a miss, produceDashboard() refreshes once (single-flighted
+  // in the cache), and if it fails the last-known-good board is served instead.
+  const data = await cached(DASH_KEY, DASH_TTL_MS, produceDashboard);
+  return NextResponse.json(data);
+}
 
+// Runs only on a cache miss (once per TTL, shared across concurrent callers).
+async function produceDashboard() {
+  // Best-effort freshening — must never hang the response. autoSyncBokun is already
+  // fire-and-forget + throttled; reconcile/sweep are raced against a timeout so a slow
+  // upstream (SMTP/LINE/web-push/Bokun) can't block the board. They keep running in the
+  // background if they exceed the cap — the board is simply built from current DB state.
+  void autoSyncBokun();
+  await withTimeout(reconcileAssignedBookings().catch(() => {}), FRESHEN_TIMEOUT_MS, undefined);
+  await withTimeout(sweepExpiredOffers().catch(() => {}), FRESHEN_TIMEOUT_MS, undefined);
+  return buildDashboard();
+}
+
+// Pure read: build the board payload from current DB state. No external calls.
+async function buildDashboard() {
   const today = bkk(0);
   const horizon = bkk(7);
 
@@ -93,5 +116,5 @@ export async function GET() {
   }
 
   const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
-  return NextResponse.json({ today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, leaveRequests });
+  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, leaveRequests };
 }
