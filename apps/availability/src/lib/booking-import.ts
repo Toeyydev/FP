@@ -164,7 +164,18 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
 // is already assigned to a guide, THEN re-sync every assignment's pax to the real
 // booking total so the operator's board/dashboard never shows a stale number.
 // Idempotent — safe to call on every inbox / dashboard load.
-export async function reconcileAssignedBookings(): Promise<number> {
+//
+// Throttled: this ~70-query sweep fires from every dashboard AND inbox load, so with
+// a few operators/tabs polling it used to re-run many times a minute for no gain (the
+// data barely moves between calls) — a big driver of general DB contention / slowness.
+// We now run it at most once per RECONCILE_MIN_GAP_MS across the process; the 30-min
+// background loop and the manual Sync path pass force=true for an immediate real sweep.
+let lastReconcileAt = 0;
+const RECONCILE_MIN_GAP_MS = 45_000;
+export async function reconcileAssignedBookings(force = false): Promise<number> {
+  const now = Date.now();
+  if (!force && now - lastReconcileAt < RECONCILE_MIN_GAP_MS) return 0;
+  lastReconcileAt = now;
   const today = ymd(todayD());
   const pending = await prisma.booking.findMany({
     where: { status: "PENDING", tourId: { not: null }, date: { gte: today }, slotIdx: { not: null } },

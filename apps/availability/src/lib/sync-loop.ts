@@ -12,7 +12,7 @@ export function startSyncLoop(): void {
   started = true;
   const tick = async () => {
     try { await autoSyncBokun(); } catch { /* keep looping */ }
-    try { await reconcileAssignedBookings(); } catch { /* keep looping */ }
+    try { await reconcileAssignedBookings(true); } catch { /* keep looping */ } // force: the loop is the guaranteed real sweep
     try { await sweepExpiredOffers(); } catch { /* keep looping */ }
   };
   setTimeout(() => { void tick(); }, 30_000);          // shortly after boot

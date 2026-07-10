@@ -3,7 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { audit } from "@/lib/audit";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
-import { importRawBooking, type ImportResult } from "@/lib/booking-import";
+import { importRawBooking, reconcileAssignedBookings, type ImportResult } from "@/lib/booking-import";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -40,6 +40,9 @@ export async function POST(req: NextRequest) {
     if (res.items.length < 100) break; // last page
   }
 
+  // Manual Sync is the "instant path" — force a real reconcile now (bypass the throttle)
+  // so pax totals / auto-combine reflect what we just imported without waiting for a load.
+  await reconcileAssignedBookings(true).catch(() => {});
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bokun.sync", entityType: "Booking", detail: { from, to, ...counts } });
   return NextResponse.json({ ok: true, from, to, ...counts });
 }

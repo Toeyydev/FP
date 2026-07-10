@@ -7,6 +7,7 @@ import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { productKey, isChannelProductName } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
+import { withTimeout } from "@/lib/api-cache";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -67,7 +68,12 @@ export async function GET(req: NextRequest) {
   // Auto-combine: fold any pending booking whose slot is already assigned into that
   // guide's job before listing, so the inbox self-reconciles with no manual step.
   void autoSyncBokun(); // background: keep the inbox current with Bokun (throttled), non-blocking
-  await reconcileAssignedBookings();
+  // Best-effort auto-combine: race it against a timeout so a large/slow reconcile can
+  // never block the inbox response (it keeps running in the background and is idempotent,
+  // so anything it doesn't finish in time is folded in on the next load). Mirrors how the
+  // dashboard guards the same sweep. This was previously an unbounded blocking await —
+  // the main cause of the inbox getting slow as bookings accumulate.
+  await withTimeout(reconcileAssignedBookings().catch(() => {}), 5_000, undefined);
 
   // Hide bookings whose tour date has already passed (Bangkok civil date) from the
   // incoming inbox — keep undated bookings (date == null) because those still need
