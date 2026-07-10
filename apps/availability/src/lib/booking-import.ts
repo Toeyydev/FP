@@ -71,22 +71,34 @@ async function flagCrossChannelDuplicate(rec: { confirmationCode: string | null;
   } catch { return false; }
 }
 
-// If the SAME customer name is already booked on the SAME date + time slot, this
-// new copy is a true duplicate: auto-remove it (hidden from the inbox, recoverable)
-// and tell the operator. Scoped to date+slot so two different tours for the same
-// person are never touched. Returns true if it removed a duplicate. Never throws.
-async function autoRemoveNameDuplicate(rec: { id: string; customerName: string | null; date: string | null; slotIdx: number | null }): Promise<boolean> {
+// A re-import can create a second row for the SAME booking (a different confirmation
+// code carrying the same GYG ref, or a cross-listed copy). Auto-remove ONLY a true
+// duplicate — one that shares this booking's NUMBER (bookingRef of externalRef /
+// confirmation code) with an existing row on the same date+slot. A matching NAME but a
+// DIFFERENT booking number is two real reservations (a repeat customer, or two guests
+// who happen to share a name), so we keep BOTH and only alert ops to eyeball it — never
+// drop a paid booking on a name clash. Scoped to date+slot so two different tours for
+// the same person are untouched. Returns true only when it removed a genuine duplicate.
+async function autoRemoveExactDuplicate(rec: { id: string; customerName: string | null; date: string | null; slotIdx: number | null; externalRef: string | null; confirmationCode: string | null }): Promise<boolean> {
   try {
     const name = (rec.customerName || "").trim().toLowerCase();
     if (!name || !rec.date || rec.slotIdx == null) return false;
+    const newRef = (bookingRef(rec.externalRef, rec.confirmationCode) || "").trim().toLowerCase();
     const others = await prisma.booking.findMany({
       where: { id: { not: rec.id }, date: rec.date, slotIdx: rec.slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } },
-      select: { id: true, customerName: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true },
     });
-    if (!others.some((o) => (o.customerName || "").trim().toLowerCase() === name)) return false;
-    await prisma.booking.update({ where: { id: rec.id }, data: { status: "IGNORED", notes: "Auto-removed: same name already booked on this slot" } });
-    await notifyOps(`Removed a duplicate booking for "${rec.customerName}" on ${rec.date} — that name was already booked on this slot.`, "Duplicate removed", `${rec.customerName} · ${rec.date}`, { push: false, date: rec.date });
-    return true;
+    const sameName = others.filter((o) => (o.customerName || "").trim().toLowerCase() === name);
+    if (!sameName.length) return false;
+    // Shares a booking number with an existing same-name row → genuine re-import: remove it.
+    if (newRef && sameName.some((o) => (bookingRef(o.externalRef, o.confirmationCode) || "").trim().toLowerCase() === newRef)) {
+      await prisma.booking.update({ where: { id: rec.id }, data: { status: "IGNORED", notes: "Auto-removed: identical booking (same booking number) already on this slot" } });
+      await notifyOps(`Removed a re-imported duplicate of "${rec.customerName}" on ${rec.date} — same booking number already on this slot.`, "Duplicate removed", `${rec.customerName} · ${rec.date}`, { push: false, date: rec.date });
+      return true;
+    }
+    // Same name, DIFFERENT booking number → two real bookings. Keep both; flag for a look.
+    await notifyOps(`Two bookings under "${rec.customerName}" on ${rec.date} have different booking numbers — both kept. Please verify they're separate guests.`, "Same name, different booking", `${rec.customerName} · ${rec.date}`, { push: false, date: rec.date });
+    return false;
   } catch { return false; }
 }
 
@@ -282,7 +294,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
       },
     });
-    if (!existing && !(await autoRemoveNameDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+    if (!existing && !(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
     if (cancelled && existing?.status !== "CANCELLED") await onBookingCancelled(rec);
     return existing ? "updated" : "created";
   }
@@ -304,7 +316,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING",
     },
   });
-  if (!(await autoRemoveNameDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+  if (!(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
   return "created";
 }
 
