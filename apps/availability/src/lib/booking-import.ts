@@ -278,15 +278,22 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   const { source, cancelled } = opts;
   const raw = (opts.raw ?? undefined) as object | undefined;
 
+  // A booking whose date/slot an operator pinned by hand (a rebooking arranged outside
+  // the OTA) must survive the sync: when pinned, an import updates everything EXCEPT the
+  // date/slot/time, so the channel's original date can't drag it back. Non-pinned (the
+  // default) behaves exactly as before.
+  const slotFields = (pinned: boolean) =>
+    pinned ? {} : { date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
+
   if (p.externalId) {
-    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true } });
+    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true } });
     // The SAME OTA booking can re-arrive under a different Bokun externalId (a
     // re-issue / channel remap). If we already hold this externalRef, update THAT
     // record in place instead of creating a duplicate.
     if (!existing && p.externalRef) {
-      const byRef = await prisma.booking.findFirst({ where: { externalRef: p.externalRef }, select: { id: true, status: true } });
+      const byRef = await prisma.booking.findFirst({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true } });
       if (byRef) {
-        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined, pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw } });
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
         return "updated";
       }
@@ -301,7 +308,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       },
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined,
-        tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined,
+        tourId: tourId ?? undefined, ...slotFields(existing?.datePinned ?? false),
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
       },
     });
@@ -313,9 +320,9 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   // No externalId: dedupe on confirmationCode / externalRef so re-import is safe.
   const ref = p.confirmationCode || p.externalRef;
   if (ref) {
-    const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true, status: true } });
+    const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true, status: true, datePinned: true } });
     if (dup) {
-      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, date: p.date ?? undefined, slotIdx: p.slotIdx ?? undefined, pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
       if (cancelled && dup.status !== "CANCELLED") await onBookingCancelled(updated);
       return "updated";
     }
