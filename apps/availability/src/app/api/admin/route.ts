@@ -8,7 +8,8 @@ import { revokeAllForUser } from "@/lib/sessionTokens";
 import { randomBytes } from "crypto";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
-import { lineLoginEnabled } from "@/lib/line";
+import { lineLoginEnabled, lineGetFollowerIds } from "@/lib/line";
+import { listUnlinkedContacts, linkContactToGuide, captureLineContact } from "@/lib/line-contacts";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -27,7 +28,9 @@ export async function GET() {
   ]);
   // Don't leak the raw LINE user id — just whether they're linked.
   const accounts = rows.map(({ lineUserId, ...a }) => ({ ...a, lineLinked: Boolean(lineUserId) }));
-  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null, lineLoginEnabled });
+  // Followers who added the OA but aren't matched to a guide yet (+ a suggestion).
+  const lineContacts = await listUnlinkedContacts();
+  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null, lineLoginEnabled, lineContacts });
 }
 
 export async function POST(req: NextRequest) {
@@ -186,6 +189,62 @@ export async function POST(req: NextRequest) {
     await prisma.user.update({ where: { id: user.id }, data: { lineLinkCode: code } });
     await audit({ actorId, actorRole, action: "line.code.issued", entityType: "User", entityId: user.id });
     return NextResponse.json({ ok: true, code });
+  }
+
+  // One-click connect: match a captured OA follower to a guide account. The guide
+  // does nothing — linking happens entirely operator-side.
+  if (action === "lineLinkContact") {
+    const parsed = z.object({ contactId: z.string().min(1), guideUserId: z.string().min(1) }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const ok = await linkContactToGuide(parsed.data.contactId, parsed.data.guideUserId, { id: actorId, role: actorRole });
+    if (!ok) return NextResponse.json({ error: "link-failed" }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
+
+  // Optional one-off backfill: pull the OA's existing followers (Verified/Premium
+  // accounts only) and capture any not yet linked, so guides who added the OA
+  // before capture existed still show up in the match list.
+  if (action === "lineBackfill") {
+    let start: string | undefined;
+    let added = 0, pages = 0;
+    for (;;) {
+      const res = await lineGetFollowerIds(start);
+      if (!res.ok) return NextResponse.json({ ok: false, forbidden: Boolean(res.forbidden), added });
+      for (const uid of res.userIds) { await captureLineContact(uid).catch(() => {}); added++; }
+      pages++;
+      if (!res.next || pages >= 20) break; // cap the sweep (≈6k followers) to stay bounded
+      start = res.next;
+    }
+    await audit({ actorId, actorRole, action: "line.backfill", entityType: "LineContact", detail: { scanned: added } });
+    return NextResponse.json({ ok: true, added });
+  }
+
+  // Nudge every active guide who hasn't linked LINE yet to connect. We can't reach
+  // them ON LINE (that's the id we're missing), so we use the channels we do have:
+  // an in-app notification + web push, pointing at the one-tap connect on /profile.
+  if (action === "lineRemindUnlinked") {
+    const unlinked = await prisma.user.findMany({
+      where: { role: "GUIDE", state: "ACTIVE", lineUserId: null },
+      select: { id: true, displayName: true, email: true },
+    });
+    const msg = "Connect your LINE to get job offers & job sheets there — open My details → Connect LINE.";
+    let emailed = 0;
+    await Promise.all(unlinked.map(async (g) => {
+      await prisma.notification.create({ data: { userId: g.id, kind: "line", message: msg } }).catch(() => {});
+      await sendPushToUser(g.id, { title: "Connect your LINE", body: "Tap to link LINE and get job offers there.", url: "/profile", tag: "line-connect" }).catch(() => {});
+      // Skip placeholder addresses for guides auto-created without a real email.
+      if (g.email && !g.email.endsWith("@folkpath.local")) {
+        const firstName = g.displayName.split(" ")[0];
+        const r = await sendEmail({
+          to: g.email,
+          subject: "Connect your LINE to Folkpaths",
+          text: `Hi ${firstName},\n\nConnect your LINE to Folkpaths to get job offers and job sheets on LINE.\n\nOpen https://guide.folkpaths.com/profile and tap "Connect LINE" — it takes one tap.\n\nThanks!\nFolkpaths`,
+        }).catch(() => ({ sent: false }));
+        if (r.sent) emailed++;
+      }
+    }));
+    await audit({ actorId, actorRole, action: "line.remind_unlinked", entityType: "User", detail: { count: unlinked.length, emailed } });
+    return NextResponse.json({ ok: true, count: unlinked.length, emailed });
   }
 
   // Remove a single guide account. Cascades clean up their availability,

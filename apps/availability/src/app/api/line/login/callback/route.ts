@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
   // Move the LINE id off any other account, then link it here.
   await prisma.user.updateMany({ where: { lineUserId: userId, NOT: { id: uid } }, data: { lineUserId: null } });
   await prisma.user.update({ where: { id: uid }, data: { lineUserId: userId, lineLinkCode: null } });
+  await prisma.lineContact.updateMany({ where: { lineUserId: userId }, data: { linkedUserId: uid } }).catch(() => {});
   await audit({ actorId: uid, actorRole: session?.user?.role ?? null, action: "line.linked_oauth", entityType: "User", entityId: uid });
 
   const clear = (r: NextResponse) => { r.cookies.set("line_oauth_state", "", { path: "/", maxAge: 0 }); r.cookies.set("line_link_uid", "", { path: "/", maxAge: 0 }); return r; };

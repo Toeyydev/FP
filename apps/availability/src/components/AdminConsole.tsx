@@ -6,7 +6,8 @@ import { useLang } from "@/components/Providers";
 
 type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null; lineLinked?: boolean; lineId?: string | null; lineLinkCode?: string | null };
 type Req = { id: string; name: string; nickname: string | null; phone: string | null; email: string; believedGuideId: string | null; createdAt: string };
-type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null; lineLoginEnabled?: boolean };
+type LineContact = { id: string; displayName: string | null; pictureUrl: string | null; suggestedGuideId: string | null };
+type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null; lineLoginEnabled?: boolean; lineContacts?: LineContact[] };
 
 function lineInvite(name: string, code: string, oaUrl: string | null, connectLink: string | null) {
   if (connectLink) {
@@ -35,6 +36,10 @@ export default function AdminConsole() {
   const [linkSel, setLinkSel] = useState<Record<string, string>>({}); // requestId -> existing guide userId to link
   const [lineCodes, setLineCodes] = useState<Record<string, string>>({}); // userId -> freshly generated code
   const [copiedId, setCopiedId] = useState("");
+  const [contactSel, setContactSel] = useState<Record<string, string>>({}); // contactId -> chosen guide userId
+  const [busyContact, setBusyContact] = useState("");
+  const [backfilling, setBackfilling] = useState(false);
+  const [reminding, setReminding] = useState(false);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/admin", { cache: "no-store" });
@@ -183,6 +188,79 @@ export default function AdminConsole() {
             <div className="fieldhelp" style={{ marginBottom: 10 }}>
               Generate a guide&apos;s one-time code, then send them the invite. They add the Folkpaths LINE Official Account and send the code to connect. (Sending offers/sheets over LINE also needs <code>LINE_CHANNEL_ACCESS_TOKEN</code> set.)
             </div>
+
+            {/* Hybrid follower-match: people who already added the OA, ready to connect in one click. */}
+            {(() => {
+              const contacts = data.lineContacts ?? [];
+              const unlinkedGuides = guides.filter((g) => !g.lineLinked);
+              return (
+                <div style={{ marginBottom: 18, border: "1.5px solid var(--line)", borderRadius: 12, padding: 12, background: "var(--grey-bg)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+                    <b style={{ fontSize: 14 }}>Added the OA — connect in one tap ({contacts.length})</b>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="btn sm" disabled={reminding || unlinkedGuides.length === 0} onClick={async () => {
+                        setReminding(true);
+                        const r = await post({ action: "lineRemindUnlinked" });
+                        setReminding(false);
+                        setFlash({ msg: r.ok ? `Reminded ${r.data?.count ?? 0} unlinked guide(s) — in-app + push${r.data?.emailed ? ` + ${r.data.emailed} email(s)` : ""}.` : "Couldn't send reminders." });
+                      }}>{reminding ? "Sending…" : `Remind unlinked (${unlinkedGuides.length})`}</button>
+                      <button className="btn sm" disabled={backfilling} onClick={async () => {
+                        setBackfilling(true);
+                        const r = await post({ action: "lineBackfill" });
+                        setBackfilling(false);
+                        setFlash({ msg: r.data?.forbidden
+                          ? "Backfill needs a Verified/Premium LINE OA. New followers are still captured automatically."
+                          : `Backfill done — checked ${r.data?.added ?? 0} follower(s).` });
+                        await load();
+                      }}>{backfilling ? "Scanning…" : "Backfill followers"}</button>
+                    </div>
+                  </div>
+                  <div className="fieldhelp" style={{ marginBottom: 10 }}>
+                    Anyone who adds the Folkpaths OA (or messages it) shows up here. Pick the matching guide — we pre-select our best guess — and tap Connect. No code needed on their side.
+                  </div>
+                  {contacts.length === 0 ? (
+                    <div className="op-empty" style={{ fontSize: 13 }}>No unmatched followers. New ones appear here automatically.</div>
+                  ) : (
+                    <table className="acct-table">
+                      <thead><tr><th>On LINE</th><th>Connect to guide</th><th /></tr></thead>
+                      <tbody>
+                        {contacts.map((c) => {
+                          const sel = contactSel[c.id] ?? c.suggestedGuideId ?? "";
+                          return (
+                            <tr key={c.id}>
+                              <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                {c.pictureUrl
+                                  ? <img src={c.pictureUrl} alt="" width={28} height={28} style={{ borderRadius: "50%", objectFit: "cover" }} />
+                                  : <span style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--line)", display: "inline-block" }} />}
+                                <span>{c.displayName || <span style={{ color: "var(--ink-soft)" }}>Unknown</span>}</span>
+                              </td>
+                              <td>
+                                <select value={sel} onChange={(e) => setContactSel((m) => ({ ...m, [c.id]: e.target.value }))} style={{ maxWidth: 220 }}>
+                                  <option value="">— pick a guide —</option>
+                                  {unlinkedGuides.map((g) => (
+                                    <option key={g.id} value={g.id}>{g.guideId ? `${g.guideId} · ` : ""}{g.displayName}{g.id === c.suggestedGuideId ? " (suggested)" : ""}</option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <button className="btn sm primary" disabled={!sel || busyContact === c.id} onClick={async () => {
+                                  setBusyContact(c.id);
+                                  const r = await post({ action: "lineLinkContact", contactId: c.id, guideUserId: sel });
+                                  setBusyContact("");
+                                  if (!r.ok) setFlash({ msg: `Couldn't connect: ${(r.data as { error?: string }).error ?? "failed"}` });
+                                  await load();
+                                }}>{busyContact === c.id ? "…" : "Connect"}</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })()}
+
             {guides.length === 0 ? <div className="op-empty">{t("noGuides")}</div> : (
               <table className="acct-table">
                 <thead><tr><th>Guide</th><th>LINE ID (ref)</th><th>Status</th><th /></tr></thead>

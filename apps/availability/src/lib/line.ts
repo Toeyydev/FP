@@ -36,6 +36,37 @@ async function lineApi(path: string, body: unknown): Promise<void> {
   }
 }
 
+// Fetch a follower's LINE profile (display name + photo) by their userId. Only
+// works for users who have added the OA. Returns null on any failure so callers
+// can degrade gracefully.
+export async function lineGetProfile(userId: string): Promise<{ displayName: string | null; pictureUrl: string | null } | null> {
+  if (!TOKEN || !userId) return null;
+  try {
+    const r = await fetch(`https://api.line.me/v2/bot/profile/${encodeURIComponent(userId)}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { displayName?: string; pictureUrl?: string };
+    return { displayName: j.displayName ?? null, pictureUrl: j.pictureUrl ?? null };
+  } catch { return null; }
+}
+
+// List the OA's follower userIds (one page). Only Verified/Premium accounts may
+// call this — a normal OA gets 403, which we surface as { ok:false, forbidden }.
+// Used for an optional one-off backfill of guides who added the OA before capture
+// existed. No profile data here (names come from lineGetProfile).
+export async function lineGetFollowerIds(start?: string): Promise<{ ok: boolean; forbidden?: boolean; userIds: string[]; next?: string }> {
+  if (!TOKEN) return { ok: false, userIds: [] };
+  try {
+    const q = new URLSearchParams({ limit: "300", ...(start ? { start } : {}) });
+    const r = await fetch(`https://api.line.me/v2/bot/followers/ids?${q}`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    if (r.status === 403) return { ok: false, forbidden: true, userIds: [] };
+    if (!r.ok) return { ok: false, userIds: [] };
+    const j = (await r.json()) as { userIds?: string[]; next?: string };
+    return { ok: true, userIds: j.userIds ?? [], next: j.next };
+  } catch { return { ok: false, userIds: [] }; }
+}
+
 export function lineReply(replyToken: string, text: string) {
   return lineApi("message/reply", { replyToken, messages: [{ type: "text", text }] });
 }
