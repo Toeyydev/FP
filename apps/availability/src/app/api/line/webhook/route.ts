@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { verifyLineSignature, lineReply } from "@/lib/line";
 import { audit } from "@/lib/audit";
 import { acceptOffer, denyOffer, slotLabel } from "@/lib/offers";
+import { captureLineContact, markContactLinked } from "@/lib/line-contacts";
 
 // LINE calls this (no app session). Verify the signature, then handle events.
 export async function POST(req: NextRequest) {
@@ -45,18 +46,25 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    if (ev.type === "follow" && ev.replyToken) {
-      await lineReply(ev.replyToken, "Welcome to Folkpaths 👋\nTo link your guide account, open the app → My details → Connect LINE, then send me the code shown there.");
+    if (ev.type === "follow") {
+      // They added the OA — capture them so an operator can match them to a guide
+      // in one click, even if they never send a code.
+      await captureLineContact(userId).catch(() => {});
+      if (ev.replyToken) await lineReply(ev.replyToken, "Welcome to Folkpaths 👋\nTo link your guide account, open the app → My details → Connect LINE, then send me the code shown there.");
     } else if (ev.type === "message" && ev.message?.type === "text") {
       const code = (ev.message.text || "").trim().toUpperCase();
       const looksLikeCode = /^[A-Z0-9]{6}$/.test(code);
       const user = looksLikeCode ? await prisma.user.findFirst({ where: { lineLinkCode: code } }) : null;
       if (user) {
         await prisma.user.update({ where: { id: user.id }, data: { lineUserId: userId, lineLinkCode: null } });
+        await markContactLinked(userId, user.id).catch(() => {});
         await audit({ actorId: user.id, action: "line.linked", entityType: "User", entityId: user.id });
         if (ev.replyToken) await lineReply(ev.replyToken, `✓ Connected, ${user.displayName}! You'll get Folkpaths job offers and alerts here.`);
       } else if (looksLikeCode && ev.replyToken) {
         await lineReply(ev.replyToken, "That code didn't work or has expired. In the app: My details → Connect LINE for a fresh code.");
+      } else {
+        // A non-code message from someone not yet linked — capture them for matching.
+        await captureLineContact(userId).catch(() => {});
       }
       // Any other (non-code) message: stay silent — don't spam users.
     }

@@ -26,39 +26,39 @@ enum AccountState {
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String? // null until the account is claimed
-  role         Role         @default(GUIDE)
-  state        AccountState @default(INVITED)
-  displayName  String // nickname shown on the roster
-  fullName     String?
-  guideId      String?      @unique // G-001..G-025; null for operator/admin
-  phone        String?
-  languages    String[]     @default([])
-  qualifications String[]   @default([]) // tour ids the guide can run
-  offerBlocked Boolean      @default(false) // operator blocked this guide from receiving job offers
-  consentAt    DateTime? // acknowledged handling customer booking data
-  claimedAt    DateTime?
-  createdAt    DateTime     @default(now())
-  lastSeenAt   DateTime? // presence — updated while the app is open (online/offline)
+  id             String       @id @default(cuid())
+  email          String       @unique
+  passwordHash   String? // null until the account is claimed
+  role           Role         @default(GUIDE)
+  state          AccountState @default(INVITED)
+  displayName    String // nickname shown on the roster
+  fullName       String?
+  guideId        String?      @unique // G-001..G-025; null for operator/admin
+  phone          String?
+  languages      String[]     @default([])
+  qualifications String[]     @default([]) // tour ids the guide can run
+  offerBlocked   Boolean      @default(false) // operator blocked this guide from receiving job offers
+  consentAt      DateTime? // acknowledged handling customer booking data
+  claimedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  lastSeenAt     DateTime? // presence — updated while the app is open (online/offline)
 
-  lineId       String? // LINE id/handle the guide typed (reference)
-  lineUserId   String? @unique // real LINE Messaging API user id (captured on link)
-  lineLinkCode String? // one-time code to link their LINE to this account
+  lineId            String? // LINE id/handle the guide typed (reference)
+  lineUserId        String? @unique // real LINE Messaging API user id (captured on link)
+  lineLinkCode      String? // one-time code to link their LINE to this account
   emergencyName     String?
   emergencyPhone    String?
   emergencyRelation String?
-  licenseNo       String? // tour-guide licence no. (manual) — printed on the job order
-  signature       String? // AES-encrypted PNG data-URI of the guide's signature
+  licenseNo         String? // tour-guide licence no. (manual) — printed on the job order
+  signature         String? // AES-encrypted PNG data-URI of the guide's signature
   // Verified profile (sensitive PII — stored AES-encrypted via lib/crypto).
-  taxId           String?
-  idCardAddress   String?
-  currentAddress  String?
-  bankName        String?
-  bankAccountNo   String?
-  bankAccountName String?
-  bankBranch      String?
+  taxId             String?
+  idCardAddress     String?
+  currentAddress    String?
+  bankName          String?
+  bankAccountNo     String?
+  bankAccountName   String?
+  bankBranch        String?
 
   availability   Availability[]
   assignments    Assignment[]
@@ -84,7 +84,7 @@ model BlockedDate {
 // it). Finer-grained than BlockedDate, which blocks the whole day.
 model BlockedSlot {
   id          String   @id @default(cuid())
-  date        String   // YYYY-MM-DD
+  date        String // YYYY-MM-DD
   slotIdx     Int
   reason      String?
   createdById String?
@@ -346,11 +346,11 @@ model Booking {
   raw              Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+  noShow           Boolean  @default(false) // guest didn't arrive (set by operator or guide)
 
   @@unique([source, externalId])
   @@index([date])
   @@index([status])
-  noShow      Boolean  @default(false) // guest didn't arrive (set by operator or guide)
 }
 
 // Web Push subscription (one per browser/device) for home-screen job alerts.
@@ -379,22 +379,22 @@ model ProductMap {
 // Living document: the operator edits pax/costs/tickets anytime and re-saves.
 // bookings / expenses / guideFee are JSON so rows can be added/removed freely.
 model JobSheet {
-  id        String   @id @default(cuid())
-  ref       String? // FOLK-BKK-YYYYMMDD-NN
-  guideId   String
-  date      String // "YYYY-MM-DD"
-  slotIdx   Int
-  tourId    String
-  status    String   @default("Confirmed")
-  bookings  Json     @default("[]") // [{name, bookingNo, bookedPax, actualPax, tickets, status}]
-  expenses  Json     @default("[]") // [{description, price, pax}] — operator's official set
-  guideFee  Json     @default("{}") // {price, time, whtPct}
-  guideExpenses   Json?     // [{description, price, pax}] — guide's own report, to cross-check
-  guideExpensesAt DateTime? // when the guide last submitted their expense report
+  id                String    @id @default(cuid())
+  ref               String? // FOLK-BKK-YYYYMMDD-NN
+  guideId           String
+  date              String // "YYYY-MM-DD"
+  slotIdx           Int
+  tourId            String
+  status            String    @default("Confirmed")
+  bookings          Json      @default("[]") // [{name, bookingNo, bookedPax, actualPax, tickets, status}]
+  expenses          Json      @default("[]") // [{description, price, pax}] — operator's official set
+  guideFee          Json      @default("{}") // {price, time, whtPct}
+  guideExpenses     Json? // [{description, price, pax}] — guide's own report, to cross-check
+  guideExpensesAt   DateTime? // when the guide last submitted their expense report
   guideExpensesNote String? // free-text note the guide adds with their expense report
-  createdById String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@unique([guideId, date, slotIdx])
   @@index([date])
@@ -404,17 +404,17 @@ model JobSheet {
 // an assignment, with the GPS captured at the moment (geofencing comes once
 // meeting points carry coordinates).
 model Checkin {
-  id        String   @id @default(cuid())
-  guideId   String
-  date      String // "YYYY-MM-DD"
-  slotIdx   Int
-  tourId    String
-  type          String // ARRIVE | START | COMPLETE
-  at            DateTime @default(now())
-  lat           Float?
-  lng           Float?
-  accuracyM     Int?
-  distanceM     Int? // metres from the meeting point (if it has coords)
+  id             String   @id @default(cuid())
+  guideId        String
+  date           String // "YYYY-MM-DD"
+  slotIdx        Int
+  tourId         String
+  type           String // ARRIVE | START | COMPLETE
+  at             DateTime @default(now())
+  lat            Float?
+  lng            Float?
+  accuracyM      Int?
+  distanceM      Int? // metres from the meeting point (if it has coords)
   withinGeofence Boolean?
 
   @@index([guideId, date, slotIdx])
@@ -465,15 +465,15 @@ model TourPayment {
 // Guide leave (holiday / unavailable range). Operator-approved; an approved leave
 // excludes the guide from job offers across the date range.
 model LeaveRequest {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   guideId   String
   fromDate  String // "YYYY-MM-DD"
   toDate    String // "YYYY-MM-DD"
   reason    String?
-  status    String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  status    String    @default("PENDING") // PENDING | APPROVED | REJECTED
   decidedBy String?
   decidedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([guideId])
   @@index([status])
@@ -536,6 +536,23 @@ model JobOfferResponse {
 
   @@unique([offerId, guideId])
   @@index([offerId])
+}
+
+// Someone who added the LINE Official Account but isn't yet linked to a guide
+// account. Captured from the webhook (follow / message) with their LINE display
+// name + photo so an operator can match them to a guide in one click — instead of
+// the guide having to send a code. `linkedUserId` is set once matched (kept for a
+// short audit trail; the live link lives on User.lineUserId).
+model LineContact {
+  id           String   @id @default(cuid())
+  lineUserId   String   @unique
+  displayName  String?
+  pictureUrl   String?
+  linkedUserId String? // User.id once an operator matched this follower to a guide
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([linkedUserId])
 }
 
 // Ad-hoc bonus / adjustment paid to a guide in a month (e.g. a 5-star review reward).
