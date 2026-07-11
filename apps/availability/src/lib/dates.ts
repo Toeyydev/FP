@@ -75,3 +75,10 @@ export function currentSlotIdx(): number {
   }
   return idx;
 }
+
+// Bangkok wall-clock minutes since midnight — for lead-time reminders that must
+// fire relative to a slot's local departure time regardless of the server tz.
+export function bangkokNowMinutes(): number {
+  const { h, min } = bangkokParts();
+  return h * 60 + min;
+}
