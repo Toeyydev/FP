@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
-import LiveSyncBadge from "@/components/LiveSyncBadge";
 import InstallPrompt from "@/components/InstallPrompt";
 import { GuideTabs } from "@/components/GuideTabs";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
@@ -1175,7 +1174,6 @@ export default function AppClient({
           {notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}
         </button>
         <nav className="topnav">
-          {role === "operator" && <LiveSyncBadge />}
           {role === "operator" && <a className="navlink" href="/dashboard">{t("dashboardNav")}</a>}
           {role === "operator" && <a className="navlink" href="/jobs">{t("jobsNav")}</a>}
           {role === "operator" && <a className="navlink" href="/bookings">{t("bookings")}</a>}
