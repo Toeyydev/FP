@@ -202,7 +202,7 @@ export default function AdminConsole() {
                         setReminding(true);
                         const r = await post({ action: "lineRemindUnlinked" });
                         setReminding(false);
-                        setFlash({ msg: r.ok ? `Reminded ${r.data?.count ?? 0} unlinked guide(s) in-app + push.` : "Couldn't send reminders." });
+                        setFlash({ msg: r.ok ? `Reminded ${r.data?.count ?? 0} unlinked guide(s) — in-app + push${r.data?.emailed ? ` + ${r.data.emailed} email(s)` : ""}.` : "Couldn't send reminders." });
                       }}>{reminding ? "Sending…" : `Remind unlinked (${unlinkedGuides.length})`}</button>
                       <button className="btn sm" disabled={backfilling} onClick={async () => {
                         setBackfilling(true);

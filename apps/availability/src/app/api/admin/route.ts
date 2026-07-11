@@ -225,15 +225,26 @@ export async function POST(req: NextRequest) {
   if (action === "lineRemindUnlinked") {
     const unlinked = await prisma.user.findMany({
       where: { role: "GUIDE", state: "ACTIVE", lineUserId: null },
-      select: { id: true, displayName: true },
+      select: { id: true, displayName: true, email: true },
     });
     const msg = "Connect your LINE to get job offers & job sheets there — open My details → Connect LINE.";
+    let emailed = 0;
     await Promise.all(unlinked.map(async (g) => {
       await prisma.notification.create({ data: { userId: g.id, kind: "line", message: msg } }).catch(() => {});
       await sendPushToUser(g.id, { title: "Connect your LINE", body: "Tap to link LINE and get job offers there.", url: "/profile", tag: "line-connect" }).catch(() => {});
+      // Skip placeholder addresses for guides auto-created without a real email.
+      if (g.email && !g.email.endsWith("@folkpath.local")) {
+        const firstName = g.displayName.split(" ")[0];
+        const r = await sendEmail({
+          to: g.email,
+          subject: "Connect your LINE to Folkpaths",
+          text: `Hi ${firstName},\n\nConnect your LINE to Folkpaths to get job offers and job sheets on LINE.\n\nOpen https://guide.folkpaths.com/profile and tap "Connect LINE" — it takes one tap.\n\nThanks!\nFolkpaths`,
+        }).catch(() => ({ sent: false }));
+        if (r.sent) emailed++;
+      }
     }));
-    await audit({ actorId, actorRole, action: "line.remind_unlinked", entityType: "User", detail: { count: unlinked.length } });
-    return NextResponse.json({ ok: true, count: unlinked.length });
+    await audit({ actorId, actorRole, action: "line.remind_unlinked", entityType: "User", detail: { count: unlinked.length, emailed } });
+    return NextResponse.json({ ok: true, count: unlinked.length, emailed });
   }
 
   // Remove a single guide account. Cascades clean up their availability,
