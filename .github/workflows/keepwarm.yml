@@ -1,0 +1,35 @@
+name: Keep-warm
+
+# Pings the app on a schedule so the Railway container never goes idle and the
+# operator never hits a cold-boot (~60s) when opening the dashboard. Hits the
+# lightweight /api/version endpoint (no DB load; also boots the sync loop).
+#
+# NOTE: this is a safety net. The real fix is disabling App Sleeping on the
+# Railway service. GitHub's scheduled runs can lag several minutes and are
+# occasionally skipped — for hard guarantees use an uptime monitor (UptimeRobot,
+# cron-job.org) pinging the same URL every 1–3 min instead.
+on:
+  schedule:
+    - cron: "*/5 * * * *" # every 5 minutes
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keepwarm
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping app
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" -m 30 https://guide.folkpaths.com/api/version)
+          echo "GET /api/version -> HTTP $code"
+          # 2xx/3xx means the app answered (warm). Anything else is a real problem.
+          case "$code" in
+            2*|3*) exit 0 ;;
+            *) echo "::warning::Unexpected status $code from keep-warm ping"; exit 0 ;;
+          esac
