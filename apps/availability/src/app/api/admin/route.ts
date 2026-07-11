@@ -219,6 +219,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, added });
   }
 
+  // Nudge every active guide who hasn't linked LINE yet to connect. We can't reach
+  // them ON LINE (that's the id we're missing), so we use the channels we do have:
+  // an in-app notification + web push, pointing at the one-tap connect on /profile.
+  if (action === "lineRemindUnlinked") {
+    const unlinked = await prisma.user.findMany({
+      where: { role: "GUIDE", state: "ACTIVE", lineUserId: null },
+      select: { id: true, displayName: true },
+    });
+    const msg = "Connect your LINE to get job offers & job sheets there — open My details → Connect LINE.";
+    await Promise.all(unlinked.map(async (g) => {
+      await prisma.notification.create({ data: { userId: g.id, kind: "line", message: msg } }).catch(() => {});
+      await sendPushToUser(g.id, { title: "Connect your LINE", body: "Tap to link LINE and get job offers there.", url: "/profile", tag: "line-connect" }).catch(() => {});
+    }));
+    await audit({ actorId, actorRole, action: "line.remind_unlinked", entityType: "User", detail: { count: unlinked.length } });
+    return NextResponse.json({ ok: true, count: unlinked.length });
+  }
+
   // Remove a single guide account. Cascades clean up their availability,
   // assignments, invites, documents and notifications. Only GUIDE rows can be
   // removed here (never an operator/admin), and the Guide Database view stays —

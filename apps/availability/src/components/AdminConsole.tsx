@@ -39,6 +39,7 @@ export default function AdminConsole() {
   const [contactSel, setContactSel] = useState<Record<string, string>>({}); // contactId -> chosen guide userId
   const [busyContact, setBusyContact] = useState("");
   const [backfilling, setBackfilling] = useState(false);
+  const [reminding, setReminding] = useState(false);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/admin", { cache: "no-store" });
@@ -196,15 +197,23 @@ export default function AdminConsole() {
                 <div style={{ marginBottom: 18, border: "1.5px solid var(--line)", borderRadius: 12, padding: 12, background: "var(--grey-bg)" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
                     <b style={{ fontSize: 14 }}>Added the OA — connect in one tap ({contacts.length})</b>
-                    <button className="btn sm" disabled={backfilling} onClick={async () => {
-                      setBackfilling(true);
-                      const r = await post({ action: "lineBackfill" });
-                      setBackfilling(false);
-                      setFlash({ msg: r.data?.forbidden
-                        ? "Backfill needs a Verified/Premium LINE OA. New followers are still captured automatically."
-                        : `Backfill done — checked ${r.data?.added ?? 0} follower(s).` });
-                      await load();
-                    }}>{backfilling ? "Scanning…" : "Backfill followers"}</button>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="btn sm" disabled={reminding || unlinkedGuides.length === 0} onClick={async () => {
+                        setReminding(true);
+                        const r = await post({ action: "lineRemindUnlinked" });
+                        setReminding(false);
+                        setFlash({ msg: r.ok ? `Reminded ${r.data?.count ?? 0} unlinked guide(s) in-app + push.` : "Couldn't send reminders." });
+                      }}>{reminding ? "Sending…" : `Remind unlinked (${unlinkedGuides.length})`}</button>
+                      <button className="btn sm" disabled={backfilling} onClick={async () => {
+                        setBackfilling(true);
+                        const r = await post({ action: "lineBackfill" });
+                        setBackfilling(false);
+                        setFlash({ msg: r.data?.forbidden
+                          ? "Backfill needs a Verified/Premium LINE OA. New followers are still captured automatically."
+                          : `Backfill done — checked ${r.data?.added ?? 0} follower(s).` });
+                        await load();
+                      }}>{backfilling ? "Scanning…" : "Backfill followers"}</button>
+                    </div>
                   </div>
                   <div className="fieldhelp" style={{ marginBottom: 10 }}>
                     Anyone who adds the Folkpaths OA (or messages it) shows up here. Pick the matching guide — we pre-select our best guess — and tap Connect. No code needed on their side.
