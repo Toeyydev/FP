@@ -13,6 +13,7 @@ export async function sendPaymentNotice(
   guideId: string,
   jobs: { date: string; slotIdx: number }[],
   scope?: string, // e.g. "June 2026" for a monthly slip; omit for a per-tour batch
+  slipUrl?: string, // the uploaded bank slip, so the guide can open it straight from the alert
 ): Promise<void> {
   if (!jobs.length) return;
   const where = { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) };
@@ -32,7 +33,8 @@ export async function sendPaymentNotice(
     return `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}${amt > 0 ? ` · ${thb(amt)}` : ""}`;
   });
   const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
-  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
+  const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
+  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}${slipLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
 }
 
 type SheetJob = {

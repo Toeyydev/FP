@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
   } catch { /* PEAK posting is best-effort; payment already recorded */ }
 
   // Tell the guide their payment landed — short summary + completed tour details.
-  try { await sendPaymentNotice(guideId, jobs); } catch { /* best-effort */ }
+  try { await sendPaymentNotice(guideId, jobs, undefined, link); } catch { /* best-effort */ }
 
   return NextResponse.json({ ok: true, link, count: jobs.length, peakRef: peakCode ?? peakRef });
 }
