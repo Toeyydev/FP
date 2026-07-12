@@ -3,12 +3,15 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { thb } from "@/lib/jobsheet";
+import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
+import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
+type Candidate = { date: string; slotIdx: number; time: string; tourId: string; tour: string; guideId: string; guide: string; customerName: string | null; ref: string | null };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -23,6 +26,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [q, setQ] = useState(""); // filter by guide id / name
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
   const [bForm, setBForm] = useState({ guideId: "", amount: "", reason: "" });
+  // "Reward a review" helper: the OTA email gives only the product + rating; the
+  // operator adds the tour date or reviewer name to find who guided it.
+  const [rv, setRv] = useState({ paste: "", date: "", name: "", product: "", stars: 0, comment: "", ota: "GYG" });
+  const [rvMatches, setRvMatches] = useState<Candidate[] | null>(null);
+  const [rvBusy, setRvBusy] = useState(false);
+  const [extraGuides, setExtraGuides] = useState<{ guideId: string; guide: string }[]>([]); // guides found via review lookup but not in this month's rows
   // Draft PEAK ref typed against a still-pending guide (keyed by guideId) — shown on
   // the row so the operator can record it before paying the guide's jobs together.
   const [payRef, setPayRef] = useState<Record<string, string>>({});
@@ -73,14 +82,40 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const amt = parseFloat(bForm.amount);
     if (!bForm.guideId || !(amt > 0)) return;
     const r = await fetch("/api/payments/bonus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId: bForm.guideId, amount: amt, reason: bForm.reason }) });
-    if (r.ok) { setBForm({ guideId: "", amount: "", reason: "" }); loadBonuses(period); }
+    if (r.ok) { setBForm({ guideId: "", amount: "", reason: "" }); setExtraGuides([]); loadBonuses(period); }
+  }
+  // Pull product / rating / comment out of a pasted OTA review email.
+  function onPasteReview(text: string) {
+    const p = parseReviewEmail(text);
+    setRv((s) => ({ ...s, paste: text, product: p.product ?? s.product, stars: p.stars ?? s.stars, comment: p.comment ?? s.comment, ota: p.ota ?? s.ota }));
+  }
+  // Look up who guided the reviewed tour (by date and/or reviewer name).
+  async function findReviewGuide() {
+    if (!rv.date && rv.name.trim().length < 2) return;
+    setRvBusy(true); setRvMatches(null);
+    const qs = new URLSearchParams();
+    if (rv.date) qs.set("date", rv.date);
+    if (rv.name.trim()) qs.set("name", rv.name.trim());
+    if (rv.product.trim()) qs.set("product", rv.product.trim());
+    const r = await fetch(`/api/payments/review-match?${qs.toString()}`, { cache: "no-store" });
+    setRvBusy(false);
+    if (r.ok) { const d = await r.json(); setRvMatches(d.candidates ?? []); } else setRvMatches([]);
+  }
+  // Pre-fill the bonus form for the chosen guide (adding them to the picker if this
+  // month's payout doesn't already list them — a late review can span months).
+  function rewardCandidate(c: Candidate) {
+    const reason = `${rv.stars ? rv.stars + "★ " : ""}${rv.ota || "OTA"} · ${c.tour} · ${dShort(c.date)}${rv.comment ? ` · "${rv.comment}"` : ""}`.slice(0, 200);
+    setExtraGuides((g) => g.some((x) => x.guideId === c.guideId) ? g : [...g, { guideId: c.guideId, guide: c.guide }]);
+    setBForm({ guideId: c.guideId, amount: "", reason });
+    setRvMatches(null);
   }
   async function delBonus(id: string) {
     const r = await fetch("/api/payments/bonus", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
     if (r.ok) loadBonuses(period);
   }
   async function uploadBonusEslip(bonusId: string, file: File) {
-    const fd = new FormData(); fd.append("bonusId", bonusId); fd.append("file", file);
+    const blob = await shrinkImage(file);
+    const fd = new FormData(); fd.append("bonusId", bonusId); fd.append("file", blob, shrunkName(file.name, blob));
     const r = await fetch("/api/payments/bonus/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (r.ok) loadBonuses(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
@@ -97,7 +132,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // Upload a bank payment slip (e-slip) for a guide's month. The slip IS proof of
   // payment, so the backend flips the month — and all its tours — to PAID on upload.
   async function uploadEslip(guideId: string, file: File) {
-    const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", file);
+    const blob = await shrinkImage(file);
+    const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", blob, shrunkName(file.name, blob));
     const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (r.ok) load(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
@@ -118,7 +154,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     fd.append("guideId", guideId);
     fd.append("jobs", JSON.stringify(jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx }))));
     if (ref) fd.append("peakRef", ref);
-    fd.append("file", file);
+    const blob = await shrinkImage(file);
+    fd.append("file", blob, shrunkName(file.name, blob));
     const r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); }
@@ -382,10 +419,39 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             </table>
           )}
           {canEdit && (
+          <div style={{ border: "1px dashed var(--line-strong)", borderRadius: 12, padding: 12, margin: "0 0 12px", background: "var(--paper)" }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Reward a review</div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", margin: "2px 0 8px" }}>Paste the OTA review email (optional), then add the tour date or the reviewer&apos;s name to find who guided it.</div>
+            <textarea className="search" style={{ width: "100%", minHeight: 52, resize: "vertical", marginBottom: 8, boxSizing: "border-box" }} placeholder="Paste the GetYourGuide / Viator review email here…" value={rv.paste} onChange={(e) => onPasteReview(e.target.value)} />
+            {(rv.product || rv.stars > 0) && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>{rv.stars > 0 ? "★".repeat(rv.stars) + " " : ""}{rv.product ? <b style={{ color: "var(--ink)" }}>{rv.product}</b> : null}{rv.comment ? ` · "${rv.comment}"` : ""}</div>}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input className="search" style={{ flex: "none", width: 150 }} type="date" title="Tour date (from the OTA portal)" value={rv.date} onChange={(e) => setRv((s) => ({ ...s, date: e.target.value }))} />
+              <input className="search" style={{ flex: 1, minWidth: 160 }} placeholder="or reviewer / customer name" value={rv.name} onChange={(e) => setRv((s) => ({ ...s, name: e.target.value }))} />
+              <button className="btn" disabled={rvBusy || (!rv.date && rv.name.trim().length < 2)} onClick={findReviewGuide}>{rvBusy ? "Finding…" : "Find guide"}</button>
+            </div>
+            {rvMatches && (rvMatches.length ? (
+              <table className="acct-table" style={{ marginTop: 10 }}>
+                <thead><tr><th>Date</th><th>Tour</th><th>Guide</th><th>Customer</th><th /></tr></thead>
+                <tbody>
+                  {rvMatches.map((c, i) => (
+                    <tr key={i}>
+                      <td style={{ whiteSpace: "nowrap" }}>{dShort(c.date)}<br /><small style={{ color: "var(--ink-soft)" }}>{c.time}</small></td>
+                      <td>{c.tour}</td>
+                      <td style={{ whiteSpace: "nowrap" }}><span className="gid">{c.guideId}</span> {c.guide}</td>
+                      <td style={{ color: "var(--ink-soft)" }}>{c.customerName || "—"}</td>
+                      <td style={{ textAlign: "right" }}><button className="btn sm primary" onClick={() => rewardCandidate(c)}>Reward →</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <div className="op-empty" style={{ marginTop: 10 }}>No match — check the date, or try the reviewer&apos;s name.</div>)}
+          </div>
+          )}
+          {canEdit && (
           <div className="op-toolbar" style={{ gap: 8, flexWrap: "wrap" }}>
             <select className="search" style={{ flex: "none", width: 200 }} value={bForm.guideId} onChange={(e) => setBForm((x) => ({ ...x, guideId: e.target.value }))}>
               <option value="">Choose guide…</option>
-              {rows.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.guide}</option>)}
+              {[...rows.map((g) => ({ guideId: g.guideId, guide: g.guide })), ...extraGuides.filter((e) => !rows.some((r) => r.guideId === e.guideId))].map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.guide}</option>)}
             </select>
             <input className="search" style={{ flex: 1, minWidth: 180 }} placeholder="Reason (e.g. 5★ review – Omari)" value={bForm.reason} onChange={(e) => setBForm((x) => ({ ...x, reason: e.target.value }))} />
             <input className="search" style={{ flex: "none", width: 120 }} type="number" min={0} placeholder="฿ amount" value={bForm.amount} onChange={(e) => setBForm((x) => ({ ...x, amount: e.target.value }))} />
