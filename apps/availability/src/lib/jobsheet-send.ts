@@ -34,7 +34,10 @@ export async function sendPaymentNotice(
   });
   const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
   const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
-  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}${slipLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
+  // Deep-link to the guide's pay page, where every paid tour now opens its job sheet
+  // — so right after the slip lands the guide can check each previous job sheet.
+  const sheetsLine = `\n\nYour tours & job sheets: ${BASE}/pay`;
+  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}${slipLine}${sheetsLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
 }
 
 type SheetJob = {
