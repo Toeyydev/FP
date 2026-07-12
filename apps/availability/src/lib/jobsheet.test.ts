@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets } from "@/lib/jobsheet";
 
 describe("jobsheet — lotus fee only for Wat Pho & Wat Arun tours", () => {
   const hasLotus = (name: string) => defaultExpensesForTour(name).some((e) => /lotus/i.test(e.description));
@@ -77,5 +77,33 @@ describe("applyReportedAttendance", () => {
   it("never drives a group below zero", () => {
     const out = applyReportedAttendance(mk([[2, "included"]]), [], 10);
     expect(out.bookings[0].actualPax).toBe(0);
+  });
+});
+
+describe("noShowStatus — whole vs partial vs present", () => {
+  it("none absent → present (empty status)", () => {
+    expect(noShowStatus(0, 8)).toBe("");
+  });
+  it("some absent → partial (booked 8, 3 didn't come)", () => {
+    expect(noShowStatus(3, 8)).toBe("partial");
+  });
+  it("all absent → whole no-show", () => {
+    expect(noShowStatus(8, 8)).toBe("no-show");
+  });
+  it("over-count clamps to whole no-show, and null pax with any absent reads as no-show", () => {
+    expect(noShowStatus(9, 8)).toBe("no-show");
+    expect(noShowStatus(1, null)).toBe("no-show");
+  });
+});
+
+describe("syncAttractionTickets", () => {
+  it("re-syncs attraction ticket pax to included guests who came, leaving other expenses alone", () => {
+    const bookings = [
+      { name: "a", bookingNo: "A", bookedPax: 8, actualPax: 5, tickets: "included" as const, status: "partial" },
+      { name: "b", bookingNo: "B", bookedPax: 3, actualPax: 3, tickets: "not" as const, status: "" },
+    ];
+    const out = syncAttractionTickets(bookings, [{ description: "Grand Palace entrance", price: 500, pax: 11 }, { description: "Lunch", price: 200, pax: 11 }]);
+    expect(out.find((e) => e.description.startsWith("Grand Palace"))!.pax).toBe(5); // only the 5 who came on the included booking
+    expect(out.find((e) => e.description === "Lunch")!.pax).toBe(11); // untouched
   });
 });

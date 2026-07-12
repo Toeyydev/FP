@@ -6,8 +6,16 @@ export type Booking = {
   bookedPax: number | null;
   actualPax: number | null;
   tickets: "included" | "not" | ""; // hybrid: some bookings include tickets, some don't
-  status: string;
+  status: string; // "no-show" (all absent) | "partial" (some absent) | "" (all came)
+  noShowPax?: number; // how many of this booking didn't arrive (0..bookedPax)
 };
+
+// The no-show status label for a booking of `pax` guests with `noShowPax` absent.
+export function noShowStatus(noShowPax: number, pax: number | null): "no-show" | "partial" | "" {
+  const p = Math.max(0, Math.floor(noShowPax || 0));
+  if (p <= 0) return "";
+  return pax != null && p < pax ? "partial" : "no-show";
+}
 export type Expense = { description: string; price: number | null; pax: number | null };
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
@@ -64,6 +72,16 @@ export function makeRef(date: string, seq: number) {
 // groups first — then re-sync the attraction (Grand Palace / Wat Pho / Wat Arun)
 // ticket expenses to who actually showed up. The fixed guide fee is untouched.
 const ATTRACTION_PREFIXES = ["grand palace", "wat pho", "wat arun"];
+
+// Re-sync the attraction (Grand Palace / Wat Pho / Wat Arun) ticket expenses to the
+// number of ticket-included guests who actually showed up (sum of actualPax).
+export function syncAttractionTickets(bookings: Booking[], expenses: Expense[]): Expense[] {
+  const inclPax = bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
+  return expenses.map((e) =>
+    ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,
+  );
+}
+
 export function applyReportedAttendance(bookings: Booking[], expenses: Expense[], absent: number): { bookings: Booking[]; expenses: Expense[] } {
   const rows = bookings.map((b) => ({ ...b, actualPax: b.actualPax ?? b.bookedPax ?? 0 }));
   let remaining = Math.max(0, Math.floor(absent));
@@ -74,9 +92,5 @@ export function applyReportedAttendance(bookings: Booking[], expenses: Expense[]
     rows[idx].actualPax = (rows[idx].actualPax ?? 0) - 1;
     remaining--;
   }
-  const inclPax = rows.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
-  const newExpenses = expenses.map((e) =>
-    ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,
-  );
-  return { bookings: rows, expenses: newExpenses };
+  return { bookings: rows, expenses: syncAttractionTickets(rows, expenses) };
 }

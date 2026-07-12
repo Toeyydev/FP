@@ -89,8 +89,8 @@ export default function AppClient({
   const [rNoShow, setRNoShow] = useState("0");
   const [rLeft, setRLeft] = useState("0");
   const [rComment, setRComment] = useState("");
-  const [reportBookings, setReportBookings] = useState<{ id: string; name: string; ref: string; pax: number; noShow: boolean }[]>([]);
-  const [noShowIds, setNoShowIds] = useState<Set<string>>(new Set());
+  const [reportBookings, setReportBookings] = useState<{ id: string; name: string; ref: string; pax: number; noShow: boolean; noShowPax?: number }[]>([]);
+  const [noShowCounts, setNoShowCounts] = useState<Record<string, number>>({}); // booking id → absent pax
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [installed, setInstalled] = useState(true); // home-screen install state
@@ -625,17 +625,17 @@ export default function AppClient({
   const showAction = (s: { date: string; time: string; checkinState: string | null }, next: { type: string } | null) =>
     !!next && (next.type !== "ARRIVE" || checkInOpen(s.date, s.time));
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
-    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowIds(new Set()); setReportFor(s);
+    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({}); setReportFor(s);
     fetch(`/api/report?date=${s.date}&slotIdx=${s.slotIdx}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { const bs = d?.bookings ?? []; setReportBookings(bs); setNoShowIds(new Set(bs.filter((b: { noShow: boolean }) => b.noShow).map((b: { id: string }) => b.id))); })
+      .then((d) => { const bs = d?.bookings ?? []; setReportBookings(bs); setNoShowCounts(Object.fromEntries(bs.map((b: { id: string; pax: number; noShow: boolean; noShowPax?: number }) => [b.id, b.noShowPax ?? (b.noShow ? b.pax : 0)]))); })
       .catch(() => {});
   }
   async function submitReport() {
     if (!reportFor) return;
     const r = await fetch("/api/report", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowIds: [...noShowIds] } : {}) }),
+      body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowCounts: reportBookings.map((b) => ({ id: b.id, pax: noShowCounts[b.id] ?? 0 })) } : {}) }),
     });
     if (r.ok) { setReportFor(null); toast(t("reportSubmitted")); fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d) => setSchedule(d.items ?? [])); }
     else toast(t("errGeneric"));
@@ -1352,15 +1352,27 @@ export default function AppClient({
               <p className="sub" style={{ color: "var(--ink-soft)", fontSize: 13, margin: "0 0 14px" }}>{reportFor.tourName} · {reportFor.pax ?? 0} {t("guestsBooked")}</p>
               {reportBookings.length > 0 ? (
                 <div>
-                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("noShowLabel")} · tap guests who didn&apos;t arrive</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("noShowLabel")} · who didn&apos;t arrive</span>
                   <div style={{ display: "grid", gap: 6, margin: "6px 0 12px", maxHeight: 220, overflowY: "auto" }}>
-                    {reportBookings.map((b) => { const on = noShowIds.has(b.id); return (
-                      <label key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1.5px solid", borderColor: on ? "var(--danger-line)" : "var(--line)", background: on ? "var(--danger-bg)" : "#fff", borderRadius: 10, cursor: "pointer" }}>
-                        <input type="checkbox" checked={on} onChange={() => setNoShowIds((st) => { const n = new Set(st); n.has(b.id) ? n.delete(b.id) : n.add(b.id); return n; })} />
-                        <span style={{ flex: 1, fontWeight: 600, textDecoration: on ? "line-through" : "none", color: on ? "var(--danger)" : "inherit" }}>{b.name}{b.ref ? <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}> · {b.ref}</span> : null}</span>
-                        <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>{b.pax} pax</span>
-                      </label>
-                    ); })}
+                    {reportBookings.map((b) => {
+                      const P = b.pax || 0;
+                      const ns = noShowCounts[b.id] ?? 0;
+                      const full = P > 0 && ns >= P;
+                      const set = (v: number) => setNoShowCounts((m) => ({ ...m, [b.id]: Math.max(0, Math.min(P || v, v)) }));
+                      return (
+                      <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1.5px solid", borderColor: ns > 0 ? "var(--danger-line)" : "var(--line)", background: ns > 0 ? "var(--danger-bg)" : "#fff", borderRadius: 10 }}>
+                        <input type="checkbox" checked={ns > 0} onChange={(e) => set(e.target.checked ? P : 0)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
+                        <span style={{ flex: 1, fontWeight: 600, textDecoration: full ? "line-through" : "none", color: ns > 0 ? "var(--danger)" : "inherit" }}>{b.name}{b.ref ? <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}> · {b.ref}</span> : null}</span>
+                        {P > 1 ? (
+                          <span style={{ color: "var(--ink-soft)", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                            {t("cameLabel")}
+                            <input type="number" min={0} max={P} value={P - ns} onChange={(e) => set(P - Math.max(0, Math.min(P, Number(e.target.value) || 0)))} style={{ width: 46, padding: "3px 5px", border: "1px solid var(--line-strong)", borderRadius: 6, font: "inherit", fontSize: 12, textAlign: "right" }} />
+                            / {P}
+                          </span>
+                        ) : <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>{P} pax</span>}
+                      </div>
+                      );
+                    })}
                   </div>
                   <label className="fld" style={{ marginTop: 0 }}><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("leftEarlyLabel")}</span>
                     <input type="number" min={0} value={rLeft} onChange={(e) => setRLeft(e.target.value)} /></label>
@@ -1375,7 +1387,7 @@ export default function AppClient({
               )}
               <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("incidentsLabel")}</span>
                 <input value={rComment} onChange={(e) => setRComment(e.target.value)} placeholder={t("incidentsHint")} /></label>
-              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 10 }}>✓ {t("completedShown")}: <b style={{ color: "var(--ink)" }}>{Math.max(0, (reportFor.pax ?? 0) - (reportBookings.length ? reportBookings.filter((b) => noShowIds.has(b.id)).reduce((s2, b) => s2 + b.pax, 0) : (Number(rNoShow) || 0)) - (Number(rLeft) || 0))}</b> · {t("payNotAffected")}</div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 10 }}>✓ {t("completedShown")}: <b style={{ color: "var(--ink)" }}>{Math.max(0, (reportFor.pax ?? 0) - (reportBookings.length ? reportBookings.reduce((s2, b) => s2 + (noShowCounts[b.id] ?? 0), 0) : (Number(rNoShow) || 0)) - (Number(rLeft) || 0))}</b> · {t("payNotAffected")}</div>
             </div>
             <div className="mfoot">
               <button className="btn" onClick={() => setReportFor(null)}>{t("cancel")}</button>

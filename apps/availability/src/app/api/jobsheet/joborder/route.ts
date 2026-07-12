@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, noShowStatus, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 
@@ -44,12 +44,12 @@ export async function GET(req: NextRequest) {
   if (bookings.length === 0) {
     const live = await prisma.booking.findMany({
       where: { date, slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true },
       orderBy: { customerName: "asc" },
     });
     const splitHere = live.some((b) => b.assignedGuideId);
     const mine = splitHere ? live.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : live;
-    bookings = mine.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
+    bookings = mine.map((b) => { const P = b.pax ?? 0; const ns = b.noShow ? (b.noShowPax || P) : 0; return { name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: ns > 0 ? Math.max(0, P - ns) : null, tickets: "" as const, status: noShowStatus(ns, P || null), noShowPax: ns }; });
   }
   const guideFee = ((sheet?.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
   const guideName = u?.fullName || u?.displayName || "";

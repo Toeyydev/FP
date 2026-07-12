@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -8,16 +8,18 @@ const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDa
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const gfOf = (v: unknown): GuideFee => (v && typeof v === "object" ? (v as GuideFee) : DEFAULT_GUIDE_FEE);
 
-// GET — the signed-in guide's own pay, grouped by month (last 12 months up to today).
-// Each tour: net fee (after WHT) + reimbursable expenses, its paid status, and the
-// bank slip to open — so the guide can check the transfer matches the job sheet.
-export async function GET() {
+// GET ?all=1 — the signed-in guide's own pay, grouped by month. Defaults to the last
+// 12 months; ?all=1 returns their full history. Each tour: net fee (after WHT) +
+// reimbursable expenses, its paid status, and the bank slip — so the guide can check
+// the transfer matches the job sheet (and open the sheet itself from the app).
+export async function GET(req: NextRequest) {
   const session = await auth();
   const guideId = session?.user?.guideId;
   if (!session?.user || !guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
+  const all = req.nextUrl.searchParams.get("all") === "1";
   const today = bkk(0);
-  const from = `${bkk(-365).slice(0, 7)}-01`;
+  const from = all ? "2000-01-01" : `${bkk(-365).slice(0, 7)}-01`;
 
   const [assigns, sheets, statuses, tourPays, tours] = await Promise.all([
     prisma.assignment.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, tourId: true, createdAt: true } }),
@@ -76,5 +78,5 @@ export async function GET() {
   const thisPeriod = today.slice(0, 7);
   const paidThisMonth = r2((monthMap[thisPeriod] ?? []).filter((x) => x.paid).reduce((s, x) => s + x.amount, 0));
 
-  return NextResponse.json({ months, yearTotal, paidThisMonth });
+  return NextResponse.json({ months, yearTotal, paidThisMonth, guideId, all });
 }
