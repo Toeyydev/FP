@@ -346,7 +346,8 @@ model Booking {
   raw              Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-  noShow           Boolean  @default(false) // guest didn't arrive (set by operator or guide)
+  noShow           Boolean  @default(false) // any guest on this booking didn't arrive (kept in sync: noShowPax > 0)
+  noShowPax        Int      @default(0) // how many of this booking's `pax` didn't arrive (0..pax) — supports partial no-shows (e.g. booked 8, came 5 → 3)
 
   @@unique([source, externalId])
   @@index([date])

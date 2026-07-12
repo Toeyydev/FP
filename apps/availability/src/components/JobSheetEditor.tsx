@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { SLOT_TIMES } from "@/lib/slots";
 
 type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string } | null;
@@ -93,21 +93,25 @@ export default function JobSheetEditor() {
   // auto-save only when !saved) always persist the change before exporting/uploading.
   const up = (patch: Partial<Sheet>) => { setSheet({ ...sheet, ...patch }); setSaved(false); if (msg) setMsg(""); };
   const setBooking = (i: number, p: Partial<Booking>) => up({ bookings: sheet.bookings.map((b, j) => j === i ? { ...b, ...p } : b) });
-  // Guide (or operator) taps a guest's no-show box — persists to the Booking so it
-  // shows in the operator's Tour Log; updates the row locally without dirtying the sheet.
-  const markNoShow = async (i: number, b: Booking, on: boolean) => {
-    setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, status: on ? "no-show" : "" } : x) } : s);
+  // Guide (or operator) records how many of a booking's guests didn't arrive
+  // (0 = all came, whole pax = fully absent, in between = partial). Persists to the
+  // Booking so it shows in the operator's Tour Log; updates the row locally without
+  // dirtying the sheet.
+  const markNoShow = async (i: number, b: Booking, noShowPax: number) => {
+    const P = b.bookedPax ?? 0;
+    const ns = Math.max(0, Math.min(noShowPax, P || noShowPax));
+    setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, noShowPax: ns, status: noShowStatus(ns, x.bookedPax), actualPax: Math.max(0, (x.bookedPax ?? 0) - ns) } : x) } : s);
     if (!b.bookingNo) return;
-    // Record the no-show first — the API also mirrors it onto the saved job sheet.
-    await fetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShow: on }) }).catch(() => {});
+    // Record it first — the API also mirrors the count / status / actual pax onto the sheet.
+    await fetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => {});
     // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
-    // record reflects the no-show immediately (best-effort; needs a saved sheet + Drive).
+    // record reflects it immediately (best-effort; needs a saved sheet + Drive).
     if (drive.enabled && drive.connected) {
       try {
         const r = await fetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx }) });
-        setMsg(r.ok ? (on ? "No-show saved & uploaded to Drive ✓" : "Updated & uploaded to Drive ✓") : "No-show saved ✓");
+        setMsg(r.ok ? (ns > 0 ? "No-show saved & uploaded to Drive ✓" : "Updated & uploaded to Drive ✓") : "No-show saved ✓");
       } catch { setMsg("No-show saved ✓"); }
-    } else setMsg("No-show saved ✓");
+    } else setMsg(ns > 0 ? "No-show saved ✓" : "Updated ✓");
   };
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
@@ -125,11 +129,17 @@ export default function JobSheetEditor() {
     setExpBusy(false);
     if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
   }
-  // Operator: copy the guide's reported figures into the official expenses (then Save).
+  // Operator: merge the guide's reported figures into the official expenses (then Save).
+  // Adopt the guide's numbers, but KEEP any operator-only line the guide didn't report
+  // so an operator-added expense is never silently dropped.
   function acceptGuideExpenses() {
     if (!sheet?.guideExpenses) return;
-    up({ expenses: sheet.guideExpenses.map((e) => ({ ...e })) });
-    setMsg("Guide's figures copied in — review and Save.");
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const gd = sheet.guideExpenses;
+    const gdKeys = new Set(gd.map((e) => norm(e.description)));
+    const opOnly = (sheet.expenses ?? []).filter((e) => !gdKeys.has(norm(e.description)));
+    up({ expenses: [...gd.map((e) => ({ ...e })), ...opOnly.map((e) => ({ ...e }))] });
+    setMsg(opOnly.length ? "Guide's figures merged — operator-only items kept. Review and Save." : "Guide's figures copied in — review and Save.");
   }
   // Cross-check rows: merge official + guide-reported by description.
   const crossRows = (() => {
@@ -140,8 +150,8 @@ export default function JobSheetEditor() {
       const o = op.find((e) => norm(e.description) === k), g = gd.find((e) => norm(e.description) === k);
       const oa = o ? expenseAmount(o) : null, ga = g ? expenseAmount(g) : null;
       const desc = (o?.description || g?.description || "").trim();
-      let flag: "match" | "differ" | "added" | "removed" = "match";
-      if (oa == null) flag = "added"; else if (ga == null) flag = "removed"; else if (Math.round(oa) !== Math.round(ga)) flag = "differ";
+      let flag: "match" | "differ" | "added" | "opOnly" = "match";
+      if (oa == null) flag = "added"; else if (ga == null) flag = "opOnly"; else if (Math.round(oa) !== Math.round(ga)) flag = "differ";
       return { desc, oa, ga, flag };
     });
   })();
@@ -191,6 +201,12 @@ export default function JobSheetEditor() {
         </div>
       </div>
 
+      {sheet.status === "Review: no-show" && (
+        <div style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 13.5 }}>
+          ⚠ A guide reported a no-show on this tour. Absent guests were removed from the pax counts and ticket expenses — confirm the numbers before payout.
+        </div>
+      )}
+
       {ro && (() => {
         const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
         const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0);
@@ -211,17 +227,28 @@ export default function JobSheetEditor() {
                 {sheet.bookings.length ? (
                   <ol className="gs-cust">
                     {sheet.bookings.map((b, i) => {
-                      const ns = b.status === "no-show";
+                      const P = b.bookedPax ?? 0;
+                      const ns = b.noShowPax ?? (b.status === "no-show" ? P : 0); // absent pax on this booking
+                      const full = P > 0 && ns >= P, partial = ns > 0 && ns < P;
                       return (
                       <li key={i} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                        <span style={{ flex: 1, minWidth: 130, textDecoration: ns ? "line-through" : "none", color: ns ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {b.actualPax ?? b.bookedPax} pax</span> : ""}</span>
+                        <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}</span>
                         {b.tickets && <span style={{ fontSize: 11, fontWeight: 700, color: b.tickets === "included" ? "#2e7d4f" : "var(--ink-soft)", whiteSpace: "nowrap" }} title="Set by the operator">{b.tickets === "included" ? "Tickets incl." : "No tickets"}</span>}
                         {canMarkNoShow ? (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default", whiteSpace: "nowrap" }} title={b.bookingNo ? "Mark this guest as a no-show" : "No reference to mark"}>
-                            <input type="checkbox" checked={ns} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
-                            No-show
-                          </label>
-                        ) : (ns && <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--danger)", whiteSpace: "nowrap" }}>✗ No-show</span>)}
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
+                            <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: ns > 0 ? "var(--danger)" : "var(--ink-soft)", cursor: b.bookingNo ? "pointer" : "default" }} title={b.bookingNo ? "Mark this booking as a no-show" : "No reference to mark"}>
+                              <input type="checkbox" checked={ns > 0} disabled={!b.bookingNo} onChange={(e) => markNoShow(i, b, e.target.checked ? P : 0)} style={{ width: 17, height: 17, accentColor: "var(--danger)" }} />
+                              No-show
+                            </label>
+                            {P > 1 && b.bookingNo && (
+                              <span style={{ fontSize: 11.5, color: "var(--ink-soft)", display: "inline-flex", alignItems: "center", gap: 4 }} title="How many of this booking actually came">
+                                came
+                                <input type="number" min={0} max={P} value={P - ns} onChange={(e) => markNoShow(i, b, P - Math.max(0, Math.min(P, Number(e.target.value) || 0)))} style={{ width: 44, padding: "3px 5px", border: "1px solid var(--line-strong)", borderRadius: 6, font: "inherit", fontSize: 11.5, textAlign: "right" }} />
+                                / {P}
+                              </span>
+                            )}
+                          </span>
+                        ) : (full ? <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--danger)", whiteSpace: "nowrap" }}>✗ No-show</span> : partial ? <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--danger)", whiteSpace: "nowrap" }}>✗ {ns} of {P} no-show</span> : null)}
                       </li>
                       );
                     })}
@@ -301,7 +328,9 @@ export default function JobSheetEditor() {
             <tr><td>Guide ID</td><td>{sheet.guideId}</td></tr>
             <tr><td>Status</td><td>
               <select value={sheet.status} onChange={(e) => up({ status: e.target.value })} className="no-print-border">
-                {["Confirmed", "Pending", "Cancelled"].map((s) => <option key={s}>{s}</option>)}
+                {/* include the live status (e.g. "Review: no-show", set by a guide's report) so it
+                    renders instead of a blank box and is never lost when the operator saves */}
+                {Array.from(new Set(["Confirmed", "Pending", "Cancelled", sheet.status])).map((s) => <option key={s}>{s}</option>)}
               </select>
               <span className="print-only">{sheet.status}</span>
             </td></tr>
@@ -386,7 +415,7 @@ export default function JobSheetEditor() {
                       <td style={{ padding: "5px 10px" }}>{r.desc}</td>
                       <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.oa == null ? "—" : thb(r.oa)}</td>
                       <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: r.flag === "differ" || r.flag === "added" ? 700 : 400, color: r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "inherit" }}>{r.ga == null ? "—" : thb(r.ga)}</td>
-                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>{r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : "− removed"}</td>
+                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>{r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : "operator only"}</td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: "2px solid #ddd", background: "#fafafa", fontWeight: 800 }}>
@@ -399,7 +428,7 @@ export default function JobSheetEditor() {
               </table>
               <div style={{ padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <button className="btn sm primary" onClick={acceptGuideExpenses}>Accept guide&apos;s figures</button>
-                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>copies them into the official expenses above — then Save</span>
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>merges them into the official expenses (keeps operator-only items) — then Save</span>
               </div>
             </div>
           );

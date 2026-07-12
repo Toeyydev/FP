@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { thb, defaultExpensesForTour, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
 import { nextJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 
@@ -39,12 +39,21 @@ export async function POST(req: NextRequest) {
   // Submitting the report is the moment Actual Pax becomes real: fill each booking
   // row = Booked Pax minus no-shows (a no-show guest → 0). Blank before this, so a
   // number only appears once the guide has reported. Operators can still override.
-  const slotBookings = await prisma.booking.findMany({ where: { date, slotIdx }, select: { externalRef: true, confirmationCode: true, noShow: true } });
-  const noShowRefs = new Set(slotBookings.filter((b) => b.noShow).flatMap((b) => [b.externalRef, b.confirmationCode]).filter(Boolean) as string[]);
+  const slotBookings = await prisma.booking.findMany({ where: { date, slotIdx }, select: { externalRef: true, confirmationCode: true, noShow: true, noShowPax: true, pax: true } });
+  const noShowByRef = new Map<string, number>(); // booking ref → absent pax
+  for (const b of slotBookings) {
+    if (!b.noShow) continue;
+    const ns = b.noShowPax || (b.pax ?? 0);
+    for (const ref of [b.externalRef, b.confirmationCode]) if (ref) noShowByRef.set(ref, ns);
+  }
   const fillActualPax = (rows: unknown): object[] => (Array.isArray(rows) ? rows : []).map((row) => {
-    const r = row as { bookingNo?: string; status?: string; bookedPax?: number | null; actualPax?: number | null };
-    const isNo = r?.status === "no-show" || (!!r?.bookingNo && noShowRefs.has(r.bookingNo));
-    return { ...r, status: isNo ? "no-show" : (r?.status ?? ""), actualPax: isNo ? 0 : (r?.actualPax ?? r?.bookedPax ?? null) };
+    const r = row as { bookingNo?: string; status?: string; bookedPax?: number | null; actualPax?: number | null; noShowPax?: number };
+    const P = r?.bookedPax ?? 0;
+    // Absent pax for this row: prefer the row's own count, then the booking's, then a
+    // legacy "no-show" status (= whole booking). Partial no-shows keep the rest present.
+    const raw = r?.noShowPax ?? (r?.bookingNo ? noShowByRef.get(r.bookingNo) : undefined) ?? (r?.status === "no-show" ? P : 0);
+    const ns = P > 0 ? Math.min(raw, P) : raw;
+    return { ...r, noShowPax: ns, status: noShowStatus(ns, P || null), actualPax: Math.max(0, P - ns) };
   });
 
   if (existing) {
