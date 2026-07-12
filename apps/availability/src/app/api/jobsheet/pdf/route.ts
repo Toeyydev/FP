@@ -69,9 +69,10 @@ export async function GET(req: NextRequest) {
   const updated = (sheet as { updatedAt?: Date | null }).updatedAt;
   const ref = sheet.ref || `job-sheet-${guideId || tourId || "slot"}-${date}`;
 
-  let bookedSum = 0, actualSum = 0;
+  let bookedSum = 0, actualSum = 0, noShowSum = 0;
   let bookingRows = bookings.map((b, i) => {
     bookedSum += b.bookedPax ?? 0; actualSum += b.actualPax ?? 0;
+    noShowSum += b.noShowPax ?? (b.status === "no-show" ? (b.bookedPax ?? 0) : 0);
     const tickets = b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "";
     return `<tr><td>${i + 1}</td><td${ce}>${esc(b.name)}</td><td${ce}>${esc(b.bookingNo)}</td><td class="n" data-bpax>${b.bookedPax ?? ""}</td><td class="n"${ce} data-apax>${b.actualPax ?? ""}</td><td${ce}>${tickets}</td></tr>`;
   }).join("");
@@ -150,6 +151,7 @@ export async function GET(req: NextRequest) {
       <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th class="n">Booked Pax</th><th class="n">Actual Pax</th><th>Tickets</th></tr></thead>
       <tbody>${bookingRows || '<tr><td colspan="6" style="color:#aaa">No bookings listed.</td></tr>'}
         <tr class="tot"><td></td><td colspan="2" style="text-align:right">Total</td><td class="n" id="bookedTot">${bookedSum}</td><td class="n" id="actualTot">${actualSum}</td><td></td></tr>
+        ${noShowSum > 0 ? `<tr class="tot"><td></td><td colspan="2" style="text-align:right;color:#c2604a">No-shows</td><td class="n" colspan="2" style="color:#c2604a">${noShowSum} pax</td><td></td></tr>` : ""}
       </tbody>
     </table>
 

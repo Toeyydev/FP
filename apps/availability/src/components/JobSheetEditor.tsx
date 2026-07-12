@@ -115,6 +115,9 @@ export default function JobSheetEditor() {
   };
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
+  // Total no-show pax reported across the sheet's bookings (per-booking count, with a
+  // fallback for legacy rows that only carry the "no-show" status).
+  const noShowTotal = sheet.bookings.reduce((s, b) => s + (b.noShowPax ?? (b.status === "no-show" ? (b.bookedPax ?? 0) : 0)), 0);
 
   // ---- Guide's own expense report (separate from the operator's official set) ----
   const setGExp = (i: number, p: Partial<Expense>) => setGuideExp((arr) => arr.map((e, j) => j === i ? { ...e, ...p } : e));
@@ -222,7 +225,7 @@ export default function JobSheetEditor() {
             </div>
             <div className="gs-grid">
               <div>
-                <h3>Your customers ({sheet.bookings.length})</h3>
+                <h3>Your customers ({sheet.bookings.length}){noShowTotal > 0 ? <span style={{ color: "var(--danger)", fontWeight: 700 }}> · {noShowTotal} no-show</span> : null}</h3>
                 {ro && !canMarkNoShow && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", margin: "2px 0 6px" }}>{!checkedIn ? "Check in to report no-shows." : "No-show reporting is open for 30 minutes after the tour starts."}</div>}
                 {sheet.bookings.length ? (
                   <ol className="gs-cust">
@@ -370,6 +373,7 @@ export default function JobSheetEditor() {
               </tr>
             ))}
             <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /></tr>
+            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-shows</td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700 }}>{noShowTotal} pax</td><td /><td className="no-print" /></tr>}
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
