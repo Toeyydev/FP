@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
-type Row = { id: string; guideId: string; name: string; languages: string; tours: number; rating: number | null; ratingCount: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; email: string; fullName: string; phone: string; taxId: string; address: string };
+type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; email: string; fullName: string; phone: string; taxId: string; address: string };
 type EditForm = { email: string; fullName: string; phone: string; taxId: string; address: string };
 
 export default function Guides() {
@@ -43,10 +43,10 @@ export default function Guides() {
       </div>
 
       <section className="panel">
-        <div className="panel-head"><h2>Guide directory</h2><span className="hint">{rows.length} active · rated by completed tours</span></div>
+        <div className="panel-head"><h2>Guide directory</h2><span className="hint">{rows.length} active · ranked by completed tours</span></div>
         <div className="grid-scroll">
           <table className="acct-table">
-            <thead><tr><th>Guide</th><th>Presence</th><th>Languages</th><th className="r">Tours</th><th className="r">Rating</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Guide</th><th>Presence</th><th>Languages</th><th className="r">Tours</th><th>Status</th><th /></tr></thead>
             <tbody>
               {rows.length === 0 ? <tr><td colSpan={7} className="op-empty">No guides.</td></tr> : rows.map((g) => (
                 <Fragment key={g.guideId}>
@@ -55,7 +55,6 @@ export default function Guides() {
                   <td style={{ whiteSpace: "nowrap" }}><span className={`presence-dot ${isOnline(g.lastSeenAt) ? "on" : "off"}`} />{isOnline(g.lastSeenAt) ? <b style={{ fontSize: 12, color: "var(--green)" }}>Online</b> : <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{lastSeenLabel(g.lastSeenAt)}</span>}</td>
                   <td style={{ color: "var(--ink-soft)" }}>{g.languages || "—"}</td>
                   <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}>{g.tours}</td>
-                  <td className="r">{g.rating != null ? <span style={{ fontWeight: 700 }}>★ {g.rating} <small style={{ color: "var(--ink-soft)", fontWeight: 400 }}>({g.ratingCount})</small></span> : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
                   <td>{g.offerBlocked
                     ? <span className="leave-badge" style={{ background: "var(--danger-bg)", color: "var(--danger)", borderColor: "var(--danger-line)" }}>No offers</span>
                     : g.leave ? <span className="leave-badge">On leave {g.leave}</span>

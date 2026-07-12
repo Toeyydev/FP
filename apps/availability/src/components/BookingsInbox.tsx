@@ -31,17 +31,17 @@ export default function BookingsInbox() {
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [tab, setTab] = useState<"inbox" | "all">("inbox");
   const [monthFilter, setMonthFilter] = useState(""); // YYYY-MM filter for the inbox
-  const [guides, setGuides] = useState<{ guideId: string; displayName: string; rating: number | null; online: boolean; languages: string }[]>([]);
+  const [guides, setGuides] = useState<{ guideId: string; displayName: string; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
   const [availMap, setAvailMap] = useState<Record<string, string[]>>({}); // "date|slot" -> available guideIds
   const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
-  // Load the enriched guide list (rating + presence) and rank best-match first:
-  // online before offline, then higher rating, then more tours.
+  // Load the guide list (presence) and rank best-match first: online before offline,
+  // then more tours (the API already returns guides ordered by tour count).
   useEffect(() => {
     fetch("/api/guides", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-      const rows = (d.rows ?? []) as { guideId: string; name: string; rating: number | null; lastSeenAt: string | null; languages: string | string[] }[];
-      const list = rows.map((g) => ({ guideId: g.guideId, displayName: g.name, rating: g.rating, online: isOnline(g.lastSeenAt), languages: Array.isArray(g.languages) ? g.languages.join(", ") : (g.languages ?? "") }));
-      list.sort((a, b) => Number(b.online) - Number(a.online) || (b.rating ?? -1) - (a.rating ?? -1));
+      const rows = (d.rows ?? []) as { guideId: string; name: string; lastSeenAt: string | null; languages: string | string[] }[];
+      const list = rows.map((g) => ({ guideId: g.guideId, displayName: g.name, online: isOnline(g.lastSeenAt), languages: Array.isArray(g.languages) ? g.languages.join(", ") : (g.languages ?? "") }));
+      list.sort((a, b) => Number(b.online) - Number(a.online));
       setGuides(list);
     }).catch(() => {});
   }, []);
@@ -419,7 +419,7 @@ export default function BookingsInbox() {
                                 <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
                                 <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
                                   <option value="">Offer to all available</option>
-                                  {guides.filter((g) => !availMap[key] || availMap[key].includes(g.guideId)).map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
+                                  {guides.filter((g) => !availMap[key] || availMap[key].includes(g.guideId)).map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}</option>)}
                                 </select>
                                 {grpGuide[key]
                                   ? <>
@@ -507,7 +507,7 @@ export default function BookingsInbox() {
                     <span style={{ flex: 1, fontSize: 13 }}><b>{bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—"}</b> · {b.pax ?? "?"} pax</span>
                     <select className="search" style={{ flex: "none", width: 220 }} value={splitMap[b.id] ?? ""} onChange={(e) => setSplitMap((m) => ({ ...m, [b.id]: e.target.value }))}>
                       <option value="">Assign to guide…</option>
-                      {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{g.rating != null ? ` · ★${g.rating}` : ""}</option>)}
+                      {guides.map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}</option>)}
                     </select>
                   </div>
                 ))}
