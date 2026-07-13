@@ -48,10 +48,14 @@ export async function GET(req: NextRequest) {
   if (bookings.length === 0) {
     const live = await prisma.booking.findMany({
       where: { date, slotIdx, ...(tourId ? { tourId } : {}), status: { notIn: ["CANCELLED", "IGNORED"] } },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true },
       orderBy: { customerName: "asc" },
     });
-    bookings = live.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "" })) as Booking[];
+    // Split-aware: if this slot was split across guides, a named guide's prep sheet
+    // shows only their guests (plus any not-yet-tagged), so the sheets stay separated.
+    const splitHere = live.some((b) => b.assignedGuideId);
+    const mine = splitHere && guideId ? live.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : live;
+    bookings = mine.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: b.pax ?? null, tickets: "" })) as Booking[];
   }
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;

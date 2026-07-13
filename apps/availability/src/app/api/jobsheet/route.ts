@@ -153,6 +153,9 @@ export async function GET(req: NextRequest) {
       select: { externalRef: true, confirmationCode: true },
     }) : [];
     const movedRefSet = new Set(elsewhere.flatMap(refKeys));
+    // A guest re-tagged to ANOTHER guide at this same slot (a hybrid split) must drop
+    // off this guide's saved sheet, so the two guides' sheets stay separated.
+    const otherGuideRefSet = new Set(allAtSlot.filter((b) => b.assignedGuideId && b.assignedGuideId !== guideId).flatMap(refKeys));
 
     const matched = new Map<SheetBooking, (typeof linked)[number]>();
     for (const r of saved) { const lb = matchLive(r); if (lb) matched.set(r, lb); }
@@ -162,7 +165,7 @@ export async function GET(req: NextRequest) {
         if (matched.has(r)) return true;                    // still active at this slot
         const rRef = rowRef(r);
         if (!rRef) return true;                             // manual row — always keep
-        return !movedRefSet.has(rRef);                      // drop only if THIS booking # re-slotted elsewhere
+        return !movedRefSet.has(rRef) && !otherGuideRefSet.has(rRef); // drop if re-slotted elsewhere OR handed to another guide here
       })
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked

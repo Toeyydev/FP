@@ -24,8 +24,20 @@ export async function GET(req: NextRequest) {
     if (!booking) return NextResponse.json({ error: "not-found" }, { status: 404 });
     return NextResponse.json({ booking });
   }
-  // Full Bookings table view: ?view=all with optional status / source / q filters.
   const sp = req.nextUrl.searchParams;
+  // Slot bookings for the Dispatch split modal: every guest at this date+slot with
+  // its current guide tag, so an assigned tour can be re-split across guides.
+  if (sp.get("slot") === "1") {
+    const sd = sp.get("date") || ""; const si = Number(sp.get("slotIdx"));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sd) || !Number.isInteger(si)) return NextResponse.json({ error: "bad-params" }, { status: 400 });
+    const rows = await prisma.booking.findMany({
+      where: { date: sd, slotIdx: si, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+      select: { id: true, customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, tourId: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return NextResponse.json({ bookings: rows });
+  }
+  // Full Bookings table view: ?view=all with optional status / source / q filters.
   if (sp.get("view") === "all") {
     const status = sp.get("status") || "";
     const source = sp.get("source") || "";

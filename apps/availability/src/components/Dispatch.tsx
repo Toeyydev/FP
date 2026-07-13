@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { bookingRef } from "@/lib/booking-ref";
 
 type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
 type Candidate = { guideId: string; displayName: string };
+type SlotBooking = { id: string; customerName: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null; assignedGuideId: string | null; tourId: string | null };
+const SPLIT_CAP = 10;
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
@@ -89,6 +92,51 @@ export default function Dispatch() {
     await load();
   }
 
+  // Split an assigned tour across a second guide (a "hybrid" two-guide tour). Loads
+  // the slot's guests + the guides free for the slot, then lets the operator assign
+  // each whole booking to a guide (≤10 pax each). Each guide keeps a separate sheet.
+  const [splitFor, setSplitFor] = useState<{ a: Assignment; items: SlotBooking[] } | null>(null);
+  const [splitCands, setSplitCands] = useState<Candidate[] | null>(null);
+  const [splitMap, setSplitMap] = useState<Record<string, string>>({});
+  const [splitBusy, setSplitBusy] = useState(false);
+  async function openSplit(a: Assignment) {
+    setSplitFor(null); setSplitCands(null); setSplitMap({}); setMsg("");
+    const [rb, rc] = await Promise.all([
+      fetch(`/api/bookings?slot=1&date=${a.date}&slotIdx=${a.slotIdx}`, { cache: "no-store" }),
+      fetch(`/api/offers/candidates?date=${a.date}&slotIdx=${a.slotIdx}`, { cache: "no-store" }),
+    ]);
+    const jb = await rb.json().catch(() => ({ bookings: [] }));
+    const jc = await rc.json().catch(() => ({ guides: [] }));
+    const items = (jb.bookings ?? []) as SlotBooking[];
+    if (!items.length) { setMsg("No bookings found on this slot to split."); return; }
+    // Options = the guides already on this slot + those free for it, de-duplicated.
+    const cands: Candidate[] = [{ guideId: a.guideId, displayName: a.guideName }];
+    for (const g of (jc.guides ?? []) as Candidate[]) if (!cands.some((c) => c.guideId === g.guideId)) cands.push(g);
+    setSplitCands(cands);
+    // Default each booking to whoever holds it now (or the current guide if untagged).
+    setSplitMap(Object.fromEntries(items.map((b) => [b.id, b.assignedGuideId || a.guideId])));
+    setSplitFor({ a, items });
+  }
+  const splitPax = (gid: string) => splitFor ? splitFor.items.filter((b) => splitMap[b.id] === gid).reduce((s, b) => s + (b.pax ?? 0), 0) : 0;
+  async function submitSplit() {
+    if (!splitFor) return;
+    const unassigned = splitFor.items.filter((b) => !splitMap[b.id]);
+    if (unassigned.length) { setMsg("Assign every booking to a guide first."); return; }
+    const distinct = new Set(Object.values(splitMap));
+    if (distinct.size < 2) { setMsg("Pick a second guide for at least one booking — otherwise nothing splits."); return; }
+    const byGuide: Record<string, string[]> = {};
+    for (const b of splitFor.items) (byGuide[splitMap[b.id]] ??= []).push(b.id);
+    const groups = Object.entries(byGuide).map(([guideId, bookingIds]) => ({ guideId, bookingIds }));
+    setSplitBusy(true);
+    const r = await fetch("/api/bookings/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: splitFor.a.date, slotIdx: splitFor.a.slotIdx, tourId: splitFor.a.tourId, groups }) });
+    const d = await r.json().catch(() => ({}));
+    setSplitBusy(false);
+    if (!r.ok) { setMsg(d.error === "over-cap" ? `A guide's group exceeds ${SPLIT_CAP} pax — rebalance.` : "Split failed."); return; }
+    setSplitFor(null);
+    setMsg(`✅ Split into ${d.groups} guide job(s) — each guide notified with their own sheet.`);
+    await load();
+  }
+
   if (!data) return <div className="wrap"><AuthHeader backHref="/" /><section className="panel"><div className="op-empty">…</div></section></div>;
 
   const openOffers = data.offers.filter((o) => o.status === "OPEN");
@@ -132,6 +180,7 @@ export default function Dispatch() {
                       <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div><div style={{ marginTop: 4 }}><StateTag a={a} /></div></div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>Job sheet</a>
+                        {!["ARRIVE", "START", "COMPLETE"].includes(a.state) && <button className="btn sm" title="Split this tour across a second guide — each keeps their own job sheet" onClick={() => openSplit(a)}>Split</button>}
                         <button className="btn sm" onClick={() => reoffer(a)}>Re-offer</button>
                         <button className="btn sm danger" onClick={() => removeAssignment(a)}>Remove</button>
                       </div>
@@ -176,6 +225,47 @@ export default function Dispatch() {
             )}
           </div>
         </section>
+      )}
+
+      {splitFor && (
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !splitBusy) setSplitFor(null); }}>
+          <div className="modal" style={{ maxWidth: 560 }}>
+            <div style={{ padding: "18px 20px" }}>
+              <h3 style={{ margin: "0 0 4px" }}>Split across guides</h3>
+              <p className="sub" style={{ margin: "0 0 14px" }}>
+                {fmt(splitFor.a.date)} · {splitFor.a.time} · {splitFor.a.tourName} — {splitFor.items.reduce((s, b) => s + (b.pax ?? 0), 0)} pax over {splitFor.items.length} booking(s). Assign each booking to a guide (max {SPLIT_CAP} pax each — families stay together).
+              </p>
+              {splitCands === null ? <div className="op-empty">Loading guests…</div> : (
+                <>
+                  <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
+                    {splitFor.items.map((b) => (
+                      <div key={b.id} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", alignItems: "center", gap: 8, padding: "7px 10px" }}>
+                        <span style={{ flex: 1, fontSize: 13 }}><b>{bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—"}</b> · {b.pax ?? "?"} pax</span>
+                        <select className="search" style={{ flex: "none", width: 220 }} value={splitMap[b.id] ?? ""} onChange={(e) => setSplitMap((m) => ({ ...m, [b.id]: e.target.value }))}>
+                          <option value="">Assign to guide…</option>
+                          {splitCands.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.displayName}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  {Array.from(new Set(Object.values(splitMap).filter(Boolean))).length > 0 && (
+                    <div style={{ display: "grid", gap: 4, marginBottom: 6 }}>
+                      {Array.from(new Set(Object.values(splitMap).filter(Boolean))).map((gid) => {
+                        const p = splitPax(gid); const over = p > SPLIT_CAP;
+                        const name = splitCands.find((c) => c.guideId === gid)?.displayName ?? "";
+                        return <div key={gid} style={{ fontSize: 12.5, fontWeight: 600, color: over ? "var(--danger)" : "var(--green)" }}>{gid} {name}: {p} / {SPLIT_CAP} pax {over ? "⚠️ over cap" : "✓"}</div>;
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="mfoot">
+              <button className="btn" disabled={splitBusy} onClick={() => setSplitFor(null)}>Cancel</button>
+              <button className="btn primary" disabled={splitBusy || splitCands === null} onClick={submitSplit}>{splitBusy ? "Splitting…" : "Assign split"}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {assignFor && (
