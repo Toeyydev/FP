@@ -13,7 +13,7 @@ const prismaMock = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
 
-import { autoAttachLate } from "@/lib/booking-import";
+import { autoAttachLate, reconcileSheetRows, type SheetRow } from "@/lib/booking-import";
 const FUTURE = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10); // keep test tours in the future (past-tour alerts are suppressed)
 
 const booking = (over: Partial<Parameters<typeof autoAttachLate>[0]> = {}) => ({
@@ -101,5 +101,64 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
     await autoAttachLate(booking({ tourId: null, pax: 2 }));
     expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
     expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 6 } }));
+  });
+});
+
+// The exact failure we hit: an OFFERED booking (Susan) never made it onto the saved
+// sheet, and a cancelled booking (Petra) lingered on it. reconcileSheetRows is what
+// keeps the stored guest list honest for everything that reads it (job order/PDF/LINE/pay).
+const live = (name: string, ref: string, pax: number, over: Record<string, unknown> = {}) =>
+  ({ customerName: name, externalRef: ref, confirmationCode: null, pax, noShow: false, ...over });
+
+describe("reconcileSheetRows — saved job sheet vs live bookings", () => {
+  it("adds an OFFERED booking missing from the sheet and drops a cancelled one", () => {
+    const saved: SheetRow[] = [
+      { name: "Petra Sabine Glover", bookingNo: "GYGZGZYRRMRX", bookedPax: 3, actualPax: 3, tickets: "", status: "" }, // cancelled → not in live
+      { name: "Bola kolawole", bookingNo: "GYG48YM75QKK", bookedPax: 1, actualPax: 1, tickets: "", status: "" },
+    ];
+    const mine = [live("Susan Hjorth", "GYGKBGAGHX58", 2), live("Bola kolawole", "GYG48YM75QKK", 1)];
+    const out = reconcileSheetRows(saved, mine);
+    expect(out.map((r) => r.bookingNo)).toEqual(["GYG48YM75QKK", "GYGKBGAGHX58"]); // Petra dropped, Susan added
+    expect(out.reduce((s, r) => s + (r.bookedPax ?? 0), 0)).toBe(3);
+  });
+
+  it("preserves the operator's per-row edits on a surviving booking", () => {
+    const saved: SheetRow[] = [{ name: "Bola kolawole", bookingNo: "GYG48YM75QKK", bookedPax: 1, actualPax: 0, tickets: "included", status: "no-show", noShowPax: 1 }];
+    const out = reconcileSheetRows(saved, [live("Bola kolawole", "GYG48YM75QKK", 1)]);
+    expect(out[0]).toMatchObject({ actualPax: 0, tickets: "included", status: "no-show", noShowPax: 1 });
+  });
+
+  it("keeps manual rows (no booking number) untouched", () => {
+    const saved: SheetRow[] = [{ name: "Walk-in guest", bookingNo: "", bookedPax: 2, actualPax: 2, tickets: "", status: "" }];
+    const out = reconcileSheetRows(saved, []);
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("Walk-in guest");
+  });
+
+  it("collapses duplicate rows for the same booking", () => {
+    const saved: SheetRow[] = [
+      { name: "Amy", bookingNo: "GYGAAA", bookedPax: 2 },
+      { name: "Amy", bookingNo: "GYGAAA", bookedPax: 2 },
+    ];
+    const out = reconcileSheetRows(saved, [live("Amy", "GYGAAA", 2)]);
+    expect(out).toHaveLength(1);
+  });
+
+  it("refreshes a stored GET- confirmation code to the live GYG ref, and refreshes pax", () => {
+    const saved: SheetRow[] = [{ name: "Old Name", bookingNo: "GET-123", bookedPax: 1 }];
+    const mine = [{ customerName: "New Name", externalRef: "GYG999", confirmationCode: "GET-123", pax: 4, noShow: false }];
+    const out = reconcileSheetRows(saved, mine);
+    expect(out[0]).toMatchObject({ bookingNo: "GYG999", name: "New Name", bookedPax: 4 });
+  });
+
+  it("makes no change when the sheet already matches live bookings", () => {
+    const saved: SheetRow[] = [{ name: "Bola kolawole", bookingNo: "GYG48YM75QKK", bookedPax: 1, actualPax: null, tickets: "", status: "" }];
+    const out = reconcileSheetRows(saved, [live("Bola kolawole", "GYG48YM75QKK", 1)]);
+    expect(JSON.stringify(out)).toBe(JSON.stringify(saved));
+  });
+
+  it("flags a live no-show as no-show on a freshly added row", () => {
+    const out = reconcileSheetRows([], [live("Late Add", "GYGZZZ", 2, { noShow: true })]);
+    expect(out[0]).toMatchObject({ bookingNo: "GYGZZZ", status: "no-show" });
   });
 });
