@@ -27,10 +27,15 @@ export async function sendPaymentNotice(
   let total = 0;
   const lines = sorted.map((j) => {
     const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
-    const amt = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal : 0;
-    total += amt;
+    const t = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE) : null;
+    total += t?.grandTotal ?? 0;
     const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-    return `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}${amt > 0 ? ` · ${thb(amt)}` : ""}`;
+    // Header line + a compact expense breakdown so the guide sees what makes up the
+    // payment (reimbursable expenses vs net guide fee) right in LINE — no need to open
+    // the app. Full itemisation stays one tap away via the /pay link below.
+    let s = `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}`;
+    if (t) s += `\n   Expenses ${thb(t.totalExpenses)} · Net fee ${thb(t.netGuideFee)} · Total ${thb(t.grandTotal)}`;
+    return s;
   });
   const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
   const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
