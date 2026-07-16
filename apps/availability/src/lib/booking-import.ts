@@ -3,7 +3,7 @@ import { DEFAULT_GUIDE_FEE, defaultExpensesForTour } from "@/lib/jobsheet";
 import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, type ParsedBooking } from "@/lib/bookings";
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
-import { linePush, lineEnabled } from "@/lib/line";
+import { linePush, linePushFlex, lineEnabled } from "@/lib/line";
 import { sendEmail } from "@/lib/email";
 import { todayD, ymd } from "@/lib/dates";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
@@ -34,13 +34,18 @@ export async function notifyOps(message: string, title: string, body: string, op
   } catch { /* alerts are best-effort; never block import */ }
 }
 
-export async function notifyGuide(guideId: string, message: string, title: string, body: string) {
+export async function notifyGuide(guideId: string, message: string, title: string, body: string, opts?: { lineFlex?: { altText: string; contents: object } }) {
   try {
     const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true, email: true } });
     if (!u) return;
     await prisma.notification.create({ data: { userId: u.id, kind: "job-change", message } });
     await sendPushToUser(u.id, { title, body, url: "/", tag: "job-change" });
-    if (lineEnabled && u.lineUserId) await linePush(u.lineUserId, message);
+    // LINE: a rich Flex bubble when the caller supplies one (e.g. the payment table),
+    // otherwise the plain-text message. In-app / push / email always stay text.
+    if (lineEnabled && u.lineUserId) {
+      if (opts?.lineFlex) await linePushFlex(u.lineUserId, opts.lineFlex.altText, opts.lineFlex.contents);
+      else await linePush(u.lineUserId, message);
+    }
     // Email is the catch-all: most guides have no push or LINE, so without this a
     // cancellation / group-change notice would never reach them. Skip placeholders.
     const realEmail = u.email && !/@(?:guides\.)?folkpath\.local$/i.test(u.email);

@@ -6,6 +6,58 @@ import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } fr
 
 const BASE = "https://guide.folkpaths.com";
 
+export type PaymentRow = { when: string; tour: string; exp: number; fee: number; grand: number; hasSheet: boolean };
+
+// Build the LINE Flex "bubble" for a payment notice — a table with a row per tour
+// (date · time · tour · expenses · fee · total) plus a totals row and two link
+// buttons (bank slip + full details). Pure: returns the Flex `contents` object, so
+// it's unit-tested directly. Colours are the Folkpaths brand (brown header + cream).
+export function paymentFlex(p: {
+  scope?: string;
+  rows: PaymentRow[];
+  total: number; totExp: number; totFee: number; count: number;
+  slipUrl?: string; payUrl: string;
+}): object {
+  const baht = (n: number) => `฿${Math.round(n).toLocaleString("en-US")}`;
+  const BROWN = "#7E3A2C", CREAM = "#F6F1E6", MUTED = "#9B9B9B", INK = "#1A1A1A", SUB = "#6A6A6A";
+  const colHead = { type: "box", layout: "horizontal", contents: [
+    { type: "text", text: "Tour", size: "xs", color: MUTED, flex: 5 },
+    { type: "text", text: "Exp.", size: "xs", color: MUTED, align: "end", flex: 2 },
+    { type: "text", text: "Fee", size: "xs", color: MUTED, align: "end", flex: 2 },
+    { type: "text", text: "Total", size: "xs", color: MUTED, align: "end", flex: 2 },
+  ] };
+  const rowBoxes = p.rows.map((r) => ({ type: "box", layout: "horizontal", margin: "md", contents: [
+    { type: "box", layout: "vertical", flex: 5, contents: [
+      { type: "text", text: r.when, size: "sm", color: INK },
+      { type: "text", text: r.tour, size: "xxs", color: MUTED, wrap: true },
+    ] },
+    { type: "text", text: r.hasSheet ? baht(r.exp) : "—", size: "sm", color: SUB, align: "end", flex: 2, gravity: "center" },
+    { type: "text", text: r.hasSheet ? baht(r.fee) : "—", size: "sm", color: SUB, align: "end", flex: 2, gravity: "center" },
+    { type: "text", text: baht(r.grand), size: "sm", weight: "bold", color: INK, align: "end", flex: 2, gravity: "center" },
+  ] }));
+  const totalRow = { type: "box", layout: "horizontal", margin: "md", contents: [
+    { type: "text", text: "Total", size: "sm", weight: "bold", color: INK, flex: 5 },
+    { type: "text", text: baht(p.totExp), size: "sm", weight: "bold", color: INK, align: "end", flex: 2 },
+    { type: "text", text: baht(p.totFee), size: "sm", weight: "bold", color: INK, align: "end", flex: 2 },
+    { type: "text", text: baht(p.total), size: "sm", weight: "bold", color: INK, align: "end", flex: 2 },
+  ] };
+  const buttons = [
+    ...(p.slipUrl ? [{ type: "button", style: "secondary", height: "sm", action: { type: "uri", label: "Bank slip", uri: p.slipUrl } }] : []),
+    { type: "button", style: "secondary", height: "sm", action: { type: "uri", label: "Full details", uri: p.payUrl } },
+  ];
+  return {
+    type: "bubble",
+    header: { type: "box", layout: "vertical", backgroundColor: BROWN, paddingAll: "14px", spacing: "xs", contents: [
+      { type: "text", text: `Payment${p.scope ? ` · ${p.scope}` : ""}`, size: "sm", color: CREAM },
+      { type: "text", text: `${baht(p.total)}  ·  ${p.count} tour${p.count === 1 ? "" : "s"} paid`, size: "xl", weight: "bold", color: CREAM },
+    ] },
+    body: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm", contents: [
+      colHead, { type: "separator", margin: "sm" }, ...rowBoxes, { type: "separator", margin: "md" }, totalRow,
+    ] },
+    footer: { type: "box", layout: "horizontal", spacing: "sm", paddingAll: "12px", contents: buttons },
+  };
+}
+
 // One payment notification (LINE + in-app): a short summary plus the completed
 // tours just paid (date · time · tour · amount). Shared by the monthly e-slip
 // and the per-tour / merged-batch slip so both read identically.
@@ -25,25 +77,25 @@ export async function sendPaymentNotice(
   const tourName = (d: string, s: number) => asgs.find((a) => a.date === d && a.slotIdx === s)?.tour?.name ?? "Tour";
   const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
   const baht = (n: number) => `฿${Math.round(n).toLocaleString("en-US")}`; // whole baht, no ".00" noise
-  let total = 0;
-  const lines = sorted.map((j) => {
+  let total = 0, totExp = 0, totFee = 0;
+  const rows: PaymentRow[] = sorted.map((j) => {
     const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
     const t = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE) : null;
-    total += t?.grandTotal ?? 0;
+    const exp = t?.totalExpenses ?? 0, fee = t?.netGuideFee ?? 0, grand = t?.grandTotal ?? 0;
+    total += grand; totExp += exp; totFee += fee;
     const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-    // Header line + a simple "expenses + fee = total" breakdown (whole baht) so the
-    // guide sees what makes up the payment right in LINE — no need to open the app.
-    // Full itemisation stays one tap away via the /pay link below.
-    let s = `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}`;
-    if (t) s += `\n${baht(t.totalExpenses)} expenses + ${baht(t.netGuideFee)} fee = ${baht(t.grandTotal)}`;
-    return s;
+    return { when: `${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""}`, tour: tourName(j.date, j.slotIdx), exp, fee, grand, hasSheet: !!t };
   });
+  // Plain-text body — in-app bell / web push / email, and the LINE Flex fallback
+  // (altText). A simple "expenses + fee = total" per tour.
+  const lines = rows.map((r) => `✓ ${r.when} — ${r.tour}${r.hasSheet ? `\n${baht(r.exp)} expenses + ${baht(r.fee)} fee = ${baht(r.grand)}` : ""}`);
   const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${baht(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
   const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
-  // Deep-link to the guide's pay page, where every paid tour now opens its job sheet
-  // — so right after the slip lands the guide can check each previous job sheet.
   const sheetsLine = `\n\nYour tours & job sheets: ${BASE}/pay`;
-  await notifyGuide(guideId, `${head}\n\n${lines.join("\n\n")}${slipLine}${sheetsLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${baht(total)}` : ""}`);
+  const textBody = `${head}\n\n${lines.join("\n\n")}${slipLine}${sheetsLine}`;
+  // LINE gets the rich table (Flex); every other channel gets the text above.
+  const flex = paymentFlex({ scope, rows, total, totExp, totFee, count: jobs.length, slipUrl, payUrl: `${BASE}/pay` });
+  await notifyGuide(guideId, textBody, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${baht(total)}` : ""}`, { lineFlex: { altText: head, contents: flex } });
 }
 
 type SheetJob = {
