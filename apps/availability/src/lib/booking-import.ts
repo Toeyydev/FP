@@ -14,6 +14,67 @@ export type ImportResult = "created" | "updated" | "skipped";
 
 const CAP = 10; // max pax per guide / job
 
+export type SheetRow = { name?: string; bookingNo?: string; bookedPax?: number | null; actualPax?: number | null; tickets?: string; status?: string; noShowPax?: number };
+type LiveActive = { customerName: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null; noShow?: boolean };
+
+// Rebuild a saved job sheet's booking rows from the live ACTIVE bookings for its slot
+// (already split-filtered to this guide). Adds a booking that's missing from the sheet
+// (e.g. one that became OFFERED without going through the PENDING auto-attach path),
+// drops a numbered row whose booking is no longer active here (cancelled / re-slotted /
+// handed to another guide), keeps manual rows (no booking number), collapses duplicate
+// rows for the same booking, and PRESERVES the operator's per-row edits (actual pax /
+// tickets / status / no-show) on rows that survive. Pure — no IO — so it's unit-tested
+// directly. This is the single source of truth for "what guests belong on this sheet",
+// so nothing a guide is actually taking can silently fall off it again.
+export function reconcileSheetRows(saved: SheetRow[], mine: LiveActive[]): SheetRow[] {
+  const liveRef = (b: LiveActive) => bookingRef(b.externalRef, b.confirmationCode).toLowerCase();
+  const rowRef = (r: SheetRow) => (r.bookingNo || "").trim().toLowerCase();
+  const liveByRef = new Map(mine.map((b) => [liveRef(b), b] as const));
+  const seen = new Set<string>();
+  const kept: SheetRow[] = [];
+  for (const r of saved) {
+    const rr = rowRef(r);
+    if (!rr) { kept.push(r); continue; }              // manual row (no booking number) — always keep
+    if (seen.has(rr)) continue;                        // duplicate row for the same booking — collapse
+    const lb = liveByRef.get(rr);
+    if (!lb) continue;                                 // booking no longer active at this slot — drop
+    seen.add(rr);
+    kept.push({ ...r, name: lb.customerName ?? r.name ?? "", bookingNo: bookingRef(lb.externalRef, lb.confirmationCode), bookedPax: lb.pax ?? r.bookedPax ?? null });
+  }
+  const added: SheetRow[] = mine
+    .filter((b) => !seen.has(liveRef(b)))
+    .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
+  return kept.concat(added);
+}
+
+// Persist reconcileSheetRows for one guide's saved sheet: only for upcoming/today tours
+// (a past tour is a finished record — never touched), only when a sheet already exists
+// (an unassigned-yet slot is scaffolded on demand by GET /api/jobsheet), and only writes
+// when something actually changed. Best-effort caller contract: returns null when there's
+// nothing to do. Split-aware — on a split slot the guide keeps only their tagged guests.
+export async function syncSheetToLiveBookings(guideId: string, date: string, slotIdx: number): Promise<{ added: number; removed: number } | null> {
+  if (date < ymd(todayD())) return null;                                   // finished tour — leave the record as saved
+  const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true, bookings: true } });
+  if (!sheet) return null;                                                 // no saved sheet yet — GET scaffolds from live bookings
+  const saved = (Array.isArray(sheet.bookings) ? sheet.bookings : []) as SheetRow[];
+  const allAtSlot = await prisma.booking.findMany({
+    where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const split = allAtSlot.some((b) => b.assignedGuideId);
+  const mine = split ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
+  const next = reconcileSheetRows(saved, mine);
+  if (JSON.stringify(next) === JSON.stringify(saved)) return { added: 0, removed: 0 };
+  await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: next as object } });
+  const refs = (rows: SheetRow[]) => new Set(rows.map((r) => (r.bookingNo || "").trim().toLowerCase()).filter(Boolean));
+  const before = refs(saved), after = refs(next);
+  let added = 0, removed = 0;
+  after.forEach((r) => { if (!before.has(r)) added++; });
+  before.forEach((r) => { if (!after.has(r)) removed++; });
+  return { added, removed };
+}
+
 export async function notifyOps(message: string, title: string, body: string, opts?: { push?: boolean; date?: string }) {
   // A finished job shouldn't alert: skip entirely if the tour date is in the past.
   if (opts?.date) { const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); if (opts.date < today) return; }
@@ -197,6 +258,15 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
       try { await removeTourEvents(a); } catch { /* best-effort */ }
       await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
     }
+    // Keep the SAVED job sheet's guest list in sync too — pax alone isn't enough: the
+    // job order, PDF, LINE sheet and payment all read the stored rows, so an OFFERED
+    // late-add or a cancellation that only moved the pax would otherwise leave a guest
+    // missing (or a cancelled one lingering) on the printed/sent sheet. Only on the
+    // FORCED sweep (30-min loop + manual Sync) — these are extra per-assignment queries,
+    // so we keep them off the dashboard/inbox request path. onBookingCancelled prunes a
+    // cancellation immediately, and autoAttachLate adds PENDING right away, so the
+    // request path stays fast without letting the sheet fall behind.
+    if (force) { try { await syncSheetToLiveBookings(a.guideId, a.date, a.slotIdx); } catch { /* best-effort; never block the sweep */ } }
   }
 
   // Heal stranded bookings: a booking is only OFFERED while its slot is assigned to
@@ -255,6 +325,9 @@ async function onBookingCancelled(b: { date: string | null; slotIdx: number | nu
         await notifyOps(`Cancellation on ${b.date}: ${who}was the last guest \u2014 ${a.guideId}'s tour removed from the board.`, "Tour cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 removed`, { push: false, date: b.date });
       } else {
         if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
+        // Drop the cancelled guest's row from the saved sheet right away so the job
+        // order / PDF / LINE sheet don't keep listing someone who cancelled.
+        try { await syncSheetToLiveBookings(a.guideId, a.date, a.slotIdx); } catch { /* best-effort */ }
         await notifyGuide(a.guideId, `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`, "A guest cancelled", `${b.date} \u00b7 ${sum} guests`);
         await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`, { push: false, date: b.date });
       }
