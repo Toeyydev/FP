@@ -24,25 +24,26 @@ export async function sendPaymentNotice(
   const sheetMap = new Map(sheets.map((s) => [`${s.date}|${s.slotIdx}`, s]));
   const tourName = (d: string, s: number) => asgs.find((a) => a.date === d && a.slotIdx === s)?.tour?.name ?? "Tour";
   const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
+  const baht = (n: number) => `฿${Math.round(n).toLocaleString("en-US")}`; // whole baht, no ".00" noise
   let total = 0;
   const lines = sorted.map((j) => {
     const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
     const t = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE) : null;
     total += t?.grandTotal ?? 0;
     const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-    // Header line + a compact expense breakdown so the guide sees what makes up the
-    // payment (reimbursable expenses vs net guide fee) right in LINE — no need to open
-    // the app. Full itemisation stays one tap away via the /pay link below.
+    // Header line + a simple "expenses + fee = total" breakdown (whole baht) so the
+    // guide sees what makes up the payment right in LINE — no need to open the app.
+    // Full itemisation stays one tap away via the /pay link below.
     let s = `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}`;
-    if (t) s += `\n   Expenses ${thb(t.totalExpenses)} · Net fee ${thb(t.netGuideFee)} · Total ${thb(t.grandTotal)}`;
+    if (t) s += `\n${baht(t.totalExpenses)} expenses + ${baht(t.netGuideFee)} fee = ${baht(t.grandTotal)}`;
     return s;
   });
-  const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
+  const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${baht(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
   const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
   // Deep-link to the guide's pay page, where every paid tour now opens its job sheet
   // — so right after the slip lands the guide can check each previous job sheet.
   const sheetsLine = `\n\nYour tours & job sheets: ${BASE}/pay`;
-  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}${slipLine}${sheetsLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
+  await notifyGuide(guideId, `${head}\n\n${lines.join("\n\n")}${slipLine}${sheetsLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${baht(total)}` : ""}`);
 }
 
 type SheetJob = {
