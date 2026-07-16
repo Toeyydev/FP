@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { paymentFlex, type PaymentRow } from "@/lib/jobsheet-send";
 
 const rows: PaymentRow[] = [
-  { when: "Mon 7 Jul · 13:30", tour: "Grand Palace, Wat Pho & Wat Arun", exp: 1280, fee: 970, grand: 2250, hasSheet: true },
-  { when: "Tue 8 Jul · 08:30", tour: "Grand Palace, Wat Pho & Wat Arun", exp: 665, fee: 970, grand: 1635, hasSheet: true },
+  { when: "Mon 7 Jul · 13:30", tour: "Grand Palace, Wat Pho & Wat Arun", exp: 1280, fee: 970, grand: 2250, hasSheet: true, reported: null },
+  { when: "Tue 8 Jul · 08:30", tour: "Grand Palace, Wat Pho & Wat Arun", exp: 665, fee: 970, grand: 1635, hasSheet: true, reported: null },
 ];
 
 describe("paymentFlex — LINE table bubble", () => {
@@ -14,20 +14,32 @@ describe("paymentFlex — LINE table bubble", () => {
     expect(header).toContain("฿3,885");
     expect(header).toContain("2 tours paid");
     expect(header).toContain("July 2026");
-    // colHead + separator + 2 rows + separator + totals row = 6
-    expect(b.body.contents).toHaveLength(6);
-    // whole baht, no decimals
+    expect(b.body.contents).toHaveLength(6); // colHead + separator + 2 rows + separator + totals
     expect(JSON.stringify(b.body)).toContain("฿2,250");
     expect(JSON.stringify(b.body)).not.toContain(".00");
-    // both link buttons (bank slip + full details)
     expect(b.footer.contents).toHaveLength(2);
     expect(JSON.stringify(b.footer)).toContain("https://guide.folkpaths.com/pay");
   });
 
   it("omits the bank-slip button with no slip, and shows — for a tour with no sheet", () => {
-    const b = paymentFlex({ rows: [{ when: "Mon 1 Jul · 08:30", tour: "T", exp: 0, fee: 0, grand: 500, hasSheet: false }], total: 500, totExp: 0, totFee: 0, count: 1, payUrl: "https://p" }) as any;
-    expect(b.footer.contents).toHaveLength(1); // only "Full details"
-    expect(JSON.stringify(b.body)).toContain("—"); // dashes for exp/fee when no sheet
+    const b = paymentFlex({ rows: [{ when: "Mon 1 Jul · 08:30", tour: "T", exp: 0, fee: 0, grand: 500, hasSheet: false, reported: null }], total: 500, totExp: 0, totFee: 0, count: 1, payUrl: "https://p" }) as any;
+    expect(b.footer.contents).toHaveLength(1);
+    expect(JSON.stringify(b.body)).toContain("—");
     expect(JSON.stringify(b.header)).toContain("1 tour paid");
+  });
+
+  it("shows the guide's reported total as a review line, flagging a mismatch", () => {
+    const match: PaymentRow = { when: "d", tour: "t", exp: 881, fee: 970, grand: 1851, hasSheet: true, reported: 881 };
+    const off: PaymentRow = { when: "d", tour: "t", exp: 881, fee: 970, grand: 1851, hasSheet: true, reported: 920 };
+    const bMatch = JSON.stringify(paymentFlex({ rows: [match], total: 1851, totExp: 881, totFee: 970, count: 1, payUrl: "https://p" }));
+    const bOff = JSON.stringify(paymentFlex({ rows: [off], total: 1851, totExp: 881, totFee: 970, count: 1, payUrl: "https://p" }));
+    expect(bMatch).toContain("you reported ฿881 ✓");
+    expect(bOff).toContain("you reported ฿920 — check");
+    expect(bOff).toContain("#B26A00"); // amber highlight on mismatch
+  });
+
+  it("shows no review line when the guide didn't report expenses", () => {
+    const b = JSON.stringify(paymentFlex({ rows, total: 3885, totExp: 1945, totFee: 1940, count: 2, payUrl: "https://p" }));
+    expect(b).not.toContain("you reported");
   });
 });

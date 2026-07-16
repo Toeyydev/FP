@@ -2,11 +2,11 @@ import { prisma } from "@/lib/db";
 import { linePush, lineEnabled } from "@/lib/line";
 import { notifyGuide } from "@/lib/booking-import";
 import { SLOT_TIMES } from "@/lib/slots";
-import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 const BASE = "https://guide.folkpaths.com";
 
-export type PaymentRow = { when: string; tour: string; exp: number; fee: number; grand: number; hasSheet: boolean };
+export type PaymentRow = { when: string; tour: string; exp: number; fee: number; grand: number; hasSheet: boolean; reported: number | null };
 
 // Build the LINE Flex "bubble" for a payment notice — a table with a row per tour
 // (date · time · tour · expenses · fee · total) plus a totals row and two link
@@ -26,15 +26,24 @@ export function paymentFlex(p: {
     { type: "text", text: "Fee", size: "xs", color: MUTED, align: "end", flex: 2 },
     { type: "text", text: "Total", size: "xs", color: MUTED, align: "end", flex: 2 },
   ] };
-  const rowBoxes = p.rows.map((r) => ({ type: "box", layout: "horizontal", margin: "md", contents: [
-    { type: "box", layout: "vertical", flex: 5, contents: [
+  const AMBER = "#B26A00";
+  const rowBoxes = p.rows.map((r) => {
+    const left: object[] = [
       { type: "text", text: r.when, size: "sm", color: INK },
       { type: "text", text: r.tour, size: "xxs", color: MUTED, wrap: true },
-    ] },
-    { type: "text", text: r.hasSheet ? baht(r.exp) : "—", size: "sm", color: SUB, align: "end", flex: 2, gravity: "center" },
-    { type: "text", text: r.hasSheet ? baht(r.fee) : "—", size: "sm", color: SUB, align: "end", flex: 2, gravity: "center" },
-    { type: "text", text: baht(r.grand), size: "sm", weight: "bold", color: INK, align: "end", flex: 2, gravity: "center" },
-  ] }));
+    ];
+    // Review line: the guide's own reported total vs what was reimbursed. Amber = differs.
+    if (r.reported != null) {
+      const match = Math.round(r.exp) === r.reported;
+      left.push({ type: "text", text: match ? `you reported ${baht(r.reported)} ✓` : `you reported ${baht(r.reported)} — check`, size: "xxs", color: match ? MUTED : AMBER, wrap: true });
+    }
+    return { type: "box", layout: "horizontal", margin: "md", contents: [
+      { type: "box", layout: "vertical", flex: 5, contents: left },
+      { type: "text", text: r.hasSheet ? baht(r.exp) : "—", size: "sm", color: SUB, align: "end", flex: 2, gravity: "center" },
+      { type: "text", text: r.hasSheet ? baht(r.fee) : "—", size: "sm", color: SUB, align: "end", flex: 2, gravity: "center" },
+      { type: "text", text: baht(r.grand), size: "sm", weight: "bold", color: INK, align: "end", flex: 2, gravity: "center" },
+    ] };
+  });
   const totalRow = { type: "box", layout: "horizontal", margin: "md", contents: [
     { type: "text", text: "Total", size: "sm", weight: "bold", color: INK, flex: 5 },
     { type: "text", text: baht(p.totExp), size: "sm", weight: "bold", color: INK, align: "end", flex: 2 },
@@ -70,7 +79,7 @@ export async function sendPaymentNotice(
   if (!jobs.length) return;
   const where = { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) };
   const [sheets, asgs] = await Promise.all([
-    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true, expenses: true, guideFee: true } }),
+    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true, expenses: true, guideFee: true, guideExpenses: true } }),
     prisma.assignment.findMany({ where, include: { tour: true } }),
   ]);
   const sheetMap = new Map(sheets.map((s) => [`${s.date}|${s.slotIdx}`, s]));
@@ -83,12 +92,19 @@ export async function sendPaymentNotice(
     const t = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE) : null;
     const exp = t?.totalExpenses ?? 0, fee = t?.netGuideFee ?? 0, grand = t?.grandTotal ?? 0;
     total += grand; totExp += exp; totFee += fee;
+    // What the guide themselves reported spending (their own expense submission), so the
+    // payment message doubles as a review: did the reimbursement match what they reported?
+    const ge = Array.isArray(sh?.guideExpenses) ? (sh!.guideExpenses as Expense[]) : null;
+    const reported = ge && ge.length ? Math.round(ge.reduce((s, e) => s + expenseAmount(e), 0)) : null;
     const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-    return { when: `${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""}`, tour: tourName(j.date, j.slotIdx), exp, fee, grand, hasSheet: !!t };
+    return { when: `${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""}`, tour: tourName(j.date, j.slotIdx), exp, fee, grand, hasSheet: !!t, reported };
   });
+  // A guide's reported total vs what was reimbursed — the review line (only when they
+  // submitted their own expenses). Flags a mismatch so they can raise it.
+  const reviewLine = (r: PaymentRow) => r.reported == null ? "" : `\nYou reported ${baht(r.reported)}${Math.round(r.exp) === r.reported ? " ✓ matches" : ` — reimbursed ${baht(r.exp)}, please check`}`;
   // Plain-text body — in-app bell / web push / email, and the LINE Flex fallback
-  // (altText). A simple "expenses + fee = total" per tour.
-  const lines = rows.map((r) => `✓ ${r.when} — ${r.tour}${r.hasSheet ? `\n${baht(r.exp)} expenses + ${baht(r.fee)} fee = ${baht(r.grand)}` : ""}`);
+  // (altText). A simple "expenses + fee = total" per tour + the review line.
+  const lines = rows.map((r) => `✓ ${r.when} — ${r.tour}${r.hasSheet ? `\n${baht(r.exp)} expenses + ${baht(r.fee)} fee = ${baht(r.grand)}` : ""}${reviewLine(r)}`);
   const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${baht(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
   const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
   const sheetsLine = `\n\nYour tours & job sheets: ${BASE}/pay`;
