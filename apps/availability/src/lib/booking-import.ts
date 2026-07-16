@@ -261,8 +261,12 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
     // Keep the SAVED job sheet's guest list in sync too — pax alone isn't enough: the
     // job order, PDF, LINE sheet and payment all read the stored rows, so an OFFERED
     // late-add or a cancellation that only moved the pax would otherwise leave a guest
-    // missing (or a cancelled one lingering) on the printed/sent sheet.
-    try { await syncSheetToLiveBookings(a.guideId, a.date, a.slotIdx); } catch { /* best-effort; never block the sweep */ }
+    // missing (or a cancelled one lingering) on the printed/sent sheet. Only on the
+    // FORCED sweep (30-min loop + manual Sync) — these are extra per-assignment queries,
+    // so we keep them off the dashboard/inbox request path. onBookingCancelled prunes a
+    // cancellation immediately, and autoAttachLate adds PENDING right away, so the
+    // request path stays fast without letting the sheet fall behind.
+    if (force) { try { await syncSheetToLiveBookings(a.guideId, a.date, a.slotIdx); } catch { /* best-effort; never block the sweep */ } }
   }
 
   // Heal stranded bookings: a booking is only OFFERED while its slot is assigned to
