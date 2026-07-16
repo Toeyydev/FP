@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   // Only on the FIRST time the month flips to paid — never on a slip replacement.
   if (!alreadyPaid) try {
     const monthLabel = `${MONTHS[Number(period.slice(5, 7)) - 1] ?? ""} ${period.slice(0, 4)}`.trim();
-    await sendPaymentNotice(guideId, assigns.map((a) => ({ date: a.date, slotIdx: a.slotIdx })), monthLabel, link);
+    await sendPaymentNotice(guideId, assigns.map((a) => ({ date: a.date, slotIdx: a.slotIdx })), monthLabel, link, period);
   } catch { /* notifying the guide is best-effort */ }
   return NextResponse.json({ ok: true, link, markedPaid: true });
 }

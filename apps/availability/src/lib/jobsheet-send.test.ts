@@ -17,15 +17,29 @@ describe("paymentFlex — LINE table bubble", () => {
     expect(b.body.contents).toHaveLength(6); // colHead + separator + 2 rows + separator + totals
     expect(JSON.stringify(b.body)).toContain("฿2,250");
     expect(JSON.stringify(b.body)).not.toContain(".00");
-    expect(b.footer.contents).toHaveLength(2);
-    expect(JSON.stringify(b.footer)).toContain("https://guide.folkpaths.com/pay");
+    const footer = JSON.stringify(b.footer);
+    expect(footer).toContain("Bank slip");
+    expect(footer).toContain("https://guide.folkpaths.com/pay");
+    expect(footer).not.toContain("expreview"); // no review buttons without a period
   });
 
   it("omits the bank-slip button with no slip, and shows — for a tour with no sheet", () => {
     const b = paymentFlex({ rows: [{ when: "Mon 1 Jul · 08:30", tour: "T", exp: 0, fee: 0, grand: 500, hasSheet: false, reported: null }], total: 500, totExp: 0, totFee: 0, count: 1, payUrl: "https://p" }) as any;
-    expect(b.footer.contents).toHaveLength(1);
+    const footer = JSON.stringify(b.footer);
+    expect(footer).toContain("Full details");
+    expect(footer).not.toContain("Bank slip");
     expect(JSON.stringify(b.body)).toContain("—");
     expect(JSON.stringify(b.header)).toContain("1 tour paid");
+  });
+
+  it("adds the review (postback) buttons only when a period is given", () => {
+    const withP = JSON.stringify(paymentFlex({ rows, total: 3885, totExp: 1945, totFee: 1940, count: 2, payUrl: "https://p", period: "2026-07" }));
+    expect(withP).toContain("expreview:ok:2026-07");
+    expect(withP).toContain("expreview:off:2026-07");
+    expect(withP).toContain("Looks right");
+    expect(withP).toContain("Something's off");
+    const noP = JSON.stringify(paymentFlex({ rows, total: 3885, totExp: 1945, totFee: 1940, count: 2, payUrl: "https://p" }));
+    expect(noP).not.toContain("expreview");
   });
 
   it("shows the guide's reported total as a review line, flagging a mismatch", () => {

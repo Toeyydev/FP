@@ -16,7 +16,7 @@ export function paymentFlex(p: {
   scope?: string;
   rows: PaymentRow[];
   total: number; totExp: number; totFee: number; count: number;
-  slipUrl?: string; payUrl: string;
+  slipUrl?: string; payUrl: string; period?: string; // period (YYYY-MM) enables the review buttons
 }): object {
   const baht = (n: number) => `฿${Math.round(n).toLocaleString("en-US")}`;
   const BROWN = "#7E3A2C", CREAM = "#F6F1E6", MUTED = "#9B9B9B", INK = "#1A1A1A", SUB = "#6A6A6A";
@@ -50,10 +50,17 @@ export function paymentFlex(p: {
     { type: "text", text: baht(p.totFee), size: "sm", weight: "bold", color: INK, align: "end", flex: 2 },
     { type: "text", text: baht(p.total), size: "sm", weight: "bold", color: INK, align: "end", flex: 2 },
   ] };
-  const buttons = [
+  // Review buttons (only when a period is known): the guide taps one to confirm the
+  // expenses look right, or flag them — handled by the LINE webhook (expreview:...).
+  const GREEN = "#2E7D46";
+  const reviewRow = p.period ? [{ type: "box", layout: "horizontal", spacing: "sm", contents: [
+    { type: "button", style: "primary", color: GREEN, height: "sm", action: { type: "postback", label: "✓ Looks right", data: `expreview:ok:${p.period}`, displayText: "✓ Looks right" } },
+    { type: "button", style: "primary", color: AMBER, height: "sm", action: { type: "postback", label: "⚠ Something's off", data: `expreview:off:${p.period}`, displayText: "⚠ Something's off" } },
+  ] }] : [];
+  const linkRow = { type: "box", layout: "horizontal", spacing: "sm", contents: [
     ...(p.slipUrl ? [{ type: "button", style: "secondary", height: "sm", action: { type: "uri", label: "Bank slip", uri: p.slipUrl } }] : []),
     { type: "button", style: "secondary", height: "sm", action: { type: "uri", label: "Full details", uri: p.payUrl } },
-  ];
+  ] };
   return {
     type: "bubble",
     header: { type: "box", layout: "vertical", backgroundColor: BROWN, paddingAll: "14px", spacing: "xs", contents: [
@@ -63,7 +70,7 @@ export function paymentFlex(p: {
     body: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "sm", contents: [
       colHead, { type: "separator", margin: "sm" }, ...rowBoxes, { type: "separator", margin: "md" }, totalRow,
     ] },
-    footer: { type: "box", layout: "horizontal", spacing: "sm", paddingAll: "12px", contents: buttons },
+    footer: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "12px", contents: [...reviewRow, linkRow] },
   };
 }
 
@@ -75,6 +82,7 @@ export async function sendPaymentNotice(
   jobs: { date: string; slotIdx: number }[],
   scope?: string, // e.g. "June 2026" for a monthly slip; omit for a per-tour batch
   slipUrl?: string, // the uploaded bank slip, so the guide can open it straight from the alert
+  period?: string, // YYYY-MM — when set, the LINE card gets the review buttons
 ): Promise<void> {
   if (!jobs.length) return;
   const where = { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) };
@@ -110,7 +118,7 @@ export async function sendPaymentNotice(
   const sheetsLine = `\n\nYour tours & job sheets: ${BASE}/pay`;
   const textBody = `${head}\n\n${lines.join("\n\n")}${slipLine}${sheetsLine}`;
   // LINE gets the rich table (Flex); every other channel gets the text above.
-  const flex = paymentFlex({ scope, rows, total, totExp, totFee, count: jobs.length, slipUrl, payUrl: `${BASE}/pay` });
+  const flex = paymentFlex({ scope, rows, total, totExp, totFee, count: jobs.length, slipUrl, payUrl: `${BASE}/pay`, period });
   await notifyGuide(guideId, textBody, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${baht(total)}` : ""}`, { lineFlex: { altText: head, contents: flex } });
 }
 
