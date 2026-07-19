@@ -2,13 +2,14 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
   jobOffer: { findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), findMany: vi.fn() },
-  assignment: { upsert: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
-  jobOfferResponse: { updateMany: vi.fn(), findMany: vi.fn() },
+  assignment: { upsert: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+  jobOfferResponse: { updateMany: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+  booking: { updateMany: vi.fn() },
   jobSheet: { deleteMany: vi.fn() },
   checkin: { count: vi.fn() },
   notification: { deleteMany: vi.fn(), create: vi.fn() },
   tour: { findUnique: vi.fn() },
-  user: { findFirst: vi.fn(), findMany: vi.fn() },
+  user: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
   blockedDate: { findUnique: vi.fn() },
   blockedSlot: { findUnique: vi.fn() },
   availability: { findMany: vi.fn() },
@@ -21,7 +22,7 @@ vi.mock("@/lib/line", () => ({ linePushButtons: vi.fn(), lineEnabled: () => fals
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
 vi.mock("@/lib/email", () => ({ sendEmail: vi.fn() }));
 
-import { acceptOffer, createOffer, slotLabel, timeRangeLabel } from "@/lib/offers";
+import { acceptOffer, createOffer, denyOffer, slotLabel, timeRangeLabel } from "@/lib/offers";
 
 const openOffer = (over = {}) => ({
   id: "of1", status: "OPEN", expiresAt: new Date(Date.now() + 10 * 60_000),
@@ -35,6 +36,7 @@ beforeEach(() => {
   prismaMock.jobOfferResponse.findMany.mockResolvedValue([]);
   prismaMock.checkin.count.mockResolvedValue(0);
   prismaMock.assignment.findUnique.mockResolvedValue(null);
+  prismaMock.assignment.findFirst.mockResolvedValue(null); // no time-clashing assignment by default
 });
 
 describe("offers — labels", () => {
@@ -107,5 +109,55 @@ describe("offers — acceptOffer (first-to-accept race)", () => {
     const r = await acceptOffer("of1", "G-003");
     expect(r).toEqual({ ok: false, reason: "expired" });
     expect(prismaMock.assignment.upsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a slot that clashes with a job the guide already holds, without claiming the offer", async () => {
+    // Offer for slot 3 (14:00); the guide already holds slot 2 (13:30) — 30 min apart.
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ slotIdx: 3 }));
+    prismaMock.assignment.findFirst.mockResolvedValue({ slotIdx: 2 });
+    const r = await acceptOffer("of1", "G-007");
+    expect(r).toEqual({ ok: false, reason: "clash", clashSlotIdx: 2 });
+    // The offer is left OPEN for another guide, and no assignment is written.
+    expect(prismaMock.jobOffer.updateMany).not.toHaveBeenCalled();
+    expect(prismaMock.assignment.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("offers — denyOffer returns the job to operators (no random reassign)", () => {
+  it("closes the offer and alerts operators when the last candidate declines", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer());
+    prismaMock.user.findUnique.mockResolvedValue({ id: "u7" }); // denying guide's bell
+    prismaMock.jobOfferResponse.count.mockResolvedValue(0); // nobody left who could accept
+    prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 1 }); // wins the close
+    prismaMock.assignment.findFirst.mockResolvedValue(null); // no other guide on the slot
+    prismaMock.tour.findUnique.mockResolvedValue({ name: "City Tour" });
+    prismaMock.user.findFirst.mockResolvedValue({ displayName: "Fon" }); // decliner label
+    prismaMock.user.findMany.mockResolvedValue([{ id: "op1" }]); // operator team
+
+    const r = await denyOffer("of1", "G-007");
+
+    expect(r).toBe("ok");
+    // Offer closed (EXPIRED), never re-offered to a fresh guide (no createOffer path).
+    expect(prismaMock.jobOffer.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: "of1", status: "OPEN" }), data: { status: "EXPIRED" } }),
+    );
+    expect(prismaMock.jobOffer.create).not.toHaveBeenCalled();
+    // Bookings returned to the operator inbox + operator notified.
+    expect(prismaMock.booking.updateMany).toHaveBeenCalled();
+    expect(prismaMock.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: "op1" }) }),
+    );
+  });
+
+  it("leaves a broadcast offer open while other guides can still accept", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer());
+    prismaMock.user.findUnique.mockResolvedValue({ id: "u7" });
+    prismaMock.jobOfferResponse.count.mockResolvedValue(2); // two other guides still OFFERED
+
+    const r = await denyOffer("of1", "G-007");
+
+    expect(r).toBe("ok");
+    expect(prismaMock.jobOffer.updateMany).not.toHaveBeenCalled(); // not closed
+    expect(prismaMock.notification.create).not.toHaveBeenCalled(); // operators not pinged
   });
 });

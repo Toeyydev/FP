@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
           // The operator team is notified inside acceptOffer (covers app + LINE).
         } else if (ev.replyToken) {
           const msg = res.reason === "taken" ? "Sorry — another guide already took this one. 🙏"
+            : res.reason === "clash" ? `You already have a tour at ${slotLabel(res.clashSlotIdx ?? 0)} that day — this one is too close to it. We'll offer it to someone else. 🙏`
             : res.reason === "expired" ? "This offer has expired."
             : "This offer is no longer open.";
           await lineReply(ev.replyToken, msg);

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { SLOT_TIMES } from "@/lib/slots";
+import { SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
 import { sendTourCalendarInvite } from "@/lib/calendar";
 import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
@@ -100,7 +100,8 @@ export async function createOffer(o: {
 // Guides who are AVAILABLE for a given date + slot:
 //  - active guide with a G-id
 //  - NOT marked busy for that slot (availability.slots[idx] === true means busy)
-//  - NOT already assigned that slot
+//  - NOT already assigned that slot OR a slot that clashes in time (same or within
+//    the clash gap — a guide can't run two overlapping tours)
 //  - the day is not company-blocked
 export async function availableGuides(date: string, slotIdx: number) {
   const blocked = await prisma.blockedDate.findUnique({ where: { date } }).catch(() => null);
@@ -114,7 +115,9 @@ export async function availableGuides(date: string, slotIdx: number) {
       select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true },
     }),
     prisma.availability.findMany({ where: { date }, select: { guideId: true, slots: true } }),
-    prisma.assignment.findMany({ where: { date, slotIdx }, select: { guideId: true } }),
+    // Include any slot that clashes in time, not just this exact one, so a guide
+    // already booked at (e.g.) 13:30 is not offered the 14:00 slot.
+    prisma.assignment.findMany({ where: { date, slotIdx: { in: clashingSlotIdxs(slotIdx) } }, select: { guideId: true } }),
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", fromDate: { lte: date }, toDate: { gte: date } }, select: { guideId: true } }),
   ]);
 
@@ -143,7 +146,7 @@ export function timeRangeLabel(slotIdx: number, durationMin?: number | null): st
 
 export type AcceptResult =
   | { ok: true; offer: { id: string; date: string; slotIdx: number; tourId: string } }
-  | { ok: false; reason: "taken" | "expired" | "closed" | "not-offered" };
+  | { ok: false; reason: "taken" | "expired" | "closed" | "not-offered" | "clash"; clashSlotIdx?: number };
 
 // Atomic first-wins accept. The conditional updateMany (status OPEN + not expired)
 // can only succeed for ONE concurrent caller, so a race resolves to a single winner.
@@ -155,6 +158,20 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   if (offer.expiresAt.getTime() < Date.now()) {
     await prisma.jobOffer.updateMany({ where: { id: offerId, status: "OPEN" }, data: { status: "EXPIRED" } });
     return { ok: false, reason: "expired" };
+  }
+
+  // Don't let one guide hold two tours that clash in time. Offers are broadcast
+  // while the guide is still free, so a second offer for a nearby slot can be
+  // sitting in their bell after they've taken the first — this is the accept-time
+  // backstop availableGuides() can't provide at broadcast time. Checked before the
+  // claim so a rejected accept leaves the offer OPEN for another guide.
+  const clashSlots = clashingSlotIdxs(offer.slotIdx).filter((i) => i !== offer.slotIdx);
+  if (clashSlots.length) {
+    const clash = await prisma.assignment.findFirst({
+      where: { guideId, date: offer.date, slotIdx: { in: clashSlots } },
+      select: { slotIdx: true },
+    });
+    if (clash) return { ok: false, reason: "clash", clashSlotIdx: clash.slotIdx };
   }
 
   // The race-safe claim: only one updateMany matches status=OPEN and flips it.
@@ -226,7 +243,46 @@ export async function denyOffer(offerId: string, guideId: string): Promise<"ok" 
   const u = await prisma.user.findUnique({ where: { guideId }, select: { id: true } });
   if (u) await prisma.notification.deleteMany({ where: { offerId, userId: u.id } });
   await cleanupPreppedSheet(guideId, offer.date, offer.slotIdx);
+
+  // Once nobody who was offered this job can still accept it (a single-guide
+  // assignment that was declined, or a broadcast everyone passed on), the job goes
+  // straight back to the operators to reassign by hand. We never auto-offer it to a
+  // fresh guide — the operator chooses who gets it.
+  if (offer.status === "OPEN") {
+    const stillOpen = await prisma.jobOfferResponse.count({ where: { offerId, response: "OFFERED" } });
+    if (stillOpen === 0) await returnOfferToOperators(offer, guideId);
+  }
   return "ok";
+}
+
+// Close an OPEN offer and hand it back to the operator team (in-app + push) to
+// reassign manually — used when a guide declines or cancels and no other candidate
+// remains. Deliberately does NOT create a new offer: no random reassignment.
+async function returnOfferToOperators(
+  offer: { id: string; tourId: string; date: string; slotIdx: number },
+  declinedByGuideId?: string,
+): Promise<void> {
+  // Race-safe close so a concurrent accept can't still win it.
+  const won = await prisma.jobOffer.updateMany({ where: { id: offer.id, status: "OPEN" }, data: { status: "EXPIRED" } });
+  if (won.count !== 1) return;
+  await prisma.notification.deleteMany({ where: { offerId: offer.id } });
+  // Return the slot's bookings to the inbox so the operator sees the job to dispatch
+  // (unless another guide is still assigned the slot, e.g. a hybrid split).
+  const stillAssigned = await prisma.assignment.findFirst({ where: { date: offer.date, slotIdx: offer.slotIdx }, select: { id: true } });
+  if (!stillAssigned) await prisma.booking.updateMany({ where: { date: offer.date, slotIdx: offer.slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+
+  const [tour, ops, decliner] = await Promise.all([
+    prisma.tour.findUnique({ where: { id: offer.tourId }, select: { name: true } }),
+    prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } }),
+    declinedByGuideId ? prisma.user.findFirst({ where: { guideId: declinedByGuideId }, select: { displayName: true } }) : Promise.resolve(null),
+  ]);
+  const job = `${tour?.name ?? offer.tourId} · ${slotLabel(offer.slotIdx)} · ${offer.date}`;
+  const who = declinedByGuideId ? `${declinedByGuideId}${decliner?.displayName ? ` ${decliner.displayName}` : ""}` : null;
+  const msg = who ? `${who} declined ${job}. It's back with you — please assign another guide.` : `No guide accepted ${job}. Please assign a guide.`;
+  for (const op of ops) {
+    await prisma.notification.create({ data: { userId: op.id, kind: "offer", message: msg } });
+    await sendPushToUser(op.id, { title: "Job needs assigning", body: msg, url: "/jobs", tag: `returned-${offer.id}` });
+  }
 }
 
 // A pending (unaccepted) job must be locked in by this many hours before the

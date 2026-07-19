@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
   const res = await acceptOffer(v.offerId, v.guideId);
   if (res.ok) return page("Job accepted", `Great — this job is yours: ${slotLabel(res.offer.slotIdx)} · ${res.offer.date}. It’s now in your schedule.`, "ok");
   if (res.reason === "taken") return page("Someone got there first", "This job was just taken by another guide — you're a moment too late. No worries, we'll send you the next one.", "info");
+  if (res.reason === "clash") return page("That clashes with another job", `You already have a tour at ${slotLabel(res.clashSlotIdx ?? offer.slotIdx)} on ${offer.date}, and this one is too close to it. We'll offer it to another guide.`, "info");
   if (res.reason === "expired") return page("This offer expired", "It went back to the office — the next offer is on its way.", "info");
   return page("This offer is closed", "It’s no longer open. Open the app to see your other jobs.", "info");
 }
