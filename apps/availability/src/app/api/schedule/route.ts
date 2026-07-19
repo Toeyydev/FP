@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
+import { untagGuideSlotBookings } from "@/lib/offers";
 
 // GET — the signed-in guide's upcoming confirmed tours (today onward).
 export async function GET() {
@@ -73,8 +74,10 @@ export async function POST(req: NextRequest) {
   await prisma.assignment.delete({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   // Return the slot's bookings to the inbox (pending) so the operator sees the job
   // to re-dispatch. The job goes back to the operators — it is NOT auto re-offered
-  // to another guide; the operator chooses who takes it over.
-  await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+  // to another guide; the operator chooses who takes it over. Clear this guide's tag
+  // (so nothing is left orphaned), then return any untagged whole-slot offers too.
+  await untagGuideSlotBookings(guideId, date, slotIdx);
+  await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED", assignedGuideId: null }, data: { status: "PENDING" } });
 
   const ops = await prisma.user.findMany({ where: { role: { in: ["OPERATOR", "ADMIN"] }, state: "ACTIVE" }, select: { id: true } });
   const who = session!.user!.name ?? "";

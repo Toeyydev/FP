@@ -22,7 +22,7 @@ vi.mock("@/lib/line", () => ({ linePushButtons: vi.fn(), lineEnabled: () => fals
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
 vi.mock("@/lib/email", () => ({ sendEmail: vi.fn() }));
 
-import { acceptOffer, createOffer, denyOffer, slotLabel, timeRangeLabel } from "@/lib/offers";
+import { acceptOffer, createOffer, denyOffer, untagGuideSlotBookings, slotLabel, timeRangeLabel } from "@/lib/offers";
 
 const openOffer = (over = {}) => ({
   id: "of1", status: "OPEN", expiresAt: new Date(Date.now() + 10 * 60_000),
@@ -159,5 +159,31 @@ describe("offers — denyOffer returns the job to operators (no random reassign)
     expect(r).toBe("ok");
     expect(prismaMock.jobOffer.updateMany).not.toHaveBeenCalled(); // not closed
     expect(prismaMock.notification.create).not.toHaveBeenCalled(); // operators not pinged
+  });
+
+  it("frees the declining guide's tagged bookings back to the inbox", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer());
+    prismaMock.user.findUnique.mockResolvedValue({ id: "u7" });
+    prismaMock.jobOfferResponse.count.mockResolvedValue(1); // sole candidate declined
+
+    await denyOffer("of1", "G-007");
+
+    // The decliner's own bookings on the slot are untagged + returned to PENDING.
+    expect(prismaMock.booking.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { date: "2026-06-13", slotIdx: 5, assignedGuideId: "G-007" },
+        data: { assignedGuideId: null, status: "PENDING" },
+      }),
+    );
+  });
+});
+
+describe("offers — untagGuideSlotBookings (orphaned-tag prevention)", () => {
+  it("clears only the given guide's tag on the slot and returns them to PENDING", async () => {
+    await untagGuideSlotBookings("G-014", "2026-07-20", 2);
+    expect(prismaMock.booking.updateMany).toHaveBeenCalledWith({
+      where: { date: "2026-07-20", slotIdx: 2, assignedGuideId: "G-014" },
+      data: { assignedGuideId: null, status: "PENDING" },
+    });
   });
 });

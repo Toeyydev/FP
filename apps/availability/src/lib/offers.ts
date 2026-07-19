@@ -235,6 +235,20 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   return { ok: true, offer: { id: offer.id, date: offer.date, slotIdx: offer.slotIdx, tourId: offer.tourId } };
 }
 
+// Clear a guide's tag from a slot's bookings and return them to the operator inbox
+// (PENDING). Called whenever a guide leaves a slot — assignment removed/cancelled,
+// or a pre-tagged split offer declined — so a departing guide never leaves an
+// "orphaned" tag: a booking still pointing at a guide who has no assignment for the
+// slot, which silently jams re-dispatch (the offer/reassign actions can't act on
+// it). Scoped to THIS guide, so a co-guide sharing the slot (hybrid split) is
+// untouched.
+export async function untagGuideSlotBookings(guideId: string, date: string, slotIdx: number): Promise<void> {
+  await prisma.booking.updateMany({
+    where: { date, slotIdx, assignedGuideId: guideId },
+    data: { assignedGuideId: null, status: "PENDING" },
+  });
+}
+
 export async function denyOffer(offerId: string, guideId: string): Promise<"ok" | "closed"> {
   const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
   if (!offer) return "closed";
@@ -243,6 +257,9 @@ export async function denyOffer(offerId: string, guideId: string): Promise<"ok" 
   const u = await prisma.user.findUnique({ where: { guideId }, select: { id: true } });
   if (u) await prisma.notification.deleteMany({ where: { offerId, userId: u.id } });
   await cleanupPreppedSheet(guideId, offer.date, offer.slotIdx);
+  // If this offer had pre-tagged the guide's bookings (a hybrid-split offer), free
+  // them back to the inbox so the declined group doesn't linger tagged to them.
+  await untagGuideSlotBookings(guideId, offer.date, offer.slotIdx);
 
   // Once nobody who was offered this job can still accept it (a single-guide
   // assignment that was declined, or a broadcast everyone passed on), the job goes
