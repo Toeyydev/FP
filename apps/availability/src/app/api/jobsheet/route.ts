@@ -86,8 +86,11 @@ export async function GET(req: NextRequest) {
     select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true },
     orderBy: { createdAt: "asc" },
   });
+  // Split slot → this guide's sheet is only the guests tagged to them. Untagged
+  // guests are NOT copied onto every guide's sheet (that duplicated one booking
+  // across two guides); they stay unassigned for the operator to place.
   const splitHere = allAtSlot.some((b) => b.assignedGuideId);
-  const linked = splitHere ? allAtSlot.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : allAtSlot;
+  const linked = splitHere ? allAtSlot.filter((b) => b.assignedGuideId === guideId) : allAtSlot;
   type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
   // Actual Pax stays blank until the guide reports after the tour (a no-show → 0,
   // everyone else → their booked count). Booked Pax is always shown alongside.
