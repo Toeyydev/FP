@@ -32,6 +32,22 @@ export default function Dispatch() {
   }, []);
   useEffect(() => { load(); const id = window.setInterval(load, 15000); return () => window.clearInterval(id); }, [load]);
 
+  // Deep-link from the dashboard's Understaffed card: /jobs?split=<date>&slot=<idx>
+  // jumps straight into the Split modal for that slot so the operator can assign the
+  // remaining guests in one step. Fires once, after assignments have loaded.
+  const [didFocus, setDidFocus] = useState(false);
+  useEffect(() => {
+    if (didFocus || !data?.assignments?.length) return;
+    const p = new URLSearchParams(window.location.search);
+    const fd = p.get("split"), fs = p.get("slot");
+    setDidFocus(true);
+    if (!fd || fs == null) return;
+    const a = data.assignments.find((x: Assignment) => x.date === fd && x.slotIdx === Number(fs));
+    if (a) { openSplit(a); window.history.replaceState(null, "", "/jobs"); }
+    // openSplit is stable enough for a one-shot; guarded by didFocus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, didFocus]);
+
   const [msg, setMsg] = useState("");
   // Hand an unfilled offer to a specific guide: pick from those free for the slot.
   const [assignFor, setAssignFor] = useState<Offer | null>(null);
