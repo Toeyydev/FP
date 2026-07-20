@@ -189,7 +189,10 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
   for (const a of assigns) {
     const bks = await prisma.booking.findMany({ where: { date: a.date, slotIdx: a.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
     const split = bks.some((b) => b.assignedGuideId);
-    const mine = split ? bks.filter((b) => !b.assignedGuideId || b.assignedGuideId === a.guideId) : bks;
+    // On a split slot, a guide's pax is ONLY their tagged guests — an untagged guest
+    // must not be counted into every guide's pax (that double-counted one booking
+    // across both guides). Untagged guests stay unassigned for the operator to place.
+    const mine = split ? bks.filter((b) => b.assignedGuideId === a.guideId) : bks;
     const sum = mine.reduce((s, b) => s + (b.pax ?? 0), 0);
     if (sum > 0 && sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
     // Safety net: a fully-cancelled slot (0 guests) loses its calendar events.
