@@ -135,14 +135,20 @@ export default function JobSheetEditor() {
   // Operator: merge the guide's reported figures into the official expenses (then Save).
   // Adopt the guide's numbers, but KEEP any operator-only line the guide didn't report
   // so an operator-added expense is never silently dropped.
-  function acceptGuideExpenses() {
+  async function acceptGuideExpenses() {
     if (!sheet?.guideExpenses) return;
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const gd = sheet.guideExpenses;
     const gdKeys = new Set(gd.map((e) => norm(e.description)));
     const opOnly = (sheet.expenses ?? []).filter((e) => !gdKeys.has(norm(e.description)));
-    up({ expenses: [...gd.map((e) => ({ ...e })), ...opOnly.map((e) => ({ ...e }))] });
-    setMsg(opOnly.length ? "Guide's figures merged — operator-only items kept. Review and Save." : "Guide's figures copied in — review and Save.");
+    const merged = [...gd.map((e) => ({ ...e })), ...opOnly.map((e) => ({ ...e }))];
+    // Brief confirmation — accepting overwrites the official expenses and saves, so a
+    // mis-tap can't silently replace the operator's figures.
+    const gdTot = gd.reduce((s, e) => s + expenseAmount(e), 0);
+    if (!confirm(`Accept the guide's expenses (${thb(gdTot)}) as the official figures?${opOnly.length ? `\n${opOnly.length} operator-only item(s) will be kept.` : ""}\n\nThis updates the Expenses column and saves the sheet now.`)) return;
+    up({ expenses: merged });                 // reflect in the Expenses column right away
+    const ok = await save({ expenses: merged }); // …and persist it in the same click
+    if (ok) setMsg(opOnly.length ? `Guide's figures accepted & saved — ${opOnly.length} operator-only item(s) kept. ✓` : "Guide's figures accepted & saved ✓");
   }
   // Cross-check rows: merge official + guide-reported by description.
   const crossRows = (() => {
@@ -159,11 +165,15 @@ export default function JobSheetEditor() {
     });
   })();
 
-  async function save(): Promise<boolean> {
+  // `override` lets a caller save fields it just computed WITHOUT waiting for the
+  // async setState to land (e.g. accept-guide-expenses saves the merged list right
+  // away). Falls back to current sheet state when omitted.
+  async function save(override?: Partial<Sheet>): Promise<boolean> {
     setBusy(true); setMsg("");
+    const s = { ...sheet!, ...override };
     const r = await fetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, tourId: sheet!.tourId, status: sheet!.status, bookings: sheet!.bookings, expenses: sheet!.expenses, guideFee: sheet!.guideFee }),
+      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
@@ -200,7 +210,7 @@ export default function JobSheetEditor() {
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>Excel</button>}
           {canEdit && drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>}
-          {canEdit && <button className="btn primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>}
+          {canEdit && <button className="btn primary" disabled={busy} onClick={() => save()}>{busy ? "…" : "Save"}</button>}
         </div>
       </div>
 
@@ -431,8 +441,8 @@ export default function JobSheetEditor() {
                 </tbody>
               </table>
               <div style={{ padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <button className="btn sm primary" onClick={acceptGuideExpenses}>Accept guide&apos;s figures</button>
-                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>merges them into the official expenses (keeps operator-only items) — then Save</span>
+                <button className="btn sm primary" disabled={busy} onClick={acceptGuideExpenses}>{busy ? "Saving…" : "Accept guide’s figures"}</button>
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>updates the official expenses (keeps operator-only items) and saves — in one click</span>
               </div>
             </div>
           );
