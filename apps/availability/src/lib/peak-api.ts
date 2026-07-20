@@ -20,16 +20,28 @@ const CONNECT_ID = process.env.PEAK_CONNECT_ID || "";
 const CONNECT_KEY = process.env.PEAK_CONNECT_KEY || "";
 const USER_TOKEN = process.env.PEAK_USER_TOKEN || "";
 const SIGN_SECRET = (process.env.PEAK_SIGN_SECRET || "connectId") === "connectKey" ? CONNECT_KEY : CONNECT_ID;
-const SIG_ENC: "hex" | "base64" = process.env.PEAK_SIG_ENCODING === "hex" ? "hex" : "base64";
+// Verified against the PEAK UAT sandbox: the Time-Signature is HMAC-SHA1(connectId,
+// timestamp) hex-encoded. Overridable, but hex is the working default (base64 →
+// "TimeSignature Unauthorized").
+const SIG_ENC: "hex" | "base64" = process.env.PEAK_SIG_ENCODING === "base64" ? "base64" : "hex";
 
 export const peakConfigured = !!(CONNECT_ID && CONNECT_KEY);
 export const peakEnabled = !!(CONNECT_ID && CONNECT_KEY && USER_TOKEN);
 export const peakBaseUrl = BASE;
 
 function stamp(): string {
-  const d = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok wall-clock
+  // PEAK validates the timestamp against its own (UTC) clock — a Bangkok +7h stamp
+  // is rejected as out-of-window ("Invalid API Validate Data. (TimeStamp)").
+  const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
+}
+
+// PEAK responses capitalize the wrapper key (e.g. `PeakClientToken`) while requests
+// send it lowercase — read either casing so a valid response is never missed.
+function peakWrap<T>(j: Record<string, unknown>, key: string): T | undefined {
+  const cap = key.charAt(0).toUpperCase() + key.slice(1);
+  return (j[key] ?? j[cap]) as T | undefined;
 }
 function sigHeaders(): Record<string, string> {
   const ts = stamp();
@@ -52,7 +64,7 @@ export async function clientToken(force = false): Promise<Res<{ token?: string }
     });
   } catch (e) { return { ok: false, desc: `network: ${(e as Error).message}` }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const t = (j as { peakClientToken?: { token?: string; resCode?: string; resDesc?: string } }).peakClientToken;
+  const t = peakWrap<{ token?: string; resCode?: string; resDesc?: string }>(j, "peakClientToken");
   if (t?.token) { cached = { token: t.token, at: Date.now() }; return { ok: true, token: t.token, code: t.resCode, desc: t.resDesc }; }
   return { ok: false, code: t?.resCode, desc: t?.resDesc || `HTTP ${r.status}` };
 }
@@ -74,7 +86,7 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
     r = await fetch(`${BASE}/api/v1/Expenses/allinone`, { method: "POST", headers, body: JSON.stringify({ peakExpenses: { expenses: [expense], getResult: 1 } }) });
   } catch (e) { return { ok: false, desc: `network: ${(e as Error).message}` }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = (j as { peakExpenses?: { expenses?: Array<{ code?: string; id?: string; documentLink?: string; resCode?: string; resDesc?: string }>; resDesc?: string } }).peakExpenses;
+  const wrap = peakWrap<{ expenses?: Array<{ code?: string; id?: string; documentLink?: string; resCode?: string; resDesc?: string }>; resDesc?: string }>(j, "peakExpenses");
   const e = wrap?.expenses?.[0];
   if (e?.code) return { ok: true, code: e.code, id: e.id, link: e.documentLink, desc: e.resDesc };
   return { ok: false, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
@@ -89,6 +101,6 @@ export async function getContacts(): Promise<Res<{ contacts?: unknown[] }>> {
   try { r = await fetch(`${BASE}/api/v1/Contacts/list`, { method: "GET", headers }); }
   catch (e) { return { ok: false, desc: `network: ${(e as Error).message}` }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = (j as { peakContacts?: { contacts?: unknown[]; resCode?: string; resDesc?: string } }).peakContacts;
+  const wrap = peakWrap<{ contacts?: unknown[]; resCode?: string; resDesc?: string }>(j, "peakContacts");
   return { ok: r.ok, contacts: wrap?.contacts, code: wrap?.resCode, desc: wrap?.resDesc };
 }
