@@ -17,8 +17,9 @@ function StateTag({ t }: { t: Tour }) {
 type Unassigned = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number };
 type Understaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number };
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
+type Orphaned = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number; count: number };
 type Leave = { id: string; guideId: string; guide: string; fromDate: string; toDate: string; reason: string | null };
-type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; leaveRequests: Leave[] };
+type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[] };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -174,7 +175,8 @@ export default function Dashboard() {
           const todayPax = d.todayTours.reduce((s, t) => s + (t.pax ?? 0), 0);
           const todayIn = d.todayTours.filter((t) => done.includes(t.state)).length;
           const todayOverdue = d.todayTours.filter((t) => t.overdue).length;
-          const attention = d.unassigned.length + d.understaffed.length + d.conflicts.length + d.leaveRequests.length;
+          const orphaned = d.orphaned ?? [];
+          const attention = d.unassigned.length + d.understaffed.length + d.conflicts.length + orphaned.length + d.leaveRequests.length;
           return (
         <div className="dash">
           <div className="kpi-row">
@@ -183,6 +185,7 @@ export default function Dashboard() {
             <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" onClick={() => jumpTo("attention")} />
             <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" onClick={() => jumpTo("attention")} />
             <Kpi n={d.conflicts.length} label="Conflicts" tone="bad" onClick={() => jumpTo("attention")} />
+            {orphaned.length > 0 && <Kpi n={orphaned.length} label="Orphaned" tone="bad" onClick={() => jumpTo("attention")} />}
             <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" onClick={() => jumpTo("upcoming", "upcoming")} />
           </div>
 
@@ -204,7 +207,7 @@ export default function Dashboard() {
                 </div>
               )}
             </section>
-            {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || d.leaveRequests.length > 0) && (
+            {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || orphaned.length > 0 || d.leaveRequests.length > 0) && (
               <section className="panel" id="attention">
                 <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">Export unassigned PDF</button>}</div>
                 <div className="dash-list">
@@ -225,9 +228,17 @@ export default function Dashboard() {
                     </a>
                   ))}
                   {d.understaffed.map((u, i) => (
-                    <a key={`s${i}`} className="dash-row bad" href="/jobs" title="Open Dispatch to assign a guide">
+                    <a key={`s${i}`} className="dash-row bad" href={`/jobs?split=${u.date}&slot=${u.slotIdx}`} title="Open Dispatch and split this tour to add a guide to the remaining guests">
                       <span className="tag bad">Understaffed</span>
                       <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.pax} pax · {u.have}/{u.need} guides — add {u.need - u.have} more</div></span>
+                      <span style={{ marginLeft: "auto", fontWeight: 700, whiteSpace: "nowrap" }}>Assign remaining →</span>
+                    </a>
+                  ))}
+                  {orphaned.map((o, i) => (
+                    <a key={`o${i}`} className="dash-row bad" href={`/bookings?focus=${o.date}`} title="These guests are tagged to a guide who has no assignment for this slot — re-dispatch them">
+                      <span className="tag bad">Orphaned</span>
+                      <span className="dr-main"><b>{o.tour}</b> · {dShort(o.date)} {o.time}<div className="dr-sub">{o.count} booking{o.count > 1 ? "s" : ""} · {o.pax} pax tagged to {o.guide}, who isn’t assigned — re-dispatch</div></span>
+                      <span style={{ marginLeft: "auto", fontWeight: 700, whiteSpace: "nowrap" }}>Fix →</span>
                     </a>
                   ))}
                   {d.unassigned.map((u, i) => (
