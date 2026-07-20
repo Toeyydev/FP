@@ -41,13 +41,16 @@ export async function GET(req: NextRequest) {
   // An auto-created sheet can have an empty guideFee ({}); ?? won't catch that, so a
   // missing price must fall back to the standard fee or the guide shows ฿0 unpaid.
   const gfOf = (gf: unknown): GuideFee => (gf && typeof gf === "object" && (gf as GuideFee).price != null ? (gf as GuideFee) : DEFAULT_GUIDE_FEE);
-  // A whole-month "paid" only covers tours that EXISTED when it was paid — so a tour
-  // imported/recreated AFTER the payment (even if its date is earlier) correctly shows
-  // unpaid again, instead of being silently swept into "Paid".
-  const coveredByMonth = (gid: string, recordCreatedAt: Date) => {
+  // A whole-month "paid" covers a tour only if BOTH: the tour had already happened by
+  // the payment date (a payment can't cover a tour that runs later — the paid-before-
+  // tour bug), AND its record existed when the payment was made (a tour re-imported
+  // after the payment correctly shows unpaid again, not silently swept into "Paid").
+  const coveredByMonth = (gid: string, tourDate: string, recordCreatedAt: Date) => {
     const st = statusOf(gid);
     if ((st?.status ?? "pending") !== "paid") return false;
     if (!st?.paidAt) return true; // paid but no timestamp (legacy) — cover it
+    const paidThrough = new Date(st.paidAt.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10); // Bangkok date of the payment
+    if (tourDate > paidThrough) return false; // tour runs after the payment — not covered
     return new Date(recordCreatedAt).getTime() <= new Date(st.paidAt).getTime();
   };
 
@@ -63,7 +66,7 @@ export async function GET(req: NextRequest) {
       : computeTotals([], DEFAULT_GUIDE_FEE);
     const g = (byGuide[a.guideId] ??= { guideId: a.guideId, guide: gName(a.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
-    const covered = coveredByMonth(a.guideId, a.createdAt);
+    const covered = coveredByMonth(a.guideId, a.date, a.createdAt);
     const ps = payStatusOf.get(k) ?? "PENDING";
     g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), ref: s?.ref ?? null, amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(a.guideId)?.eslipUrl ?? null : null), fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses) });
   }
@@ -79,7 +82,7 @@ export async function GET(req: NextRequest) {
     const t = computeTotals((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
     const g = (byGuide[s.guideId] ??= { guideId: s.guideId, guide: gName(s.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
-    const covered = coveredByMonth(s.guideId, s.createdAt);
+    const covered = coveredByMonth(s.guideId, s.date, s.createdAt);
     const ps = payStatusOf.get(k) ?? "PENDING";
     g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), ref: s.ref ?? null, amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(s.guideId)?.eslipUrl ?? null : null), fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses) });
   }

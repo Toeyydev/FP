@@ -36,6 +36,10 @@ export async function POST(req: NextRequest) {
   const { date, slotIdx, tourId, groups } = parsed.data;
 
   const ids = groups.flatMap((g) => g.bookingIds);
+  // A booking may belong to at most ONE group — otherwise it would be counted and
+  // listed under two guides (the duplicated-booking bug). Reject overlaps outright.
+  const dupIds = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+  if (dupIds.length) return NextResponse.json({ error: "duplicate-booking", ids: dupIds }, { status: 400 });
   const bookings = await prisma.booking.findMany({ where: { id: { in: ids } }, select: { id: true, pax: true, confirmationCode: true, customerName: true, externalRef: true } });
   const byId = new Map(bookings.map((b) => [b.id, b]));
 
@@ -83,6 +87,9 @@ export async function POST(req: NextRequest) {
   for (const a of removed) {
     try { await removeTourEvents(a); } catch { /* calendar cleanup is best-effort */ }
     await prisma.assignment.deleteMany({ where: { guideId: a.guideId, date, slotIdx } });
+    // Any guest still tagged to this dropped guide (not moved into a new group) is
+    // freed back to the inbox, so it isn't left orphaned on a guide with no assignment.
+    await prisma.booking.updateMany({ where: { date, slotIdx, assignedGuideId: a.guideId }, data: { assignedGuideId: null, status: "PENDING" } });
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),

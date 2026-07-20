@@ -312,7 +312,7 @@ export default function AppClient({
         const won = offers.find((o) => o.id === offerId);
         if (won) setCongrats({ tourName: won.tourName, date: won.date, time: won.time, pax: won.pax, meetingPoint: won.meetingPoint });
         else toast(t("offerAccepted"));
-      } else toast(d.reason === "taken" ? t("offerTaken") : d.reason === "expired" ? t("offerExpired") : t("errGeneric"));
+      } else toast(d.reason === "taken" ? t("offerTaken") : d.reason === "clash" ? t("offerClash") : d.reason === "expired" ? t("offerExpired") : t("errGeneric"));
     } else {
       toast(t("offerDenied"));
     }

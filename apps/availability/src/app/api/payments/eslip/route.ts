@@ -60,7 +60,12 @@ export async function POST(req: NextRequest) {
     create: { guideId, period, status: "paid", paidAt: now, eslipUrl: link },
     update: { eslipUrl: link, status: "paid", paidAt: now },
   });
-  const assigns = await prisma.assignment.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { date: true, slotIdx: true, tourId: true } });
+  // Only mark tours that had already happened by the payment date PAID — a slip
+  // uploaded mid-month must not stamp tours later in the month as paid before they
+  // even run (the paid-before-tour bug).
+  const payThrough = new Date(now.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10); // Bangkok date of the payment
+  const lteDate = payThrough < `${period}-31` ? payThrough : `${period}-31`;
+  const assigns = await prisma.assignment.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: lteDate } }, select: { date: true, slotIdx: true, tourId: true } });
   for (const a of assigns) {
     await prisma.tourPayment.upsert({
       where: { guideId_date_slotIdx: { guideId, date: a.date, slotIdx: a.slotIdx } },

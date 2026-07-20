@@ -48,7 +48,7 @@ async function buildDashboard() {
 
   const [assigns, bookings, tours, guides, checkins, reports, pendingLeaves] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: today, lte: horizon } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }),
-    prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true, status: true } }),
+    prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true, status: true, assignedGuideId: true } }),
     prisma.tour.findMany({ select: { id: true, name: true, durationMin: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.checkin.findMany({ where: { date: today }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
@@ -115,6 +115,23 @@ async function buildDashboard() {
     if (bad.size) conflicts.push({ guideId, guide: gName(guideId), date, slots: [...bad].sort((a, b) => a - b).map((i) => `${SLOT_TIMES[iv[i].slotIdx]} ${iv[i].tour}`) });
   }
 
+  // Orphaned booking tags: a booking still tagged to a guide who has NO assignment
+  // for that slot (e.g. a removed/cancelled/re-split assignment that didn't clear the
+  // tag). This is invisible until it silently jams re-dispatch — surface it so an
+  // operator can reassign the guests. Grouped by date+slot+guide.
+  const asgKey = new Set(assigns.map((a) => `${a.guideId}|${a.date}|${a.slotIdx}`));
+  const orphanAgg: Record<string, { date: string; slotIdx: number; guideId: string; tourId: string; pax: number; count: number }> = {};
+  for (const b of bookings) {
+    if (!b.assignedGuideId || b.slotIdx == null || !b.date) continue;
+    if (asgKey.has(`${b.assignedGuideId}|${b.date}|${b.slotIdx}`)) continue; // tag matches a real assignment — fine
+    const k = `${b.date}|${b.slotIdx}|${b.assignedGuideId}`;
+    (orphanAgg[k] ??= { date: b.date, slotIdx: b.slotIdx, guideId: b.assignedGuideId, tourId: b.tourId ?? "", pax: 0, count: 0 });
+    orphanAgg[k].pax += b.pax ?? 0; orphanAgg[k].count += 1;
+  }
+  const orphaned = Object.values(orphanAgg)
+    .map((o) => ({ date: o.date, slotIdx: o.slotIdx, time: SLOT_TIMES[o.slotIdx] ?? "", tour: tourName.get(o.tourId) ?? o.tourId, guideId: o.guideId, guide: gName(o.guideId), pax: o.pax, count: o.count }))
+    .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
   const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
-  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, leaveRequests };
+  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, orphaned, leaveRequests };
 }
