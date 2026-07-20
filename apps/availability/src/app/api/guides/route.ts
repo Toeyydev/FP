@@ -14,17 +14,24 @@ export async function GET() {
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
-  const [guides, assigns, leaves] = await Promise.all([
-    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true, email: true, fullName: true, phone: true, taxId: true, currentAddress: true } }),
+  const [guides, assigns, leaves, pushSubs] = await Promise.all([
+    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true, email: true, fullName: true, phone: true, taxId: true, currentAddress: true, lineUserId: true } }),
     prisma.assignment.groupBy({ by: ["guideId"], _count: { _all: true } }),
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", toDate: { gte: today } }, select: { guideId: true, fromDate: true, toDate: true } }),
+    prisma.pushSubscription.groupBy({ by: ["userId"], _count: { _all: true } }),
   ]);
   const tours = new Map(assigns.map((a) => [a.guideId, a._count._all]));
+  const pushByUser = new Set(pushSubs.map((p) => p.userId));
   const leaveOf = (gid: string) => leaves.find((l) => l.guideId === gid);
 
   const rows = guides.map((g) => {
     const l = leaveOf(g.guideId!);
-    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked, email: g.email, fullName: g.fullName ?? "", phone: g.phone ?? "", taxId: decrypt(g.taxId), address: decrypt(g.currentAddress) };
+    const lineLinked = !!g.lineUserId;
+    const hasPush = pushByUser.has(g.id);
+    const realEmail = !!g.email && !/@(?:guides\.)?folkpath\.local$/i.test(g.email);
+    // A "fast" alert channel = LINE or web-push. Without one, a job offer only reaches
+    // the guide by email (or not at all) — slow/unreliable for day-of dispatch.
+    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked, email: g.email, fullName: g.fullName ?? "", phone: g.phone ?? "", taxId: decrypt(g.taxId), address: decrypt(g.currentAddress), lineLinked, hasPush, hasEmail: realEmail };
   }).sort((a, b) => b.tours - a.tours);
   return NextResponse.json({ rows });
 }
