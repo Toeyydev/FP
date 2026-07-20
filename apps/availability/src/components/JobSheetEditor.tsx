@@ -133,22 +133,26 @@ export default function JobSheetEditor() {
     if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
   }
   // Operator: merge the guide's reported figures into the official expenses (then Save).
-  // Adopt the guide's numbers, but KEEP any operator-only line the guide didn't report
-  // so an operator-added expense is never silently dropped.
+  // Make the official expenses EXACTLY the guide's reported figures — the guide ran the
+  // tour, so their report is the actual spend. The Total updates to the guide's number
+  // (an unreported template line like the lotus drops off). A line the guide left out
+  // that still has a real amount is called out in the confirm so it isn't lost by
+  // accident — the operator can cancel and add it back.
   async function acceptGuideExpenses() {
     if (!sheet?.guideExpenses) return;
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const gd = sheet.guideExpenses;
+    const adopted = gd.map((e) => ({ ...e }));
     const gdKeys = new Set(gd.map((e) => norm(e.description)));
-    const opOnly = (sheet.expenses ?? []).filter((e) => !gdKeys.has(norm(e.description)));
-    const merged = [...gd.map((e) => ({ ...e })), ...opOnly.map((e) => ({ ...e }))];
-    // Brief confirmation — accepting overwrites the official expenses and saves, so a
-    // mis-tap can't silently replace the operator's figures.
+    const droppedReal = (sheet.expenses ?? []).filter((e) => !gdKeys.has(norm(e.description)) && expenseAmount(e) > 0);
     const gdTot = gd.reduce((s, e) => s + expenseAmount(e), 0);
-    if (!confirm(`Accept the guide's expenses (${thb(gdTot)}) as the official figures?${opOnly.length ? `\n${opOnly.length} operator-only item(s) will be kept.` : ""}\n\nThis updates the Expenses column and saves the sheet now.`)) return;
-    up({ expenses: merged });                 // reflect in the Expenses column right away
-    const ok = await save({ expenses: merged }); // …and persist it in the same click
-    if (ok) setMsg(opOnly.length ? `Guide's figures accepted & saved — ${opOnly.length} operator-only item(s) kept. ✓` : "Guide's figures accepted & saved ✓");
+    const warn = droppedReal.length
+      ? `\n\nThe guide didn't report these — they'll be removed:\n${droppedReal.map((e) => `· ${e.description}  ${thb(expenseAmount(e))}`).join("\n")}`
+      : "";
+    if (!confirm(`Set the official expenses to the guide's reported figures (${thb(gdTot)})?${warn}`)) return;
+    up({ expenses: adopted });                 // Total updates to the guide's number right away
+    const ok = await save({ expenses: adopted }); // …and persist it in the same click
+    if (ok) setMsg(`Official expenses set to the guide's report (${thb(gdTot)}) ✓`);
   }
   // Cross-check rows: merge official + guide-reported by description.
   const crossRows = (() => {
@@ -442,7 +446,7 @@ export default function JobSheetEditor() {
               </table>
               <div style={{ padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <button className="btn sm primary" disabled={busy} onClick={acceptGuideExpenses}>{busy ? "Saving…" : "Accept guide’s figures"}</button>
-                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>updates the official expenses (keeps operator-only items) and saves — in one click</span>
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>sets the official expenses to the guide’s reported figures and saves — in one click</span>
               </div>
             </div>
           );
