@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
-import { sweepExpiredOffers, createOffer } from "@/lib/offers";
+import { sweepExpiredOffers, createOffer, untagGuideSlotBookings } from "@/lib/offers";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
@@ -142,11 +142,14 @@ export async function DELETE(req: NextRequest) {
       prisma.guideRating.deleteMany({ where: { guideId, date, slotIdx } }),
       prisma.jobOffer.updateMany({ where: { date, slotIdx, assignedGuideId: guideId, status: { not: "EXPIRED" } }, data: { status: "CANCELLED", assignedGuideId: null } }),
     ]);
+    // The removed guide holds the slot no longer — clear their tag from its
+    // bookings so none are left orphaned (pointing at a guide with no assignment).
+    await untagGuideSlotBookings(guideId, date, slotIdx);
   }
-  // Plain Remove: send the slot's bookings back to the inbox (PENDING) so they can
-  // be re-dispatched instead of being stranded as "offered" with no job.
+  // Plain Remove: send the slot's remaining (untagged) offered bookings back to the
+  // inbox (PENDING) so they can be re-dispatched instead of stranded as "offered".
   if (release) {
-    await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED" }, data: { status: "PENDING" } });
+    await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED", assignedGuideId: null }, data: { status: "PENDING" } });
   }
 
   // Tell the guide their job was removed (in-app + push + LINE if linked).
