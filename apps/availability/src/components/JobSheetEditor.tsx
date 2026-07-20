@@ -144,6 +144,15 @@ export default function JobSheetEditor() {
     up({ expenses: [...gd.map((e) => ({ ...e })), ...opOnly.map((e) => ({ ...e }))] });
     setMsg(opOnly.length ? "Guide's figures merged — operator-only items kept. Review and Save." : "Guide's figures copied in — review and Save.");
   }
+  // Drop an operator-only line the guide didn't report (e.g. a template item like the
+  // lotus that wasn't actually bought). One tap; not persisted until Save/Accept, so a
+  // mis-tap is undone by simply reloading without saving.
+  function dropExpense(desc: string) {
+    if (!sheet) return;
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    up({ expenses: (sheet.expenses ?? []).filter((e) => norm(e.description) !== norm(desc)) });
+    setMsg(`Removed “${desc}” — review and Save.`);
+  }
   // Cross-check rows: merge official + guide-reported by description.
   const crossRows = (() => {
     const norm = (s: string) => (s || "").trim().toLowerCase();
@@ -419,7 +428,9 @@ export default function JobSheetEditor() {
                       <td style={{ padding: "5px 10px" }}>{r.desc}</td>
                       <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.oa == null ? "—" : thb(r.oa)}</td>
                       <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: r.flag === "differ" || r.flag === "added" ? 700 : 400, color: r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "inherit" }}>{r.ga == null ? "—" : thb(r.ga)}</td>
-                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>{r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : "operator only"}</td>
+                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>{r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>operator only{canEdit && <button onClick={() => dropExpense(r.desc)} title={`Remove “${r.desc}” — the guide didn't report it (not incurred)`} style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--danger)", fontWeight: 700, fontSize: 13, lineHeight: 1, padding: "0 2px" }}>✕</button>}</span>
+                      )}</td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: "2px solid #ddd", background: "#fafafa", fontWeight: 800 }}>
@@ -432,7 +443,7 @@ export default function JobSheetEditor() {
               </table>
               <div style={{ padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <button className="btn sm primary" onClick={acceptGuideExpenses}>Accept guide&apos;s figures</button>
-                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>merges them into the official expenses (keeps operator-only items) — then Save</span>
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>merges them into the official expenses (keeps operator-only items) — tap ✕ to drop one the guide didn’t report — then Save</span>
               </div>
             </div>
           );
