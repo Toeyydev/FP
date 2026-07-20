@@ -83,9 +83,17 @@ export async function GET(req: NextRequest) {
   // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true },
     orderBy: { createdAt: "asc" },
   });
+  // Actual Pax on a live-scaffolded row: derived from the guide's no-show report —
+  // a full no-show → 0, a partial → who actually came, and blank (null) until any
+  // no-show is reported. (A hand-saved sheet already carries this; this is for the
+  // scaffold, which previously left it null even for a reported no-show.)
+  const liveActualPax = (b: { pax: number | null; noShow: boolean; noShowPax: number | null }) => {
+    const ns = b.noShowPax ?? (b.noShow ? (b.pax ?? 0) : 0);
+    return ns > 0 ? Math.max(0, (b.pax ?? 0) - ns) : null;
+  };
   // Split slot → this guide's sheet is only the guests tagged to them. Untagged
   // guests are NOT copied onto every guide's sheet (that duplicated one booking
   // across two guides); they stay unassigned for the operator to place.
@@ -94,7 +102,7 @@ export async function GET(req: NextRequest) {
   type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
   // Actual Pax stays blank until the guide reports after the tour (a no-show → 0,
   // everyone else → their booked count). Booked Pax is always shown alongside.
-  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
+  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
 
   // Standard expense template scaled to the actual guests. Used for a fresh sheet,
   // AND to backfill a saved sheet that has none (e.g. one auto-created from a late
@@ -173,7 +181,7 @@ export async function GET(req: NextRequest) {
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked
       .filter((lb) => !coveredLive.has(lb))
-      .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: b.noShow ? "no-show" : "" }));
+      .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
     return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet, reconciledAdded: added.length, reconciledRemoved });
