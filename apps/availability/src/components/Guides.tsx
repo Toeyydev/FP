@@ -4,7 +4,25 @@ import { Fragment, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
-type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; email: string; fullName: string; phone: string; taxId: string; address: string };
+type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; email: string; fullName: string; phone: string; taxId: string; address: string; lineLinked: boolean; hasPush: boolean; hasEmail: boolean };
+
+// Which channels a job offer can reach this guide on. LINE / push are "fast" (a
+// phone ping); email is the slow fallback. No fast channel → flag it, because a
+// day-of offer can easily be missed.
+function Reach({ g }: { g: Row }) {
+  const fast = g.lineLinked || g.hasPush;
+  const chips: string[] = [];
+  if (g.lineLinked) chips.push("LINE");
+  if (g.hasPush) chips.push("Push");
+  if (g.hasEmail) chips.push("Email");
+  if (fast) return <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{chips.join(" · ")}</span>;
+  return (
+    <span className="leave-badge" style={{ background: "var(--danger-bg)", color: "var(--danger)", borderColor: "var(--danger-line)" }}
+      title="No LINE and no app notifications — job offers only reach this guide by email (or not at all). Ask them to connect LINE or install the app.">
+      ⚠ {g.hasEmail ? "Email only" : "Unreachable"}
+    </span>
+  );
+}
 type EditForm = { email: string; fullName: string; phone: string; taxId: string; address: string };
 
 export default function Guides() {
@@ -46,13 +64,14 @@ export default function Guides() {
         <div className="panel-head"><h2>Guide directory</h2><span className="hint">{rows.length} active · ranked by completed tours</span></div>
         <div className="grid-scroll">
           <table className="acct-table">
-            <thead><tr><th>Guide</th><th>Presence</th><th>Languages</th><th className="r">Tours</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Guide</th><th>Presence</th><th>Reach</th><th>Languages</th><th className="r">Tours</th><th>Status</th><th /></tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={7} className="op-empty">No guides.</td></tr> : rows.map((g) => (
+              {rows.length === 0 ? <tr><td colSpan={8} className="op-empty">No guides.</td></tr> : rows.map((g) => (
                 <Fragment key={g.guideId}>
                 <tr>
                   <td style={{ whiteSpace: "nowrap" }}><span className="gid">{g.guideId}</span> {g.name}</td>
                   <td style={{ whiteSpace: "nowrap" }}><span className={`presence-dot ${isOnline(g.lastSeenAt) ? "on" : "off"}`} />{isOnline(g.lastSeenAt) ? <b style={{ fontSize: 12, color: "var(--green)" }}>Online</b> : <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{lastSeenLabel(g.lastSeenAt)}</span>}</td>
+                  <td style={{ whiteSpace: "nowrap" }}><Reach g={g} /></td>
                   <td style={{ color: "var(--ink-soft)" }}>{g.languages || "—"}</td>
                   <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}>{g.tours}</td>
                   <td>{g.offerBlocked
@@ -67,7 +86,7 @@ export default function Guides() {
                   </td>
                 </tr>
                 {editId === g.id && (
-                  <tr><td colSpan={7} style={{ background: "var(--grey-bg,#f7f8f7)", padding: 14 }}>
+                  <tr><td colSpan={8} style={{ background: "var(--grey-bg,#f7f8f7)", padding: 14 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
                       <label style={lbl}>E-mail (login){g.email?.endsWith(".folkpath.local") ? <span style={{ color: "var(--danger)", fontWeight: 600 }}> · placeholder</span> : null}<input className="search" type="email" value={form.email} onChange={(e) => setForm((x) => ({ ...x, email: e.target.value }))} placeholder="name@email.com" /></label>
                       <label style={lbl}>Full name<input className="search" value={form.fullName} onChange={(e) => setForm((x) => ({ ...x, fullName: e.target.value }))} /></label>
