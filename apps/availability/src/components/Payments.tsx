@@ -162,7 +162,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     else alert(d.hint || d.detail || `Slip upload failed (${r.status}).`);
   }
   async function removeRow(guideId: string, guide: string) {
-    if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports and payments. Cannot be undone.`)) return;
+    if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports, payments AND the imported bookings for those tours, so they won't re-sync back onto Payments.\n\nThis does NOT cancel anything on the OTA (GetYourGuide) — do that there first. Cannot be undone.`)) return;
     const r = await fetch("/api/payments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId }) });
     if (r.ok) load(period);
   }
