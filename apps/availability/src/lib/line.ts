@@ -74,6 +74,13 @@ export function linePush(to: string, text: string) {
   return lineApi("message/push", { to, messages: [{ type: "text", text }] });
 }
 
+// Push a LINE Flex message (a rich JSON bubble — e.g. the payment table). `altText`
+// is what shows in the chat list / on clients that can't render Flex, so keep the
+// plain-text summary there as a graceful fallback.
+export function linePushFlex(to: string, altText: string, contents: object) {
+  return lineApi("message/push", { to, messages: [{ type: "flex", altText: altText.slice(0, 400), contents }] });
+}
+
 type PostbackAction = { label: string; data: string; displayText?: string };
 // Push a buttons template with tappable postback actions (e.g. Accept / Deny).
 // `text` is the body shown above the buttons (max ~160 chars).

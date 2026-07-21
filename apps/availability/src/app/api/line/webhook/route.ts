@@ -4,6 +4,9 @@ import { verifyLineSignature, lineReply } from "@/lib/line";
 import { audit } from "@/lib/audit";
 import { acceptOffer, denyOffer, slotLabel } from "@/lib/offers";
 import { captureLineContact, markContactLinked } from "@/lib/line-contacts";
+import { notifyOps } from "@/lib/booking-import";
+import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense } from "@/lib/jobsheet";
+import { SLOT_TIMES } from "@/lib/slots";
 
 // LINE calls this (no app session). Verify the signature, then handle events.
 export async function POST(req: NextRequest) {
@@ -43,6 +46,37 @@ export async function POST(req: NextRequest) {
         await denyOffer(offerId, guide.guideId);
         await audit({ actorId: guide.id, action: "offer.denied", entityType: "JobOffer", entityId: offerId });
         if (ev.replyToken) await lineReply(ev.replyToken, "No problem — thanks for letting us know. 🙏");
+      }
+      continue;
+    }
+
+    if (ev.type === "postback" && ev.postback?.data?.startsWith("expreview:")) {
+      // The guide tapped "Looks right" / "Something's off" on their payment card.
+      const [, action, period] = ev.postback.data.split(":");
+      const guide = await prisma.user.findFirst({ where: { lineUserId: userId }, select: { id: true, guideId: true, displayName: true } });
+      if (!guide?.guideId) {
+        if (ev.replyToken) await lineReply(ev.replyToken, "Please link your guide account first: app → My details → Connect LINE.");
+        continue;
+      }
+      const monthLabel = /^\d{4}-\d{2}$/.test(period || "") ? new Date(`${period}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" }) : (period || "your");
+      if (action === "ok") {
+        await audit({ actorId: guide.id, action: "expense.review.confirmed", entityType: "PayrollStatus", entityId: `${guide.guideId}|${period}`, detail: { period } });
+        if (ev.replyToken) await lineReply(ev.replyToken, `✓ Thanks, ${guide.displayName}! Your ${monthLabel} expenses are confirmed.`);
+      } else if (action === "off") {
+        // Pinpoint which tours the guide's reported total differs from what was reimbursed.
+        const sheets = await prisma.jobSheet.findMany({ where: { guideId: guide.guideId, date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { date: true, slotIdx: true, expenses: true, guideExpenses: true } });
+        const diffs = sheets.map((s) => {
+          const paid = Math.round(computeTotals((s.expenses as Expense[]) ?? [], DEFAULT_GUIDE_FEE).totalExpenses);
+          const ge = Array.isArray(s.guideExpenses) ? (s.guideExpenses as Expense[]) : null;
+          const rep = ge && ge.length ? Math.round(ge.reduce((a, e) => a + expenseAmount(e), 0)) : null;
+          return rep != null && rep !== paid ? { date: s.date, slotIdx: s.slotIdx, rep, paid } : null;
+        }).filter((d): d is { date: string; slotIdx: number; rep: number; paid: number } => !!d);
+        const summary = diffs.length
+          ? diffs.map((d) => `${d.date} ${SLOT_TIMES[d.slotIdx] ?? ""}: reported ฿${d.rep.toLocaleString("en-US")} vs ฿${d.paid.toLocaleString("en-US")}`).join("; ")
+          : "the reimbursed amounts don't match their report";
+        await notifyOps(`${guide.displayName} flagged their ${monthLabel} expenses${diffs.length ? ` — ${diffs.length} tour(s) differ: ${summary}` : ` — ${summary}`}. Please review.`, "⚠️ Expense flagged by a guide", `${guide.displayName} · ${monthLabel}`);
+        await audit({ actorId: guide.id, action: "expense.review.flagged", entityType: "PayrollStatus", entityId: `${guide.guideId}|${period}`, detail: { period, diffs } });
+        if (ev.replyToken) await lineReply(ev.replyToken, `Thanks, ${guide.displayName} — we'll re-check your ${monthLabel} expenses. The operator has been notified and will get back to you. 🙏`);
       }
       continue;
     }
