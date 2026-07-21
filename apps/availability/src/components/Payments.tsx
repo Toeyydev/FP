@@ -55,7 +55,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   }
   // Remove a single uploaded job sheet + its tour records (operators only).
   async function removeJob(j: Job, guideId: string, guide: string) {
-    if (!confirm(`Remove this job sheet?\n${guide} · ${dShort(j.date)} ${SLOTS[j.slotIdx]?.start} · ${j.tour}\n\nDeletes the job sheet, assignment, payment and any check-in/report for this tour. Cannot be undone.`)) return;
+    if (!confirm(`Remove this job sheet?\n${guide} · ${dShort(j.date)} ${SLOTS[j.slotIdx]?.start} · ${j.tour}${j.ref ? ` · ${j.ref}` : ""}\n\nDeletes the job sheet, assignment, payment, any check-in/report AND the imported booking for this tour, so it won't re-sync back onto Payments.\n\nThis does NOT cancel it on the OTA (GetYourGuide) — do that there first. Cannot be undone.`)) return;
     const r = await fetch("/api/jobsheet", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx }) });
     if (r.ok) load(period);
   }
@@ -293,7 +293,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 {canEdit && (j.paid
                   ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
                   : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
-                {canEdit && <button className="btn sm danger" title="Remove this job sheet + its tour records" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
+                {canEdit && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
               </div>
             ))}
           </td></tr>
