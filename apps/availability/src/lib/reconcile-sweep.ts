@@ -14,6 +14,11 @@ export type SweepResult = { disabled?: boolean; checked: number; drift: number; 
 
 const bkkToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
+// Phase 0 (probe) runs silently: flags are written and visible on the dashboard, but
+// no operator push is sent until alerts are explicitly enabled. Opt-in, so a fresh
+// deploy is silent by default and Phase 1 is one env var flip (RECONCILE_ALERTS_ENABLED=true).
+const alertsEnabled = () => process.env.RECONCILE_ALERTS_ENABLED === "true";
+
 // Default window: today → +14 days (the tours close enough that a mismatch still
 // matters). Callers can widen it (e.g. a manual backfill over a past range).
 export async function reconcileSweep(opts?: { fromDate?: string; toDate?: string }): Promise<SweepResult> {
@@ -75,7 +80,9 @@ export async function reconcileSweep(opts?: { fromDate?: string; toDate?: string
       const flag = await prisma.reconciliationFlag.create({
         data: { bookingId: b.id, externalRef: portal.ref, kind: result.kind, action: result.action, portalStatus: portal.status, channelStatus, portalPax: portal.pax, channelPax, tourDate: b.date },
       });
-      alerted += await alertOperators(flag.externalRef ?? b.id, result.action, b.id);
+      // New drift → alert operators, but only once alerts are switched on (Phase 1).
+      // In Phase 0 the flag still lands on the dashboard; it just doesn't ping anyone.
+      if (alertsEnabled()) alerted += await alertOperators(flag.externalRef ?? b.id, result.action, b.id);
     }
   }
 
