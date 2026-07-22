@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
 
   const form = await req.formData().catch(() => null);
   const bonusId = String(form?.get("bonusId") || "");
+  const slipRef = String(form?.get("ref") || "").trim().slice(0, 60); // slip's ref no. → becomes the bonus REF NO.
   const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
   if (!bonusId || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const mime = file.type || "image/jpeg";
   const monthFolder = `${bonus.period} ${MONTHS[Number(bonus.period.slice(5, 7)) - 1] ?? ""}`.trim();
-  const tag = (bonus.ref || `Bonus ${bonusId.slice(-6)}`).replace(/[\\/:*?"<>|]/g, " ").trim();
+  const tag = (slipRef || bonus.ref || `Bonus ${bonusId.slice(-6)}`).replace(/[\\/:*?"<>|]/g, " ").trim();
   const name = `${tag} — ${guideName} — bonus.${extOf(mime)}`;
 
   let link: string;
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
   }
-  await prisma.bonus.update({ where: { id: bonusId }, data: { eslipUrl: link } });
+  await prisma.bonus.update({ where: { id: bonusId }, data: { eslipUrl: link, ...(slipRef ? { ref: slipRef } : {}) } });
   try {
     await notifyGuide(bonus.guideId, `Your bonus${bonus.reason ? ` (${bonus.reason})` : ""} has been transferred — ${thb(bonus.amount)}. 🎁`, "Bonus transferred \ud83c\udf81", `${thb(bonus.amount)}${bonus.reason ? ` · ${bonus.reason}` : ""}`);
   } catch { /* best-effort */ }
