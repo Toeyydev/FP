@@ -6,6 +6,75 @@ import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } fr
 
 const BASE = "https://guide.folkpaths.com";
 
+// Whole-baht (no decimals) — payment amounts in the breakdown read as round numbers.
+const baht = (v: number) => `฿${Math.round(v).toLocaleString("en-US")}`;
+
+export type PayRow = { dateLabel: string; time: string; tour: string; expenses: number; fee: number; total: number };
+
+// Build the LINE Flex "payment breakdown" bubble: a header (heading + total · tour
+// count) and one row per paid tour (date/time · tour · expenses · fee · total),
+// with buttons to the bank slip and the guide's pay page. Pure — unit-tested.
+export function paymentBubble(heading: string, jobs: PayRow[], total: number, slipUrl?: string): Record<string, unknown> {
+  const MAX = 12;
+  const shown = jobs.slice(0, MAX);
+  const rows: Record<string, unknown>[] = shown.map((j, i) => ({
+    type: "box", layout: "horizontal", spacing: "sm", margin: i ? "lg" : "md",
+    contents: [
+      { type: "text", text: `${j.dateLabel}\n${j.time}`, size: "xs", color: "#8c8c8c", flex: 3, wrap: true, gravity: "top" },
+      {
+        type: "box", layout: "vertical", flex: 8, spacing: "xs",
+        contents: [
+          { type: "text", text: j.tour, size: "sm", color: "#333333", wrap: true },
+          {
+            type: "box", layout: "horizontal", spacing: "sm",
+            contents: [
+              { type: "text", text: "Expenses", size: "xs", color: "#8c8c8c", flex: 0 },
+              { type: "text", text: baht(j.expenses), size: "xs", color: "#8c8c8c", flex: 0 },
+              { type: "text", text: "· Fee", size: "xs", color: "#8c8c8c", flex: 0 },
+              { type: "text", text: baht(j.fee), size: "xs", color: "#8c8c8c" },
+            ],
+          },
+        ],
+      },
+      { type: "text", text: baht(j.total), size: "sm", weight: "bold", color: "#1b5e20", flex: 3, align: "end", gravity: "center" },
+    ],
+  }));
+  if (jobs.length > MAX) rows.push({ type: "text", text: `+ ${jobs.length - MAX} more tours — see the full list on your pay page.`, size: "xs", color: "#8c8c8c", margin: "lg", align: "center", wrap: true });
+
+  // Footer links as tappable text (a Flex button can't carry a plain URL label the
+  // same way): the bank slip (only when uploaded) and the pay page.
+  const footer: Record<string, unknown>[] = [];
+  if (slipUrl) footer.push({
+    type: "text", wrap: true, size: "sm", weight: "bold", color: "#1b5e20",
+    contents: [{ type: "span", text: "Bank slip: ", color: "#8c8c8c", weight: "regular" }, { type: "span", text: "tap to view the transfer", color: "#1b5e20" }],
+    action: { type: "uri", label: "Bank slip", uri: slipUrl },
+  });
+  footer.push({
+    type: "text", wrap: true, size: "sm",
+    contents: [{ type: "span", text: "Payment details & job sheets: ", color: "#8c8c8c" }, { type: "span", text: `${BASE}/pay`, color: "#1b5e20", weight: "bold" }],
+    action: { type: "uri", label: "Job sheets", uri: `${BASE}/pay` },
+  });
+
+  return {
+    type: "bubble",
+    header: {
+      type: "box", layout: "vertical", spacing: "sm", paddingAll: "16px",
+      contents: [
+        { type: "text", text: heading, weight: "bold", size: "md", color: "#1b5e20", wrap: true },
+        {
+          type: "text", wrap: true,
+          contents: [
+            { type: "span", text: baht(total), weight: "bold", size: "xl", color: "#1b5e20" },
+            { type: "span", text: `  |  ${jobs.length} tour${jobs.length === 1 ? "" : "s"}`, size: "sm", color: "#8c8c8c" },
+          ],
+        },
+      ],
+    },
+    body: { type: "box", layout: "vertical", paddingAll: "16px", contents: rows },
+    footer: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "12px", contents: footer },
+  };
+}
+
 // One payment notification (LINE + in-app): a short summary plus the completed
 // tours just paid (date · time · tour · amount). Shared by the monthly e-slip
 // and the per-tour / merged-batch slip so both read identically.
@@ -25,19 +94,36 @@ export async function sendPaymentNotice(
   const tourName = (d: string, s: number) => asgs.find((a) => a.date === d && a.slotIdx === s)?.tour?.name ?? "Tour";
   const sorted = [...jobs].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
   let total = 0;
-  const lines = sorted.map((j) => {
+  const rows = sorted.map((j) => {
     const sh = sheetMap.get(`${j.date}|${j.slotIdx}`);
-    const amt = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE).grandTotal : 0;
-    total += amt;
-    const dl = new Date(`${j.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-    return `✓ ${dl} · ${SLOT_TIMES[j.slotIdx] ?? ""} — ${tourName(j.date, j.slotIdx)}${amt > 0 ? ` · ${thb(amt)}` : ""}`;
+    const tt = sh ? computeTotals((sh.expenses as Expense[]) ?? [], (sh.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE) : { totalExpenses: 0, netGuideFee: 0, grandTotal: 0 };
+    total += tt.grandTotal;
+    const d = new Date(`${j.date}T00:00:00`);
+    return {
+      dateLabel: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+      dateLabelFull: d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }),
+      time: SLOT_TIMES[j.slotIdx] ?? "",
+      tour: tourName(j.date, j.slotIdx),
+      expenses: tt.totalExpenses, fee: tt.netGuideFee, total: tt.grandTotal,
+    };
   });
+  const lines = rows.map((j) => `✓ ${j.dateLabelFull} · ${j.time} — ${j.tour}${j.total > 0 ? ` · ${thb(j.total)}` : ""}`);
   const head = `💸 Your payment${scope ? ` for ${scope}` : ""} has been transferred${total > 0 ? ` — ${thb(total)}` : ""} for ${jobs.length} tour${jobs.length === 1 ? "" : "s"}. Thank you!`;
   const slipLine = slipUrl ? `\n\nBank slip: ${slipUrl}` : "";
   // Deep-link to the guide's pay page, where every paid tour now opens its job sheet
   // — so right after the slip lands the guide can check each previous job sheet.
   const sheetsLine = `\n\nYour tours & job sheets: ${BASE}/pay`;
-  await notifyGuide(guideId, `${head}\n\n${lines.join("\n")}${slipLine}${sheetsLine}`, "Payment transferred 💸", `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`);
+  // On LINE, deliver the rich breakdown TABLE (expenses + fee + total per tour); the
+  // in-app / push / email channels keep the plain-text summary.
+  const heading = `💸 ${scope ? `${scope} payment` : "Payment"} transferred`;
+  const altText = `Payment transferred${total > 0 ? ` — ${thb(total)}` : ""} · ${jobs.length} tour${jobs.length === 1 ? "" : "s"}`;
+  await notifyGuide(
+    guideId,
+    `${head}\n\n${lines.join("\n")}${slipLine}${sheetsLine}`,
+    "Payment transferred 💸",
+    `${scope ?? `${jobs.length} tour${jobs.length === 1 ? "" : "s"}`}${total > 0 ? ` · ${thb(total)}` : ""}`,
+    { altText, contents: paymentBubble(heading, rows, total, slipUrl) },
+  );
 }
 
 type SheetJob = {
