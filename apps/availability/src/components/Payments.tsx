@@ -245,6 +245,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // for their paid tours — so a single tour moves to Paid the moment it's paid.
   const unpaidGuides = visible.filter((r) => r.jobs.some((j) => !j.paid));
   const paidGuides = visible.filter((r) => r.jobs.some((j) => j.paid));
+  // Flat, date-sorted list of every unpaid job across all guides — the "Pending only"
+  // view, so pending payments read in tour-date order (earliest first) rather than by guide.
+  const pendingFlat: (Job & { guideId: string; guide: string })[] = rows
+    .filter((r) => !ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql))
+    .flatMap((r) => r.jobs.filter((j) => !j.paid).map((j) => ({ ...j, guideId: r.guideId, guide: r.guide })))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx);
   const sumBy = (jobs: Job[], k: "amount" | "fee" | "expenses") => jobs.reduce((s, j) => s + (j[k] ?? 0), 0);
 
   function renderGuideRow(r: Row, jobs: Job[], mode: "unpaid" | "paid") {
@@ -360,6 +366,34 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600 }}>Month total: {thb(totals.payout)}</span>
         </div>
         <div className="grid-scroll">
+          {statusFilter === "pending" ? (
+          <table className="acct-table pay-table">
+            <thead>
+              <tr><th>Date</th><th>Guide</th><th>Tour</th><th className="r">Amount</th><th></th></tr>
+            </thead>
+            <tbody>
+              {pendingFlat.length === 0 ? (
+                <tr><td colSpan={5} className="op-empty">{unpaidJobs.length === 0 ? "Everyone's paid — no pending payments this month." : "No pending payments match this search."}</td></tr>
+              ) : pendingFlat.map((j) => (
+                <tr key={`${j.guideId}|${j.date}|${j.slotIdx}`}>
+                  <td style={{ whiteSpace: "nowrap" }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</td>
+                  <td><span className="gid">{j.guideId}</span> {j.guide}</td>
+                  <td>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</td>
+                  <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}><b>{thb(j.amount)}</b></td>
+                  <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(j.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
+                    {canEdit && <button className="btn sm primary" title="Mark this job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, j.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            {pendingFlat.length > 0 && (
+              <tfoot>
+                <tr className="pay-foot"><td colSpan={3}><b>{pendingFlat.length} pending job{pendingFlat.length === 1 ? "" : "s"}</b></td><td className="r"><b>{thb(pendingFlat.reduce((s, j) => s + j.amount, 0))}</b></td><td></td></tr>
+              </tfoot>
+            )}
+          </table>
+          ) : (
           <table className="acct-table pay-table">
             <thead>
               <tr><th>Guide</th><th className="r">Tours</th><th className="r">Guide fee (net)</th><th className="r">Expenses</th><th className="r">Total payout</th><th>PEAK ref</th><th>Status</th><th></th></tr>
@@ -387,6 +421,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               </tfoot>
             )}
           </table>
+          )}
         </div>
       </section>
 
