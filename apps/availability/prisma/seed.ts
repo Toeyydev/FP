@@ -8,7 +8,7 @@ const TOURS: [string, string, string][] = [
   ["T-002", "Wat Phra Kaew & Grand Palace, Wat Pho & Wat Arun", "13.30 PM"],
   ["T-003", "Wat Pho & Wat Arun Guided Tour", "10.00 AM"],
   ["T-004", "Wat Pho & Wat Arun Guided Tour", "15.00 PM"],
-  ["T-005", "Wat Phrakaew & The Grand Palace Guided Tour", "14.00 PM"],
+  ["T-005", "Wat Phrakaew & Grand Palace", "14.00 PM"],
   ["T-006", "Wat Pho Evening Visit with Temple Cats", "17.30 PM"],
   ["T-007", "Eat Like a Local — China Town", "16.30 PM"],
   ["T-008", "Eat Like a Local — China Town", "17.30 PM"],
