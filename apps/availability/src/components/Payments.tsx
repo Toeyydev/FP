@@ -116,8 +116,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     if (r.ok) loadBonuses(period);
   }
   async function uploadBonusEslip(bonusId: string, file: File) {
+    // The bonus REF NO. follows the payment slip: capture the slip's ref no. on upload
+    // (blank keeps the current ref).
+    const slipRef = prompt("Payment slip ref no. — sets the bonus REF NO. (leave blank to keep the current ref):", "");
     const blob = await shrinkImage(file);
     const fd = new FormData(); fd.append("bonusId", bonusId); fd.append("file", blob, shrunkName(file.name, blob));
+    if (slipRef && slipRef.trim()) fd.append("ref", slipRef.trim());
     const r = await fetch("/api/payments/bonus/eslip", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (r.ok) loadBonuses(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
