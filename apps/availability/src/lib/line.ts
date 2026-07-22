@@ -74,6 +74,16 @@ export function linePush(to: string, text: string) {
   return lineApi("message/push", { to, messages: [{ type: "text", text }] });
 }
 
+// Wrap a Flex bubble/carousel in the message envelope LINE expects. altText is what
+// shows in the chat list + notification (LINE caps it at 400 chars).
+export function flexMessage(altText: string, contents: Record<string, unknown>) {
+  return { type: "flex" as const, altText: altText.slice(0, 400), contents };
+}
+// Push a Flex message (a rich card, e.g. the payment breakdown table).
+export function linePushFlex(to: string, altText: string, contents: Record<string, unknown>) {
+  return lineApi("message/push", { to, messages: [flexMessage(altText, contents)] });
+}
+
 type PostbackAction = { label: string; data: string; displayText?: string };
 // Push a buttons template with tappable postback actions (e.g. Accept / Deny).
 // `text` is the body shown above the buttons (max ~160 chars).
