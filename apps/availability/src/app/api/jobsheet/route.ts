@@ -278,6 +278,24 @@ export async function DELETE(req: NextRequest) {
   const slotIdx = Number(body?.slotIdx);
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const where = { guideId, date, slotIdx };
+  // Imported bookings (bokun/gyg/viator) for this slot must go too, not just
+  // manual ones: otherwise the surviving Booking is re-turned into a job by the
+  // Bookings Inbox on the next sync and the row reappears on Payments (the
+  // "won't stay deleted" bug for imported bookings). Snapshot them into the audit
+  // trail first — they feed PEAK accounting and this is a hard delete.
+  // Split-aware: a slot split across guides (any booking tagged with
+  // assignedGuideId) only loses THIS guide's tagged bookings, never the co-guide's,
+  // mirroring the split rule in GET above; a normal slot combines into one job so
+  // all its bookings are this guide's.
+  // NB: the operator must have already cancelled the booking on the OTA
+  // (GetYourGuide); deleting here does NOT propagate to the channel.
+  const atSlot = await prisma.booking.findMany({
+    where: { date, slotIdx },
+    select: { id: true, source: true, externalRef: true, confirmationCode: true, customerName: true, pax: true, status: true, paymentStatus: true, assignedGuideId: true },
+  });
+  const splitHere = atSlot.some((b) => b.assignedGuideId);
+  const deletedBookings = splitHere ? atSlot.filter((b) => b.assignedGuideId === guideId) : atSlot;
+  const doomedIds = deletedBookings.map((b) => b.id);
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),
@@ -285,8 +303,8 @@ export async function DELETE(req: NextRequest) {
     prisma.tourPayment.deleteMany({ where }),
     prisma.assignment.deleteMany({ where }),
     prisma.jobSheet.deleteMany({ where }),
-    prisma.booking.deleteMany({ where: { date, slotIdx, source: "manual" } }),
+    ...(doomedIds.length ? [prisma.booking.deleteMany({ where: { id: { in: doomedIds } } })] : []),
   ]);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, deletedBookings } });
   return NextResponse.json({ ok: true });
 }
