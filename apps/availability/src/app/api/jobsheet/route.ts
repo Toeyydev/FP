@@ -60,6 +60,21 @@ export async function GET(req: NextRequest) {
   // Whether this guide has checked in for the tour — gates the guide's no-show boxes.
   const checkedIn = (await prisma.checkin.count({ where: { guideId, date, slotIdx } })) > 0;
 
+  // Paid state for this slot. Once the operator has uploaded the slip / marked it paid
+  // (per-tour TourPayment, or the guide's whole-month payroll), the guide's summary
+  // shows the operator's FINAL official expenses (which equal the transfer) instead of
+  // the report flow. Slip = per-tour e-slip, else the monthly batch slip.
+  const period = date.slice(0, 7);
+  const [tourPay, payroll] = await Promise.all([
+    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true } }),
+  ]);
+  const payment = {
+    paid: tourPay?.status === "PAID" || payroll?.status === "paid",
+    paidAt: tourPay?.paidAt ?? payroll?.paidAt ?? null,
+    slip: tourPay?.eslipUrl ?? payroll?.eslipUrl ?? null,
+  };
+
   // Collapse repeated guests to a single row — the same booking must appear only once
   // (a re-import or combine can leave a guest listed twice). The SAME booking can
   // arrive under two name spellings ("Romel Sierra" vs "Sierra, Romel"), so dedupe by
@@ -129,7 +144,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -184,7 +199,7 @@ export async function GET(req: NextRequest) {
       .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -193,7 +208,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, checkedIn,
+    header, tour, saved: false, canEdit: isOps, checkedIn, payment,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }
