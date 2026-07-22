@@ -6,6 +6,7 @@ import { thb } from "@/lib/jobsheet";
 import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
+import ReconcileFlags from "@/components/ReconcileFlags";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
@@ -322,6 +323,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       <div id="appBar"><div className="subtabs"><span className="subtab active">Payments</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
+
+      <ReconcileFlags canResolve={canEdit} />
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12, padding: 14 }}>

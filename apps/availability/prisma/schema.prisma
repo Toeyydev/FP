@@ -571,3 +571,28 @@ model Bonus {
 
   @@index([period])
 }
+
+// Option A (detect & alert): a detected mismatch between a portal Booking and its
+// authoritative state on GetYourGuide (read via Bokun). The portal never writes to
+// the channel — this only records drift for the operator to resolve on GYG. One
+// open (resolved=false) row per booking; a later clean check flips it to resolved.
+model ReconciliationFlag {
+  id            String    @id @default(cuid())
+  bookingId     String // portal Booking.id
+  externalRef   String? // OTA / Bokun ref for display
+  kind          String // STATUS_MISMATCH | PAX_MISMATCH | MISSING_ON_CHANNEL
+  action        String // human-readable next step for the operator
+  portalStatus  String // Active | Cancelled
+  channelStatus String // Active | Cancelled | MISSING
+  portalPax     Int
+  channelPax    Int
+  tourDate      String? // "YYYY-MM-DD" of the tour, for filtering the operator view
+  resolved      Boolean   @default(false)
+  resolvedBy    String?
+  resolvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  lastCheckedAt DateTime  @default(now())
+
+  @@index([resolved, tourDate])
+  @@index([bookingId])
+}
