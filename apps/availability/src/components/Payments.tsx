@@ -25,7 +25,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "paid">("all");
   const [q, setQ] = useState(""); // filter by guide id / name
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
-  const [bForm, setBForm] = useState({ guideId: "", amount: "", reason: "" });
+  // date/slotIdx are set only when the bonus is tied to a rewarded tour (via "Reward a
+  // review"), so the server can make the bonus ref follow that tour's job-sheet number.
+  const [bForm, setBForm] = useState<{ guideId: string; amount: string; reason: string; date?: string; slotIdx?: number }>({ guideId: "", amount: "", reason: "" });
   // "Reward a review" helper: the OTA email gives only the product + rating; the
   // operator adds the tour date or reviewer name to find who guided it.
   const [rv, setRv] = useState({ paste: "", date: "", name: "", product: "", stars: 0, comment: "", ota: "GYG" });
@@ -81,7 +83,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   async function addBonus() {
     const amt = parseFloat(bForm.amount);
     if (!bForm.guideId || !(amt > 0)) return;
-    const r = await fetch("/api/payments/bonus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId: bForm.guideId, amount: amt, reason: bForm.reason }) });
+    const r = await fetch("/api/payments/bonus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId: bForm.guideId, amount: amt, reason: bForm.reason, ...(bForm.date && bForm.slotIdx != null ? { date: bForm.date, slotIdx: bForm.slotIdx } : {}) }) });
     if (r.ok) { setBForm({ guideId: "", amount: "", reason: "" }); setExtraGuides([]); loadBonuses(period); }
   }
   // Pull product / rating / comment out of a pasted OTA review email.
@@ -106,7 +108,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   function rewardCandidate(c: Candidate) {
     const reason = `${rv.stars ? rv.stars + "★ " : ""}${rv.ota || "OTA"} · ${c.tour} · ${dShort(c.date)}${rv.comment ? ` · "${rv.comment}"` : ""}`.slice(0, 200);
     setExtraGuides((g) => g.some((x) => x.guideId === c.guideId) ? g : [...g, { guideId: c.guideId, guide: c.guide }]);
-    setBForm({ guideId: c.guideId, amount: "", reason });
+    setBForm({ guideId: c.guideId, amount: "", reason, date: c.date, slotIdx: c.slotIdx });
     setRvMatches(null);
   }
   async function delBonus(id: string) {
@@ -449,7 +451,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           )}
           {canEdit && (
           <div className="op-toolbar" style={{ gap: 8, flexWrap: "wrap" }}>
-            <select className="search" style={{ flex: "none", width: 200 }} value={bForm.guideId} onChange={(e) => setBForm((x) => ({ ...x, guideId: e.target.value }))}>
+            <select className="search" style={{ flex: "none", width: 200 }} value={bForm.guideId} onChange={(e) => setBForm((x) => ({ ...x, guideId: e.target.value, date: undefined, slotIdx: undefined }))}>
               <option value="">Choose guide…</option>
               {[...rows.map((g) => ({ guideId: g.guideId, guide: g.guide })), ...extraGuides.filter((e) => !rows.some((r) => r.guideId === e.guideId))].map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.guide}</option>)}
             </select>

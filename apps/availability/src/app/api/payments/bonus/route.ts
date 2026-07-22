@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { canViewFinance } from "@/lib/roles";
+import { nextJobRef } from "@/lib/jobref";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const PERIOD = /^\d{4}-\d{2}$/;
@@ -24,18 +25,35 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ period, rows, total: Math.round(total * 100) / 100 });
 }
 
-// POST { period, guideId, amount, reason? } — add a bonus.
+// POST { period, guideId, amount, reason?, date?, slotIdx? } — add a bonus.
+// When date+slotIdx point at a rewarded tour, the bonus ref FOLLOWS that tour's job
+// sheet number (FOLK-BKK-…) so the bonus is traceable to the job sheet; a sheet with
+// no ref yet is given the next one. Otherwise the bonus gets an auto FOLK-BNS-YYYYMM-NN.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = z.object({
     period: z.string().regex(PERIOD), guideId: z.string().min(1),
     amount: z.number().positive().max(1000000), reason: z.string().max(200).optional(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), slotIdx: z.number().int().min(0).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const d = parsed.data;
-  const seq = (await prisma.bonus.count({ where: { period: d.period } })) + 1;
-  const ref = `FOLK-BNS-${d.period.replace("-", "")}-${String(seq).padStart(2, "0")}`;
+
+  let ref: string | null = null;
+  if (d.date && d.slotIdx != null) {
+    const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
+    const sheet = await prisma.jobSheet.findUnique({ where: key, select: { ref: true } });
+    if (sheet) {
+      ref = sheet.ref ?? (await nextJobRef(d.date));
+      if (!sheet.ref) await prisma.jobSheet.update({ where: key, data: { ref } }).catch(() => {}); // keep sheet + bonus in sync
+    }
+  }
+  if (!ref) {
+    const seq = (await prisma.bonus.count({ where: { period: d.period } })) + 1;
+    ref = `FOLK-BNS-${d.period.replace("-", "")}-${String(seq).padStart(2, "0")}`;
+  }
+
   const b = await prisma.bonus.create({ data: { period: d.period, guideId: d.guideId, amount: d.amount, reason: d.reason?.trim() || null, ref, createdById: session!.user!.id ?? null } });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bonus.added", entityType: "Bonus", entityId: b.id, detail: { period: d.period, guideId: d.guideId, amount: d.amount } });
   return NextResponse.json({ ok: true });
