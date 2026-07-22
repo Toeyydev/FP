@@ -267,11 +267,13 @@ export default function BookingsInbox() {
               const mins = last ? Math.floor((Date.now() - last) / 60000) : Infinity;
               const live = last && mins < 60 * 24 * 3; // seen in the last 3 days
               const ago = !last ? "never" : mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : mins < 60 * 24 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+              // Only show the badge when the webhook is live; the "Live sync off" state is hidden.
+              if (!live) return null;
               return (
-                <span title={live ? "Bokun's webhook is delivering bookings & cancellations automatically." : "No recent webhook events — bookings only update when you press Sync. Check the Bokun webhook URL."}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, padding: "3px 9px", borderRadius: 999, border: "1px solid", borderColor: live ? "var(--ok-line, var(--line))" : "var(--danger-line)", background: live ? "var(--ok-bg, var(--surface))" : "var(--danger-bg)", color: live ? "var(--ok, #2f7d4f)" : "var(--danger)" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 999, background: live ? "#2f9e54" : "var(--danger)" }} />
-                  {live ? `Live sync · last event ${ago}` : "Live sync off"}
+                <span title="Bokun's webhook is delivering bookings & cancellations automatically."
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, padding: "3px 9px", borderRadius: 999, border: "1px solid", borderColor: "var(--ok-line, var(--line))", background: "var(--ok-bg, var(--surface))", color: "var(--ok, #2f7d4f)" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: "#2f9e54" }} />
+                  {`Live sync · last event ${ago}`}
                 </span>
               );
             })()}
