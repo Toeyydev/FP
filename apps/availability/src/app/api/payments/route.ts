@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { tourNameMap } from "@/lib/tour-master";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const thisMonth = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
@@ -20,17 +21,17 @@ export async function GET(req: NextRequest) {
   // Cap the month at today so future (not-yet-done) tours don't count as earned.
   const monthEnd = `${period}-31`;
   const cap = bkkToday() < monthEnd ? bkkToday() : monthEnd;
-  const [assigns, sheets, statuses, guides, tours, tourPays] = await Promise.all([
+  const [assigns, sheets, statuses, guides, tourPays, nameMap] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: `${period}-01`, lte: cap } }, select: { guideId: true, date: true, slotIdx: true, tourId: true, createdAt: true } }),
     prisma.jobSheet.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, tourId: true, ref: true, expenses: true, guideFee: true, createdAt: true } }),
     prisma.payrollStatus.findMany({ where: { period } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
-    prisma.tour.findMany({ select: { id: true, name: true } }),
     prisma.tourPayment.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, status: true, peakRef: true, paidAt: true, eslipUrl: true } }),
+    tourNameMap(),
   ]);
 
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
-  const tName = (id: string) => tours.find((t) => t.id === id)?.name ?? id;
+  const tName = (id: string) => nameMap.get(id) ?? id;
   const statusOf = (gid: string) => statuses.find((s) => s.guideId === gid);
   const sheetOf = new Map(sheets.map((s) => [`${s.guideId}|${s.date}|${s.slotIdx}`, s]));
   const payStatusOf = new Map(tourPays.map((p) => [`${p.guideId}|${p.date}|${p.slotIdx}`, p.status]));

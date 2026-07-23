@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { masterTitle } from "@/lib/tour-master";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
   ]);
   const tourId = existing?.tourId || assignment?.tourId || qTourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
+  const displayName = (await masterTitle(tour?.tourCode)) ?? tour?.name ?? "";
 
   const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, updatedAt: null as Date | null };
   let bookings = (sheet.bookings as Booking[]) ?? [];
@@ -142,7 +144,7 @@ export async function GET(req: NextRequest) {
     <div class="guide">
       <div><span>Tour Date</span><b>${esc(date)}</b></div>
       <div><span>Time</span><b>${esc(time)}</b></div>
-      <div><span>Tour Name</span><b>${esc(tour?.name || "")}</b></div>
+      <div><span>Tour Name</span><b>${esc(displayName)}</b></div>
       <div><span>Guide name</span><b${ce}>${esc(guideName)}</b></div>
       <div><span>Tax ID</span><span${ce}>${esc(taxId || (editable ? "" : "—"))}</span></div>
       <div><span>Address</span><span${ce}>${esc(address || (editable ? "" : "—"))}</span></div>

@@ -45,6 +45,15 @@ export async function GET(req: NextRequest) {
   ]);
   const tourId = existing?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
+  // The internal `tour.name` (e.g. "…Wat Pho & Wat Arun") still drives the Lotus/
+  // ticket expense logic below, which keys off those temple words. The header shown
+  // to the operator/guide, though, should read the real product title from the
+  // TourMaster catalogue when this tour is linked to one — resolved here and applied
+  // to the returned `tour` object AFTER the expense catalogue is built from the
+  // original name.
+  const masterName = tour?.tourCode
+    ? (await prisma.tourMaster.findUnique({ where: { tourCode: tour.tourCode }, select: { tourName: true, isActive: true } }))
+    : null;
 
   // Give every saved sheet a job number. Sheets auto-created from a late-booking
   // combine never got one (ref stayed null → "auto on save"); assign the next ref
@@ -109,6 +118,9 @@ export async function GET(req: NextRequest) {
   // add, which writes only bookings). "(Inc. Guide)" items add +1 (the guide).
   const clientPax = linked.reduce((s, b) => s + (b.pax ?? 0), 0) || (assignment?.pax ?? 0);
   const catalogue = defaultExpensesForTour(tour?.name);
+  // Expense catalogue is now fixed from the original name — safe to swap the header
+  // to the real product title for display.
+  if (tour && masterName?.isActive && masterName.tourName) tour.name = masterName.tourName;
   const defaultExpenses = clientPax > 0
     ? catalogue.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
     : catalogue;
