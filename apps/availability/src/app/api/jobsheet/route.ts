@@ -104,14 +104,12 @@ export async function GET(req: NextRequest) {
   // everyone else → their booked count). Booked Pax is always shown alongside.
   const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
 
-  // Standard expense template scaled to the actual guests. Used for a fresh sheet,
-  // AND to backfill a saved sheet that has none (e.g. one auto-created from a late
-  // add, which writes only bookings). "(Inc. Guide)" items add +1 (the guide).
-  const clientPax = linked.reduce((s, b) => s + (b.pax ?? 0), 0) || (assignment?.pax ?? 0);
+  // Standard expense template (labels + prices) with pax left BLANK — the operator
+  // fills the counts via "fill down" on the sheet, so nothing is silently auto-scaled
+  // to a guest count that may be stale. Used for a fresh sheet AND to backfill a saved
+  // sheet that has none (e.g. one auto-created from a late add, which writes only bookings).
   const catalogue = defaultExpensesForTour(tour?.name);
-  const defaultExpenses = clientPax > 0
-    ? catalogue.map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? clientPax + 1 : clientPax }))
-    : catalogue;
+  const defaultExpenses = catalogue;
   // Never show an empty expense table / blank fee for a real tour — fall back to the
   // standard template + guide fee when the saved sheet has none.
   const fill = <T extends { expenses?: unknown; guideFee?: unknown }>(sheet: T) => ({

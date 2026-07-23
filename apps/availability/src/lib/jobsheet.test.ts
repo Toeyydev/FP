@@ -1,5 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax } from "@/lib/jobsheet";
+
+describe("jobsheet — fill down expense pax", () => {
+  const rows = [
+    { description: "Water (Inc. Guide)", price: 10, pax: null },
+    { description: "Grand Palace", price: 500, pax: null },
+    { description: "Lotus (Inc. Guide)", price: 10, pax: null },
+  ];
+  it("sets ticket lines to the guest count and (Inc. Guide) lines to +1", () => {
+    const out = fillDownExpensePax(rows, 4);
+    expect(out.map((e) => e.pax)).toEqual([5, 4, 5]);
+  });
+  it("floors and clamps a bad count to 0 without going negative", () => {
+    expect(fillDownExpensePax(rows, -3).map((e) => e.pax)).toEqual([1, 0, 1]);
+    expect(fillDownExpensePax(rows, 2.9).map((e) => e.pax)).toEqual([3, 2, 3]);
+  });
+  it("does not mutate the input rows", () => {
+    fillDownExpensePax(rows, 6);
+    expect(rows.every((e) => e.pax === null)).toBe(true);
+  });
+});
 
 describe("jobsheet — lotus fee only for Wat Pho & Wat Arun tours", () => {
   const hasLotus = (name: string) => defaultExpensesForTour(name).some((e) => /lotus/i.test(e.description));

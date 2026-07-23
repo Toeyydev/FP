@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, fillDownExpensePax, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { SLOT_TIMES } from "@/lib/slots";
 
 type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string } | null;
@@ -47,6 +47,7 @@ export default function JobSheetEditor() {
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
   const [expBusy, setExpBusy] = useState(false);
+  const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -67,6 +68,11 @@ export default function JobSheetEditor() {
   useEffect(() => {
     setSheet((prev) => {
       if (!prev) return prev;
+      // Only sync attraction (ticket) pax to the ticket-included headcount ONCE the
+      // operator has started tagging tickets. Until then, every expense pax is the
+      // operator's to set (blank defaults + "Fill down"), so we never force it to 0.
+      const anyTicketTagged = prev.bookings.some((b) => b.tickets === "included" || b.tickets === "not");
+      if (!anyTicketTagged) return prev;
       const ATTRACTIONS = ["grand palace", "wat pho", "wat arun"];
       const inclPax = prev.bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? b.bookedPax ?? 0) : 0), 0);
       let changed = false;
@@ -411,6 +417,19 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
+        {!ro && (() => {
+          // Expense pax starts blank — the operator enters the guest count once here
+          // and fills every line (attraction/ticket lines get the count, "(Inc. Guide)"
+          // lines get +1). They can still tweak any line by hand afterwards.
+          const guestTotal = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
+          return (
+            <span className="no-print" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginLeft: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>Fill down pax:</span>
+              <input type="number" min={0} value={fillPax} placeholder={String(guestTotal || "")} onChange={(e) => setFillPax(e.target.value)} style={{ ...L, width: 72 }} title="Guest count to apply to every expense line (Inc. Guide +1)" />
+              <button className="btn sm" title="Set every expense line's pax from this guest count" onClick={() => { const p = fillPax.trim() === "" ? guestTotal : Math.max(0, Math.floor(Number(fillPax) || 0)); up({ expenses: fillDownExpensePax(sheet.expenses, p) }); }}>Fill down</button>
+            </span>
+          );
+        })()}
 
         {/* Guide-reported expenses — cross-check (operator only) */}
         {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && (() => {
