@@ -9,6 +9,7 @@ import { nextJobRef } from "@/lib/jobref";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
+import { removeTourEvents } from "@/lib/tour-calendar-sync";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -280,10 +281,16 @@ export async function POST(req: NextRequest) {
 }
 
 
-// DELETE { guideId, date, slotIdx } — operator/admin only. Remove a single uploaded
-// job sheet and the tour records tied to that slot (assignment, payment, check-ins,
-// report, rating, and any manually-imported bookings for it). For undoing a bad
-// import or a one-off tour from the Payments screen. Real (Bokun) bookings are kept.
+// DELETE { guideId, date, slotIdx, guardStarted? } — operator/admin only. Remove a single
+// job sheet and the tour records tied to that slot (assignment, payment, check-ins, report,
+// rating) AND hard-delete the slot's bookings — imported (bokun/gyg/viator) as well as
+// manual — so a synced booking doesn't reappear as a job (see the block below). The operator
+// must have already cancelled the booking on the OTA; this does NOT propagate to the channel.
+// Used from Payments (undo a bad import / one-off tour) and from the Job Sheet page.
+//   guardStarted: the Job Sheet page's Delete is a before-start-only action — pass this so
+//   the delete is refused (409 tour-in-progress) once the guide has checked in, the same
+//   guard Dispatch's Remove uses. Payments' undo path omits it, so it can still clear a
+//   completed tour's bad import.
 export async function DELETE(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -291,8 +298,23 @@ export async function DELETE(req: NextRequest) {
   const guideId = String(body?.guideId || "");
   const date = String(body?.date || "");
   const slotIdx = Number(body?.slotIdx);
+  const guardStarted = body?.guardStarted === true;
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const where = { guideId, date, slotIdx };
+
+  // Before-start-only delete (from the Job Sheet page): once the guide has checked in the
+  // tour is live or done — refuse it, so a running/finished tour isn't wiped by accident.
+  if (guardStarted && (await prisma.checkin.count({ where })) > 0) {
+    return NextResponse.json({ error: "tour-in-progress" }, { status: 409 });
+  }
+
+  // Clear the guide + operator Google Calendar events first so a deleted upcoming tour
+  // doesn't linger as a ghost event. Best-effort; never blocks the delete.
+  if (guardStarted) {
+    const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
+    if (assignment) { try { await removeTourEvents(assignment); } catch { /* calendar cleanup is best-effort */ } }
+  }
+
   // Imported bookings (bokun/gyg/viator) for this slot must go too, not just
   // manual ones: otherwise the surviving Booking is re-turned into a job by the
   // Bookings Inbox on the next sync and the row reappears on Payments (the
@@ -320,6 +342,6 @@ export async function DELETE(req: NextRequest) {
     prisma.jobSheet.deleteMany({ where }),
     ...(doomedIds.length ? [prisma.booking.deleteMany({ where: { id: { in: doomedIds } } })] : []),
   ]);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, deletedBookings } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, guardStarted, deletedBookings } });
   return NextResponse.json({ ok: true });
 }
