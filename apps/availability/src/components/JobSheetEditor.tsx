@@ -196,12 +196,48 @@ export default function JobSheetEditor() {
     setMsg(d.lineSent > 0 ? `✅ Sent to guide on LINE` : `✅ Sent to guide's in-app inbox (link LINE to also send there)`);
   }
 
+  // Operator: return the job to the operator — unassign this guide and send its bookings
+  // back to the Bookings inbox to re-dispatch. Notifies the guide. Blocked once the guide
+  // has checked in (before-start only). Reuses DELETE /api/assignments (release: true).
+  async function returnToOperator() {
+    if (!sheet) return;
+    const when = `${sheet.date} · ${SLOT_TIMES[sheet.slotIdx] ?? ""}`;
+    const who = header?.name || sheet.guideId;
+    if (!confirm(`Return this tour to the operator?\n${who} · ${when} · ${tour?.name ?? sheet.tourId}\n\n${sheet.guideId} is unassigned and the tour's bookings go back to the inbox to re-dispatch. The guide is notified.`)) return;
+    setBusy(true); setMsg("Returning to operator…");
+    const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, release: true }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg(d.error === "tour-in-progress" ? "Can't return — the guide already checked into this tour. Undo it from the Tour Log instead." : "Failed to return the job."); return; }
+    router.back();
+  }
+  // Operator: delete the whole tour record for this slot (sheet + assignment + payment +
+  // check-ins + report + rating + manual bookings). For a cancelled tour or a bad import;
+  // real (Bokun) bookings are kept. Blocked once the guide has checked in. Reuses
+  // DELETE /api/jobsheet with guardStarted so a started tour can't be wiped here.
+  async function deleteJobSheet() {
+    if (!sheet) return;
+    const when = `${sheet.date} · ${SLOT_TIMES[sheet.slotIdx] ?? ""}`;
+    const who = header?.name || sheet.guideId;
+    if (!confirm(`Delete this job sheet?\n${who} · ${when} · ${tour?.name ?? sheet.tourId}\n\nDeletes the job sheet, the guide's assignment, and any payment, check-in, report and rating for this tour. Real (Bokun) bookings are kept. Cannot be undone.`)) return;
+    setBusy(true); setMsg("Deleting…");
+    const r = await fetch("/api/jobsheet", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, guardStarted: true }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg(d.error === "tour-in-progress" ? "This tour has already started — delete it from Payments / Tour Log instead." : d.error === "forbidden" ? "Operator only." : "Delete failed."); return; }
+    router.back();
+  }
+
   const L = { width: "100%", boxSizing: "border-box" as const, padding: "5px 7px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit" };
 
   return (
     <div className="wrap jobsheet">
       <div className="js-bar no-print">
-        <button className="btn ghost" onClick={() => router.back()}>← Back</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="btn ghost" onClick={() => router.back()}>← Back</button>
+          {canEdit && <button className="btn" disabled={busy || checkedIn} title={checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>}
+          {canEdit && <button className="btn danger" disabled={busy || checkedIn} title={checkedIn ? "The guide has checked in — delete it from Payments / Tour Log instead" : "Delete this job sheet and its tour records"} onClick={deleteJobSheet}>Delete job sheet</button>}
+        </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {ro && <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>}
           <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
