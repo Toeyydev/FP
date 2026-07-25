@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName } from "@/lib/bookings";
-import { isEveningSlot } from "@/lib/slots";
+import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName, slotAwareTourId } from "@/lib/bookings";
+import { isEveningSlot, SLOT_TIMES } from "@/lib/slots";
 
 describe("channel-only bookings — don't default evening tours to Grand Palace", () => {
   it("isChannelProductName flags bare channel names, not real titles", () => {
@@ -18,6 +18,29 @@ describe("channel-only bookings — don't default evening tours to Grand Palace"
     expect(isEveningSlot(5)).toBe(true);   // 16:30 China Town
     expect(isEveningSlot(7)).toBe(true);   // 18:30 China Town
     expect(isEveningSlot(null)).toBe(false);
+  });
+});
+
+describe("slotAwareTourId — 14:00 is the palace-only tour", () => {
+  const slot1400 = SLOT_TIMES.indexOf("14:00");
+  it("remaps the combined day tour (T-001/T-002) to palace-only T-005 at 14:00", () => {
+    expect(slotAwareTourId("T-001", slot1400)).toBe("T-005");
+    expect(slotAwareTourId("T-002", slot1400)).toBe("T-005");
+  });
+  it("leaves the combined tour untouched at any other slot", () => {
+    expect(slotAwareTourId("T-001", 0)).toBe("T-001");  // 08:30
+    expect(slotAwareTourId("T-002", 2)).toBe("T-002");  // 13:30
+    expect(slotAwareTourId("T-001", 4)).toBe("T-001");  // 15:00
+  });
+  it("never touches a tour that isn't the combined day tour", () => {
+    expect(slotAwareTourId("T-005", slot1400)).toBe("T-005");  // already palace-only
+    expect(slotAwareTourId("T-003", slot1400)).toBe("T-003");  // Wat Pho & Wat Arun
+  });
+  it("passes through null/unknown tour or slot safely", () => {
+    expect(slotAwareTourId(null, slot1400)).toBeNull();
+    expect(slotAwareTourId(undefined, slot1400)).toBeNull();
+    expect(slotAwareTourId("T-001", null)).toBe("T-001");
+    expect(slotAwareTourId("T-001", undefined)).toBe("T-001");
   });
 });
 

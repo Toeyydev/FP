@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour } from "@/lib/jobsheet";
-import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, type ParsedBooking } from "@/lib/bookings";
+import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, type ParsedBooking } from "@/lib/bookings";
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, linePushFlex, lineEnabled } from "@/lib/line";
@@ -280,6 +280,9 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       if (!eveningChannelOnly) tourId = map.tourId;
     }
   }
+  // Correct the resolved tour by departure time: the 14:00 slot is the palace-only tour,
+  // not the combined day tour a channel product maps to by name. (No-op for other slots.)
+  tourId = slotAwareTourId(tourId, p.slotIdx);
   const { source, cancelled } = opts;
   const raw = (opts.raw ?? undefined) as object | undefined;
 
