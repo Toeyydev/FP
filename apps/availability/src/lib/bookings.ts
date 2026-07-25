@@ -46,6 +46,20 @@ export function isChannelProductName(name?: string | null): boolean {
   return !!name && CHANNEL_PRODUCT_KEYS.has(productKey(name));
 }
 
+// The 14:00 departure is the palace-only tour "Wat Phrakaew & Grand Palace" (T-005), NOT
+// the combined "Grand Palace, Wat Pho & Wat Arun" day tour (T-001 morning / T-002 early
+// afternoon). Channel-only products (GetYourGuide / Viator) match by name to the combined
+// tour regardless of time, so a booking that lands on the 14:00 slot must be corrected to
+// the palace-only tour. Every other slot's mapping is left exactly as resolved.
+const COMBINED_PALACE_TOUR_IDS = new Set(["T-001", "T-002"]);
+const PALACE_ONLY_TOUR_ID = "T-005";
+const SLOT_1400 = SLOT_TIMES.indexOf("14:00");
+export function slotAwareTourId(tourId: string | null | undefined, slotIdx: number | null | undefined): string | null {
+  if (!tourId) return tourId ?? null;
+  if (SLOT_1400 >= 0 && slotIdx === SLOT_1400 && COMBINED_PALACE_TOUR_IDS.has(tourId)) return PALACE_ONLY_TOUR_ID;
+  return tourId;
+}
+
 export function normTime(v: unknown): string | undefined {
   if (v == null) return undefined;
   const s = String(v).replace(".", ":");
