@@ -139,6 +139,30 @@ export async function DELETE(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { period, guideId } = parsed.data;
   const where = { guideId, date: { gte: `${period}-01`, lte: `${period}-31` } };
+  // Imported bookings for this guide's tours must go too, or the Bookings Inbox
+  // re-creates the jobs on the next sync and the payroll row reappears (the same
+  // "won't stay deleted" bug fixed for the per-job delete). Find the guide's slots
+  // for the month, then take only the bookings they OWN: on a split slot (any
+  // booking there tagged to a guide) that's just their tagged bookings — never the
+  // co-guide's — mirroring the job-sheet split rule; on a normal slot the whole
+  // slot is theirs. Snapshot into the audit trail first (they feed PEAK accounting).
+  type SlotBooking = { id: string; source: string; externalRef: string | null; confirmationCode: string | null; customerName: string | null; pax: number | null; status: string; paymentStatus: string; date: string | null; slotIdx: number | null; assignedGuideId: string | null };
+  const [aSlots, sSlots] = await Promise.all([
+    prisma.assignment.findMany({ where, select: { date: true, slotIdx: true } }),
+    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true } }),
+  ]);
+  const slots = [...new Set([...aSlots, ...sSlots].map((s) => `${s.date}|${s.slotIdx}`))].map((k) => { const [d, si] = k.split("|"); return { date: d, slotIdx: Number(si) }; });
+  const atSlots: SlotBooking[] = slots.length
+    ? await prisma.booking.findMany({ where: { OR: slots }, select: { id: true, source: true, externalRef: true, confirmationCode: true, customerName: true, pax: true, status: true, paymentStatus: true, date: true, slotIdx: true, assignedGuideId: true } })
+    : [];
+  const bySlot = new Map<string, SlotBooking[]>();
+  for (const b of atSlots) { const k = `${b.date}|${b.slotIdx}`; const a = bySlot.get(k) ?? []; a.push(b); bySlot.set(k, a); }
+  const deletedBookings: SlotBooking[] = [];
+  for (const list of bySlot.values()) {
+    const split = list.some((b) => b.assignedGuideId);
+    for (const b of list) if (!split || b.assignedGuideId === guideId) deletedBookings.push(b);
+  }
+  const doomedIds = deletedBookings.map((b) => b.id);
   await prisma.$transaction([
     prisma.jobSheet.deleteMany({ where }),
     prisma.tourPayment.deleteMany({ where }),
@@ -147,7 +171,8 @@ export async function DELETE(req: NextRequest) {
     prisma.guideRating.deleteMany({ where }),
     prisma.assignment.deleteMany({ where }),
     prisma.payrollStatus.deleteMany({ where: { guideId, period } }),
+    ...(doomedIds.length ? [prisma.booking.deleteMany({ where: { id: { in: doomedIds } } })] : []),
   ]);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.deleted", entityType: "PayrollStatus", detail: { period, guideId } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.deleted", entityType: "PayrollStatus", detail: { period, guideId, deletedBookings } });
   return NextResponse.json({ ok: true });
 }

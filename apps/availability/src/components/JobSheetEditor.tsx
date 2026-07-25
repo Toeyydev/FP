@@ -40,6 +40,7 @@ export default function JobSheetEditor() {
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
   const [checkedIn, setCheckedIn] = useState(false);
+  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
@@ -52,7 +53,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
     // expense lines (with prices) as a starting template to fill in.
     const s = d.sheet as Sheet;
@@ -219,7 +220,7 @@ export default function JobSheetEditor() {
     if (!sheet) return;
     const when = `${sheet.date} · ${SLOT_TIMES[sheet.slotIdx] ?? ""}`;
     const who = header?.name || sheet.guideId;
-    if (!confirm(`Delete this job sheet?\n${who} · ${when} · ${tour?.name ?? sheet.tourId}\n\nDeletes the job sheet, the guide's assignment, and any payment, check-in, report and rating for this tour. Real (Bokun) bookings are kept. Cannot be undone.`)) return;
+    if (!confirm(`Delete this job sheet?\n${who} · ${when} · ${tour?.name ?? sheet.tourId}\n\nDeletes the job sheet, the guide's assignment, payment, check-in, report and rating — AND removes this slot's bookings (including OTA/Bokun ones) so they don't re-appear as a job. Cancel them on the OTA first. Cannot be undone.`)) return;
     setBusy(true); setMsg("Deleting…");
     const r = await fetch("/api/jobsheet", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, guardStarted: true }) });
     const d = await r.json().catch(() => ({}));
@@ -264,7 +265,10 @@ export default function JobSheetEditor() {
         const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
         const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0);
         const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-        const canReport = checkedIn || sheet.date <= today; // tour done → guide reports expenses
+        const paid = !!payment?.paid;
+        // Once paid (slip uploaded), the report flow closes and the summary shows the
+        // operator's FINAL official expenses (t.totalExpenses) — which equal the transfer.
+        const canReport = (checkedIn || sheet.date <= today) && !paid; // tour done & not yet paid → guide reports
         const expShown = canReport ? guideExpTotal : t.totalExpenses;
         const grandShown = t.netGuideFee + expShown;
         return (
@@ -326,6 +330,15 @@ export default function JobSheetEditor() {
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
                   <div className="gs-payout-row gs-grand"><span>You&apos;ll receive</span><b>{thb(grandShown)}</b></div>
                 </div>
+                {paid && (
+                  <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--ok-bg, #eef7f0)", border: "1px solid var(--ok-line, #cfe6d6)", borderRadius: 8, fontSize: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700, color: "var(--green, #2f7d4f)" }}>
+                      <span>✓ Paid{payment?.paidAt ? ` · ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span>
+                      {payment?.slip && <a href={payment.slip} target="_blank" rel="noopener noreferrer" style={{ color: "var(--green, #2f7d4f)", fontWeight: 700 }}>View slip</a>}
+                    </div>
+                    <div style={{ color: "var(--ink-soft)", marginTop: 3 }}>These are the operator&apos;s final figures — they match your transfer.</div>
+                  </div>
+                )}
                 {canReport && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below · confirmed by the operator.</div>}
               </div>
             </div>

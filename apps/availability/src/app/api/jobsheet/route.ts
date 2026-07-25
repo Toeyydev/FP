@@ -61,6 +61,21 @@ export async function GET(req: NextRequest) {
   // Whether this guide has checked in for the tour — gates the guide's no-show boxes.
   const checkedIn = (await prisma.checkin.count({ where: { guideId, date, slotIdx } })) > 0;
 
+  // Paid state for this slot. Once the operator has uploaded the slip / marked it paid
+  // (per-tour TourPayment, or the guide's whole-month payroll), the guide's summary
+  // shows the operator's FINAL official expenses (which equal the transfer) instead of
+  // the report flow. Slip = per-tour e-slip, else the monthly batch slip.
+  const period = date.slice(0, 7);
+  const [tourPay, payroll] = await Promise.all([
+    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true } }),
+  ]);
+  const payment = {
+    paid: tourPay?.status === "PAID" || payroll?.status === "paid",
+    paidAt: tourPay?.paidAt ?? payroll?.paidAt ?? null,
+    slip: tourPay?.eslipUrl ?? payroll?.eslipUrl ?? null,
+  };
+
   // Collapse repeated guests to a single row — the same booking must appear only once
   // (a re-import or combine can leave a guest listed twice). The SAME booking can
   // arrive under two name spellings ("Romel Sierra" vs "Sierra, Romel"), so dedupe by
@@ -130,7 +145,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -185,7 +200,7 @@ export async function GET(req: NextRequest) {
       .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -194,7 +209,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, checkedIn,
+    header, tour, saved: false, canEdit: isOps, checkedIn, payment,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
   });
 }
@@ -267,9 +282,11 @@ export async function POST(req: NextRequest) {
 
 
 // DELETE { guideId, date, slotIdx, guardStarted? } — operator/admin only. Remove a single
-// job sheet and the tour records tied to that slot (assignment, payment, check-ins,
-// report, rating, and any manually-imported bookings for it). Real (Bokun) bookings are
-// kept. Used from Payments (undo a bad import / one-off tour) and from the Job Sheet page.
+// job sheet and the tour records tied to that slot (assignment, payment, check-ins, report,
+// rating) AND hard-delete the slot's bookings — imported (bokun/gyg/viator) as well as
+// manual — so a synced booking doesn't reappear as a job (see the block below). The operator
+// must have already cancelled the booking on the OTA; this does NOT propagate to the channel.
+// Used from Payments (undo a bad import / one-off tour) and from the Job Sheet page.
 //   guardStarted: the Job Sheet page's Delete is a before-start-only action — pass this so
 //   the delete is refused (409 tour-in-progress) once the guide has checked in, the same
 //   guard Dispatch's Remove uses. Payments' undo path omits it, so it can still clear a
@@ -298,6 +315,24 @@ export async function DELETE(req: NextRequest) {
     if (assignment) { try { await removeTourEvents(assignment); } catch { /* calendar cleanup is best-effort */ } }
   }
 
+  // Imported bookings (bokun/gyg/viator) for this slot must go too, not just
+  // manual ones: otherwise the surviving Booking is re-turned into a job by the
+  // Bookings Inbox on the next sync and the row reappears on Payments (the
+  // "won't stay deleted" bug for imported bookings). Snapshot them into the audit
+  // trail first — they feed PEAK accounting and this is a hard delete.
+  // Split-aware: a slot split across guides (any booking tagged with
+  // assignedGuideId) only loses THIS guide's tagged bookings, never the co-guide's,
+  // mirroring the split rule in GET above; a normal slot combines into one job so
+  // all its bookings are this guide's.
+  // NB: the operator must have already cancelled the booking on the OTA
+  // (GetYourGuide); deleting here does NOT propagate to the channel.
+  const atSlot = await prisma.booking.findMany({
+    where: { date, slotIdx },
+    select: { id: true, source: true, externalRef: true, confirmationCode: true, customerName: true, pax: true, status: true, paymentStatus: true, assignedGuideId: true },
+  });
+  const splitHere = atSlot.some((b) => b.assignedGuideId);
+  const deletedBookings = splitHere ? atSlot.filter((b) => b.assignedGuideId === guideId) : atSlot;
+  const doomedIds = deletedBookings.map((b) => b.id);
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),
@@ -305,8 +340,8 @@ export async function DELETE(req: NextRequest) {
     prisma.tourPayment.deleteMany({ where }),
     prisma.assignment.deleteMany({ where }),
     prisma.jobSheet.deleteMany({ where }),
-    prisma.booking.deleteMany({ where: { date, slotIdx, source: "manual" } }),
+    ...(doomedIds.length ? [prisma.booking.deleteMany({ where: { id: { in: doomedIds } } })] : []),
   ]);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, guardStarted } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, guardStarted, deletedBookings } });
   return NextResponse.json({ ok: true });
 }
