@@ -46,17 +46,21 @@ async function buildDashboard() {
   const today = bkk(0);
   const horizon = bkk(7);
 
-  const [assigns, bookings, tours, guides, checkins, reports, pendingLeaves] = await Promise.all([
+  const [assigns, bookings, tours, guides, checkins, reports, pendingLeaves, masters] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: today, lte: horizon } }, include: { tour: true }, orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }),
     prisma.booking.findMany({ where: { date: { gte: today, lte: horizon }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { tourId: true, date: true, slotIdx: true, pax: true, status: true, assignedGuideId: true } }),
-    prisma.tour.findMany({ select: { id: true, name: true, durationMin: true } }),
+    prisma.tour.findMany({ select: { id: true, name: true, durationMin: true, tourCode: true } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.checkin.findMany({ where: { date: today }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
     prisma.tourReport.findMany({ where: { date: today }, select: { guideId: true, date: true, slotIdx: true, noShow: true, leftEarly: true, completedPax: true, comments: true } }),
     prisma.leaveRequest.findMany({ where: { status: "PENDING" }, orderBy: { fromDate: "asc" }, take: 30 }),
+    prisma.tourMaster.findMany({ where: { isActive: true }, select: { tourCode: true, tourName: true } }),
   ]);
 
-  const tourName = new Map(tours.map((t) => [t.id, t.name]));
+  // Prefer the TourMaster real product title (via Tour.tourCode); fall back to the
+  // internal Tour.name when a tour isn't linked to a master row yet.
+  const masterName = new Map(masters.map((m) => [m.tourCode, m.tourName]));
+  const tourName = new Map(tours.map((t) => [t.id, (t.tourCode && masterName.get(t.tourCode)) || t.name]));
   const tourDur = new Map(tours.map((t) => [t.id, t.durationMin ?? 180]));
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
   // latest check-in event per assignment (guide|date|slot)
@@ -70,7 +74,7 @@ async function buildDashboard() {
     const c = ck[`${a.guideId}|${a.date}|${a.slotIdx}`];
     const state = c ? c.type : "NONE";
     const overdue = a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx);
-    return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue, report: rep[`${a.guideId}|${a.date}|${a.slotIdx}`] ?? null };
+    return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: tourName.get(a.tourId) ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue, report: rep[`${a.guideId}|${a.date}|${a.slotIdx}`] ?? null };
   };
 
   const tomorrow = bkk(1);
@@ -109,7 +113,7 @@ async function buildDashboard() {
   const conflicts: { guideId: string; guide: string; date: string; slots: string[] }[] = [];
   for (const [k, items] of Object.entries(byGD)) {
     const [guideId, date] = k.split("|");
-    const iv = items.map((a) => { const [h, m] = (SLOT_TIMES[a.slotIdx] ?? "0:0").split(":").map(Number); const start = h * 60 + m; return { slotIdx: a.slotIdx, tour: a.tour?.name ?? a.tourId, start, end: start + (tourDur.get(a.tourId ?? "") ?? 180) }; });
+    const iv = items.map((a) => { const [h, m] = (SLOT_TIMES[a.slotIdx] ?? "0:0").split(":").map(Number); const start = h * 60 + m; return { slotIdx: a.slotIdx, tour: tourName.get(a.tourId) ?? a.tourId, start, end: start + (tourDur.get(a.tourId ?? "") ?? 180) }; });
     const bad = new Set<number>();
     for (let x = 0; x < iv.length; x++) for (let y = x + 1; y < iv.length; y++) if (iv[x].start < iv[y].end && iv[y].start < iv[x].end) { bad.add(x); bad.add(y); }
     if (bad.size) conflicts.push({ guideId, guide: gName(guideId), date, slots: [...bad].sort((a, b) => a - b).map((i) => `${SLOT_TIMES[iv[i].slotIdx]} ${iv[i].tour}`) });

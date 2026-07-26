@@ -23,6 +23,32 @@ async function main() {
     await prisma.tour.upsert({ where: { id }, create: { id, name, time }, update: { name, time } });
   }
 
+  // Bootstrap the TourMaster catalogue so the read-path is live end-to-end. Each
+  // internal tour gets a master row keyed by its own id as `tourCode`, with the
+  // current name as a PLACEHOLDER title — so nothing on screen changes until the
+  // real OTA product title is filled in (by editing tour_master.tour_name, or the
+  // n8n Bokun→Master flow). Idempotent and non-destructive: `update: {}` keeps any
+  // title already there, and the link is only set on tours not yet linked — so
+  // operator edits and Flow A titles survive every redeploy.
+  // Seed real OTA product titles for the tours we know them for (from Folkpaths'
+  // own GetYourGuide bookings). Everything else falls back to the internal name.
+  // Edit / extend this map (or the tour_master rows directly) to switch a tour's
+  // shown title; `update: {}` below means a title already in the DB is never
+  // overwritten, so operator edits and the n8n Bokun→Master flow win over this seed.
+  const REAL_TITLES: Record<string, string> = {
+    "T-001": "Bangkok: Grand Palace, Wat Pho & Wat Arun Guided Experience",
+    "T-002": "Bangkok: Grand Palace, Wat Pho & Wat Arun Guided Experience",
+  };
+  for (const [id, name, time] of TOURS) {
+    const hhmm = time.trim().split(/\s+/)[0].replace(".", ":"); // "08.30 AM" → "08:30"
+    await prisma.tourMaster.upsert({
+      where: { tourCode: id },
+      create: { tourCode: id, tourName: REAL_TITLES[id] ?? name, tourTime: new Date(`1970-01-01T${hhmm}:00Z`) },
+      update: {},
+    });
+    await prisma.tour.updateMany({ where: { id, tourCode: null }, data: { tourCode: id } });
+  }
+
   // Bootstrap admin (active)
   await prisma.user.upsert({
     where: { email: adminEmail },

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { masterTitle } from "@/lib/tour-master";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, noShowStatus, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
@@ -36,6 +37,7 @@ export async function GET(req: NextRequest) {
   ]);
   const tourId = sheet?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
+  const displayName = (await masterTitle(tour?.tourCode)) ?? tour?.name ?? tourId;
 
   // A guide can open their job order before the operator has saved a sheet — so
   // when the sheet has no rows yet, fall back to the live bookings for this slot.
@@ -113,7 +115,7 @@ export async function GET(req: NextRequest) {
     <div class="row">๒. ขอมอบหมายให้</div>
     <div class="row indent">๒.๑ <b>${esc(guideName)}</b> ใบอนุญาตเป็นมัคคุเทศก์เลขที่ <input id="licNo" class="lic" contenteditable="false" value="${esc(licenseNo)}" placeholder="เลขที่ใบอนุญาต" /></div>
     <div class="row indent">ปฏิบัติหน้าที่เป็นมัคคุเทศก์เพื่อให้บริการแก่นักท่องเที่ยวคณะนี้ ในอัตราค่าตอบแทนวันละ <b>${esc(rate)}</b> บาท</div>
-    <div class="row indent">ทัวร์: <b>${esc(tour?.name ?? tourId)}</b> · เวลา ${esc(SLOT_TIMES[slotIdx] ?? tour?.time ?? "")}</div>
+    <div class="row indent">ทัวร์: <b>${esc(displayName)}</b> · เวลา ${esc(SLOT_TIMES[slotIdx] ?? tour?.time ?? "")}</div>
 
     <div class="sec">ส่วนที่ ๒ ข้อมูลคณะนักท่องเที่ยวและการเดินทาง</div>
     <div class="row">๓. ชื่อบริษัทนำเที่ยวจากต่างประเทศ ${BLANK}${BLANK}</div>

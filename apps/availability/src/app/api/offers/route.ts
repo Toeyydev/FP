@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { tourNameMap } from "@/lib/tour-master";
 import { audit } from "@/lib/audit";
 import { timeRangeLabel, sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
@@ -41,12 +42,12 @@ export async function GET() {
     ...offers.map((o) => o.assignedGuideId).filter((x): x is string => !!x),
     ...assigns.map((a) => a.guideId),
   ])];
-  const [tours, guides, checkins] = await Promise.all([
-    prisma.tour.findMany({ where: { id: { in: tourIds } }, select: { id: true, name: true } }),
+  const [nameMap, guides, checkins] = await Promise.all([
+    tourNameMap(tourIds),
     prisma.user.findMany({ where: { guideId: { in: guideIds } }, select: { guideId: true, displayName: true } }),
     prisma.checkin.findMany({ where: { date: { gte: today } }, orderBy: { at: "asc" }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
   ]);
-  const tourName = new Map(tours.map((t) => [t.id, t.name]));
+  const tourName = nameMap;
   const gDisp = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? "";
   const gName = (gid: string | null) => (gid ? `${gid} ${gDisp(gid)}`.trim() : null);
   // Latest check-in event per tour instance → lifecycle state.
@@ -62,7 +63,7 @@ export async function GET() {
       const state = c ? c.type : "NONE";
       return {
         guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
-        time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
+        time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: tourName.get(a.tourId) ?? a.tourId, pax: a.pax, note: a.note,
         state, checkedAt: c ? c.at.toISOString() : null, overdue: a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx),
       };
     }),

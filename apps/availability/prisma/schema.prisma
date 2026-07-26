@@ -139,7 +139,31 @@ model Tour {
   bring          String?
   durationMin    Int? // default tour length (prefills offer duration)
 
+  // Links this internal tour to a row in the canonical `tour_master` catalogue.
+  // When set (and that row exists), the master's `tourName` — the real OTA product
+  // title — is shown instead of `name`. Null → fall back to `name`, so nothing
+  // breaks while the master is empty. See [[TourMaster]].
+  tourCode String?
+
   assignments Assignment[]
+}
+
+// Canonical tour catalogue — the "TourMaster" master list. Populated out-of-band
+// (the n8n "Bokun → Master" flow, or a seed), keyed by `tourCode`. The app READS
+// it to show the real product title; it does not own the rows. Mapped to the exact
+// snake_case `tour_master` table so the external writer and the app share one table.
+model TourMaster {
+  id             String   @id @default(uuid()) @db.Uuid
+  tourCode       String   @unique @map("tour_code")
+  tourName       String   @map("tour_name")
+  tourTime       DateTime @db.Time(6) @map("tour_time")
+  durationMin    Int      @default(180) @map("duration_minutes")
+  meetingPointId String?  @db.Uuid @map("meeting_point_id")
+  guideFee       Decimal? @db.Decimal @map("guide_fee")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("tour_master")
 }
 
 model Availability {

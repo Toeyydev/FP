@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { masterTitle } from "@/lib/tour-master";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest) {
   ]);
   const tourId = existing?.tourId || assignment?.tourId || "";
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
+  const displayName = (await masterTitle(tour?.tourCode)) ?? tour?.name ?? "";
 
   const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE };
   const bookings = (sheet.bookings as Booking[]) ?? [];
@@ -61,7 +63,7 @@ export async function GET(req: NextRequest) {
   // Guide block
   r = 4;
   const guideRows: [string, string][] = [
-    ["Tour Date", date], ["Time", tour?.time ?? ""], ["Tour Name", tour?.name ?? ""],
+    ["Tour Date", date], ["Time", tour?.time ?? ""], ["Tour Name", displayName],
     ["Guide name", u?.fullName || u?.displayName || ""], ["Tax ID", decrypt(u?.taxId)],
     ["Address", decrypt(u?.currentAddress) || decrypt(u?.idCardAddress)], ["E-mail", u?.email ?? ""], ["Tel no.", u?.phone ?? ""],
   ];
