@@ -153,7 +153,7 @@ export async function autoAttachLate(b: { id: string; tourId: string | null; dat
     const tour = await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } });
     await prisma.jobSheet.upsert({
       where: key,
-      create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object, expenses: defaultExpensesForTour(tour?.name).map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? newTotal + 1 : newTotal })) as object, guideFee: DEFAULT_GUIDE_FEE as object },
+      create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object, expenses: defaultExpensesForTour(tour?.name) as object, guideFee: DEFAULT_GUIDE_FEE as object },
       update: { bookings: list as object },
     });
     await notifyGuide(a.guideId, `A booking was added to your ${b.date} tour. You now have ${newTotal} guests.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
