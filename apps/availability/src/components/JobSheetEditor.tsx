@@ -278,11 +278,6 @@ export default function JobSheetEditor() {
               <h2>{tour?.name ?? "Your tour"}</h2>
               <div className="gs-when">{sheet.date} · {SLOT_TIMES[sheet.slotIdx] ?? ""}{totalPax ? ` · ${totalPax} pax` : ""}</div>
             </div>
-            {sheet.operatorNote && (
-              <div style={{ margin: "0 0 12px", padding: "10px 14px", borderRadius: 8, background: "#eaf1ff", border: "1px solid #c7d9f7", color: "var(--ink)", fontSize: 13.5, whiteSpace: "pre-wrap" }}>
-                <b style={{ color: "var(--ink-soft)", fontWeight: 600 }}>📌 From the operator: </b>{sheet.operatorNote}
-              </div>
-            )}
             <div className="gs-grid">
               <div>
                 <h3>Your customers ({sheet.bookings.length}){noShowTotal > 0 ? <span style={{ color: "var(--danger)", fontWeight: 700 }}> · {noShowTotal} no-show</span> : null}</h3>
@@ -531,12 +526,12 @@ export default function JobSheetEditor() {
           <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
         </div>
 
-        {/* Operator comment — free-text note shown to the guide on their sheet */}
+        {/* Internal operations note — operator-only, never shown to the guide */}
         {canEdit && (
           <div className="no-print" style={{ marginTop: 16 }}>
-            <h3 className="js-section" style={{ background: "#eaf1ff" }}>Comment to guide</h3>
-            <textarea value={sheet.operatorNote ?? ""} maxLength={2000} onChange={(e) => up({ operatorNote: e.target.value })} rows={3} placeholder="e.g. Meet the group at Gate 3 — one guest is vegetarian." style={{ width: "100%", boxSizing: "border-box", marginTop: 6, padding: "8px 10px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>The guide sees this at the top of their job sheet. Remember to Save.</div>
+            <h3 className="js-section" style={{ background: "#eaf1ff" }}>Internal note</h3>
+            <textarea value={sheet.operatorNote ?? ""} maxLength={2000} onChange={(e) => up({ operatorNote: e.target.value })} rows={3} placeholder="e.g. Confirm van with supplier · guest paid deposit only" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, padding: "8px 10px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
+            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>Internal operations note — not shown to the guide. Remember to Save.</div>
           </div>
         )}
        </fieldset>
