@@ -393,6 +393,7 @@ model JobSheet {
   guideExpenses     Json? // [{description, price, pax}] — guide's own report, to cross-check
   guideExpensesAt   DateTime? // when the guide last submitted their expense report
   guideExpensesNote String? // free-text note the guide adds with their expense report
+  operatorNote      String? // free-text comment the operator adds for the guide (shown on the guide's sheet)
   createdById       String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt

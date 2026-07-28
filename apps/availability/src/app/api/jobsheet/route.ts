@@ -210,7 +210,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps, checkedIn, payment,
-    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, updatedAt: null },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, updatedAt: null },
   });
 }
 
@@ -230,6 +230,7 @@ export async function PUT(req: NextRequest) {
     guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0),
     tourId: z.string().default(""), status: z.string().max(40).default("Confirmed"),
     bookings: z.array(bookingZ).max(20), expenses: z.array(expenseZ).max(40), guideFee: guideFeeZ,
+    operatorNote: z.string().max(2000).optional().default(""),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", detail: parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : undefined }, { status: 400 });
   const d = parsed.data;
@@ -238,11 +239,12 @@ export async function PUT(req: NextRequest) {
   const existing = await prisma.jobSheet.findUnique({ where: key });
   let ref = existing?.ref ?? null;
   if (!ref) ref = await nextJobRef(d.date);
+  const operatorNote = d.operatorNote.trim() || null;
 
   const sheet = await prisma.jobSheet.upsert({
     where: key,
-    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, createdById: session!.user!.id ?? null },
-    update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee },
+    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
+    update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
   });
   // Keep the assignment's pax in sync with the job sheet's booking total, so the
   // dispatch board ("On-going tours") and the LINE job sheet match the Job Details.
