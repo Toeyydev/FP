@@ -31,9 +31,19 @@ export default function Tours() {
     const d = draft[t.id] ?? {};
     const body: Record<string, unknown> = { action: "update", id: t.id };
     for (const k of ["name", "time", "meetingPoint", "itinerary", "included", "bring"] as const) if (d[k] !== undefined) body[k] = d[k];
-    if (d.durationMin !== undefined) { const dm = d.durationMin as unknown as string | number | null; body.durationMin = dm === "" || dm == null ? null : Number(dm); }
+    if (d.durationMin !== undefined) {
+      const dm = d.durationMin as unknown as string | number | null;
+      if (dm === "" || dm == null) { body.durationMin = null; }
+      else {
+        const n = Number(dm);
+        // The API only accepts a whole number of minutes from 15 to 720 — catch it
+        // here with a clear message instead of a bare "Save failed".
+        if (!Number.isInteger(n) || n < 15 || n > 720) { setMsg("Duration must be a whole number of minutes between 15 and 720."); return; }
+        body.durationMin = n;
+      }
+    }
     const r = await fetch("/api/tours", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    setMsg(r.ok ? "✅ Saved" : "Save failed."); if (r.ok) await load();
+    setMsg(r.ok ? "✅ Saved" : "Save failed — please check the field values."); if (r.ok) await load();
   }
   async function addTour() {
     if (!adding.name.trim()) return;

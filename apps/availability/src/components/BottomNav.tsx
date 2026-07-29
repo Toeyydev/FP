@@ -46,7 +46,6 @@ export default function BottomNav({ role }: { role?: string }) {
     { href: "/tour-log", label: "Tour log", icon: "list" },
     { href: "/guides", label: "Guides", icon: "user" },
     { href: "/tours", label: "Tours", icon: "board" },
-    { href: "/product-map", label: "Products", icon: "list" },
     { href: "/blocked-slots", label: "Block slots", icon: "calendar" },
     { href: "/admin", label: "Accounts", icon: "user" },
   ];
