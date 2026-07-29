@@ -1,0 +1,30 @@
+{
+  // Worker-only TypeScript config. Two jobs:
+  //   1. Scoped type-check: `tsc --noEmit -p tsconfig.worker.json` checks the worker
+  //      entry and the small graph it pulls in (db, payments, audit, parser) WITHOUT
+  //      type-checking the whole Next.js app.
+  //   2. Path resolution for the bundler: esbuild reads `paths` from here so `@/*`
+  //      imports resolve during `npm run build:worker`.
+  // The actual JS is produced by esbuild (see the build:worker script), not tsc — so
+  // noEmit stays true and this never emits a partial/mismatched build.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "lib": ["ES2022"],
+    "jsx": "preserve",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "src/workers/**/*.ts",
+    "src/lib/db.ts",
+    "src/lib/audit.ts",
+    "src/lib/kbiz-slip.ts",
+    "src/lib/payments/**/*.ts"
+  ],
+  "exclude": ["node_modules", "**/*.test.ts"]
+}

@@ -572,3 +572,94 @@ model Bonus {
 
   @@index([period])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payment architecture — Phase 2: bank-slip evidence + the transaction extracted
+// from it. Additive: the existing TourPayment / PayrollStatus flow is untouched.
+// Money uses Decimal and payment times use timestamptz for financial correctness.
+// Idempotency: unique googleDriveFileId + fileHash (a slip can't be recorded
+// twice), and a unique nullable transactionId (one bank transaction = one record;
+// Postgres allows multiple NULLs, giving the "unique where not null" behaviour).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The original bank slip (or other payment evidence) stored privately in Drive.
+model PaymentEvidence {
+  id       String  @id @default(cuid())
+  guideId  String? // the guide this slip pays (matched via the extracted reference)
+  payrollPeriod String? // "YYYY-MM" when tied to the existing monthly payroll
+  evidenceType    String @default("K_BIZ_SLIP") // K_BIZ_SLIP | KCASH_RESULT | BANK_STATEMENT | MANUAL | OTHER
+  paymentProvider String @default("K_BIZ_SLIP")
+
+  googleDriveFileId   String  @unique // idempotency: a Drive file is recorded once
+  googleDriveFolderId String?
+  originalFilename    String?
+  mimeType            String?
+  fileSize            Int?
+  fileHash            String  @unique // sha-256 of the bytes: same file, never twice
+  driveLink           String?
+
+  slipUploadedAt       DateTime? @db.Timestamptz(6) // when the operator uploaded it here
+  slipUploadedBy       String?
+  historicalImportedAt DateTime? @db.Timestamptz(6)
+  driveCreatedAt       DateTime? @db.Timestamptz(6)
+  driveModifiedAt      DateTime? @db.Timestamptz(6)
+
+  extractionMethod     String? // PDF_TEXT | OCR_PDF | OCR_IMAGE | MANUAL_CORRECTION | BANK_RESULT_FILE | BANK_API | BANK_STATEMENT | OTHER
+  extractionConfidence Float?
+  rawText              String? // full extracted text — audit / parser improvement
+  rawData              Json?
+  processingStatus     String  @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | NEEDS_REVIEW | FAILED | SKIPPED_DUPLICATE
+  processingError      String?
+
+  transaction PaymentTransaction?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([guideId])
+  @@index([processingStatus])
+}
+
+// Structured payment data parsed from a PaymentEvidence slip.
+model PaymentTransaction {
+  id         String          @id @default(cuid())
+  evidence   PaymentEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  evidenceId String          @unique
+
+  transactionId      String? @unique // bank transaction id — dedup (unique-where-not-null)
+  transactionStatus  String?
+  transactionChannel String?
+
+  transactionDateRaw String? // original "DD/MM/YYYY HH:mm" — never overwritten
+  paidAt             DateTime? @db.Timestamptz(6) // authoritative transfer time
+  deductedAt         DateTime? @db.Timestamptz(6)
+  receivedAt         DateTime? @db.Timestamptz(6)
+
+  senderName            String?
+  senderAccountMasked   String?
+  senderBank            String?
+  recipientName         String?
+  recipientAccountMasked String?
+  recipientBank         String?
+
+  transferAmount Decimal? @db.Decimal(12, 2)
+  transferFee    Decimal? @db.Decimal(12, 2)
+  totalAmount    Decimal? @db.Decimal(12, 2)
+  currency       String   @default("THB")
+
+  paymentMemoRaw        String? // exactly as printed — never mutated
+  paymentMemoNormalized String?
+  paymentReferenceType  String? // JOB_NO | PAYOUT_ITEM_NO | PAYMENT_BATCH_NO | PEAK_EXPENSE_NO | OTHER | NOT_FOUND
+  paymentReferenceValue String?
+
+  detectedBank String?
+  sourceType   String? // PDF_TEXT | OCR_PDF | OCR_IMAGE | ...
+
+  validationStatus  String @default("PENDING") // PENDING | MATCHED | PAYMENT_NEEDS_REVIEW | FAILED
+  validationDetails Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentReferenceType, paymentReferenceValue])
+}
