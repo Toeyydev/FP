@@ -64,6 +64,7 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [jobInput, setJobInput] = useState<Record<string, string>>({});
+  const [peakInput, setPeakInput] = useState<Record<string, string>>({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -93,6 +94,26 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
         const e = await res.json().catch(() => ({}));
         const hint = e.error === "job-not-found" ? "No job sheet has that number." : e.error === "job-ambiguous" ? "More than one job sheet has that number." : (e.error ?? res.status);
         window.alert(`Could not ${action} this payment: ${hint}`);
+        return;
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const savePeak = async (r: Row) => {
+    const val = (peakInput[r.id] ?? r.peakExpenseNo ?? "").trim();
+    setBusy(r.id);
+    try {
+      const res = await fetch("/api/payments/transactions/peak-ref", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: r.id, peakExpenseNo: val }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        window.alert(`Could not save PEAK reference: ${e.error ?? res.status}`);
         return;
       }
       await load();
@@ -158,7 +179,19 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
                     <Field label="Reference Type" value={REF_TYPE_LABEL[r.referenceType ?? ""] ?? r.referenceType ?? "—"} />
                     <Field label="Amount" value={thb(r.amount, r.currency)} mono />
                     <Field label="Transferred" value={when(r.paidAt)} />
-                    {r.peakExpenseNo && <Field label="PEAK Expense" value={r.peakExpenseNo} mono />}
+                    {canEdit && r.status === "MATCHED" ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <span style={{ fontSize: 10.5, letterSpacing: ".07em", textTransform: "uppercase", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK Expense</span>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <input value={peakInput[r.id] ?? r.peakExpenseNo ?? ""} onChange={(e) => setPeakInput((m) => ({ ...m, [r.id]: e.target.value }))}
+                            placeholder="EXP-…" aria-label="PEAK expense number"
+                            style={{ border: "1px solid var(--line-strong)", borderRadius: 8, padding: "5px 8px", fontSize: 12.5, fontFamily: "inherit", width: 130, background: "var(--card)", color: "var(--ink)", fontVariantNumeric: "tabular-nums" }} />
+                          <button className="btn sm" disabled={busy === r.id || (peakInput[r.id] ?? r.peakExpenseNo ?? "") === (r.peakExpenseNo ?? "")} onClick={() => savePeak(r)}>Save</button>
+                        </div>
+                      </div>
+                    ) : r.peakExpenseNo ? (
+                      <Field label="PEAK Expense" value={r.peakExpenseNo} mono />
+                    ) : null}
                   </div>
 
                   {(r.reason || r.driveLink || (canEdit && r.status === "PAYMENT_NEEDS_REVIEW")) && (
