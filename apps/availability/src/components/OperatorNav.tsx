@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { signOut } from "next-auth/react";
 
-// One shared left rail for every operator page. Sections are grouped by the
-// operator's actual workflow: the everyday dispatch loop up top, the pay run
-// next, then the set-up-once / check-rarely items under "Manage".
+// One shared sidebar for every operator page — same structure everywhere (as the
+// Dashboard): the workflow-grouped rail, an optional footer slot (the Dashboard
+// drops its Google Drive status here), and Sign out pinned at the bottom.
 const GROUPS: { label?: string; items: { key: string; label: string; href: string }[] }[] = [
   {
     items: [
@@ -34,9 +35,9 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
   },
 ];
 
-export function OperatorNav({ active }: { active?: string }) {
+export function OperatorNav({ active, children }: { active?: string; children?: ReactNode }) {
   // Pending sign-ups badge on Accounts — self-fetched so any page can drop in
-  // the rail without threading the count through props.
+  // the sidebar without threading the count through props.
   const [pending, setPending] = useState(0);
   useEffect(() => {
     let ok = true;
@@ -48,25 +49,35 @@ export function OperatorNav({ active }: { active?: string }) {
   }, []);
 
   return (
-    <nav className="op-nav" aria-label="Sections">
-      <a href="/" className="op-nav-link op-home">Home</a>
-      {GROUPS.map((g, gi) => (
-        <Fragment key={gi}>
-          {g.label && <span className="op-nav-group">{g.label}</span>}
-          {g.items.map((s) => (
-            <a
-              key={s.key}
-              href={s.href}
-              className={`op-nav-link${active === s.key ? " active" : ""}`}
-              aria-current={active === s.key ? "page" : undefined}
-            >
-              {s.label}
-              {s.key === "accounts" && pending > 0 && <span className="navbadge op-nav-badge">{pending}</span>}
-            </a>
-          ))}
-        </Fragment>
-      ))}
-    </nav>
+    <div className="op-side">
+      <nav className="op-nav" aria-label="Sections">
+        <a href="/" className="op-nav-link op-home">Home</a>
+        {GROUPS.map((g, gi) => (
+          <Fragment key={gi}>
+            {g.label && <span className="op-nav-group">{g.label}</span>}
+            {g.items.map((s) => (
+              <a
+                key={s.key}
+                href={s.href}
+                className={`op-nav-link${active === s.key ? " active" : ""}`}
+                aria-current={active === s.key ? "page" : undefined}
+              >
+                {s.label}
+                {s.key === "accounts" && pending > 0 && <span className="navbadge op-nav-badge">{pending}</span>}
+              </a>
+            ))}
+          </Fragment>
+        ))}
+      </nav>
+      {children}
+      <button
+        type="button"
+        className="btn sm ghost op-signout"
+        onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }}
+      >
+        Sign out
+      </button>
+    </div>
   );
 }
 

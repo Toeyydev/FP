@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { signOut } from "next-auth/react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 
@@ -162,11 +161,9 @@ export default function Dashboard() {
     <div className="wrap">
       <AuthHeader home={false} />
       <div className="op-layout">
-        <div className="op-side">
-          <OperatorNav active="dashboard" />
+        <OperatorNav active="dashboard">
           <DriveCard />
-          <button className="btn sm ghost op-signout" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }}>Sign out</button>
-        </div>
+        </OperatorNav>
         <div className="op-main">
 
       {!d ? (
