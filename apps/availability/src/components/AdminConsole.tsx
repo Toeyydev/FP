@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 import { useLang } from "@/components/Providers";
 
 type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null; lineLinked?: boolean; lineId?: string | null; lineLinkCode?: string | null };
@@ -105,7 +106,10 @@ export default function AdminConsole() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="accounts" />
+        <div className="op-main">
       <div id="appBar">
         <div className="subtabs">
           <button className={`subtab ${tab === "invites" ? "active" : ""}`} onClick={() => setTab("invites")}>{t("tabInvites")}</button>
@@ -300,6 +304,8 @@ export default function AdminConsole() {
           </div>
         )}
       </section>
+        </div>
+      </div>
     </div>
   );
 }

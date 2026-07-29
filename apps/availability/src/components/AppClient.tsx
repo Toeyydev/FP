@@ -7,6 +7,7 @@ import { useLang } from "@/components/Providers";
 import GuideWelcome from "@/components/GuideWelcome";
 import InstallPrompt from "@/components/InstallPrompt";
 import { GuideTabs } from "@/components/GuideTabs";
+import { OperatorNav } from "@/components/OperatorNav";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
@@ -75,7 +76,6 @@ export default function AppClient({
   >(null);
   const [q, setQ] = useState("");
   const [onlyAvail, setOnlyAvail] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
   const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set());
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; kind?: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
@@ -157,15 +157,6 @@ export default function AppClient({
     return () => window.clearInterval(id);
   }, []);
 
-  // Operator/admin: poll the pending sign-up count for the Accounts badge.
-  useEffect(() => {
-    if (role !== "operator") return;
-    const fetchCount = () => fetch("/api/admin/pending-count", { cache: "no-store" })
-      .then((r) => r.json()).then((d) => setPendingCount(d.count ?? 0)).catch(() => {});
-    fetchCount();
-    const id = window.setInterval(fetchCount, 15000);
-    return () => window.clearInterval(id);
-  }, [role]);
 
   // Poll notifications — guides (date blocked, offers) and operators (a guide
   // signed up / accepted a job, an offer expired). Operators get a chime on a NEW
@@ -1162,6 +1153,17 @@ export default function AppClient({
     ? [["schedule", t("schedule")], ["week", t("week")], ["month", t("month")], ["year", t("year")]]
     : [["day", t("day")], ["month", t("month")], ["year", t("year")]];
 
+  // Operators get the shared left rail; guides keep the plain single-column app.
+  const shell = (children: ReactNode) =>
+    role === "operator" ? (
+      <div className="op-layout">
+        <OperatorNav active="board" />
+        <div className="op-main">{children}</div>
+      </div>
+    ) : (
+      <>{children}</>
+    );
+
   return (
     <div className="wrap">
       <header className="app">
@@ -1173,32 +1175,13 @@ export default function AppClient({
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
           {notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}
         </button>
-        <nav className="topnav">
-          {role === "operator" && <a className="navlink" href="/dashboard">{t("dashboardNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/jobs">{t("jobsNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/bookings">{t("bookings")}</a>}
-          {role === "operator" && <a className="navlink" href="/payments">{t("paymentsNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/reports">{t("reportsNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/blocked-slots">{t("blockSlotsNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/pay">{t("approvalsNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/tour-log">{t("tourLogNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/guides">{t("guidesNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/meeting-points">{t("meetingPtsNav")}</a>}
-          {role === "operator" && <a className="navlink" href="/tours">Tours</a>}
-          {role === "operator" && <a className="navlink" href="/product-map">{t("productMapNav")}</a>}
-          {role === "operator" && (
-            <a className="navlink" href="/admin" style={{ position: "relative" }}>
-              {t("accountsTitle")}
-              {pendingCount > 0 && <span className="navbadge" title={`${pendingCount} pending sign-up(s)`}>{pendingCount}</span>}
-            </a>
-          )}
-        </nav>
         <div className="chip">
           {role !== "guide" && <div className="who"><small>{t("signedInOperator")}</small><span>{t("operations")}</span></div>}
           <button className="btn sm ghost" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }} type="button">{t("signOut")}</button>
         </div>
       </header>
 
+      {shell(<>
       {role === "guide" ? (
         // Guides get the same tab bar as their Pay / Me pages — one consistent app.
         <>
@@ -1435,6 +1418,7 @@ export default function AppClient({
       )}
 
       <div className={`toast ${toastMsg ? "show" : ""}`}>{toastMsg}</div>
+      </>)}
     </div>
   );
 }

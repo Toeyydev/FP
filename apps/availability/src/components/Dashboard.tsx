@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { signOut } from "next-auth/react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
 type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null };
@@ -158,12 +160,14 @@ export default function Dashboard() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/board" />
-      <div id="appBar"><div className="subtabs"><span className="subtab active">Dashboard</span></div>
-        <div className="nav"><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/jobs">Dispatch</a><a className="btn sm" href="/bookings">Bookings</a></div>
-      </div>
-
-      <DriveCard />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <div className="op-side">
+          <OperatorNav active="dashboard" />
+          <DriveCard />
+          <button className="btn sm ghost op-signout" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }}>Sign out</button>
+        </div>
+        <div className="op-main">
 
       {!d ? (
         <div className="dash">
@@ -176,7 +180,7 @@ export default function Dashboard() {
           const todayIn = d.todayTours.filter((t) => done.includes(t.state)).length;
           const todayOverdue = d.todayTours.filter((t) => t.overdue).length;
           const orphaned = d.orphaned ?? [];
-          const attention = d.unassigned.length + d.understaffed.length + d.conflicts.length + orphaned.length + d.leaveRequests.length;
+          const attention = d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length;
           return (
         <div className="dash">
           <div className="kpi-row">
@@ -184,7 +188,6 @@ export default function Dashboard() {
             <Kpi n={d.tomorrowTours.length} label="Tomorrow" onClick={() => jumpTo("tomorrow", "tomorrow")} />
             <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" onClick={() => jumpTo("attention")} />
             <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" onClick={() => jumpTo("attention")} />
-            <Kpi n={d.conflicts.length} label="Conflicts" tone="bad" onClick={() => jumpTo("attention")} />
             {orphaned.length > 0 && <Kpi n={orphaned.length} label="Orphaned" tone="bad" onClick={() => jumpTo("attention")} />}
             <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" onClick={() => jumpTo("upcoming", "upcoming")} />
           </div>
@@ -207,7 +210,7 @@ export default function Dashboard() {
                 </div>
               )}
             </section>
-            {(d.unassigned.length > 0 || d.conflicts.length > 0 || d.understaffed.length > 0 || orphaned.length > 0 || d.leaveRequests.length > 0) && (
+            {(d.unassigned.length > 0 || d.understaffed.length > 0 || orphaned.length > 0 || d.leaveRequests.length > 0) && (
               <section className="panel" id="attention">
                 <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">Export unassigned PDF</button>}</div>
                 <div className="dash-list">
@@ -220,12 +223,6 @@ export default function Dashboard() {
                         <button className="btn sm ghost" onClick={() => decideLeave(l.id, "REJECTED")}>Reject</button>
                       </span>
                     </div>
-                  ))}
-                  {d.conflicts.map((c, i) => (
-                    <a key={`c${i}`} className="dash-row bad" href="/jobs" title="Open Dispatch to resolve the clash">
-                      <span className="tag bad">Conflict</span>
-                      <span className="dr-main"><b>{c.guide}</b> · {dShort(c.date)}<div className="dr-sub">{c.slots.join("  ·  ")}</div></span>
-                    </a>
                   ))}
                   {d.understaffed.map((u, i) => (
                     <a key={`s${i}`} className="dash-row bad" href={`/jobs?split=${u.date}&slot=${u.slotIdx}`} title="Open Dispatch and split this tour to add a guide to the remaining guests">
@@ -295,6 +292,8 @@ export default function Dashboard() {
         </div>
         );
       })())}
+        </div>
+      </div>
     </div>
   );
 }

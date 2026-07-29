@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 import { thb } from "@/lib/jobsheet";
 import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
@@ -324,7 +325,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="payments" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Payments</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
@@ -501,6 +505,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           )}
         </div>
       </section>
+        </div>
+      </div>
     </div>
   );
 }

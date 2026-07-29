@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 
 type Tour = { id: string; name: string };
 type Map = { id: string; productKey: string; productName: string; tourId: string; tourName: string };
@@ -43,7 +44,10 @@ export default function ProductMapping() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="products" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Product mapping</span></div>
         <div className="nav"><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
@@ -90,6 +94,8 @@ export default function ProductMapping() {
           </div>
         )}
       </section>
+        </div>
+      </div>
     </div>
   );
 }

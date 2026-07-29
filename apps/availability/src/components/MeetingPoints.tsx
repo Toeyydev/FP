@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 
 type Tour = { id: string; name: string; meetingPoint: string | null; meetingLat: number | null; meetingLng: number | null; meetingRadiusM: number | null };
 
@@ -30,7 +31,10 @@ export default function MeetingPoints() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="meeting-points" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Meeting points</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a></div>
       </div>
@@ -64,6 +68,8 @@ export default function MeetingPoints() {
           })}
         </div>
       </section>
+        </div>
+      </div>
     </div>
   );
 }
