@@ -63,6 +63,7 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
   const [filter, setFilter] = useState<"review" | "all">("review");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [jobInput, setJobInput] = useState<Record<string, string>>({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -75,9 +76,10 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
 
   useEffect(() => { load(); }, [load]);
 
-  const resolve = async (r: Row, action: "confirm" | "dismiss") => {
+  const resolve = async (r: Row, action: "confirm" | "dismiss", jobNo?: string) => {
+    const job = jobNo?.trim() || r.matchedJobNo;
     const msg = action === "confirm"
-      ? `Confirm and mark ${r.matchedJobNo ?? "this payment"} PAID${r.guideId ? ` for guide ${r.guideId}` : ""}?`
+      ? `Confirm and mark ${job ?? "this payment"} PAID${r.guideId ? ` for guide ${r.guideId}` : ""}?`
       : "Dismiss this payment from the review queue? It will not be marked paid.";
     if (!window.confirm(msg)) return;
     setBusy(r.id);
@@ -85,11 +87,12 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
       const res = await fetch("/api/payments/transactions/resolve", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: r.id, action }),
+        body: JSON.stringify({ id: r.id, action, jobNo: jobNo?.trim() || undefined }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
-        window.alert(`Could not ${action} this payment: ${e.error ?? res.status}`);
+        const hint = e.error === "job-not-found" ? "No job sheet has that number." : e.error === "job-ambiguous" ? "More than one job sheet has that number." : (e.error ?? res.status);
+        window.alert(`Could not ${action} this payment: ${hint}`);
         return;
       }
       await load();
@@ -168,11 +171,21 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
                         {canEdit && r.status === "PAYMENT_NEEDS_REVIEW" && (
                           <>
                             <button className="btn sm" disabled={busy === r.id} onClick={() => resolve(r, "dismiss")}>Dismiss</button>
-                            {r.matchedJobNo && (
+                            {r.matchedJobNo ? (
                               <button className="btn sm" disabled={busy === r.id} onClick={() => resolve(r, "confirm")}
                                 style={{ background: "var(--primary)", borderColor: "var(--primary)", color: "#fff" }}>
                                 Confirm &amp; mark paid
                               </button>
+                            ) : (
+                              <>
+                                <input value={jobInput[r.id] ?? ""} onChange={(e) => setJobInput((m) => ({ ...m, [r.id]: e.target.value }))}
+                                  placeholder="Job no. (FOLK-BKK-…)" aria-label="Job number to link"
+                                  style={{ border: "1px solid var(--line-strong)", borderRadius: 8, padding: "6px 9px", fontSize: 12.5, fontFamily: "inherit", width: 172, background: "var(--card)", color: "var(--ink)" }} />
+                                <button className="btn sm" disabled={busy === r.id || !(jobInput[r.id] ?? "").trim()} onClick={() => resolve(r, "confirm", jobInput[r.id])}
+                                  style={{ background: "var(--primary)", borderColor: "var(--primary)", color: "#fff" }}>
+                                  Link &amp; mark paid
+                                </button>
+                              </>
                             )}
                           </>
                         )}

@@ -16,10 +16,11 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const id = String(body?.id || "").trim();
   const action = body?.action as ReviewAction;
+  const jobNo = body?.jobNo ? String(body.jobNo).trim().slice(0, 64) : null;
   const note = body?.note ? String(body.note).slice(0, 500) : null;
   if (!id || (action !== "confirm" && action !== "dismiss")) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
-  const res = await resolveReview(prisma, { id, action, note, actorId: session!.user!.id ?? null });
+  const res = await resolveReview(prisma, { id, action, jobNo, note, actorId: session!.user!.id ?? null });
   if (!res.ok) {
     return NextResponse.json({ error: res.error }, { status: res.error === "not-found" ? 404 : 400 });
   }
