@@ -106,8 +106,11 @@ export async function GET(req: NextRequest) {
   }).sort((a, b) => b.tours - a.tours);
 
   // 6-month trend: bookings + cancellations by tour-date month.
+  // Last 6 real calendar months. (30-day stepping duplicated or skipped months
+  // near boundaries — e.g. March twice and February missing.)
+  const [ty, tm] = today.split("-").map(Number);
   const months: string[] = [];
-  for (let i = 5; i >= 0; i--) months.push(bkk(-i * 30).slice(0, 7));
+  for (let i = 5; i >= 0; i--) months.push(new Date(Date.UTC(ty, tm - 1 - i, 1)).toISOString().slice(0, 7));
   const bkMap: Record<string, number> = {}, cxMap: Record<string, number> = {};
   for (const m of months) { bkMap[m] = 0; cxMap[m] = 0; }
   for (const b of trend) { const m = (b.date ?? "").slice(0, 7); if (m in bkMap) { bkMap[m]++; if (b.status === "CANCELLED") cxMap[m]++; } }
