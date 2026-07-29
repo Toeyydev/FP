@@ -42,6 +42,7 @@ export default function BottomNav({ role }: { role?: string }) {
       ];
   const moreLinks: Item[] = [
     { href: "/payments", label: "Payments", icon: "pay" },
+    { href: "/payment-slips", label: "Payment slips", icon: "list" },
     { href: "/reports", label: "Reports", icon: "grid" },
     { href: "/tour-log", label: "Tour log", icon: "list" },
     { href: "/guides", label: "Guides", icon: "user" },

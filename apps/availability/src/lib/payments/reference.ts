@@ -41,6 +41,15 @@ export function normalizeMemo(raw: string | null | undefined): string {
     .toUpperCase();
 }
 
+// Mask a bank Transaction ID for guide-facing / support display — keeps only the last
+// 5 characters visible. Operators/admins see the full id; the guide never does.
+export function maskTransactionId(id: string | null | undefined): string {
+  if (!id) return "";
+  const s = String(id);
+  if (s.length <= 5) return s;
+  return "•".repeat(Math.min(10, s.length - 5)) + s.slice(-5);
+}
+
 export function classifyReference(raw: string | null | undefined): ClassifiedReference {
   const rawStr = raw ?? "";
   const normalized = normalizeMemo(rawStr);

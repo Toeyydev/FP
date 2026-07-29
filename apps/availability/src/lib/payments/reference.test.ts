@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyReference, normalizeMemo } from "@/lib/payments/reference";
+import { classifyReference, normalizeMemo, maskTransactionId } from "@/lib/payments/reference";
 
 describe("classifyReference — the four Folkpaths reference formats", () => {
   it("classifies an individual job number (FOLK-BKK-YYYYMMDD-NN)", () => {
@@ -75,5 +75,16 @@ describe("normalizeMemo", () => {
     expect(normalizeMemo(null)).toBe("");
     expect(normalizeMemo(undefined)).toBe("");
     expect(normalizeMemo("   ")).toBe("");
+  });
+});
+
+describe("maskTransactionId — never expose the full id to a guide", () => {
+  it("keeps only the last 5 characters", () => {
+    expect(maskTransactionId("TRTS260411497513247")).toBe("••••••••••13247");
+  });
+  it("passes through short ids and handles empties", () => {
+    expect(maskTransactionId("12345")).toBe("12345");
+    expect(maskTransactionId(null)).toBe("");
+    expect(maskTransactionId("")).toBe("");
   });
 });
