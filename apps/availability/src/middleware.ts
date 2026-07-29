@@ -9,5 +9,5 @@ export const config = {
   // Exclude auth API, Next internals, and static/PWA files (manifest, service
   // worker, icons) — otherwise unauthenticated requests for them get redirected
   // to /start and the app isn't installable.
-  matcher: ["/((?!api/auth|_next/static|_next/image|favicon.ico|manifest.webmanifest|manifest.json|sw.js|service-worker.js|offline.html|.*\\.png$).*)"],
+  matcher: ["/((?!api/auth|api/health|_next/static|_next/image|favicon.ico|manifest.webmanifest|manifest.json|sw.js|service-worker.js|offline.html|.*\\.png$).*)"],
 };
