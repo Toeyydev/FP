@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
 type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; email: string; fullName: string; phone: string; taxId: string; address: string; lineLinked: boolean; hasPush: boolean; hasEmail: boolean };
@@ -55,7 +56,10 @@ export default function Guides() {
   const lbl: React.CSSProperties = { display: "grid", gap: 4, fontSize: 12.5, fontWeight: 600, color: "var(--ink-soft)" };
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="guides" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Guides</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/tour-log">Tour log</a></div>
       </div>
@@ -107,6 +111,8 @@ export default function Guides() {
           </table>
         </div>
       </section>
+        </div>
+      </div>
     </div>
   );
 }

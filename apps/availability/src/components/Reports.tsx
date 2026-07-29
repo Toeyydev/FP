@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 
 type Sum = {
   bookings: number; cancelled: number; cancelRate: number; totalPax: number;
@@ -54,7 +55,10 @@ export default function Reports() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="reports" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Reports</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/payments">Payments</a></div>
       </div>
@@ -126,6 +130,8 @@ export default function Reports() {
           </div>
         )}
       </section>
+        </div>
+      </div>
     </div>
   );
 }

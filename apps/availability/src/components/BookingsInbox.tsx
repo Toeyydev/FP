@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 import { SLOTS } from "@/lib/slots";
 import { isOnline } from "@/lib/presence";
 import { DOW, MON, parseYMD } from "@/lib/dates";
@@ -249,7 +250,10 @@ export default function BookingsInbox() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="bookings" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs">
         <button className={`subtab ${tab === "inbox" ? "active" : ""}`} onClick={() => setTab("inbox")}>Inbox</button>
         <button className={`subtab ${tab === "all" ? "active" : ""}`} onClick={() => setTab("all")}>All bookings</button>
@@ -530,6 +534,8 @@ export default function BookingsInbox() {
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }

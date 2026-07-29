@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
 type Row = { date: string; time: string; tour: string; guideId: string; slotIdx: number; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; stars: number | null; completed: boolean; report: Report | null; noShows?: { name: string; ref: string; pax: number; noShowPax?: number }[] };
@@ -29,7 +30,10 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
   }
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="tour-log" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Tour log</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/reports">Reports</a></div>
       </div>
@@ -82,6 +86,8 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
           </table>
         </div>
       </section>
+        </div>
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
+import { OperatorNav } from "@/components/OperatorNav";
 import { SLOTS } from "@/lib/slots";
 
 type Row = { id: string; date: string; slotIdx: number };
@@ -57,7 +58,10 @@ export default function BlockSlots() {
 
   return (
     <div className="wrap">
-      <AuthHeader backHref="/" />
+      <AuthHeader home={false} />
+      <div className="op-layout">
+        <OperatorNav active="blocked-slots" />
+        <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Block time slots</span></div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/jobs">Dispatch</a></div>
       </div>
@@ -108,6 +112,8 @@ export default function BlockSlots() {
           ))}
         </div>
       </section>
+        </div>
+      </div>
     </div>
   );
 }
