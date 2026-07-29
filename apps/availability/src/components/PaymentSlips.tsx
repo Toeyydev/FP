@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 
 type Row = {
@@ -58,19 +58,45 @@ function Field({ label, value, mono }: { label: string; value: React.ReactNode; 
   );
 }
 
-export default function PaymentSlips() {
+export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [filter, setFilter] = useState<"review" | "all">("review");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true);
-    fetch(`/api/payments/transactions?filter=${filter}`, { cache: "no-store" })
+    return fetch(`/api/payments/transactions?filter=${filter}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => setRows(d.rows ?? []))
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
   }, [filter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const resolve = async (r: Row, action: "confirm" | "dismiss") => {
+    const msg = action === "confirm"
+      ? `Confirm and mark ${r.matchedJobNo ?? "this payment"} PAID${r.guideId ? ` for guide ${r.guideId}` : ""}?`
+      : "Dismiss this payment from the review queue? It will not be marked paid.";
+    if (!window.confirm(msg)) return;
+    setBusy(r.id);
+    try {
+      const res = await fetch("/api/payments/transactions/resolve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: r.id, action }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        window.alert(`Could not ${action} this payment: ${e.error ?? res.status}`);
+        return;
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const reviewCount = useMemo(() => rows.filter((r) => r.status === "PAYMENT_NEEDS_REVIEW").length, [rows]);
 
@@ -132,12 +158,25 @@ export default function PaymentSlips() {
                     {r.peakExpenseNo && <Field label="PEAK Expense" value={r.peakExpenseNo} mono />}
                   </div>
 
-                  {(r.reason || r.driveLink) && (
+                  {(r.reason || r.driveLink || (canEdit && r.status === "PAYMENT_NEEDS_REVIEW")) && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
                       <span style={{ fontSize: 12.5, color: r.status === "PAYMENT_NEEDS_REVIEW" ? "var(--assign)" : "var(--ink-soft)" }}>{r.reason ?? ""}</span>
-                      {r.driveLink && (
-                        <a className="btn sm" href={r.driveLink} target="_blank" rel="noopener noreferrer">View slip</a>
-                      )}
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        {r.driveLink && (
+                          <a className="btn sm" href={r.driveLink} target="_blank" rel="noopener noreferrer">View slip</a>
+                        )}
+                        {canEdit && r.status === "PAYMENT_NEEDS_REVIEW" && (
+                          <>
+                            <button className="btn sm" disabled={busy === r.id} onClick={() => resolve(r, "dismiss")}>Dismiss</button>
+                            {r.matchedJobNo && (
+                              <button className="btn sm" disabled={busy === r.id} onClick={() => resolve(r, "confirm")}
+                                style={{ background: "var(--primary)", borderColor: "var(--primary)", color: "#fff" }}>
+                                Confirm &amp; mark paid
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
