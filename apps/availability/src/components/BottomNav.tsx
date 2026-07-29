@@ -41,13 +41,13 @@ export default function BottomNav({ role }: { role?: string }) {
         { href: "/", label: "Board", icon: "board" },
       ];
   const moreLinks: Item[] = [
-    { href: "/payments", label: "Payroll", icon: "pay" },
-    { href: "/pay", label: "Approvals", icon: "pay" },
+    { href: "/payments", label: "Payments", icon: "pay" },
     { href: "/reports", label: "Reports", icon: "grid" },
     { href: "/tour-log", label: "Tour log", icon: "list" },
     { href: "/guides", label: "Guides", icon: "user" },
-    { href: "/meeting-points", label: "Meeting points", icon: "dispatch" },
-    { href: "/product-map", label: "Product mapping", icon: "list" },
+    { href: "/tours", label: "Tours", icon: "board" },
+    { href: "/product-map", label: "Products", icon: "list" },
+    { href: "/blocked-slots", label: "Block slots", icon: "calendar" },
     { href: "/admin", label: "Accounts", icon: "user" },
   ];
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href.split("?")[0]);

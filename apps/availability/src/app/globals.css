@@ -91,14 +91,13 @@ header.app{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-
 .op-signout{width:100%;color:var(--ink-soft)}
 .op-signout:hover{color:var(--danger);border-color:transparent;background:var(--danger-bg)}
 /* On phones/tablets the rail folds up into a horizontal row so it never eats the width. */
-@media (max-width:720px){
+/* On mobile the fixed bottom bar (below 760px) is the operator nav, so hide the
+   left rail there — Dashboard's Drive + Sign out in .op-side stay visible. */
+@media (max-width:760px){
   .op-layout{flex-direction:column;gap:14px}
   .op-side{position:static;flex:none;width:100%}
-  .op-nav{flex-direction:row;flex-wrap:wrap}
-  .op-layout > .op-nav{flex:none;position:static}
-  .op-nav .op-home{width:100%;border-bottom:none}
-  .op-nav-group{width:100%}
-  .op-nav-link{flex:1 1 auto;text-align:center}
+  .op-nav{display:none}
+  .op-main{width:100%}
 }
 
 .panel-head{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:10px;align-items:center}

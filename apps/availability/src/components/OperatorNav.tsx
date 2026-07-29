@@ -28,7 +28,6 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "guides", label: "Guides", href: "/guides" },
       { key: "tours", label: "Tours", href: "/tours" },
       { key: "products", label: "Products", href: "/product-map" },
-      { key: "meeting-points", label: "Meeting points", href: "/meeting-points" },
       { key: "blocked-slots", label: "Block slots", href: "/blocked-slots" },
       { key: "accounts", label: "Accounts", href: "/admin" },
     ],
