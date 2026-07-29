@@ -584,11 +584,11 @@ model Bonus {
 
 // The original bank slip (or other payment evidence) stored privately in Drive.
 model PaymentEvidence {
-  id       String  @id @default(cuid())
-  guideId  String? // the guide this slip pays (matched via the extracted reference)
-  payrollPeriod String? // "YYYY-MM" when tied to the existing monthly payroll
-  evidenceType    String @default("K_BIZ_SLIP") // K_BIZ_SLIP | KCASH_RESULT | BANK_STATEMENT | MANUAL | OTHER
-  paymentProvider String @default("K_BIZ_SLIP")
+  id              String  @id @default(cuid())
+  guideId         String? // the guide this slip pays (matched via the extracted reference)
+  payrollPeriod   String? // "YYYY-MM" when tied to the existing monthly payroll
+  evidenceType    String  @default("K_BIZ_SLIP") // K_BIZ_SLIP | KCASH_RESULT | BANK_STATEMENT | MANUAL | OTHER
+  paymentProvider String  @default("K_BIZ_SLIP")
 
   googleDriveFileId   String  @unique // idempotency: a Drive file is recorded once
   googleDriveFolderId String?
@@ -635,12 +635,12 @@ model PaymentTransaction {
   deductedAt         DateTime? @db.Timestamptz(6)
   receivedAt         DateTime? @db.Timestamptz(6)
 
-  senderName            String?
-  senderAccountMasked   String?
-  senderBank            String?
-  recipientName         String?
+  senderName             String?
+  senderAccountMasked    String?
+  senderBank             String?
+  recipientName          String?
   recipientAccountMasked String?
-  recipientBank         String?
+  recipientBank          String?
 
   transferAmount Decimal? @db.Decimal(12, 2)
   transferFee    Decimal? @db.Decimal(12, 2)
@@ -655,6 +655,36 @@ model PaymentTransaction {
   detectedBank String?
   sourceType   String? // PDF_TEXT | OCR_PDF | OCR_IMAGE | ...
 
+  // Provider-issued transaction id, kept DISTINCT from the bank `transactionId`
+  // above (e.g. a K CASH CONNECT PLUS result id like KCCP-TRANSACTION-123456).
+  providerTransactionId String? @unique
+
+  // Split validation (spec): the memo/reference match is judged separately from
+  // the transaction-level checks (duplicate / amount / recipient). `validationStatus`
+  // below stays as the overall roll-up used by existing code.
+  memoValidationStatus        String? @default("PENDING") // PENDING | MATCHED | NOT_MATCHED | REFERENCE_GUIDE_MISMATCH | AMOUNT_MISMATCH
+  transactionValidationStatus String? @default("PENDING") // PENDING | OK | DUPLICATE_TRANSACTION | NEEDS_REVIEW
+
+  // What the memo reference resolved to. Only the relevant pair is set; the *_No
+  // columns hold the human reference, the *_Id columns the internal row id (linked
+  // to the Payout / PaymentBatch models added with the matching engine in a later stage).
+  matchedJobSheetId     String?
+  matchedJobNo          String?
+  matchedPayoutId       String?
+  matchedPayoutItemNo   String?
+  matchedPaymentBatchId String?
+  matchedPaymentBatchNo String?
+
+  // The PEAK expense created for this payment, stored separately from the bank ids
+  // and the memo — never overwrite `transactionId` / `paymentReferenceValue` with it.
+  peakExpenseNo String?
+
+  // K CASH CONNECT PLUS preparation: the bank's own batch/item references and the
+  // customer reference, preserved raw and separate from our Folkpaths references.
+  bankBatchReference String?
+  bankItemReference  String?
+  customerReference  String?
+
   validationStatus  String @default("PENDING") // PENDING | MATCHED | PAYMENT_NEEDS_REVIEW | FAILED
   validationDetails Json?
 
@@ -662,4 +692,8 @@ model PaymentTransaction {
   updatedAt DateTime @updatedAt
 
   @@index([paymentReferenceType, paymentReferenceValue])
+  @@index([matchedJobNo])
+  @@index([matchedPayoutItemNo])
+  @@index([transactionValidationStatus])
+  @@index([memoValidationStatus])
 }
