@@ -79,6 +79,9 @@ header.app{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-
 .op-nav .op-home{color:var(--ink);margin-bottom:4px;padding-bottom:12px;border-bottom:1px solid var(--line);border-radius:9px 9px 0 0}
 .op-nav-group{font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft);font-weight:700;padding:10px 12px 3px}
 .op-nav-link .op-nav-badge{position:static;top:auto;right:auto;margin-left:6px;display:inline-block;box-shadow:none}
+/* When the rail is used without the .op-side wrapper (every page except the
+   Dashboard), constrain its width directly so it doesn't stretch across the row. */
+.op-layout > .op-nav{flex:0 0 190px;position:sticky;top:16px}
 .op-main{flex:1;min-width:0}
 /* Drive status tucked at the foot of the rail — compact, stacked. */
 .op-side .drive-card{margin-bottom:0;flex-direction:column;align-items:stretch;gap:8px;padding:11px 13px}
@@ -92,6 +95,7 @@ header.app{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-
   .op-layout{flex-direction:column;gap:14px}
   .op-side{position:static;flex:none;width:100%}
   .op-nav{flex-direction:row;flex-wrap:wrap}
+  .op-layout > .op-nav{flex:none;position:static}
   .op-nav .op-home{width:100%;border-bottom:none}
   .op-nav-group{width:100%}
   .op-nav-link{flex:1 1 auto;text-align:center}
