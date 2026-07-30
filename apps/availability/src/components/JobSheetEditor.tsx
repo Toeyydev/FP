@@ -461,6 +461,7 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
+        <button className="btn sm no-print" title="Reward for reviews — rate × number of reviews (e.g. 2 × ฿50). Shown as its own line on the guide's Pay." onClick={() => up({ expenses: [...sheet.expenses, { description: "Review reward", price: 50, pax: 1 }] })}>★ + Review reward</button>
 
         {/* Guide-reported expenses — cross-check (operator only) */}
         {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && (() => {
