@@ -35,10 +35,9 @@ export default function BottomNav({ role }: { role?: string }) {
         { href: "/profile", label: "Profile", icon: "user" },
       ]
     : [
-        { href: "/dashboard", label: "Dashboard", icon: "grid" },
+        { href: "/board", label: "Board", icon: "board" },
         { href: "/bookings", label: "Bookings", icon: "list" },
         { href: "/jobs", label: "Dispatch", icon: "dispatch" },
-        { href: "/", label: "Board", icon: "board" },
       ];
   const moreLinks: Item[] = [
     { href: "/payments", label: "Payments", icon: "pay" },

@@ -60,7 +60,7 @@ export default function Reports() {
         <OperatorNav active="reports" />
         <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Reports</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/payments">Payments</a></div>
+        <div className="nav"><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/payments">Payments</a></div>
       </div>
 
       <section className="panel">

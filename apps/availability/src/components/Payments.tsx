@@ -330,7 +330,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         <OperatorNav active="payments" />
         <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Payments</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
+        <div className="nav"><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
 
       <section className="panel" style={{ marginBottom: 14 }}>

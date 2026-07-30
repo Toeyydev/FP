@@ -61,7 +61,7 @@ export default function Guides() {
         <OperatorNav active="guides" />
         <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Guides</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/tour-log">Tour log</a></div>
+        <div className="nav"><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/tour-log">Tour log</a></div>
       </div>
 
       <section className="panel">

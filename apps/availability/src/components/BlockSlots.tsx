@@ -63,7 +63,7 @@ export default function BlockSlots() {
         <OperatorNav active="blocked-slots" />
         <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Block time slots</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/jobs">Dispatch</a></div>
+        <div className="nav"><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/jobs">Dispatch</a></div>
       </div>
 
       <section className="panel">

@@ -36,7 +36,7 @@ export default function MeetingPoints() {
         <OperatorNav active="meeting-points" />
         <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Meeting points</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a></div>
+        <div className="nav"><a className="btn sm" href="/board">Board</a></div>
       </div>
 
       <section className="panel">
