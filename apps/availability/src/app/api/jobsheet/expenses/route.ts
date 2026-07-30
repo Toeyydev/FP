@@ -6,7 +6,6 @@ import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
 import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
 import { nextJobRef } from "@/lib/jobref";
-import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -76,11 +75,6 @@ export async function POST(req: NextRequest) {
     await notifyOps(`${guideId} reported expenses for ${tour?.name ?? tourId} · ${dl} — ${thb(total)}. Cross-check on the job sheet.`, "Guide reported expenses", `${guideId} · ${dl} · ${thb(total)}`);
   } catch { /* notifying ops is best-effort */ }
 
-  // Tour is complete (the guide has reported) — save the finished job sheet to the
-  // Folkpaths Drive automatically, so admin@folkpaths.com (and account@folkpaths.com,
-  // via the shared folder) get the record with no operator action. Best-effort.
-  const driveLink = await saveJobSheetToDrive(guideId, date, slotIdx);
-
-  await audit({ actorId: session.user.id ?? null, actorRole: role ?? "GUIDE", action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink } });
-  return NextResponse.json({ ok: true, driveLink });
+  await audit({ actorId: session.user.id ?? null, actorRole: role ?? "GUIDE", action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length } });
+  return NextResponse.json({ ok: true });
 }

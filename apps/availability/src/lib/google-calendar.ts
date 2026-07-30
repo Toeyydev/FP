@@ -6,9 +6,9 @@ const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 export const googleEnabled = Boolean(CLIENT_ID && CLIENT_SECRET);
 
-// calendar.events for Calendar sync + drive.file so we can save job sheets into
-// the connected account's Drive (drive.file = only files this app creates).
-const SCOPE = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file";
+// calendar.events for Calendar sync — the app's only Google use now (e-slips and
+// job sheets are stored in our own DB, so no drive.file scope is requested).
+const SCOPE = "https://www.googleapis.com/auth/calendar.events";
 const REDIRECT = (host: string) => `https://${host}/api/google/callback`;
 
 export function authUrl(host: string, state: string): string {

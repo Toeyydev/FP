@@ -3,23 +3,21 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { saveEslip } from "@/lib/eslip-store";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import { peakEnabled } from "@/lib/peak-api";
 import { postGuidePayout, peakPayoutReady } from "@/lib/peak-payout";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 
 // POST (multipart) { guideId, jobs, peakRef? , file } — pay ONE or SEVERAL of a
-// guide's tours in a single transfer: upload one bank slip, push it to Drive once,
-// and mark every listed tour PAID with that slip + the shared PEAK ref. This is the
-// "merged payment" path (e.g. a guide's 2-3 pending jobs paid together). Ops only.
+// guide's tours in a single transfer: upload one bank slip, store it once, and mark
+// every listed tour PAID with that slip + the shared PEAK ref. This is the "merged
+// payment" path (e.g. a guide's 2-3 pending jobs paid together). Ops only.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", hint: "Connect Google Drive first." }, { status: 400 });
 
   const form = await req.formData().catch(() => null);
   const guideId = String(form?.get("guideId") || "");
@@ -32,25 +30,15 @@ export async function POST(req: NextRequest) {
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
   const jobs = jobsParsed.data;
 
-  const refreshToken = await folkpathsDriveToken(session!.user!.id ?? undefined);
-  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
-
   const u = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
   const guideName = u?.fullName || u?.displayName || guideId;
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const mime = file.type || "image/jpeg";
   const dates = [...new Set(jobs.map((j) => j.date))].sort();
-  const earliest = dates[0];
-  const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
   const dateLabel = dates.length === 1 ? dates[0] : `${dates[0]}+${dates.length - 1}`;
   const name = `${guideId} ${guideName} — ${dateLabel} (${jobs.length} tour${jobs.length === 1 ? "" : "s"})${peakRef ? ` — ${peakRef}` : ""} — e-slip.${extOf(mime)}`;
 
-  let link: string;
-  try {
-    ({ link } = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
-  } catch (e) {
-    return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
-  }
+  const { link } = await saveEslip({ base64, mimeType: mime, filename: name });
 
   // Mark every listed tour PAID, tagged with the one slip + shared ref.
   const now = new Date();
@@ -64,7 +52,7 @@ export async function POST(req: NextRequest) {
       update: data,
     });
   }
-  await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: "pay.eslip", entityType: "Assignment", detail: { guideId, count: jobs.length, peakRef, drive: true } });
+  await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: "pay.eslip", entityType: "Assignment", detail: { guideId, count: jobs.length, peakRef } });
 
   // Auto-post this transfer to PEAK as one expense and adopt its EXP- code as the
   // ref — dormant until PEAK is connected + account-chart config is set, so this is

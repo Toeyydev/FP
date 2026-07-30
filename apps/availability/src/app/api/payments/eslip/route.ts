@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { saveEslip, eslipIdFromUrl } from "@/lib/eslip-store";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -10,12 +10,11 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 
 // POST (multipart) { period, guideId, file } — upload a bank payment slip (e-slip)
-// as evidence, push it straight to Google Drive (Folkpaths E-slips / <month>), and
-// store the Drive link on the guide's monthly payroll row. Operator/admin only.
+// as evidence, store it (encrypted) in our own DB, and put its /api/eslip link on
+// the guide's monthly payroll row. Operator/admin only.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", hint: "Connect Google Drive first." }, { status: 400 });
 
   const form = await req.formData().catch(() => null);
   const period = String(form?.get("period") || "");
@@ -24,9 +23,6 @@ export async function POST(req: NextRequest) {
   const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
   if (!/^\d{4}-\d{2}$/.test(period) || !guideId || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
-
-  const refreshToken = await folkpathsDriveToken(session!.user!.id ?? undefined);
-  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
 
   const u = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
   const guideName = u?.fullName || u?.displayName || guideId;
@@ -40,21 +36,16 @@ export async function POST(req: NextRequest) {
   const base = refs.length === 1 ? `${refs[0]} — ${guideName}` : refs.length > 1 ? `${refs[0]} +${refs.length - 1} more — ${guideName}` : `${guideId} ${guideName} ${period}`;
   const name = `${base} — e-slip.${extOf(mime)}`;
 
-  let link: string;
-  try {
-    ({ link } = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
-  } catch (e) {
-    return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
-  }
-
-  // The e-slip uploaded successfully → it's evidence of payment, so mark the guide's
-  // month PAID, and flip each of that month's tours to PAID so the per-tour badges agree.
-  const now = new Date();
   // Was this month already paid? If so, this is a re-upload / "Replace slip" — we
-  // refresh the file but must NOT notify the guide again (caused duplicate
-  // "payment transferred" messages).
-  const prior = await prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true } });
+  // refresh the stored file (replacing the old one) but must NOT notify the guide
+  // again (caused duplicate "payment transferred" messages).
+  const prior = await prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, eslipUrl: true } });
   const alreadyPaid = prior?.status === "paid";
+  const { link } = await saveEslip({ base64, mimeType: mime, filename: name, replaceUrl: prior?.eslipUrl });
+
+  // The e-slip is stored → it's evidence of payment, so mark the guide's month PAID,
+  // and flip each of that month's tours to PAID so the per-tour badges agree.
+  const now = new Date();
   await prisma.payrollStatus.upsert({
     where: { guideId_period: { guideId, period } },
     create: { guideId, period, status: "paid", paidAt: now, eslipUrl: link },
@@ -84,13 +75,16 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, link, markedPaid: true });
 }
 
-// DELETE { period, guideId } — clear the e-slip link (the file stays in Drive).
+// DELETE { period, guideId } — clear the e-slip link and remove the stored slip.
 export async function DELETE(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const body = await req.json().catch(() => ({}));
   const period = String(body?.period || ""), guideId = String(body?.guideId || "");
   if (!/^\d{4}-\d{2}$/.test(period) || !guideId) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const row = await prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { eslipUrl: true } });
+  const oldId = eslipIdFromUrl(row?.eslipUrl);
+  if (oldId) await prisma.eslip.delete({ where: { id: oldId } }).catch(() => {});
   await prisma.payrollStatus.updateMany({ where: { guideId, period }, data: { eslipUrl: null } });
   return NextResponse.json({ ok: true });
 }

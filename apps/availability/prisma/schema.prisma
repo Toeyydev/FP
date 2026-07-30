@@ -124,6 +124,19 @@ model GuideDocument {
   @@index([userId])
 }
 
+// A payment slip (bank e-slip / bonus slip) stored in our own DB — the evidence a
+// tour, payroll month, or bonus was paid. Replaces the previous Google Drive
+// storage; the owning row's eslipUrl points at /api/eslip/{id}. Bytes are
+// AES-encrypted at rest, like GuideDocument.
+model Eslip {
+  id        String   @id @default(cuid())
+  mimeType  String
+  filename  String?
+  size      Int
+  data      Bytes // encrypted
+  createdAt DateTime @default(now())
+}
+
 model Tour {
   id   String @id // T-001..T-009
   name String

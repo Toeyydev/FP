@@ -92,7 +92,6 @@ export async function GET(req: NextRequest) {
 <html lang="en"><head><meta charset="UTF-8"><title>${esc(ref)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
@@ -125,7 +124,7 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
 </style></head>
 <body>
-  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span style="font-size:12px;opacity:.9">\ud83d\udcce e-slip:</span><input type="file" id="eslipInput" accept="image/*,application/pdf" onchange="eslipChosen(this)" style="background:#fff;color:#7e3a2c;border-radius:7px;padding:6px 8px;font-size:12px;max-width:210px"><span id="eslipName" style="font-size:12px;opacity:.9"></span><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
+  <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span style="font-size:12px;opacity:.9">\ud83d\udcce e-slip:</span><input type="file" id="eslipInput" accept="image/*,application/pdf" onchange="eslipChosen(this)" style="background:#fff;color:#7e3a2c;border-radius:7px;padding:6px 8px;font-size:12px;max-width:210px"><span id="eslipName" style="font-size:12px;opacity:.9"></span>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
   <div class="page">
     ${editable ? `<div class="prepnote">📝 Prep sheet — no guide assigned yet. Fill in the highlighted fields, then <b>Save as PDF / Print</b>. Totals update as you type.</div>` : ""}
     <div class="head">
@@ -198,28 +197,8 @@ export async function GET(req: NextRequest) {
     }
     document.addEventListener("input",recompute);
     var eslipFile=null;
-    async function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(el) el.textContent=eslipFile?("\ud83d\udcce "+eslipFile.name):""; if(!eslipFile) return; var btn=document.getElementById("driveBtn"); var old=btn?btn.textContent:""; if(btn){ btn.disabled=true; btn.textContent="Uploading\u2026"; } try{ var b64=await readB64(eslipFile); var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,eslipBase64:b64,eslipMime:eslipFile.type||"image/jpeg"})}); var d=await r.json().catch(function(){return {};}); if(!r.ok){ alert(d.hint||d.detail||("Upload failed ("+r.status+")")); if(btn){btn.textContent=old;btn.disabled=false;} return; } if(btn){ btn.textContent=d.paid?"Marked paid \u2713":"Uploaded \u2713"; btn.disabled=false; } if(d.driveError){ alert((d.paid?"Tour marked paid. ":"")+"Note: "+d.driveError); } if(d.paid){ setTimeout(function(){ location.reload(); }, 1200); } }catch(e){ alert("Upload failed: "+((e&&e.message)||e)); if(btn){btn.textContent=old;btn.disabled=false;} } }
+    async function eslipChosen(inp){ eslipFile=(inp.files&&inp.files[0])||null; var el=document.getElementById("eslipName"); if(!eslipFile){ if(el) el.textContent=""; return; } if(el) el.textContent="\ud83d\udcce Uploading\u2026"; try{ var b64=await readB64(eslipFile); var r=await fetch("/api/jobsheet/eslip",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,eslipBase64:b64,eslipMime:eslipFile.type||"image/jpeg"})}); var d=await r.json().catch(function(){return {};}); if(!r.ok){ if(el) el.textContent=""; alert(d.hint||d.detail||("Upload failed ("+r.status+")")); return; } if(el) el.textContent="Marked paid \u2713"; setTimeout(function(){ location.reload(); }, 1200); }catch(e){ if(el) el.textContent=""; alert("Upload failed: "+((e&&e.message)||e)); } }
     function readB64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ var u=String(fr.result); res(u.substring(u.indexOf(",")+1)); }; fr.onerror=rej; fr.readAsDataURL(file); }); }
-    async function shareToDrive(btn){
-      var old=btn.textContent; btn.disabled=true; btn.textContent="Saving\u2026";
-      try{
-        var payload={guideId:GID,date:DATE,slotIdx:SLOT};
-        try{
-          var opt={margin:8,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true,backgroundColor:"#ffffff"},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},pagebreak:{mode:["css","legacy"]}};
-          var uri=await html2pdf().set(opt).from(document.querySelector(".page")).outputPdf("datauristring");
-          payload.pdfBase64=uri.substring(uri.indexOf(",")+1);
-        }catch(pe){ /* PDF render is best-effort; e-slip + paid still go through */ }
-        if(eslipFile){ payload.eslipBase64=await readB64(eslipFile); payload.eslipMime=eslipFile.type||"image/jpeg"; }
-        if(!payload.pdfBase64 && !payload.eslipBase64){ alert("Nothing to save."); btn.textContent=old; btn.disabled=false; return; }
-        var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
-        var d=await r.json().catch(function(){return {};});
-        if(!r.ok){ alert(d.hint||d.detail||"Drive save failed."); btn.textContent=old; btn.disabled=false; return; }
-        btn.textContent=d.paid?"Saved + marked paid \u2713":(eslipFile?"Saved sheet + e-slip \u2713":"Saved \u2713");
-        if(d.driveError){ alert((d.paid?"Payment marked paid. ":"")+"But the Drive copy failed: "+d.driveError+"\nTry Share to Drive again."); }
-        else if(d.link) window.open(d.link,"_blank","noopener");
-        if(d.paid){ setTimeout(function(){ location.reload(); }, 1500); }
-      }catch(e){ alert("Could not save PDF: "+((e&&e.message)||e)); btn.textContent=old; btn.disabled=false; }
-    }
   </script>
 </body></html>`;
 

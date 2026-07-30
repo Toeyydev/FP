@@ -1,6 +1,6 @@
 // Client-side image downscale for uploads. Big phone photos (3–8 MB) are the
-// slow path for document + e-slip uploads (server → Google Drive); shrinking to
-// ~1600px JPEG before sending cuts upload time and Drive/DB storage many-fold.
+// slow path for document + e-slip uploads (server → DB); shrinking to
+// ~1600px JPEG before sending cuts upload time and DB storage many-fold.
 // Non-images (PDFs) pass through untouched; if anything fails we return the
 // original so an upload never breaks because of compression.
 export async function shrinkImage(file: File, max = 1600, quality = 0.82): Promise<Blob> {
