@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { GuideTabs } from "@/components/GuideTabs";
 
-type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; paid: boolean; paidAt: string | null; slip: string | null };
-type Month = { period: string; label: string; tourCount: number; total: number; paidCount: number; monthly: { paid: boolean; paidAt: string | null; slip: string | null }; tours: Tour[] };
+type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; reviewReward: number; paid: boolean; paidAt: string | null; slip: string | null };
+type Month = { period: string; label: string; tourCount: number; total: number; reviewReward: number; paidCount: number; monthly: { paid: boolean; paidAt: string | null; slip: string | null }; tours: Tour[] };
 type Data = { months: Month[]; yearTotal: number; paidThisMonth: number; guideId: string; all?: boolean };
 
 const thb = (v: number) => `฿${v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -23,6 +23,12 @@ function Status({ paid, paidAt }: { paid: boolean; paidAt: string | null }) {
   return paid
     ? <span className="pay-pill paid">✓ Paid{paidAt ? ` · ${paidLabel(paidAt)}` : ""}</span>
     : <span className="pay-pill pend">Awaiting payment</span>;
+}
+// Review reward earned on a tour (part of its total) — shown on its own so the
+// guide can see what a review paid them.
+function ReviewReward({ amount }: { amount: number }) {
+  if (!amount) return null;
+  return <span className="pay-pill" style={{ color: "#a06a00", background: "rgba(234,160,20,.12)" }}>★ Review {thb(amount)}</span>;
 }
 
 export default function MyPay() {
@@ -66,7 +72,7 @@ export default function MyPay() {
                       <div style={{ minWidth: 0 }}><div className="when">{dLabel(t.date)} · {t.time}</div><div className="tour">{t.tour}</div></div>
                       <div className="amt">{thb(t.amount)}</div>
                     </div>
-                    <div className="r2"><Status paid={t.paid} paidAt={t.paidAt} /><Slip url={t.slip} /><SheetLink guideId={d.guideId} date={t.date} slotIdx={t.slotIdx} /></div>
+                    <div className="r2"><Status paid={t.paid} paidAt={t.paidAt} /><ReviewReward amount={t.reviewReward} /><Slip url={t.slip} /><SheetLink guideId={d.guideId} date={t.date} slotIdx={t.slotIdx} /></div>
                   </div>
                 ))}
               </div>
@@ -77,13 +83,13 @@ export default function MyPay() {
                   return (
                     <div key={m.period} className="pay-mrow">
                       <button className="mhead" onClick={() => setOpen((o) => ({ ...o, [m.period]: !isOpen }))}>
-                        <span><b>{m.label}</b><small>{m.tourCount} tour{m.tourCount === 1 ? "" : "s"} · {isOpen ? "tap to collapse" : "tap for details"}</small></span>
+                        <span><b>{m.label}</b><small>{m.tourCount} tour{m.tourCount === 1 ? "" : "s"}{m.reviewReward > 0 ? ` · ★ ${thb(m.reviewReward)} reviews` : ""} · {isOpen ? "tap to collapse" : "tap for details"}</small></span>
                         <span className="mt">{thb(m.total)}</span>
                       </button>
                       {isOpen && (
                         <div className="msub">
                           {m.tours.map((t, i) => (
-                            <div key={i} className="sub-r"><span className="sw">{dLabel(t.date)} · {t.tour} <SheetLink guideId={d.guideId} date={t.date} slotIdx={t.slotIdx} /></span><span className="sa">{thb(t.amount)}{!t.paid ? " ⏳" : ""}</span></div>
+                            <div key={i} className="sub-r"><span className="sw">{dLabel(t.date)} · {t.tour} {t.reviewReward > 0 ? <span style={{ color: "#a06a00" }}>★{thb(t.reviewReward)}</span> : null} <SheetLink guideId={d.guideId} date={t.date} slotIdx={t.slotIdx} /></span><span className="sa">{thb(t.amount)}{!t.paid ? " ⏳" : ""}</span></div>
                           ))}
                         </div>
                       )}

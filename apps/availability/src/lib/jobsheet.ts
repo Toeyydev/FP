@@ -50,6 +50,16 @@ export function expenseAmount(e: Expense): number {
   return n(e.price) * n(e.pax);
 }
 
+// A "Review reward" expense line — the guide's reward for reviews, entered as a
+// normal expense (rate × count, e.g. 2 × ฿50) but surfaced on its own line on the
+// job sheet and the guide's Pay so they can see what a review earned them.
+export function isReviewExpense(e: { description?: string | null }): boolean {
+  return (e.description || "").trim().toLowerCase().startsWith("review");
+}
+export function reviewRewardTotal(expenses: Expense[]): number {
+  return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
+}
+
 export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   const totalExpenses = (expenses ?? []).reduce((s, e) => s + expenseAmount(e), 0);
   const gross = n(guideFee?.price) * n(guideFee?.time);
