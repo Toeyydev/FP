@@ -1170,15 +1170,18 @@ export default function AppClient({
         <div className="brand"><div className="kicker">{t("kicker")}</div><h1>{t("appTitle")}</h1></div>
         <div className="spacer" />
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
-        <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>
-        <button className="iconbtn" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")} aria-label={t("notifications")}>
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
-          {notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}
-        </button>
-        <div className="chip">
-          {role !== "guide" && <div className="who"><small>{t("signedInOperator")}</small><span>{t("operations")}</span></div>}
-          <button className="btn sm ghost" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }} type="button">{t("signOut")}</button>
-        </div>
+        {role === "guide" && <button className="btn sm ghost" onClick={() => setLang(lang === "en" ? "th" : "en")}>{lang === "en" ? "ไทย" : "EN"}</button>}
+        {role === "guide" && (
+          <button className="iconbtn" style={{ position: "relative" }} onClick={openNotif} type="button" title={t("notifications")} aria-label={t("notifications")}>
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
+            {notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}
+          </button>
+        )}
+        {role === "guide" && (
+          <div className="chip">
+            <button className="btn sm ghost" onClick={async () => { await fetch("/api/session/logout", { method: "POST" }); signOut({ callbackUrl: "/start" }); }} type="button">{t("signOut")}</button>
+          </div>
+        )}
       </header>
 
       {shell(<>
