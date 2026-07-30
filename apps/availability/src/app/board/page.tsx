@@ -3,9 +3,8 @@ import { auth } from "@/auth";
 import { isAccountant } from "@/lib/roles";
 import AppClient from "@/components/AppClient";
 
-// The availability / dispatch board. Operators reach it from the Dashboard's
-// "Board" link; "/" sends operators to the Dashboard instead, so this route lets
-// them open the board without bouncing back.
+// The availability / dispatch board. This is now the same view served at "/"
+// (home) for operators; kept as a stable /board alias for existing links.
 export default async function BoardPage() {
   const session = await auth();
   if (!session?.user) redirect("/start");

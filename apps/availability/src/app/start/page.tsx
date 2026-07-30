@@ -1,6 +1,6 @@
 "use client";
 
-import { signIn, getSession } from "next-auth/react";
+import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -42,9 +42,8 @@ export default function StartPage() {
     if (res?.error) { setLoginBusy(false); setLoginMsg(t("badCreds")); return; }
     if (remember) await fetch("/api/session/remember", { method: "POST" });
     setLoginBusy(false);
-    // Operators/admins land on the Dashboard (control tower); guides on their board.
-    const role = (await getSession())?.user?.role;
-    router.push(role === "OPERATOR" || role === "ADMIN" ? "/dashboard" : "/"); router.refresh();
+    // Everyone lands on home ("/"): operators/admins get the Board, guides their view.
+    router.push("/"); router.refresh();
   }
 
   async function doSignup(e: React.FormEvent) {

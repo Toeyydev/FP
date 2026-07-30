@@ -56,7 +56,7 @@ export default function Reports() {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Reports</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/payments">Payments</a></div>
+        <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/payments">Payments</a></div>
       </div>
 
       <section className="panel">

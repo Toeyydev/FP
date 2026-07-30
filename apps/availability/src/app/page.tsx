@@ -7,14 +7,15 @@ export default async function Home() {
   const session = await auth();
   if (!session?.user) redirect("/start");
   if (isAccountant(session.user.role)) redirect("/payments");
-  // Operators/admins land on the Dashboard (control tower); the board lives at /board.
-  if (session.user.role === "OPERATOR" || session.user.role === "ADMIN") redirect("/dashboard");
 
-  // Only guides reach here — operators/admins/accountants were redirected above.
+  // Home for everyone: operators/admins get the Board (their control surface),
+  // guides get their own view. Accountants were redirected above.
+  const r = session.user.role;
+  const role = r === "OPERATOR" || r === "ADMIN" ? "operator" : "guide";
   return (
     <AppClient
-      role="guide"
-      isAdmin={false}
+      role={role}
+      isAdmin={r === "ADMIN"}
       guideId={session.user.guideId ?? null}
       displayName={session.user.displayName ?? session.user.name ?? ""}
     />

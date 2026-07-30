@@ -31,7 +31,7 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Tour log</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/reports">Reports</a></div>
+        <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/reports">Reports</a></div>
       </div>
 
       <section className="panel">

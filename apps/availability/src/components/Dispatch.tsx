@@ -170,7 +170,7 @@ export default function Dispatch() {
         <button className={`subtab ${tab === "assigned" ? "active" : ""}`} onClick={() => setTab("assigned")}>Assigned jobs ({data.assignments.length})</button>
         <button className={`subtab ${tab === "offers" ? "active" : ""}`} onClick={() => setTab("offers")}>Offers ({openOffers.length} waiting{unfilled.length ? `, ${unfilled.length} unfilled` : ""})</button>
       </div>
-        <div className="nav"><a className="btn sm" href="/tour-log">📋 Past tours</a><a className="btn sm" href="/dashboard">Dashboard</a></div>
+        <div className="nav"><a className="btn sm" href="/tour-log">📋 Past tours</a><a className="btn sm" href="/">Board</a></div>
       </div>
 
       {tab === "assigned" ? (

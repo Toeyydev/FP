@@ -57,7 +57,7 @@ export default function Guides() {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Guides</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/tour-log">Tour log</a></div>
+        <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/tour-log">Tour log</a></div>
       </div>
 
       <section className="panel">

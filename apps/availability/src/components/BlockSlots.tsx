@@ -59,7 +59,7 @@ export default function BlockSlots() {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Block time slots</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/jobs">Dispatch</a></div>
+        <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/jobs">Dispatch</a></div>
       </div>
 
       <section className="panel">

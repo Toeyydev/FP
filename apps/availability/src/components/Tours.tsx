@@ -62,7 +62,7 @@ export default function Tours() {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Tours</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/meeting-points">Meeting points</a></div>
+        <div className="nav"><a className="btn sm" href="/">Board</a><a className="btn sm" href="/meeting-points">Meeting points</a></div>
       </div>
 
       <section className="panel">

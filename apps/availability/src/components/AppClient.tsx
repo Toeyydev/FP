@@ -1174,7 +1174,6 @@ export default function AppClient({
           {notif.unread > 0 && <span className="navbadge">{notif.unread}</span>}
         </button>
         <nav className="topnav">
-          {role === "operator" && <a className="navlink" href="/dashboard">{t("dashboardNav")}</a>}
           {role === "operator" && <a className="navlink" href="/jobs">{t("jobsNav")}</a>}
           {role === "operator" && <a className="navlink" href="/bookings">{t("bookings")}</a>}
           {role === "operator" && <a className="navlink" href="/payments">{t("paymentsNav")}</a>}

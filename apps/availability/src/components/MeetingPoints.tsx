@@ -32,7 +32,7 @@ export default function MeetingPoints() {
     <div className="wrap">
       <AuthHeader backHref="/" />
       <div id="appBar"><div className="subtabs"><span className="subtab active">Meeting points</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a></div>
+        <div className="nav"><a className="btn sm" href="/">Board</a></div>
       </div>
 
       <section className="panel">
