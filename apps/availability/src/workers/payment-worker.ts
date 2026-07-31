@@ -23,6 +23,9 @@
 
 import { prisma } from "@/lib/db";
 import { extractFromText } from "@/lib/payments/slip-evidence";
+import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
+import { sweepExpiredOffers } from "@/lib/offers";
+import { bokunApiEnabled } from "@/lib/bokun-api";
 
 const POLL_INTERVAL_MS = Number(process.env.PAYMENT_WORKER_POLL_MS ?? 15_000);
 const BATCH_SIZE = Number(process.env.PAYMENT_WORKER_BATCH ?? 10);
@@ -30,8 +33,20 @@ const BATCH_SIZE = Number(process.env.PAYMENT_WORKER_BATCH ?? 10);
 // heartbeat (useful to deploy the service before the feature is meant to act).
 const ENABLED = (process.env.PAYMENT_WORKER_ENABLED ?? "true").toLowerCase() !== "false";
 
+// Bokun sync lives here (the always-on worker) so bookings + cancellations stay
+// current even when nobody has the app open — the web-side loop only boots off a
+// page poll and can stall if the app is idle or the web dyno restarts unseen.
+// Runs hourly by default; autoSyncBokun still self-throttles (30-min audit marker),
+// so this and any web-side trigger dedupe across services rather than double-pull.
+const BOKUN_SYNC_ENABLED = (process.env.BOKUN_SYNC_ENABLED ?? "true").toLowerCase() !== "false";
+const BOKUN_SYNC_INTERVAL_MS = Number(process.env.BOKUN_SYNC_INTERVAL_MS ?? 3_600_000); // 1h
+const BOKUN_SYNC_FIRST_DELAY_MS = Number(process.env.BOKUN_SYNC_FIRST_DELAY_MS ?? 30_000); // ~30s after boot
+
 let shuttingDown = false;
 let ticking = false;
+let bokunTicking = false;
+// Next epoch-ms at which the Bokun sync is due (first run shortly after boot).
+let nextBokunAt = Date.now() + BOKUN_SYNC_FIRST_DELAY_MS;
 
 function log(msg: string, extra?: Record<string, unknown>) {
   const line = { t: new Date().toISOString(), svc: "payment-worker", msg, ...extra };
@@ -104,12 +119,33 @@ async function tick(): Promise<void> {
   }
 }
 
+/**
+ * One Bokun sync pass: pull fresh bookings + cancellations (throttled inside
+ * autoSyncBokun), re-sync assignment pax / self-heal sheets, then expire timed-out
+ * offers. Mirrors the web-side sync-loop tick. Every step is guarded so one bad
+ * call never stops the worker; the whole thing is a no-op if Bokun isn't configured.
+ */
+async function bokunTick(): Promise<void> {
+  if (bokunTicking || shuttingDown) return;
+  if (!bokunApiEnabled) { log("bokun-sync-skipped (BOKUN keys not set on this service)"); return; }
+  bokunTicking = true;
+  const startedAt = Date.now();
+  try {
+    try { await autoSyncBokun(); } catch (err) { log("bokun-autosync-error", { error: String(err) }); }
+    try { await reconcileAssignedBookings(true); } catch (err) { log("bokun-reconcile-error", { error: String(err) }); }
+    try { await sweepExpiredOffers(); } catch (err) { log("bokun-offer-sweep-error", { error: String(err) }); }
+    log("bokun-sync-done", { ms: Date.now() - startedAt });
+  } finally {
+    bokunTicking = false;
+  }
+}
+
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log("shutdown-start", { signal });
   // Let an in-flight tick finish (bounded wait) before disconnecting.
-  for (let i = 0; i < 100 && ticking; i++) await sleep(50);
+  for (let i = 0; i < 100 && (ticking || bokunTicking); i++) await sleep(50);
   try {
     await prisma.$disconnect();
   } catch {
@@ -124,6 +160,9 @@ async function main(): Promise<void> {
     enabled: ENABLED,
     pollMs: POLL_INTERVAL_MS,
     batch: BATCH_SIZE,
+    bokunSync: BOKUN_SYNC_ENABLED,
+    bokunSyncMs: BOKUN_SYNC_INTERVAL_MS,
+    bokunConfigured: bokunApiEnabled,
     node: process.version,
   });
 
@@ -138,6 +177,13 @@ async function main(): Promise<void> {
       await tick();
     } else {
       log("heartbeat (disabled)");
+    }
+    // Bokun sync runs on its own hourly cadence, independent of the fast payment
+    // poll — checked each iteration so shutdown stays responsive and a long payment
+    // batch never delays it by more than one poll.
+    if (BOKUN_SYNC_ENABLED && !shuttingDown && Date.now() >= nextBokunAt) {
+      await bokunTick();
+      nextBokunAt = Date.now() + BOKUN_SYNC_INTERVAL_MS;
     }
     // Sleep in small slices so shutdown is responsive.
     const until = POLL_INTERVAL_MS;

@@ -25,10 +25,10 @@ export async function exchangeCode(host: string, code: string): Promise<{ refres
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: CLIENT_ID!, client_secret: CLIENT_SECRET!, code, grant_type: "authorization_code", redirect_uri: REDIRECT(host) }),
   });
-  const j = await res.json();
+  const j = (await res.json()) as { id_token?: string; refresh_token?: string; access_token?: string };
   let email: string | null = null;
   try { if (j.id_token) email = JSON.parse(Buffer.from(j.id_token.split(".")[1], "base64").toString()).email ?? null; } catch { /* ignore */ }
-  return { refreshToken: j.refresh_token ?? null, accessToken: j.access_token, email };
+  return { refreshToken: j.refresh_token ?? null, accessToken: j.access_token ?? "", email };
 }
 
 export async function googleAccessToken(refreshToken: string): Promise<string | null> {
@@ -37,7 +37,7 @@ export async function googleAccessToken(refreshToken: string): Promise<string | 
     body: new URLSearchParams({ client_id: CLIENT_ID!, client_secret: CLIENT_SECRET!, refresh_token: refreshToken, grant_type: "refresh_token" }),
   });
   if (!res.ok) return null;
-  return (await res.json()).access_token ?? null;
+  return ((await res.json()) as { access_token?: string }).access_token ?? null;
 }
 
 export type CalEvent = {
@@ -52,7 +52,7 @@ export async function insertEvent(refreshToken: string, calendarId: string, even
     method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify(event),
   });
   if (!res.ok) return null;
-  return (await res.json()).id ?? null;
+  return ((await res.json()) as { id?: string }).id ?? null;
 }
 
 export async function patchEvent(refreshToken: string, calendarId: string, eventId: string, event: Partial<CalEvent>): Promise<boolean> {
