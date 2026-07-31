@@ -1,0 +1,54 @@
+name: CI
+
+# Lightweight PR gate for the availability app: install, generate the Prisma
+# client, run the unit tests, typecheck both the Next app and the worker, and
+# make sure the worker still bundles (esbuild ESM). No DB and no `next build` —
+# these are the checks that caught the real regressions during development
+# (worker bundle crash + node-only typecheck drift), kept fast.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/availability
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/availability/package-lock.json
+
+      # postinstall runs `prisma generate`; the explicit call keeps the client
+      # present even if that hook is ever removed. Neither needs a database.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Typecheck (app)
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Typecheck (worker)
+        run: npm run typecheck:worker
+
+      - name: Build worker bundle
+        run: npm run build:worker
