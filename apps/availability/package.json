@@ -16,7 +16,7 @@
     "db:seed": "prisma db seed",
     "db:setup": "prisma migrate dev --name init && prisma db seed",
     "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
-    "build:worker": "esbuild src/workers/payment-worker.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/worker/payment-worker.js --external:@prisma/client --external:.prisma/client --tsconfig=tsconfig.worker.json",
+    "build:worker": "esbuild src/workers/payment-worker.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/worker/payment-worker.js --external:@prisma/client --external:.prisma/client --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\" --tsconfig=tsconfig.worker.json",
     "worker": "node dist/worker/payment-worker.js"
   },
   "prisma": {
