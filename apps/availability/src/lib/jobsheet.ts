@@ -44,6 +44,15 @@ export function defaultExpensesForTour(tourName?: string | null): Expense[] {
   return tourHasLotus(tourName) ? DEFAULT_EXPENSES : DEFAULT_EXPENSES.filter((e) => !/lotus/i.test(e.description));
 }
 
+// Fill every expense line's pax from a single guest count — "(Inc. Guide)" lines
+// get +1 (the guide joins). The operator triggers this on the sheet ("fill down");
+// expense pax is NOT auto-filled on generation, so the column starts blank until
+// they do this — keeping the operator in control of the ticket/inclusive counts.
+export function fillDownExpensePax(expenses: Expense[], guests: number): Expense[] {
+  const g = Math.max(0, Math.floor(guests || 0));
+  return (expenses ?? []).map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? g + 1 : g }));
+}
+
 const n = (v: number | null | undefined) => (typeof v === "number" && isFinite(v) ? v : 0);
 
 export function expenseAmount(e: Expense): number {
