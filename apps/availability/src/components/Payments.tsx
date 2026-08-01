@@ -15,6 +15,10 @@ type Bonus = { id: string; guideId: string; guide: string; amount: number; reaso
 type Candidate = { date: string; slotIdx: number; time: string; tourId: string; tour: string; guideId: string; guide: string; customerName: string | null; ref: string | null };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+// Full Bangkok timestamp (date + time) — used to show exactly when a payment slip was
+// uploaded (paidAt is stamped at upload time). Forced to Asia/Bangkok so it reads the
+// same regardless of the viewer's browser timezone.
+const dTime = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
 
 export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [period, setPeriod] = useState("");
@@ -264,6 +268,22 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const okey = `${mode}|${r.guideId}`;
     const isOpen = open.has(okey);
     const refs = [...new Set(jobs.map((j) => j.peakRef).filter(Boolean))];
+    // Group the paid jobs into the transfers that settled them: one bank slip can
+    // cover several tours (a merged payment) or a whole month, so jobs sharing the
+    // same slip + transfer day (+ PEAK ref) belong to one transfer. Shown as a
+    // labelled line above the tours so it's obvious what each slip paid for.
+    const bkkDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+    const transfers = (() => {
+      const groups = new Map<string, { eslipUrl: string | null; paidAt: string; peakRef: string | null; jobs: Job[]; amount: number }>();
+      for (const j of jobs) {
+        if (!j.paid || !j.paidAt) continue;
+        const key = `${j.eslipUrl ?? ""}|${bkkDay(j.paidAt)}|${j.peakRef ?? ""}`;
+        const g = groups.get(key) ?? { eslipUrl: j.eslipUrl ?? null, paidAt: j.paidAt, peakRef: j.peakRef ?? null, jobs: [], amount: 0 };
+        g.jobs.push(j); g.amount += j.amount;
+        groups.set(key, g);
+      }
+      return [...groups.values()].sort((a, b) => a.paidAt.localeCompare(b.paidAt));
+    })();
     return (
       <Fragment key={okey}>
         <tr style={{ cursor: "pointer", background: mode === "unpaid" ? "#fbf4e8" : undefined }} onClick={() => toggle(okey)}>
@@ -280,7 +300,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>
           <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
             {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">E-slip</a>}
-            {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+            {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title={r.eslipUrl ? "When the payment slip was uploaded" : "When this month was marked paid"}>{r.eslipUrl ? "Slip uploaded " : "Paid "}{dTime(r.paidAt)}</span>}
             {mode === "unpaid" && canEdit && jobs.length > 0 && <button className="btn sm primary" title={`Pay ${jobs.length} job${jobs.length === 1 ? "" : "s"} together and tag them with the PEAK ref`} onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length}</button>}
             {mode === "unpaid" && canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
             {mode === "paid" && canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace the uploaded slip">Replace slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
@@ -288,6 +308,18 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         </tr>
         {isOpen && (
           <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+            {transfers.length > 0 && <div style={{ margin: "2px 0 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+              {transfers.map((tr, ti) => (
+                <div key={ti} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "7px 11px", background: "var(--green-bg, #eaf7ee)", borderLeft: "3px solid var(--green, #1a7f37)", borderRadius: 6, fontSize: 12.5 }}>
+                  <b style={{ color: "var(--green, #1a7f37)", whiteSpace: "nowrap" }}>✓ Transferred {dTime(tr.paidAt)}</b>
+                  {tr.peakRef && <span style={{ fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>· {tr.peakRef}</span>}
+                  <span style={{ color: "var(--ink-soft)", whiteSpace: "nowrap" }}>· covers {tr.jobs.length} job{tr.jobs.length === 1 ? "" : "s"}:</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 11.5 }}>{tr.jobs.map((j) => j.ref || `${dShort(j.date)} ${SLOTS[j.slotIdx]?.start ?? ""}`).join(", ")}</span>
+                  <span style={{ marginLeft: "auto", fontVariantNumeric: "tabular-nums", fontWeight: 700, whiteSpace: "nowrap" }}>{thb(tr.amount)}</span>
+                  {tr.eslipUrl && <a className="btn sm" href={tr.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this transfer's slip in Drive">E-slip</a>}
+                </div>
+              ))}
+            </div>}
             {mode === "unpaid" && canEdit && jobs.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
               <button className="btn sm primary" title="Mark these jobs paid in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length} job{jobs.length === 1 ? "" : "s"} together · one ref</button>
               <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {jobs.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, jobs, f); e.target.value = ""; }} /></label>
@@ -299,7 +331,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
                 <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
                 {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
-                <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
+                <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title={j.eslipUrl ? "When this tour's payment slip was uploaded" : "When this tour was marked paid"}>{j.eslipUrl ? "Slip uploaded " : "Paid "}{dTime(j.paidAt)}</span> : null}
                 <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                 {j.paid && j.eslipUrl && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
                 {canEdit && !j.paid && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload the bank slip for THIS tour (separate transfer) — marks just this tour paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
