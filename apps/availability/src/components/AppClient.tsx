@@ -20,7 +20,7 @@ import {
 type Role = "guide" | "operator";
 type Job = { tour: string; pax: number | null; note: string | null };
 type Ref = {
-  guides: { guideId: string; displayName: string; phone?: string | null }[];
+  guides: { guideId: string; displayName: string; phone?: string | null; state?: string; offerBlocked?: boolean }[];
   tours: { id: string; name: string; time: string; durationMin?: number | null }[];
 };
 type AvMap = Record<string, Record<string, Record<number, boolean[]>>>; // mkey -> gid -> day -> [10]
@@ -422,16 +422,25 @@ export default function AppClient({
     setODate(ymd(anchor)); setOSlot(0); setODur("3"); setOGuide("");
     setModal({ kind: "newoffer" });
   }
+  // A guide is "off" for a whole day — and so must never appear in the assign/offer
+  // flow that day — if they are inactive, offer-blocked, on approved leave, or have
+  // blocked ANY of their own slots that day. Mirrors availableGuides() on the server.
+  function offToday(g: { guideId: string; state?: string; offerBlocked?: boolean }, d: Date): boolean {
+    if (g.state && g.state !== "ACTIVE") return true;
+    if (g.offerBlocked) return true;
+    if (onLeave(g.guideId, ymd(d))) return true;
+    return (getAvail(g.guideId, d) ?? EMPTY).some(Boolean);
+  }
   // How many guides are free for a date+slot (client-side preview before sending).
-  // Guides free for a slot: not marked busy, not already assigned, date not blocked.
+  // Free = not off today (see offToday) and not already assigned that slot.
   function availGuidesFor(dateStr: string, slotIdx: number) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return ref?.guides ?? [];
     const d = new Date(`${dateStr}T00:00:00`);
     if (isBlocked(d)) return [];
     return (ref?.guides ?? []).filter((g) => {
-      const avd = getAvail(g.guideId, d) ?? EMPTY;
+      if (offToday(g, d)) return false;
       const asg = getAssign(g.guideId, d);
-      return !avd[slotIdx] && !asg[slotIdx];
+      return !asg[slotIdx];
     });
   }
   function availCountFor(dateStr: string, slotIdx: number): number {
@@ -853,8 +862,9 @@ export default function AppClient({
   function opDay(): ReactNode {
     const d = anchor; const nowIdx = currentSlotIdx(); const isToday = sameDay(d, todayD()); const guides = ref?.guides ?? []; const blocked = isBlocked(d);
     // Count GUIDES (not slots) for the day:
-    //   available = has ≥1 open slot · assigned = has a job ·
-    //   busy = some slots busy but not the whole day · day off = whole day blocked.
+    //   available = actually offerable today (not off — see offToday) with ≥1 open slot ·
+    //   assigned = has a job · busy = some slots busy but not the whole day ·
+    //   day off = whole day blocked.
     let availGuides = 0, assignGuides = 0, busyGuides = 0, dayOffGuides = 0, conflictTot = 0;
     for (const g of guides) {
       const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
@@ -862,7 +872,9 @@ export default function AppClient({
       for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busySlots++; else free++; }
       const assignedN = Object.keys(asg).length;
       const dayOff = busySlots === SLOTS.length && assignedN === 0; // whole day blocked → day off
-      if (!blocked && free > 0) availGuides++;
+      // "Available" now means genuinely offerable: a guide who blocked any slot,
+      // is on leave, or is inactive/blocked is off for the day, not available.
+      if (!blocked && !offToday(g, d) && free > 0) availGuides++;
       if (assignedN > 0) assignGuides++;
       if (busySlots > 0 && !dayOff) busyGuides++;
       if (dayOff) dayOffGuides++;
@@ -944,6 +956,7 @@ export default function AppClient({
                   const avd = getAvail(g.guideId, d) ?? EMPTY; const asg = getAssign(g.guideId, d);
                   const conf = conflictSlots(g.guideId, d);
                   const leave = onLeave(g.guideId, ymd(d));
+                  const off = offToday(g, d); // off the whole day → free slots aren't assignable either
                   return (
                     <tr key={g.guideId}>
                       <td className="gname"><span className="gid">{g.guideId}</span>{g.displayName}{leave && <span className="leave-badge">{t("onLeave")}</span>}</td>
@@ -952,6 +965,9 @@ export default function AppClient({
                         if (a) { const c = conf.has(s.idx); return <td key={s.idx} className={`cell assigned${c ? " conflict" : ""}${nm}`} title={c ? t("conflictWarn") : (tourById[a.tour]?.name || a.tour)} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{c ? "⚠ " : ""}{a.tour}</span></td>; }
                         if (leave) return <td key={s.idx} className={`cell leave${nm}`} title={t("onLeave")} />;
                         if (avd[s.idx]) return <td key={s.idx} className={`cell busy${nm}`} title={t("busy")} />;
+                        // Guide is off for the whole day (blocked part of it, on leave, blocked or inactive):
+                        // their remaining free slots must not be assignable either.
+                        if (off) return <td key={s.idx} className={`cell off${nm}`} title={t("offToday")} />;
                         return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
                       })}
                     </tr>
