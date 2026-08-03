@@ -14,7 +14,9 @@ export async function GET() {
   const guides = isOps
     ? await prisma.user.findMany({
         where: { role: "GUIDE", guideId: { not: null } },
-        select: { guideId: true, displayName: true, phone: true },
+        // state + offerBlocked let the board hide off/ineligible guides from the
+        // assign & offer surfaces (mirrors availableGuides()).
+        select: { guideId: true, displayName: true, phone: true, state: true, offerBlocked: true },
         orderBy: { guideId: "asc" },
       })
     : [];

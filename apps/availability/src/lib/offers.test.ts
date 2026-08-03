@@ -75,6 +75,25 @@ describe("offers — createOffer single-guide window", () => {
   });
 });
 
+describe("offers — a guide off part of the day is off all day", () => {
+  it("excludes a guide who blocked a DIFFERENT slot that day (offering the morning to an afternoon-blocked guide)", async () => {
+    prismaMock.tour.findUnique.mockResolvedValue({ id: "t1", name: "City Tour" });
+    prismaMock.blockedDate.findUnique.mockResolvedValue(null);
+    prismaMock.blockedSlot.findUnique.mockResolvedValue(null);
+    prismaMock.user.findMany.mockResolvedValue([{ id: "u13", guideId: "G-013", displayName: "Tinn Tinn", lineUserId: null, email: null }]);
+    // Blocked slot 2 (13:30) only; slots 0/1 (morning) left open.
+    prismaMock.availability.findMany.mockResolvedValue([
+      { guideId: "G-013", slots: [false, false, true, false, false, false, false, false] },
+    ]);
+    prismaMock.assignment.findMany.mockResolvedValue([]);
+    prismaMock.leaveRequest.findMany.mockResolvedValue([]);
+
+    // Offer the 08:30 slot (idx 0) — a slot the guide did NOT block.
+    const r = await createOffer({ tourId: "t1", date: "2026-08-07", slotIdx: 0, onlyGuideId: "G-013" });
+    expect(r.candidates).toBe(0); // off the whole day because they blocked the afternoon
+  });
+});
+
 describe("offers — acceptOffer (first-to-accept race)", () => {
   it("the winning caller (updateMany count 1) gets the job + an assignment", async () => {
     prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer());
