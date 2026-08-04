@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { computeTotals, expenseAmount, fillDownExpensePax, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { SLOT_TIMES } from "@/lib/slots";
 
+const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
+
 type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string } | null;
 type Tour = { id: string; name: string; time: string; durationMin?: number | null } | null;
 
@@ -451,7 +453,7 @@ export default function JobSheetEditor() {
         {/* Expenses */}
         <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense</h3>
         <table className="js-table">
-          <thead><tr><th>Description</th><th>Price</th><th></th><th>Pax</th><th>Amount</th><th className="no-print" /></tr></thead>
+          <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
               <tr key={i}>
@@ -459,11 +461,12 @@ export default function JobSheetEditor() {
                 <td><input style={{ ...L, width: 90 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
                 <td style={{ textAlign: "center" }}>×</td>
                 <td><input style={{ ...L, width: 70 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
+                <td><select style={{ ...L, width: 78 }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select></td>
                 <td style={{ textAlign: "right" }}>{thb(expenseAmount(e))}</td>
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={4} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /></tr>
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
