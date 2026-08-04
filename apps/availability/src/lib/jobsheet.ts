@@ -16,13 +16,13 @@ export function noShowStatus(noShowPax: number, pax: number | null): "no-show" |
   if (p <= 0) return "";
   return pax != null && p < pax ? "partial" : "no-show";
 }
-export type Expense = { description: string; price: number | null; pax: number | null };
+export type Expense = { description: string; price: number | null; pax: number | null; unit?: string };
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
 // The standard items that appear on every new sheet (prices editable per job).
 export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Water (Inc. Guide)", price: 10, pax: null },
-  { description: "Ferry (Inc. Guide)", price: 11, pax: null },
+  { description: "Ferry (Inc. Guide)", price: null, pax: null, unit: "เที่ยว" },
   { description: "Grand Palace", price: 500, pax: null },
   { description: "Wat Pho", price: 300, pax: null },
   { description: "Wat Arun", price: 200, pax: null },

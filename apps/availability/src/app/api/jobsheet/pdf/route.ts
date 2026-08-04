@@ -83,11 +83,11 @@ export async function GET(req: NextRequest) {
   }).join("");
   if (editable) for (let k = 0; k < 4; k++) bookingRows += `<tr><td>${bookings.length + k + 1}</td><td contenteditable="true"></td><td contenteditable="true"></td><td class="n" contenteditable="true" data-bpax></td><td class="n" contenteditable="true" data-apax></td><td contenteditable="true"></td></tr>`;
 
-  const expRow = (desc: string, price: string, pax: string, amt: string) => editable
-    ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="n" data-eamt>${amt}</td></tr>`
-    : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="n">${amt}</td></tr>`;
-  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", thb(expenseAmount(e)))).join("");
-  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "");
+  const expRow = (desc: string, price: string, pax: string, unit: string, amt: string) => editable
+    ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td></tr>`
+    : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td></tr>`;
+  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)))).join("");
+  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "");
 
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${esc(ref)}</title>
@@ -172,7 +172,7 @@ export async function GET(req: NextRequest) {
 
     <h3 class="exp">Expense</h3>
     <table>
-      <thead><tr><th>Description</th><th class="n">Price</th><th class="c"></th><th class="n">Pax</th><th class="n">Amount</th></tr></thead>
+      <thead><tr><th>Description</th><th class="n">Price</th><th class="c"></th><th class="n">จำนวน</th><th class="c">หน่วย</th><th class="n">Amount</th></tr></thead>
       <tbody>${expenseRows}
         <tr class="tot"><td colspan="4" style="text-align:right">Total Expenses</td><td class="n" id="expTot">${thb(t.totalExpenses)}</td></tr>
       </tbody>
