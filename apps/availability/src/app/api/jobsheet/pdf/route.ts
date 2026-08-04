@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
   const guideId = req.nextUrl.searchParams.get("guideId") || "";
   const date = req.nextUrl.searchParams.get("date") || "";
   const slotIdx = Number(req.nextUrl.searchParams.get("slotIdx") ?? "-1");
+  const auto = req.nextUrl.searchParams.get("auto") === "1";
   const qTourId = req.nextUrl.searchParams.get("tourId") || "";
   // guideId is optional: the Incoming-bookings page exports a prep sheet for a
   // slot that isn't assigned yet (bookings come straight from the live table).
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
   let bookingRows = bookings.map((b, i) => {
     bookedSum += b.bookedPax ?? 0; actualSum += b.actualPax ?? 0;
     noShowSum += b.noShowPax ?? (b.status === "no-show" ? (b.bookedPax ?? 0) : 0);
-    const tickets = b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "";
+    const tickets = b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : `<span class="strike"></span>`;
     return `<tr><td>${i + 1}</td><td${ce}>${esc(b.name)}</td><td${ce}>${esc(b.bookingNo)}</td><td class="n" data-bpax>${b.bookedPax ?? ""}</td><td class="n"${ce} data-apax>${b.actualPax ?? ""}</td><td${ce}>${tickets}</td></tr>`;
   }).join("");
   if (editable) for (let k = 0; k < 4; k++) bookingRows += `<tr><td>${bookings.length + k + 1}</td><td contenteditable="true"></td><td contenteditable="true"></td><td class="n" contenteditable="true" data-bpax></td><td class="n" contenteditable="true" data-apax></td><td contenteditable="true"></td></tr>`;
@@ -123,6 +124,16 @@ export async function GET(req: NextRequest) {
   [contenteditable="true"]:focus { background:#fff2cf; box-shadow:0 0 0 2px #e9c98a inset; }
   .guide [contenteditable="true"] { display:inline-block; min-width:120px; }
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
+  .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; }
+  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.5; max-width:540px; }
+  .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
+  .approve .sigbox { text-align:center; width:290px; }
+  .approve .sigimg { height:52px; display:block; margin:0 auto -8px; user-select:none; -webkit-user-select:none; pointer-events:none; }
+  .approve .sigline { margin-top:2px; }
+  .approve .signame { font-weight:600; margin-top:2px; }
+  .approve .sigdate { color:#6b746f; margin-top:4px; font-size:11px; }
+  @media print { .approve .sigimg { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+  .strike { display:inline-block; width:60%; height:0; border-top:1.4px solid #333; vertical-align:middle; }
 </style></head>
 <body>
   <div class="toolbar"><span>Job sheet · ${esc(ref)}</span><span style="display:flex;gap:8px;align-items:center">${isOps ? `<span style="font-size:12px;opacity:.9">\ud83d\udcce e-slip:</span><input type="file" id="eslipInput" accept="image/*,application/pdf" onchange="eslipChosen(this)" style="background:#fff;color:#7e3a2c;border-radius:7px;padding:6px 8px;font-size:12px;max-width:210px"><span id="eslipName" style="font-size:12px;opacity:.9"></span><button id="driveBtn" onclick="shareToDrive(this)">\u2601 Share to Drive</button>` : ""}<button onclick="window.print()">Save as PDF / Print</button></span></div>
@@ -180,6 +191,17 @@ export async function GET(req: NextRequest) {
       <div><span>Net Guide Fee</span><b>${thb(t.netGuideFee)}</b></div>
       <div class="grand"><span>Total</span><b id="grandTot">${thb(t.grandTotal)}</b></div>
     </div>
+    <div class="approve">
+      <div class="certnote">ข้าพเจ้าขอรับรองว่ารายการค่าใช้จ่ายข้างต้นได้จ่ายไปจริงเพื่อกิจการนำเที่ยวของบริษัท และขอใช้ใบสำคัญนี้เป็นหลักฐานประกอบการเบิกจ่าย/แทนใบเสร็จรับเงินที่ไม่อาจเรียกเก็บได้</div>
+      <div class="sigwrap">
+        <div class="sigbox">
+          <img class="sigimg" src="/approver-signature.png" alt="ลายเซ็นผู้อนุมัติ" draggable="false" />
+          <div class="sigline">ลงชื่อ ...................................... ผู้อนุมัติ / ผู้รับรอง</div>
+          <div class="signame">( นางสาว หทัยวรรณ ใจปลอด )</div>
+          <div class="sigdate">วันที่ ......../......../........</div>
+        </div>
+      </div>
+    </div>
   </div>
   <script>
     var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0};
@@ -221,7 +243,7 @@ export async function GET(req: NextRequest) {
       }catch(e){ alert("Could not save PDF: "+((e&&e.message)||e)); btn.textContent=old; btn.disabled=false; }
     }
   </script>
-</body></html>`;
+${auto ? '<script>window.addEventListener("load",function(){setTimeout(async function(){try{if(document.fonts&&document.fonts.ready){await document.fonts.ready;}var opt={margin:8,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true,backgroundColor:"#ffffff"},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"},pagebreak:{mode:["css","legacy"]}};var uri=await html2pdf().set(opt).from(document.querySelector(".page")).outputPdf("datauristring");var b64=uri.substring(uri.indexOf(",")+1);var r=await fetch("/api/jobsheet/drive",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({guideId:GID,date:DATE,slotIdx:SLOT,pdfBase64:b64})});var d=await r.json().catch(function(){return {};});parent.postMessage({fpBackfill:true,ok:r.ok,drive:!!(d&&d.link),error:(d&&(d.driveError||d.detail))||(r.ok?null:"HTTP "+r.status)},"*");}catch(e){parent.postMessage({fpBackfill:true,ok:false,error:String((e&&e.message)||e)},"*");}},400);});</script>' : ""}</body></html>`;
 
   return new NextResponse(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } });
 }
