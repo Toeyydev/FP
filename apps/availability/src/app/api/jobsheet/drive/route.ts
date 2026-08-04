@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
   const bookingRows = bookings.map((b) => {
     const ns = (b as { status?: string }).status === "no-show";
     const actual = ns ? `<span style="color:#c0392b;font-weight:700">NO-SHOW</span>` : `${b.actualPax ?? ""}`;
-    return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`;
+    return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : '<span style="display:inline-block;width:60%;height:0;border-top:1.4px solid #333;vertical-align:middle"></span>'}</td></tr>`;
   }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
   const expenseRows = expenses.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="3" style="color:#888">No expenses.</td></tr>`;
 
