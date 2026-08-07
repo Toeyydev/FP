@@ -180,13 +180,17 @@ export default function Dispatch() {
 
       {tab === "assigned" ? (
         <section className="panel">
-          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today & tomorrow — auto-updates"}</span></div>
+          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today only — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
-            {data.assignments.length === 0 ? <div className="op-empty">No upcoming assigned jobs yet.</div> : (() => {
-              // Group by date (each date shown once), tours numbered 1, 2, 3…
+            {(() => {
+              // On-going tours = today only. Future assigned jobs still live on the
+              // Board and Dashboard; this list stays focused on the day in progress.
               const todayStr = new Date().toLocaleDateString("en-CA");
+              const todayAssignments = data.assignments.filter((a) => a.date === todayStr);
+              if (todayAssignments.length === 0) return <div className="op-empty">No tours scheduled for today.</div>;
+              // Group by date (single date now, kept for the numbered 1, 2, 3… layout).
               const byDate: [string, Assignment[]][] = [];
-              for (const a of data.assignments) {
+              for (const a of todayAssignments) {
                 const g = byDate.find(([d]) => d === a.date);
                 if (g) g[1].push(a); else byDate.push([a.date, [a]]);
               }
