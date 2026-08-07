@@ -35,7 +35,7 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
         <OperatorNav active="tour-log" />
         <div className="op-main">
       <div id="appBar"><div className="subtabs"><span className="subtab active">Tour log</span></div>
-        <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/reports">Reports</a></div>
+        <div className="nav"><a className="btn sm" href="/board">Board</a><a className="btn sm" href="/reports">Reports</a></div>
       </div>
 
       <section className="panel">

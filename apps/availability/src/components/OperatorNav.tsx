@@ -3,15 +3,13 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { signOut } from "next-auth/react";
 
-// One shared sidebar for every operator page — same structure everywhere (as the
-// Dashboard): the workflow-grouped rail, an optional footer slot (the Dashboard
-// drops its Google Drive status here), and Sign out pinned at the bottom.
+// One shared sidebar for every operator page — the workflow-grouped rail, an
+// optional footer slot (children), and Sign out pinned at the bottom.
 const GROUPS: { label?: string; items: { key: string; label: string; href: string }[] }[] = [
   {
     items: [
-      { key: "dashboard", label: "Dashboard", href: "/dashboard" },
-      { key: "bookings", label: "Bookings", href: "/bookings" },
       { key: "board", label: "Board", href: "/board" },
+      { key: "bookings", label: "Bookings", href: "/bookings" },
       { key: "jobs", label: "Jobs", href: "/jobs" },
     ],
   },

@@ -42,9 +42,9 @@ export default function StartPage() {
     if (res?.error) { setLoginBusy(false); setLoginMsg(t("badCreds")); return; }
     if (remember) await fetch("/api/session/remember", { method: "POST" });
     setLoginBusy(false);
-    // Operators/admins land on the Dashboard (control tower); guides on their board.
+    // Operators/admins land on the Board (their home); guides on their schedule.
     const role = (await getSession())?.user?.role;
-    router.push(role === "OPERATOR" || role === "ADMIN" ? "/dashboard" : "/"); router.refresh();
+    router.push(role === "OPERATOR" || role === "ADMIN" ? "/board" : "/"); router.refresh();
   }
 
   async function doSignup(e: React.FormEvent) {
