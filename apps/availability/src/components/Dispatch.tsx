@@ -127,8 +127,16 @@ export default function Dispatch() {
     const jc = await rc.json().catch(() => ({ guides: [] }));
     const items = (jb.bookings ?? []) as SlotBooking[];
     if (!items.length) { setMsg("No bookings found on this slot to split."); return; }
-    // Options = the guides already on this slot + those free for it, de-duplicated.
+    // Options = EVERY guide already on this slot (a hybrid tour can have several — not
+    // just the card we opened from) + those free for it, de-duplicated. Including the
+    // other assigned guides lets the operator rebalance bookings between two guides
+    // already on the tour without first removing one of them.
     const cands: Candidate[] = [{ guideId: a.guideId, displayName: a.guideName }];
+    for (const asg of data?.assignments ?? []) {
+      if (asg.date === a.date && asg.slotIdx === a.slotIdx && !cands.some((c) => c.guideId === asg.guideId)) {
+        cands.push({ guideId: asg.guideId, displayName: asg.guideName });
+      }
+    }
     for (const g of (jc.guides ?? []) as Candidate[]) if (!cands.some((c) => c.guideId === g.guideId)) cands.push(g);
     setSplitCands(cands);
     // Default each booking to whoever holds it now (or the current guide if untagged).
