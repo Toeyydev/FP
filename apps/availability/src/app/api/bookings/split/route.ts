@@ -9,9 +9,10 @@ import { bookingRef } from "@/lib/booking-ref";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { pushTourToCalendars, removeTourEvents } from "@/lib/tour-calendar-sync";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
-const CAP = 10;
+const CAP = PAX_PER_GUIDE;
 
 type SheetRow = { name?: string; bookingNo?: string; [k: string]: unknown };
 
