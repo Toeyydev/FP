@@ -127,8 +127,16 @@ export default function Dispatch() {
     const jc = await rc.json().catch(() => ({ guides: [] }));
     const items = (jb.bookings ?? []) as SlotBooking[];
     if (!items.length) { setMsg("No bookings found on this slot to split."); return; }
-    // Options = the guides already on this slot + those free for it, de-duplicated.
+    // Options = EVERY guide already on this slot (a hybrid tour can have several — not
+    // just the card we opened from) + those free for it, de-duplicated. Including the
+    // other assigned guides lets the operator rebalance bookings between two guides
+    // already on the tour without first removing one of them.
     const cands: Candidate[] = [{ guideId: a.guideId, displayName: a.guideName }];
+    for (const asg of data?.assignments ?? []) {
+      if (asg.date === a.date && asg.slotIdx === a.slotIdx && !cands.some((c) => c.guideId === asg.guideId)) {
+        cands.push({ guideId: asg.guideId, displayName: asg.guideName });
+      }
+    }
     for (const g of (jc.guides ?? []) as Candidate[]) if (!cands.some((c) => c.guideId === g.guideId)) cands.push(g);
     setSplitCands(cands);
     // Default each booking to whoever holds it now (or the current guide if untagged).
@@ -180,13 +188,17 @@ export default function Dispatch() {
 
       {tab === "assigned" ? (
         <section className="panel">
-          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today & tomorrow — auto-updates"}</span></div>
+          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today only — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
-            {data.assignments.length === 0 ? <div className="op-empty">No upcoming assigned jobs yet.</div> : (() => {
-              // Group by date (each date shown once), tours numbered 1, 2, 3…
+            {(() => {
+              // On-going tours = today only. Future assigned jobs still live on the
+              // Board and Dashboard; this list stays focused on the day in progress.
               const todayStr = new Date().toLocaleDateString("en-CA");
+              const todayAssignments = data.assignments.filter((a) => a.date === todayStr);
+              if (todayAssignments.length === 0) return <div className="op-empty">No tours scheduled for today.</div>;
+              // Group by date (single date now, kept for the numbered 1, 2, 3… layout).
               const byDate: [string, Assignment[]][] = [];
-              for (const a of data.assignments) {
+              for (const a of todayAssignments) {
                 const g = byDate.find(([d]) => d === a.date);
                 if (g) g[1].push(a); else byDate.push([a.date, [a]]);
               }
