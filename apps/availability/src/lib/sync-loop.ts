@@ -1,6 +1,7 @@
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { sweepTourReminders } from "@/lib/tour-reminders";
+import { runIntegrityMonitor } from "@/lib/integrity";
 
 // A self-scheduling background loop that keeps the board current even when nobody
 // has the app open — so it never again depends on the Bokun webhook being alive.
@@ -15,6 +16,9 @@ export function startSyncLoop(): void {
     try { await autoSyncBokun(); } catch { /* keep looping */ }
     try { await reconcileAssignedBookings(true); } catch { /* keep looping */ } // force: the loop is the guaranteed real sweep
     try { await sweepExpiredOffers(); } catch { /* keep looping */ }
+    // Safety net on top of the sweep: once a day, verify no sheet drifted from its live
+    // bookings (and payment sanity) and alert ops if so. Self-throttled to 1×/24h.
+    try { await runIntegrityMonitor(); } catch { /* keep looping */ }
   };
   setTimeout(() => { void tick(); }, 30_000);          // shortly after boot
   setInterval(() => { void tick(); }, 1_800_000);      // then every 30 min (matches the Bokun refresh window; manual Sync is the instant path)
