@@ -9,10 +9,11 @@ import { todayD, ymd } from "@/lib/dates";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { bookingRef } from "@/lib/booking-ref";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
 
 export type ImportResult = "created" | "updated" | "skipped";
 
-const CAP = 10; // max pax per guide / job
+const CAP = PAX_PER_GUIDE; // max pax per guide / job (single source: lib/capacity)
 
 export async function notifyOps(message: string, title: string, body: string, opts?: { push?: boolean; date?: string }) {
   // A finished job shouldn't alert: skip entirely if the tour date is in the past.
@@ -105,7 +106,7 @@ async function autoRemoveExactDuplicate(rec: { id: string; customerName: string 
 }
 
 // When a NEW booking lands for a slot already assigned to a guide: auto-add it to
-// that guide's job if it stays within the 10-pax cap, and ALWAYS alert the
+// that guide's job if it stays within the per-guide cap, and ALWAYS alert the
 // operator to confirm. If it would breach the cap (or the slot is split across
 // guides), leave it pending and alert for a manual decision. Never throws.
 export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; externalRef?: string | null; status: string }): Promise<boolean> {

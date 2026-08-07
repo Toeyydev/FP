@@ -4,12 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { bookingRef } from "@/lib/booking-ref";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
 
-type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
+type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
 type Candidate = { guideId: string; displayName: string };
 type SlotBooking = { id: string; customerName: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null; assignedGuideId: string | null; tourId: string | null };
-const SPLIT_CAP = 10;
+const SPLIT_CAP = PAX_PER_GUIDE;
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
@@ -111,7 +112,7 @@ export default function Dispatch() {
 
   // Split an assigned tour across a second guide (a "hybrid" two-guide tour). Loads
   // the slot's guests + the guides free for the slot, then lets the operator assign
-  // each whole booking to a guide (≤10 pax each). Each guide keeps a separate sheet.
+  // each whole booking to a guide (≤ the cap each). Each guide keeps a separate sheet.
   const [splitFor, setSplitFor] = useState<{ a: Assignment; items: SlotBooking[] } | null>(null);
   const [splitCands, setSplitCands] = useState<Candidate[] | null>(null);
   const [splitMap, setSplitMap] = useState<Record<string, string>>({});

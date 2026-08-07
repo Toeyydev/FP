@@ -8,6 +8,9 @@ import { isOnline } from "@/lib/presence";
 import { DOW, MON, parseYMD } from "@/lib/dates";
 import BookingsTable from "@/components/BookingsTable";
 import { bookingRef } from "@/lib/booking-ref";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
+
+const CAP = PAX_PER_GUIDE; // per-guide seat cap (single source: lib/capacity)
 
 type Booking = {
   id: string; source: string; confirmationCode: string | null; externalRef: string | null; productName: string | null;
@@ -95,7 +98,7 @@ export default function BookingsInbox() {
     setSyncing(false);
   }
 
-  // Over-capacity split editor: assign each booking to a guide, ≤10 pax per guide.
+  // Over-capacity split editor: assign each booking to a guide, ≤ CAP pax per guide.
   const [splitFor, setSplitFor] = useState<{ date: string; slotIdx: number; tourId: string; items: Booking[] } | null>(null);
   const [splitMap, setSplitMap] = useState<Record<string, string>>({});
   function openSplit(items: Booking[]) {
@@ -112,7 +115,7 @@ export default function BookingsInbox() {
     const groups = Object.entries(byGuide).map(([guideId, bookingIds]) => ({ guideId, bookingIds }));
     const r = await fetch("/api/bookings/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: splitFor.date, slotIdx: splitFor.slotIdx, tourId: splitFor.tourId, groups }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { setMsg(d.error === "over-cap" ? `A group exceeds 10 pax — rebalance.` : "Split failed."); return; }
+    if (!r.ok) { setMsg(d.error === "over-cap" ? `A group exceeds ${CAP} pax — rebalance.` : "Split failed."); return; }
     setSplitFor(null); setMsg(`✅ Split into ${d.groups} guide job(s).`); await load();
   }
 
@@ -129,7 +132,7 @@ export default function BookingsInbox() {
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
-    if ((pax ?? 0) > 10 && !confirm(`${pax} pax is over the 10-pax cap.\nAssign all of them to ${guideId} anyway?`)) return;
+    if ((pax ?? 0) > CAP && !confirm(`${pax} pax is over the ${CAP}-pax cap.\nAssign all of them to ${guideId} anyway?`)) return;
     const note = `${items.length} booking(s): ${items.map((b) => bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—").join(", ")}`.slice(0, 280);
     const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
     const d = await r.json().catch(() => ({}));
@@ -372,7 +375,7 @@ export default function BookingsInbox() {
             shownDates.map((date, di) => {
               const dayGroups = byDate[date];
               const dayPax = dayGroups.reduce((s, [, items]) => s + items.reduce((a, b) => a + (b.pax ?? 0), 0), 0);
-              const dayOver = dayGroups.some(([, items]) => items.reduce((a, b) => a + (b.pax ?? 0), 0) > 10);
+              const dayOver = dayGroups.some(([, items]) => items.reduce((a, b) => a + (b.pax ?? 0), 0) > CAP);
               const open = openDates[date] ?? (di === 0);
               const month = date.slice(0, 7);
               const showMonth = di === 0 || shownDates[di - 1].slice(0, 7) !== month;
@@ -390,7 +393,7 @@ export default function BookingsInbox() {
                   <button onClick={() => setOpenDates((o) => ({ ...o, [date]: !open }))} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: open ? "#f3f6f4" : "#fff", border: "none", borderBottom: open ? "1px solid var(--line)" : "none", cursor: "pointer", font: "inherit", textAlign: "left" }}>
                     <span style={{ display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s", color: "var(--ink-soft)" }}>▸</span>
                     <b style={{ flex: 1 }}>{fmtDay(date)}</b>
-                    {dayOver && <span className="badge" style={{ background: "#fbe6e2", color: "#b23b2e" }}>over 10</span>}
+                    {dayOver && <span className="badge" style={{ background: "#fbe6e2", color: "#b23b2e" }}>over {CAP}</span>}
                     <span className="badge">{dayGroups.length} tour{dayGroups.length > 1 ? "s" : ""}</span>
                     <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{dayPax} pax</span>
                   </button>
@@ -407,7 +410,7 @@ export default function BookingsInbox() {
                             <div style={{ flex: 1, minWidth: 240 }}>
                               <b>{slot?.start} · {tourName(tourId)}</b>
                               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 3 }}>
-                                {items.length} booking(s) · {pax} pax{pax > 10 ? " ⚠️ over 10 — split into separate jobs" : ""}
+                                {items.length} booking(s) · {pax} pax{pax > CAP ? ` ⚠️ over ${CAP} — split into separate jobs` : ""}
                               </div>
                               <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: 5 }}>
                                 {items.map((b) => (
@@ -430,10 +433,10 @@ export default function BookingsInbox() {
                                 {grpGuide[key]
                                   ? <>
                                       <button className="btn sm primary" onClick={() => offerGroup(key, items, grpGuide[key])}>📨 Offer to guide</button>
-                                      <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > 10 ? "Assign all (over cap)" : "Assign now"}</button>
+                                      <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > CAP ? "Assign all (over cap)" : "Assign now"}</button>
                                     </>
                                   : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
-                                {pax > 10 && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
+                                {pax > CAP && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
                               </>
                             )}
                             <button className="btn sm" title="Export this tour's job sheet as a PDF (Save as PDF in the print dialog)" onClick={() => openJobSheetPdf(items, assignedGuide || grpGuide[key])}>📄 Job sheet PDF</button>
@@ -506,7 +509,7 @@ export default function BookingsInbox() {
           <div className="modal" style={{ maxWidth: 560 }}>
             <div style={{ padding: "18px 20px" }}>
               <h3 style={{ margin: "0 0 4px" }}>Split across guides</h3>
-              <p className="sub" style={{ margin: "0 0 14px" }}>{splitFor.date} · {SLOTS[splitFor.slotIdx]?.start} · {splitFor.items.reduce((s, b) => s + (b.pax ?? 0), 0)} pax over {splitFor.items.length} bookings. Assign each booking to a guide (max 10 pax each — families stay together).</p>
+              <p className="sub" style={{ margin: "0 0 14px" }}>{splitFor.date} · {SLOTS[splitFor.slotIdx]?.start} · {splitFor.items.reduce((s, b) => s + (b.pax ?? 0), 0)} pax over {splitFor.items.length} bookings. Assign each booking to a guide (max {CAP} pax each — families stay together).</p>
               <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
                 {splitFor.items.map((b) => (
                   <div key={b.id} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", alignItems: "center", gap: 8, padding: "7px 10px" }}>
@@ -521,8 +524,8 @@ export default function BookingsInbox() {
               {Array.from(new Set(Object.values(splitMap).filter(Boolean))).length > 0 && (
                 <div style={{ display: "grid", gap: 4, marginBottom: 6 }}>
                   {Array.from(new Set(Object.values(splitMap).filter(Boolean))).map((gid) => {
-                    const p = splitPax(gid); const over = p > 10;
-                    return <div key={gid} style={{ fontSize: 12.5, fontWeight: 600, color: over ? "var(--danger)" : "var(--green)" }}>{gid}: {p} / 10 pax {over ? "⚠️ over cap" : "✓"}</div>;
+                    const p = splitPax(gid); const over = p > CAP;
+                    return <div key={gid} style={{ fontSize: 12.5, fontWeight: 600, color: over ? "var(--danger)" : "var(--green)" }}>{gid}: {p} / {CAP} pax {over ? "⚠️ over cap" : "✓"}</div>;
                   })}
                 </div>
               )}
