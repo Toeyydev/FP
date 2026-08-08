@@ -31,7 +31,7 @@ export default function BottomNav({ role }: { role?: string }) {
     ? [
         { href: "/", label: "Home", icon: "home" },
         { href: "/?view=week", label: "Availability", icon: "calendar" },
-        { href: "/pay", label: "Pay", icon: "pay" },
+        { href: "/pay", label: "Payments", icon: "pay" },
         { href: "/profile", label: "Profile", icon: "user" },
       ]
     : [

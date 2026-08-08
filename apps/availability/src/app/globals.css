@@ -1,16 +1,18 @@
 :root{
-  /* Folkpaths "clay lanes" palette — green-free: terracotta brand, saffron/clay
-     warmth on cream, with one cool indigo for "available". --green now = indigo
-     (free), --assign = saffron-gold (assigned), --danger = clay (busy/error). */
-  --ink:#2a2520;--ink-soft:#6f665b;--paper:#f6f1e6;--card:#fffcf6;--line:#e7ddcb;--line-strong:#d9cfbe;
-  --primary:#7e3a2c;--green:#2e4e8f;--green-bg:#e7ecf6;--green-line:#c9d5ec;--grey:#b8ae9e;--grey-bg:#efeadf;
-  --assign:#9c6a14;--assign-bg:#f6e8cc;--assign-line:#e6cc9a;--accent:#7e3a2c;
-  --danger:#c2604a;--danger-bg:#f6e5df;--danger-line:#e7c5ba;
-  /* Soft & elevated: a real depth scale + a terracotta focus ring. */
-  --shadow-sm:0 1px 2px rgba(42,37,32,.05);
-  --shadow:0 4px 16px -7px rgba(42,37,32,.14),0 1px 3px rgba(42,37,32,.05);
-  --shadow-lg:0 18px 44px -16px rgba(42,37,32,.24),0 4px 12px -6px rgba(42,37,32,.10);
-  --ring:0 0 0 3px rgba(126,58,44,.18);
+  /* Folkpaths design system — the SAME neutral SaaS palette as the operator
+     shell: #F7F7F5 page, white cards with #E5E7EB hairlines, Folkpaths green
+     #0E3B2E primary. Guide + operator now share one visual language; the Thai
+     day-of-week colour survives only as a small accent (top bar / time), never
+     as a page theme. */
+  --ink:#18181B;--ink-soft:#71717A;--paper:#F7F7F5;--card:#FFFFFF;--line:#E5E7EB;--line-strong:#D4D4D8;
+  --primary:#0E3B2E;--green:#0E7A43;--green-bg:#EAF4EF;--green-line:#CBE5D6;--grey:#A1A1AA;--grey-bg:#F4F4F5;
+  --assign:#8A5A0D;--assign-bg:#FBF4E4;--assign-line:#EADFC3;--accent:#0E3B2E;
+  --danger:#B3402F;--danger-bg:#FBEDEA;--danger-line:#EFCFC7;
+  --ok-bg:#EAF4EF;--ok-line:#CBE5D6;
+  --shadow-sm:0 1px 2px rgba(24,24,27,.04);
+  --shadow:0 1px 3px rgba(24,24,27,.06);
+  --shadow-lg:0 10px 30px -12px rgba(24,24,27,.14);
+  --ring:0 0 0 3px rgba(14,59,46,.22);
 }
 *{box-sizing:border-box}html,body{margin:0;padding:0}
 body{font-family:"Inter",system-ui,sans-serif;color:var(--ink);font-size:15px;-webkit-font-smoothing:antialiased;
@@ -323,9 +325,9 @@ a.glink:hover{text-decoration:underline}
 .pay-row .amt{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pay-row .r2{display:flex;justify-content:space-between;align-items:center;margin-top:9px}
 .pay-pill{font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px}
-.pay-pill.paid{background:#e7f0e8;color:#2f7a4d}
-.pay-pill.pend{background:#fbeede;color:#c2604a}
-.pay-pill.warn{background:#fdf3e0;color:#9a6a00}
+.pay-pill.paid{background:var(--green-bg);color:var(--green)}
+.pay-pill.pend{background:var(--assign-bg);color:var(--assign)}
+.pay-pill.warn{background:var(--assign-bg);color:var(--assign)}
 .pay-slip{font-size:13px;font-weight:700;color:var(--primary);text-decoration:none;border-bottom:2px solid #e0cbb6;padding-bottom:1px}
 .pay-mrow{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:9px;overflow:hidden}
 .pay-mrow .mhead{width:100%;display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border:none;background:none;font:inherit;cursor:pointer;text-align:left}
@@ -461,7 +463,7 @@ a.glink:hover{text-decoration:underline}
 
 /* ---- Guide job-sheet summary card ---- */
 .guide-sum{ padding:16px 18px; margin-bottom:12px; }
-.guide-sum .gs-head h2{ margin:0; color:#1b4ef0; font-size:19px; }
+.guide-sum .gs-head h2{ margin:0; color:var(--primary); font-size:19px; }
 .guide-sum .gs-when{ color:var(--ink-soft,#777); font-weight:600; margin-top:3px; }
 .guide-sum .gs-grid{ display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:14px; }
 @media (max-width:560px){ .guide-sum .gs-grid{ grid-template-columns:1fr; } }
@@ -902,36 +904,34 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:4px;backgroun
 [data-day="sat"]{--day-deep:#5b21b6}
 [data-day="sun"]{--day-deep:#991b1b}
 
+/* Guide greeting: a quiet white card. The Thai day colour stays as a slim left
+   accent + the date tint — a nod to สีประจำวัน without theming the page. */
 .guide-hero{
-  color:var(--day-deep);
-  background:linear-gradient(135deg, color-mix(in srgb, var(--day) 24%, #fff), color-mix(in srgb, var(--day) 11%, #fff));
-  border:1px solid color-mix(in srgb, var(--day) 32%, #fff);
-  box-shadow:var(--shadow);
+  color:var(--ink);
+  background:var(--card);
+  border:1px solid var(--line);
+  border-left:4px solid color-mix(in srgb, var(--day) 78%, #fff);
+  border-radius:14px;
+  box-shadow:none;
+  padding:18px 18px 16px;
 }
-.guide-hero h2{color:var(--day-deep)}
-.guide-hero .gh-date{color:color-mix(in srgb, var(--day-deep) 72%, transparent)}
-.guide-hero::after{background:radial-gradient(circle, color-mix(in srgb, var(--day) 26%, transparent), transparent 70%)}
-.guide-hero .gh-status{background:color-mix(in srgb, var(--day) 16%, #fff);border:1px solid color-mix(in srgb, var(--day) 34%, #fff);color:var(--day-deep)}
-.guide-hero .gh-status b{color:var(--day-deep)}
+.guide-hero h2{color:var(--ink);font-size:21px;font-weight:700}
+.guide-hero .gh-date{color:var(--day-deep);font-weight:600}
+.guide-hero::after{display:none}
+.guide-hero .gh-status{background:var(--grey-bg);border:1px solid var(--line);color:var(--ink)}
+.guide-hero .gh-status b{color:var(--primary)}
 
 /* Softer top accent bar + deep-hue card time text. */
 body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
 .sched-when span{color:var(--day-deep)}
 
 /* =====================================================================
-   EVERYTHING FOLLOWS THE DAY — retint the core surfaces, primary, and
-   borders from --day (light wash) and --day-deep (buttons/links/accent),
-   so the whole app takes today's colour while text stays readable.
+   (Removed) "Everything follows the day" — the day-of-week colour used to
+   retint the WHOLE app (page, cards, borders, primary), which made Saturdays
+   purple and every day a different theme. The app now keeps ONE neutral
+   Folkpaths-green system; the Thai day colour survives only as the thin top
+   accent bar, the live dot, "today" markers and the schedule time colour.
    ===================================================================== */
-[data-day]{
-  --paper: color-mix(in srgb, var(--day) 10%, #ffffff);   /* page background */
-  --card:  color-mix(in srgb, var(--day) 4%,  #ffffff);   /* cards / panels  */
-  --line:        color-mix(in srgb, var(--day) 18%, #e7ddcb);
-  --line-strong: color-mix(in srgb, var(--day) 26%, #d9cfbe);
-  --grey-bg:     color-mix(in srgb, var(--day) 12%, #efeadf);
-  --primary: var(--day-deep);     /* buttons, brand accents (white text reads) */
-  --accent:  var(--day-deep);
-}
 
 /* Payments dashboard KPI cards */
 .pay-kpi { background: var(--grey-bg, #f6f5f3); border: 1px solid var(--line, #e7e4e0); border-radius: 12px; padding: 12px 14px; }
@@ -1052,3 +1052,16 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .op-layout .op-side .drive-card .dc-status{font-size:11px;color:#A1A1AA}
 .op-layout .op-side .drive-card .btn{width:auto;align-self:flex-start}
 .op-layout .op-signout{border:1px solid transparent}
+
+/* ── Guide payments: mobile payment cards (no accounting tables) ── */
+.pay-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:10px}
+.pay-card .pc-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.pay-card .pc-tour{font-size:15.5px;font-weight:650;line-height:1.25}
+.pay-card .pc-when{font-size:12.5px;color:var(--ink-soft);margin-top:2px}
+.pay-card .pc-ref{font-family:monospace;font-size:11px;color:var(--ink-soft);margin-top:2px}
+.pay-card .pc-amt{font-size:19px;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pay-card .pc-split{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-soft);margin-top:9px;padding-top:9px;border-top:1px solid #F1F1EF}
+.pay-card .pc-split b{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:650}
+.pay-card .pc-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}
+.pay-slip{font-size:12.5px;font-weight:700;color:var(--primary);text-decoration:none}
+.msub .pay-card{margin:8px 0}
