@@ -34,6 +34,13 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
     ],
   },
   {
+    label: "Accounting",
+    items: [
+      { key: "peak-sync", label: "PEAK sync", href: "/peak-sync" },
+      { key: "accounting-logs", label: "Accounting logs", href: "/accounting-logs" },
+    ],
+  },
+  {
     label: "Reporting",
     items: [
       { key: "reports", label: "Reports", href: "/reports" },
