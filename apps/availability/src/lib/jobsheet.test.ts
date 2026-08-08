@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -155,5 +155,18 @@ describe("jobsheet — enriched expense fields don't change the payout math", ()
     );
     expect(enriched.totalExpenses).toBe(2000); // 500 × 4 — the extra fields are inert
     expect(enriched.grandTotal).toBe(plain.grandTotal);
+  });
+});
+
+describe("jobsheet — receiptDriveName", () => {
+  it("is unique per expense row (ref + E<n>) even for identical descriptions", () => {
+    const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 0, description: "Grand Palace", ext: "jpg" });
+    const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 1, description: "Grand Palace", ext: "jpg" });
+    expect(a).toBe("FOLK-BKK-20260808-01-E1 Grand Palace — receipt.jpg");
+    expect(a).not.toBe(b); // same description, different row → a different Drive file
+  });
+  it("falls back to guideId-date without a ref and sanitises the description", () => {
+    const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
+    expect(n).toBe("G-002-2026-08-08-E3 Taxi airport run — receipt.pdf");
   });
 });
