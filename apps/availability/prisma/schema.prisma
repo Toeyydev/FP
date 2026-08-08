@@ -457,6 +457,7 @@ model TourPayment {
   paidAt     DateTime?
   peakRef    String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
   eslipUrl   String? // payment slip in Drive — one slip can cover a merged batch of tours
+  paidBatchNo String? // FP-BATCH-… that settled this tour — provenance, so un-marking a batch only reverts ITS tours
   updatedAt  DateTime  @updatedAt
 
   @@unique([guideId, date, slotIdx])
