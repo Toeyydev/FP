@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
-type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null };
+type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null; ref?: string | null; expenseReported?: boolean; payStatus?: string | null };
 
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 function StateTag({ t }: { t: Tour }) {
@@ -57,13 +57,25 @@ function DriveCard() {
   useEffect(() => { fetch("/api/google/status", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then(setG).catch(() => {}); }, []);
   if (!g || !g.enabled) return null;
   const ok = !!(g.connected && g.email);
+  // Connected → a tiny footer status line (nav should dominate the sidebar);
+  // NOT connected → keep the prominent connect button, since that's actionable.
+  if (ok) {
+    return (
+      <div className="drive-card">
+        <div className="dc-main">
+          <b>Google Drive · <span style={{ color: "var(--green,#0E7A43)" }}>Connected</span></b>
+          <span className="dc-status">{g.email} · <a href="/api/google/connect" style={{ color: "inherit" }}>switch</a></span>
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className={`drive-card${ok ? "" : " warn"}`}>
+    <div className="drive-card warn">
       <div className="dc-main">
         <b>☁ Google Drive</b>
-        <span className="dc-status">{ok ? <>Saving to <b>{g.email}</b></> : "Not connected — job sheets & e-slips aren’t being saved to Drive"}</span>
+        <span className="dc-status">Not connected — job sheets &amp; e-slips aren’t being saved to Drive</span>
       </div>
-      <a className={`btn sm ${ok ? "" : "primary"}`} href="/api/google/connect">{ok ? "Switch account" : "Connect Google Drive"}</a>
+      <a className="btn sm primary" href="/api/google/connect">Connect Google Drive</a>
     </div>
   );
 }
@@ -198,104 +210,66 @@ export default function Dashboard() {
           const attention = d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length;
           return (
         <div className="dash">
+          {/* Page header — title left, primary actions right. */}
+          <div className="dash-head">
+            <div>
+              <h1 className="page-title">Operator Dashboard</h1>
+              <div className="page-sub">Today&rsquo;s tours, guide assignments, pending actions and payments.</div>
+            </div>
+            <div className="dash-head-actions">
+              <a className="btn" href="/board">Dispatch board</a>
+              <a className="btn primary" href="/bookings">+ New booking</a>
+            </div>
+          </div>
+
+          {/* One compact KPI band — operations + money, all computed server-side. */}
           <div className="kpi-row">
-            <Kpi n={d.todayTours.length} label="Today" sub={d.todayTours.length ? `${todayIn}/${d.todayTours.length} in · ${todayPax} guests` : undefined} onClick={() => jumpTo("today", "today")} />
+            <Kpi n={d.todayTours.length} label="Tours today" sub={d.todayTours.length ? `${todayIn}/${d.todayTours.length} in · ${todayPax} guests` : undefined} onClick={() => jumpTo("today")} />
             <Kpi n={d.tomorrowTours.length} label="Tomorrow" onClick={() => jumpTo("tomorrow", "tomorrow")} />
             <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" onClick={() => jumpTo("attention")} />
             <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" onClick={() => jumpTo("attention")} />
             {orphaned.length > 0 && <Kpi n={orphaned.length} label="Orphaned" tone="bad" onClick={() => jumpTo("attention")} />}
-            <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" onClick={() => jumpTo("upcoming", "upcoming")} />
-          </div>
-
-          {/* Money band — follow-ups & payables, all computed server-side. */}
-          {d.finance && (
-            <div className="kpi-row">
-              <MoneyKpi v={String(d.reportsPending ?? 0)} label="Reports pending" tone="warn" hot={(d.reportsPending ?? 0) > 0} sub="awaiting end-tour report" href="/tour-log" />
+            {d.finance && <>
+              <MoneyKpi v={String(d.reportsPending ?? 0)} label="Reports pending" tone="warn" hot={(d.reportsPending ?? 0) > 0} sub="end-tour report" href="/tour-log" />
               <MoneyKpi v={String(d.finance.expensesToReview.count)} label="Expenses to review" tone="warn" hot={d.finance.expensesToReview.count > 0} sub={d.finance.expensesToReview.count ? thb0(d.finance.expensesToReview.total) : undefined} href="/payments" />
               <MoneyKpi v={thb0(d.finance.guidePayable.total)} label="Guide payable" sub={d.finance.guidePayable.guides ? `${d.finance.guidePayable.guides} guide${d.finance.guidePayable.guides === 1 ? "" : "s"} · ${d.finance.guidePayable.tours} tour${d.finance.guidePayable.tours === 1 ? "" : "s"}` : "all settled"} href="/payments" />
-              <MoneyKpi v={String(d.finance.batches.open)} label="Open batches" tone="warn" hot={d.finance.batches.open > 0} sub={d.finance.batches.open ? `${thb0(d.finance.batches.openTotal)}${d.finance.batches.latestOpenNo ? ` · ${d.finance.batches.latestOpenNo}` : ""}` : undefined} href="/payment-batches" />
-              <MoneyKpi v={thb0(d.finance.batches.paidWeekTotal)} label="Batches paid · 7d" sub={d.finance.batches.paidWeekCount ? `${d.finance.batches.paidWeekCount} batch${d.finance.batches.paidWeekCount === 1 ? "" : "es"}` : undefined} href="/payment-batches" />
-              <MoneyKpi v={`${d.finance.peak.synced}`} label="PEAK refs" tone="warn" hot={d.finance.peak.pendingRef > 0} sub={d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} paid without ref` : "all recorded"} href="/payments" />
-            </div>
-          )}
+              <MoneyKpi v={String(d.finance.batches.open)} label="Open batches" tone="warn" hot={d.finance.batches.open > 0} sub={d.finance.batches.open ? `${thb0(d.finance.batches.openTotal)}` : "none open"} href="/payment-batches" />
+              <MoneyKpi v={`${d.finance.peak.synced}`} label="PEAK refs" tone="warn" hot={d.finance.peak.pendingRef > 0} sub={d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} missing` : "all recorded"} href="/payments" />
+            </>}
+          </div>
 
+          <div className="dash-cols">
           <div className="dash-main">
-            <section className="panel">
-              <button onClick={() => setBcOpen((o) => !o)} style={{ width: "100%", border: "none", background: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, font: "inherit", textAlign: "left", padding: "12px 14px" }}>
-                <h2 style={{ margin: 0, flex: 1 }}>📢 Broadcast to guides</h2>
-                <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>upcoming tours</span>
-                <span style={{ color: "var(--ink-soft)", display: "inline-block", transform: bcOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
-              </button>
-              {bcOpen && (
-                <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-                  <textarea value={bcText} onChange={(e) => setBcText(e.target.value)} maxLength={500} rows={3} placeholder="Message to all guides with an upcoming tour — e.g. Heavy rain expected today, please bring umbrellas for guests." className="search" style={{ width: "100%", resize: "vertical", font: "inherit", lineHeight: 1.5 }} />
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{bcText.length}/500 · in-app + push + LINE</span>
-                    <button className="btn sm primary" style={{ marginLeft: "auto" }} disabled={bcBusy || !bcText.trim()} onClick={sendBroadcast}>{bcBusy ? "Sending…" : "Send broadcast"}</button>
-                  </div>
-                  {bcMsg && <div style={{ fontSize: 13, fontWeight: 600, color: bcMsg.startsWith("✅") ? "var(--green)" : "var(--danger)" }}>{bcMsg}</div>}
+            {/* Today's Operations — the centrepiece: one dense row per running job.
+                Row click opens the job sheet. Extra columns (job no. / report /
+                expense / pay) come from the same single dashboard request. */}
+            <section className="panel" id="today">
+              <div className="panel-head"><h2>Today&rsquo;s operations</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${d.todayTours.length} tour${d.todayTours.length === 1 ? "" : "s"} · ${todayPax} guests${todayOverdue ? ` · ⚠ ${todayOverdue} not checked in` : ""}` : ""}</span></div>
+              {d.todayTours.length === 0 ? <div className="op-empty" style={{ padding: 18 }}>No tours today.</div> : (
+                <div className="grid-scroll" style={{ padding: "0 6px 8px" }}>
+                  <table className="ops-table">
+                    <thead><tr><th>Time</th><th>Job No.</th><th>Tour</th><th>Guide</th><th>Guests</th><th>Check-in</th><th>Report</th><th>Expense</th><th>Pay</th></tr></thead>
+                    <tbody>
+                      {d.todayTours.map((a, i) => {
+                        const reportNote = a.report && (a.report.noShow > 0 || a.report.leftEarly > 0 || a.report.comments);
+                        return (
+                          <tr key={i} onClick={() => { window.location.href = `/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`; }} title="Open this tour’s job sheet — full details">
+                            <td style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{a.time}</td>
+                            <td style={{ fontFamily: "monospace", fontSize: 11.5, whiteSpace: "nowrap" }}>{a.ref || "—"}</td>
+                            <td><b>{a.tour}</b>{reportNote ? <div className="dr-sub">{a.report!.noShow > 0 ? `${a.report!.noShow} no-show` : ""}{a.report!.leftEarly > 0 ? ` · ${a.report!.leftEarly} left early` : ""}{a.report!.comments ? ` · ⚠ ${a.report!.comments}` : ""}</div> : null}</td>
+                            <td>{a.guide}</td>
+                            <td style={{ fontVariantNumeric: "tabular-nums" }}>{a.pax ?? "—"}</td>
+                            <td><StateTag t={a} /></td>
+                            <td>{a.report ? <span className="ob ok">✓ Reported</span> : a.state === "COMPLETE" ? <span className="ob warn">Pending</span> : <span className="ob mut">—</span>}</td>
+                            <td>{a.expenseReported ? <span className="ob ok">✓ Reported</span> : <span className="ob mut">—</span>}</td>
+                            <td>{a.payStatus === "PAID" ? <span className="ob ok">Paid</span> : a.payStatus === "APPROVED" ? <span className="ob warn">Approved</span> : <span className="ob mut">—</span>}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </section>
-            {(d.unassigned.length > 0 || d.understaffed.length > 0 || orphaned.length > 0 || d.leaveRequests.length > 0) && (
-              <section className="panel" id="attention">
-                <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">Export unassigned PDF</button>}</div>
-                <div className="dash-list">
-                  {d.leaveRequests.map((l) => (
-                    <div key={l.id} className="dash-row">
-                      <span className="tag" style={{ background: "var(--grey)", color: "#fff" }}>Leave</span>
-                      <span className="dr-main"><b>{l.guide}</b> · {dShort(l.fromDate)}{l.toDate !== l.fromDate ? `–${dShort(l.toDate)}` : ""}<div className="dr-sub">{l.reason || "leave request"}</div></span>
-                      <span style={{ display: "flex", gap: 6 }}>
-                        <button className="btn sm primary" onClick={() => decideLeave(l.id, "APPROVED")}>Approve</button>
-                        <button className="btn sm ghost" onClick={() => decideLeave(l.id, "REJECTED")}>Reject</button>
-                      </span>
-                    </div>
-                  ))}
-                  {d.understaffed.map((u, i) => (
-                    <a key={`s${i}`} className="dash-row bad" href={`/jobs?split=${u.date}&slot=${u.slotIdx}`} title="Open Dispatch and split this tour to add a guide to the remaining guests">
-                      <span className="tag bad">Understaffed</span>
-                      <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.pax} pax · {u.have}/{u.need} guides — add {u.need - u.have} more</div></span>
-                      <span style={{ marginLeft: "auto", fontWeight: 700, whiteSpace: "nowrap" }}>Assign remaining →</span>
-                    </a>
-                  ))}
-                  {orphaned.map((o, i) => (
-                    <a key={`o${i}`} className="dash-row bad" href={`/bookings?focus=${o.date}`} title="These guests are tagged to a guide who has no assignment for this slot — re-dispatch them">
-                      <span className="tag bad">Orphaned</span>
-                      <span className="dr-main"><b>{o.tour}</b> · {dShort(o.date)} {o.time}<div className="dr-sub">{o.count} booking{o.count > 1 ? "s" : ""} · {o.pax} pax tagged to {o.guide}, who isn’t assigned — re-dispatch</div></span>
-                      <span style={{ marginLeft: "auto", fontWeight: 700, whiteSpace: "nowrap" }}>Fix →</span>
-                    </a>
-                  ))}
-                  {d.unassigned.map((u, i) => (
-                    <a key={`u${i}`} className="dash-row warn" href={`/bookings?focus=${u.date}`} title="Open Bookings to dispatch this tour">
-                      <span className="tag warn">Unassigned</span>
-                      <span className="dr-main"><b>{u.tour}</b> · {dShort(u.date)} {u.time}<div className="dr-sub">{u.count} booking{u.count > 1 ? "s" : ""} · {u.pax} pax — needs {u.need} guide{u.need > 1 ? "s" : ""}</div></span>
-                    </a>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            <section className="panel" id="today">
-              <div className="panel-head" onClick={() => toggleSec("today")} style={{ cursor: "pointer" }}><h2>{hidden.has("today") ? "▸ " : "▾ "}On tour today</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${todayIn}/${d.todayTours.length} checked in · ${todayPax} guests${todayOverdue ? ` · ⚠ ${todayOverdue} not checked in` : ""}` : " · no tours"}</span></div>
-              <div className="dash-list" style={{ display: hidden.has("today") ? "none" : undefined }}>
-                {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => (
-                  <a key={i} className={`dash-row${a.overdue ? " warn" : ""}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details">
-                    <span className="dr-time">{a.time}</span>
-                    <span className="dr-main"><b>{a.tour}</b>
-                      <div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div>
-                      {a.report && (a.report.noShow > 0 || a.report.leftEarly > 0 || a.report.comments) && (
-                        <div className="dr-report">
-                          {a.report.completedPax != null ? `✓ ${a.report.completedPax} completed` : ""}
-                          {a.report.noShow > 0 ? ` · ${a.report.noShow} no-show` : ""}
-                          {a.report.leftEarly > 0 ? ` · ${a.report.leftEarly} left early` : ""}
-                          {a.report.comments ? <span className="dr-incident"> · ⚠ {a.report.comments}</span> : ""}
-                        </div>
-                      )}
-                    </span>
-                    <StateTag t={a} />
-                  </a>
-                ))}
-              </div>
             </section>
 
             <section className="panel" id="tomorrow">
@@ -315,6 +289,103 @@ export default function Dashboard() {
                 ))}
               </div>
             </section>
+          </div>
+
+          {/* Right rail — exceptions + money snapshot. Only actionable state. */}
+          <div className="dash-side">
+            <section className="panel" id="attention">
+              <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">PDF</button>}</div>
+              <div className="dash-list">
+                {attention === 0 && <div className="op-empty" style={{ padding: 14 }}>All operations are on track.</div>}
+                {d.leaveRequests.map((l) => (
+                  <div key={l.id} className="dash-row">
+                    <span className="dr-main"><b>{l.guide}</b> · leave {dShort(l.fromDate)}{l.toDate !== l.fromDate ? `–${dShort(l.toDate)}` : ""}<div className="dr-sub">{l.reason || "leave request"}</div></span>
+                    <span style={{ display: "flex", gap: 5 }}>
+                      <button className="btn sm primary" onClick={() => decideLeave(l.id, "APPROVED")}>✓</button>
+                      <button className="btn sm ghost" onClick={() => decideLeave(l.id, "REJECTED")}>✕</button>
+                    </span>
+                  </div>
+                ))}
+                {d.understaffed.map((u, i) => (
+                  <a key={`s${i}`} className="att-row" href={`/jobs?split=${u.date}&slot=${u.slotIdx}`} title="Open Dispatch and split this tour to add a guide to the remaining guests">
+                    <span className="att-dot" style={{ background: "var(--danger)" }} />
+                    <span><b>{u.tour}</b><div className="dr-sub">{dShort(u.date)} {u.time} · {u.have}/{u.need} guides</div></span>
+                    <span className="att-go">Assign →</span>
+                  </a>
+                ))}
+                {orphaned.map((o, i) => (
+                  <a key={`o${i}`} className="att-row" href={`/bookings?focus=${o.date}`} title="Guests tagged to a guide with no assignment — re-dispatch them">
+                    <span className="att-dot" style={{ background: "var(--danger)" }} />
+                    <span><b>{o.tour}</b><div className="dr-sub">{dShort(o.date)} {o.time} · {o.pax} pax tagged to {o.guide}</div></span>
+                    <span className="att-go">Fix →</span>
+                  </a>
+                ))}
+                {d.unassigned.map((u, i) => (
+                  <a key={`u${i}`} className="att-row" href={`/bookings?focus=${u.date}`} title="Open Bookings to dispatch this tour">
+                    <span className="att-dot" style={{ background: "var(--assign)" }} />
+                    <span><b>{u.tour}</b><div className="dr-sub">{dShort(u.date)} {u.time} · {u.pax} pax · needs {u.need}</div></span>
+                    <span className="att-go">Assign →</span>
+                  </a>
+                ))}
+              </div>
+            </section>
+
+            {d.finance && (
+              <section className="panel">
+                <div className="panel-head"><h2>Finance &amp; accounting</h2></div>
+                <div style={{ padding: "4px 16px 12px" }}>
+                  <div className="fin-row"><span>Expenses awaiting review</span><b>{d.finance.expensesToReview.count ? `${d.finance.expensesToReview.count} · ${thb0(d.finance.expensesToReview.total)}` : "0"}</b></div>
+                  <div className="fin-row"><span>Guide payable</span><b>{thb0(d.finance.guidePayable.total)}</b></div>
+                  {d.finance.guidePayable.guides > 0 && <div className="fin-row"><span><small>{d.finance.guidePayable.guides} guide{d.finance.guidePayable.guides === 1 ? "" : "s"} · {d.finance.guidePayable.tours} tour{d.finance.guidePayable.tours === 1 ? "" : "s"}</small></span><b /></div>}
+                  <div className="fin-row"><span>Payment batch</span><b>{d.finance.batches.open ? `${d.finance.batches.open} open · ${thb0(d.finance.batches.openTotal)}` : "No open batch"}</b></div>
+                  <div className="fin-row"><span>Paid this week</span><b>{d.finance.batches.paidWeekCount ? thb0(d.finance.batches.paidWeekTotal) : "—"}</b></div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                    <a className="btn sm" href="/payments">Review expenses</a>
+                    <a className="btn sm" href="/payment-batches">Batches</a>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {d.finance && (
+              <section className="panel">
+                <div className="panel-head"><h2>PEAK accounting</h2></div>
+                <div style={{ padding: "4px 16px 12px" }}>
+                  <div className="fin-row">
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span className="att-dot" style={{ background: d.finance.peak.pendingRef ? "var(--assign)" : "var(--green)" }} />
+                      Reference tracking
+                    </span>
+                    <b>{d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} missing` : "All recorded"}</b>
+                  </div>
+                  <div className="fin-row"><span>EXP refs this month</span><b>{d.finance.peak.synced}</b></div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 6 }}>Expense refs are recorded on Payments when payouts are posted.</div>
+                  <div style={{ marginTop: 8 }}><a className="btn sm" href="/payments">Open Payments</a></div>
+                </div>
+              </section>
+            )}
+
+            {/* Broadcast — demoted to a secondary card; opens the composer in place. */}
+            <section className="panel">
+              <div style={{ padding: "12px 16px" }}>
+                <div style={{ fontSize: 14, fontWeight: 650 }}>Broadcast to guides</div>
+                <div className="dr-sub" style={{ marginTop: 2 }}>Send an update to guides with upcoming tours — in-app, push and LINE.</div>
+                {!bcOpen ? (
+                  <button className="btn sm" style={{ marginTop: 9 }} onClick={() => setBcOpen(true)}>Create broadcast</button>
+                ) : (
+                  <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 7 }}>
+                    <textarea value={bcText} onChange={(e) => setBcText(e.target.value)} maxLength={500} rows={3} placeholder="e.g. Heavy rain expected today, please bring umbrellas for guests." className="search" style={{ width: "100%", resize: "vertical", font: "inherit", fontSize: 13, lineHeight: 1.5 }} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{bcText.length}/500</span>
+                      <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => setBcOpen(false)}>Cancel</button>
+                      <button className="btn sm primary" disabled={bcBusy || !bcText.trim()} onClick={sendBroadcast}>{bcBusy ? "Sending…" : "Send"}</button>
+                    </div>
+                    {bcMsg && <div style={{ fontSize: 12.5, fontWeight: 600, color: bcMsg.startsWith("✅") ? "var(--green)" : "var(--danger)" }}>{bcMsg}</div>}
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
           </div>
         </div>
         );
