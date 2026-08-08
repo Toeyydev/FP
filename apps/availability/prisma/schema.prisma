@@ -394,6 +394,11 @@ model JobSheet {
   guideExpensesAt   DateTime? // when the guide last submitted their expense report
   guideExpensesNote String? // free-text note the guide adds with their expense report
   operatorNote      String? // free-text comment the operator adds for the guide (shown on the guide's sheet)
+  // Finance/accounting approval — the operator signs off the actual expenses before
+  // payout / PEAK sync. Additive + nullable: an unset value reads as "not approved".
+  approvalStatus    String? // null | "APPROVED" (lifecycle grows later: DRAFT → READY_FOR_REVIEW → APPROVED)
+  approvedBy        String? // User.id of the operator who approved
+  approvedAt        DateTime?
   createdById       String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
