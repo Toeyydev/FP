@@ -7,8 +7,9 @@ import { thb } from "@/lib/jobsheet";
 import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
+import { matchState, type Slip } from "@/lib/payments/slips";
 
-type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; fee: number; expenses: number };
+type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -168,6 +169,35 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); }
     else alert(d.hint || d.detail || `Slip upload failed (${r.status}).`);
   }
+  // Split payment: add ONE slip (with its amount) to a single tour. Several slips
+  // can be added and must sum to the tour's payout ("the right number") before it
+  // shows Paid. A mismatch is reported so the operator can correct the amount.
+  async function addSplitSlip(guideId: string, job: Job, file: File) {
+    const remaining = matchState(job.slips ?? [], job.amount).remaining;
+    const suggested = remaining > 0 ? String(remaining) : "";
+    const entered = prompt(`Amount on this slip (฿) — tour payout is ${thb(job.amount)}${(job.slips?.length ?? 0) ? `, ${thb(remaining)} still to pay` : ""}:`, suggested);
+    if (entered === null) return;
+    const amount = Number(entered.replace(/[,\s]/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) { alert("Enter a valid amount in baht."); return; }
+    const fd = new FormData();
+    fd.append("guideId", guideId);
+    fd.append("jobs", JSON.stringify([{ date: job.date, slotIdx: job.slotIdx }]));
+    fd.append("amount", String(amount));
+    const blob = await shrinkImage(file);
+    fd.append("file", blob, shrunkName(file.name, blob));
+    const r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(d.hint || d.detail || `Slip upload failed (${r.status}).`); return; }
+    if (d.driveError) alert(`Slip amount saved, but the Drive copy failed: ${d.driveError}`);
+    if (d.warn) alert(d.warn === "over" ? `Slips now total ${thb(d.slipsTotal)} — that's ${thb(Math.abs(d.delta))} OVER the ${thb(d.payout)} payout. Not marked paid; remove or fix a slip.` : `Added. ${thb(d.slipsTotal)} of ${thb(d.payout)} paid — ${thb(d.remaining)} still to go.`);
+    load(period);
+  }
+  async function removeSplitSlip(guideId: string, job: Job, slip: Slip) {
+    if (!confirm(`Remove this slip (${thb(slip.amount)})? The Drive file stays; the tour total is recalculated.`)) return;
+    const r = await fetch("/api/pay/eslip", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: job.date, slotIdx: job.slotIdx, at: slip.at }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) load(period); else alert(d.hint || d.detail || `Couldn't remove the slip (${r.status}).`);
+  }
   async function removeRow(guideId: string, guide: string) {
     if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports, payments AND the imported bookings for those tours, so they won't re-sync back onto Payments.\n\nThis does NOT cancel anything on the OTA (GetYourGuide) — do that there first. Cannot be undone.`)) return;
     const r = await fetch("/api/payments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId }) });
@@ -293,22 +323,46 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {jobs.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, jobs, f); e.target.value = ""; }} /></label>
               <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>or use the per-tour Slip below for separate transfers</span>
             </div>}
-            {jobs.map((j, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
-                <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
-                <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
-                <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
-                {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
-                <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
-                <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
-                {j.paid && j.eslipUrl && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
-                {canEdit && !j.paid && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload the bank slip for THIS tour (separate transfer) — marks just this tour paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
-                {canEdit && (j.paid
-                  ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
-                  : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
-                {canEdit && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
+            {jobs.map((j, i) => {
+              const ms = matchState(j.slips ?? [], j.amount);
+              const hasSlips = (j.slips?.length ?? 0) > 0;
+              return (
+              <div key={i} style={{ padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+                  <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
+                  <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
+                  <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
+                  {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
+                  <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
+                  <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
+                  {j.paid && j.eslipUrl && !hasSlips && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
+                  {canEdit && !j.paid && !hasSlips && <label className="btn sm" style={{ cursor: "pointer" }} title="Pay this tour in full with one slip (one transfer) — marks it paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
+                  {canEdit && !j.paid && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Add a split-payment slip with its amount — several slips must add up to this tour's payout before it shows Paid">＋ Split slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) addSplitSlip(r.guideId, j, f); e.target.value = ""; }} /></label>}
+                  {canEdit && (j.paid
+                    ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
+                    : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
+                  {canEdit && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
+                </div>
+                {hasSlips && (
+                  <div style={{ margin: "5px 0 2px 160px", fontSize: 12, background: "var(--card,#fff)", border: "1px solid var(--line)", borderRadius: 8, padding: "6px 10px" }}>
+                    {(j.slips ?? []).map((s, si) => (
+                      <div key={si} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+                        <span style={{ color: "var(--ink-soft)", minWidth: 48 }}>Slip {si + 1}</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 84, fontWeight: 600 }}>{thb(s.amount)}</span>
+                        {s.url && <a className="btn sm" href={s.url} target="_blank" rel="noopener noreferrer">View</a>}
+                        {canEdit && <button className="btn sm danger" onClick={() => removeSplitSlip(r.guideId, j, s)}>Remove</button>}
+                        <span style={{ flex: 1, textAlign: "right", fontSize: 11, color: "var(--ink-soft)" }}>{new Date(s.at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--line)", marginTop: 4, paddingTop: 4, fontWeight: 700, color: ms.paid ? "var(--green,#1a7f37)" : ms.warn === "over" ? "var(--danger)" : "var(--ink)" }}>
+                      <span>{ms.paid ? "✓ Slips add up to the payout" : ms.warn === "over" ? `⚠ Over by ${thb(Math.abs(ms.delta))} — remove or fix a slip` : `${thb(ms.remaining)} still to pay`}</span>
+                      <span style={{ fontVariantNumeric: "tabular-nums" }}>{thb(ms.slipsTotal)} / {thb(ms.payout)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </td></tr>
         )}
       </Fragment>
