@@ -208,7 +208,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     header, tour, saved: false, canEdit: isOps, checkedIn, payment,
-    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, updatedAt: null },
+    sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
 
@@ -216,8 +216,22 @@ export async function GET(req: NextRequest) {
 // store gaps, and JSON.stringify drops undefined keys on re-save, so requiring a
 // present number would reject an otherwise-valid save. Strings/extra keys are lenient.
 const num = z.number().nullish().transform((v) => v ?? null);
+const numOpt = z.number().nullable().optional(); // present → number|null; absent → omitted (not stored)
 const bookingZ = z.object({ name: z.string().max(200).optional().default(""), bookingNo: z.string().max(120).optional().default(""), bookedPax: num, actualPax: num, tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
-const expenseZ = z.object({ description: z.string().max(160).optional().default(""), price: num, pax: num });
+// Expense rows: description/price/pax are the billed reimbursement; the rest are
+// OPTIONAL finance metadata kept verbatim in the JSON. zod strips unknown keys, so a
+// field MUST be listed here to survive a save — this is why `unit` used to vanish.
+const expenseZ = z.object({
+  description: z.string().max(160).optional().default(""), price: num, pax: num,
+  unit: z.string().max(24).optional(),
+  expenseType: z.string().max(40).optional(),
+  paidBy: z.string().max(24).optional(),
+  reimbursementRequired: z.boolean().optional(),
+  estimatedAmount: numOpt,
+  actualAmount: numOpt,
+  receiptUrl: z.string().max(2000).optional(),
+  notes: z.string().max(500).optional(),
+});
 const guideFeeZ = z.object({ price: num, time: num, whtPct: num }).nullish().transform((v) => v ?? { price: null, time: null, whtPct: null });
 
 // PUT — operator only. Upserts the sheet; assigns a FOLK-BKK-… ref on first save.
