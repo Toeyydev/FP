@@ -4,12 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { bookingRef } from "@/lib/booking-ref";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
 
-type Assignment = { guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
+type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
 type Candidate = { guideId: string; displayName: string };
 type SlotBooking = { id: string; customerName: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null; assignedGuideId: string | null; tourId: string | null };
-const SPLIT_CAP = 10;
+const SPLIT_CAP = PAX_PER_GUIDE;
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
@@ -111,7 +112,7 @@ export default function Dispatch() {
 
   // Split an assigned tour across a second guide (a "hybrid" two-guide tour). Loads
   // the slot's guests + the guides free for the slot, then lets the operator assign
-  // each whole booking to a guide (≤10 pax each). Each guide keeps a separate sheet.
+  // each whole booking to a guide (≤ the cap each). Each guide keeps a separate sheet.
   const [splitFor, setSplitFor] = useState<{ a: Assignment; items: SlotBooking[] } | null>(null);
   const [splitCands, setSplitCands] = useState<Candidate[] | null>(null);
   const [splitMap, setSplitMap] = useState<Record<string, string>>({});
@@ -126,8 +127,16 @@ export default function Dispatch() {
     const jc = await rc.json().catch(() => ({ guides: [] }));
     const items = (jb.bookings ?? []) as SlotBooking[];
     if (!items.length) { setMsg("No bookings found on this slot to split."); return; }
-    // Options = the guides already on this slot + those free for it, de-duplicated.
+    // Options = EVERY guide already on this slot (a hybrid tour can have several — not
+    // just the card we opened from) + those free for it, de-duplicated. Including the
+    // other assigned guides lets the operator rebalance bookings between two guides
+    // already on the tour without first removing one of them.
     const cands: Candidate[] = [{ guideId: a.guideId, displayName: a.guideName }];
+    for (const asg of data?.assignments ?? []) {
+      if (asg.date === a.date && asg.slotIdx === a.slotIdx && !cands.some((c) => c.guideId === asg.guideId)) {
+        cands.push({ guideId: asg.guideId, displayName: asg.guideName });
+      }
+    }
     for (const g of (jc.guides ?? []) as Candidate[]) if (!cands.some((c) => c.guideId === g.guideId)) cands.push(g);
     setSplitCands(cands);
     // Default each booking to whoever holds it now (or the current guide if untagged).
@@ -179,13 +188,17 @@ export default function Dispatch() {
 
       {tab === "assigned" ? (
         <section className="panel">
-          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today & tomorrow — auto-updates"}</span></div>
+          <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today only — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
-            {data.assignments.length === 0 ? <div className="op-empty">No upcoming assigned jobs yet.</div> : (() => {
-              // Group by date (each date shown once), tours numbered 1, 2, 3…
+            {(() => {
+              // On-going tours = today only. Future assigned jobs still live on the
+              // Board and Dashboard; this list stays focused on the day in progress.
               const todayStr = new Date().toLocaleDateString("en-CA");
+              const todayAssignments = data.assignments.filter((a) => a.date === todayStr);
+              if (todayAssignments.length === 0) return <div className="op-empty">No tours scheduled for today.</div>;
+              // Group by date (single date now, kept for the numbered 1, 2, 3… layout).
               const byDate: [string, Assignment[]][] = [];
-              for (const a of data.assignments) {
+              for (const a of todayAssignments) {
                 const g = byDate.find(([d]) => d === a.date);
                 if (g) g[1].push(a); else byDate.push([a.date, [a]]);
               }

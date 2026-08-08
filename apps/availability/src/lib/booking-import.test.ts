@@ -58,10 +58,10 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
     expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 3 } }));
   });
 
-  it("holds and alerts when it would exceed 10", async () => {
+  it("holds and alerts when it would exceed 12", async () => {
     prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 9 }]);
     prismaMock.booking.findMany.mockResolvedValue([{ pax: 5 }, { pax: 4 }, { pax: 4 }]); // slot total 13
-    await autoAttachLate(booking({ pax: 4 })); // 13 > 10
+    await autoAttachLate(booking({ pax: 4 })); // 13 > 12
 
     expect(prismaMock.booking.update).not.toHaveBeenCalled();
     expect(prismaMock.assignment.update).not.toHaveBeenCalled();

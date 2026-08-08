@@ -394,6 +394,11 @@ model JobSheet {
   guideExpensesAt   DateTime? // when the guide last submitted their expense report
   guideExpensesNote String? // free-text note the guide adds with their expense report
   operatorNote      String? // free-text comment the operator adds for the guide (shown on the guide's sheet)
+  // Finance/accounting approval — the operator signs off the actual expenses before
+  // payout / PEAK sync. Additive + nullable: an unset value reads as "not approved".
+  approvalStatus    String? // null | "APPROVED" (lifecycle grows later: DRAFT → READY_FOR_REVIEW → APPROVED)
+  approvedBy        String? // User.id of the operator who approved
+  approvedAt        DateTime?
   createdById       String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -697,4 +702,53 @@ model PaymentTransaction {
   @@index([matchedPayoutItemNo])
   @@index([transactionValidationStatus])
   @@index([memoValidationStatus])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payment batches — group several guide tour-payouts into ONE bank run. Items are
+// SNAPSHOTTED from the job sheets at add time (computeTotals, server-side), so a
+// batch records what was actually settled even if a sheet is edited afterwards.
+// A tour payout (guideId+date+slotIdx) belongs to at most ONE batch at a time — the
+// unique on PaymentBatchItem enforces "not in two active batches"; deleting a batch
+// cascade-deletes its items, freeing those payouts to be re-batched. guide.folkpaths
+// stays the operational record; PEAK remains the accounting mirror.
+// ─────────────────────────────────────────────────────────────────────────────
+model PaymentBatch {
+  id          String    @id @default(cuid())
+  batchNo     String    @unique // FP-BATCH-YYYYMMDD-NN (matches the bank-slip PAYMENT_BATCH_NO format)
+  status      String    @default("DRAFT") // DRAFT | READY | PROCESSING | PAID | FAILED | CANCELLED
+  paymentDate String? // "YYYY-MM-DD" — when the transfer is/was made
+  totalAmount Float     @default(0) // sum of item.totalPayable at build time (THB)
+  note        String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  paidAt      DateTime?
+
+  items PaymentBatchItem[]
+
+  @@index([status])
+}
+
+// One guide tour-payout inside a batch. Amounts are a snapshot of the job sheet's
+// computeTotals at add time (net guide fee after WHT / reimbursable expenses / their
+// sum), never trusted from the client. The unique key is the tour-payout tuple, so
+// the same payout can't sit in two batches at once.
+model PaymentBatchItem {
+  id            String       @id @default(cuid())
+  batch         PaymentBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchId       String
+  guideId       String
+  date          String // "YYYY-MM-DD"
+  slotIdx       Int
+  tourId        String       @default("")
+  ref           String? // JobSheet.ref snapshot (FOLK-BKK-…), for display / slip matching
+  guideFee      Float        @default(0) // net guide fee after WHT (snapshot)
+  reimbursement Float        @default(0) // reimbursable expenses (snapshot)
+  totalPayable  Float        @default(0) // guideFee + reimbursement (snapshot)
+  paymentStatus String       @default("PENDING") // PENDING | PAID
+  createdAt     DateTime     @default(now())
+
+  @@unique([guideId, date, slotIdx]) // a payout is in at most one batch at a time
+  @@index([batchId])
 }

@@ -19,6 +19,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
     label: "Money",
     items: [
       { key: "payments", label: "Payments", href: "/payments" },
+      { key: "payment-batches", label: "Payment batches", href: "/payment-batches" },
     ],
   },
   {
