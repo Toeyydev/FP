@@ -462,6 +462,7 @@ model TourPayment {
   paidAt     DateTime?
   peakRef    String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
   eslipUrl   String? // payment slip in Drive — one slip can cover a merged batch of tours
+  slips      Json? // split payment: [{ amount, url, at, name? }] — several transfers that sum to this tour's payout; eslipUrl mirrors the latest for back-compat
   paidBatchNo String? // FP-BATCH-… that settled this tour — provenance, so un-marking a batch only reverts ITS tours
   updatedAt  DateTime  @updatedAt
 
