@@ -33,6 +33,23 @@ export async function nextBatchNo(date: string): Promise<string> {
   return no;
 }
 
+// What marking a batch PAID / un-PAID should do to one tour's TourPayment row.
+// Pure, so the double-settlement rules are testable:
+//  - mark-paid: flip a tour to PAID and stamp our batchNo — UNLESS it is already
+//    PAID by another route (separate slip, manual, another batch): leave it alone
+//    and report it, so a batch can never silently re-settle someone else's payment.
+//    Re-marking a tour this same batch already settled is a no-op "flip" (idempotent).
+//  - undo: revert ONLY a tour whose paidBatchNo is OUR batch number; anything else
+//    (unpaid, or paid by a different route) is untouched.
+export type TourPayState = { status: string; paidBatchNo: string | null } | null;
+export function batchPaidAction(existing: TourPayState, batchNo: string): "flip" | "skip" {
+  if (existing?.status === "PAID" && existing.paidBatchNo !== batchNo) return "skip";
+  return "flip";
+}
+export function batchUndoAction(existing: TourPayState, batchNo: string): "revert" | "leave" {
+  return existing?.status === "PAID" && existing.paidBatchNo === batchNo ? "revert" : "leave";
+}
+
 // Snapshot a tour payout from its job sheet — SERVER-SIDE truth, never the client:
 // net guide fee (after WHT), reimbursable expenses, and their sum. Falls back to the
 // standard fee with no expenses when no sheet is saved (same rule the payroll uses).

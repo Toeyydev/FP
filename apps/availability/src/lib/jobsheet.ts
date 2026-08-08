@@ -34,7 +34,11 @@ export type Expense = {
   reimbursementRequired?: boolean;
   estimatedAmount?: number | null;
   actualAmount?: number | null;
-  receiptUrl?: string | null;
+  receiptUrl?: string | null; // Drive link to the supporting receipt (login-gated, not a signed URL)
+  receiptFileId?: string | null; // Drive file id — for replace-in-place / audit
+  receiptName?: string; // original filename
+  receiptAt?: string; // ISO timestamp the receipt was attached
+  receiptBy?: string; // User.id who attached it
   notes?: string;
 };
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
@@ -116,6 +120,16 @@ export const isApproved = (status?: string | null): boolean => status === "APPRO
 // Pure, reversible toggle so an accidental approval can be undone before payout.
 export function toggleApproval(current?: string | null): ApprovalStatus {
   return isApproved(current) ? null : "APPROVED";
+}
+
+// Drive file name for an expense receipt. Unique per expense row (ref + E<n>) so a
+// re-upload replaces only that row's receipt and never another's. The description is
+// sanitised (Drive/query-safe) and clipped; falls back to guideId-date when a sheet
+// has no ref yet.
+export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; index: number; description?: string | null; ext: string }): string {
+  const base = (opts.ref || `${opts.guideId}-${opts.date}`).trim();
+  const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+  return `${base}-E${opts.index + 1}${desc ? ` ${desc}` : ""} — receipt.${opts.ext}`;
 }
 
 // Apply a guide's reported attendance to a job sheet: remove `absent` guests

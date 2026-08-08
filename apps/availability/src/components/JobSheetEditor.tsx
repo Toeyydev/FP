@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, fillDownExpensePax, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, fillDownExpensePax, isApproved, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { SLOT_TIMES } from "@/lib/slots";
+import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -26,6 +27,7 @@ type Sheet = {
   bookings: Booking[]; expenses: Expense[]; guideFee: GuideFee; updatedAt?: string | null;
   guideExpenses?: Expense[] | null; guideExpensesAt?: string | null; guideExpensesNote?: string | null;
   operatorNote?: string | null;
+  approvalStatus?: string | null; approvedBy?: string | null; approvedAt?: string | null;
 };
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -43,10 +45,11 @@ export default function JobSheetEditor() {
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
   const [checkedIn, setCheckedIn] = useState(false);
-  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null } | null>(null); // paid state + slip (from the operator)
+  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
+  const [secTab, setSecTab] = useState<"all" | "details" | "expenses" | "fee">("all"); // operator section tabs — "all" keeps the classic single-scroll sheet
   const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
@@ -206,6 +209,51 @@ export default function JobSheetEditor() {
     setMsg(d.lineSent > 0 ? `✅ Sent to guide on LINE` : `✅ Sent to guide's in-app inbox (link LINE to also send there)`);
   }
 
+  // Operator: sign off (or un-sign) the actual expenses before payout / PEAK sync.
+  // Auto-saves first so approval always ties to the persisted figures. Records
+  // approvedBy/approvedAt server-side; the pill in the toolbar reflects the state.
+  async function toggleApprove() {
+    if (!sheet) return;
+    if (!saved) { const ok = await save(); if (!ok) return; }
+    const approve = !isApproved(sheet.approvalStatus);
+    setBusy(true); setMsg(approve ? "Approving…" : "Removing approval…");
+    const r = await fetch("/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, approve }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg(d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
+    setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt } : s);
+    setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
+  }
+
+  // Operator: attach / detach a supporting receipt on ONE expense line. Auto-saves
+  // first so the row index the server writes to is stable. Images are shrunk client-
+  // side (same as e-slips) before upload. The server returns the updated sheet.
+  async function uploadReceipt(i: number, file: File) {
+    if (!sheet) return;
+    if (!saved) { const ok = await save(); if (!ok) return; }
+    setBusy(true); setMsg("Uploading receipt…");
+    let blob: Blob = file;
+    try { blob = await shrinkImage(file); } catch { /* fall back to the original file */ }
+    const fd = new FormData();
+    fd.append("guideId", sheet.guideId); fd.append("date", sheet.date); fd.append("slotIdx", String(sheet.slotIdx)); fd.append("expenseIndex", String(i));
+    fd.append("file", blob, shrunkName(file.name, blob));
+    const r = await fetch("/api/jobsheet/receipt", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg(d.error === "too-large" ? "Receipt too large (max 10 MB)." : d.error === "bad-type" ? "Upload an image or a PDF." : (d.error === "not-connected" || d.error === "not-configured") ? "Connect Google Drive first." : d.error === "no-sheet" ? "Save the sheet first." : "Couldn't attach the receipt."); return; }
+    setSheet(d.sheet); setSaved(true); setMsg("Receipt attached ✓");
+  }
+  async function removeReceipt(i: number) {
+    if (!sheet) return;
+    if (!confirm("Remove this receipt from the expense line? The file stays in Drive.")) return;
+    setBusy(true); setMsg("Removing receipt…");
+    const r = await fetch("/api/jobsheet/receipt", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenseIndex: i }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg("Couldn't remove the receipt."); return; }
+    setSheet(d.sheet); setSaved(true); setMsg("Receipt removed");
+  }
+
   // Operator: return the job to the operator — unassign this guide and send its bookings
   // back to the Bookings inbox to re-dispatch. Notifies the guide. Blocked once the guide
   // has checked in (before-start only). Reuses DELETE /api/assignments (release: true).
@@ -259,6 +307,10 @@ export default function JobSheetEditor() {
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>Job order</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>Excel</button>}
           {canEdit && drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
+          {canEdit && isApproved(sheet.approvalStatus) && (
+            <span title={sheet.approvedAt ? `Approved ${new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "Approved for payout"} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, color: "var(--green,#2f7d4f)", background: "var(--ok-bg,#eef7f0)", border: "1px solid var(--ok-line,#cfe6d6)", borderRadius: 999, padding: "3px 10px" }}>✓ Approved</span>
+          )}
+          {canEdit && <button className="btn" disabled={busy} onClick={toggleApprove} title="Operator sign-off on the actual expenses before payout / PEAK sync">{isApproved(sheet.approvalStatus) ? "Unapprove" : "Approve"}</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>}
           {canEdit && <button className="btn primary" disabled={busy} onClick={() => save()}>{busy ? "…" : "Save"}</button>}
         </div>
@@ -391,7 +443,21 @@ export default function JobSheetEditor() {
       })()}
 
       {(canEdit || showFull) && (
+      <div className="js-detail-grid">
       <section className="panel js-sheet" style={{ padding: 18 }}>
+       {/* Section tabs — "All" is the classic single-scroll sheet (default, so the
+           existing workflow is unchanged); the others focus one part of the job. */}
+       <div className="subtabs no-print" style={{ marginBottom: 14 }}>
+         {([["all", "All"], ["details", "Job details"], ["expenses", "Expenses"], ["fee", "Fee & summary"]] as const).map(([k, l]) => (
+           <button key={k} type="button" className={`subtab${secTab === k ? " active" : ""}`} onClick={() => setSecTab(k)}>{l}</button>
+         ))}
+       </div>
+       {/* Financial summary — live from the same computeTotals the payout uses. */}
+       <div className="kpi-row no-print" style={{ marginBottom: 14 }}>
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(t.netGuideFee)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(t.totalExpenses)}</b><span>Reimbursement</span></div>
+         <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(t.grandTotal)}</b><span>Guide payable</span></div>
+       </div>
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
         <div className="js-head">
@@ -425,6 +491,7 @@ export default function JobSheetEditor() {
         </div>
 
         {/* Job details */}
+        <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details</h3>
         <table className="js-table">
           <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th>Booked Pax</th><th>Actual Pax</th><th>Tickets</th><th className="no-print" /></tr></thead>
@@ -449,11 +516,13 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
+        </div>
 
         {/* Expenses */}
+        <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense</h3>
         <table className="js-table">
-          <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print" /></tr></thead>
+          <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print">Receipt</th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
               <tr key={i}>
@@ -463,10 +532,23 @@ export default function JobSheetEditor() {
                 <td><input style={{ ...L, width: 70 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
                 <td><select style={{ ...L, width: 78 }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select></td>
                 <td style={{ textAlign: "right" }}>{thb(expenseAmount(e))}</td>
+                <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
+                  {e.receiptUrl ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <a href={e.receiptUrl} target="_blank" rel="noopener noreferrer" title={e.receiptName || "View receipt"} style={{ fontSize: 12, fontWeight: 700, color: "var(--green,#2f7d4f)" }}>📎 View</a>
+                      <button type="button" className="btn sm danger" title="Remove receipt" onClick={() => removeReceipt(i)}>×</button>
+                    </span>
+                  ) : (
+                    <label className="btn sm" style={{ cursor: "pointer", margin: 0 }} title="Attach a receipt (image or PDF, max 10 MB)">
+                      📎 Add
+                      <input type="file" accept="image/*,application/pdf" hidden onChange={(ev) => { const f = ev.target.files?.[0]; ev.currentTarget.value = ""; if (f) uploadReceipt(i, f); }} />
+                    </label>
+                  )}
+                </td>
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
@@ -525,7 +607,10 @@ export default function JobSheetEditor() {
           );
         })()}
 
+        </div>
+
         {/* Guide fee */}
+        <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide</h3>
         <table className="js-table">
           <thead><tr><th>Description</th><th>Price</th><th></th><th>Time</th><th>WHT %</th><th>WHT</th><th>Net</th></tr></thead>
@@ -548,10 +633,11 @@ export default function JobSheetEditor() {
           <div><span>Net Guide Fee</span><b>{thb(t.netGuideFee)}</b></div>
           <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
         </div>
+        </div>
 
         {/* Internal operations note — operator-only, never shown to the guide */}
         {canEdit && (
-          <div className="no-print" style={{ marginTop: 16 }}>
+          <div className="no-print" style={{ marginTop: 16, display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
             <h3 className="js-section" style={{ background: "#eaf1ff" }}>Internal note</h3>
             <textarea value={sheet.operatorNote ?? ""} maxLength={2000} onChange={(e) => up({ operatorNote: e.target.value })} rows={3} placeholder="e.g. Confirm van with supplier · guest paid deposit only" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, padding: "8px 10px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
             <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>Internal operations note — not shown to the guide. Remember to Save.</div>
@@ -559,6 +645,50 @@ export default function JobSheetEditor() {
         )}
        </fieldset>
       </section>
+
+      {/* Finance / accounting side panel — operator-only snapshot of where this job
+          stands on the money side. Read state lives here; money ACTIONS stay on
+          their own screens (Payments / Payment batches). */}
+      {canEdit && (
+        <aside className="panel no-print js-fin-side" style={{ padding: "14px 16px" }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>Finance & accounting</h3>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>Approval</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              {isApproved(sheet.approvalStatus)
+                ? <span className="badge active">✓ Approved</span>
+                : <span className="badge muted">Not approved</span>}
+              <button className="btn sm" disabled={busy} onClick={toggleApprove}>{isApproved(sheet.approvalStatus) ? "Unapprove" : "Approve"}</button>
+            </div>
+            {sheet.approvedAt && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 3 }}>{new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>Payment</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              {payment?.paid
+                ? <span className="badge active">✓ Paid</span>
+                : payment?.status === "APPROVED"
+                  ? <span className="badge pending">Approved</span>
+                  : <span className="badge muted">Pending</span>}
+              {payment?.paidAt && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+              {payment?.slip && <a href={payment.slip} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>Slip</a>}
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 5 }}>Payable <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(t.grandTotal)}</b></div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
+            {payment?.peakRef
+              ? <div style={{ marginTop: 4, fontFamily: "monospace", fontSize: 12.5, fontWeight: 700 }}>{payment.peakRef}</div>
+              : <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>No expense ref yet — recorded when the payout is posted (Payments).</div>}
+          </div>
+
+          <a className="btn sm" href="/payments" style={{ display: "inline-block" }}>Open Payments</a>
+        </aside>
+      )}
+      </div>
       )}
     </div>
   );
