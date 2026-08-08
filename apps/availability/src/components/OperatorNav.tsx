@@ -6,30 +6,43 @@ import { signOut } from "next-auth/react";
 // One shared sidebar for every operator page — same structure everywhere (as the
 // Dashboard): the workflow-grouped rail, an optional footer slot (the Dashboard
 // drops its Google Drive status here), and Sign out pinned at the bottom.
+// Grouped Operations / Finance / Reporting / Settings — existing pages only
+// (no dead links; Expenses / PEAK Sync / Logs pages join their groups when built).
 const GROUPS: { label?: string; items: { key: string; label: string; href: string }[] }[] = [
   {
     items: [
       { key: "dashboard", label: "Dashboard", href: "/dashboard" },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
       { key: "bookings", label: "Bookings", href: "/bookings" },
-      { key: "board", label: "Board", href: "/board" },
+      { key: "board", label: "Availability board", href: "/board" },
       { key: "jobs", label: "Jobs", href: "/jobs" },
-    ],
-  },
-  {
-    label: "Money",
-    items: [
-      { key: "payments", label: "Payments", href: "/payments" },
-      { key: "payment-batches", label: "Payment batches", href: "/payment-batches" },
-    ],
-  },
-  {
-    label: "Manage",
-    items: [
-      { key: "reports", label: "Reports", href: "/reports" },
-      { key: "tour-log", label: "Tour log", href: "/tour-log" },
       { key: "guides", label: "Guides", href: "/guides" },
       { key: "tours", label: "Tours", href: "/tours" },
       { key: "blocked-slots", label: "Block slots", href: "/blocked-slots" },
+    ],
+  },
+  {
+    label: "Finance",
+    items: [
+      { key: "payments", label: "Payments", href: "/payments" },
+      { key: "payment-batches", label: "Payment batches", href: "/payment-batches" },
+      { key: "payment-slips", label: "Payment slips", href: "/payment-slips" },
+    ],
+  },
+  {
+    label: "Reporting",
+    items: [
+      { key: "reports", label: "Reports", href: "/reports" },
+      { key: "tour-log", label: "Tour log", href: "/tour-log" },
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
       { key: "accounts", label: "Accounts", href: "/admin" },
     ],
   },
@@ -51,7 +64,10 @@ export function OperatorNav({ active, children }: { active?: string; children?: 
   return (
     <div className="op-side">
       <nav className="op-nav" aria-label="Sections">
-        <a href="/" className="op-nav-link op-home">Home</a>
+        <a href="/" className="op-brand" title="Home">
+          <b>FOLKPATHS</b>
+          <span>Operations</span>
+        </a>
         {GROUPS.map((g, gi) => (
           <Fragment key={gi}>
             {g.label && <span className="op-nav-group">{g.label}</span>}
