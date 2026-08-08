@@ -6,6 +6,8 @@ import { guidesNeeded } from "@/lib/capacity";
 import { reconcileAssignedBookings, autoSyncBokun } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { cached, withTimeout } from "@/lib/api-cache";
+import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { money2 } from "@/lib/payment-batch";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -133,5 +135,84 @@ async function buildDashboard() {
     .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
 
   const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
-  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, orphaned, leaveRequests };
+  const { reportsPending, finance } = await buildFinance(today, nowMin, startMin);
+  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, orphaned, leaveRequests, reportsPending, finance };
+}
+
+// Money + follow-up state for the operator's "what needs me" view. All figures are
+// computed HERE from the job sheets (computeTotals — the payout source of truth),
+// never client-side, and ride the same 60s shared cache as the rest of the board.
+// Every query is bounded (7/31-day windows, one month) so the board stays fast.
+async function buildFinance(today: string, nowMin: number, startMin: (slot: number) => number) {
+  const weekAgo = bkk(-7);
+  const monthAgo = bkk(-31);
+  const period = today.slice(0, 7);
+  const mStart = `${period}-01`, mEnd = `${period}-31`;
+
+  const [pastAssigns, pastReports, reviewSheets, monthAssigns, monthSheets, monthPays, monthPayroll, openBatches, paidBatches] = await Promise.all([
+    prisma.assignment.findMany({ where: { date: { gte: weekAgo, lte: today } }, select: { guideId: true, date: true, slotIdx: true } }),
+    prisma.tourReport.findMany({ where: { date: { gte: weekAgo, lte: today } }, select: { guideId: true, date: true, slotIdx: true } }),
+    prisma.jobSheet.findMany({ where: { date: { gte: monthAgo, lte: today }, guideExpensesAt: { not: null } }, select: { guideId: true, date: true, slotIdx: true, guideExpenses: true } }),
+    prisma.assignment.findMany({ where: { date: { gte: mStart, lte: mEnd } }, select: { guideId: true, date: true, slotIdx: true } }),
+    prisma.jobSheet.findMany({ where: { date: { gte: mStart, lte: mEnd } }, select: { guideId: true, date: true, slotIdx: true, expenses: true, guideFee: true } }),
+    // 31-day window (not just the month) so prior-month sheets awaiting review are
+    // checked against their real per-tour paid state too.
+    prisma.tourPayment.findMany({ where: { date: { gte: monthAgo, lte: mEnd } }, select: { guideId: true, date: true, slotIdx: true, status: true, peakRef: true } }),
+    prisma.payrollStatus.findMany({ where: { period }, select: { guideId: true, status: true } }),
+    prisma.paymentBatch.findMany({ where: { status: { in: ["DRAFT", "READY", "PROCESSING", "FAILED"] } }, select: { batchNo: true, status: true, totalAmount: true }, orderBy: { createdAt: "desc" } }),
+    prisma.paymentBatch.aggregate({ where: { status: "PAID", paidAt: { gte: new Date(Date.now() - 7 * 86400 * 1000) } }, _sum: { totalAmount: true }, _count: true }),
+  ]);
+
+  const k = (g: string, d: string, s: number) => `${g}|${d}|${s}`;
+  const paidKey = new Set(monthPays.filter((p) => p.status === "PAID").map((p) => k(p.guideId, p.date, p.slotIdx)));
+  const settledGuides = new Set(monthPayroll.filter((p) => p.status === "paid").map((p) => p.guideId));
+
+  // Reports pending: a tour that has started (past days, or today once its slot time
+  // has passed) with no end-tour report yet.
+  const reported = new Set(pastReports.map((r) => k(r.guideId, r.date, r.slotIdx)));
+  const reportsPending = pastAssigns.filter((a) =>
+    !reported.has(k(a.guideId, a.date, a.slotIdx)) && (a.date < today || nowMin >= startMin(a.slotIdx))).length;
+
+  // Guide expense reports awaiting the operator's cross-check (tour not yet paid;
+  // a current-month sheet also counts as settled once the month's payroll is paid).
+  let expensesToReviewTotal = 0;
+  const reviewRows = reviewSheets.filter((s) =>
+    !paidKey.has(k(s.guideId, s.date, s.slotIdx)) && !(s.date >= mStart && settledGuides.has(s.guideId)));
+  for (const s of reviewRows) expensesToReviewTotal += ((s.guideExpenses as unknown as Expense[]) ?? []).reduce((t, e) => t + expenseAmount(e), 0);
+
+  // Guide payable this month: every assigned/sheeted tour not yet paid, at the job
+  // sheet's computed payout (standard fee when no sheet — same rule as the payroll).
+  const sheetByKey = new Map(monthSheets.map((s) => [k(s.guideId, s.date, s.slotIdx), s]));
+  const payableKeys = new Map<string, { guideId: string }>();
+  for (const a of monthAssigns) payableKeys.set(k(a.guideId, a.date, a.slotIdx), a);
+  for (const s of monthSheets) payableKeys.set(k(s.guideId, s.date, s.slotIdx), s);
+  let payableTotal = 0; const payableGuides = new Set<string>(); let payableTours = 0;
+  for (const [kk, v] of payableKeys) {
+    if (paidKey.has(kk) || settledGuides.has(v.guideId)) continue;
+    const sheet = sheetByKey.get(kk);
+    const gf = sheet?.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? (sheet.guideFee as unknown as GuideFee) : DEFAULT_GUIDE_FEE;
+    const t = computeTotals((sheet?.expenses as unknown as Expense[]) ?? [], gf);
+    if (t.grandTotal <= 0) continue;
+    payableTotal += t.grandTotal; payableGuides.add(v.guideId); payableTours += 1;
+  }
+
+  // PEAK refs on this month's PAID tours: recorded vs still missing.
+  const paidRows = monthPays.filter((p) => p.status === "PAID" && p.date >= mStart);
+  const peakSynced = paidRows.filter((p) => !!p.peakRef).length;
+
+  return {
+    reportsPending,
+    finance: {
+      expensesToReview: { count: reviewRows.length, total: money2(expensesToReviewTotal) },
+      guidePayable: { total: money2(payableTotal), guides: payableGuides.size, tours: payableTours },
+      batches: {
+        open: openBatches.length,
+        openTotal: money2(openBatches.reduce((s, b) => s + b.totalAmount, 0)),
+        latestOpenNo: openBatches[0]?.batchNo ?? null,
+        paidWeekTotal: money2(paidBatches._sum.totalAmount ?? 0),
+        paidWeekCount: paidBatches._count,
+      },
+      peak: { synced: peakSynced, pendingRef: paidRows.length - peakSynced },
+    },
+  };
 }
