@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     return new Date(createdAt).getTime() <= new Date(st.paidAt).getTime();
   };
 
-  type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; reviewReward: number; paid: boolean; paidAt: Date | null; slip: string | null };
+  type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; fee: number; expenses: number; reviewReward: number; paid: boolean; paidAt: Date | null; slip: string | null };
   const monthMap: Record<string, Tour[]> = {};
   const seen = new Set<string>();
   const addTour = (date: string, slotIdx: number, tourId: string | null, ref: string | null, expenses: unknown, guideFee: unknown, createdAt: Date) => {
@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
     const pp = payOf.get(k);
     const paid = covered || pp?.status === "PAID";
     const slip = pp?.eslipUrl ?? (covered ? statusOfPeriod(period)?.eslipUrl ?? null : null);
-    (monthMap[period] ??= []).push({ date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "", tour: tName(tourId), ref, amount: r2(t.grandTotal), reviewReward, paid, paidAt: pp?.paidAt ?? statusOfPeriod(period)?.paidAt ?? null, slip });
+    (monthMap[period] ??= []).push({ date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "", tour: tName(tourId), ref, amount: r2(t.grandTotal), fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses), reviewReward, paid, paidAt: pp?.paidAt ?? statusOfPeriod(period)?.paidAt ?? null, slip });
   };
 
   for (const a of assigns) { const s = sheetOf.get(`${a.date}|${a.slotIdx}`); addTour(a.date, a.slotIdx, a.tourId, s?.ref ?? null, s?.expenses, s?.guideFee, a.createdAt); }
@@ -82,6 +82,10 @@ export async function GET(req: NextRequest) {
   const yearTotal = r2(months.reduce((s, m) => s + m.total, 0));
   const thisPeriod = today.slice(0, 7);
   const paidThisMonth = r2((monthMap[thisPeriod] ?? []).filter((x) => x.paid).reduce((s, x) => s + x.amount, 0));
+  // What the guide is still waiting on, across the whole window shown.
+  const unpaid = Object.values(monthMap).flat().filter((x) => !x.paid);
+  const pendingTotal = r2(unpaid.reduce((s, x) => s + x.amount, 0));
+  const pendingCount = unpaid.length;
 
-  return NextResponse.json({ months, yearTotal, paidThisMonth, guideId, all });
+  return NextResponse.json({ months, yearTotal, paidThisMonth, pendingTotal, pendingCount, guideId, all });
 }

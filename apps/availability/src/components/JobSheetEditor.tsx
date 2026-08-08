@@ -481,8 +481,8 @@ export default function JobSheetEditor() {
         {/* Guide / tour block (auto-filled from profile) */}
         <div className="js-guide">
           <div><span>Tour Date</span><b>{date}</b></div>
-          <div><span>Time</span><b style={{ color: "#1b4ef0" }}>{SLOT_TIMES[sheet.slotIdx] ?? tour?.time ?? ""}</b></div>
-          <div><span>Tour Name</span><b style={{ color: "#1b4ef0" }}>{tour?.name || ""}</b></div>
+          <div><span>Time</span><b style={{ color: "var(--primary)" }}>{SLOT_TIMES[sheet.slotIdx] ?? tour?.time ?? ""}</b></div>
+          <div><span>Tour Name</span><b style={{ color: "var(--primary)" }}>{tour?.name || ""}</b></div>
           <div><span>Guide name</span>{header?.name || ""}</div>
           <div><span>Tax ID</span>{header?.taxId || "—"}</div>
           <div><span>Address</span>{header?.address || "—"}</div>
