@@ -67,13 +67,15 @@ export async function GET(req: NextRequest) {
   // the report flow. Slip = per-tour e-slip, else the monthly batch slip.
   const period = date.slice(0, 7);
   const [tourPay, payroll] = await Promise.all([
-    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true } }),
-    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true } }),
+    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
   ]);
   const payment = {
     paid: tourPay?.status === "PAID" || payroll?.status === "paid",
     paidAt: tourPay?.paidAt ?? payroll?.paidAt ?? null,
     slip: tourPay?.eslipUrl ?? payroll?.eslipUrl ?? null,
+    status: tourPay?.status ?? (payroll?.status === "paid" ? "PAID" : null), // per-tour state for the finance sidebar
+    peakRef: tourPay?.peakRef ?? payroll?.peakRef ?? null, // accounting ref (recorded on Payments)
   };
 
   // Collapse repeated guests to a single row — the same booking must appear only once

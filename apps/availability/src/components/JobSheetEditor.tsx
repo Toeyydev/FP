@@ -45,10 +45,11 @@ export default function JobSheetEditor() {
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
   const [checkedIn, setCheckedIn] = useState(false);
-  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null } | null>(null); // paid state + slip (from the operator)
+  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
+  const [secTab, setSecTab] = useState<"all" | "details" | "expenses" | "fee">("all"); // operator section tabs — "all" keeps the classic single-scroll sheet
   const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
@@ -442,7 +443,21 @@ export default function JobSheetEditor() {
       })()}
 
       {(canEdit || showFull) && (
+      <div className="js-detail-grid">
       <section className="panel js-sheet" style={{ padding: 18 }}>
+       {/* Section tabs — "All" is the classic single-scroll sheet (default, so the
+           existing workflow is unchanged); the others focus one part of the job. */}
+       <div className="subtabs no-print" style={{ marginBottom: 14 }}>
+         {([["all", "All"], ["details", "Job details"], ["expenses", "Expenses"], ["fee", "Fee & summary"]] as const).map(([k, l]) => (
+           <button key={k} type="button" className={`subtab${secTab === k ? " active" : ""}`} onClick={() => setSecTab(k)}>{l}</button>
+         ))}
+       </div>
+       {/* Financial summary — live from the same computeTotals the payout uses. */}
+       <div className="kpi-row no-print" style={{ marginBottom: 14 }}>
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(t.netGuideFee)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(t.totalExpenses)}</b><span>Reimbursement</span></div>
+         <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(t.grandTotal)}</b><span>Guide payable</span></div>
+       </div>
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
         <div className="js-head">
@@ -476,6 +491,7 @@ export default function JobSheetEditor() {
         </div>
 
         {/* Job details */}
+        <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details</h3>
         <table className="js-table">
           <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th>Booked Pax</th><th>Actual Pax</th><th>Tickets</th><th className="no-print" /></tr></thead>
@@ -500,8 +516,10 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
+        </div>
 
         {/* Expenses */}
+        <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense</h3>
         <table className="js-table">
           <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print">Receipt</th><th className="no-print" /></tr></thead>
@@ -589,7 +607,10 @@ export default function JobSheetEditor() {
           );
         })()}
 
+        </div>
+
         {/* Guide fee */}
+        <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide</h3>
         <table className="js-table">
           <thead><tr><th>Description</th><th>Price</th><th></th><th>Time</th><th>WHT %</th><th>WHT</th><th>Net</th></tr></thead>
@@ -612,10 +633,11 @@ export default function JobSheetEditor() {
           <div><span>Net Guide Fee</span><b>{thb(t.netGuideFee)}</b></div>
           <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
         </div>
+        </div>
 
         {/* Internal operations note — operator-only, never shown to the guide */}
         {canEdit && (
-          <div className="no-print" style={{ marginTop: 16 }}>
+          <div className="no-print" style={{ marginTop: 16, display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
             <h3 className="js-section" style={{ background: "#eaf1ff" }}>Internal note</h3>
             <textarea value={sheet.operatorNote ?? ""} maxLength={2000} onChange={(e) => up({ operatorNote: e.target.value })} rows={3} placeholder="e.g. Confirm van with supplier · guest paid deposit only" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, padding: "8px 10px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
             <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>Internal operations note — not shown to the guide. Remember to Save.</div>
@@ -623,6 +645,50 @@ export default function JobSheetEditor() {
         )}
        </fieldset>
       </section>
+
+      {/* Finance / accounting side panel — operator-only snapshot of where this job
+          stands on the money side. Read state lives here; money ACTIONS stay on
+          their own screens (Payments / Payment batches). */}
+      {canEdit && (
+        <aside className="panel no-print js-fin-side" style={{ padding: "14px 16px" }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>Finance & accounting</h3>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>Approval</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              {isApproved(sheet.approvalStatus)
+                ? <span className="badge active">✓ Approved</span>
+                : <span className="badge muted">Not approved</span>}
+              <button className="btn sm" disabled={busy} onClick={toggleApprove}>{isApproved(sheet.approvalStatus) ? "Unapprove" : "Approve"}</button>
+            </div>
+            {sheet.approvedAt && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 3 }}>{new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>Payment</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              {payment?.paid
+                ? <span className="badge active">✓ Paid</span>
+                : payment?.status === "APPROVED"
+                  ? <span className="badge pending">Approved</span>
+                  : <span className="badge muted">Pending</span>}
+              {payment?.paidAt && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+              {payment?.slip && <a href={payment.slip} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>Slip</a>}
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 5 }}>Payable <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(t.grandTotal)}</b></div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
+            {payment?.peakRef
+              ? <div style={{ marginTop: 4, fontFamily: "monospace", fontSize: 12.5, fontWeight: 700 }}>{payment.peakRef}</div>
+              : <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>No expense ref yet — recorded when the payout is posted (Payments).</div>}
+          </div>
+
+          <a className="btn sm" href="/payments" style={{ display: "inline-block" }}>Open Payments</a>
+        </aside>
+      )}
+      </div>
       )}
     </div>
   );
