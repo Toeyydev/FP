@@ -40,6 +40,25 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // the row so the operator can record it before paying the guide's jobs together.
   const [payRef, setPayRef] = useState<Record<string, string>>({});
   const toggle = (gid: string) => setOpen((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
+  // Batch flow: tick guides → review the total → create ONE payment batch from all
+  // their unpaid jobs (server snapshots the amounts; already-batched jobs are
+  // skipped and reported by the API — a payable can't sit in two active batches).
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const toggleSel = (gid: string) => setSel((s) => { const n = new Set(s); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
+  async function createBatchFromSelection(guides: Row[]) {
+    const items = guides.filter((r) => sel.has(r.guideId)).flatMap((r) => r.jobs.filter((j) => !j.paid).map((j) => ({ guideId: r.guideId, date: j.date, slotIdx: j.slotIdx })));
+    if (!items.length) return;
+    setBatchBusy(true);
+    const r = await fetch("/api/payment-batches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items }) });
+    const d = await r.json().catch(() => ({}));
+    setBatchBusy(false);
+    if (!r.ok) { alert(d.error === "no-eligible-items" ? "None of those jobs are eligible — already paid or already in a batch." : "Couldn't create the batch."); return; }
+    setSel(new Set());
+    if (confirm(`Batch ${d.batchNo} created — ${d.added} job${d.added === 1 ? "" : "s"} · ${thb(d.total)}${d.skipped?.length ? ` (${d.skipped.length} already in another batch, skipped)` : ""}.\n\nOpen Payment batches to review and pay it?`)) {
+      window.location.href = "/payment-batches";
+    } else load(period);
+  }
   // Mark a single tour paid/unpaid (per-tour TourPayment via the /pay endpoint).
   async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING", peakRef?: string) {
     const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status, ...(peakRef ? { peakRef } : {}) }) });
@@ -293,31 +312,40 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   function renderGuideRow(r: Row, jobs: Job[], mode: "unpaid" | "paid") {
     const okey = `${mode}|${r.guideId}`;
     const isOpen = open.has(okey);
-    const refs = [...new Set(jobs.map((j) => j.peakRef).filter(Boolean))];
+    // PEAK stays in the background on the main row: a compact recorded-vs-total
+    // count; the actual EXP- refs live in the expanded job rows.
+    const refd = jobs.filter((j) => j.peakRef).length;
     return (
       <Fragment key={okey}>
-        <tr style={{ cursor: "pointer", background: mode === "unpaid" ? "#fbf4e8" : undefined }} onClick={() => toggle(okey)}>
+        <tr style={{ cursor: "pointer" }} onClick={() => toggle(okey)}>
+          <td onClick={(e) => e.stopPropagation()} style={{ width: 30, textAlign: "center" }}>
+            {mode === "unpaid" && canEdit
+              ? <input type="checkbox" checked={sel.has(r.guideId)} onChange={() => toggleSel(r.guideId)} title="Select for a payment batch" />
+              : null}
+          </td>
           <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{isOpen ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
           <td className="r">{jobs.length}</td>
           <td className="r">{thb(sumBy(jobs, "fee"))}</td>
           <td className="r">{thb(sumBy(jobs, "expenses"))}</td>
           <td className="r"><b>{thb(sumBy(jobs, "amount"))}</b></td>
-          <td style={{ fontSize: 11.5, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} onClick={(e) => e.stopPropagation()}>
-            {mode === "unpaid" && canEdit && jobs.length > 1
-              ? <input className="peak-ref-in" value={payRef[r.guideId] ?? ""} placeholder="EXP-…" title={`PEAK ref for paying ${jobs.length} jobs together`} onChange={(e) => setPayRef((p) => ({ ...p, [r.guideId]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && (payRef[r.guideId] ?? "").trim()) payBatch(r.guideId, jobs); }} />
-              : refs.join(", ")}
+          <td>
+            {mode === "paid"
+              ? (refd === jobs.length
+                  ? <span className="ob ok" title="Every job in this payout has its PEAK expense ref recorded">✓ PEAK {refd}/{jobs.length}</span>
+                  : <span className="ob warn" title="Some paid jobs have no PEAK expense ref yet — open the row to record them">⚠ {refd}/{jobs.length} ref&rsquo;d</span>)
+              : <span className="ob mut">—</span>}
           </td>
           <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>
           <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
-            {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">E-slip</a>}
+            {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">View slip</a>}
             {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
-            {mode === "unpaid" && canEdit && jobs.length > 0 && <button className="btn sm primary" title={`Pay ${jobs.length} job${jobs.length === 1 ? "" : "s"} together and tag them with the PEAK ref`} onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length}</button>}
-            {mode === "unpaid" && canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload payment slip — marks this guide's month paid">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
+            {mode === "unpaid" && canEdit && jobs.length > 0 && <button className="btn sm primary" title={`Pay ${jobs.length} job${jobs.length === 1 ? "" : "s"} together in one transfer`} onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length}</button>}
+            {mode === "unpaid" && canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Record the transfer: upload the payment slip — marks this guide's month paid">Record transfer<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
             {mode === "paid" && canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace the uploaded slip">Replace slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
           </td>
         </tr>
         {isOpen && (
-          <tr className="pay-jobs-row"><td colSpan={8} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+          <tr className="pay-jobs-row"><td colSpan={9} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
             {mode === "unpaid" && canEdit && jobs.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
               <button className="btn sm primary" title="Mark these jobs paid in one transfer and tag them all with one PEAK ref" onClick={() => payBatch(r.guideId, jobs)}>Pay {jobs.length} job{jobs.length === 1 ? "" : "s"} together · one ref</button>
               <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {jobs.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, jobs, f); e.target.value = ""; }} /></label>
@@ -374,8 +402,6 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const paidAmt = allJobs.filter((j) => j.paid).reduce((sum, j) => sum + (j.amount || 0), 0);
   const unpaidJobs = allJobs.filter((j) => !j.paid);
   const outstanding = unpaidJobs.reduce((sum, j) => sum + (j.amount || 0), 0);
-  const paidFrac = totals.payout > 0 ? paidAmt / totals.payout : 0;
-  const DC = 2 * Math.PI * 42; // donut circumference (r=42)
 
   return (
     <div className="wrap">
@@ -387,33 +413,23 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
 
-      <section className="panel" style={{ marginBottom: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12, padding: 14 }}>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(totals.payout)}</div><div className="pay-kpi-l">Total payout</div></div>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: "var(--green)" }}>{thb(paidAmt)}</div><div className="pay-kpi-l">Paid</div></div>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800, color: outstanding > 0 ? "#b45309" : "var(--ink-soft)" }}>{thb(outstanding)}</div><div className="pay-kpi-l">Pending{unpaidJobs.length ? ` · ${unpaidJobs.length} job${unpaidJobs.length === 1 ? "" : "s"}` : ""}</div></div>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{rows.length}</div><div className="pay-kpi-l">Guides</div></div>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{totals.tours}</div><div className="pay-kpi-l">Job sheets</div></div>
-          <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(totals.expenses)}</div><div className="pay-kpi-l">Expenses</div></div>
-          {bonuses.total > 0 && <div className="pay-kpi"><div style={{ fontSize: 21, fontWeight: 800 }}>{thb(bonuses.total)}</div><div className="pay-kpi-l">Bonuses</div></div>}
+      {/* Payment execution at a glance: who needs paying, how much, done or not.
+          Pending payment carries the emphasis; paid-to-date is a footnote. */}
+      <div className="kpi-row" style={{ marginBottom: 4 }}>
+        <div className={`kpi${outstanding > 0 ? " warn" : " ok"}`} style={{ gridColumn: "span 2" }}>
+          <b style={{ fontSize: 26, fontVariantNumeric: "tabular-nums" }}>{thb(outstanding)}</b>
+          <span>Pending payment</span>
+          {outstanding > 0 && <small className="kpi-sub">this month · not yet transferred</small>}
         </div>
-        {rows.length > 0 && (
-          <div style={{ display: "flex", justifyContent: "center", gap: 30, flexWrap: "wrap", padding: "4px 16px 18px", alignItems: "center" }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <svg viewBox="0 0 100 100" width="150" height="150" role="img" aria-label="Paid vs pending">
-                <circle cx="50" cy="50" r="42" fill="none" stroke="#e8b06b" strokeWidth="15" />
-                <circle cx="50" cy="50" r="42" fill="none" stroke="var(--green, #1a7f37)" strokeWidth="15" strokeLinecap="round" strokeDasharray={`${paidFrac * DC} ${DC}`} transform="rotate(-90 50 50)" />
-                <text x="50" y="49" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--ink, #222)">{Math.round(paidFrac * 100)}%</text>
-                <text x="50" y="63" textAnchor="middle" fontSize="8" fill="var(--ink-soft, #888)">paid</text>
-              </svg>
-              <div style={{ display: "flex", gap: 14, fontSize: 12.5, flexWrap: "wrap", justifyContent: "center" }}>
-                <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "var(--green)" }}>●</span> Paid <b style={{ color: "var(--ink)" }}>{thb(paidAmt)}</b></span>
-                <span style={{ color: "var(--ink-soft)" }}><span style={{ color: "#e8b06b" }}>●</span> Pending <b style={{ color: "var(--ink)" }}>{thb(outstanding)}</b></span>
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
+        <div className="kpi"><b>{unpaidGuides.length}</b><span>Guides to pay</span></div>
+        <div className="kpi"><b>{unpaidJobs.length}</b><span>Jobs</span></div>
+        <div className="kpi"><b style={{ fontSize: 20, fontVariantNumeric: "tabular-nums" }}>{thb(unpaidJobs.reduce((s, j) => s + (j.expenses || 0), 0))}</b><span>Reimbursements</span></div>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--ink-soft)", padding: "0 2px", marginBottom: 12 }}>
+        Paid so far this month: <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(paidAmt)}</b>
+        {bonuses.total > 0 && <> · bonuses <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(bonuses.total)}</b></>}
+        {" "}· month total {thb(totals.payout)} across {totals.tours} job{totals.tours === 1 ? "" : "s"}
+      </div>
 
       <section className="panel">
         <div className="op-toolbar" style={{ gap: 10 }}>
@@ -429,6 +445,21 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           <button className="btn sm" onClick={exportPendingPdf} title="Print-ready list of every unpaid job, grouped by guide — Save as PDF">Export pending PDF</button>
           <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600 }}>Month total: {thb(totals.payout)}</span>
         </div>
+        {canEdit && sel.size > 0 && (() => {
+          const chosen = unpaidGuides.filter((r) => sel.has(r.guideId));
+          const jobsN = chosen.reduce((s, r) => s + r.jobs.filter((j) => !j.paid).length, 0);
+          const total = chosen.reduce((s, r) => s + r.jobs.filter((j) => !j.paid).reduce((a, j) => a + j.amount, 0), 0);
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "9px 14px", background: "var(--green-bg)", borderTop: "1px solid var(--green-line)", borderBottom: "1px solid var(--green-line)", fontSize: 13 }}>
+              <b>{chosen.length} guide{chosen.length === 1 ? "" : "s"} selected</b>
+              <span style={{ color: "var(--ink-soft)" }}>{jobsN} job{jobsN === 1 ? "" : "s"} · <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(total)}</b></span>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <button className="btn sm ghost" onClick={() => setSel(new Set())}>Clear</button>
+                <button className="btn sm primary" disabled={batchBusy} title="Group these guides' unpaid jobs into ONE payment batch — amounts snapshotted server-side; a job can't sit in two batches" onClick={() => createBatchFromSelection(unpaidGuides)}>{batchBusy ? "Creating…" : `Create payment batch (${thb(total)})`}</button>
+              </span>
+            </div>
+          );
+        })()}
         <div className="grid-scroll">
           {statusFilter === "pending" ? (
           <table className="acct-table pay-table">
@@ -460,21 +491,22 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           ) : (
           <table className="acct-table pay-table">
             <thead>
-              <tr><th>Guide</th><th className="r">Tours</th><th className="r">Guide fee (net)</th><th className="r">Expenses</th><th className="r">Total payout</th><th>PEAK ref</th><th>Status</th><th></th></tr>
+              <tr><th style={{ width: 30 }} /><th>Guide</th><th className="r">Jobs</th><th className="r">Guide fee</th><th className="r">Reimbursement</th><th className="r">Payable</th><th>PEAK</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
-                <tr><td colSpan={8} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
+                <tr><td colSpan={9} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
               ) : (<>
-                {unpaidGuides.length > 0 && <tr><td colSpan={8} onClick={() => toggleSec("unpaid")} style={{ cursor: "pointer", padding: "8px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "#b45309", background: "#fbf4e8" }}>{hideSec.has("unpaid") ? "▸" : "▾"} Unpaid — needs payment ({unpaidGuides.length}) · {thb(unpaidGuides.reduce((s, r) => s + r.jobs.filter((j) => !j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
+                {unpaidGuides.length > 0 && <tr><td colSpan={9} onClick={() => toggleSec("unpaid")} style={{ cursor: "pointer", padding: "8px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--assign)" }}>{hideSec.has("unpaid") ? "▸" : "▾"} Unpaid — needs payment ({unpaidGuides.length}) · {thb(unpaidGuides.reduce((s, r) => s + r.jobs.filter((j) => !j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
                 {!hideSec.has("unpaid") && unpaidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => !j.paid), "unpaid"))}
-                {paidGuides.length > 0 && <tr><td colSpan={8} onClick={() => toggleSec("paid")} style={{ cursor: "pointer", padding: "12px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>{hideSec.has("paid") ? "▸" : "▾"} Paid ({paidGuides.length}) · {thb(paidGuides.reduce((s, r) => s + r.jobs.filter((j) => j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
+                {paidGuides.length > 0 && <tr><td colSpan={9} onClick={() => toggleSec("paid")} style={{ cursor: "pointer", padding: "12px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>{hideSec.has("paid") ? "▸" : "▾"} Paid ({paidGuides.length}) · {thb(paidGuides.reduce((s, r) => s + r.jobs.filter((j) => j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
                 {!hideSec.has("paid") && paidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => j.paid), "paid"))}
               </>)}
             </tbody>
             {visible.length > 0 && (
               <tfoot>
                 <tr className="pay-foot">
+                  <td />
                   <td><b>{statusFilter !== "all" || ql ? `Shown (${visible.length} of ${rows.length})` : `Total (${rows.length} guides)`}</b></td>
                   <td className="r">{vTotals.tours}</td>
                   <td className="r">{thb(vTotals.netFee)}</td>
