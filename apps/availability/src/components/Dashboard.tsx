@@ -20,7 +20,16 @@ type Understaffed = { date: string; slotIdx: number; time: string; tour: string;
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
 type Orphaned = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number; count: number };
 type Leave = { id: string; guideId: string; guide: string; fromDate: string; toDate: string; reason: string | null };
-type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[] };
+type Finance = {
+  expensesToReview: { count: number; total: number };
+  guidePayable: { total: number; guides: number; tours: number };
+  batches: { open: number; openTotal: number; latestOpenNo: string | null; paidWeekTotal: number; paidWeekCount: number };
+  peak: { synced: number; pendingRef: number };
+};
+type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[]; reportsPending?: number; finance?: Finance };
+
+// Compact baht for KPI cards — whole-baht, no decimals (the tables keep 2dp via thb).
+const thb0 = (v: number) => `฿${Math.round(v).toLocaleString("en-US")}`;
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -30,6 +39,15 @@ function Kpi({ n, label, tone = "", sub, onClick }: { n: number; label: string; 
       <b>{n}</b><span>{label}</span>{sub ? <small className="kpi-sub">{sub}</small> : null}
     </div>
   );
+}
+
+// A KPI whose headline is a formatted string (e.g. ฿24,800) instead of a count.
+// Same .kpi visual; `hot` applies the tone even though the value isn't numeric.
+function MoneyKpi({ v, label, tone = "", hot = false, sub, href }: { v: string; label: string; tone?: string; hot?: boolean; sub?: string; href?: string }) {
+  const body = <><b style={{ fontVariantNumeric: "tabular-nums" }}>{v}</b><span>{label}</span>{sub ? <small className="kpi-sub">{sub}</small> : null}</>;
+  return href
+    ? <a className={`kpi ${hot ? tone : ""} kpi-click`} href={href} style={{ textDecoration: "none", color: "inherit" }}>{body}</a>
+    : <div className={`kpi ${hot ? tone : ""}`}>{body}</div>;
 }
 
 // Google Drive connection — where job sheets + e-slips are saved. A visible button
@@ -188,6 +206,18 @@ export default function Dashboard() {
             {orphaned.length > 0 && <Kpi n={orphaned.length} label="Orphaned" tone="bad" onClick={() => jumpTo("attention")} />}
             <Kpi n={d.upcomingTours.length} label="Upcoming · 7d" onClick={() => jumpTo("upcoming", "upcoming")} />
           </div>
+
+          {/* Money band — follow-ups & payables, all computed server-side. */}
+          {d.finance && (
+            <div className="kpi-row">
+              <MoneyKpi v={String(d.reportsPending ?? 0)} label="Reports pending" tone="warn" hot={(d.reportsPending ?? 0) > 0} sub="awaiting end-tour report" href="/tour-log" />
+              <MoneyKpi v={String(d.finance.expensesToReview.count)} label="Expenses to review" tone="warn" hot={d.finance.expensesToReview.count > 0} sub={d.finance.expensesToReview.count ? thb0(d.finance.expensesToReview.total) : undefined} href="/payments" />
+              <MoneyKpi v={thb0(d.finance.guidePayable.total)} label="Guide payable" sub={d.finance.guidePayable.guides ? `${d.finance.guidePayable.guides} guide${d.finance.guidePayable.guides === 1 ? "" : "s"} · ${d.finance.guidePayable.tours} tour${d.finance.guidePayable.tours === 1 ? "" : "s"}` : "all settled"} href="/payments" />
+              <MoneyKpi v={String(d.finance.batches.open)} label="Open batches" tone="warn" hot={d.finance.batches.open > 0} sub={d.finance.batches.open ? `${thb0(d.finance.batches.openTotal)}${d.finance.batches.latestOpenNo ? ` · ${d.finance.batches.latestOpenNo}` : ""}` : undefined} href="/payment-batches" />
+              <MoneyKpi v={thb0(d.finance.batches.paidWeekTotal)} label="Batches paid · 7d" sub={d.finance.batches.paidWeekCount ? `${d.finance.batches.paidWeekCount} batch${d.finance.batches.paidWeekCount === 1 ? "" : "es"}` : undefined} href="/payment-batches" />
+              <MoneyKpi v={`${d.finance.peak.synced}`} label="PEAK refs" tone="warn" hot={d.finance.peak.pendingRef > 0} sub={d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} paid without ref` : "all recorded"} href="/payments" />
+            </div>
+          )}
 
           <div className="dash-main">
             <section className="panel">

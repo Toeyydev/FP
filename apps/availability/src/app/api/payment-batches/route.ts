@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { canViewFinance, isOps } from "@/lib/roles";
-import { nextBatchNo, payoutSnapshot, money2, isBatchStatus } from "@/lib/payment-batch";
+import { nextBatchNo, payoutSnapshot, money2, isBatchStatus, batchPaidAction } from "@/lib/payment-batch";
 
 export const dynamic = "force-dynamic";
 
@@ -90,9 +90,11 @@ export async function POST(req: NextRequest) {
 }
 
 // PATCH { id, status?, paymentDate?, note?, removeItemId? } — operator/admin only.
-// Update batch lifecycle/metadata, or remove one item. Marking PAID stamps paidAt and
-// flips each item to PAID (self-contained; wiring to TourPayment is a follow-up). The
-// total is recomputed from the surviving items — never a client-supplied total.
+// Update batch lifecycle/metadata, or remove one item. Marking PAID settles the
+// member tours: each TourPayment flips to PAID stamped with this batch's number —
+// UNLESS the tour was already paid by another route (slip / manual / another batch),
+// which is skipped and reported, never re-settled. Un-marking reverts ONLY the tours
+// carrying this batch's number. Totals recomputed server-side, never client-supplied.
 export async function PATCH(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -118,18 +120,52 @@ export async function PATCH(req: NextRequest) {
   const data: Record<string, unknown> = {};
   if (paymentDate !== undefined) data.paymentDate = paymentDate;
   if (note !== undefined) data.note = note?.trim() || null;
+  let settled: { flipped: number; skippedPaid: { guideId: string; date: string; slotIdx: number }[] } | null = null;
   if (status) {
     data.status = status;
-    if (status === "PAID") { data.paidAt = new Date(); await prisma.paymentBatchItem.updateMany({ where: { batchId: id }, data: { paymentStatus: "PAID" } }); }
-    else { data.paidAt = null; await prisma.paymentBatchItem.updateMany({ where: { batchId: id }, data: { paymentStatus: "PENDING" } }); }
+    const wasPaid = existing.status === "PAID";
+    if (status === "PAID" && !wasPaid) {
+      // Settle the member tours. Skip (and report) any tour already PAID by another
+      // route so a batch can never silently re-settle someone else's payment.
+      const items = await prisma.paymentBatchItem.findMany({ where: { batchId: id }, select: { guideId: true, date: true, slotIdx: true, tourId: true } });
+      const pays = items.length ? await prisma.tourPayment.findMany({
+        where: { OR: items.map((it) => ({ guideId: it.guideId, date: it.date, slotIdx: it.slotIdx })) },
+        select: { guideId: true, date: true, slotIdx: true, status: true, paidBatchNo: true },
+      }) : [];
+      const now = new Date();
+      settled = { flipped: 0, skippedPaid: [] };
+      for (const it of items) {
+        const ex = pays.find((p) => p.guideId === it.guideId && p.date === it.date && p.slotIdx === it.slotIdx) ?? null;
+        if (batchPaidAction(ex, existing.batchNo) === "skip") { settled.skippedPaid.push({ guideId: it.guideId, date: it.date, slotIdx: it.slotIdx }); continue; }
+        await prisma.tourPayment.upsert({
+          where: { guideId_date_slotIdx: { guideId: it.guideId, date: it.date, slotIdx: it.slotIdx } },
+          create: { guideId: it.guideId, date: it.date, slotIdx: it.slotIdx, tourId: it.tourId, status: "PAID", paidAt: now, paidBatchNo: existing.batchNo },
+          update: { status: "PAID", paidAt: now, paidBatchNo: existing.batchNo },
+        });
+        settled.flipped += 1;
+      }
+      data.paidAt = now;
+      await prisma.paymentBatchItem.updateMany({ where: { batchId: id }, data: { paymentStatus: "PAID" } });
+    } else if (status !== "PAID" && wasPaid) {
+      // Undo: revert ONLY the tours this batch settled (provenance = our batchNo).
+      // A tour paid via a slip / manually / by another batch is never touched.
+      await prisma.tourPayment.updateMany({ where: { paidBatchNo: existing.batchNo, status: "PAID" }, data: { status: "PENDING", paidAt: null, paidBatchNo: null } });
+      data.paidAt = null;
+      await prisma.paymentBatchItem.updateMany({ where: { batchId: id }, data: { paymentStatus: "PENDING" } });
+    } else if (status !== "PAID") {
+      // Non-paid → non-paid transition (e.g. DRAFT → READY): nothing to settle.
+      data.paidAt = null;
+      await prisma.paymentBatchItem.updateMany({ where: { batchId: id }, data: { paymentStatus: "PENDING" } });
+    }
+    // status === "PAID" && wasPaid: already settled — leave paidAt and the tours alone.
   }
   if (removeItemId) {
     const agg = await prisma.paymentBatchItem.aggregate({ where: { batchId: id }, _sum: { totalPayable: true } });
     data.totalAmount = money2(agg._sum.totalPayable ?? 0);
   }
   const batch = await prisma.paymentBatch.update({ where: { id }, data, include: { _count: { select: { items: true } } } });
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payment_batch.updated", entityType: "PaymentBatch", entityId: id, detail: { batchNo: existing.batchNo, status: batch.status, removedItem: removeItemId ?? null } });
-  return NextResponse.json({ ok: true, id, status: batch.status, totalAmount: batch.totalAmount, items: batch._count.items });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payment_batch.updated", entityType: "PaymentBatch", entityId: id, detail: { batchNo: existing.batchNo, status: batch.status, removedItem: removeItemId ?? null, settled: settled ? { flipped: settled.flipped, skippedPaid: settled.skippedPaid.length } : undefined } });
+  return NextResponse.json({ ok: true, id, status: batch.status, totalAmount: batch.totalAmount, items: batch._count.items, settled });
 }
 
 // DELETE { id } — operator/admin only. Remove a batch; cascade-deletes its items,

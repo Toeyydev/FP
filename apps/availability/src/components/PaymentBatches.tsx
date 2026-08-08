@@ -89,6 +89,7 @@ export default function PaymentBatches({ canEdit }: { canEdit: boolean }) {
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg(d.hint || (d.error === "paid-locked" ? "A paid batch is locked." : "Update failed.")); return; }
+    if (d.settled) setMsg(`${d.settled.flipped} tour${d.settled.flipped === 1 ? "" : "s"} marked paid${d.settled.skippedPaid?.length ? ` · ${d.settled.skippedPaid.length} already paid elsewhere — left as-is` : ""}.`);
     await openDetail(id); await load();
   }
 
