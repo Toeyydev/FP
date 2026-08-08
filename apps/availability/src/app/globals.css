@@ -942,3 +942,113 @@ body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
 .js-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; }
 .js-fin-side { position: sticky; top: 12px; }
 @media (max-width: 1100px) { .js-detail-grid { grid-template-columns: 1fr; } .js-fin-side { position: static; } }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   OPERATOR SHELL THEME — neutral SaaS look (Linear/Stripe-like), Folkpaths green.
+   Scoped to .op-layout so GUIDE-facing screens keep the original identity.
+   Pure re-skin: overrides tokens + component styles, no structural CSS removed.
+   ════════════════════════════════════════════════════════════════════════════ */
+body:has(.op-layout){background:#F7F7F5}
+body:has(.op-layout) .wrap{max-width:1440px}
+.op-layout{
+  --ink:#18181B;--ink-soft:#71717A;--paper:#F7F7F5;--card:#FFFFFF;
+  --line:#E5E7EB;--line-strong:#D4D4D8;
+  --primary:#0E3B2E;--accent:#0E3B2E;
+  --green:#0E7A43;--green-bg:#EAF4EF;--green-line:#CBE5D6;
+  --assign:#8A5A0D;--assign-bg:#FBF4E4;--assign-line:#EADFC3;
+  --danger:#B3402F;--danger-bg:#FBEDEA;--danger-line:#EFCFC7;
+  --grey:#A1A1AA;--grey-bg:#F4F4F5;
+  --ok-bg:#EAF4EF;--ok-line:#CBE5D6;
+  --shadow-sm:0 1px 2px rgba(24,24,27,.04);
+  --shadow:0 1px 3px rgba(24,24,27,.06);
+  --shadow-lg:0 10px 30px -12px rgba(24,24,27,.14);
+  --ring:0 0 0 3px rgba(14,59,46,.22);
+  color:var(--ink);
+}
+/* — Sidebar: white shell column, right hairline, no big rounded container — */
+.op-layout .op-side{flex:0 0 228px;gap:8px;background:#fff;border:none;border-right:1px solid #E5E7EB;border-radius:0;padding:14px 12px 16px 4px;min-height:76vh}
+.op-layout .op-nav{background:transparent;border:none;box-shadow:none;border-radius:0;padding:0;gap:2px}
+.op-layout > .op-nav{background:#fff;border:none;border-right:1px solid #E5E7EB;border-radius:0;box-shadow:none;padding:14px 12px 16px 4px;min-height:76vh;flex-basis:228px;gap:2px}
+.op-layout .op-nav-link{font-size:13.5px;font-weight:600;padding:8px 12px;border-radius:7px;color:#3F3F46}
+.op-layout .op-nav-link:hover{background:#F4F4F5;color:#18181B}
+.op-layout .op-nav-link.active{background:#EAF4EF;color:#0E3B2E}
+.op-layout .op-nav-group{font-size:10px;letter-spacing:.1em;color:#A1A1AA;font-weight:700;padding:14px 12px 4px}
+.op-layout .op-nav .op-home{border-bottom:1px solid #F0F0EF;margin-bottom:6px;padding-bottom:12px}
+.op-brand{display:block;text-decoration:none;padding:2px 12px 12px;border-bottom:1px solid #F0F0EF;margin-bottom:6px}
+.op-brand b{display:block;font-size:15px;letter-spacing:.06em;color:#0E3B2E;font-weight:800}
+.op-brand span{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#A1A1AA;font-weight:700;margin-top:1px}
+/* — Cards / panels: white, hairline border, quiet — */
+.op-layout .panel{background:#fff;border:1px solid #E5E7EB;border-radius:12px;box-shadow:none}
+.op-layout .panel-head{padding:12px 16px;border-bottom:1px solid #F0F0EF}
+.op-layout .panel-head h2{font-size:15.5px;font-weight:650}
+.op-layout .panel-head .hint{font-size:12px}
+/* — Page header — */
+.op-layout .page-title{font-size:25px;font-weight:650;letter-spacing:-.02em;margin:0}
+.op-layout .page-sub{font-size:13px;color:#71717A;margin-top:3px}
+.op-layout .dash-head{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:4px}
+.op-layout .dash-head-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+/* — Buttons: Folkpaths green primary, quiet secondary — */
+.op-layout .btn{border-color:#E5E7EB;background:#fff;color:#18181B;box-shadow:none}
+.op-layout .btn:hover{background:#F4F4F5}
+.op-layout .btn.primary{background:#0E3B2E;border-color:#0E3B2E;color:#fff}
+.op-layout .btn.primary:hover{background:#0B2F25}
+.op-layout .btn.dark{background:#0E3B2E;border-color:#0E3B2E;color:#fff}
+.op-layout .btn.ghost{background:transparent;border-color:transparent;color:#52525B}
+.op-layout .btn.ghost:hover{background:#F4F4F5}
+.op-layout .btn.danger{background:#fff;border-color:#EFCFC7;color:#B3402F}
+.op-layout .btn.danger:hover{background:#FBEDEA}
+.op-layout .subtab.active{background:#0E3B2E;color:#fff}
+/* — KPI cards: compact, hairline, muted tones (no saturated fills) — */
+.op-layout .kpi{padding:11px 13px;border:1px solid #E5E7EB;border-radius:10px;box-shadow:none;gap:2px}
+.op-layout .kpi b{font-size:22px;font-weight:650;letter-spacing:-.015em}
+.op-layout .kpi span{font-size:11px;color:#71717A}
+.op-layout .kpi.warn{background:#FCF8EF;border-color:#EADFC3}
+.op-layout .kpi.bad{background:#FCF2EF;border-color:#EFCFC7}
+.op-layout .kpi.ok{background:#F1F8F4;border-color:#CBE5D6}
+/* — Status badges (ops screens): soft chips, not solid fills — */
+.op-layout .badge.active{background:#EAF4EF;color:#0E3B2E;border:1px solid #CBE5D6}
+.op-layout .badge.pending,.op-layout .badge.invited{background:#FBF4E4;color:#8A5A0D;border:1px solid #EADFC3}
+.op-layout .badge.suspended{background:#FBEDEA;color:#B3402F;border:1px solid #EFCFC7}
+.op-layout .badge.muted{background:#F4F4F5;color:#71717A;border:1px solid #E5E7EB}
+.op-layout .tag{letter-spacing:.04em}
+.op-layout .tag.warn{background:#F6E9CF;color:#8A5A0D}
+.op-layout .tag.bad{background:#F6D9D2;color:#9A3A28}
+/* — Dashboard rows: quiet neutrals, hover #FAFAF9, no orange bars — */
+.op-layout .dash-row{padding:8px 10px;border-bottom:1px solid #F1F1EF}
+.op-layout a.dash-row:hover{background:#FAFAF9}
+.op-layout .dash-row.warn{background:#FDFAF2}
+.op-layout .dash-row.bad{background:#FCF3F0}
+.op-layout .dr-sub{font-size:11.5px}
+/* — Two-column dashboard grid: operations wide, exceptions 320px — */
+.dash-cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
+.dash-side{display:flex;flex-direction:column;gap:16px;min-width:0}
+@media (max-width:1100px){.dash-cols{grid-template-columns:1fr}}
+/* — Today's Operations table — */
+.ops-table{width:100%;border-collapse:collapse;font-size:13px}
+.ops-table th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#A1A1AA;font-weight:700;text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;white-space:nowrap}
+.ops-table td{padding:9px 10px;border-bottom:1px solid #F1F1EF;vertical-align:middle}
+.ops-table tr:last-child td{border-bottom:none}
+.ops-table tbody tr{cursor:pointer}
+.ops-table tbody tr:hover{background:#FAFAF9}
+.ob{display:inline-block;font-size:10.5px;font-weight:700;border-radius:999px;padding:2.5px 9px;white-space:nowrap}
+.ob.ok{background:#EAF4EF;color:#0E3B2E}
+.ob.warn{background:#F9F0DC;color:#8A5A0D}
+.ob.bad{background:#F9E3DD;color:#9A3A28}
+.ob.mut{background:#F4F4F5;color:#71717A}
+/* — Needs-attention: compact exception rows — */
+.op-layout .att-row{display:flex;align-items:center;gap:9px;padding:9px 6px;border-bottom:1px solid #F1F1EF;text-decoration:none;color:#18181B;font-size:13px}
+.op-layout .att-row:last-child{border-bottom:none}
+.op-layout a.att-row:hover{background:#FAFAF9;border-radius:6px}
+.op-layout .att-row .att-go{margin-left:auto;font-size:12px;font-weight:700;color:#0E3B2E;white-space:nowrap}
+.op-layout .att-dot{width:7px;height:7px;border-radius:99px;flex:none}
+/* — Finance/PEAK compact metric rows — */
+.fin-row{display:flex;align-items:baseline;gap:8px;padding:7px 0;border-bottom:1px solid #F1F1EF;font-size:13px}
+.fin-row:last-of-type{border-bottom:none}
+.fin-row b{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:650}
+.fin-row small{color:#71717A;font-size:11.5px}
+/* — Drive status: tiny footer line in the sidebar, not a card — */
+.op-layout .op-side .drive-card{background:transparent;border:none;box-shadow:none;padding:8px 12px 0;border-top:1px solid #F0F0EF;border-radius:0;font-size:11.5px}
+.op-layout .op-side .drive-card .dc-main b{font-size:11.5px;color:#52525B}
+.op-layout .op-side .drive-card .dc-status{font-size:11px;color:#A1A1AA}
+.op-layout .op-side .drive-card .btn{width:auto;align-self:flex-start}
+.op-layout .op-signout{border:1px solid transparent}
