@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -125,5 +125,35 @@ describe("syncAttractionTickets", () => {
     const out = syncAttractionTickets(bookings, [{ description: "Grand Palace entrance", price: 500, pax: 11 }, { description: "Lunch", price: 200, pax: 11 }]);
     expect(out.find((e) => e.description.startsWith("Grand Palace"))!.pax).toBe(5); // only the 5 who came on the included booking
     expect(out.find((e) => e.description === "Lunch")!.pax).toBe(11); // untouched
+  });
+});
+
+describe("jobsheet — finance approval", () => {
+  it("toggles between unapproved and APPROVED", () => {
+    expect(toggleApproval(null)).toBe("APPROVED");
+    expect(toggleApproval(undefined)).toBe("APPROVED");
+    expect(toggleApproval("APPROVED")).toBe(null);
+  });
+  it("isApproved is true only for APPROVED", () => {
+    expect(isApproved("APPROVED")).toBe(true);
+    expect(isApproved(null)).toBe(false);
+    expect(isApproved(undefined)).toBe(false);
+    expect(isApproved("DRAFT")).toBe(false);
+  });
+});
+
+describe("jobsheet — enriched expense fields don't change the payout math", () => {
+  it("computeTotals bills price × pax and ignores unit / category / paidBy / estimate metadata", () => {
+    const plain = computeTotals([{ description: "Grand Palace", price: 500, pax: 4 }], DEFAULT_GUIDE_FEE);
+    const enriched = computeTotals(
+      [{
+        description: "Grand Palace", price: 500, pax: 4,
+        unit: "คน", expenseType: "entrance", paidBy: "guide", reimbursementRequired: true,
+        estimatedAmount: 480, actualAmount: 500, receiptUrl: "https://drive.example/x", notes: "kept receipt",
+      }],
+      DEFAULT_GUIDE_FEE,
+    );
+    expect(enriched.totalExpenses).toBe(2000); // 500 × 4 — the extra fields are inert
+    expect(enriched.grandTotal).toBe(plain.grandTotal);
   });
 });

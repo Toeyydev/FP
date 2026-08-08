@@ -16,7 +16,27 @@ export function noShowStatus(noShowPax: number, pax: number | null): "no-show" |
   if (p <= 0) return "";
   return pax != null && p < pax ? "partial" : "no-show";
 }
-export type Expense = { description: string; price: number | null; pax: number | null; unit?: string };
+// An operational expense line on a job sheet. `description/price/pax` are the billed
+// reimbursement (amount = price × pax, see expenseAmount). The rest are OPTIONAL
+// finance metadata — additive and fully back-compatible with old rows that carry
+// only the first three. None of them change the payout math: computeTotals still
+// bills price × pax. `unit` is display-only (คน/เที่ยว/ครั้ง); the accounting fields
+// (operational category, who paid, whether the guide is reimbursed, estimate vs
+// actual, a supporting receipt, a note) feed the later PEAK-sync flow.
+export type ExpenseType = "guide_fee" | "entrance" | "transport" | "meal" | "other";
+export type Expense = {
+  description: string;
+  price: number | null;
+  pax: number | null;
+  unit?: string;
+  expenseType?: ExpenseType | string; // operational category (mapped to a PEAK account in the backend, not here)
+  paidBy?: string; // "guide" | "operator" | "company"
+  reimbursementRequired?: boolean;
+  estimatedAmount?: number | null;
+  actualAmount?: number | null;
+  receiptUrl?: string | null;
+  notes?: string;
+};
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
 // The standard items that appear on every new sheet (prices editable per job).
@@ -84,6 +104,18 @@ export const thb = (v: number) =>
 // FOLK-BKK-YYYYMMDD-NN  (NN = nth sheet for that tour date)
 export function makeRef(date: string, seq: number) {
   return `FOLK-BKK-${date.replace(/-/g, "")}-${String(seq).padStart(2, "0")}`;
+}
+
+// ── Finance approval ─────────────────────────────────────────────────────────
+// A job sheet's operator sign-off state. Deliberately minimal for now: a sheet is
+// either unapproved (null) or APPROVED. The lifecycle can grow later (DRAFT →
+// READY_FOR_REVIEW → APPROVED → SYNCED_TO_PEAK) without changing existing callers.
+// Approval is the gate a later PEAK sync will require; it never moves money itself.
+export type ApprovalStatus = "APPROVED" | null;
+export const isApproved = (status?: string | null): boolean => status === "APPROVED";
+// Pure, reversible toggle so an accidental approval can be undone before payout.
+export function toggleApproval(current?: string | null): ApprovalStatus {
+  return isApproved(current) ? null : "APPROVED";
 }
 
 // Apply a guide's reported attendance to a job sheet: remove `absent` guests
