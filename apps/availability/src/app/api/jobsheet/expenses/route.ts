@@ -24,6 +24,16 @@ export async function POST(req: NextRequest) {
       description: z.string().max(120),
       price: z.number().nullable(),
       pax: z.number().nullable(),
+      // Optional finance metadata — kept so the guide's report can carry the same
+      // fields as the operator's set (zod strips anything not listed here).
+      unit: z.string().max(24).optional(),
+      expenseType: z.string().max(40).optional(),
+      paidBy: z.string().max(24).optional(),
+      reimbursementRequired: z.boolean().optional(),
+      estimatedAmount: z.number().nullable().optional(),
+      actualAmount: z.number().nullable().optional(),
+      receiptUrl: z.string().max(2000).optional(),
+      notes: z.string().max(500).optional(),
     })).max(40),
     note: z.string().max(500).optional(),
   }).safeParse(await req.json().catch(() => null));
