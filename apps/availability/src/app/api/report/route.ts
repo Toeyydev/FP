@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { notifyOps } from "@/lib/booking-import";
-import { applyReportedAttendance, noShowStatus, type Booking, type Expense } from "@/lib/jobsheet";
+import { applyReportedAttendance, guideExpensesComplete, noShowStatus, type Booking, type Expense } from "@/lib/jobsheet";
 
 // GET ?date&slotIdx — the bookings for the signed-in guide's own tour (for the
 // no-show checklist in the report). Guide-only; returns [] if not assigned.
@@ -18,8 +18,16 @@ export async function GET(req: NextRequest) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
   const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true } });
   if (!a) return NextResponse.json({ bookings: [] });
-  const bookings = await prisma.booking.findMany({ where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, noShow: true, noShowPax: true } });
-  return NextResponse.json({ bookings: bookings.map((b) => ({ id: b.id, name: b.customerName || b.confirmationCode || b.externalRef || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShow: b.noShow, noShowPax: b.noShowPax })) });
+  const [bookings, sheet] = await Promise.all([
+    prisma.booking.findMany({ where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, noShow: true, noShowPax: true } }),
+    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { guideExpensesAt: true, guideExpenses: true } }),
+  ]);
+  return NextResponse.json({
+    // The app checks this BEFORE opening the end-tour report: expenses must be
+    // filled before Done (POST enforces it too — this just makes the UX kind).
+    expensesReported: guideExpensesComplete(sheet),
+    bookings: bookings.map((b) => ({ id: b.id, name: b.customerName || b.confirmationCode || b.externalRef || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShow: b.noShow, noShowPax: b.noShowPax })),
+  });
 }
 
 // POST { date, slotIdx, bookedPax, noShow, leftEarly, comments? } — guide submits
@@ -72,6 +80,12 @@ export async function POST(req: NextRequest) {
 
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
+
+  // Expenses before Done (owner rule): the report completes the tour, so it is
+  // blocked until the guide's expense report is submitted with every line filled
+  // (0 = not used). The app routes them to their job sheet on this error.
+  const sheetGate = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { guideExpensesAt: true, guideExpenses: true } });
+  if (!guideExpensesComplete(sheetGate)) return NextResponse.json({ error: "expenses-required" }, { status: 409 });
 
   const completedPax = bookedPax != null ? Math.max(0, bookedPax - noShow - leftEarly) : null;
   await prisma.tourReport.upsert({

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, fillDownExpensePax, isApproved, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, expenseRowComplete, fillDownExpensePax, isApproved, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
@@ -139,8 +139,16 @@ export default function JobSheetEditor() {
   const guideExpTotal = guideExp.reduce((s, e) => s + expenseAmount(e), 0);
   async function submitGuideExpenses() {
     if (!sheet) return;
-    setExpBusy(true); setMsg("");
     const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
+    // Every line must be fully filled before it can be sent — price AND pax.
+    // 0 means "not used"; blank means "not filled" and blocks the submit (the
+    // tour can't be completed until this report is in, so be strict here).
+    const incomplete = clean.filter((e) => !expenseRowComplete(e));
+    if (incomplete.length > 0) {
+      setMsg(`Fill in price and pax on every line before sending — enter 0 for anything not used (${incomplete.length} line${incomplete.length === 1 ? "" : "s"} still blank).`);
+      return;
+    }
+    setExpBusy(true); setMsg("");
     const r = await fetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
     if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");

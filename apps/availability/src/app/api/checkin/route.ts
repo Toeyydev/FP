@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
+import { guideExpensesComplete } from "@/lib/jobsheet";
 
 const TYPES = ["ARRIVE", "START", "COMPLETE"] as const;
 
@@ -40,6 +41,14 @@ export async function POST(req: NextRequest) {
 
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, include: { tour: { select: { meetingLat: true, meetingLng: true, meetingRadiusM: true } } } });
   if (!assignment) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
+
+  // Expenses before Done: COMPLETE is normally recorded via POST /api/report (which
+  // gates on the expense report), but this route accepts a direct COMPLETE too —
+  // enforce the same rule so the gate can't be sidestepped.
+  if (type === "COMPLETE") {
+    const sheetGate = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { guideExpensesAt: true, guideExpenses: true } });
+    if (!guideExpensesComplete(sheetGate)) return NextResponse.json({ error: "expenses-required" }, { status: 409 });
+  }
 
   // Geofence: distance from the meeting point, if it has coordinates + we have GPS.
   let distanceM: number | null = null, withinGeofence: boolean | null = null;

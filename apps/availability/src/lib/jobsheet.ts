@@ -122,6 +122,33 @@ export function toggleApproval(current?: string | null): ApprovalStatus {
   return isApproved(current) ? null : "APPROVED";
 }
 
+// ── "Fill down all expenses before Done" ────────────────────────────────────
+// A guide can't complete a tour until their expense report is submitted and
+// every line is filled in. 0 is a valid count ("not used"); blank is not
+// ("not filled") — that distinction is what keeps ฿0 reimbursements honest.
+export function expenseRowComplete(e: Expense): boolean {
+  return typeof e?.price === "number" && isFinite(e.price) && typeof e?.pax === "number" && isFinite(e.pax);
+}
+// Complete = the guide has SUBMITTED a report (guideExpensesAt set — an empty
+// list is a valid "nothing spent" declaration) and every submitted line is
+// filled. No sheet / no submission → not complete.
+export function guideExpensesComplete(sheet: { guideExpensesAt?: Date | string | null; guideExpenses?: unknown } | null | undefined): boolean {
+  if (!sheet?.guideExpensesAt) return false;
+  const rows = Array.isArray(sheet.guideExpenses) ? (sheet.guideExpenses as Expense[]) : [];
+  return rows.every(expenseRowComplete);
+}
+
+// Does a month-level payroll payment cover this tour? Only tours on/before the
+// transfer's Bangkok calendar date — a tour run AFTER the month's transfer was
+// physically not in that money (the payroll e-slip flow applies the same guard
+// when it flips TourPayments). Null paidAt (legacy row) keeps the old
+// covers-the-whole-month behavior.
+export function payrollCoversTour(paidAt: Date | string | null | undefined, tourDate: string): boolean {
+  if (!paidAt) return true;
+  const bkkDate = new Date(new Date(paidAt).getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  return tourDate <= bkkDate;
+}
+
 // Drive file name for an expense receipt. Unique per expense row (ref + E<n>) so a
 // re-upload replaces only that row's receipt and never another's. The description is
 // sanitised (Drive/query-safe) and clipped; falls back to guideId-date when a sheet
