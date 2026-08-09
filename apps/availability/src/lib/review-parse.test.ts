@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseReviewEmail } from "@/lib/review-parse";
+import { parseReviewEmail, parseGygSubject } from "@/lib/review-parse";
 
 describe("parseReviewEmail — GetYourGuide notification", () => {
   const email = `Hi supply partner,
@@ -27,5 +27,27 @@ Great tour guide!`;
     const p = parseReviewEmail("just some random note");
     expect(p.product).toBeUndefined();
     expect(p.stars).toBeUndefined();
+  });
+});
+
+describe("parseGygSubject — supplier + review ids from the subject line", () => {
+  it("parses the standard GYG subject", () => {
+    expect(parseGygSubject("You have a new review on GetYourGuide - 691771 (126357479)")).toEqual({
+      supplierRef: "691771",
+      sourceReviewId: "126357479",
+    });
+  });
+
+  it("tolerates extra whitespace around the ids", () => {
+    expect(parseGygSubject("You have a new review on GetYourGuide -  691771  ( 126357479 )")).toEqual({
+      supplierRef: "691771",
+      sourceReviewId: "126357479",
+    });
+  });
+
+  it("yields {} on anything that doesn't match — ids are dedup keys, parse strictly", () => {
+    expect(parseGygSubject("You have a new review on GetYourGuide")).toEqual({});
+    expect(parseGygSubject("Re: your payout")).toEqual({});
+    expect(parseGygSubject("")).toEqual({});
   });
 });

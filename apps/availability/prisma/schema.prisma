@@ -753,3 +753,125 @@ model PaymentBatchItem {
   @@unique([guideId, date, slotIdx]) // a payout is in at most one batch at a time
   @@index([batchId])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Review rewards — a GetYourGuide review email becomes a Review row; an operator
+// confirms the guide; that mints a ReviewReward (its own financial row) which is
+// settled per the guide's policy (weekly/monthly). A review NEVER reopens the job
+// sheet: guideId is required before money moves, job linkage is optional trace.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A customer review ingested from a source (currently GYG notification emails).
+// Dedup: gmailMessageId is unique, and (source, sourceReviewId) is unique —
+// Postgres allows multiple NULLs, so hand-added reviews without ids still work.
+model Review {
+  id              String    @id @default(cuid())
+  source          String    @default("GETYOURGUIDE_EMAIL")
+  sourceReviewId  String? // GYG review reference from the subject, e.g. 126357479
+  gmailMessageId  String?   @unique // Gmail message id — worker idempotency
+  supplierRef     String? // GYG supplier/account id from the subject, e.g. 691771
+  productName     String?
+  reviewText      String?
+  rating          Int? // 1..5 when parseable
+  reviewerName    String?
+  receivedAt      DateTime? // when the email arrived
+  guideId         String? // User.guideId (G-xxx) — required before CONFIRMED
+  tourId          String?
+  bookingId       String?
+  jobSheetRef     String? // FOLK-BKK-… when a job could be identified (optional)
+  matchStatus     String    @default("UNMATCHED") // UNMATCHED | SUGGESTED | AUTO_MATCHED | MANUAL_MATCHED
+  matchMethod     String? // name-mention | product-map | manual
+  matchConfidence String? // high | medium | low
+  status          String    @default("NEW") // NEW | NEEDS_REVIEW | CONFIRMED | REJECTED
+  confirmedBy     String? // User.id of the operator who confirmed
+  confirmedAt     DateTime?
+  rawEmailMeta    Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  reward ReviewReward?
+
+  @@unique([source, sourceReviewId])
+  @@index([status])
+  @@index([guideId])
+  @@index([receivedAt])
+}
+
+// Alternate names a guide is known by ("Mai", "P'Mai", "มาย") — used only to
+// SUGGEST a guide for a review; the operator always confirms before money moves.
+model GuideAlias {
+  id              String   @id @default(cuid())
+  guideId         String // User.guideId (G-xxx)
+  alias           String
+  normalizedAlias String // normalizeName() form, for matching
+  createdAt       DateTime @default(now())
+
+  @@unique([guideId, normalizedAlias])
+  @@index([normalizedAlias])
+}
+
+// The reward money for one confirmed review. One reward per review (unique), so
+// confirming twice can never pay twice. Separate from the job sheet by design.
+model ReviewReward {
+  id            String            @id @default(cuid())
+  review        Review            @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  reviewId      String            @unique
+  guideId       String // User.guideId (G-xxx)
+  jobSheetRef   String? // optional traceability to a FOLK-BKK-… job
+  amount        Float
+  earnedDate    String // "YYYY-MM-DD" — the day the review was confirmed
+  period        String // settlement period label: "2026-08" or "2026-W33"
+  paymentPolicy String            @default("MONTHLY") // WEEKLY | MONTHLY — snapshot at confirm time
+  settlement    ReviewSettlement? @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  settlementId  String?
+  paymentStatus String            @default("UNPAID") // UNPAID | IN_SETTLEMENT | PAID | CANCELLED
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([guideId])
+  @@index([paymentStatus])
+  @@index([period])
+  @@index([settlementId])
+}
+
+// Payout cadence per guide per cost type. Only REVIEW_REWARD is enforced today;
+// GUIDE_FEE / TOUR_EXPENSE rows are recorded for a future settlement engine.
+model GuidePaymentPolicy {
+  id            String   @id @default(cuid())
+  guideId       String // User.guideId (G-xxx)
+  costType      String // GUIDE_FEE | TOUR_EXPENSE | REVIEW_REWARD
+  frequency     String // WEEKLY | MONTHLY
+  effectiveFrom String? // "YYYY-MM-DD" — informational
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([guideId, costType])
+}
+
+// One settlement run of review rewards for one guide and one period. Mirrors
+// PaymentBatch but review-scoped — PaymentBatchItem is keyed on the tour tuple,
+// so rewards can't join tour batches. Deleting a settlement frees its rewards
+// (settlementId set null) to be re-settled; a PAID settlement is delete-locked
+// in the API layer like a PAID batch.
+model ReviewSettlement {
+  id          String    @id @default(cuid())
+  ref         String    @unique // FOLK-RR-<period>-<guideId>, e.g. FOLK-RR-202608-G001
+  guideId     String
+  periodLabel String // "2026-08" or "2026-W33"
+  periodStart String // "YYYY-MM-DD"
+  periodEnd   String // "YYYY-MM-DD"
+  totalAmount Float     @default(0)
+  status      String    @default("OPEN") // OPEN | PAID | CANCELLED
+  paidAt      DateTime?
+  eslipUrl    String? // Drive link to the payment slip (evidence)
+  peakRef     String? // PEAK expense ref (EXP-…) once posted — later phase
+  note        String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  rewards ReviewReward[]
+
+  @@unique([guideId, periodLabel])
+  @@index([status])
+}

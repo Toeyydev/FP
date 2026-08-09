@@ -43,3 +43,11 @@ export function parseReviewEmail(text: string): ParsedReview {
 
   return out;
 }
+
+// GYG notification subject: "You have a new review on GetYourGuide - 691771 (126357479)"
+// → supplierRef 691771 (our GYG account), sourceReviewId 126357479 (the review).
+// Both are dedup keys, so parse strictly — a subject that doesn't match yields {}.
+export function parseGygSubject(subject: string): { supplierRef?: string; sourceReviewId?: string } {
+  const m = (subject || "").match(/-\s*(\d+)\s*\(\s*(\d+)\s*\)\s*$/);
+  return m ? { supplierRef: m[1], sourceReviewId: m[2] } : {};
+}
