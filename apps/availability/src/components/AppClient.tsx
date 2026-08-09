@@ -624,12 +624,23 @@ export default function AppClient({
   // Whether to show the lifecycle action: ARRIVE is time-gated; once started, always.
   const showAction = (s: { date: string; time: string; checkinState: string | null }, next: { type: string } | null) =>
     !!next && (next.type !== "ARRIVE" || checkInOpen(s.date, s.time));
+  // Expenses before Done: the guide must submit a fully-filled expense report
+  // before the end-tour report can complete the tour. Checked here so they're
+  // sent straight to their job sheet instead of filling attendance for nothing;
+  // the server enforces it again on submit.
+  const goFillExpenses = (s: { date: string; slotIdx: number }) => {
+    toast(t("expensesBeforeDone"));
+    setTimeout(() => { window.location.href = `/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`; }, 1200);
+  };
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
-    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({}); setReportFor(s);
+    const open = (d: { bookings?: { id: string; name: string; ref: string; pax: number; noShow: boolean; noShowPax?: number }[] } | null) => {
+      setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({}); setReportFor(s);
+      const bs = d?.bookings ?? []; setReportBookings(bs); setNoShowCounts(Object.fromEntries(bs.map((b) => [b.id, b.noShowPax ?? (b.noShow ? b.pax : 0)])));
+    };
     fetch(`/api/report?date=${s.date}&slotIdx=${s.slotIdx}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { const bs = d?.bookings ?? []; setReportBookings(bs); setNoShowCounts(Object.fromEntries(bs.map((b: { id: string; pax: number; noShow: boolean; noShowPax?: number }) => [b.id, b.noShowPax ?? (b.noShow ? b.pax : 0)]))); })
-      .catch(() => {});
+      .then((d) => { if (d && d.expensesReported === false) goFillExpenses(s); else open(d); })
+      .catch(() => open(null)); // offline etc. — open anyway, the server still enforces
   }
   async function submitReport() {
     if (!reportFor) return;
@@ -638,6 +649,7 @@ export default function AppClient({
       body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowCounts: reportBookings.map((b) => ({ id: b.id, pax: noShowCounts[b.id] ?? 0 })) } : {}) }),
     });
     if (r.ok) { setReportFor(null); toast(t("reportSubmitted")); fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d) => setSchedule(d.items ?? [])); }
+    else if (r.status === 409) { setReportFor(null); goFillExpenses(reportFor); }
     else toast(t("errGeneric"));
   }
 

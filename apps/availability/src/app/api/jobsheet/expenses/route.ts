@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
+import { thb, defaultExpensesForTour, expenseRowComplete, noShowStatus, DEFAULT_GUIDE_FEE } from "@/lib/jobsheet";
 import { nextJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 
@@ -45,6 +45,9 @@ export async function POST(req: NextRequest) {
   const { guideId, date, slotIdx, expenses } = parsed.data;
   const note = parsed.data.note?.trim() || null;
   if (!ops(role) && myGuideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // A guide's report must be fully filled — every line needs a price AND a count
+  // (0 = not used, blank = not filled). Operators saving a draft are exempt.
+  if (!ops(role) && !expenses.every(expenseRowComplete)) return NextResponse.json({ error: "expenses-incomplete" }, { status: 400 });
 
   const now = new Date();
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };

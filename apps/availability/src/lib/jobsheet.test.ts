@@ -1,5 +1,41 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseRowComplete, guideExpensesComplete, payrollCoversTour } from "@/lib/jobsheet";
+
+describe("jobsheet — month payroll covers a tour only up to the transfer date", () => {
+  // 22 Jul 16:12 UTC = 22 Jul 23:12 Bangkok → covers tours through 22 Jul only.
+  const paidAt = "2026-07-22T16:12:01.889Z";
+  it("covers tours on/before the Bangkok transfer date", () => {
+    expect(payrollCoversTour(paidAt, "2026-07-22")).toBe(true);
+    expect(payrollCoversTour(paidAt, "2026-07-01")).toBe(true);
+  });
+  it("does NOT cover tours run after the transfer (the real July cases)", () => {
+    expect(payrollCoversTour(paidAt, "2026-07-27")).toBe(false); // FOLK-BKK-20260727-02
+    expect(payrollCoversTour(paidAt, "2026-07-31")).toBe(false); // FOLK-BKK-20260731-01
+  });
+  it("a UTC time late enough to be the next Bangkok day counts as that day", () => {
+    expect(payrollCoversTour("2026-07-22T17:30:00Z", "2026-07-23")).toBe(true); // 00:30 BKK on the 23rd
+  });
+  it("legacy rows without paidAt keep the old covers-the-month behavior", () => {
+    expect(payrollCoversTour(null, "2026-07-31")).toBe(true);
+  });
+});
+
+describe("jobsheet — expenses before Done", () => {
+  it("a row is complete only with BOTH price and pax — 0 counts, blank doesn't", () => {
+    expect(expenseRowComplete({ description: "Water", price: 10, pax: 7 })).toBe(true);
+    expect(expenseRowComplete({ description: "Water", price: 10, pax: 0 })).toBe(true);
+    expect(expenseRowComplete({ description: "Water", price: 10, pax: null })).toBe(false);
+    expect(expenseRowComplete({ description: "Water", price: null, pax: 2 })).toBe(false);
+    expect(expenseRowComplete({ description: "Water", price: null, pax: null })).toBe(false);
+  });
+  it("the tour can complete only after a fully-filled report is submitted", () => {
+    expect(guideExpensesComplete(null)).toBe(false); // no sheet at all
+    expect(guideExpensesComplete({ guideExpensesAt: null, guideExpenses: [] })).toBe(false); // never submitted
+    expect(guideExpensesComplete({ guideExpensesAt: new Date(), guideExpenses: [] })).toBe(true); // "nothing spent" declared
+    expect(guideExpensesComplete({ guideExpensesAt: "2026-08-09T15:00:00Z", guideExpenses: [{ description: "Ferry", price: 11, pax: 4 }, { description: "Water", price: 10, pax: 0 }] })).toBe(true);
+    expect(guideExpensesComplete({ guideExpensesAt: new Date(), guideExpenses: [{ description: "Ferry", price: 11, pax: null }] })).toBe(false); // submitted but a line left blank
+  });
+});
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
