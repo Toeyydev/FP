@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, payrollCoversTour, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { nextJobRef } from "@/lib/jobref";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
@@ -70,12 +70,16 @@ export async function GET(req: NextRequest) {
     prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
     prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
   ]);
+  // A month marked paid only covers tours on/before the transfer's Bangkok date.
+  // Without this guard a sheet for a LATER tour shows "PAID" off the month's slip
+  // while Payments correctly still lists it unpaid — and the guide is misled.
+  const paidByMonth = payroll?.status === "paid" && payrollCoversTour(payroll.paidAt, date);
   const payment = {
-    paid: tourPay?.status === "PAID" || payroll?.status === "paid",
-    paidAt: tourPay?.paidAt ?? payroll?.paidAt ?? null,
-    slip: tourPay?.eslipUrl ?? payroll?.eslipUrl ?? null,
-    status: tourPay?.status ?? (payroll?.status === "paid" ? "PAID" : null), // per-tour state for the finance sidebar
-    peakRef: tourPay?.peakRef ?? payroll?.peakRef ?? null, // accounting ref (recorded on Payments)
+    paid: tourPay?.status === "PAID" || paidByMonth,
+    paidAt: tourPay?.paidAt ?? (paidByMonth ? payroll?.paidAt ?? null : null),
+    slip: tourPay?.eslipUrl ?? (paidByMonth ? payroll?.eslipUrl ?? null : null),
+    status: tourPay?.status ?? (paidByMonth ? "PAID" : null), // per-tour state for the finance sidebar
+    peakRef: tourPay?.peakRef ?? (paidByMonth ? payroll?.peakRef ?? null : null), // accounting ref (recorded on Payments)
   };
 
   // Collapse repeated guests to a single row — the same booking must appear only once
