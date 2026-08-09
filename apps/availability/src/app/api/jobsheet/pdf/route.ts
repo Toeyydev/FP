@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
   .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.5; max-width:540px; }
   .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
   .approve .sigbox { text-align:center; width:290px; }
-  .approve .sigimg { height:52px; display:block; margin:0 auto -8px; user-select:none; -webkit-user-select:none; pointer-events:none; }
+  .approve .sigimg { height:68px; display:block; margin:0 auto -10px; user-select:none; -webkit-user-select:none; pointer-events:none; }
   .approve .sigline { margin-top:2px; }
   .approve .signame { font-weight:600; margin-top:2px; }
   .approve .sigdate { color:#6b746f; margin-top:4px; font-size:11px; }
@@ -198,7 +198,7 @@ export async function GET(req: NextRequest) {
           <img class="sigimg" src="/approver-signature.png" alt="ลายเซ็นผู้อนุมัติ" draggable="false" />
           <div class="sigline">ลงชื่อ ...................................... ผู้อนุมัติ / ผู้รับรอง</div>
           <div class="signame">( นางสาว หทัยวรรณ ใจปลอด )</div>
-          <div class="sigdate">วันที่ ......../......../........</div>
+          <div class="sigdate">วันที่ ${esc(date.slice(8, 10))}/${esc(date.slice(5, 7))}/${esc(date.slice(0, 4))}</div>
         </div>
       </div>
     </div>
