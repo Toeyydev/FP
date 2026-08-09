@@ -753,3 +753,80 @@ model PaymentBatchItem {
   @@unique([guideId, date, slotIdx]) // a payout is in at most one batch at a time
   @@index([batchId])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Review incentives — a customer review earns the guide a bonus SEPARATE from
+// the job sheet (reviews arrive weeks after a tour is paid; the original sheet
+// is never reopened). The OTA booking reference is the lookup key:
+// bookingReference → Booking → job (date+slot) → assigned guide, saved onto the
+// review at match time. The review row IS the financial record.
+// ─────────────────────────────────────────────────────────────────────────────
+model Review {
+  id               String  @id @default(cuid())
+  bookingReference String? // OTA ref as entered/imported (GYG…/VIA…) — normalized uppercase
+  source           String  @default("GETYOURGUIDE") // review platform
+  reviewDate       String // "YYYY-MM-DD"
+  rating           Int? // 1..5
+  reviewerName     String?
+  reviewText       String?
+  reviewUrl        String?
+  incentiveAmount  Float   @default(100)
+
+  // Resolved relationships — auto-matched from bookingReference or set manually.
+  // Job identity is the house tuple (guideId+tourDate+slotIdx); jobSheetRef is the
+  // human FOLK-BKK-… number for display/traceability.
+  bookingId   String? // Booking.id
+  guideId     String? // User.guideId (G-xxx)
+  tourId      String?
+  tourDate    String? // "YYYY-MM-DD"
+  slotIdx     Int?
+  jobSheetRef String? // FOLK-BKK-…
+
+  matchStatus   String        @default("UNMATCHED") // MATCHED | UNMATCHED
+  paymentStatus String        @default("UNPAID") // UNPAID | IN_PAYOUT | PAID | VOID
+  payoutBatch   ReviewPayout? @relation(fields: [payoutBatchId], references: [id], onDelete: SetNull)
+  payoutBatchId String?
+
+  // Future email-ingestion idempotency (a worker fills these; manual rows leave
+  // them null — Postgres allows multiple NULLs under the unique).
+  gmailMessageId String? @unique
+  sourceReviewId String? // OTA's own review id (e.g. from the GYG subject line)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([source, sourceReviewId])
+  @@index([bookingReference])
+  @@index([guideId])
+  @@index([reviewDate])
+  @@index([paymentStatus])
+  @@index([matchStatus])
+}
+
+// One review-incentive payout for one guide (normally a weekly run). Mirrors
+// PaymentBatch but review-scoped — PaymentBatchItem is keyed on the tour tuple,
+// so review lines can't join tour batches without reworking a live money table.
+// Traceability: each Review keeps payoutBatchId (review → payout → slip), and
+// deleting a non-PAID payout frees its reviews (SetNull + status reverted).
+model ReviewPayout {
+  id          String    @id @default(cuid())
+  ref         String    @unique // FOLK-RR-YYYYMMDD-NN
+  guideId     String
+  periodStart String // "YYYY-MM-DD"
+  periodEnd   String // "YYYY-MM-DD"
+  totalAmount Float     @default(0)
+  status      String    @default("DRAFT") // DRAFT | PAID | CANCELLED
+  paidAt      DateTime?
+  eslipUrl    String? // Drive link to the transfer slip (evidence)
+  peakRef     String? // EXP-… once the summary is recorded in PEAK
+  note        String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  reviews Review[]
+
+  @@index([guideId])
+  @@index([status])
+}

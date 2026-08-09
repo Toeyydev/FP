@@ -21,12 +21,19 @@ export async function GET(req: NextRequest) {
   const today = bkk(0);
   const from = all ? "2000-01-01" : `${bkk(-365).slice(0, 7)}-01`;
 
-  const [assigns, sheets, statuses, tourPays, tours] = await Promise.all([
+  const [assigns, sheets, statuses, tourPays, tours, reviewRows] = await Promise.all([
     prisma.assignment.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, tourId: true, createdAt: true } }),
     prisma.jobSheet.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, tourId: true, ref: true, expenses: true, guideFee: true, createdAt: true } }),
     prisma.payrollStatus.findMany({ where: { guideId } }),
     prisma.tourPayment.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, status: true, paidAt: true, eslipUrl: true } }),
     prisma.tour.findMany({ select: { id: true, name: true } }),
+    // Review incentives — the guide's separate earning type (never part of the
+    // job sheet). Read-only here; VOID rows are hidden.
+    prisma.review.findMany({
+      where: { guideId, paymentStatus: { not: "VOID" }, reviewDate: { gte: from } },
+      orderBy: { reviewDate: "desc" },
+      select: { id: true, reviewDate: true, bookingReference: true, jobSheetRef: true, tourId: true, rating: true, incentiveAmount: true, paymentStatus: true, reviewText: true },
+    }),
   ]);
 
   const tName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? (id ?? "Tour");
@@ -87,5 +94,15 @@ export async function GET(req: NextRequest) {
   const pendingTotal = r2(unpaid.reduce((s, x) => s + x.amount, 0));
   const pendingCount = unpaid.length;
 
-  return NextResponse.json({ months, yearTotal, paidThisMonth, pendingTotal, pendingCount, guideId, all });
+  // Review bonus block — separate earning type with its own paid state.
+  const reviewIncentives = reviewRows.map((r) => ({
+    id: r.id, reviewDate: r.reviewDate, bookingReference: r.bookingReference, jobSheetRef: r.jobSheetRef,
+    tour: tName(r.tourId), rating: r.rating, amount: r2(r.incentiveAmount),
+    status: r.paymentStatus, // UNPAID | IN_PAYOUT | PAID
+    text: r.reviewText ? r.reviewText.slice(0, 200) : null,
+  }));
+  const reviewBonusTotal = r2(reviewIncentives.reduce((s, x) => s + x.amount, 0));
+  const reviewBonusPaid = r2(reviewIncentives.filter((x) => x.status === "PAID").reduce((s, x) => s + x.amount, 0));
+
+  return NextResponse.json({ months, yearTotal, paidThisMonth, pendingTotal, pendingCount, guideId, all, reviewIncentives, reviewBonusTotal, reviewBonusPaid });
 }

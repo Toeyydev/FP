@@ -10,7 +10,8 @@ import { GuideTabs } from "@/components/GuideTabs";
 // guide-readable breakdown: fee (after WHT) + reimbursed expenses = total.
 type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; fee?: number; expenses?: number; reviewReward: number; paid: boolean; paidAt: string | null; slip: string | null };
 type Month = { period: string; label: string; tourCount: number; total: number; reviewReward: number; paidCount: number; monthly: { paid: boolean; paidAt: string | null; slip: string | null }; tours: Tour[] };
-type Data = { months: Month[]; yearTotal: number; paidThisMonth: number; pendingTotal?: number; pendingCount?: number; guideId: string; all?: boolean };
+type ReviewIncentive = { id: string; reviewDate: string; bookingReference: string | null; jobSheetRef: string | null; tour: string; rating: number | null; amount: number; status: string; text: string | null };
+type Data = { months: Month[]; yearTotal: number; paidThisMonth: number; pendingTotal?: number; pendingCount?: number; guideId: string; all?: boolean; reviewIncentives?: ReviewIncentive[]; reviewBonusTotal?: number; reviewBonusPaid?: number };
 
 const thb = (v: number) => `฿${v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 const dLabel = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
@@ -88,6 +89,33 @@ export default function MyPay() {
               <span>Paid this month</span>
             </div>
           </div>
+
+          {/* Review bonus — a separate earning from customer reviews. Never part of
+              the job sheet totals above; paid in its own weekly payout. */}
+          {(d.reviewIncentives?.length ?? 0) > 0 && (
+            <section className="panel" style={{ padding: 14, marginBottom: 12 }}>
+              <div className="panel-head" style={{ padding: 0, marginBottom: 8 }}>
+                <h2>★ Review bonus</h2>
+                <span className="hint">{thb(d.reviewBonusPaid ?? 0)} paid · {thb(d.reviewBonusTotal ?? 0)} total</span>
+              </div>
+              {d.reviewIncentives!.map((r) => (
+                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 2px", borderBottom: "1px solid var(--line)", fontSize: 13, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 200px" }}>
+                    <div><b>{new Date(`${r.reviewDate}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</b> · {r.tour || "Tour"}</div>
+                    <div style={{ color: "var(--ink-soft)", fontSize: 12 }}>
+                      <span style={{ color: "var(--assign)" }}>{r.rating ? "★".repeat(r.rating) : ""}</span>
+                      {r.bookingReference ? ` · ${r.bookingReference}` : ""}{r.jobSheetRef ? ` · ${r.jobSheetRef}` : ""}
+                    </div>
+                    {r.text && <div style={{ color: "var(--ink-soft)", fontSize: 12, fontStyle: "italic" }}>“{r.text}”</div>}
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(r.amount)}</b>
+                    <div><span className={`ob ${r.status === "PAID" ? "ok" : "mut"}`} style={{ fontSize: 10.5 }}>{r.status === "IN_PAYOUT" ? "IN PAYOUT" : r.status}</span></div>
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
 
           <div className="pay-toggle">
             <button className={tab === "pending" ? "on" : ""} onClick={() => setTab("pending")}>Pending{pending.length ? ` (${pending.length})` : ""}</button>
