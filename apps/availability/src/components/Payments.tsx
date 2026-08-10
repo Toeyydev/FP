@@ -359,7 +359,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
                   <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
                   <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
-                  <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>{thb(j.amount)}</span>
+                  <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>
+                    {thb(j.amount)}
+                    {(j.expenses ?? 0) > 0 && <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Guide fee (after WHT) + expense reimbursement">fee {thb(j.fee)} + reimb. {thb(j.expenses)}</span>}
+                  </span>
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
                   <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
@@ -474,7 +477,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <td style={{ whiteSpace: "nowrap" }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</td>
                   <td><span className="gid">{j.guideId}</span> {j.guide}</td>
                   <td>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</td>
-                  <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}><b>{thb(j.amount)}</b></td>
+                  <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    <b>{thb(j.amount)}</b>
+                    {(j.expenses ?? 0) > 0 && <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Guide fee (after WHT) + expense reimbursement">fee {thb(j.fee)} + reimb. {thb(j.expenses)}</span>}
+                  </td>
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(j.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                     {canEdit && <button className="btn sm primary" title="Mark this job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, j.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>}
