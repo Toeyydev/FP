@@ -170,6 +170,7 @@ export async function GET(req: NextRequest) {
   .adv { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
   .adv table td { font-size:11.5px; }
   .adv .st { font-weight:700; }
+  .summary span { white-space:nowrap; }
   .keep { break-inside:avoid; page-break-inside:avoid; }
   h3 { break-after:avoid-page; page-break-after:avoid; }
   .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
