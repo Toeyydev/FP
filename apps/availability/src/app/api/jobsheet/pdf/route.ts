@@ -157,7 +157,8 @@ export async function GET(req: NextRequest) {
   th { background:#f4f4f4; font-weight:600; }
   td.n, th.n { text-align:right; } td.c { text-align:center; }
   .tot td { font-weight:600; background:#fafafa; }
-  .summary { margin-top:16px; margin-left:auto; width:280px; }
+  .summary { margin-top:16px; margin-left:auto; width:fit-content; min-width:280px; max-width:100%; }
+  .summary > div { gap:18px; }
   .summary div { display:flex; justify-content:space-between; padding:5px 8px; }
   .summary .grand { background:#bfe3bf; font-weight:600; border-radius:4px; font-size:14px; }
   .prepnote { background:#fbf4e8; border:1px solid #ecd9bf; color:#7e3a2c; border-radius:8px; padding:8px 12px; font-size:11.5px; margin:14px 0 2px; }
