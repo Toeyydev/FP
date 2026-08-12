@@ -172,7 +172,7 @@ export async function GET(req: NextRequest) {
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
   th small, .thx { display:block; font-size:8px; color:#8a8f8b; font-weight:500; line-height:1.2; }
   h3 small, .summary small, .adv small { font-size:9px; color:#8a8f8b; font-weight:500; margin-left:5px; }
-  .adv { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
+  .adv, .advance-settlement { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
   .adv table td { font-size:11.5px; }
   .adv .st { font-weight:700; }
 
@@ -253,7 +253,7 @@ export async function GET(req: NextRequest) {
       const at = advanceTotals(advRows, retRows, expenses);
       const st = ADVANCE_STATUS_LABEL[advanceStatus(at, true)];
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
-      return `<div class="adv"><h3>Advance / Settlement <small>การเคลียร์เงินทดรองจ่าย</small></h3>
+      return `<div class="adv advance-settlement"><h3>Advance / Settlement <small>การเคลียร์เงินทดรองจ่าย</small></h3>
       <table>
         <thead><tr><th>Description<small>รายการ</small></th><th style="width:120px">Date · Time<small>วันเวลาทำรายการ</small></th><th class="n" style="width:100px">Amount<small>จำนวนเงิน</small></th></tr></thead>
         <tbody>
