@@ -2,6 +2,10 @@ import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/google-drive";
 import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
+import { JOB_SHEET_CERTIFIER, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -40,7 +44,42 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
       const actual = ns ? `<span style="color:#c0392b;font-weight:700">NO-SHOW</span>` : `${b.actualPax ?? ""}`;
       return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`;
     }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
-    const expenseRows = expenses.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="3" style="color:#888">No expenses.</td></tr>`;
+    const SRC: Record<string, string> = { advance: "Advance / เงินทดรอง", guide: "Guide / เงินส่วนตัวไกด์" };
+    const expenseRows = expenses.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(SRC[e.paidBy ?? ""] ?? "Company / บริษัท")}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="4" style="color:#888">No expenses.</td></tr>`;
+
+    // Advance / settlement ledger — the accountant's cash story (never in expense totals).
+    const [advRows, retRows] = await Promise.all([
+      prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
+      prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
+    ]);
+    const at = advanceTotals(advRows, retRows, expenses);
+    const dtBKK = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+    const advanceHtml = advRows.length || retRows.length ? `
+      <h3 style="margin:14px 0 4px">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">เงินทดรองจ่าย</span></h3>
+      <table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">
+        <tbody>
+          ${advRows.map((a) => `<tr><td>Advance paid to guide <span style="font-size:10px;color:#8a8f8b">เงินทดรองจ่ายให้ไกด์</span> · ${esc(dtBKK(a.paidAt))} · ${esc(a.method)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}</td><td align="right">${esc(thb(a.amount))}</td></tr>`).join("")}
+          <tr><td style="padding-left:18px">Actual expenses from advance <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายจริงจากเงินทดรอง</span></td><td align="right">− ${esc(thb(at.usedFromAdvance))}</td></tr>
+          ${retRows.map((a) => `<tr><td style="padding-left:18px">Returned by guide <span style="font-size:10px;color:#8a8f8b">เงินคืนจากไกด์</span> · ${esc(dtBKK(a.returnedAt))} · ${esc(a.method)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}</td><td align="right">− ${esc(thb(a.amount))}</td></tr>`).join("")}
+          <tr style="background:#f7f7f7"><td align="right"><b>Outstanding <span style="font-size:10px;color:#8a8f8b;font-weight:400">คงค้าง</span></b></td><td align="right"><b>${esc(thb(at.outstanding))}</b></td></tr>
+          <tr><td colspan="2"><b>Status:</b> ${esc(ADVANCE_STATUS_LABEL[advanceStatus(at, true)])}</td></tr>
+        </tbody>
+      </table>` : "";
+
+    // Certification footer — same certifier + first-save date as the app/PDF; the
+    // PNG is inlined base64 so the Doc conversion never depends on a live fetch.
+    const certDate = certificationDate(sheet);
+    let sigSrc = `https://guide.folkpaths.com${JOB_SHEET_CERTIFIER.signatureUrl}`;
+    try { sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`; } catch { /* fall back to the public URL */ }
+    const certHtml = `
+      <div style="margin-top:26px;border-top:1px dashed #cdd3cf;padding-top:12px">
+        <table style="margin-left:auto;border-collapse:collapse"><tbody>
+          <tr><td align="center" style="color:#777;font-size:11px;letter-spacing:1px">CERTIFIED BY <span style="font-size:10px">รับรองโดย</span></td></tr>
+          <tr><td align="center"><img src="${sigSrc}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" width="170" /></td></tr>
+          <tr><td align="center" style="font-weight:700">${esc(JOB_SHEET_CERTIFIER.nameTh)}</td></tr>
+          <tr><td align="center" style="color:#666;font-size:12px">${certDate ? esc(fmtCertDate(certDate)) : "—"}</td></tr>
+        </tbody></table>
+      </div>`;
 
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#111;font-size:13px">
       <div style="font-size:24px;font-weight:800;letter-spacing:1px">FOLKPATHS</div>
@@ -66,7 +105,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
       </table>
       <h3 style="margin:14px 0 4px">Expenses</h3>
       <table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">
-        <thead><tr style="background:#f2f2f2"><th align="left">Description</th><th>Pax</th><th align="right">Amount</th></tr></thead>
+        <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Source <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งจ่าย</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>${expenseRows}</tbody>
       </table>
       <table style="margin-top:12px;border-collapse:collapse"><tbody>
@@ -74,6 +113,8 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         <tr><td style="padding:2px 16px 2px 0;color:#555">Expenses</td><td align="right"><b>${esc(thb(t.totalExpenses))}</b></td></tr>
         <tr><td style="padding:2px 16px 2px 0"><b>Total payout</b></td><td align="right"><b>${esc(thb(t.grandTotal))}</b></td></tr>
       </tbody></table>
+      ${advanceHtml}
+      ${certHtml}
     </body></html>`;
 
     const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
