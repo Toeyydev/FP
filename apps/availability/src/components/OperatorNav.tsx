@@ -72,7 +72,7 @@ export function OperatorNav({ active, children }: { active?: string; children?: 
     <div className="op-side">
       <nav className="op-nav" aria-label="Sections">
         <a href="/" className="op-brand" title="Home">
-          <b>FOLKPATHS</b>
+          <b>FolkOPS</b>
           <span>Operations</span>
         </a>
         {GROUPS.map((g, gi) => (

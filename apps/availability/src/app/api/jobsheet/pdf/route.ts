@@ -154,10 +154,12 @@ export async function GET(req: NextRequest) {
   h3.exp { background:#fff8c4; } h3.fee { background:#f4d9c4; }
   table { width:100%; border-collapse:collapse; font-size:11.5px; }
   th, td { border:0; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
+  tbody tr:last-child td { border-bottom:0; }
   thead th { border-bottom:1px solid #b9beb9; }
   th { background:#f4f4f4; font-weight:600; }
   td.n, th.n { text-align:right; } td.c { text-align:center; }
-  .tot td { font-weight:600; background:#fafafa; }
+  .tot td { font-weight:600; background:#fafafa; border-bottom:0; }
+  tr:has(+ .tot) td { border-bottom:0; }
   .summary { margin-top:16px; margin-left:auto; width:fit-content; min-width:280px; max-width:100%; }
   .summary > div { gap:18px; }
   .summary div { display:flex; justify-content:space-between; padding:5px 8px; }
@@ -177,7 +179,7 @@ export async function GET(req: NextRequest) {
   .keep { break-inside:avoid; page-break-inside:avoid; }
   h3 { break-after:avoid-page; page-break-after:avoid; }
   .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
-  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.5; max-width:540px; }
+  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.55; max-width:none; text-align:justify; }
   .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
   .approve .sigbox { text-align:center; width:290px; }
   .approve .sigimg { height:52px; display:block; margin:0 auto -8px; user-select:none; -webkit-user-select:none; pointer-events:none; }

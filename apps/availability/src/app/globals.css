@@ -369,9 +369,11 @@ a.glink:hover{text-decoration:underline}
 .js-section{margin:16px 0 4px;background:#bfe3bf;text-align:center;padding:5px;border:0;border-radius:4px;font-size:14px}
 .js-table{width:100%;border-collapse:collapse;font-size:13px}
 .js-table th,.js-table td{border:0;border-bottom:1px solid #e4e4e4;padding:3px 5px;text-align:left}
+.js-table tbody tr:last-child td{border-bottom:0}
 .js-table thead th{border-bottom:1.5px solid #c9c9c9}
 .js-table th{background:#f4f4f4;font-weight:700;text-align:center}
-.js-table .js-total td{background:#fafafa;font-weight:600}
+.js-table .js-total td{background:#fafafa;font-weight:600;border-bottom:0}
+.js-table tr:has(+ .js-total) td{border-bottom:0}
 .js-table input,.js-table select{background:#fff}
 /* Phone: the 7-column job sheet scrolls inside its own box, not the page. */
 @media (max-width:560px){

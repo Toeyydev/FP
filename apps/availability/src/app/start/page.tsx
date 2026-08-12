@@ -128,7 +128,7 @@ export default function StartPage() {
           )}
         </div>
       </section>
-      <div className="login-logo">FOLKPATHS</div>
+      <div className="login-logo">FolkOPS</div>
 
       {sent && (
         <div className="scrim show">
