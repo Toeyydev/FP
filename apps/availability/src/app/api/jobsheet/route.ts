@@ -267,11 +267,19 @@ export async function PUT(req: NextRequest) {
   if (!ref) ref = await nextJobRef(d.date);
   const operatorNote = d.operatorNote.trim() || null;
 
-  const sheet = await prisma.jobSheet.upsert({
+  let sheet = await prisma.jobSheet.upsert({
     where: key,
     create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
     update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
   });
+  // Certification timestamp — the FIRST successful save stamps the document (the
+  // date printed under the authorized signature). Set-once at the DB level: the
+  // NULL guard in the WHERE means rapid double-saves or later edits can never
+  // move an earlier stamp; only updatedAt keeps tracking modifications.
+  if (!sheet.certifiedAt) {
+    await prisma.jobSheet.updateMany({ where: { id: sheet.id, certifiedAt: null }, data: { certifiedAt: new Date() } });
+    sheet = (await prisma.jobSheet.findUnique({ where: { id: sheet.id } })) ?? sheet;
+  }
   // Keep the assignment's pax in sync with the job sheet's booking total, so the
   // dispatch board ("On-going tours") and the LINE job sheet match the Job Details.
   const paxTotal = d.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0);
