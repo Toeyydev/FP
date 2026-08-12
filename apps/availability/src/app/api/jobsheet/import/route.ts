@@ -6,19 +6,9 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { parseJobSheetXlsx } from "@/lib/jobsheet-xlsx";
 import { nextJobRef } from "@/lib/jobref";
 import { encrypt } from "@/lib/crypto";
+import { nameTokens, bestGuideByName } from "@/lib/guide-match";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
-
-// Significant name tokens (drop titles + punctuation) for matching a sheet's guide
-// name against the platform record — used to catch Guide-ID collisions on import.
-function nameTokens(s: string | null | undefined): string[] {
-  return (s || "")
-    .toLowerCase()
-    .replace(/\b(miss|mrs|mr|ms|khun|k|dr)\.?\b/g, " ")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/)
-    .filter((w) => w.length >= 2);
-}
 
 // POST (multipart, one or more `file`) — import filled FOLKPATHS job-sheet .xlsx
 // files. Each becomes a booking(s) + assignment + job sheet so non-Bokun tours
@@ -57,6 +47,35 @@ export async function POST(req: NextRequest) {
           continue;
         }
       }
+      // The sheet's Guide ID is unknown here → try to find the guide BY NAME before
+      // creating a placeholder. GuideMaster IDs on paper sheets don't always match
+      // platform IDs (a sheet's "G-001" was platform G-026, "G-005" was G-031), so a
+      // confident unique name match wins over the sheet's ID. Ambiguity → placeholder.
+      let remapped: string | null = null;
+      if (!guide && p.guideName?.trim()) {
+        const roster = await prisma.user.findMany({ where: { role: "GUIDE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, fullName: true, phone: true, taxId: true, currentAddress: true } });
+        const match = bestGuideByName(roster, p.guideName);
+        if (match) { guide = match; remapped = `${p.guideId}→${match.guideId}`; }
+      }
+
+      // Date sanity: if any of the sheet's booking numbers already exists in the
+      // system on a DIFFERENT date, the sheet's date is almost certainly misread or
+      // miswritten (a real batch imported 6 days early and dragged bookings with it).
+      // Skip the file — importing would file the tour, and the payout, on a day the
+      // tour never ran.
+      const nums = p.bookings.map((b) => b.bookingNo).filter(Boolean) as string[];
+      if (nums.length) {
+        const known = await prisma.booking.findMany({
+          where: { OR: [{ confirmationCode: { in: nums } }, { externalRef: { in: nums } }], status: { notIn: ["CANCELLED", "IGNORED"] } },
+          select: { confirmationCode: true, externalRef: true, date: true },
+        });
+        const clash = known.find((k) => k.date !== p.date);
+        if (clash) {
+          results.push({ file: fname, ok: false, detail: `Sheet is dated ${p.date}, but its booking ${clash.externalRef || clash.confirmationCode} is on ${clash.date} in the system. Check the date written on the sheet — not imported.` });
+          continue;
+        }
+      }
+
       const created: string[] = [];
       // Auto-create a missing tour / guide so a backlog of past tours imports without
       // hand-setup. Both are placeholders the operator can flesh out later; the guide
@@ -88,7 +107,9 @@ export async function POST(req: NextRequest) {
       if (!guide.currentAddress && p.address) gUpd.currentAddress = encrypt(p.address);
       if (Object.keys(gUpd).length) await prisma.user.update({ where: { id: guide.id }, data: gUpd });
 
-      const date = p.date, slotIdx = p.slotIdx, guideId = p.guideId, tourId = p.tourId;
+      // Everything files under the RESOLVED platform guide — which is the sheet's ID
+      // unless the name-match redirected it to an existing guide.
+      const date = p.date, slotIdx = p.slotIdx, guideId = guide.guideId ?? p.guideId, tourId = p.tourId;
       const totalPax = p.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0) || null;
 
       // bookings (dedupe by booking no. so re-import / later Bokun sync won't duplicate)
@@ -119,9 +140,9 @@ export async function POST(req: NextRequest) {
         update: { tourId, ref, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee },
       });
 
-      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length } });
+      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length, ...(remapped ? { remapped } : {}) } });
       const parsedGuide = [p.guideName && "name", p.taxId && "tax", p.address && "addr", p.tel && "tel"].filter(Boolean).join("+") || "none-found";
-      results.push({ file: fname, ok: true, guideId, date, slotIdx, ref, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
+      results.push({ file: fname, ok: true, guideId, date, slotIdx, ref, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${remapped ? ` · sheet says ${remapped.split("→")[0]} — matched by name to ${guideId} (${guide.displayName || guide.fullName})` : ""}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
     } catch (e) {
       results.push({ file: file.name || "file", ok: false, detail: (e as Error).message.slice(0, 160) });
     }
