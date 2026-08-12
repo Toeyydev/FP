@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
   if (file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0) {
     // Same naming convention as every other Drive file of this job
     // ("<ref> — <guide> — <date> — …") so a job's documents sort together.
-    const base = `${sheet.ref || `${guideId}-${date}`} — ${guideName} — ${date}`;
+    const base = `${kind === "advance" && peakRef ? `${peakRef} — ` : ""}${sheet.ref || `${guideId}-${date}`} — ${guideName} — ${date}`;
     const up = await uploadSlip(session.user.id ?? undefined, file, `${base} — ${kind === "advance" ? "advance" : "advance return"} ฿${amount}`, date);
     if ("error" in up) return NextResponse.json({ error: up.error }, { status: up.status });
     slip = up;
