@@ -114,6 +114,8 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>${expenseRows}</tbody>
       </table>
+${advanceHtml}
+      
       <table style="margin-top:12px;border-collapse:collapse"><tbody>
         <tr><td colspan="2" style="font-weight:700;padding:2px 0">Financial Summary <span style="font-size:10px;color:#8a8f8b;font-weight:400">สรุปรายการทางการเงิน</span></td></tr>
         <tr><td style="padding:2px 16px 2px 0;color:#555">Tour Expenses <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></td><td align="right"><b>${esc(thb(tourOperatingExpenses(expenses)))}</b></td></tr>
@@ -124,7 +126,6 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         <tr><td style="padding:2px 16px 2px 0;color:#555">Net Payable to Guide <span style="font-size:10px;color:#8a8f8b">ยอดจ่ายสุทธิให้มัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
         ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
       </tbody></table>
-      ${advanceHtml}
       ${certHtml}
     </body></html>`;
 
