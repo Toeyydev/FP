@@ -811,7 +811,7 @@ export default function JobSheetEditor() {
            A cash-movement ledger: it never adds to the expense total. Lives outside
            the read-only fieldset so the GUIDE can still record their return. */}
        {(hasAdvance || canEdit) && (
-       <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
+       <div className="advance-settlement" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
         <h3 className="js-section" style={{ background: "#e8f1ea", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <span>Advance / Settlement<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"การเคลียร์เงินทดรองจ่าย"}</small></span>
           <span className="no-print">{advChip}</span>
