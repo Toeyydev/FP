@@ -171,7 +171,7 @@ export async function GET(req: NextRequest) {
   .adv { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
   .adv table td { font-size:11.5px; }
   .adv .st { font-weight:700; }
-  .summary span { white-space:nowrap; }
+  .summary span small { display:block; margin-left:0; }
   .keep { break-inside:avoid; page-break-inside:avoid; }
   h3 { break-after:avoid-page; page-break-after:avoid; }
   .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
@@ -236,12 +236,12 @@ export async function GET(req: NextRequest) {
     <div class="keep">
     <h3 class="fee">Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></h3>
     <table>
-      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Rate<small>อัตราค่าจ้าง</small></th><th class="c"></th><th class="n">Qty<small>จำนวนครั้ง</small></th><th class="n">WHT %<small>อัตราภาษีหัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net Payable<small>ยอดจ่ายสุทธิ</small></th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Rate<small>อัตราค่าจ้าง</small></th><th class="c"></th><th class="n">Qty<small>จำนวนครั้ง</small></th><th class="n">WHT %<small>อัตราภาษีหัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net Guide Fee<small>ค่าจ้างมัคคุเทศก์สุทธิ</small></th></tr></thead>
       <tbody>
         <tr><td>Guide Fee <small style="display:block;font-size:8px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</small></td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
       </tbody>
     </table>
-    ${reviewRewardTotal(expenses) > 0 ? `<div style="display:flex;justify-content:flex-end;gap:22px;padding:4px 6px;font-size:11.5px"><span>Review Reward <small style="font-size:8.5px;color:#8a8f8b">ค่าตอบแทนรีวิว · ไม่อยู่ในฐานภาษีหัก ณ ที่จ่าย</small></span><b>${thb(reviewRewardTotal(expenses))}</b></div>` : ""}
+    ${reviewRewardTotal(expenses) > 0 ? `<div style="display:flex;justify-content:flex-end;gap:22px;padding:4px 6px;font-size:11.5px"><span>Review Reward <small style="font-size:8.5px;color:#8a8f8b">ค่าตอบแทนรีวิว</small></span><b>${thb(reviewRewardTotal(expenses))}</b></div>` : ""}
     </div>
 
 
@@ -264,7 +264,7 @@ export async function GET(req: NextRequest) {
       <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
       ${reviewRewardTotal(expenses) > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(reviewRewardTotal(expenses))}</b></div>` : ""}
       <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
-      <div><span>Net Payable to Guide <small>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>${thb(t.netGuideFee)}</b></div>
+      <div><span>Net Guide Fee <small>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
       ${guidePersonalTotal(expenses) > 0 ? `<div><span>Reimbursement Due <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style="color:#b45309">${thb(guidePersonalTotal(expenses))}</b></div>` : ""}
       <div class="grand"><span>Total Job Expenses <small>รวมค่าใช้จ่ายของงาน</small></span><b id="grandTot">${thb(totalJobExpenses(t))}</b></div>
     </div>
