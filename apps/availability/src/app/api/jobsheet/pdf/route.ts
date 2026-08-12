@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, thb, totalJobExpenses, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, isReviewExpense, noShowStats, reviewRewardTotal, thb, totalJobExpenses, tourOperatingExpenses, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -106,6 +106,7 @@ export async function GET(req: NextRequest) {
   const updated = (sheet as { updatedAt?: Date | null }).updatedAt;
   const ref = sheet.ref || `job-sheet-${guideId || tourId || "slot"}-${date}`;
 
+  const nsStats = noShowStats(bookings);
   let bookedSum = 0, actualSum = 0, noShowSum = 0;
   let bookingRows = bookings.map((b, i) => {
     bookedSum += b.bookedPax ?? 0; actualSum += b.actualPax ?? 0;
@@ -121,7 +122,9 @@ export async function GET(req: NextRequest) {
   const expRow = (desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
     ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
     : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
-  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
+  // Review-reward rows are guide compensation — rendered with the Guide Fee
+  // section, never inside Tour Expenses (presentation only; data unchanged).
+  let expenseRows = expenses.filter((e) => !isReviewExpense(e)).map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
   if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "", "");
 
   const html = `<!DOCTYPE html>
@@ -167,6 +170,8 @@ export async function GET(req: NextRequest) {
   .adv { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
   .adv table td { font-size:11.5px; }
   .adv .st { font-weight:700; }
+  .keep { break-inside:avoid; page-break-inside:avoid; }
+  h3 { break-after:avoid-page; page-break-after:avoid; }
   .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
   .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.5; max-width:540px; }
   .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
@@ -212,18 +217,21 @@ export async function GET(req: NextRequest) {
       <thead><tr><th>No.<small>ลำดับ</small></th><th>Guest Name<small>ชื่อผู้เดินทาง</small></th><th>Booking No.<small>เลขที่การจอง</small></th><th class="n">Booked Pax<small>จำนวนที่จอง</small></th><th class="n">Actual Pax<small>จำนวนผู้เดินทางจริง</small></th><th>Tickets<small>บัตรเข้าชม</small></th></tr></thead>
       <tbody>${bookingRows || '<tr><td colspan="6" style="color:#aaa">No bookings listed.</td></tr>'}
         <tr class="tot"><td></td><td colspan="2" style="text-align:right">Total</td><td class="n" id="bookedTot">${bookedSum}</td><td class="n" id="actualTot">${actualSum}</td><td></td></tr>
-        ${noShowSum > 0 ? `<tr class="tot"><td></td><td colspan="2" style="text-align:right;color:#c2604a">No-shows</td><td class="n" colspan="2" style="color:#c2604a">${noShowSum} pax</td><td></td></tr>` : ""}
+        ${nsStats.pax > 0 || nsStats.bookings > 0 ? `<tr class="tot"><td></td><td colspan="2" style="text-align:right;color:#c2604a">No-show <small>ไม่มาใช้บริการ</small></td><td class="n" colspan="2" style="color:#c2604a;white-space:nowrap">${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}</td><td></td></tr>` : ""}
       </tbody>
     </table>
+
+    ${nsStats.pax > 0 ? `<div style="font-size:9.5px;color:#8a8f8b;margin:4px 0 0">หมายเหตุ: งานนี้มีรายการผู้เดินทางไม่มาใช้บริการ (${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}) / Note: no-show recorded for this job.</div>` : ""}
 
     <h3 class="exp">Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></h3>
     <table>
       <thead><tr><th>Description<small>รายการ</small></th><th class="n">Unit Price<small>ราคาต่อหน่วย</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th><th class="c">Paid by<small>แหล่งเงินที่ใช้ชำระ</small></th></tr></thead>
       <tbody>${expenseRows}
-        <tr class="tot"><td colspan="4" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(t.totalExpenses)}</td><td></td></tr>
+        <tr class="tot"><td colspan="4" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(tourOperatingExpenses(expenses))}</td><td></td></tr>
       </tbody>
     </table>
 
+    <div class="keep">
     <h3 class="fee">Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></h3>
     <table>
       <thead><tr><th>Description<small>รายการ</small></th><th class="n">Rate<small>อัตราค่าจ้าง</small></th><th class="c"></th><th class="n">Qty<small>จำนวนครั้ง</small></th><th class="n">WHT %<small>อัตราภาษีหัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net Payable<small>ยอดจ่ายสุทธิ</small></th></tr></thead>
@@ -231,11 +239,14 @@ export async function GET(req: NextRequest) {
         <tr><td>Guide Fee <small style="display:block;font-size:8px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</small></td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
       </tbody>
     </table>
+    ${reviewRewardTotal(expenses) > 0 ? `<div style="display:flex;justify-content:flex-end;gap:22px;padding:4px 6px;font-size:11.5px"><span>Review Reward <small style="font-size:8.5px;color:#8a8f8b">ค่าตอบแทนรีวิว · ไม่อยู่ในฐานภาษีหัก ณ ที่จ่าย</small></span><b>${thb(reviewRewardTotal(expenses))}</b></div>` : ""}
+    </div>
 
     <div class="summary" style="break-inside:avoid;page-break-inside:avoid">
       <div style="font-weight:700;margin-bottom:2px">Financial Summary <small>สรุปรายการทางการเงิน</small></div>
-      <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
+      <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(tourOperatingExpenses(expenses))}</b></div>
       <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
+      ${reviewRewardTotal(expenses) > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(reviewRewardTotal(expenses))}</b></div>` : ""}
       <div class="grand"><span>Total Job Expenses <small>รวมค่าใช้จ่ายของงาน</small></span><b id="grandTot">${thb(totalJobExpenses(t))}</b></div>
       <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
       <div><span>Net Payable to Guide <small>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>${thb(t.netGuideFee)}</b></div>
@@ -268,7 +279,7 @@ export async function GET(req: NextRequest) {
     </div>
   </div>
   <script>
-    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0};
+    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0}, REVIEW=${Number(reviewRewardTotal(expenses)) || 0};
     // Live totals for the fillable prep sheet — sum pax + expense lines as you type.
     function jnum(t){ var n=parseFloat(String(t==null?"":t).replace(/[^0-9.\\-]/g,"")); return isFinite(n)?n:0; }
     function baht(n){ return "฿"+Math.round(n).toLocaleString(); }
@@ -280,7 +291,7 @@ export async function GET(req: NextRequest) {
       var et=0; document.querySelectorAll("tr[data-exp]").forEach(function(r){ var p=jnum((r.querySelector("[data-eprice]")||{}).textContent); var px=jnum((r.querySelector("[data-epax]")||{}).textContent); var amt=p*px; var ac=r.querySelector("[data-eamt]"); if(ac) ac.textContent=amt?baht(amt):""; et+=amt; });
       var ete=document.getElementById("expTot"); if(ete) ete.textContent=baht(et);
       var se=document.getElementById("sumExp"); if(se) se.textContent=baht(et);
-      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+GROSSFEE);
+      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+REVIEW+GROSSFEE);
     }
     document.addEventListener("input",recompute);
     var eslipFile=null;
