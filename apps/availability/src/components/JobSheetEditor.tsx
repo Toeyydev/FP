@@ -72,6 +72,7 @@ export default function JobSheetEditor() {
   const [advKind, setAdvKind] = useState<null | "advance" | "return">(null); // which record-form is open
   const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null });
   const [advBusy, setAdvBusy] = useState(false);
+  const [showCross, setShowCross] = useState(false); // expand the cross-check again after approval
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -690,8 +691,17 @@ export default function JobSheetEditor() {
           );
         })()}
 
-        {/* Guide-reported expenses — cross-check (operator only) */}
-        {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && (() => {
+        {/* Guide-reported expenses — cross-check (operator only). Once the sheet is
+            APPROVED the review is decided — collapse to a closure line (the full
+            comparison stays one click away for audit). */}
+        {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && isApproved(sheet.approvalStatus) && (
+          <div className="no-print" style={{ marginTop: 18, border: "1px solid var(--ok-line,#cfe6d6)", background: "var(--ok-bg,#eef7f0)", borderRadius: 10, padding: "9px 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, color: "var(--green,#2f7d4f)", fontSize: 13 }}>✓ Guide report reviewed — official figures approved<span style={{ display: "block", fontSize: 10.5, fontWeight: 500 }}>ตรวจสอบรายงานไกด์แล้ว — ยึดตามตัวเลขที่อนุมัติ</span></span>
+            {sheet.approvedAt && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>}
+            <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => setShowCross((v) => !v)}>{showCross ? "Hide comparison" : "Show comparison"}</button>
+          </div>
+        )}
+        {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && (!isApproved(sheet.approvalStatus) || showCross) && (() => {
           const opTot = sheet.expenses.reduce((s, e) => s + expenseAmount(e), 0);
           const gdTot = sheet.guideExpenses!.reduce((s, e) => s + expenseAmount(e), 0);
           return (
@@ -729,7 +739,10 @@ export default function JobSheetEditor() {
               </table>
               <div style={{ padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <button className="btn sm primary" disabled={busy} onClick={acceptGuideExpenses}>{busy ? "Saving…" : "Accept guide’s figures"}</button>
-                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>sets the official expenses to the guide’s reported figures and saves — in one click</span>
+                {!isApproved(sheet.approvalStatus) && (
+                  <button className="btn sm" disabled={busy} title="Keep the official (operator) figures, approve the sheet, and close this review — the guide's report stays for audit" onClick={() => { if (confirm(`Keep the official figures (${thb(opTot)}) and approve this sheet?\n\nThe guide's report (${thb(gdTot)}) stays recorded for audit.`)) toggleApprove(); }}>✓ Keep operator’s figures · ยึดตาม Operator</button>
+                )}
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>accept = use the guide’s numbers · keep = the official numbers stand and the sheet is approved</span>
               </div>
             </div>
           );
