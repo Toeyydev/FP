@@ -269,9 +269,12 @@ export default function JobSheetEditor() {
     if (row.flag === "added") {
       up({ expenses: [...sheet.expenses, { ...row.g }] });
     } else {
-      up({ expenses: sheet.expenses.map((e) => (norm2(e.description) === row.key ? { ...e, price: row.g!.price ?? e.price, pax: row.g!.pax ?? e.pax } : e)) });
+      // Copy the guide's figures VERBATIM — a blank/zero from the guide is the whole
+      // point of adopting (e.g. "we never bought those tickets"). Falling back to the
+      // operator's old numbers here made Use a silent no-op on blank guide rows.
+      up({ expenses: sheet.expenses.map((e) => (norm2(e.description) === row.key ? { ...e, price: row.g!.price ?? null, pax: row.g!.pax ?? null, ...(row.g!.unit ? { unit: row.g!.unit } : {}) } : e)) });
     }
-    setMsg("Adopted the guide’s figure — adjust if needed, then Save.");
+    setMsg(`Adopted “${(row.g!.description || row.key).trim()}” from the guide’s report — adjust if needed, then Save.`);
   }
 
   // `override` lets a caller save fields it just computed WITHOUT waiting for the
