@@ -399,6 +399,11 @@ model JobSheet {
   approvalStatus    String? // null | "APPROVED" (lifecycle grows later: DRAFT → READY_FOR_REVIEW → APPROVED)
   approvedBy        String? // User.id of the operator who approved
   approvedAt        DateTime?
+  // First successful operator save — the certification date printed under the
+  // authorized signature on the sheet/PDF. Stamped once server-side (only while
+  // NULL); later saves touch updatedAt but never this. Historical sheets stay
+  // NULL until their next save (display falls back to approvedAt — lib/certifier).
+  certifiedAt       DateTime?
   createdById       String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt

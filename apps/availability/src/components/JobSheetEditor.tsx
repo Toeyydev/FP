@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeTotals, expenseAmount, fillDownExpensePax, isApproved, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
+import { JOB_SHEET_CERTIFIER, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
@@ -29,6 +30,7 @@ type Sheet = {
   guideExpenses?: Expense[] | null; guideExpensesAt?: string | null; guideExpensesNote?: string | null;
   operatorNote?: string | null;
   approvalStatus?: string | null; approvedBy?: string | null; approvedAt?: string | null;
+  certifiedAt?: string | null; // first successful save — the certification date (server-stamped, set once)
 };
 // Advance rows as returned by /api/jobsheet (paidAt on advances, returnedAt on returns).
 type AdvanceRow = { id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null };
@@ -829,6 +831,26 @@ export default function JobSheetEditor() {
         )}
        </div>
        )}
+
+       {/* Certified by — the document sign-off. Fixed authorized certifier (see
+           lib/certifier); the date is the sheet's FIRST successful save, stamped
+           server-side — never the tour date, never changed by reopening. Printable,
+           and kept together on one page. */}
+       <div className="js-certify" style={{ marginTop: 26, borderTop: "1px dashed var(--line,#d9d9d9)", paddingTop: 14, display: "flex", justifyContent: "flex-end", breakInside: "avoid", pageBreakInside: "avoid" }}>
+         <div style={{ textAlign: "center", minWidth: 220, maxWidth: "100%" }}>
+           <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by</div>
+           {/* eslint-disable-next-line @next/next/no-img-element */}
+           <img
+             src={JOB_SHEET_CERTIFIER.signatureUrl}
+             alt={`Signature of ${JOB_SHEET_CERTIFIER.nameTh}`}
+             style={{ maxWidth: "min(180px, 100%)", width: "auto", height: "auto", objectFit: "contain", display: "block", margin: "6px auto -4px", userSelect: "none", pointerEvents: "none" }}
+             draggable={false}
+             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; console.warn("Job-sheet certifier signature failed to load:", JOB_SHEET_CERTIFIER.signatureUrl); }}
+           />
+           <div style={{ fontWeight: 600, marginTop: 8 }}>{JOB_SHEET_CERTIFIER.nameTh}</div>
+           <div style={{ fontSize: 12.5, color: "var(--ink-soft,#666)", marginTop: 2 }}>{fmtCertDate(certificationDate(sheet)) || (canEdit ? "date set on first save" : "\u2014")}</div>
+         </div>
+       </div>
       </section>
 
       {/* Finance / accounting side panel — operator-only snapshot of where this job
