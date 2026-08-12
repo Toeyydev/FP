@@ -377,8 +377,8 @@ a.glink:hover{text-decoration:underline}
   .js-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
   .js-table thead,.js-table tbody{display:table;width:100%;min-width:500px}
 }
-.js-summary{margin:14px 0 0;margin-left:auto;width:280px;font-size:14px}
-.js-summary>div{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #eee}
+.js-summary{margin:14px 0 0;margin-left:auto;width:fit-content;min-width:280px;max-width:100%;font-size:14px}
+.js-summary>div{display:flex;justify-content:space-between;gap:18px;padding:3px 0;border-bottom:1px solid #eee}
 .js-summary span{color:#555}
 .js-summary .grand b{background:#bfe3bf;padding:2px 8px;font-style:italic}
 .print-only{display:none}
