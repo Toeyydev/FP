@@ -3,10 +3,11 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, thb, totalJobExpenses, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
-import { JOB_SHEET_CERTIFIER, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -114,11 +115,14 @@ export async function GET(req: NextRequest) {
   }).join("");
   if (editable) for (let k = 0; k < 4; k++) bookingRows += `<tr><td>${bookings.length + k + 1}</td><td contenteditable="true"></td><td contenteditable="true"></td><td class="n" contenteditable="true" data-bpax></td><td class="n" contenteditable="true" data-apax></td><td contenteditable="true"></td></tr>`;
 
-  const expRow = (desc: string, price: string, pax: string, unit: string, amt: string) => editable
-    ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td></tr>`
-    : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td></tr>`;
-  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)))).join("");
-  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "");
+  // Paid-by (แหล่งเงินที่ใช้ชำระ): compact read-only labels — Company / Advance /
+  // Guide are the sanctioned short forms; never truncated composites.
+  const paidByShort = (v?: string) => (v === "advance" ? "Advance" : v === "guide" ? "Guide" : "Company");
+  const expRow = (desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
+    ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
+    : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
+  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
+  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "", "");
 
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${esc(ref)}</title>
@@ -133,8 +137,11 @@ export async function GET(req: NextRequest) {
   .toolbar button { background:#fff; color:#7e3a2c; border:none; border-radius:7px; padding:7px 14px; font-weight:600; cursor:pointer; font-size:13px; }
   .page { max-width: 800px; margin: 16px auto; padding: 0 16px; }
   .head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #7e3a2c; padding-bottom:10px; }
-  .brand { font-size:22px; font-weight:600; color:#7e3a2c; }
-  .brand small { display:block; font-size:12px; color:#6b746f; font-weight:400; }
+  .brand { font-size:11px; font-weight:600; letter-spacing:0.06em; color:#333; break-inside:avoid; page-break-inside:avoid; }
+  .brand .co2 { font-size:8.5px; color:#6b746f; font-weight:400; letter-spacing:0; }
+  .brand .co3 { font-size:8px; color:#8a8f8b; font-weight:400; letter-spacing:0; }
+  .brand .doctitle { font-size:19px; font-weight:700; color:#111; margin-top:9px; letter-spacing:0.02em; }
+  .brand .docref { font-size:13px; font-weight:600; color:#7e3a2c; font-family:ui-monospace,Menlo,monospace; }
   .meta { font-size:11px; }
   .meta div { margin-bottom:2px; } .meta b { display:inline-block; min-width:66px; color:#6b746f; font-weight:400; }
   .guide { display:grid; grid-template-columns:1fr 1fr; gap:2px 18px; margin:12px 0; }
@@ -176,7 +183,12 @@ export async function GET(req: NextRequest) {
   <div class="page">
     ${editable ? `<div class="prepnote">📝 Prep sheet — no guide assigned yet. Fill in the highlighted fields, then <b>Save as PDF / Print</b>. Totals update as you type.</div>` : ""}
     <div class="head">
-      <div class="brand">FOLKPATHS<small>บริษัท โฟล์คพาธส์ จำกัด</small></div>
+      <div class="brand">${esc(CO.brandName)}
+        <div class="co2">Operated by ${esc(CO.operatedBy)} / ${esc(CO.legalNameTh)}</div>
+        <div class="co3">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
+        <div class="doctitle">JOB SHEET</div>
+        <div class="docref">${esc(sheet.ref || "")}</div>
+      </div>
       <div class="meta">
         <div><b>No.</b> ${esc(sheet.ref || "")}</div>
         <div><b>Tour ID</b> ${esc(tourId || "—")}</div>
@@ -190,71 +202,75 @@ export async function GET(req: NextRequest) {
       <div><span>Tour Date</span><b>${esc(date)}</b></div>
       <div><span>Time</span><b>${esc(time)}</b></div>
       <div><span>Tour Name</span><b>${esc(tour?.name || "")}</b></div>
-      <div><span>Guide name</span><b${ce}>${esc(guideName)}</b></div>
+      <div><span>Guide Name</span><b${ce}>${esc(guideName)}</b></div>
       <div><span>Tax ID</span><span${ce}>${esc(taxId || (editable ? "" : "—"))}</span></div>
       <div><span>Address</span><span${ce}>${esc(address || (editable ? "" : "—"))}</span></div>
       <div><span>E-mail</span><span${ce}>${esc(u?.email || "")}</span></div>
-      <div><span>Tel no.</span><span${ce}>${esc(u?.phone || (editable ? "" : "—"))}</span></div>
+      <div><span>Tel.</span><span${ce}>${esc(u?.phone || (editable ? "" : "—"))}</span></div>
     </div>
 
     <h3>Job Details <small>รายละเอียดงาน</small></h3>
     <table>
-      <thead><tr><th>No.<small>ลำดับ</small></th><th>Name lists<small>รายชื่อลูกค้า</small></th><th>Booking No.<small>เลขที่การจอง</small></th><th class="n">Booked Pax<small>จำนวนจอง</small></th><th class="n">Actual Pax<small>มาจริง</small></th><th>Tickets<small>บัตรเข้าชม</small></th></tr></thead>
+      <thead><tr><th>No.<small>ลำดับ</small></th><th>Guest Name<small>ชื่อผู้เดินทาง</small></th><th>Booking No.<small>เลขที่การจอง</small></th><th class="n">Booked Pax<small>จำนวนที่จอง</small></th><th class="n">Actual Pax<small>จำนวนผู้เดินทางจริง</small></th><th>Tickets<small>บัตรเข้าชม</small></th></tr></thead>
       <tbody>${bookingRows || '<tr><td colspan="6" style="color:#aaa">No bookings listed.</td></tr>'}
         <tr class="tot"><td></td><td colspan="2" style="text-align:right">Total</td><td class="n" id="bookedTot">${bookedSum}</td><td class="n" id="actualTot">${actualSum}</td><td></td></tr>
         ${noShowSum > 0 ? `<tr class="tot"><td></td><td colspan="2" style="text-align:right;color:#c2604a">No-shows</td><td class="n" colspan="2" style="color:#c2604a">${noShowSum} pax</td><td></td></tr>` : ""}
       </tbody>
     </table>
 
-    <h3 class="exp">Expense <small>ค่าใช้จ่าย</small></h3>
+    <h3 class="exp">Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></h3>
     <table>
-      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Price<small>ราคา</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Unit Price<small>ราคาต่อหน่วย</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th><th class="c">Paid by<small>แหล่งเงินที่ใช้ชำระ</small></th></tr></thead>
       <tbody>${expenseRows}
-        <tr class="tot"><td colspan="4" style="text-align:right">Total Expenses <small>รวมค่าใช้จ่าย</small></td><td class="n" id="expTot">${thb(t.totalExpenses)}</td></tr>
+        <tr class="tot"><td colspan="4" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(t.totalExpenses)}</td><td></td></tr>
       </tbody>
     </table>
 
-    <h3 class="fee">Guide <small>ค่าตอบแทนมัคคุเทศก์</small></h3>
+    <h3 class="fee">Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></h3>
     <table>
-      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Price<small>ราคา</small></th><th class="c"></th><th class="n">Time<small>ครั้ง</small></th><th class="n">WHT %<small>หัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net<small>สุทธิ</small></th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Rate<small>อัตราค่าจ้าง</small></th><th class="c"></th><th class="n">Qty<small>จำนวนครั้ง</small></th><th class="n">WHT %<small>อัตราภาษีหัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net Payable<small>ยอดจ่ายสุทธิ</small></th></tr></thead>
       <tbody>
-        <tr><td>Guide Fee</td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
+        <tr><td>Guide Fee <small style="display:block;font-size:8px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</small></td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
       </tbody>
     </table>
 
-    <div class="summary">
-      <div><span>Total Expenses <small>รวมค่าใช้จ่าย</small></span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
-      <div><span>Net Guide Fee <small>ค่ามัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
-      <div class="grand"><span>Total <small>รวมทั้งสิ้น</small></span><b id="grandTot">${thb(t.grandTotal)}</b></div>
+    <div class="summary" style="break-inside:avoid;page-break-inside:avoid">
+      <div style="font-weight:700;margin-bottom:2px">Financial Summary <small>สรุปรายการทางการเงิน</small></div>
+      <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
+      <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
+      <div class="grand"><span>Total Job Expenses <small>รวมค่าใช้จ่ายของงาน</small></span><b id="grandTot">${thb(totalJobExpenses(t))}</b></div>
+      <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
+      <div><span>Net Payable to Guide <small>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>${thb(t.netGuideFee)}</b></div>
+      ${guidePersonalTotal(expenses) > 0 ? `<div><span>Reimbursement Due <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style="color:#b45309">${thb(guidePersonalTotal(expenses))}</b></div>` : ""}
     </div>
     ${advRows.length || retRows.length ? (() => {
       const at = advanceTotals(advRows, retRows, expenses);
       const st = ADVANCE_STATUS_LABEL[advanceStatus(at, true)];
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
-      return `<div class="adv"><h3>Advance / Settlement <small>เงินทดรองจ่าย</small></h3>
+      return `<div class="adv"><h3>Advance / Settlement <small>การเคลียร์เงินทดรองจ่าย</small></h3>
       <table><tbody>
-        ${advRows.map((a) => `<tr><td>Advance paid to guide <small>เงินทดรองจ่ายให้ไกด์</small> · ${esc(dt(a.paidAt))}${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
-        <tr><td style="padding-left:16px">Actual expenses from advance <small>ค่าใช้จ่ายจริงจากเงินทดรอง</small></td><td class="n">− ${thb(at.usedFromAdvance)}</td></tr>
-        ${retRows.map((a) => `<tr><td style="padding-left:16px">Returned by guide <small>เงินคืนจากไกด์</small> · ${esc(dt(a.returnedAt))}${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td class="n">− ${thb(a.amount)}</td></tr>`).join("")}
-        <tr class="tot"><td style="text-align:right">Outstanding <small>คงค้าง</small></td><td class="n">${thb(at.outstanding)}</td></tr>
-        <tr><td class="st" colspan="2">Status <small>สถานะ</small> : ${esc(st)}</td></tr>
+        ${advRows.map((a) => `<tr><td>Advance Paid <small>เงินทดรองจ่ายให้มัคคุเทศก์</small> · ${esc(dt(a.paidAt))}${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
+        <tr><td style="padding-left:16px">Expenses Paid from Advance <small>ค่าใช้จ่ายที่ชำระจากเงินทดรอง</small></td><td class="n">− ${thb(at.usedFromAdvance)}</td></tr>
+        ${retRows.map((a) => `<tr><td style="padding-left:16px">Advance Returned <small>เงินทดรองคงเหลือส่งคืน</small> · ${esc(dt(a.returnedAt))}${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td class="n">− ${thb(a.amount)}</td></tr>`).join("")}
+        <tr class="tot"><td style="text-align:right">Outstanding Advance <small>เงินทดรองจ่ายคงค้าง</small></td><td class="n">${thb(at.outstanding)}</td></tr>
+        <tr><td class="st" colspan="2">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(st)}</td></tr>
       </tbody></table></div>`;
     })() : ""}
     <div class="approve">
-      <div class="certnote">ข้าพเจ้าขอรับรองว่ารายการค่าใช้จ่ายข้างต้นได้จ่ายไปจริงเพื่อกิจการนำเที่ยวของบริษัท และขอใช้ใบสำคัญนี้เป็นหลักฐานประกอบการเบิกจ่าย/แทนใบเสร็จรับเงินที่ไม่อาจเรียกเก็บได้</div>
+      <div class="certnote">${esc(CERT_STATEMENT_TH)}</div>
       <div class="sigwrap">
         <div class="sigbox">
           <img class="sigimg" src="${sigSrc ?? JOB_SHEET_CERTIFIER.signatureUrl}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" draggable="false" onerror="this.style.display='none';var w=document.getElementById('sigfail');if(w)w.style.display='block'" />
           <div id="sigfail" style="display:none;color:#b00020;font-size:11px;font-weight:600;padding:14px 0">⚠ ลายเซ็นผู้รับรองโหลดไม่สำเร็จ — เอกสารนี้ยังไม่สมบูรณ์ / certifier signature failed to load</div>
-          <div class="sigline">ลงชื่อ ...................................... ผู้อนุมัติ / ผู้รับรอง</div>
-          <div class="signame">( นางสาว หทัยวรรณ ใจปลอด )</div>
+          <div class="signame">(${esc(JOB_SHEET_CERTIFIER.nameFullTh)})</div>
+          <div class="sigline" style="color:#6b746f;font-size:11px">${esc(JOB_SHEET_CERTIFIER.roleLabelTh)}</div>
           <div class="sigdate">${certDate ? `วันที่ ${esc(fmtCertDate(certDate))}` : "วันที่ ......../......../........"}</div>
         </div>
       </div>
     </div>
   </div>
   <script>
-    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0};
+    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0};
     // Live totals for the fillable prep sheet — sum pax + expense lines as you type.
     function jnum(t){ var n=parseFloat(String(t==null?"":t).replace(/[^0-9.\\-]/g,"")); return isFinite(n)?n:0; }
     function baht(n){ return "฿"+Math.round(n).toLocaleString(); }
@@ -266,7 +282,7 @@ export async function GET(req: NextRequest) {
       var et=0; document.querySelectorAll("tr[data-exp]").forEach(function(r){ var p=jnum((r.querySelector("[data-eprice]")||{}).textContent); var px=jnum((r.querySelector("[data-epax]")||{}).textContent); var amt=p*px; var ac=r.querySelector("[data-eamt]"); if(ac) ac.textContent=amt?baht(amt):""; et+=amt; });
       var ete=document.getElementById("expTot"); if(ete) ete.textContent=baht(et);
       var se=document.getElementById("sumExp"); if(se) se.textContent=baht(et);
-      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+NETFEE);
+      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+GROSSFEE);
     }
     document.addEventListener("input",recompute);
     var eslipFile=null;
