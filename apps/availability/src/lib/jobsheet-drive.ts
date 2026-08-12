@@ -57,7 +57,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     const at = advanceTotals(advRows, retRows, expenses);
     const dtBKK = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
     const advanceHtml = advRows.length || retRows.length ? `
-      <h3 style="margin:14px 0 4px">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">การเคลียร์เงินทดรองจ่าย</span></h3>
+      <h3 style="margin:14px 0 4px;border:0">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">การเคลียร์เงินทดรองจ่าย</span></h3>
       <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
         <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:9px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Date · Time <span style="font-size:9px;color:#8a8f8b;font-weight:400">วันเวลาทำรายการ</span></th><th align="right">Amount <span style="font-size:9px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>
@@ -111,7 +111,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         <tbody>${bookingRows}</tbody>
       </table>
       ${nsStats.pax > 0 ? `<div style="font-size:11px;color:#c2604a;margin:4px 0 0"><b>No-show</b> <span style="font-size:9px;color:#8a8f8b">ไม่มาใช้บริการ</span>: ${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}</div>` : ""}
-      <h3 style="margin:14px 0 4px">Tour Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
+      <h3 style="margin:14px 0 4px;border:0">Tour Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
       <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
         <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>${expenseRows}</tbody>
