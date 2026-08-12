@@ -913,10 +913,10 @@ export default function JobSheetEditor() {
           <div><span>Tour Expenses<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></div>
           <div><span>Guide Fee<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
           {reviewRewardTotal(sheet.expenses) > 0 && <div><span>Review Reward<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(reviewRewardTotal(sheet.expenses))}</b></div>}
-          <div className="grand"><span>Total Job Expenses<small style={{ fontSize: 9.5, marginLeft: 5 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
           <div><span>Withholding Tax<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
           <div><span>Net Payable to Guide<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>{thb(t.netGuideFee)}</b></div>
           {personal > 0 && <div><span>Reimbursement Due<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
+          <div className="grand"><span>Total Job Expenses<small style={{ fontSize: 9.5, marginLeft: 5 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
         </div>
           );
         })()}
