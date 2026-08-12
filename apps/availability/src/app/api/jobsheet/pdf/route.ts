@@ -179,7 +179,7 @@ export async function GET(req: NextRequest) {
   .keep { break-inside:avoid; page-break-inside:avoid; }
   h3 { break-after:avoid-page; page-break-after:avoid; }
   .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
-  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.55; max-width:none; text-align:justify; }
+  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.6; max-width:none; text-align:left; }
   .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
   .approve .sigbox { text-align:center; width:290px; }
   .approve .sigimg { height:52px; display:block; margin:0 auto -8px; user-select:none; -webkit-user-select:none; pointer-events:none; }
