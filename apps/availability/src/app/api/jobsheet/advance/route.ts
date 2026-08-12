@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { isOps } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { notifyGuide, notifyOps } from "@/lib/booking-import";
+import { thb } from "@/lib/jobsheet";
 
 // Guide advances + returns for one job (guideId + date + slotIdx). An advance is a
 // cash movement, never an expense (see lib/advance). Operators/admin record both;
@@ -89,10 +91,25 @@ export async function POST(req: NextRequest) {
   if (kind === "advance") {
     const row = await prisma.guideAdvance.create({ data: { ...key(guideId, date, slotIdx), amount, paidAt: at, method, txRef, peakRef, note, slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null, createdById } });
     await audit({ actorId: createdById, actorRole: session.user.role ?? null, action: "advance.recorded", entityType: "GuideAdvance", entityId: row.id, detail: { ref: sheet.ref, guideId, date, slotIdx, amount, method, txRef, slip: !!slip } });
+    // The guide must know money was sent: in-app + push + LINE (if linked) + email
+    // fallback — same pipeline as booking changes. Best-effort, never blocks the record.
+    await notifyGuide(
+      guideId,
+      `Folkpaths sent you an advance of ${thb(amount)} for your ${date} tour${sheet.ref ? ` (${sheet.ref})` : ""}. Use it for tour expenses (tickets, transport). After the tour, report what you spent and return any unused amount.`,
+      "Advance payment sent",
+      `${date} · ${thb(amount)} advance`,
+    );
   } else {
     if (advanceId && !(await prisma.guideAdvance.findFirst({ where: { id: advanceId, ...key(guideId, date, slotIdx) } }))) return NextResponse.json({ error: "bad-advance" }, { status: 400 });
     const row = await prisma.guideAdvanceReturn.create({ data: { ...key(guideId, date, slotIdx), advanceId, amount, returnedAt: at, method, txRef, note, slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null, createdById } });
     await audit({ actorId: createdById, actorRole: session.user.role ?? null, action: "advance.return_recorded", entityType: "GuideAdvanceReturn", entityId: row.id, detail: { ref: sheet.ref, guideId, date, slotIdx, amount, method, txRef, slip: !!slip, byGuide: !opsUser } });
+    // Close the loop on returns too: a guide-recorded return alerts the operator to
+    // verify the transfer arrived; an operator-recorded one confirms to the guide.
+    if (opsUser) {
+      await notifyGuide(guideId, `Your advance return of ${thb(amount)} for the ${date} tour was recorded. Thank you!`, "Advance return recorded", `${date} · ${thb(amount)} returned`);
+    } else {
+      await notifyOps(`${guideId} recorded returning ${thb(amount)} of the ${date} tour advance${slip ? " (slip attached)" : ""}. Check the transfer arrived, then review the settlement on the job sheet.`, "Guide returned advance money", `${guideId} · ${date} · ${thb(amount)}`, { date });
+    }
   }
 
   const [advances, returns] = await Promise.all([
