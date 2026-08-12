@@ -8,7 +8,7 @@
 export const JOB_SHEET_CERTIFIER = {
   id: "hathaiwan-jaiplod",
   nameTh: "หทัยวรรณ ใจปลอด",
-  signatureUrl: "/approver-signature.png",
+  signatureUrl: "/approver-signature.png?v=2", // ?v busts stale PWA/browser caches of the pre-fix asset
   signatureFile: "approver-signature.png", // under public/ — for server-side inlining into the PDF
 } as const;
 
