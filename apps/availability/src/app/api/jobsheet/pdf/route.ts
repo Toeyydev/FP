@@ -153,7 +153,8 @@ export async function GET(req: NextRequest) {
   h3 { font-size:13px; margin:16px 0 4px; padding:5px 8px; background:#bfe3bf; border:0; border-radius:4px; }
   h3.exp { background:#fff8c4; } h3.fee { background:#f4d9c4; }
   table { width:100%; border-collapse:collapse; font-size:11.5px; }
-  th, td { border:0; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
+  th, td { border:0; border-right:0.5px solid #edefed; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
+  th:last-child, td:last-child { border-right:0; }
   tbody tr:last-child td { border-bottom:0; }
   thead th { border-bottom:1px solid #b9beb9; }
   th { background:#f4f4f4; font-weight:400; }
