@@ -1072,3 +1072,7 @@ body:has(.op-layout) .wrap{max-width:1440px}
 
 /* Advance / Settlement is one logical block — never split it across pages. */
 .advance-settlement{break-inside:avoid;page-break-inside:avoid}
+
+/* Final documents: no browser-printed date/title/URL — the page margin is
+   ours (padding), not the browser's header/footer band. */
+@media print{@page{margin:0}body{padding:12mm}}
