@@ -245,6 +245,7 @@ const expenseZ = z.object({
   receiptAt: z.string().max(40).optional(),
   receiptBy: z.string().max(60).optional(),
   notes: z.string().max(500).optional(),
+  relatedJobRef: z.string().max(60).optional(),
 });
 const guideFeeZ = z.object({ price: num, time: num, whtPct: num }).nullish().transform((v) => v ?? { price: null, time: null, whtPct: null });
 

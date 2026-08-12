@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, fillDownExpensePax, guidePersonalTotal, isApproved, isReviewExpense, noShowStats, noShowStatus, reviewRewardTotal, thb, totalJobExpenses, tourOperatingExpenses, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, fillDownExpensePax, guidePersonalTotal, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -116,6 +116,9 @@ export default function JobSheetEditor() {
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);
+  // Cost view: tour operating rows, plus a review reward only when it belongs to
+  // THIS job (lib/jobsheet) — a carried-over reward is payment, not job cost.
+  const cost = jobCostBreakdown(sheet.expenses, sheet.guideFee, sheet.ref);
   const ro = !canEdit; // read-only (guide view)
   // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
   // tour start (that's when who turned up is known). Operators can mark any time.
@@ -631,7 +634,7 @@ export default function JobSheetEditor() {
                 <td><input style={{ ...L, width: 70 }} type="number" value={b.bookedPax ?? ""} onChange={(e) => setBooking(i, { bookedPax: numOrNull(e.target.value) })} /></td>
                 <td><input style={{ ...L, width: 70 }} type="number" value={b.actualPax ?? ""} onChange={(e) => setBooking(i, { actualPax: numOrNull(e.target.value) })} /></td>
                 <td>
-                  <select style={L} value={b.tickets} onChange={(e) => setBooking(i, { tickets: e.target.value as Booking["tickets"] })}>
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", MozAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={b.tickets} onChange={(e) => setBooking(i, { tickets: e.target.value as Booking["tickets"] })}>
                     <option value="">—</option><option value="included">Included</option><option value="not">Not incl.</option>
                   </select>
                 </td>
@@ -651,7 +654,7 @@ export default function JobSheetEditor() {
         <table className="js-table">
           <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Unit Price" th="ราคาต่อหน่วย" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid by" th="แหล่งเงินที่ใช้ชำระ" /></th><th className="no-print"><TH en="Document" th="หลักฐานประกอบค่าใช้จ่าย" /></th><th className="no-print" /></tr></thead>
           <tbody>
-            {sheet.expenses.map((e, i) => (
+            {sheet.expenses.map((e, i) => ({ e, i })).filter(({ e }) => !isReviewExpense(e)).map(({ e, i }) => (
               <tr key={i}>
                 <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
                 <td><input style={{ ...L, width: 70 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
@@ -682,7 +685,7 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(cost.tourExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
         {!ro && (() => {
@@ -699,7 +702,6 @@ export default function JobSheetEditor() {
           ) : null;
         })()}
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
-        <button className="btn sm no-print" title="Reward for reviews — rate × number of reviews (e.g. 2 × ฿50). Shown as its own line on the guide's Pay." onClick={() => up({ expenses: [...sheet.expenses, { description: "Review reward", price: 50, pax: 1 }] })}>★ + Review reward</button>
         {!ro && (() => {
           // Expense pax starts blank — the operator enters the guest count once here
           // and fills every line (attraction/ticket lines get the count, "(Inc. Guide)"
@@ -791,6 +793,48 @@ export default function JobSheetEditor() {
             </tr>
           </tbody>
         </table>
+
+        {/* Additional Guide Payment — review rewards are guide compensation, not
+            tour operating cost. A reward earned on ANOTHER job (Related Job No.
+            differs) is paid out with this job but never counted as its expense. */}
+        {(() => {
+          const rows = sheet.expenses.map((e, i) => ({ e, i })).filter(({ e }) => isReviewExpense(e));
+          if (!rows.length && ro) return null;
+          return (
+            <div style={{ marginTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
+              <h3 className="js-section" style={{ background: "#efe7f3" }}>Additional Guide Payment<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายการจ่ายเพิ่มเติมให้มัคคุเทศก์"}</small></h3>
+              <table className="js-table">
+                <thead><tr>
+                  <th style={{ textAlign: "left" }}><TH en="Description" th="รายการ" /></th>
+                  <th style={{ width: 160 }}><TH en="Related Job No." th="เลขที่งานที่เกี่ยวข้อง" /></th>
+                  <th style={{ width: 120, textAlign: "right" }}><TH en="Amount" th="จำนวนเงิน" /></th>
+                  <th className="no-print" style={{ width: 34 }} />
+                </tr></thead>
+                <tbody>
+                  {rows.map(({ e, i }) => {
+                    const own = reviewBelongsToJob(e, sheet.ref);
+                    return (
+                      <tr key={i}>
+                        <td>{ro ? (e.description || "Review Reward") : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)" }}>ค่าตอบแทนรีวิว{own ? "" : " · จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้"}</small></td>
+                        <td>{ro ? (e.relatedJobRef || sheet.ref || "—") : <input style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedJobRef ?? ""} placeholder={sheet.ref ?? "FOLK-BKK-…"} title="Leave blank when the review was earned on this job" onChange={(ev) => setExpense(i, { relatedJobRef: ev.target.value })} />}</td>
+                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{ro ? thb(expenseAmount(e)) : <span style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}><input style={{ ...L, width: 58, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} />×<input style={{ ...L, width: 40, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></span>}</td>
+                        <td className="no-print">{canEdit && <button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button>}</td>
+                      </tr>
+                    );
+                  })}
+                  {rows.length > 0 && (
+                    <tr className="js-total">
+                      <td colSpan={2} style={{ textAlign: "right" }}>Total Additional Payment<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมรายการจ่ายเพิ่มเติม"}</small></td>
+                      <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}><b>{thb(cost.reviewOwn + cost.reviewOther)}</b></td>
+                      <td className="no-print" />
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {canEdit && <button className="btn sm no-print" title="Reward for reviews — rate × number of reviews (e.g. 2 × ฿50)" onClick={() => up({ expenses: [...sheet.expenses, { description: "Review reward", price: 50, pax: 1 }] })}>★ + Review reward</button>}
+            </div>
+          );
+        })()}
         </div>
 
 
@@ -921,12 +965,13 @@ export default function JobSheetEditor() {
           return (
         <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Financial Summary<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
-          <div><span>Tour Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(t.totalExpenses)}</b></div>
+          <div><span>Tour Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(cost.tourExpenses)}</b></div>
           <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
+          {cost.reviewOwn > 0 && <div><span>Review Reward<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(cost.reviewOwn)}</b></div>}
           <div><span>Withholding Tax<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
           <div><span>Net Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>{thb(t.netGuideFee)}</b></div>
           {personal > 0 && <div><span>Reimbursement Due<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
-          <div className="grand"><span>Total Job Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
+          <div className="grand"><span>Total Job Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(cost.jobExpenses)}</b></div>
         </div>
           );
         })()}
