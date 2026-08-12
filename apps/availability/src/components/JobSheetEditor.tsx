@@ -654,15 +654,15 @@ export default function JobSheetEditor() {
             {sheet.expenses.map((e, i) => (
               <tr key={i}>
                 <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
-                <td><input style={{ ...L, width: 90 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
+                <td><input style={{ ...L, width: 70 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
                 <td style={{ textAlign: "center" }}>×</td>
-                <td><input style={{ ...L, width: 70 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
-                <td><select style={{ ...L, width: 78 }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select></td>
+                <td><input style={{ ...L, width: 54 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
+                <td><select style={{ ...L, width: 54, appearance: "none", WebkitAppearance: "none", MozAppearance: "none", textAlign: "center", backgroundImage: "none", cursor: "pointer" }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })} title="เลือกหน่วย">{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select></td>
                 <td style={{ textAlign: "right" }}>{thb(expenseAmount(e))}</td>
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /
                       "operator") read as Company. "Guide Advance" rows feed the settlement. */}
-                  <select style={{ ...L, width: 128, ...(e.paidBy === "advance" ? { borderColor: "var(--primary)", fontWeight: 600 } : e.paidBy === "guide" ? { borderColor: "#b45309", fontWeight: 600 } : {}) }} value={e.paidBy === "advance" ? "advance" : e.paidBy === "guide" ? "guide" : "company"} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} = ${x.th}`).join(" · ")}>
+                  <select style={{ ...L, width: 116, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(e.paidBy === "advance" ? { borderColor: "var(--primary)", fontWeight: 600 } : e.paidBy === "guide" ? { borderColor: "#b45309", fontWeight: 600 } : {}) }} value={e.paidBy === "advance" ? "advance" : e.paidBy === "guide" ? "guide" : "company"} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} = ${x.th}`).join(" · ")}>
                     {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </td>
