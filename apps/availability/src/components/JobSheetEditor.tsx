@@ -652,7 +652,7 @@ export default function JobSheetEditor() {
           <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Unit Price" th="ราคาต่อหน่วย" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid by" th="แหล่งเงินที่ใช้ชำระ" /></th><th className="no-print"><TH en="Document" th="หลักฐานประกอบค่าใช้จ่าย" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
-              <tr key={i} style={isReviewExpense(e) ? { background: "#f8f4ec" } : undefined} title={isReviewExpense(e) ? "Review Reward — guide compensation; shown with the Guide Fee on documents, not in Tour Expenses" : undefined}>
+              <tr key={i}>
                 <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
                 <td><input style={{ ...L, width: 90 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
                 <td style={{ textAlign: "center" }}>×</td>
@@ -682,7 +682,7 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
         {!ro && (() => {
@@ -778,7 +778,7 @@ export default function JobSheetEditor() {
         <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
         <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Guide Fee" th="ค่าจ้างมัคคุเทศก์สุทธิ" /></th></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Payable" th="ยอดจ่ายสุทธิ" /></th></tr></thead>
           <tbody>
             <tr>
               <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></td>
@@ -791,12 +791,6 @@ export default function JobSheetEditor() {
             </tr>
           </tbody>
         </table>
-        {reviewRewardTotal(sheet.expenses) > 0 && (
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 24, padding: "5px 8px", fontSize: 13 }}>
-            <span>Review Reward<small style={{ fontSize: 10, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว</small></span>
-            <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(reviewRewardTotal(sheet.expenses))}</b>
-          </div>
-        )}
         </div>
 
 
@@ -825,31 +819,48 @@ export default function JobSheetEditor() {
         {hasAdvance ? (
           <>
             <table className="js-table" style={{ fontSize: 13 }}>
+              <thead><tr>
+                <th style={{ textAlign: "left" }}>Description<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>รายการ</small></th>
+                <th style={{ width: 155 }}>Date · Time<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>วันเวลาทำรายการ</small></th>
+                <th className="no-print" style={{ width: 70 }}>Slip<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>สลิป</small></th>
+                <th style={{ width: 110, textAlign: "right" }}>Amount<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>จำนวนเงิน</small></th>
+                <th className="no-print" style={{ width: 34 }} />
+              </tr></thead>
               <tbody>
                 {advance.advances.map((a) => (
                   <tr key={a.id}>
-                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.paidAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
-                    <td className="no-print" style={{ width: 70, textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
-                    <td style={{ width: 110, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
-                    <td className="no-print" style={{ width: 34, textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("advance", a)}>×</button>}</td>
+                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small>{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}{a.note ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.note}</span> : null}</td>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{dtShort(a.paidAt)} · {a.method}</td>
+                    <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
+                    <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("advance", a)}>×</button>}</td>
                   </tr>
                 ))}
                 <tr>
-                  <td style={{ paddingLeft: 18 }}>Expenses Paid from Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายที่ชำระจากเงินทดรอง"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · expense rows with Paid by = Guide Advance above</span></td>
-                  <td className="no-print" />
+                  <td style={{ paddingLeft: 18 }}>Expenses Paid from Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายที่ชำระจากเงินทดรอง"}</small></td>
+                  <td /><td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(advT.usedFromAdvance)}</td>
                   <td className="no-print" />
                 </tr>
+                {sheet.expenses.filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0).map((e, i) => (
+                  <tr key={`adv-exp-${i}`} style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+                    <td style={{ paddingLeft: 34 }}>{e.description}</td>
+                    <td /><td className="no-print" />
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{thb(expenseAmount(e))}</td>
+                    <td className="no-print" />
+                  </tr>
+                ))}
                 {advance.returns.map((a) => (
                   <tr key={a.id}>
-                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.returnedAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small>{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}{a.note ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.note}</span> : null}</td>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{dtShort(a.returnedAt)} · {a.method}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(a.amount)}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("return", a)}>×</button>}</td>
                   </tr>
                 ))}
                 <tr className="js-total">
-                  <td style={{ textAlign: "right" }}>Outstanding Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายคงค้าง"}</small></td>
+                  <td colSpan={2} style={{ textAlign: "right" }}>Outstanding Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายคงค้าง"}</small></td>
                   <td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}><b>{thb(advT.outstanding)}</b></td>
                   <td className="no-print" />
@@ -910,13 +921,12 @@ export default function JobSheetEditor() {
           return (
         <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Financial Summary<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
-          <div><span>Tour Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></div>
+          <div><span>Tour Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(t.totalExpenses)}</b></div>
           <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
-          {reviewRewardTotal(sheet.expenses) > 0 && <div><span>Review Reward<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(reviewRewardTotal(sheet.expenses))}</b></div>}
           <div><span>Withholding Tax<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
           <div><span>Net Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>{thb(t.netGuideFee)}</b></div>
           {personal > 0 && <div><span>Reimbursement Due<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
-          <div className="grand"><span>Total Job Expenses<small style={{ display: "block", fontSize: 9.5, fontWeight: 400 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
+          <div className="grand"><span>Total Job Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
         </div>
           );
         })()}

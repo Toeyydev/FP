@@ -113,12 +113,16 @@ export function bookingNoShowPax(b: Booking): number {
 // No-show PAX (จำนวนผู้เดินทางที่ไม่มาใช้บริการ) and no-show BOOKINGS (จำนวนการจอง
 // ที่ไม่มาใช้บริการ) are different units — a 13-booked/8-came job is 5 pax across
 // maybe 2 fully-absent bookings. Never display one number as the other.
+// Owner rule: a "no-show" is a booking that did not come AT ALL — pax counts the
+// BOOKED pax of fully-absent bookings only. Partial reductions (2 booked → 1 came)
+// are guests leaving early / trimming, not no-shows, and stay out of both numbers.
 export function noShowStats(bookings: Booking[]): { pax: number; bookings: number } {
   let pax = 0, count = 0;
   for (const b of bookings ?? []) {
-    const ns = bookingNoShowPax(b);
-    pax += ns;
-    if ((b.bookedPax ?? 0) > 0 && ns >= (b.bookedPax ?? 0)) count++;
+    const booked = b.bookedPax ?? 0;
+    if (booked <= 0) continue;
+    const fullyAbsent = b.actualPax === 0 || bookingNoShowPax(b) >= booked;
+    if (fullyAbsent) { pax += booked; count++; }
   }
   return { pax, bookings: count };
 }

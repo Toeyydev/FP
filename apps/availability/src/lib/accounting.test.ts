@@ -34,17 +34,17 @@ describe("accounting presentation — FOLK-BKK-20260811-01 style acceptance", ()
 import { noShowStats, tourOperatingExpenses, reviewRewardTotal } from "@/lib/jobsheet";
 
 describe("no-show stats — pax and bookings are different units", () => {
-  it("13 booked / 8 came → 5 no-show pax across 2 fully-absent bookings", () => {
+  it("no-show pax = BOOKED pax of fully-absent bookings only (owner rule)", () => {
     const bookings = [
-      { name: "A", bookingNo: "1", bookedPax: 4, actualPax: 4, tickets: "" as const, status: "" },
-      { name: "B", bookingNo: "2", bookedPax: 4, actualPax: 4, tickets: "" as const, status: "" },
-      { name: "C", bookingNo: "3", bookedPax: 2, actualPax: 0, tickets: "" as const, status: "no-show" }, // flagged
-      { name: "D", bookingNo: "4", bookedPax: 3, actualPax: 0, tickets: "" as const, status: "" }, // only actual zeroed — the old bug missed this
+      { name: "Marinus", bookingNo: "1", bookedPax: 2, actualPax: 0, tickets: "" as const, status: "" }, // fully absent
+      { name: "Peter", bookingNo: "2", bookedPax: 1, actualPax: 0, tickets: "" as const, status: "no-show" }, // fully absent
+      { name: "Federica", bookingNo: "3", bookedPax: 2, actualPax: 1, tickets: "" as const, status: "" }, // partial — left early, NOT a no-show
+      { name: "Roxana", bookingNo: "4", bookedPax: 2, actualPax: 2, tickets: "" as const, status: "" },
     ];
-    expect(noShowStats(bookings)).toEqual({ pax: 5, bookings: 2 });
+    expect(noShowStats(bookings)).toEqual({ pax: 3, bookings: 2 });
   });
-  it("partial no-show counts pax but not the booking", () => {
-    expect(noShowStats([{ name: "A", bookingNo: "1", bookedPax: 4, actualPax: 3, tickets: "", status: "" }])).toEqual({ pax: 1, bookings: 0 });
+  it("a partial reduction alone is not a no-show", () => {
+    expect(noShowStats([{ name: "A", bookingNo: "1", bookedPax: 4, actualPax: 3, tickets: "", status: "" }])).toEqual({ pax: 0, bookings: 0 });
   });
 });
 
