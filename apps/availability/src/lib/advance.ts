@@ -9,9 +9,9 @@ import { expenseAmount, type Expense } from "@/lib/jobsheet";
 //   "company" (default, also legacy rows with paidBy unset/operator) · "advance"
 //   (paid with the guide's advance money) · "guide" (guide's personal money).
 export const PAYMENT_SOURCES = [
-  { value: "company", label: "Company / Operator" },
-  { value: "advance", label: "Guide Advance" },
-  { value: "guide", label: "Guide personal" },
+  { value: "company", label: "Company / บริษัท" },
+  { value: "advance", label: "Advance / เงินทดรอง" },
+  { value: "guide", label: "Guide / เงินส่วนตัวไกด์" },
 ] as const;
 export const isAdvanceExpense = (e: Pick<Expense, "paidBy">): boolean => e.paidBy === "advance";
 
@@ -48,9 +48,9 @@ export function advanceStatus(t: AdvanceTotals, tourCompleted: boolean): Advance
 }
 
 export const ADVANCE_STATUS_LABEL: Record<AdvanceStatus, string> = {
-  NOT_REQUIRED: "No advance",
-  OPEN: "Open",
-  PENDING_SETTLEMENT: "Pending settlement",
-  SETTLED: "Settled",
-  OVER_RETURNED: "Over-returned — review",
+  NOT_REQUIRED: "No advance · ไม่มีเงินทดรอง",
+  OPEN: "Open · ระหว่างทัวร์",
+  PENDING_SETTLEMENT: "Pending settlement · รอเคลียร์",
+  SETTLED: "Settled · เคลียร์แล้ว",
+  OVER_RETURNED: "Over-returned — review · คืนเกิน ตรวจสอบ",
 };

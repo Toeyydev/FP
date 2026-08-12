@@ -36,6 +36,11 @@ type Sheet = {
 type AdvanceRow = { id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null };
 type AdvanceData = { advances: AdvanceRow[]; returns: AdvanceRow[] };
 const dtShort = (iso?: string) => (iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+// Bilingual label — English with the Thai accounting term underneath, so the job
+// sheet reads as a proper Thai accounting document (accountant-requested).
+const TH = ({ en, th }: { en: string; th: string }) => (
+  <>{en}<span style={{ display: "block", fontSize: 9.5, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", lineHeight: 1.2 }}>{th}</span></>
+);
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 
@@ -254,9 +259,20 @@ export default function JobSheetEditor() {
       const desc = (o?.description || g?.description || "").trim();
       let flag: "match" | "differ" | "added" | "opOnly" = "match";
       if (oa == null) flag = "added"; else if (ga == null) flag = "opOnly"; else if (Math.round(oa) !== Math.round(ga)) flag = "differ";
-      return { desc, oa, ga, flag };
+      return { desc, key: k, g, oa, ga, flag };
     });
   })();
+
+  const norm2 = (x: string) => (x || "").trim().toLowerCase();
+  function adoptGuideLine(row: { key: string; g?: Expense; flag: string }) {
+    if (!sheet || !row.g) return;
+    if (row.flag === "added") {
+      up({ expenses: [...sheet.expenses, { ...row.g }] });
+    } else {
+      up({ expenses: sheet.expenses.map((e) => (norm2(e.description) === row.key ? { ...e, price: row.g!.price ?? e.price, pax: row.g!.pax ?? e.pax } : e)) });
+    }
+    setMsg("Adopted the guide’s figure — adjust if needed, then Save.");
+  }
 
   // `override` lets a caller save fields it just computed WITHOUT waiting for the
   // async setState to land (e.g. accept-guide-expenses saves the merged list right
@@ -580,9 +596,9 @@ export default function JobSheetEditor() {
 
         {/* Job details */}
         <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
-        <h3 className="js-section">Job Details</h3>
+        <h3 className="js-section">Job Details<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายละเอียดงาน"}</small></h3>
         <table className="js-table">
-          <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th>Booked Pax</th><th>Actual Pax</th><th>Tickets</th><th className="no-print" /></tr></thead>
+          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Name lists" th="รายชื่อลูกค้า" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนจอง" /></th><th><TH en="Actual Pax" th="มาจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.bookings.map((b, i) => (
               <tr key={i}>
@@ -608,9 +624,9 @@ export default function JobSheetEditor() {
 
         {/* Expenses */}
         <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
-        <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense</h3>
+        <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่าย"}</small></h3>
         <table className="js-table">
-          <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print" title="Who paid this line — Guide Advance rows settle against the advance below">Source</th><th className="no-print">Receipt</th><th className="no-print" /></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Price" th="ราคา" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Who paid this line — Guide Advance rows settle against the advance below"><TH en="Source" th="แหล่งจ่าย" /></th><th className="no-print"><TH en="Receipt" th="ใบเสร็จ" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
               <tr key={i}>
@@ -643,7 +659,7 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่าย"}</small></td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
@@ -683,7 +699,12 @@ export default function JobSheetEditor() {
                       <td style={{ padding: "5px 10px" }}>{r.desc}</td>
                       <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.oa == null ? "—" : thb(r.oa)}</td>
                       <td style={{ padding: "5px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: r.flag === "differ" || r.flag === "added" ? 700 : 400, color: r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "inherit" }}>{r.ga == null ? "—" : thb(r.ga)}</td>
-                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>{r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : "operator only"}</td>
+                      <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap", color: r.flag === "match" ? "#2e7d4f" : r.flag === "differ" ? "#b45309" : r.flag === "added" ? "#2e7d4f" : "var(--ink-soft)" }}>
+                        {r.flag === "match" ? "✓" : r.flag === "differ" ? "⚠ differs" : r.flag === "added" ? "+ added" : "operator only"}
+                        {(r.flag === "differ" || r.flag === "added") && r.g && (
+                          <button className="btn sm ghost" style={{ marginLeft: 8 }} title={r.flag === "added" ? "Add this guide-reported line to the official expenses (adjust, then Save)" : "Use the guide's figure for this line only (adjust, then Save)"} onClick={() => adoptGuideLine(r)}>← {r.flag === "added" ? "Add" : "Use"}</button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: "2px solid #ddd", background: "#fafafa", fontWeight: 800 }}>
@@ -706,12 +727,12 @@ export default function JobSheetEditor() {
 
         {/* Guide fee */}
         <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
-        <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide</h3>
+        <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าตอบแทนมัคคุเทศก์"}</small></h3>
         <table className="js-table">
-          <thead><tr><th>Description</th><th>Price</th><th></th><th>Time</th><th>WHT %</th><th>WHT</th><th>Net</th></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Price" th="ราคา" /></th><th></th><th><TH en="Time" th="ครั้ง" /></th><th><TH en="WHT %" th="หัก ณ ที่จ่าย %" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net" th="สุทธิ" /></th></tr></thead>
           <tbody>
             <tr>
-              <td>Guide Fee</td>
+              <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่ามัคคุเทศก์"}</small></td>
               <td><input style={{ ...L, width: 100 }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, price: numOrNull(e.target.value) } })} /></td>
               <td style={{ textAlign: "center" }}>×</td>
               <td><input style={{ ...L, width: 60 }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, time: numOrNull(e.target.value) } })} /></td>
@@ -725,14 +746,14 @@ export default function JobSheetEditor() {
         {/* Summary — the advance lines are cash-movement info: they never add to the
             expense total or the payable (an advance is not a cost). */}
         <div className="js-summary">
-          <div><span>Total Expenses</span><b>{thb(t.totalExpenses)}</b></div>
-          <div><span>Net Guide Fee</span><b>{thb(t.netGuideFee)}</b></div>
-          <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
+          <div><span>Total Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่าย"}</small></span><b>{thb(t.totalExpenses)}</b></div>
+          <div><span>Net Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่ามัคคุเทศก์สุทธิ"}</small></span><b>{thb(t.netGuideFee)}</b></div>
+          <div className="grand"><span>Total<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมทั้งสิ้น"}</small></span><b>{thb(t.grandTotal)}</b></div>
           {hasAdvance && (<>
-            <div style={{ borderTop: "1px dashed var(--line)", marginTop: 4, paddingTop: 4 }}><span>Advance Paid</span><b>{thb(advT.totalAdvancePaid)}</b></div>
-            <div><span>Advance Used</span><b>{thb(advT.usedFromAdvance)}</b></div>
-            <div><span>Advance Returned</span><b>{thb(advT.totalReturned)}</b></div>
-            <div><span>Advance Outstanding</span><b style={{ color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}>{thb(advT.outstanding)}</b></div>
+            <div style={{ borderTop: "1px dashed var(--line)", marginTop: 4, paddingTop: 4 }}><span>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่าย"}</small></span><b>{thb(advT.totalAdvancePaid)}</b></div>
+            <div><span>Advance Used<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ใช้ไป"}</small></span><b>{thb(advT.usedFromAdvance)}</b></div>
+            <div><span>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"คืนแล้ว"}</small></span><b>{thb(advT.totalReturned)}</b></div>
+            <div><span>Advance Outstanding<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"คงค้าง"}</small></span><b style={{ color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}>{thb(advT.outstanding)}</b></div>
           </>)}
         </div>
         </div>
@@ -754,7 +775,7 @@ export default function JobSheetEditor() {
        {(hasAdvance || canEdit) && (
        <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
         <h3 className="js-section" style={{ background: "#e8f1ea", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-          <span>Advance / Settlement</span>
+          <span>Advance / Settlement<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่าย"}</small></span>
           <span className="no-print">{advChip}</span>
         </h3>
         {hasAdvance ? (
@@ -763,28 +784,28 @@ export default function JobSheetEditor() {
               <tbody>
                 {advance.advances.map((a) => (
                   <tr key={a.id}>
-                    <td>Advance paid to guide<span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.paidAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td>Advance paid to guide<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้ไกด์"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.paidAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
                     <td className="no-print" style={{ width: 70, textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ width: 110, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
                     <td className="no-print" style={{ width: 34, textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("advance", a)}>×</button>}</td>
                   </tr>
                 ))}
                 <tr>
-                  <td style={{ paddingLeft: 18 }}>Actual expenses from advance<span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · expense rows marked “Guide Advance” above</span></td>
+                  <td style={{ paddingLeft: 18 }}>Actual expenses from advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายจริงจากเงินทดรอง"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · expense rows marked “Guide Advance” above</span></td>
                   <td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(advT.usedFromAdvance)}</td>
                   <td className="no-print" />
                 </tr>
                 {advance.returns.map((a) => (
                   <tr key={a.id}>
-                    <td style={{ paddingLeft: 18 }}>Returned by guide<span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.returnedAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td style={{ paddingLeft: 18 }}>Returned by guide<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินคืนจากไกด์"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.returnedAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
                     <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(a.amount)}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("return", a)}>×</button>}</td>
                   </tr>
                 ))}
                 <tr className="js-total">
-                  <td style={{ textAlign: "right" }}>Outstanding</td>
+                  <td style={{ textAlign: "right" }}>Outstanding<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"คงค้าง"}</small></td>
                   <td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}><b>{thb(advT.outstanding)}</b></td>
                   <td className="no-print" />
@@ -838,7 +859,7 @@ export default function JobSheetEditor() {
            and kept together on one page. */}
        <div className="js-certify" style={{ marginTop: 26, borderTop: "1px dashed var(--line,#d9d9d9)", paddingTop: 14, display: "flex", justifyContent: "flex-end", breakInside: "avoid", pageBreakInside: "avoid" }}>
          <div style={{ textAlign: "center", minWidth: 220, maxWidth: "100%" }}>
-           <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by</div>
+           <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รับรองโดย"}</small></div>
            {/* eslint-disable-next-line @next/next/no-img-element */}
            <img
              src={JOB_SHEET_CERTIFIER.signatureUrl}
