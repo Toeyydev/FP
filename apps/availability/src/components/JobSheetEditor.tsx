@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeTotals, expenseAmount, fillDownExpensePax, isApproved, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
@@ -29,6 +30,10 @@ type Sheet = {
   operatorNote?: string | null;
   approvalStatus?: string | null; approvedBy?: string | null; approvedAt?: string | null;
 };
+// Advance rows as returned by /api/jobsheet (paidAt on advances, returnedAt on returns).
+type AdvanceRow = { id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null };
+type AdvanceData = { advances: AdvanceRow[]; returns: AdvanceRow[] };
+const dtShort = (iso?: string) => (iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 
@@ -55,12 +60,18 @@ export default function JobSheetEditor() {
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
   const [expBusy, setExpBusy] = useState(false);
   const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
+  // Guide advance + settlement (cash movements — separate from expenses, see lib/advance)
+  const [advance, setAdvance] = useState<AdvanceData>({ advances: [], returns: [] });
+  const [advKind, setAdvKind] = useState<null | "advance" | "return">(null); // which record-form is open
+  const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null });
+  const [advBusy, setAdvBusy] = useState(false);
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null);
+    setAdvance(d.advance ?? { advances: [], returns: [] });
     // Seed the guide's expense report: their last submission if any, else the standard
     // expense lines (with prices) as a starting template to fill in.
     const s = d.sheet as Sheet;
@@ -131,6 +142,69 @@ export default function JobSheetEditor() {
   // Total no-show pax reported across the sheet's bookings (per-booking count, with a
   // fallback for legacy rows that only carry the "no-show" status).
   const noShowTotal = sheet.bookings.reduce((s, b) => s + (b.noShowPax ?? (b.status === "no-show" ? (b.bookedPax ?? 0) : 0)), 0);
+
+  // ---- Advance / settlement (cash movements; never part of the expense total) ----
+  const advT = advanceTotals(advance.advances, advance.returns, sheet.expenses);
+  const todayBKKstr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const tourCompleted = sheet.date < todayBKKstr || checkedIn;
+  const advSt = advanceStatus(advT, tourCompleted);
+  const hasAdvance = advance.advances.length > 0 || advance.returns.length > 0;
+  const advChip = advSt === "SETTLED"
+    ? <span className="badge active">✓ Settled</span>
+    : advSt === "OVER_RETURNED"
+      ? <span className="badge" style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)" }}>⚠ Over-returned</span>
+      : advSt === "PENDING_SETTLEMENT"
+        ? <span className="badge pending">Pending {thb(advT.outstanding)}</span>
+        : advSt === "OPEN"
+          ? <span className="badge invited">Open · {thb(advT.outstanding)} out</span>
+          : <span className="badge muted">No advance</span>;
+
+  async function submitAdvance(kind: "advance" | "return") {
+    if (!sheet) return;
+    const amt = Number(advForm.amount.replace(/[,\s]/g, ""));
+    if (!Number.isFinite(amt) || amt <= 0) { setMsg("Enter a positive amount in baht."); return; }
+    if (kind === "return" && amt > Math.max(0, advT.outstanding) && !confirm(`Returned amount (${thb(amt)}) exceeds the remaining advance (${thb(Math.max(0, advT.outstanding))}).\n\nRecord it anyway? The job will show "Over-returned" for review.`)) return;
+    if (canEdit && !saved) { const ok = await save(); if (!ok) return; } // the row keys off the persisted sheet
+    setAdvBusy(true); setMsg("");
+    const fd = new FormData();
+    fd.append("kind", kind); fd.append("guideId", sheet.guideId); fd.append("date", sheet.date); fd.append("slotIdx", String(sheet.slotIdx));
+    fd.append("amount", advForm.amount);
+    if (advForm.at) fd.append("at", advForm.at);
+    fd.append("method", advForm.method);
+    if (advForm.txRef.trim()) fd.append("txRef", advForm.txRef.trim());
+    if (advForm.note.trim()) fd.append("note", advForm.note.trim());
+    if (advForm.file) {
+      let blob: Blob = advForm.file;
+      try { blob = await shrinkImage(advForm.file); } catch { /* keep original */ }
+      fd.append("file", blob, shrunkName(advForm.file.name, blob));
+    }
+    const r = await fetch("/api/jobsheet/advance", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    setAdvBusy(false);
+    if (!r.ok) {
+      setMsg(d.error === "no-sheet" ? (canEdit ? "Save the sheet first." : "Ask the operator to save the job sheet first.")
+        : d.error === "duplicate" ? "That amount was just recorded — refresh before recording it again."
+        : d.error === "forbidden" ? "Not allowed."
+        : d.error === "bad-amount" ? "Enter a positive amount in baht."
+        : (d.error === "not-connected" || d.error === "not-configured") ? "Connect Google Drive first (slip upload)."
+        : "Couldn't record it — try again.");
+      return;
+    }
+    setAdvance({ advances: d.advances, returns: d.returns });
+    setAdvKind(null); setAdvForm({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null });
+    setMsg(kind === "advance" ? "Advance recorded ✓" : "Return recorded ✓");
+  }
+  async function removeAdvanceRow(kind: "advance" | "return", row: AdvanceRow) {
+    if (!sheet) return;
+    if (!confirm(`Remove this ${kind === "advance" ? "advance" : "return"} of ${thb(row.amount)}? The full record is kept in the audit log; any slip stays in Drive.`)) return;
+    setAdvBusy(true);
+    const r = await fetch("/api/jobsheet/advance", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, id: row.id, guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx }) });
+    const d = await r.json().catch(() => ({}));
+    setAdvBusy(false);
+    if (!r.ok) { setMsg("Couldn't remove it."); return; }
+    setAdvance({ advances: d.advances, returns: d.returns });
+    setMsg("Removed — kept in the audit log.");
+  }
 
   // ---- Guide's own expense report (separate from the operator's official set) ----
   const setGExp = (i: number, p: Partial<Expense>) => setGuideExp((arr) => arr.map((e, j) => j === i ? { ...e, ...p } : e));
@@ -391,6 +465,18 @@ export default function JobSheetEditor() {
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
                   <div className="gs-payout-row gs-grand"><span>You&apos;ll receive</span><b>{thb(grandShown)}</b></div>
                 </div>
+                {hasAdvance && (
+                  <div style={{ marginTop: 8, padding: "8px 10px", background: advSt === "SETTLED" ? "var(--ok-bg,#eef7f0)" : advSt === "OVER_RETURNED" ? "var(--danger-bg)" : "var(--grey-bg,#f7f7f7)", border: `1px solid ${advSt === "SETTLED" ? "var(--ok-line,#cfe6d6)" : advSt === "OVER_RETURNED" ? "var(--danger-line)" : "var(--line)"}`, borderRadius: 8, fontSize: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700 }}>
+                      <span>Advance from Folkpaths</span>
+                      <span>{advSt === "SETTLED" ? "✓ Settled" : advSt === "OVER_RETURNED" ? "⚠ Review" : advT.outstanding > 0 ? `Return ${thb(advT.outstanding)}` : ""}</span>
+                    </div>
+                    <div style={{ color: "var(--ink-soft)", marginTop: 3, fontVariantNumeric: "tabular-nums" }}>
+                      Received {thb(advT.totalAdvancePaid)} · Spent {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)} · Balance {thb(advT.outstanding)}
+                    </div>
+                    {advT.outstanding > 0 && tourCompleted && <div style={{ color: "var(--ink)", marginTop: 4 }}>Transfer the unused {thb(advT.outstanding)} back to Folkpaths, then record it in the full sheet (“See full details” → Record return).</div>}
+                  </div>
+                )}
                 {paid && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--ok-bg, #eef7f0)", border: "1px solid var(--ok-line, #cfe6d6)", borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700, color: "var(--green, #2f7d4f)" }}>
@@ -522,7 +608,7 @@ export default function JobSheetEditor() {
         <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense</h3>
         <table className="js-table">
-          <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print">Receipt</th><th className="no-print" /></tr></thead>
+          <thead><tr><th>Description</th><th>Price</th><th></th><th>จำนวน</th><th>หน่วย</th><th>Amount</th><th className="no-print" title="Who paid this line — Guide Advance rows settle against the advance below">Source</th><th className="no-print">Receipt</th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
               <tr key={i}>
@@ -532,6 +618,13 @@ export default function JobSheetEditor() {
                 <td><input style={{ ...L, width: 70 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
                 <td><select style={{ ...L, width: 78 }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select></td>
                 <td style={{ textAlign: "right" }}>{thb(expenseAmount(e))}</td>
+                <td className="no-print">
+                  {/* Payment source maps to the existing paidBy field; legacy rows (unset /
+                      "operator") read as Company. "Guide Advance" rows feed the settlement. */}
+                  <select style={{ ...L, width: 108, ...(e.paidBy === "advance" ? { borderColor: "var(--primary)", fontWeight: 600 } : {}) }} value={e.paidBy === "advance" ? "advance" : e.paidBy === "guide" ? "guide" : "company"} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title="Who paid this line">
+                    {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </td>
                 <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
                   {e.receiptUrl ? (
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -548,7 +641,7 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses</td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
@@ -627,11 +720,18 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
 
-        {/* Summary */}
+        {/* Summary — the advance lines are cash-movement info: they never add to the
+            expense total or the payable (an advance is not a cost). */}
         <div className="js-summary">
           <div><span>Total Expenses</span><b>{thb(t.totalExpenses)}</b></div>
           <div><span>Net Guide Fee</span><b>{thb(t.netGuideFee)}</b></div>
           <div className="grand"><span>Total</span><b>{thb(t.grandTotal)}</b></div>
+          {hasAdvance && (<>
+            <div style={{ borderTop: "1px dashed var(--line)", marginTop: 4, paddingTop: 4 }}><span>Advance Paid</span><b>{thb(advT.totalAdvancePaid)}</b></div>
+            <div><span>Advance Used</span><b>{thb(advT.usedFromAdvance)}</b></div>
+            <div><span>Advance Returned</span><b>{thb(advT.totalReturned)}</b></div>
+            <div><span>Advance Outstanding</span><b style={{ color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}>{thb(advT.outstanding)}</b></div>
+          </>)}
         </div>
         </div>
 
@@ -644,6 +744,91 @@ export default function JobSheetEditor() {
           </div>
         )}
        </fieldset>
+
+       {/* Advance / Settlement — money sent to the guide BEFORE the tour, the spend
+           from it (paidBy = "Guide Advance" expense rows above) and what came back.
+           A cash-movement ledger: it never adds to the expense total. Lives outside
+           the read-only fieldset so the GUIDE can still record their return. */}
+       {(hasAdvance || canEdit) && (
+       <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
+        <h3 className="js-section" style={{ background: "#e8f1ea", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span>Advance / Settlement</span>
+          <span className="no-print">{advChip}</span>
+        </h3>
+        {hasAdvance ? (
+          <>
+            <table className="js-table" style={{ fontSize: 13 }}>
+              <tbody>
+                {advance.advances.map((a) => (
+                  <tr key={a.id}>
+                    <td>Advance paid to guide<span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.paidAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td className="no-print" style={{ width: 70, textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
+                    <td style={{ width: 110, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
+                    <td className="no-print" style={{ width: 34, textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("advance", a)}>×</button>}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={{ paddingLeft: 18 }}>Actual expenses from advance<span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · expense rows marked “Guide Advance” above</span></td>
+                  <td className="no-print" />
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(advT.usedFromAdvance)}</td>
+                  <td className="no-print" />
+                </tr>
+                {advance.returns.map((a) => (
+                  <tr key={a.id}>
+                    <td style={{ paddingLeft: 18 }}>Returned by guide<span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.returnedAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(a.amount)}</td>
+                    <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("return", a)}>×</button>}</td>
+                  </tr>
+                ))}
+                <tr className="js-total">
+                  <td style={{ textAlign: "right" }}>Outstanding</td>
+                  <td className="no-print" />
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}><b>{thb(advT.outstanding)}</b></td>
+                  <td className="no-print" />
+                </tr>
+              </tbody>
+            </table>
+            {advSt === "OVER_RETURNED" && (
+              <div style={{ margin: "8px 0 0", padding: "8px 12px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 12.5 }}>
+                ⚠ Returned amount exceeds the remaining advance. Please review the settlement — check the expense rows’ payment source and the recorded amounts.
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "6px 2px" }}>No advance issued for this job. Record one if money was transferred to the guide before the tour — the actual spend then goes in the expense rows above with source “Guide Advance”.</div>
+        )}
+
+        {/* Record forms — operator records advances and returns; the guide may record
+            their own RETURN (they made the transfer back) but never an advance. */}
+        <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          {canEdit && <button className="btn sm" disabled={advBusy} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "" })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
+          {(canEdit || (hasAdvance && advT.outstanding > 0)) && <button className="btn sm" disabled={advBusy} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "" })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
+          {hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Used {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)} · Balance {thb(advT.outstanding)}</span>}
+        </div>
+        {advKind && (
+          <div className="no-print" style={{ marginTop: 8, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg,#fafafa)", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Amount (฿)<br />
+              <input style={{ ...L, width: 110, marginTop: 2 }} type="number" min={1} value={advForm.amount} onChange={(e) => setAdvForm((f) => ({ ...f, amount: e.target.value }))} placeholder="1000" /></label>
+            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>{advKind === "advance" ? "Paid at" : "Returned at"}<br />
+              <input style={{ ...L, width: 190, marginTop: 2 }} type="datetime-local" value={advForm.at} onChange={(e) => setAdvForm((f) => ({ ...f, at: e.target.value }))} title="Leave blank for now" /></label>
+            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Method<br />
+              <select style={{ ...L, width: 120, marginTop: 2 }} value={advForm.method} onChange={(e) => setAdvForm((f) => ({ ...f, method: e.target.value }))}>
+                <option value="bank">Bank transfer</option><option value="cash">Cash</option><option value="other">Other</option>
+              </select></label>
+            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Transfer ref (optional)<br />
+              <input style={{ ...L, width: 150, marginTop: 2 }} value={advForm.txRef} onChange={(e) => setAdvForm((f) => ({ ...f, txRef: e.target.value }))} /></label>
+            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Note (optional)<br />
+              <input style={{ ...L, width: 170, marginTop: 2 }} maxLength={500} value={advForm.note} onChange={(e) => setAdvForm((f) => ({ ...f, note: e.target.value }))} /></label>
+            <label className="btn sm" style={{ cursor: "pointer" }} title="Attach the transfer slip (image or PDF, max 10 MB)">
+              {advForm.file ? `📎 ${advForm.file.name.slice(0, 18)}…` : "📎 Slip"}
+              <input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0] ?? null; setAdvForm((prev) => ({ ...prev, file: f })); e.target.value = ""; }} />
+            </label>
+            <button className="btn sm primary" disabled={advBusy} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record advance" : "Record return"}</button>
+          </div>
+        )}
+       </div>
+       )}
       </section>
 
       {/* Finance / accounting side panel — operator-only snapshot of where this job
@@ -677,6 +862,16 @@ export default function JobSheetEditor() {
             </div>
             <div style={{ fontSize: 12.5, marginTop: 5 }}>Payable <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(t.grandTotal)}</b></div>
           </div>
+
+          {hasAdvance && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>Guide advance</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>{advChip}</div>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4, fontVariantNumeric: "tabular-nums" }}>
+                Advance {thb(advT.totalAdvancePaid)} · Used {thb(advT.usedFromAdvance)}<br />Returned {thb(advT.totalReturned)} · Balance <b style={{ color: advT.outstanding < 0 ? "var(--danger)" : "var(--ink)" }}>{thb(advT.outstanding)}</b>
+              </div>
+            </div>
+          )}
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
