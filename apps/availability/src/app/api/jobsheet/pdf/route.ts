@@ -261,8 +261,8 @@ export async function GET(req: NextRequest) {
     <div class="summary" style="break-inside:avoid;page-break-inside:avoid">
       <div style="font-weight:700;margin-bottom:2px">Financial Summary <small>สรุปรายการทางการเงิน</small></div>
       <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(tourOperatingExpenses(expenses))}</b></div>
-      <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
       ${reviewRewardTotal(expenses) > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(reviewRewardTotal(expenses))}</b></div>` : ""}
+      <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
       <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
       <div><span>Net Guide Fee <small>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
       ${guidePersonalTotal(expenses) > 0 ? `<div><span>Reimbursement Due <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style="color:#b45309">${thb(guidePersonalTotal(expenses))}</b></div>` : ""}
