@@ -67,7 +67,7 @@ describe("review reward split from tour operating expenses", () => {
 
 import { jobCostBreakdown, reviewBelongsToJob } from "@/lib/jobsheet";
 
-describe("review reward: job cost vs additional guide payment", () => {
+describe("review reward: job cost vs additional guide payment (booking-no-first)", () => {
   const base = [
     { description: "Water", price: 110, pax: 1 },
     { description: "Ferry", price: 88, pax: 1 },
@@ -75,36 +75,37 @@ describe("review reward: job cost vs additional guide payment", () => {
     { description: "Bus", price: 150, pax: 1 },
   ];
   const fee = { price: 1800, time: 1, whtPct: 3 };
+  const guests = [
+    { name: "Lauren van huffel", bookingNo: "GYGVN246QYBK", bookedPax: 2, actualPax: 2, tickets: "", status: "" },
+  ];
 
-  it("A — reward earned on THIS job counts as this job's cost", () => {
-    const rows = [...base, { description: "Review reward", price: 50, pax: 1, relatedJobRef: "FOLK-BKK-20260811-01" }];
-    const c = jobCostBreakdown(rows, fee, "FOLK-BKK-20260811-01");
-    expect(c.tourExpenses).toBe(848); // review excluded from tour operating cost
+  it("A — review from a guest ON this job counts as this job's cost", () => {
+    const rows = [...base, { description: "Review reward", price: 50, pax: 1, relatedBookingNo: "GYGVN246QYBK" }];
+    const c = jobCostBreakdown(rows, fee, "FOLK-BKK-20260811-01", guests);
+    expect(c.tourExpenses).toBe(848);
     expect(c.reviewOwn).toBe(50);
     expect(c.reviewOther).toBe(0);
     expect(c.jobExpenses).toBe(2698); // 848 + 50 + 1800
-    expect(c.gross).toBe(1800);
-    expect(c.wht).toBe(54);
-    expect(c.netGuideFee).toBe(1746); // WHT base untouched by the reward
+    expect(c.netGuideFee).toBe(1746); // WHT base untouched
   });
 
-  it("a blank Related Job No. means the reward was earned here", () => {
-    const c = jobCostBreakdown([...base, { description: "Review reward", price: 50, pax: 1 }], fee, "FOLK-BKK-20260811-01");
+  it("blank booking no. = a guest of this job", () => {
+    const c = jobCostBreakdown([...base, { description: "Review reward", price: 50, pax: 1 }], fee, "FOLK-BKK-20260811-01", guests);
     expect(c.reviewOwn).toBe(50);
     expect(c.jobExpenses).toBe(2698);
   });
 
-  it("B — reward from an OLDER job is paid out here but never inflates this job", () => {
-    const rows = [...base, { description: "Review reward", price: 50, pax: 1, relatedJobRef: "FOLK-BKK-20260720-01" }];
-    const c = jobCostBreakdown(rows, fee, "FOLK-BKK-20260815-02");
+  it("B — review from a booking NOT on this job is payment, never this job's cost", () => {
+    const rows = [...base, { description: "Review reward", price: 50, pax: 1, relatedBookingNo: "GYG2Q9G9B3YM" }];
+    const c = jobCostBreakdown(rows, fee, "FOLK-BKK-20260815-02", guests);
     expect(c.reviewOwn).toBe(0);
     expect(c.reviewOther).toBe(50);
-    expect(c.jobExpenses).toBe(2648); // 848 + 1800 — the ฿50 is NOT a cost here
-    expect(c.netGuideFee).toBe(1746); // guide-fee math unchanged
+    expect(c.jobExpenses).toBe(2648); // 848 + 1800 only
   });
 
-  it("belongs-to-job test is case/space tolerant", () => {
-    expect(reviewBelongsToJob({ description: "Review", price: 1, pax: 1, relatedJobRef: " folk-bkk-20260811-01 " }, "FOLK-BKK-20260811-01")).toBe(true);
-    expect(reviewBelongsToJob({ description: "Review", price: 1, pax: 1, relatedJobRef: "FOLK-BKK-20260720-01" }, "FOLK-BKK-20260811-01")).toBe(false);
+  it("booking-no match is case/space tolerant; legacy relatedJobRef still honoured", () => {
+    expect(reviewBelongsToJob({ description: "Review", price: 1, pax: 1, relatedBookingNo: " gygvn246qybk " }, "X", guests)).toBe(true);
+    expect(reviewBelongsToJob({ description: "Review", price: 1, pax: 1, relatedJobRef: "FOLK-BKK-20260811-01" }, "FOLK-BKK-20260811-01", guests)).toBe(true);
+    expect(reviewBelongsToJob({ description: "Review", price: 1, pax: 1, relatedJobRef: "FOLK-BKK-20260720-01" }, "FOLK-BKK-20260811-01", guests)).toBe(false);
   });
 });

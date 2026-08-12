@@ -118,7 +118,7 @@ export default function JobSheetEditor() {
   const t = computeTotals(sheet.expenses, sheet.guideFee);
   // Cost view: tour operating rows, plus a review reward only when it belongs to
   // THIS job (lib/jobsheet) — a carried-over reward is payment, not job cost.
-  const cost = jobCostBreakdown(sheet.expenses, sheet.guideFee, sheet.ref);
+  const cost = jobCostBreakdown(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
   const ro = !canEdit; // read-only (guide view)
   // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
   // tour start (that's when who turned up is known). Operators can mark any time.
@@ -806,17 +806,17 @@ export default function JobSheetEditor() {
               <table className="js-table">
                 <thead><tr>
                   <th style={{ textAlign: "left" }}><TH en="Description" th="รายการ" /></th>
-                  <th style={{ width: 160 }}><TH en="Related Job No." th="เลขที่งานที่เกี่ยวข้อง" /></th>
+                  <th style={{ width: 170 }}><TH en="Booking No." th="เลขที่การจองที่รีวิว" /></th>
                   <th style={{ width: 120, textAlign: "right" }}><TH en="Amount" th="จำนวนเงิน" /></th>
                   <th className="no-print" style={{ width: 34 }} />
                 </tr></thead>
                 <tbody>
                   {rows.map(({ e, i }) => {
-                    const own = reviewBelongsToJob(e, sheet.ref);
+                    const own = reviewBelongsToJob(e, sheet.ref, sheet.bookings);
                     return (
                       <tr key={i}>
                         <td>{ro ? (e.description || "Review Reward") : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)" }}>ค่าตอบแทนรีวิว{own ? "" : " · จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้"}</small></td>
-                        <td>{ro ? (e.relatedJobRef || sheet.ref || "—") : <input style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedJobRef ?? ""} placeholder={sheet.ref ?? "FOLK-BKK-…"} title="Leave blank when the review was earned on this job" onChange={(ev) => setExpense(i, { relatedJobRef: ev.target.value })} />}</td>
+                        <td>{ro ? (e.relatedBookingNo || e.relatedJobRef || "—") : <input style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedBookingNo ?? ""} placeholder="GYG… (เว้นว่าง = แขกงานนี้)" title="Booking no. of the guest who left the review — a booking on this job's guest list counts as this job's cost; any other booking is paid out here without inflating this job" onChange={(ev) => setExpense(i, { relatedBookingNo: ev.target.value })} />}</td>
                         <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{ro ? thb(expenseAmount(e)) : <span style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}><input style={{ ...L, width: 58, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} />×<input style={{ ...L, width: 40, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></span>}</td>
                         <td className="no-print">{canEdit && <button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button>}</td>
                       </tr>
