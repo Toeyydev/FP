@@ -150,7 +150,7 @@ export async function GET(req: NextRequest) {
   .guide { display:grid; grid-template-columns:1fr 1fr; gap:2px 18px; margin:12px 0; }
   .guide div { display:flex; gap:8px; padding:3px 0; border-bottom:0.5px solid #eee; }
   .guide span { min-width:78px; color:#6b746f; }
-  h3 { font-size:13px; margin:16px 0 4px; padding:5px 8px; background:#bfe3bf; border-radius:4px; }
+  h3 { font-size:13px; margin:16px 0 4px; padding:5px 8px; background:#bfe3bf; border:0; border-radius:4px; }
   h3.exp { background:#fff8c4; } h3.fee { background:#f4d9c4; }
   table { width:100%; border-collapse:collapse; font-size:11.5px; }
   th, td { border:0; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
