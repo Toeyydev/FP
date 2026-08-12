@@ -38,7 +38,15 @@ export async function POST(req: NextRequest) {
   const sheets = await prisma.jobSheet.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` }, ref: { not: null } }, select: { ref: true }, orderBy: { date: "asc" } });
   const refs = sheets.map((sh) => sh.ref).filter((r): r is string => !!r);
   const base = refs.length === 1 ? `${refs[0]} — ${guideName}` : refs.length > 1 ? `${refs[0]} +${refs.length - 1} more — ${guideName}` : `${guideId} ${guideName} ${period}`;
-  const name = `${base} — e-slip.${extOf(mime)}`;
+  // Lead with the PEAK expense ref (EXP-xxxxx) when recorded, so the slip file
+  // matches the saved PEAK entry name and the accountant can pair them instantly.
+  const [payRefs, payrollRef] = await Promise.all([
+    prisma.tourPayment.findMany({ where: { guideId, date: { gte: `${period}-01`, lte: `${period}-31` }, peakRef: { not: null } }, select: { peakRef: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { peakRef: true } }),
+  ]);
+  const exps = [...new Set([...payRefs.map((x) => x.peakRef), payrollRef?.peakRef].filter((x): x is string => !!x))];
+  const expPrefix = exps.length === 1 ? `${exps[0]} — ` : exps.length > 1 ? `${exps[0]} +${exps.length - 1} — ` : "";
+  const name = `${expPrefix}${base} — e-slip.${extOf(mime)}`;
 
   let link: string;
   try {

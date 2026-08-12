@@ -93,7 +93,10 @@ export async function POST(req: NextRequest) {
     }
     if (eslipBase64 && refreshToken) {
       try {
-        const e = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        // Slip evidence leads with the PEAK expense ref (EXP-xxxxx) when this
+        // tour's payment has one, matching the saved PEAK entry name.
+        const tpRef = (await prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { peakRef: true } }))?.peakRef;
+        const e = await saveBufferToDrive({ refreshToken, name: `${tpRef ? `${tpRef} — ` : ""}${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         eslipLink = e.link;
       } catch (e) { driveError = driveError || (e as Error).message.slice(0, 200); }
     }
