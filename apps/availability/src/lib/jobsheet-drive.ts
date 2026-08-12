@@ -87,7 +87,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         </tbody></table>
       </div>`;
 
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#111;font-size:13px">
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Sarabun,Arial,sans-serif;color:#111;font-size:13px">
       <div style="font-size:12px;font-weight:600;letter-spacing:1px">${esc(CO.brandName)}</div>
       <div style="color:#666;font-size:9px">Operated by ${esc(CO.operatedBy)} / ${esc(CO.legalNameTh)}</div>
       <div style="color:#8a8f8b;font-size:8.5px;margin-bottom:12px">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
