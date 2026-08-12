@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, fillDownExpensePax, guidePersonalTotal, isApproved, noShowStatus, thb, totalJobExpenses, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, fillDownExpensePax, guidePersonalTotal, isApproved, isReviewExpense, noShowStats, noShowStatus, reviewRewardTotal, thb, totalJobExpenses, tourOperatingExpenses, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -150,7 +150,8 @@ export default function JobSheetEditor() {
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
   // Total no-show pax reported across the sheet's bookings (per-booking count, with a
   // fallback for legacy rows that only carry the "no-show" status).
-  const noShowTotal = sheet.bookings.reduce((s, b) => s + (b.noShowPax ?? (b.status === "no-show" ? (b.bookedPax ?? 0) : 0)), 0);
+  const noShow = noShowStats(sheet.bookings);
+  const noShowTotal = noShow.pax;
 
   // ---- Advance / settlement (cash movements; never part of the expense total) ----
   const advT = advanceTotals(advance.advances, advance.returns, sheet.expenses);
@@ -414,7 +415,7 @@ export default function JobSheetEditor() {
       </div>
 
       {sheet.status === "Review: no-show" && (
-        <div style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 13.5 }}>
+        <div className="no-print" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 13.5 }}>
           ⚠ A guide reported a no-show on this tour. Absent guests were removed from the pax counts and ticket expenses — confirm the numbers before payout.
         </div>
       )}
@@ -640,7 +641,7 @@ export default function JobSheetEditor() {
               </tr>
             ))}
             <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /></tr>
-            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show Pax <small style={{ fontSize: 9, fontWeight: 500 }}>จำนวนผู้เดินทางที่ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700 }}>{noShowTotal} pax</td><td /><td className="no-print" /></tr>}
+            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show <small style={{ fontSize: 9, fontWeight: 500 }}>ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700, whiteSpace: "nowrap" }}>{noShow.pax} pax · {noShow.bookings} booking{noShow.bookings === 1 ? "" : "s"}</td><td /><td className="no-print" /></tr>}
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
@@ -653,7 +654,7 @@ export default function JobSheetEditor() {
           <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Unit Price" th="ราคาต่อหน่วย" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid by" th="แหล่งเงินที่ใช้ชำระ" /></th><th className="no-print"><TH en="Document" th="หลักฐานประกอบค่าใช้จ่าย" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
-              <tr key={i}>
+              <tr key={i} style={isReviewExpense(e) ? { background: "#f8f4ec" } : undefined} title={isReviewExpense(e) ? "Review Reward — guide compensation; shown with the Guide Fee on documents, not in Tour Expenses" : undefined}>
                 <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
                 <td><input style={{ ...L, width: 90 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
                 <td style={{ textAlign: "center" }}>×</td>
@@ -683,7 +684,7 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
         {!ro && (() => {
@@ -776,6 +777,7 @@ export default function JobSheetEditor() {
 
         {/* Guide fee */}
         <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
+        <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
         <table className="js-table">
           <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Payable" th="ยอดจ่ายสุทธิ" /></th></tr></thead>
@@ -791,6 +793,13 @@ export default function JobSheetEditor() {
             </tr>
           </tbody>
         </table>
+        {reviewRewardTotal(sheet.expenses) > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 24, padding: "5px 8px", fontSize: 13 }}>
+            <span>Review Reward<small style={{ fontSize: 10, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว · ไม่อยู่ในฐานภาษีหัก ณ ที่จ่าย</small></span>
+            <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(reviewRewardTotal(sheet.expenses))}</b>
+          </div>
+        )}
+        </div>
 
         {/* Financial Summary — accounting presentation (see lib/jobsheet helpers):
             Total Job Expenses = tour expenses + GROSS guide fee; WHT shown
@@ -802,18 +811,13 @@ export default function JobSheetEditor() {
           return (
         <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Financial Summary<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
-          <div><span>Tour Expenses<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(t.totalExpenses)}</b></div>
+          <div><span>Tour Expenses<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></div>
           <div><span>Guide Fee<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
+          {reviewRewardTotal(sheet.expenses) > 0 && <div><span>Review Reward<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(reviewRewardTotal(sheet.expenses))}</b></div>}
           <div className="grand"><span>Total Job Expenses<small style={{ fontSize: 9.5, marginLeft: 5 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
           <div><span>Withholding Tax<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
           <div><span>Net Payable to Guide<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>{thb(t.netGuideFee)}</b></div>
           {personal > 0 && <div><span>Reimbursement Due<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
-          {hasAdvance && (<>
-            <div style={{ borderTop: "1px dashed var(--line)", marginTop: 4, paddingTop: 4 }}><span>Advance Paid<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>เงินทดรองจ่ายให้มัคคุเทศก์</small></span><b>{thb(advT.totalAdvancePaid)}</b></div>
-            <div><span>Expenses Paid from Advance<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายที่ชำระจากเงินทดรอง</small></span><b>{thb(advT.usedFromAdvance)}</b></div>
-            <div><span>Advance Returned<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>เงินทดรองคงเหลือส่งคืน</small></span><b>{thb(advT.totalReturned)}</b></div>
-            <div><span>Outstanding Advance<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>เงินทดรองจ่ายคงค้าง</small></span><b style={{ color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}>{thb(advT.outstanding)}</b></div>
-          </>)}
         </div>
           );
         })()}

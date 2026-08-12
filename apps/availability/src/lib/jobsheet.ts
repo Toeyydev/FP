@@ -102,6 +102,36 @@ export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   return { totalExpenses, gross, wht, netGuideFee, grandTotal };
 }
 
+// A booking's true no-show pax: the recorded per-booking count when present,
+// else the booked−actual difference (covers rows where only Actual Pax was
+// zeroed), else the legacy whole-booking "no-show" status.
+export function bookingNoShowPax(b: Booking): number {
+  if (typeof b.noShowPax === "number") return Math.max(0, Math.floor(b.noShowPax));
+  if (b.bookedPax != null && b.actualPax != null) return Math.max(0, b.bookedPax - b.actualPax);
+  return b.status === "no-show" ? (b.bookedPax ?? 0) : 0;
+}
+// No-show PAX (จำนวนผู้เดินทางที่ไม่มาใช้บริการ) and no-show BOOKINGS (จำนวนการจอง
+// ที่ไม่มาใช้บริการ) are different units — a 13-booked/8-came job is 5 pax across
+// maybe 2 fully-absent bookings. Never display one number as the other.
+export function noShowStats(bookings: Booking[]): { pax: number; bookings: number } {
+  let pax = 0, count = 0;
+  for (const b of bookings ?? []) {
+    const ns = bookingNoShowPax(b);
+    pax += ns;
+    if ((b.bookedPax ?? 0) > 0 && ns >= (b.bookedPax ?? 0)) count++;
+  }
+  return { pax, bookings: count };
+}
+
+// Tour OPERATING expenses = the expense rows minus Review-reward lines. Review
+// Reward is guide compensation (shown with the Guide Fee on documents), not an
+// operating cost — but it stays an expense row in the data, stays reimbursed in
+// the payout, stays OUT of the WHT base, and still posts to the PEAK expenses
+// account: this split is presentation only.
+export function tourOperatingExpenses(expenses: Expense[]): number {
+  return (expenses ?? []).reduce((s, e) => s + (isReviewExpense(e) ? 0 : expenseAmount(e)), 0);
+}
+
 // ── Accounting presentation (Job Sheet / PDF / Drive) ────────────────────────
 // Total Job Expenses = actual tour expenses + GROSS guide fee. WHT reduces the
 // cash paid to the guide (Net Payable), never the gross fee expense — so this is
