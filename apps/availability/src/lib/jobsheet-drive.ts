@@ -109,7 +109,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         <tbody>${bookingRows}</tbody>
       </table>
       ${nsStats.pax > 0 ? `<div style="font-size:11px;color:#c2604a;margin:4px 0 0"><b>No-show</b> <span style="font-size:9px;color:#8a8f8b">ไม่มาใช้บริการ</span>: ${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}</div>` : ""}
-      <h3 style="margin:14px 0 4px">Tour Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
+      <h3 style="margin:14px 0 4px">Tour Expenses <span style="display:block;font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
       <table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">
         <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>${expenseRows}</tbody>
@@ -118,13 +118,13 @@ ${advanceHtml}
       
       <table style="margin-top:12px;border-collapse:collapse"><tbody>
         <tr><td colspan="2" style="font-weight:700;padding:2px 0">Financial Summary <span style="font-size:10px;color:#8a8f8b;font-weight:400">สรุปรายการทางการเงิน</span></td></tr>
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Tour Expenses <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></td><td align="right"><b>${esc(thb(tourOperatingExpenses(expenses)))}</b></td></tr>
-        ${reviewRewardTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Review Reward <span style="font-size:10px;color:#8a8f8b">ค่าตอบแทนรีวิว</span></td><td align="right"><b>${esc(thb(reviewRewardTotal(expenses)))}</b></td></tr>` : ""}
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.gross))}</b></td></tr>
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Withholding Tax <span style="font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Net Payable to Guide <span style="font-size:10px;color:#8a8f8b">ยอดจ่ายสุทธิให้มัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
+        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Tour Expenses <span style="display:block;font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></td><td align="right"><b>${esc(thb(tourOperatingExpenses(expenses)))}</b></td></tr>
+        ${reviewRewardTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Review Reward <span style="display:block;font-size:10px;color:#8a8f8b">ค่าตอบแทนรีวิว</span></td><td align="right"><b>${esc(thb(reviewRewardTotal(expenses)))}</b></td></tr>` : ""}
+        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Guide Fee <span style="display:block;font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.gross))}</b></td></tr>
+        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Withholding Tax <span style="display:block;font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
+        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Net Guide Fee <span style="display:block;font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์สุทธิ</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
         ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
-        <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Total Job Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">รวมค่าใช้จ่ายของงาน</span></b></td><td align="right"><b>${esc(thb(totalJobExpenses(t)))}</b></td></tr>
+        <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Total Job Expenses <span style="display:block;font-size:10px;color:#8a8f8b">รวมค่าใช้จ่ายของงาน</span></b></td><td align="right"><b>${esc(thb(totalJobExpenses(t)))}</b></td></tr>
       </tbody></table>
       ${certHtml}
     </body></html>`;

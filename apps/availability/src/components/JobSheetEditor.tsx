@@ -778,7 +778,7 @@ export default function JobSheetEditor() {
         <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
         <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Payable" th="ยอดจ่ายสุทธิ" /></th></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Guide Fee" th="ค่าจ้างมัคคุเทศก์สุทธิ" /></th></tr></thead>
           <tbody>
             <tr>
               <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></td>
@@ -793,7 +793,7 @@ export default function JobSheetEditor() {
         </table>
         {reviewRewardTotal(sheet.expenses) > 0 && (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 24, padding: "5px 8px", fontSize: 13 }}>
-            <span>Review Reward<small style={{ fontSize: 10, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว · ไม่อยู่ในฐานภาษีหัก ณ ที่จ่าย</small></span>
+            <span>Review Reward<small style={{ fontSize: 10, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว</small></span>
             <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(reviewRewardTotal(sheet.expenses))}</b>
           </div>
         )}
@@ -910,13 +910,13 @@ export default function JobSheetEditor() {
           return (
         <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Financial Summary<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
-          <div><span style={{ whiteSpace: "nowrap" }}>Tour Expenses<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></div>
-          <div><span style={{ whiteSpace: "nowrap" }}>Guide Fee<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
-          {reviewRewardTotal(sheet.expenses) > 0 && <div><span style={{ whiteSpace: "nowrap" }}>Review Reward<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(reviewRewardTotal(sheet.expenses))}</b></div>}
-          <div><span style={{ whiteSpace: "nowrap" }}>Withholding Tax<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
-          <div><span style={{ whiteSpace: "nowrap" }}>Net Payable to Guide<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>{thb(t.netGuideFee)}</b></div>
-          {personal > 0 && <div><span style={{ whiteSpace: "nowrap" }}>Reimbursement Due<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
-          <div className="grand"><span style={{ whiteSpace: "nowrap" }}>Total Job Expenses<small style={{ fontSize: 9.5, marginLeft: 5 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
+          <div><span>Tour Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(tourOperatingExpenses(sheet.expenses))}</b></div>
+          <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
+          {reviewRewardTotal(sheet.expenses) > 0 && <div><span>Review Reward<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(reviewRewardTotal(sheet.expenses))}</b></div>}
+          <div><span>Withholding Tax<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
+          <div><span>Net Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>{thb(t.netGuideFee)}</b></div>
+          {personal > 0 && <div><span>Reimbursement Due<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
+          <div className="grand"><span>Total Job Expenses<small style={{ display: "block", fontSize: 9.5, fontWeight: 400 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
         </div>
           );
         })()}
