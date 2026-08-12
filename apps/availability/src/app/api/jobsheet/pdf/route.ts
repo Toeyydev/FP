@@ -135,7 +135,7 @@ export async function GET(req: NextRequest) {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  @page { size: A4; margin: 14mm; }
+  @page { size: A4; margin: 0; }
   * { box-sizing: border-box; }
   body { font-family: "Sarabun","Noto Sans Thai",-apple-system,sans-serif; color: #16201c; font-size: 12px; margin: 0; }
   .toolbar { background:#7e3a2c; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
@@ -171,7 +171,7 @@ export async function GET(req: NextRequest) {
   [contenteditable="true"] { background:#fff7e8; outline:none; border-radius:3px; min-width:18px; }
   [contenteditable="true"]:focus { background:#fff2cf; box-shadow:0 0 0 2px #e9c98a inset; }
   .guide [contenteditable="true"] { display:inline-block; min-width:120px; }
-  @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
+  @media print { .toolbar { display:none; } .page { margin:0; max-width:none; padding:14mm; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
   th small, .thx { display:block; font-size:8px; color:#8a8f8b; font-weight:500; line-height:1.2; }
   h3 small, .summary small, .adv small { font-size:9px; color:#8a8f8b; font-weight:500; margin-left:5px; }
   .adv, .advance-settlement { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
