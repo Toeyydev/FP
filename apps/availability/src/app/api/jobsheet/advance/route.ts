@@ -70,6 +70,8 @@ export async function POST(req: NextRequest) {
 
   const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key(guideId, date, slotIdx) }, select: { id: true, ref: true } });
   if (!sheet) return NextResponse.json({ error: "no-sheet", hint: "Save the job sheet first." }, { status: 404 });
+  const gUser = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
+  const guideName = gUser?.fullName || gUser?.displayName || guideId;
 
   // Accidental double-submit guard: an identical amount recorded on this job within
   // the last minute is almost certainly the same click twice.
@@ -81,7 +83,9 @@ export async function POST(req: NextRequest) {
 
   let slip: { url: string; fileId: string } | null = null;
   if (file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0) {
-    const base = sheet.ref || `${guideId}-${date}`;
+    // Same naming convention as every other Drive file of this job
+    // ("<ref> — <guide> — <date> — …") so a job's documents sort together.
+    const base = `${sheet.ref || `${guideId}-${date}`} — ${guideName} — ${date}`;
     const up = await uploadSlip(session.user.id ?? undefined, file, `${base} — ${kind === "advance" ? "advance" : "advance return"} ฿${amount}`, date);
     if ("error" in up) return NextResponse.json({ error: up.error }, { status: up.status });
     slip = up;
