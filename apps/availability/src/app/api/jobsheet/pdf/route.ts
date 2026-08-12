@@ -55,7 +55,16 @@ export async function GET(req: NextRequest) {
   let sigSrc: string | null = null;
   try {
     sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`;
-  } catch { /* fall through to the visible warning below */ }
+  } catch { /* fs layout differs on the deployed container — try HTTP next */ }
+  // The app can always reach its own public URL even when the fs path can't be
+  // found (e.g. a different working directory in production) — self-fetch and
+  // inline. Base64 keeps print/html2pdf immune to image-load races.
+  if (!sigSrc) {
+    try {
+      const res = await fetch(new URL("/approver-signature.png", req.nextUrl.origin), { cache: "no-store" });
+      if (res.ok) sigSrc = `data:image/png;base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
+    } catch { /* fall back to the plain URL <img> + client-side warning */ }
+  }
   let bookings = (sheet.bookings as Booking[]) ?? [];
   // No saved sheet yet → pull the slot's live bookings so the prep PDF still
   // lists every guest (name + OTA ref + pax) for the operator to work from.
@@ -208,7 +217,8 @@ export async function GET(req: NextRequest) {
       <div class="certnote">ข้าพเจ้าขอรับรองว่ารายการค่าใช้จ่ายข้างต้นได้จ่ายไปจริงเพื่อกิจการนำเที่ยวของบริษัท และขอใช้ใบสำคัญนี้เป็นหลักฐานประกอบการเบิกจ่าย/แทนใบเสร็จรับเงินที่ไม่อาจเรียกเก็บได้</div>
       <div class="sigwrap">
         <div class="sigbox">
-          ${sigSrc ? `<img class="sigimg" src="${sigSrc}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" draggable="false" />` : `<div style="color:#b00020;font-size:11px;font-weight:600;padding:14px 0">⚠ ลายเซ็นผู้รับรองโหลดไม่สำเร็จ — เอกสารนี้ยังไม่สมบูรณ์ / certifier signature failed to load</div>`}
+          <img class="sigimg" src="${sigSrc ?? JOB_SHEET_CERTIFIER.signatureUrl}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" draggable="false" onerror="this.style.display='none';var w=document.getElementById('sigfail');if(w)w.style.display='block'" />
+          <div id="sigfail" style="display:none;color:#b00020;font-size:11px;font-weight:600;padding:14px 0">⚠ ลายเซ็นผู้รับรองโหลดไม่สำเร็จ — เอกสารนี้ยังไม่สมบูรณ์ / certifier signature failed to load</div>
           <div class="sigline">ลงชื่อ ...................................... ผู้อนุมัติ / ผู้รับรอง</div>
           <div class="signame">( นางสาว หทัยวรรณ ใจปลอด )</div>
           <div class="sigdate">${certDate ? `วันที่ ${esc(fmtCertDate(certDate))}` : "วันที่ ......../......../........"}</div>

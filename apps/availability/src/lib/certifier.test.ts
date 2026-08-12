@@ -25,6 +25,6 @@ describe("job-sheet certification date", () => {
 
   it("certifier is the fixed authorized person with the existing repo asset", () => {
     expect(JOB_SHEET_CERTIFIER.nameTh).toBe("หทัยวรรณ ใจปลอด");
-    expect(JOB_SHEET_CERTIFIER.signatureUrl).toBe("/approver-signature.png");
+    expect(JOB_SHEET_CERTIFIER.signatureUrl).toMatch(/^\/approver-signature\.png/); // ?v= cache-buster may follow
   });
 });
