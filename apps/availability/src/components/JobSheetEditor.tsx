@@ -938,7 +938,7 @@ export default function JobSheetEditor() {
            and kept together on one page. */}
        <div className="js-certify" style={{ marginTop: 26, borderTop: "1px dashed var(--line,#d9d9d9)", paddingTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
          <div style={{ textAlign: "center", width: "100%" }}>
-           <div style={{ fontSize: 10.5, color: "var(--ink-soft,#777)", lineHeight: 1.55, textAlign: "justify", marginBottom: 12 }}>{CERT_STATEMENT_TH}</div>
+           <div style={{ fontSize: 10.5, color: "var(--ink-soft,#777)", lineHeight: 1.6, textAlign: "left", marginBottom: 12 }}>{CERT_STATEMENT_TH}</div>
            <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by</div>
            {/* eslint-disable-next-line @next/next/no-img-element */}
            <img
