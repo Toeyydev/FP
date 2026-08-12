@@ -564,6 +564,59 @@ model LineContact {
   @@index([linkedUserId])
 }
 
+// Money transferred to a guide BEFORE a tour so they can pay tickets/transport on
+// the day. An advance is a CASH MOVEMENT, never an expense: the actual spend stays
+// in JobSheet.expenses (rows with paidBy = "advance"), and unused money comes back
+// as GuideAdvanceReturn rows. Settlement math lives in lib/advance (pure, tested):
+//   outstanding = advances − advance-paid expenses − returns.
+// Keyed by the house job tuple (guideId + date + slotIdx), like TourPayment.
+model GuideAdvance {
+  id          String   @id @default(cuid())
+  guideId     String
+  date        String // "YYYY-MM-DD"
+  slotIdx     Int
+  amount      Float
+  paidAt      DateTime
+  method      String   @default("bank") // bank | cash | other
+  txRef       String? // bank transaction reference
+  peakRef     String? // PEAK expense/advance ref once posted (future PEAK sync)
+  slipUrl     String? // Drive link to the transfer slip (evidence)
+  slipFileId  String?
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  returns GuideAdvanceReturn[]
+
+  @@index([guideId, date, slotIdx])
+  @@index([date])
+}
+
+// The guide handing unused advance money back (possibly in several transfers).
+// NOT a negative expense — it only settles the advance balance.
+model GuideAdvanceReturn {
+  id          String        @id @default(cuid())
+  advanceId   String? // optional link to one advance; settlement is job-level either way
+  advance     GuideAdvance? @relation(fields: [advanceId], references: [id], onDelete: SetNull)
+  guideId     String
+  date        String // "YYYY-MM-DD" — the JOB's date (house tuple), not the transfer date
+  slotIdx     Int
+  amount      Float
+  returnedAt  DateTime
+  method      String        @default("bank")
+  txRef       String?
+  slipUrl     String? // Drive link to the guide's return-transfer slip
+  slipFileId  String?
+  note        String?
+  createdById String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([guideId, date, slotIdx])
+  @@index([date])
+}
+
 // Ad-hoc bonus / adjustment paid to a guide in a month (e.g. a 5-star review reward).
 // Tracked separately from tour pay; shown in the Payments "Bonuses" panel.
 model Bonus {

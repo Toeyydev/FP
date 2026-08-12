@@ -78,6 +78,14 @@ export async function GET(req: NextRequest) {
     peakRef: tourPay?.peakRef ?? payroll?.peakRef ?? null, // accounting ref (recorded on Payments)
   };
 
+  // Guide advance + returns for this job — cash movements, settled against the
+  // sheet's paidBy="advance" expense rows (see lib/advance). Shown to the guide too.
+  const [advances, advanceReturns] = await Promise.all([
+    prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
+    prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
+  ]);
+  const advance = { advances, returns: advanceReturns };
+
   // Collapse repeated guests to a single row — the same booking must appear only once
   // (a re-import or combine can leave a guest listed twice). The SAME booking can
   // arrive under two name spellings ("Romel Sierra" vs "Sierra, Romel"), so dedupe by
@@ -145,7 +153,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -200,7 +208,7 @@ export async function GET(req: NextRequest) {
       .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -209,7 +217,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, checkedIn, payment,
+    header, tour, saved: false, canEdit: isOps, checkedIn, payment, advance,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
