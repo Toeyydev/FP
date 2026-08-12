@@ -87,11 +87,9 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#111;font-size:13px">
       <div style="font-size:12px;font-weight:600;letter-spacing:1px">${esc(CO.brandName)}</div>
       <div style="color:#666;font-size:9px">Operated by ${esc(CO.operatedBy)} / ${esc(CO.legalNameTh)}</div>
-      <div style="color:#8a8f8b;font-size:8.5px">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
-      <div style="font-size:20px;font-weight:800;margin-top:10px">JOB SHEET</div>
-      <div style="font-size:13px;font-weight:600;color:#7e3a2c;margin-bottom:12px">${esc(ref)}</div>
+      <div style="color:#8a8f8b;font-size:8.5px;margin-bottom:12px">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
       <table border="1" cellpadding="6" style="border-collapse:collapse;margin-bottom:10px;font-size:12.5px">
-        <tr><td style="color:#555">No.</td><td><b>${esc(ref)}</b></td></tr>
+        <tr><td style="color:#555;white-space:nowrap">Job No. <small style="font-size:8px;color:#8a8f8b">เลขที่งาน</small></td><td><b>${esc(ref)}</b></td></tr>
         <tr><td style="color:#555">Updated</td><td>${esc(updated)}</td></tr>
         <tr><td style="color:#555">Tour ID</td><td><b>${esc(tourId)}</b></td></tr>
         <tr><td style="color:#555">Guide ID</td><td>${esc(guideId)}</td></tr>
