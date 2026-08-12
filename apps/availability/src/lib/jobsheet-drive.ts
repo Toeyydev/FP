@@ -59,7 +59,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     const advanceHtml = advRows.length || retRows.length ? `
       <h3 style="margin:14px 0 4px;border:0">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">การเคลียร์เงินทดรองจ่าย</span></h3>
       <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:9px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Date · Time <span style="font-size:9px;color:#8a8f8b;font-weight:400">วันเวลาทำรายการ</span></th><th align="right">Amount <span style="font-size:9px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
+        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Description <span style="font-size:9px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Date · Time <span style="font-size:9px;color:#8a8f8b;font-weight:400">วันเวลาทำรายการ</span></th><th align="right">Amount <span style="font-size:9px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>
           ${advRows.map((a) => `<tr><td>Advance Paid <span style="font-size:10px;color:#8a8f8b">เงินทดรองจ่ายให้มัคคุเทศก์</span>${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(dtBKK(a.paidAt))} · ${esc(a.method)}</td><td align="right">${esc(thb(a.amount))}</td></tr>`).join("")}
           <tr><td style="padding-left:18px">Expenses Paid from Advance <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายที่ชำระจากเงินทดรอง</span></td><td></td><td align="right">− ${esc(thb(at.usedFromAdvance))}</td></tr>
@@ -107,13 +107,13 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
       </table>
       <h3 style="margin:16px 0 4px">Job Details</h3>
       <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2"><th align="left">Name</th><th align="left">Booking no.</th><th>Booked</th><th>Actual</th><th align="left">Tickets</th></tr></thead>
+        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Name</th><th align="left">Booking no.</th><th>Booked</th><th>Actual</th><th align="left">Tickets</th></tr></thead>
         <tbody>${bookingRows}</tbody>
       </table>
       ${nsStats.pax > 0 ? `<div style="font-size:11px;color:#c2604a;margin:4px 0 0"><b>No-show</b> <span style="font-size:9px;color:#8a8f8b">ไม่มาใช้บริการ</span>: ${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}</div>` : ""}
       <h3 style="margin:14px 0 4px;border:0">Tour Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
       <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2"><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
+        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
         <tbody>${expenseRows}</tbody>
       </table>
 ${advanceHtml}

@@ -156,7 +156,7 @@ export async function GET(req: NextRequest) {
   th, td { border:0; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
   tbody tr:last-child td { border-bottom:0; }
   thead th { border-bottom:1px solid #b9beb9; }
-  th { background:#f4f4f4; font-weight:600; }
+  th { background:#f4f4f4; font-weight:400; }
   td.n, th.n { text-align:right; } td.c { text-align:center; }
   .tot td { font-weight:600; background:#fafafa; border-bottom:0; }
   tr:has(+ .tot) td { border-bottom:0; }
