@@ -634,7 +634,7 @@ export default function JobSheetEditor() {
                 <td><input style={{ ...L, width: 70 }} type="number" value={b.bookedPax ?? ""} onChange={(e) => setBooking(i, { bookedPax: numOrNull(e.target.value) })} /></td>
                 <td><input style={{ ...L, width: 70 }} type="number" value={b.actualPax ?? ""} onChange={(e) => setBooking(i, { actualPax: numOrNull(e.target.value) })} /></td>
                 <td>
-                  <select style={L} value={b.tickets} onChange={(e) => setBooking(i, { tickets: e.target.value as Booking["tickets"] })}>
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", MozAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={b.tickets} onChange={(e) => setBooking(i, { tickets: e.target.value as Booking["tickets"] })}>
                     <option value="">—</option><option value="included">Included</option><option value="not">Not incl.</option>
                   </select>
                 </td>
