@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, fillDownExpensePax, isApproved, noShowStatus, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, fillDownExpensePax, guidePersonalTotal, isApproved, noShowStatus, thb, totalJobExpenses, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
-import { JOB_SHEET_CERTIFIER, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
@@ -578,13 +579,23 @@ export default function JobSheetEditor() {
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
         <div className="js-head">
-          <div className="js-brand"><b>FOLKPATHS</b><div style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>บริษัท โฟล์คพาธส์ จำกัด</div></div>
+          {/* Company/legal reference — deliberately small and secondary (§header
+              hierarchy): the eye must land on JOB SHEET + the job no., not on the
+              Tax ID. Exact official spellings — legal entity and licensed tour
+              operator are intentionally spelled differently. */}
+          <div className="js-brand" style={{ breakInside: "avoid" }}>
+            <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.06em" }}>{CO.brandName}</div>
+            <div style={{ fontSize: 9, color: "var(--ink-soft,#888)" }}>Operated by {CO.operatedBy} / {CO.legalNameTh}</div>
+            <div style={{ fontSize: 8.5, color: "var(--ink-soft,#999)" }}>Tax ID {CO.taxId} · Tour Operator {CO.tourOperatorNameTh} · License {CO.tourismLicenseNo}</div>
+            <div style={{ fontSize: 19, fontWeight: 700, marginTop: 10, letterSpacing: "0.02em" }}>JOB SHEET</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--primary,#7e3a2c)", fontFamily: "monospace" }}>{sheet.ref ?? ""}</div>
+          </div>
           <table className="js-meta"><tbody>
-            <tr><td>No.</td><td>{sheet.ref ?? <span style={{ color: "#aaa" }}>—</span>}</td></tr>
-            <tr><td>Updated</td><td>{sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <i style={{ color: "#aaa" }}>not saved yet</i>}</td></tr>
-            <tr><td>Tour ID</td><td><b>{sheet.tourId || "—"}</b></td></tr>
-            <tr><td>Guide ID</td><td>{sheet.guideId}</td></tr>
-            <tr><td>Status</td><td>
+            <tr><td>Job No. <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>เลขที่งาน</small></td><td>{sheet.ref ?? <span style={{ color: "#aaa" }}>—</span>}</td></tr>
+            <tr><td>Updated <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>ปรับปรุงล่าสุด</small></td><td>{sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <i style={{ color: "#aaa" }}>not saved yet</i>}</td></tr>
+            <tr><td>Tour ID <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>รหัสทัวร์</small></td><td><b>{sheet.tourId || "—"}</b></td></tr>
+            <tr><td>Guide ID <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>รหัสมัคคุเทศก์</small></td><td>{sheet.guideId}</td></tr>
+            <tr><td>Status <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>สถานะงาน</small></td><td>
               <select value={sheet.status} onChange={(e) => up({ status: e.target.value })} className="no-print-border">
                 {/* include the live status (e.g. "Review: no-show", set by a guide's report) so it
                     renders instead of a blank box and is never lost when the operator saves */}
@@ -597,21 +608,21 @@ export default function JobSheetEditor() {
 
         {/* Guide / tour block (auto-filled from profile) */}
         <div className="js-guide">
-          <div><span>Tour Date</span><b>{date}</b></div>
-          <div><span>Time</span><b style={{ color: "var(--primary)" }}>{SLOT_TIMES[sheet.slotIdx] ?? tour?.time ?? ""}</b></div>
-          <div><span>Tour Name</span><b style={{ color: "var(--primary)" }}>{tour?.name || ""}</b></div>
-          <div><span>Guide name</span>{header?.name || ""}</div>
-          <div><span>Tax ID</span>{header?.taxId || "—"}</div>
-          <div><span>Address</span>{header?.address || "—"}</div>
-          <div><span>E-mail</span>{header?.email || ""}</div>
-          <div><span>Tel no.</span>{header?.tel || "—"}</div>
+          <div><span>Tour Date <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>วันที่นำเที่ยว</small></span><b>{date}</b></div>
+          <div><span>Time <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>เวลาเริ่มทัวร์</small></span><b style={{ color: "var(--primary)" }}>{SLOT_TIMES[sheet.slotIdx] ?? tour?.time ?? ""}</b></div>
+          <div><span>Tour Name <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ชื่อรายการนำเที่ยว</small></span><b style={{ color: "var(--primary)" }}>{tour?.name || ""}</b></div>
+          <div><span>Guide Name <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ชื่อมัคคุเทศก์</small></span>{header?.name || ""}</div>
+          <div><span>Tax ID <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>เลขประจำตัวผู้เสียภาษี</small></span>{header?.taxId || "—"}</div>
+          <div><span>Address <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ที่อยู่</small></span>{header?.address || "—"}</div>
+          <div><span>E-mail <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>อีเมล</small></span>{header?.email || ""}</div>
+          <div><span>Tel. <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>โทรศัพท์</small></span>{header?.tel || "—"}</div>
         </div>
 
         {/* Job details */}
         <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายละเอียดงาน"}</small></h3>
         <table className="js-table">
-          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Name lists" th="รายชื่อลูกค้า" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนจอง" /></th><th><TH en="Actual Pax" th="มาจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print" /></tr></thead>
+          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.bookings.map((b, i) => (
               <tr key={i}>
@@ -629,7 +640,7 @@ export default function JobSheetEditor() {
               </tr>
             ))}
             <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /></tr>
-            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-shows</td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700 }}>{noShowTotal} pax</td><td /><td className="no-print" /></tr>}
+            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show Pax <small style={{ fontSize: 9, fontWeight: 500 }}>จำนวนผู้เดินทางที่ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700 }}>{noShowTotal} pax</td><td /><td className="no-print" /></tr>}
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
@@ -637,9 +648,9 @@ export default function JobSheetEditor() {
 
         {/* Expenses */}
         <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
-        <h3 className="js-section" style={{ background: "#fff8c4" }}>Expense<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่าย"}</small></h3>
+        <h3 className="js-section" style={{ background: "#fff8c4" }}>Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small></h3>
         <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Price" th="ราคา" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Who paid this line — Guide Advance rows settle against the advance below"><TH en="Source" th="แหล่งจ่าย" /></th><th className="no-print"><TH en="Receipt" th="ใบเสร็จ" /></th><th className="no-print" /></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Unit Price" th="ราคาต่อหน่วย" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid by" th="แหล่งเงินที่ใช้ชำระ" /></th><th className="no-print"><TH en="Document" th="หลักฐานประกอบค่าใช้จ่าย" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.expenses.map((e, i) => (
               <tr key={i}>
@@ -652,7 +663,7 @@ export default function JobSheetEditor() {
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /
                       "operator") read as Company. "Guide Advance" rows feed the settlement. */}
-                  <select style={{ ...L, width: 108, ...(e.paidBy === "advance" ? { borderColor: "var(--primary)", fontWeight: 600 } : {}) }} value={e.paidBy === "advance" ? "advance" : e.paidBy === "guide" ? "guide" : "company"} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title="Who paid this line">
+                  <select style={{ ...L, width: 128, ...(e.paidBy === "advance" ? { borderColor: "var(--primary)", fontWeight: 600 } : e.paidBy === "guide" ? { borderColor: "#b45309", fontWeight: 600 } : {}) }} value={e.paidBy === "advance" ? "advance" : e.paidBy === "guide" ? "guide" : "company"} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} = ${x.th}`).join(" · ")}>
                     {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </td>
@@ -672,9 +683,22 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่าย"}</small></td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(t.totalExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
           </tbody>
         </table>
+        {!ro && (() => {
+          // Flag clearly unusual quantities vs the job's passenger count (guests
+          // + guide). Warn only — the operator may proceed if it's intentional.
+          const guests = sheet.bookings.reduce((a, b) => a + (b.actualPax ?? b.bookedPax ?? 0), 0);
+          const cap = Math.max(2, Math.ceil((guests + 1) * 1.5));
+          const odd = guests > 0 ? sheet.expenses.filter((e) => (e.pax ?? 0) > cap && expenseAmount(e) > 0) : [];
+          return odd.length ? (
+            <div className="no-print" style={{ margin: "6px 0 8px", padding: "8px 12px", borderRadius: 8, background: "#fdf3e7", border: "1px solid #ecd9bf", color: "#b45309", fontSize: 12.5, fontWeight: 600 }}>
+              ⚠ {odd.map((e) => `${e.description || "?"} (Qty ${e.pax})`).join(", ")} — this quantity is unusually high compared with the job passenger count ({guests} pax). Please review before finalizing.<br />
+              <span style={{ fontWeight: 500 }}>จำนวนรายการนี้สูงกว่าจำนวนผู้เดินทางอย่างมีนัยสำคัญ กรุณาตรวจสอบก่อนบันทึก Job Sheet</span>
+            </div>
+          ) : null;
+        })()}
         <button className="btn sm no-print" onClick={() => up({ expenses: [...sheet.expenses, { description: "", price: null, pax: null }] })}>+ Add expense</button>
         <button className="btn sm no-print" title="Reward for reviews — rate × number of reviews (e.g. 2 × ฿50). Shown as its own line on the guide's Pay." onClick={() => up({ expenses: [...sheet.expenses, { description: "Review reward", price: 50, pax: 1 }] })}>★ + Review reward</button>
         {!ro && (() => {
@@ -752,12 +776,12 @@ export default function JobSheetEditor() {
 
         {/* Guide fee */}
         <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
-        <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าตอบแทนมัคคุเทศก์"}</small></h3>
+        <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
         <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Price" th="ราคา" /></th><th></th><th><TH en="Time" th="ครั้ง" /></th><th><TH en="WHT %" th="หัก ณ ที่จ่าย %" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net" th="สุทธิ" /></th></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Payable" th="ยอดจ่ายสุทธิ" /></th></tr></thead>
           <tbody>
             <tr>
-              <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่ามัคคุเทศก์"}</small></td>
+              <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></td>
               <td><input style={{ ...L, width: 100 }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, price: numOrNull(e.target.value) } })} /></td>
               <td style={{ textAlign: "center" }}>×</td>
               <td><input style={{ ...L, width: 60 }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, time: numOrNull(e.target.value) } })} /></td>
@@ -768,19 +792,31 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
 
-        {/* Summary — the advance lines are cash-movement info: they never add to the
-            expense total or the payable (an advance is not a cost). */}
-        <div className="js-summary">
-          <div><span>Total Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่าย"}</small></span><b>{thb(t.totalExpenses)}</b></div>
-          <div><span>Net Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่ามัคคุเทศก์สุทธิ"}</small></span><b>{thb(t.netGuideFee)}</b></div>
-          <div className="grand"><span>Total<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมทั้งสิ้น"}</small></span><b>{thb(t.grandTotal)}</b></div>
+        {/* Financial Summary — accounting presentation (see lib/jobsheet helpers):
+            Total Job Expenses = tour expenses + GROSS guide fee; WHT shown
+            separately and never subtracted from job expenses. Advance lines are
+            cash movements, never added to totals. The Payments payout figure
+            (expenses + net fee) is a different number and lives in Payments. */}
+        {(() => {
+          const personal = guidePersonalTotal(sheet.expenses);
+          return (
+        <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Financial Summary<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
+          <div><span>Tour Expenses<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(t.totalExpenses)}</b></div>
+          <div><span>Guide Fee<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
+          <div className="grand"><span>Total Job Expenses<small style={{ fontSize: 9.5, marginLeft: 5 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(totalJobExpenses(t))}</b></div>
+          <div><span>Withholding Tax<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
+          <div><span>Net Payable to Guide<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span><b>{thb(t.netGuideFee)}</b></div>
+          {personal > 0 && <div><span>Reimbursement Due<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
           {hasAdvance && (<>
-            <div style={{ borderTop: "1px dashed var(--line)", marginTop: 4, paddingTop: 4 }}><span>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่าย"}</small></span><b>{thb(advT.totalAdvancePaid)}</b></div>
-            <div><span>Advance Used<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ใช้ไป"}</small></span><b>{thb(advT.usedFromAdvance)}</b></div>
-            <div><span>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"คืนแล้ว"}</small></span><b>{thb(advT.totalReturned)}</b></div>
-            <div><span>Advance Outstanding<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"คงค้าง"}</small></span><b style={{ color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}>{thb(advT.outstanding)}</b></div>
+            <div style={{ borderTop: "1px dashed var(--line)", marginTop: 4, paddingTop: 4 }}><span>Advance Paid<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>เงินทดรองจ่ายให้มัคคุเทศก์</small></span><b>{thb(advT.totalAdvancePaid)}</b></div>
+            <div><span>Expenses Paid from Advance<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>ค่าใช้จ่ายที่ชำระจากเงินทดรอง</small></span><b>{thb(advT.usedFromAdvance)}</b></div>
+            <div><span>Advance Returned<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>เงินทดรองคงเหลือส่งคืน</small></span><b>{thb(advT.totalReturned)}</b></div>
+            <div><span>Outstanding Advance<small style={{ fontSize: 9.5, color: "var(--ink-soft)", marginLeft: 5 }}>เงินทดรองจ่ายคงค้าง</small></span><b style={{ color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}>{thb(advT.outstanding)}</b></div>
           </>)}
         </div>
+          );
+        })()}
         </div>
 
         {/* Internal operations note — operator-only, never shown to the guide */}
@@ -800,7 +836,7 @@ export default function JobSheetEditor() {
        {(hasAdvance || canEdit) && (
        <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
         <h3 className="js-section" style={{ background: "#e8f1ea", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-          <span>Advance / Settlement<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่าย"}</small></span>
+          <span>Advance / Settlement<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"การเคลียร์เงินทดรองจ่าย"}</small></span>
           <span className="no-print">{advChip}</span>
         </h3>
         {hasAdvance ? (
@@ -809,28 +845,28 @@ export default function JobSheetEditor() {
               <tbody>
                 {advance.advances.map((a) => (
                   <tr key={a.id}>
-                    <td>Advance paid to guide<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้ไกด์"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.paidAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.paidAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
                     <td className="no-print" style={{ width: 70, textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ width: 110, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
                     <td className="no-print" style={{ width: 34, textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("advance", a)}>×</button>}</td>
                   </tr>
                 ))}
                 <tr>
-                  <td style={{ paddingLeft: 18 }}>Actual expenses from advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายจริงจากเงินทดรอง"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · expense rows marked “Guide Advance” above</span></td>
+                  <td style={{ paddingLeft: 18 }}>Expenses Paid from Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายที่ชำระจากเงินทดรอง"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · expense rows with Paid by = Guide Advance above</span></td>
                   <td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(advT.usedFromAdvance)}</td>
                   <td className="no-print" />
                 </tr>
                 {advance.returns.map((a) => (
                   <tr key={a.id}>
-                    <td style={{ paddingLeft: 18 }}>Returned by guide<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินคืนจากไกด์"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.returnedAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
+                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small><span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {dtShort(a.returnedAt)} · {a.method}{a.txRef ? ` · ${a.txRef}` : ""}{a.note ? ` · ${a.note}` : ""}</span></td>
                     <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(a.amount)}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("return", a)}>×</button>}</td>
                   </tr>
                 ))}
                 <tr className="js-total">
-                  <td style={{ textAlign: "right" }}>Outstanding<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"คงค้าง"}</small></td>
+                  <td style={{ textAlign: "right" }}>Outstanding Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายคงค้าง"}</small></td>
                   <td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}><b>{thb(advT.outstanding)}</b></td>
                   <td className="no-print" />
@@ -884,7 +920,8 @@ export default function JobSheetEditor() {
            and kept together on one page. */}
        <div className="js-certify" style={{ marginTop: 26, borderTop: "1px dashed var(--line,#d9d9d9)", paddingTop: 14, display: "flex", justifyContent: "flex-end", breakInside: "avoid", pageBreakInside: "avoid" }}>
          <div style={{ textAlign: "center", minWidth: 220, maxWidth: "100%" }}>
-           <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รับรองโดย"}</small></div>
+           <div style={{ fontSize: 9.5, color: "var(--ink-soft,#777)", lineHeight: 1.5, maxWidth: 420, textAlign: "left", marginBottom: 10 }}>{CERT_STATEMENT_TH}</div>
+           <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by</div>
            {/* eslint-disable-next-line @next/next/no-img-element */}
            <img
              src={JOB_SHEET_CERTIFIER.signatureUrl}
@@ -893,8 +930,9 @@ export default function JobSheetEditor() {
              draggable={false}
              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; console.warn("Job-sheet certifier signature failed to load:", JOB_SHEET_CERTIFIER.signatureUrl); }}
            />
-           <div style={{ fontWeight: 600, marginTop: 8 }}>{JOB_SHEET_CERTIFIER.nameTh}</div>
-           <div style={{ fontSize: 12.5, color: "var(--ink-soft,#666)", marginTop: 2 }}>{fmtCertDate(certificationDate(sheet)) || (canEdit ? "date set on first save" : "\u2014")}</div>
+           <div style={{ fontWeight: 600, marginTop: 8 }}>({JOB_SHEET_CERTIFIER.nameFullTh})</div>
+           <div style={{ fontSize: 11, color: "var(--ink-soft,#777)" }}>{JOB_SHEET_CERTIFIER.roleLabelTh}</div>
+           <div style={{ fontSize: 12.5, color: "var(--ink-soft,#666)", marginTop: 4 }}>{(() => { const d = fmtCertDate(certificationDate(sheet)); return d ? `วันที่ ${d}` : canEdit ? "date set on first save" : "\u2014"; })()}</div>
          </div>
        </div>
       </section>

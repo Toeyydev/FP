@@ -8,10 +8,15 @@ import { expenseAmount, type Expense } from "@/lib/jobsheet";
 // UI "Payment Source" per expense row maps onto the EXISTING Expense.paidBy field:
 //   "company" (default, also legacy rows with paidBy unset/operator) · "advance"
 //   (paid with the guide's advance money) · "guide" (guide's personal money).
+// "Paid by" (แหล่งเงินที่ใช้ชำระ) — the source of money used for an expense line.
+// Internal values stay company/advance/guide (per-sheet JSON; no migration):
+//   company → Company Direct (บริษัทชำระโดยตรง)
+//   advance → Guide Advance (ชำระจากเงินทดรองจ่าย) — counts toward Advance Used
+//   guide   → Guide Personal (มัคคุเทศก์สำรองจ่าย) — counts toward Reimbursement Due
 export const PAYMENT_SOURCES = [
-  { value: "company", label: "Company / บริษัท" },
-  { value: "advance", label: "Advance / เงินทดรอง" },
-  { value: "guide", label: "Guide / เงินส่วนตัวไกด์" },
+  { value: "company", label: "Company Direct", th: "บริษัทชำระโดยตรง" },
+  { value: "advance", label: "Guide Advance", th: "ชำระจากเงินทดรองจ่าย" },
+  { value: "guide", label: "Guide Personal", th: "มัคคุเทศก์สำรองจ่าย" },
 ] as const;
 export const isAdvanceExpense = (e: Pick<Expense, "paidBy">): boolean => e.paidBy === "advance";
 
@@ -48,9 +53,9 @@ export function advanceStatus(t: AdvanceTotals, tourCompleted: boolean): Advance
 }
 
 export const ADVANCE_STATUS_LABEL: Record<AdvanceStatus, string> = {
-  NOT_REQUIRED: "No advance · ไม่มีเงินทดรอง",
-  OPEN: "Open · ระหว่างทัวร์",
-  PENDING_SETTLEMENT: "Pending settlement · รอเคลียร์",
-  SETTLED: "Settled · เคลียร์แล้ว",
-  OVER_RETURNED: "Over-returned — review · คืนเกิน ตรวจสอบ",
+  NOT_REQUIRED: "No Advance · ไม่มีเงินทดรองจ่าย",
+  OPEN: "Open · ระหว่างงาน",
+  PENDING_SETTLEMENT: "Pending Settlement · รอเคลียร์เงินทดรอง",
+  SETTLED: "Settled · เคลียร์เงินทดรองแล้ว",
+  OVER_RETURNED: "Review Required · ต้องตรวจสอบ (คืนเกิน)",
 };

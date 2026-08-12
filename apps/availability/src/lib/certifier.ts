@@ -8,6 +8,8 @@
 export const JOB_SHEET_CERTIFIER = {
   id: "hathaiwan-jaiplod",
   nameTh: "หทัยวรรณ ใจปลอด",
+  nameFullTh: "นางสาว หทัยวรรณ ใจปลอด", // formal document form, shown in parentheses
+  roleLabelTh: "ผู้จัดทำ / ผู้รับรองรายการ", // preparer/certifier — NOT an approval workflow
   signatureUrl: "/approver-signature.png?v=2", // ?v busts stale PWA/browser caches of the pre-fix asset
   signatureFile: "approver-signature.png", // under public/ — for server-side inlining into the PDF
 } as const;
@@ -23,6 +25,12 @@ export function certificationDate(sheet: { certifiedAt?: string | Date | null; a
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d;
 }
+
+// Certification statement printed above the signature. Describes what the
+// document IS (internal accounting-support evidence incl. advance settlement) —
+// deliberately NOT "ใบแทนใบเสร็จรับเงิน" or any receipt/tax-invoice claim.
+export const CERT_STATEMENT_TH =
+  "ข้าพเจ้าขอรับรองว่ารายการค่าใช้จ่ายและการเคลียร์เงินทดรองจ่ายตามเอกสารฉบับนี้เกิดขึ้นจริงและเกี่ยวข้องกับการดำเนินงานนำเที่ยวของบริษัท โดยจัดทำเอกสารฉบับนี้เพื่อใช้เป็นหลักฐานประกอบการบันทึกบัญชี การเบิกจ่าย และการเคลียร์เงินทดรองจ่าย พร้อมเอกสารประกอบที่เกี่ยวข้อง (ถ้ามี)";
 
 // "13 Aug 2026" — the document-facing format, always in Thailand time. The full
 // timestamp stays stored for audit; only the display is day-granular.

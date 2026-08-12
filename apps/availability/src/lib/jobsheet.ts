@@ -102,6 +102,21 @@ export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   return { totalExpenses, gross, wht, netGuideFee, grandTotal };
 }
 
+// ── Accounting presentation (Job Sheet / PDF / Drive) ────────────────────────
+// Total Job Expenses = actual tour expenses + GROSS guide fee. WHT reduces the
+// cash paid to the guide (Net Payable), never the gross fee expense — so this is
+// deliberately NOT computeTotals().grandTotal (which is the guide-payout figure:
+// expenses + NET fee, used by Payments and left untouched).
+export function totalJobExpenses(t: { totalExpenses: number; gross: number }): number {
+  return t.totalExpenses + t.gross;
+}
+// Expenses the guide paid with PERSONAL money — the only category that can
+// create a reimbursement due to the guide (advance-paid rows were company money
+// already in the guide's hands and must never be reimbursed twice).
+export function guidePersonalTotal(expenses: Expense[]): number {
+  return (expenses ?? []).filter((e) => e.paidBy === "guide").reduce((s, e) => s + expenseAmount(e), 0);
+}
+
 export const thb = (v: number) =>
   `฿${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
