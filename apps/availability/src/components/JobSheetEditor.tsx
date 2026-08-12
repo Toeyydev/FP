@@ -587,15 +587,13 @@ export default function JobSheetEditor() {
             <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.06em" }}>{CO.brandName}</div>
             <div style={{ fontSize: 9, color: "var(--ink-soft,#888)" }}>Operated by {CO.operatedBy} / {CO.legalNameTh}</div>
             <div style={{ fontSize: 8.5, color: "var(--ink-soft,#999)" }}>Tax ID {CO.taxId} · Tour Operator {CO.tourOperatorNameTh} · License {CO.tourismLicenseNo}</div>
-            <div style={{ fontSize: 19, fontWeight: 700, marginTop: 10, letterSpacing: "0.02em" }}>JOB SHEET</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--primary,#7e3a2c)", fontFamily: "monospace" }}>{sheet.ref ?? ""}</div>
           </div>
           <table className="js-meta"><tbody>
-            <tr><td>Job No. <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>เลขที่งาน</small></td><td>{sheet.ref ?? <span style={{ color: "#aaa" }}>—</span>}</td></tr>
-            <tr><td>Updated <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>ปรับปรุงล่าสุด</small></td><td>{sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <i style={{ color: "#aaa" }}>not saved yet</i>}</td></tr>
-            <tr><td>Tour ID <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>รหัสทัวร์</small></td><td><b>{sheet.tourId || "—"}</b></td></tr>
-            <tr><td>Guide ID <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>รหัสมัคคุเทศก์</small></td><td>{sheet.guideId}</td></tr>
-            <tr><td>Status <small style={{ display: "block", fontSize: 8.5, color: "var(--ink-soft)" }}>สถานะงาน</small></td><td>
+            <tr><td style={{ whiteSpace: "nowrap" }}>Job No. <small style={{ fontSize: 8.5, color: "var(--ink-soft)", marginLeft: 3 }}>เลขที่งาน</small></td><td>{sheet.ref ?? <span style={{ color: "#aaa" }}>—</span>}</td></tr>
+            <tr><td style={{ whiteSpace: "nowrap" }}>Updated <small style={{ fontSize: 8.5, color: "var(--ink-soft)", marginLeft: 3 }}>ปรับปรุงล่าสุด</small></td><td>{sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <i style={{ color: "#aaa" }}>not saved yet</i>}</td></tr>
+            <tr><td style={{ whiteSpace: "nowrap" }}>Tour ID <small style={{ fontSize: 8.5, color: "var(--ink-soft)", marginLeft: 3 }}>รหัสทัวร์</small></td><td><b>{sheet.tourId || "—"}</b></td></tr>
+            <tr><td style={{ whiteSpace: "nowrap" }}>Guide ID <small style={{ fontSize: 8.5, color: "var(--ink-soft)", marginLeft: 3 }}>รหัสมัคคุเทศก์</small></td><td>{sheet.guideId}</td></tr>
+            <tr><td style={{ whiteSpace: "nowrap" }}>Status <small style={{ fontSize: 8.5, color: "var(--ink-soft)", marginLeft: 3 }}>สถานะงาน</small></td><td>
               <select value={sheet.status} onChange={(e) => up({ status: e.target.value })} className="no-print-border">
                 {/* include the live status (e.g. "Review: no-show", set by a guide's report) so it
                     renders instead of a blank box and is never lost when the operator saves */}

@@ -186,11 +186,9 @@ export async function GET(req: NextRequest) {
       <div class="brand">${esc(CO.brandName)}
         <div class="co2">Operated by ${esc(CO.operatedBy)} / ${esc(CO.legalNameTh)}</div>
         <div class="co3">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
-        <div class="doctitle">JOB SHEET</div>
-        <div class="docref">${esc(sheet.ref || "")}</div>
       </div>
       <div class="meta">
-        <div><b>No.</b> ${esc(sheet.ref || "")}</div>
+        <div><b>Job No.</b> <small style="font-size:8px;color:#8a8f8b">เลขที่งาน</small> ${esc(sheet.ref || "")}</div>
         <div><b>Tour ID</b> ${esc(tourId || "—")}</div>
         <div><b>Guide ID</b> ${esc(guideId)}</div>
         <div><b>Status</b> ${esc(sheet.status)}</div>
