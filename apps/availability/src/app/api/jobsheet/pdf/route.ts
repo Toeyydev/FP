@@ -7,6 +7,7 @@ import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -52,6 +53,14 @@ export async function GET(req: NextRequest) {
   // async image load and silently drop it; if it can't be read, say so on the
   // document instead of quietly producing an uncertified-looking sheet.
   const certDate = existing ? certificationDate(existing) : null;
+  // Advance / settlement ledger for the accountant: only rendered when an advance
+  // exists. Cash movements — never added into the expense or payable totals.
+  const [advRows, retRows] = guideId
+    ? await Promise.all([
+        prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
+        prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
+      ])
+    : [[], []];
   let sigSrc: string | null = null;
   try {
     sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`;
@@ -146,6 +155,11 @@ export async function GET(req: NextRequest) {
   [contenteditable="true"]:focus { background:#fff2cf; box-shadow:0 0 0 2px #e9c98a inset; }
   .guide [contenteditable="true"] { display:inline-block; min-width:120px; }
   @media print { .toolbar { display:none; } .page { margin:0; } body { font-size:11px; } .prepnote { display:none; } [contenteditable="true"] { background:transparent; box-shadow:none; } }
+  th small, .thx { display:block; font-size:8px; color:#8a8f8b; font-weight:500; line-height:1.2; }
+  h3 small, .summary small, .adv small { font-size:9px; color:#8a8f8b; font-weight:500; margin-left:5px; }
+  .adv { margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
+  .adv table td { font-size:11.5px; }
+  .adv .st { font-weight:700; }
   .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
   .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.5; max-width:540px; }
   .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
@@ -183,36 +197,49 @@ export async function GET(req: NextRequest) {
       <div><span>Tel no.</span><span${ce}>${esc(u?.phone || (editable ? "" : "—"))}</span></div>
     </div>
 
-    <h3>Job Details</h3>
+    <h3>Job Details <small>รายละเอียดงาน</small></h3>
     <table>
-      <thead><tr><th>No.</th><th>Name lists</th><th>Booking No.</th><th class="n">Booked Pax</th><th class="n">Actual Pax</th><th>Tickets</th></tr></thead>
+      <thead><tr><th>No.<small>ลำดับ</small></th><th>Name lists<small>รายชื่อลูกค้า</small></th><th>Booking No.<small>เลขที่การจอง</small></th><th class="n">Booked Pax<small>จำนวนจอง</small></th><th class="n">Actual Pax<small>มาจริง</small></th><th>Tickets<small>บัตรเข้าชม</small></th></tr></thead>
       <tbody>${bookingRows || '<tr><td colspan="6" style="color:#aaa">No bookings listed.</td></tr>'}
         <tr class="tot"><td></td><td colspan="2" style="text-align:right">Total</td><td class="n" id="bookedTot">${bookedSum}</td><td class="n" id="actualTot">${actualSum}</td><td></td></tr>
         ${noShowSum > 0 ? `<tr class="tot"><td></td><td colspan="2" style="text-align:right;color:#c2604a">No-shows</td><td class="n" colspan="2" style="color:#c2604a">${noShowSum} pax</td><td></td></tr>` : ""}
       </tbody>
     </table>
 
-    <h3 class="exp">Expense</h3>
+    <h3 class="exp">Expense <small>ค่าใช้จ่าย</small></h3>
     <table>
-      <thead><tr><th>Description</th><th class="n">Price</th><th class="c"></th><th class="n">จำนวน</th><th class="c">หน่วย</th><th class="n">Amount</th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Price<small>ราคา</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
       <tbody>${expenseRows}
-        <tr class="tot"><td colspan="4" style="text-align:right">Total Expenses</td><td class="n" id="expTot">${thb(t.totalExpenses)}</td></tr>
+        <tr class="tot"><td colspan="4" style="text-align:right">Total Expenses <small>รวมค่าใช้จ่าย</small></td><td class="n" id="expTot">${thb(t.totalExpenses)}</td></tr>
       </tbody>
     </table>
 
-    <h3 class="fee">Guide</h3>
+    <h3 class="fee">Guide <small>ค่าตอบแทนมัคคุเทศก์</small></h3>
     <table>
-      <thead><tr><th>Description</th><th class="n">Price</th><th class="c"></th><th class="n">Time</th><th class="n">WHT %</th><th class="n">WHT</th><th class="n">Net</th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Price<small>ราคา</small></th><th class="c"></th><th class="n">Time<small>ครั้ง</small></th><th class="n">WHT %<small>หัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net<small>สุทธิ</small></th></tr></thead>
       <tbody>
         <tr><td>Guide Fee</td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
       </tbody>
     </table>
 
     <div class="summary">
-      <div><span>Total Expenses</span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
-      <div><span>Net Guide Fee</span><b>${thb(t.netGuideFee)}</b></div>
-      <div class="grand"><span>Total</span><b id="grandTot">${thb(t.grandTotal)}</b></div>
+      <div><span>Total Expenses <small>รวมค่าใช้จ่าย</small></span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
+      <div><span>Net Guide Fee <small>ค่ามัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
+      <div class="grand"><span>Total <small>รวมทั้งสิ้น</small></span><b id="grandTot">${thb(t.grandTotal)}</b></div>
     </div>
+    ${advRows.length || retRows.length ? (() => {
+      const at = advanceTotals(advRows, retRows, expenses);
+      const st = ADVANCE_STATUS_LABEL[advanceStatus(at, true)];
+      const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+      return `<div class="adv"><h3>Advance / Settlement <small>เงินทดรองจ่าย</small></h3>
+      <table><tbody>
+        ${advRows.map((a) => `<tr><td>Advance paid to guide <small>เงินทดรองจ่ายให้ไกด์</small> · ${esc(dt(a.paidAt))}${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
+        <tr><td style="padding-left:16px">Actual expenses from advance <small>ค่าใช้จ่ายจริงจากเงินทดรอง</small></td><td class="n">− ${thb(at.usedFromAdvance)}</td></tr>
+        ${retRows.map((a) => `<tr><td style="padding-left:16px">Returned by guide <small>เงินคืนจากไกด์</small> · ${esc(dt(a.returnedAt))}${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td class="n">− ${thb(a.amount)}</td></tr>`).join("")}
+        <tr class="tot"><td style="text-align:right">Outstanding <small>คงค้าง</small></td><td class="n">${thb(at.outstanding)}</td></tr>
+        <tr><td class="st" colspan="2">Status <small>สถานะ</small> : ${esc(st)}</td></tr>
+      </tbody></table></div>`;
+    })() : ""}
     <div class="approve">
       <div class="certnote">ข้าพเจ้าขอรับรองว่ารายการค่าใช้จ่ายข้างต้นได้จ่ายไปจริงเพื่อกิจการนำเที่ยวของบริษัท และขอใช้ใบสำคัญนี้เป็นหลักฐานประกอบการเบิกจ่าย/แทนใบเสร็จรับเงินที่ไม่อาจเรียกเก็บได้</div>
       <div class="sigwrap">
