@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/db";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour } from "@/lib/jobsheet";
 import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, type ParsedBooking } from "@/lib/bookings";
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
@@ -9,11 +8,8 @@ import { todayD, ymd } from "@/lib/dates";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { bookingRef } from "@/lib/booking-ref";
-import { PAX_PER_GUIDE } from "@/lib/capacity";
 
 export type ImportResult = "created" | "updated" | "skipped";
-
-const CAP = PAX_PER_GUIDE; // max pax per guide / job (single source: lib/capacity)
 
 export async function notifyOps(message: string, title: string, body: string, opts?: { push?: boolean; date?: string }) {
   // A finished job shouldn't alert: skip entirely if the tour date is in the past.
@@ -105,67 +101,35 @@ async function autoRemoveExactDuplicate(rec: { id: string; customerName: string 
   } catch { return false; }
 }
 
-// When a NEW booking lands for a slot already assigned to a guide: auto-add it to
-// that guide's job if it stays within the per-guide cap, and ALWAYS alert the
-// operator to confirm. If it would breach the cap (or the slot is split across
-// guides), leave it pending and alert for a manual decision. Never throws.
+// When a NEW booking lands for a slot already assigned to a guide: NEVER attach it
+// automatically. The operator planned that group when they dispatched it, so a late
+// arrival goes back to them — the booking stays PENDING in the Bookings inbox and
+// ops get an actionable alert to review and place it themselves (add it to the
+// guide, split the slot, or offer it out). Never throws.
 export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; externalRef?: string | null; status: string }): Promise<boolean> {
   try {
-    // Attach by date + slot — the assigned guide owns that time slot, so a new
-    // booking lands on their job even if it arrived without a tour mapping yet.
     if (b.status !== "PENDING" || !b.date || b.slotIdx == null) return false;
     const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx } });
     if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
     const ref = bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "a new booking";
-    if (assigns.length > 1) {
-      await notifyOps(`Booking ${ref} for ${b.date} matches a slot already split across ${assigns.length} guides. Assign it manually.`, "Late booking needs assigning", `${ref} · ${b.date}`, { date: b.date });
-      return false;
-    }
-    const a = assigns[0];
     const addPax = b.pax ?? 0;
-    // The job's true total if this booking joins = every non-cancelled booking at the
-    // slot (this PENDING one is already part of it), NOT assignment.pax + this booking
-    // — which double-counts once assignment.pax has been re-synced to include it, and
-    // wrongly holds a booking that actually fits under the cap.
-    const slotBookings = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } }, select: { pax: true } });
-    const newTotal = slotBookings.reduce((s, x) => s + (x.pax ?? 0), 0) || ((a.pax ?? 0) + addPax);
-    if (newTotal > CAP) {
-      await notifyOps(`Booking ${ref} (+${addPax}) for ${b.date} puts ${a.guideId} over ${CAP} guests. Held — split it across guides.`, "Late booking over capacity", `${ref} · ${b.date} · ${a.guideId}`, { date: b.date });
-      return false;
-    }
-    const key = { guideId_date_slotIdx: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx } };
-    // Mark OFFERED so it leaves the "ready to offer" inbox, and link it to the
-    // guide's tour if it arrived unmapped.
-    await prisma.booking.update({ where: { id: b.id }, data: { status: "OFFERED", tourId: b.tourId ?? a.tourId } });
-    await prisma.assignment.update({ where: key, data: { pax: newTotal } });
-    const js = await prisma.jobSheet.findUnique({ where: key });
-    const list = Array.isArray(js?.bookings) ? (js!.bookings as Array<{ bookingNo?: string; name?: string; bookedPax?: number | null; actualPax?: number | null; tickets?: string; status?: string }>) : [];
-    // Don't append a guest who's already a row. A re-import / re-slot can arrive with a
-    // different name spelling ("Romel Sierra" vs "Sierra, Romel"), so match on the
-    // booking ref (stable) first, then name — otherwise the sheet double-lists the guest
-    // and inflates the booked pax.
-    const newRef = (bookingRef(b.externalRef, b.confirmationCode) || "").trim().toLowerCase();
-    const newName = (b.customerName || "").trim().toLowerCase();
-    const already = list.some((r) => {
-      const rRef = (r.bookingNo || "").trim().toLowerCase();
-      return newRef ? rRef === newRef : newName ? (r.name || "").trim().toLowerCase() === newName : false;
-    });
-    if (!already) list.push({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: null, tickets: "", status: "" });
-    const tour = await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } });
-    await prisma.jobSheet.upsert({
-      where: key,
-      create: { guideId: a.guideId, date: b.date, slotIdx: b.slotIdx, tourId: a.tourId, bookings: list as object, expenses: defaultExpensesForTour(tour?.name) as object, guideFee: DEFAULT_GUIDE_FEE as object },
-      update: { bookings: list as object },
-    });
-    await notifyGuide(a.guideId, `A booking was added to your ${b.date} tour. You now have ${newTotal} guests.`, "Your tour group grew", `${b.date} · now ${newTotal} guests`);
-    await notifyOps(`Booking ${ref} (+${addPax}) added to ${a.guideId}'s job on ${b.date} — now ${newTotal} guests.`, "Booking combined into a job", `${ref} → ${a.guideId} · ${b.date} · ${newTotal} pax`, { push: false, date: b.date });
-    return true;
-  } catch { return false; /* import must succeed regardless of attach errors */ }
+    const who = assigns.length > 1 ? `${assigns.length} guides` : assigns[0].guideId;
+    // Stable message text — notifyOps de-dupes on it, so the reconcile sweep re-seeing
+    // this booking every pass doesn't stack alerts.
+    await notifyOps(
+      `Booking ${ref} (+${addPax} pax) for ${b.date} arrived after ${who} ${assigns.length > 1 ? "were" : "was"} assigned. Held as pending — review it in Bookings and assign it yourself.`,
+      "Late booking needs assigning",
+      `${ref} · ${b.date} · +${addPax} pax`,
+      { date: b.date },
+    );
+    return false;
+  } catch { return false; /* import must succeed regardless of alert errors */ }
 }
 
-// Sweep existing PENDING bookings (today onward) and auto-combine any whose slot
-// is already assigned to a guide, THEN re-sync every assignment's pax to the real
-// booking total so the operator's board/dashboard never shows a stale number.
+// Sweep existing PENDING bookings (today onward) and flag any whose slot is
+// already assigned to a guide (held for the operator to place — never combined
+// automatically), THEN re-sync every assignment's pax to the real booking total
+// so the operator's board/dashboard never shows a stale number.
 // Idempotent — safe to call on every inbox / dashboard load.
 //
 // Throttled: this ~70-query sweep fires from every dashboard AND inbox load, so with
@@ -190,7 +154,9 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
   // Re-sync assignment.pax = the slot's live booking total (split-aware).
   const assigns = await prisma.assignment.findMany({ where: { date: { gte: today } }, select: { id: true, guideId: true, date: true, slotIdx: true, pax: true, googleEventId: true, opsGoogleEventId: true } });
   for (const a of assigns) {
-    const bks = await prisma.booking.findMany({ where: { date: a.date, slotIdx: a.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
+    // PENDING excluded: a held late booking is NOT on the guide's job until the
+    // operator places it, so it must not inflate the assignment's pax.
+    const bks = await prisma.booking.findMany({ where: { date: a.date, slotIdx: a.slotIdx, status: { in: ["OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
     const split = bks.some((b) => b.assignedGuideId);
     // On a split slot, a guide's pax is ONLY their tagged guests — an untagged guest
     // must not be counted into every guide's pax (that double-counted one booking

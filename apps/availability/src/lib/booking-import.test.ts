@@ -32,60 +32,48 @@ beforeEach(() => {
   prismaMock.booking.findMany.mockResolvedValue([]);
 });
 
-describe("autoAttachLate — late booking onto a reserved/assigned guide", () => {
+describe("autoAttachLate — late booking onto an already-assigned slot is HELD for the operator", () => {
   it("does nothing when the slot has no assignment yet", async () => {
     await autoAttachLate(booking());
     expect(prismaMock.booking.update).not.toHaveBeenCalled();
     expect(prismaMock.notification.create).not.toHaveBeenCalled();
   });
 
-  it("auto-adds to the guide when total stays within 10", async () => {
+  it("never auto-adds to the assigned guide — stays PENDING, operator alerted", async () => {
     prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
-    prismaMock.booking.findMany.mockResolvedValue([{ pax: 4 }, { pax: 2 }]); // slot total 6
-    await autoAttachLate(booking({ pax: 2 })); // 6 <= 10
+    const res = await autoAttachLate(booking({ pax: 2 }));
 
-    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
-    expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 6 } }));
-    expect(prismaMock.jobSheet.upsert).toHaveBeenCalled();
-    // alerts both the guide and the operator
-    expect(prismaMock.notification.create).toHaveBeenCalled();
+    expect(res).toBe(false);
+    expect(prismaMock.booking.update).not.toHaveBeenCalled(); // stays PENDING
+    expect(prismaMock.assignment.update).not.toHaveBeenCalled(); // guide's pax untouched
+    expect(prismaMock.jobSheet.upsert).not.toHaveBeenCalled(); // sheet untouched
+    expect(prismaMock.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ kind: "late-booking", message: expect.stringContaining("Held as pending") }) }),
+    );
+    // the alert names the assigned guide so the operator knows whose group grew
+    expect(prismaMock.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ message: expect.stringContaining("G-003") }) }),
+    );
   });
 
-  it("works for a reserved host with no bookings yet (pax 0/null)", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: null }]);
-    prismaMock.booking.findMany.mockResolvedValue([{ pax: 3 }]); // slot total 3
-    await autoAttachLate(booking({ pax: 3 }));
-    expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 3 } }));
-  });
-
-  it("holds and alerts when it would exceed 12", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 9 }]);
-    prismaMock.booking.findMany.mockResolvedValue([{ pax: 5 }, { pax: 4 }, { pax: 4 }]); // slot total 13
-    await autoAttachLate(booking({ pax: 4 })); // 13 > 12
-
-    expect(prismaMock.booking.update).not.toHaveBeenCalled();
-    expect(prismaMock.assignment.update).not.toHaveBeenCalled();
-    expect(prismaMock.notification.create).toHaveBeenCalled(); // operator alerted
-  });
-
-  it("alerts to assign manually when the slot is split across guides", async () => {
+  it("holds and alerts when the slot is split across guides", async () => {
     prismaMock.assignment.findMany.mockResolvedValue([
       { guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 6 },
       { guideId: "G-007", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 },
     ]);
     await autoAttachLate(booking({ pax: 2 }));
     expect(prismaMock.booking.update).not.toHaveBeenCalled();
-    expect(prismaMock.notification.create).toHaveBeenCalled();
+    expect(prismaMock.assignment.update).not.toHaveBeenCalled();
+    expect(prismaMock.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ message: expect.stringContaining("2 guides") }) }),
+    );
   });
 
-  it("does NOT double-count: assignment.pax already includes this booking → attaches", async () => {
-    // assignment.pax 9 already counts the pending 4-pax booking; the true slot total
-    // is 9 (<=10), so it must attach, not be held as "over capacity".
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-013", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 9 }]);
-    prismaMock.booking.findMany.mockResolvedValue([{ pax: 2 }, { pax: 2 }, { pax: 1 }, { pax: 4 }]); // slot total 9
-    await autoAttachLate(booking({ pax: 4 }));
-    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
-    expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 9 } }));
+  it("holds an UNMAPPED booking (no tourId) too — no silent tour linking", async () => {
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
+    await autoAttachLate(booking({ tourId: null, pax: 2 }));
+    expect(prismaMock.booking.update).not.toHaveBeenCalled();
+    expect(prismaMock.notification.create).toHaveBeenCalled();
   });
 
   it("ignores cancelled bookings and ones with no date/slot", async () => {
@@ -93,13 +81,5 @@ describe("autoAttachLate — late booking onto a reserved/assigned guide", () =>
     await autoAttachLate(booking({ slotIdx: null }));
     await autoAttachLate(booking({ date: null }));
     expect(prismaMock.assignment.findMany).not.toHaveBeenCalled();
-  });
-
-  it("still attaches an UNMAPPED booking (no tourId) — the slot's guide owns it", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
-    prismaMock.booking.findMany.mockResolvedValue([{ pax: 4 }, { pax: 2 }]); // slot total 6
-    await autoAttachLate(booking({ tourId: null, pax: 2 }));
-    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "OFFERED", tourId: "t1" } }));
-    expect(prismaMock.assignment.update).toHaveBeenCalledWith(expect.objectContaining({ data: { pax: 6 } }));
   });
 });
