@@ -121,10 +121,10 @@ ${advanceHtml}
         <tr><td style="padding:2px 16px 2px 0;color:#555">Tour Expenses <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></td><td align="right"><b>${esc(thb(tourOperatingExpenses(expenses)))}</b></td></tr>
         ${reviewRewardTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">Review Reward <span style="font-size:10px;color:#8a8f8b">ค่าตอบแทนรีวิว</span></td><td align="right"><b>${esc(thb(reviewRewardTotal(expenses)))}</b></td></tr>` : ""}
         <tr><td style="padding:2px 16px 2px 0;color:#555">Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.gross))}</b></td></tr>
-        <tr><td style="padding:2px 16px 2px 0"><b>Total Job Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">รวมค่าใช้จ่ายของงาน</span></b></td><td align="right"><b>${esc(thb(totalJobExpenses(t)))}</b></td></tr>
         <tr><td style="padding:2px 16px 2px 0;color:#555">Withholding Tax <span style="font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
         <tr><td style="padding:2px 16px 2px 0;color:#555">Net Payable to Guide <span style="font-size:10px;color:#8a8f8b">ยอดจ่ายสุทธิให้มัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
         ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
+        <tr><td style="padding:2px 16px 2px 0"><b>Total Job Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">รวมค่าใช้จ่ายของงาน</span></b></td><td align="right"><b>${esc(thb(totalJobExpenses(t)))}</b></td></tr>
       </tbody></table>
       ${certHtml}
     </body></html>`;
