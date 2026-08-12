@@ -549,6 +549,15 @@ export default function JobSheetEditor() {
         );
       })()}
 
+      {/* Floating save — the toolbar Save scrolls out of view on a long sheet, which
+          read as "there is no Save button" mid-edit. Appears only when dirty. */}
+      {canEdit && !saved && (
+        <div className="no-print" style={{ position: "fixed", right: 18, bottom: 18, zIndex: 60, display: "flex", gap: 10, alignItems: "center", background: "var(--card,#fff)", border: "1px solid var(--line,#ddd)", borderRadius: 999, boxShadow: "0 6px 20px rgba(0,0,0,.14)", padding: "8px 10px 8px 16px" }}>
+          <span style={{ fontSize: 12.5, color: "var(--ink-soft,#777)", fontWeight: 600 }}>Unsaved changes<span style={{ display: "block", fontSize: 10.5, fontWeight: 500 }}>มีการแก้ไข ยังไม่บันทึก</span></span>
+          <button className="btn primary" disabled={busy} onClick={() => save()}>{busy ? "…" : "Save · บันทึก"}</button>
+        </div>
+      )}
+
       {(canEdit || showFull) && (
       <div className="js-detail-grid">
       <section className="panel js-sheet" style={{ padding: 18 }}>
