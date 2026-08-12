@@ -77,7 +77,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     try { sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`; } catch { /* fall back to the public URL */ }
     const certHtml = `
       <div style="margin-top:26px;border-top:1px dashed #cdd3cf;padding-top:12px">
-        <div style="font-size:10px;color:#5c655f;line-height:1.5;max-width:540px;margin-bottom:8px">${esc(CERT_STATEMENT_TH)}</div>
+        <div style="font-size:10px;color:#5c655f;line-height:1.55;text-align:justify;margin-bottom:8px">${esc(CERT_STATEMENT_TH)}</div>
         <table style="margin-left:auto;border-collapse:collapse"><tbody>
           <tr><td align="center" style="color:#777;font-size:11px;letter-spacing:1px">CERTIFIED BY</td></tr>
           <tr><td align="center"><img src="${sigSrc}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" width="170" /></td></tr>
