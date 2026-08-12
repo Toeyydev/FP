@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
-  const cost = jobCostBreakdown(expenses, guideFee, sheet.ref);
+  const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
   // No saved sheet (e.g. exported from Incoming bookings before assignment) →
   // make the guest list, expenses and guide details fillable on the page so the
   // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
@@ -253,9 +253,9 @@ export async function GET(req: NextRequest) {
       if (!rev.length) return "";
       return `<h3 style="background:#efe7f3">Additional Guide Payment <small>รายการจ่ายเพิ่มเติมให้มัคคุเทศก์</small></h3>
     <table>
-      <thead><tr><th>Description<small>รายการ</small></th><th>Related Job No.<small>เลขที่งานที่เกี่ยวข้อง</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th>Booking No.<small>เลขที่การจองที่รีวิว</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
       <tbody>
-        ${rev.map((e) => `<tr><td>${esc(e.description || "Review Reward")} <small>ค่าตอบแทนรีวิว</small></td><td style="white-space:nowrap">${esc(e.relatedJobRef || sheet.ref || "—")}</td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
+        ${rev.map((e) => `<tr><td>${esc(e.description || "Review Reward")} <small>ค่าตอบแทนรีวิว</small></td><td style="white-space:nowrap">${esc(e.relatedBookingNo || e.relatedJobRef || "—")}</td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
         <tr class="tot"><td colspan="2" style="text-align:right">Total Additional Payment <small>รวมรายการจ่ายเพิ่มเติม</small></td><td class="n">${thb(cost.reviewOwn + cost.reviewOther)}</td></tr>
       </tbody>
     </table>`;

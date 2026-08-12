@@ -34,7 +34,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     const expenses = (sheet.expenses as Expense[]) ?? [];
     const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
     const t = computeTotals(expenses, guideFee);
-    const cost = jobCostBreakdown(expenses, guideFee, sheet.ref);
+    const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
     const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
     const guideName = u?.fullName || u?.displayName || guideId;
     const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";

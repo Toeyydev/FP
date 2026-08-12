@@ -40,10 +40,12 @@ export type Expense = {
   receiptAt?: string; // ISO timestamp the receipt was attached
   receiptBy?: string; // User.id who attached it
   notes?: string;
-  // Review-reward rows only: the job the review was earned on. Empty (or equal
-  // to this sheet's ref) = earned here; a different ref means the reward is
-  // merely PAID OUT with this job and is not a cost of it.
-  relatedJobRef?: string;
+  // Review-reward rows only: the BOOKING the review came from (GYG ref etc.).
+  // Empty = a guest of this job; a booking no. on this sheet's guest list =
+  // earned here; any other booking no. = reward earned on an earlier job,
+  // merely PAID OUT with this one and never a cost of it.
+  relatedBookingNo?: string;
+  relatedJobRef?: string; // legacy job-ref form, still honoured when present
 };
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
@@ -151,23 +153,27 @@ export function totalJobExpenses(t: { totalExpenses: number; gross: number }): n
   return t.totalExpenses + t.gross;
 }
 
-// A review reward belongs to THIS job when it carries no related job ref (the
-// normal case — earned here) or that ref points back at this sheet. Anything
-// else was earned on an earlier job and is only being paid out with this one.
-export function reviewBelongsToJob(e: Expense, jobRef?: string | null): boolean {
-  const rel = (e.relatedJobRef ?? "").trim();
-  return !rel || rel.toLowerCase() === (jobRef ?? "").trim().toLowerCase();
+// A review reward belongs to THIS job when its related booking is one of this
+// job's own guests (booking-no.-first: a review comes from a guest, the guest's
+// booking pins the job — no hand-typed job refs to get wrong). Blank = earned
+// here. Legacy rows carrying relatedJobRef are honoured by ref comparison.
+export function reviewBelongsToJob(e: Expense, jobRef?: string | null, bookings?: Booking[]): boolean {
+  const norm = (x?: string | null) => (x ?? "").trim().toLowerCase();
+  const bookingNo = norm(e.relatedBookingNo);
+  if (bookingNo) return (bookings ?? []).some((b) => norm(b.bookingNo) === bookingNo);
+  const rel = norm(e.relatedJobRef);
+  return !rel || rel === norm(jobRef);
 }
 
 // The document's cost figures. Tour Expenses are operating rows only; a review
 // reward counts as this job's cost ONLY when it belongs here — a reward carried
 // over from another job increases the transfer to the guide, never this job's
 // expenses.
-export function jobCostBreakdown(expenses: Expense[], guideFee: GuideFee, jobRef?: string | null) {
+export function jobCostBreakdown(expenses: Expense[], guideFee: GuideFee, jobRef?: string | null, bookings?: Booking[]) {
   const t = computeTotals(expenses, guideFee);
   const reviews = (expenses ?? []).filter(isReviewExpense);
-  const reviewOwn = reviews.filter((e) => reviewBelongsToJob(e, jobRef)).reduce((s, e) => s + expenseAmount(e), 0);
-  const reviewOther = reviews.filter((e) => !reviewBelongsToJob(e, jobRef)).reduce((s, e) => s + expenseAmount(e), 0);
+  const reviewOwn = reviews.filter((e) => reviewBelongsToJob(e, jobRef, bookings)).reduce((s, e) => s + expenseAmount(e), 0);
+  const reviewOther = reviews.filter((e) => !reviewBelongsToJob(e, jobRef, bookings)).reduce((s, e) => s + expenseAmount(e), 0);
   const tourExpenses = tourOperatingExpenses(expenses);
   return { ...t, tourExpenses, reviewOwn, reviewOther, jobExpenses: tourExpenses + reviewOwn + t.gross };
 }
