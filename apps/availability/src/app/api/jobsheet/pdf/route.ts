@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, isReviewExpense, noShowStats, reviewRewardTotal, thb, totalJobExpenses, tourOperatingExpenses, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -93,6 +93,7 @@ export async function GET(req: NextRequest) {
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
+  const cost = jobCostBreakdown(expenses, guideFee, sheet.ref);
   // No saved sheet (e.g. exported from Incoming bookings before assignment) →
   // make the guest list, expenses and guide details fillable on the page so the
   // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
@@ -124,7 +125,7 @@ export async function GET(req: NextRequest) {
     : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
   // Review-reward rows are guide compensation — rendered with the Guide Fee
   // section, never inside Tour Expenses (presentation only; data unchanged).
-  let expenseRows = expenses.map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
+  let expenseRows = expenses.filter((e) => !isReviewExpense(e)).map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
   if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "", "");
 
   const html = `<!DOCTYPE html>
@@ -154,7 +155,8 @@ export async function GET(req: NextRequest) {
   h3 { font-size:13px; margin:16px 0 4px; padding:5px 8px; background:#bfe3bf; border:0; border-radius:4px; }
   h3.exp { background:#fff8c4; } h3.fee { background:#f4d9c4; }
   table { width:100%; border-collapse:collapse; font-size:11.5px; }
-  th, td { border:0; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
+  th, td { border:0; border-right:0.5px solid #edefed; border-bottom:0.5px solid #dfe3df; padding:5px 7px; text-align:left; }
+  th:last-child, td:last-child { border-right:0; }
   tbody tr:last-child td { border-bottom:0; }
   thead th { border-bottom:1px solid #b9beb9; }
   th { background:#f4f4f4; font-weight:400; }
@@ -234,7 +236,7 @@ export async function GET(req: NextRequest) {
     <table>
       <thead><tr><th>Description<small>รายการ</small></th><th class="n">Unit Price<small>ราคาต่อหน่วย</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th><th class="c">Paid by<small>แหล่งเงินที่ใช้ชำระ</small></th></tr></thead>
       <tbody>${expenseRows}
-        <tr class="tot"><td colspan="4" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(t.totalExpenses)}</td><td></td></tr>
+        <tr class="tot"><td colspan="4" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(cost.tourExpenses)}</td><td></td></tr>
       </tbody>
     </table>
 
@@ -246,6 +248,18 @@ export async function GET(req: NextRequest) {
         <tr><td>Guide Fee <small style="display:block;font-size:8px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</small></td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
       </tbody>
     </table>
+    ${(() => {
+      const rev = expenses.filter((e) => isReviewExpense(e) && expenseAmount(e) > 0);
+      if (!rev.length) return "";
+      return `<h3 style="background:#efe7f3">Additional Guide Payment <small>รายการจ่ายเพิ่มเติมให้มัคคุเทศก์</small></h3>
+    <table>
+      <thead><tr><th>Description<small>รายการ</small></th><th>Related Job No.<small>เลขที่งานที่เกี่ยวข้อง</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
+      <tbody>
+        ${rev.map((e) => `<tr><td>${esc(e.description || "Review Reward")} <small>ค่าตอบแทนรีวิว</small></td><td style="white-space:nowrap">${esc(e.relatedJobRef || sheet.ref || "—")}</td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
+        <tr class="tot"><td colspan="2" style="text-align:right">Total Additional Payment <small>รวมรายการจ่ายเพิ่มเติม</small></td><td class="n">${thb(cost.reviewOwn + cost.reviewOther)}</td></tr>
+      </tbody>
+    </table>`;
+    })()}
     </div>
 
 
@@ -267,12 +281,13 @@ export async function GET(req: NextRequest) {
     })() : ""}
     <div class="summary" style="break-inside:avoid;page-break-inside:avoid">
       <div style="font-weight:700;margin-bottom:2px">Financial Summary <small>สรุปรายการทางการเงิน</small></div>
-      <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(t.totalExpenses)}</b></div>
+      <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(cost.tourExpenses)}</b></div>
       <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
+      ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
       <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
       <div><span>Net Guide Fee <small>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
       ${guidePersonalTotal(expenses) > 0 ? `<div><span>Reimbursement Due <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style="color:#b45309">${thb(guidePersonalTotal(expenses))}</b></div>` : ""}
-      <div class="grand"><span>Total Job Expenses <small>รวมค่าใช้จ่ายของงาน</small></span><b id="grandTot">${thb(totalJobExpenses(t))}</b></div>
+      <div class="grand"><span>Total Job Expenses <small>รวมค่าใช้จ่ายของงาน</small></span><b id="grandTot">${thb(cost.jobExpenses)}</b></div>
     </div>
     <div class="approve">
       <div class="certnote">${esc(CERT_STATEMENT_TH)}</div>
@@ -288,7 +303,7 @@ export async function GET(req: NextRequest) {
     </div>
   </div>
   <script>
-    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0}, REVIEW=${Number(reviewRewardTotal(expenses)) || 0};
+    var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0}, REVIEW=${Number(cost.reviewOwn) || 0};
     // Live totals for the fillable prep sheet — sum pax + expense lines as you type.
     function jnum(t){ var n=parseFloat(String(t==null?"":t).replace(/[^0-9.\\-]/g,"")); return isFinite(n)?n:0; }
     function baht(n){ return "฿"+Math.round(n).toLocaleString(); }
@@ -300,7 +315,7 @@ export async function GET(req: NextRequest) {
       var et=0; document.querySelectorAll("tr[data-exp]").forEach(function(r){ var p=jnum((r.querySelector("[data-eprice]")||{}).textContent); var px=jnum((r.querySelector("[data-epax]")||{}).textContent); var amt=p*px; var ac=r.querySelector("[data-eamt]"); if(ac) ac.textContent=amt?baht(amt):""; et+=amt; });
       var ete=document.getElementById("expTot"); if(ete) ete.textContent=baht(et);
       var se=document.getElementById("sumExp"); if(se) se.textContent=baht(et);
-      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+GROSSFEE);
+      var ge=document.getElementById("grandTot"); if(ge) ge.textContent=baht(et+REVIEW+GROSSFEE);
     }
     document.addEventListener("input",recompute);
     var eslipFile=null;

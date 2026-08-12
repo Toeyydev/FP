@@ -40,6 +40,10 @@ export type Expense = {
   receiptAt?: string; // ISO timestamp the receipt was attached
   receiptBy?: string; // User.id who attached it
   notes?: string;
+  // Review-reward rows only: the job the review was earned on. Empty (or equal
+  // to this sheet's ref) = earned here; a different ref means the reward is
+  // merely PAID OUT with this job and is not a cost of it.
+  relatedJobRef?: string;
 };
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
@@ -74,7 +78,9 @@ export function defaultExpensesForTour(tourName?: string | null): Expense[] {
 // they do this — keeping the operator in control of the ticket/inclusive counts.
 export function fillDownExpensePax(expenses: Expense[], guests: number): Expense[] {
   const g = Math.max(0, Math.floor(guests || 0));
-  return (expenses ?? []).map((e) => ({ ...e, pax: /inc\.?\s*guide/i.test(e.description) ? g + 1 : g }));
+  // Review-reward rows are guide compensation, not per-guest tour costs — a
+  // guest count must never overwrite their quantity.
+  return (expenses ?? []).map((e) => (isReviewExpense(e) ? e : { ...e, pax: /inc\.?\s*guide/i.test(e.description) ? g + 1 : g }));
 }
 
 const n = (v: number | null | undefined) => (typeof v === "number" && isFinite(v) ? v : 0);
@@ -143,6 +149,27 @@ export function tourOperatingExpenses(expenses: Expense[]): number {
 // expenses + NET fee, used by Payments and left untouched).
 export function totalJobExpenses(t: { totalExpenses: number; gross: number }): number {
   return t.totalExpenses + t.gross;
+}
+
+// A review reward belongs to THIS job when it carries no related job ref (the
+// normal case — earned here) or that ref points back at this sheet. Anything
+// else was earned on an earlier job and is only being paid out with this one.
+export function reviewBelongsToJob(e: Expense, jobRef?: string | null): boolean {
+  const rel = (e.relatedJobRef ?? "").trim();
+  return !rel || rel.toLowerCase() === (jobRef ?? "").trim().toLowerCase();
+}
+
+// The document's cost figures. Tour Expenses are operating rows only; a review
+// reward counts as this job's cost ONLY when it belongs here — a reward carried
+// over from another job increases the transfer to the guide, never this job's
+// expenses.
+export function jobCostBreakdown(expenses: Expense[], guideFee: GuideFee, jobRef?: string | null) {
+  const t = computeTotals(expenses, guideFee);
+  const reviews = (expenses ?? []).filter(isReviewExpense);
+  const reviewOwn = reviews.filter((e) => reviewBelongsToJob(e, jobRef)).reduce((s, e) => s + expenseAmount(e), 0);
+  const reviewOther = reviews.filter((e) => !reviewBelongsToJob(e, jobRef)).reduce((s, e) => s + expenseAmount(e), 0);
+  const tourExpenses = tourOperatingExpenses(expenses);
+  return { ...t, tourExpenses, reviewOwn, reviewOther, jobExpenses: tourExpenses + reviewOwn + t.gross };
 }
 // Expenses the guide paid with PERSONAL money — the only category that can
 // create a reimbursement due to the guide (advance-paid rows were company money
