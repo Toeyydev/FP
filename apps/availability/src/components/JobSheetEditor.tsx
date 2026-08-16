@@ -780,7 +780,7 @@ export default function JobSheetEditor() {
         <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
         <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
         <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Payable" th="ยอดจ่ายสุทธิ" /></th></tr></thead>
+          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Guide Fee" th="ค่าจ้างมัคคุเทศก์สุทธิ" /></th></tr></thead>
           <tbody>
             <tr>
               <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></td>
@@ -806,17 +806,26 @@ export default function JobSheetEditor() {
               <table className="js-table">
                 <thead><tr>
                   <th style={{ textAlign: "left" }}><TH en="Description" th="รายการ" /></th>
-                  <th style={{ width: 170 }}><TH en="Booking No." th="เลขที่การจองที่รีวิว" /></th>
+                  <th style={{ width: 180 }}><TH en="Related Job No." th="เลขที่งานที่เกี่ยวข้อง" /></th>
                   <th style={{ width: 120, textAlign: "right" }}><TH en="Amount" th="จำนวนเงิน" /></th>
                   <th className="no-print" style={{ width: 34 }} />
                 </tr></thead>
                 <tbody>
                   {rows.map(({ e, i }) => {
                     const own = reviewBelongsToJob(e, sheet.ref, sheet.bookings);
+                    // The document names the JOB the reward came from: this job when
+                    // the reviewer is one of its guests, otherwise the other job. A
+                    // booking no. typed here is backstage — the PDF resolves it to a job.
+                    const shown = own ? (sheet.ref ?? "—") : (e.relatedJobRef || e.relatedBookingNo || "—");
                     return (
                       <tr key={i}>
                         <td>{ro ? (e.description || "Review Reward") : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)" }}>ค่าตอบแทนรีวิว{own ? "" : " · จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้"}</small></td>
-                        <td>{ro ? (e.relatedBookingNo || e.relatedJobRef || "—") : <input style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedBookingNo ?? ""} placeholder="GYG… (เว้นว่าง = แขกงานนี้)" title="Booking no. of the guest who left the review — a booking on this job's guest list counts as this job's cost; any other booking is paid out here without inflating this job" onChange={(ev) => setExpense(i, { relatedBookingNo: ev.target.value })} />}</td>
+                        <td style={{ fontFamily: "monospace", fontSize: 12 }}>
+                          {ro ? shown : <>
+                            <span className="print-only">{shown}</span>
+                            <input className="no-print" style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedJobRef || e.relatedBookingNo || ""} placeholder={sheet.ref ?? "FOLK-BKK-…"} title="เลขที่งานที่รีวิวมาจาก (FOLK-BKK-…) หรือใส่เลข booking (GYG…) ให้ระบบหางานให้ — เว้นว่าง = งานนี้" onChange={(ev) => { const v = ev.target.value.trim(); setExpense(i, /^folk/i.test(v) || v === "" ? { relatedJobRef: v, relatedBookingNo: "" } : { relatedBookingNo: v, relatedJobRef: "" }); }} />
+                          </>}
+                        </td>
                         <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{ro ? thb(expenseAmount(e)) : <span style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}><input style={{ ...L, width: 58, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} />×<input style={{ ...L, width: 40, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></span>}</td>
                         <td className="no-print">{canEdit && <button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button>}</td>
                       </tr>
