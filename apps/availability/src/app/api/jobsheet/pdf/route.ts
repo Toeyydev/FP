@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, resolveRelatedJobRef, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -94,6 +95,30 @@ export async function GET(req: NextRequest) {
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
   const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
+  // A review reward carried over from another job is stored as the reviewing
+  // guest's booking no.; this accounting document names the JOB it came from.
+  // The ILIKE only NARROWS the candidate rows — resolveRelatedJobRef decides on an
+  // exact bookingNo match, so a substring (GYG12 inside GYG123) or a stray hit in a
+  // guest name can never print the wrong job number on a financial document.
+  const relatedJobRefs = new Map<string, string>();
+  const foreignNos = [...new Set(
+    expenses
+      .filter((e) => isReviewExpense(e) && e.relatedBookingNo && !reviewBelongsToJob(e, sheet.ref, bookings))
+      .map((e) => (e.relatedBookingNo ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  )];
+  if (foreignNos.length) {
+    try {
+      const candidates = await prisma.$queryRaw<{ ref: string | null; bookings: unknown }[]>`
+        SELECT ref, bookings FROM "JobSheet"
+        WHERE ref IS NOT NULL AND (${Prisma.join(foreignNos.map((no) => Prisma.sql`bookings::text ILIKE ${`%${no}%`}`), " OR ")})
+        ORDER BY date DESC`;
+      for (const no of foreignNos) {
+        const ref = resolveRelatedJobRef(candidates, no);
+        if (ref) relatedJobRefs.set(no, ref);
+      }
+    } catch { /* display falls back to the booking no. */ }
+  }
   // No saved sheet (e.g. exported from Incoming bookings before assignment) →
   // make the guest list, expenses and guide details fillable on the page so the
   // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
@@ -253,9 +278,9 @@ export async function GET(req: NextRequest) {
       if (!rev.length) return "";
       return `<h3 style="background:#efe7f3">Additional Guide Payment <small>รายการจ่ายเพิ่มเติมให้มัคคุเทศก์</small></h3>
     <table>
-      <thead><tr><th>Description<small>รายการ</small></th><th>Booking No.<small>เลขที่การจองที่รีวิว</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
+      <thead><tr><th>Description<small>รายการ</small></th><th>Related Job No.<small>เลขที่งานที่เกี่ยวข้อง</small></th><th class="n">Amount<small>จำนวนเงิน</small></th></tr></thead>
       <tbody>
-        ${rev.map((e) => `<tr><td>${esc(e.description || "Review Reward")} <small>ค่าตอบแทนรีวิว</small></td><td style="white-space:nowrap">${esc(e.relatedBookingNo || e.relatedJobRef || "—")}</td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
+        ${rev.map((e) => `<tr><td>${esc(e.description || "Review Reward")} <small>ค่าตอบแทนรีวิว</small></td><td style="white-space:nowrap">${esc(reviewBelongsToJob(e, sheet.ref, bookings) ? (sheet.ref || "—") : (e.relatedJobRef || relatedJobRefs.get((e.relatedBookingNo ?? "").trim().toLowerCase()) || e.relatedBookingNo || "—"))}</td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
         <tr class="tot"><td colspan="2" style="text-align:right">Total Additional Payment <small>รวมรายการจ่ายเพิ่มเติม</small></td><td class="n">${thb(cost.reviewOwn + cost.reviewOther)}</td></tr>
       </tbody>
     </table>`;

@@ -165,6 +165,26 @@ export function reviewBelongsToJob(e: Expense, jobRef?: string | null, bookings?
   return !rel || rel === norm(jobRef);
 }
 
+// A review reward earned on ANOTHER job is stored as that guest's booking no.,
+// but the accounting document names the JOB it came from. Given candidate sheets
+// (most recent first) this returns the ref of the one whose guest list actually
+// contains that booking no. The match is EXACT on bookingNo — a prefilter that
+// merely narrows rows (e.g. a SQL substring scan) must never decide the answer,
+// or "GYG12" could print the job number belonging to "GYG123".
+export function resolveRelatedJobRef(
+  candidates: { ref?: string | null; bookings?: unknown }[],
+  bookingNo?: string | null,
+): string | null {
+  const want = (bookingNo ?? "").trim().toLowerCase();
+  if (!want) return null;
+  for (const c of candidates ?? []) {
+    if (!c?.ref) continue;
+    const list = Array.isArray(c.bookings) ? (c.bookings as Booking[]) : [];
+    if (list.some((b) => (b?.bookingNo ?? "").trim().toLowerCase() === want)) return c.ref;
+  }
+  return null;
+}
+
 // The document's cost figures. Tour Expenses are operating rows only; a review
 // reward counts as this job's cost ONLY when it belongs here — a reward carried
 // over from another job increases the transfer to the guide, never this job's

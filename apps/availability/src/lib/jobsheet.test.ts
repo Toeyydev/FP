@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName } from "@/lib/jobsheet";
+import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, resolveRelatedJobRef } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -168,5 +168,33 @@ describe("jobsheet — receiptDriveName", () => {
   it("falls back to guideId-date without a ref and sanitises the description", () => {
     const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
     expect(n).toBe("G-002-2026-08-08-E3 Taxi airport run — receipt.pdf");
+  });
+});
+
+describe("jobsheet — resolveRelatedJobRef", () => {
+  const sheets = [
+    { ref: "FOLK-BKK-20260812-01", bookings: [{ name: "Ann", bookingNo: "GYG123" }] },
+    { ref: "FOLK-BKK-20260720-01", bookings: [{ name: "Bo", bookingNo: "GYG12" }] },
+  ];
+  it("returns the ref of the sheet whose guest list holds that booking", () => {
+    expect(resolveRelatedJobRef(sheets, "GYG12")).toBe("FOLK-BKK-20260720-01");
+    expect(resolveRelatedJobRef(sheets, "GYG123")).toBe("FOLK-BKK-20260812-01");
+  });
+  it("matches exactly — a shorter booking no. never claims a longer one's job", () => {
+    expect(resolveRelatedJobRef([sheets[0]], "GYG12")).toBeNull(); // GYG12 ⊄ GYG123
+  });
+  it("ignores a substring hit that isn't a booking no. (guest name, tickets)", () => {
+    expect(resolveRelatedJobRef([{ ref: "FOLK-BKK-20260801-01", bookings: [{ name: "GYG123 party", bookingNo: "VIA9" }] }], "GYG123")).toBeNull();
+  });
+  it("is case- and space-tolerant, and takes the first (most recent) match", () => {
+    expect(resolveRelatedJobRef(sheets, "  gyg123 ")).toBe("FOLK-BKK-20260812-01");
+    const dupes = [{ ref: "FOLK-BKK-20260812-01", bookings: [{ bookingNo: "GYG9" }] }, { ref: "FOLK-BKK-20260101-01", bookings: [{ bookingNo: "GYG9" }] }];
+    expect(resolveRelatedJobRef(dupes, "GYG9")).toBe("FOLK-BKK-20260812-01");
+  });
+  it("returns null for a blank booking no., an unsaved sheet (no ref), or junk bookings", () => {
+    expect(resolveRelatedJobRef(sheets, "")).toBeNull();
+    expect(resolveRelatedJobRef(sheets, null)).toBeNull();
+    expect(resolveRelatedJobRef([{ ref: null, bookings: [{ bookingNo: "GYG123" }] }], "GYG123")).toBeNull();
+    expect(resolveRelatedJobRef([{ ref: "FOLK-BKK-20260812-01", bookings: "not-an-array" }], "GYG123")).toBeNull();
   });
 });
