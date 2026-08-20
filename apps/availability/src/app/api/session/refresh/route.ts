@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   // Use the host the middleware passed (Node routes only see Railway's internal
   // host). Railway's upstream origin is internal http — using it drops the Secure
   // cookie and loops the refresh.
-  const host = safeHost(req.nextUrl.searchParams.get("h")) || safeHost(req.headers.get("x-forwarded-host")) || "guide.folkpaths.com";
+  const host = safeHost(req.nextUrl.searchParams.get("h")) || safeHost(req.headers.get("x-forwarded-host")) || "ops.folkpaths.com";
   const proto = /^localhost/i.test(host) ? "http" : "https";
   const origin = `${proto}://${host}`;
   const next = safeNext(req.nextUrl.searchParams.get("next"));

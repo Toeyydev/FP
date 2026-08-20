@@ -1,7 +1,7 @@
 // Google Calendar OAuth + event CRUD. One-way sync (app → calendar); the app is
 // the source of truth. Set on Railway: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
 // Redirect URI in the Google Cloud console must be:
-//   https://guide.folkpaths.com/api/google/callback
+//   https://ops.folkpaths.com/api/google/callback
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 export const googleEnabled = Boolean(CLIENT_ID && CLIENT_SECRET);

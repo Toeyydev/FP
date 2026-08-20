@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 function page(title: string, body: string, tone: "ok" | "info" | "bad" = "info") {
   const color = tone === "ok" ? "#2e7d4f" : tone === "bad" ? "#c2604a" : "#7e3a2c";
-  const html = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><div style="font-family:system-ui,-apple-system,sans-serif;max-width:440px;margin:16vh auto;padding:0 24px;text-align:center;color:#2a2520"><div style="width:14px;height:14px;border-radius:50%;background:${color};margin:0 auto"></div><h1 style="font-size:23px;margin:16px 0 8px;color:${color}">${title}</h1><p style="color:#6f665b;font-size:15px;line-height:1.55">${body}</p><p style="margin-top:22px"><a href="https://guide.folkpaths.com/" style="display:inline-block;background:#7e3a2c;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open Folkpaths</a></p></div>`;
+  const html = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><div style="font-family:system-ui,-apple-system,sans-serif;max-width:440px;margin:16vh auto;padding:0 24px;text-align:center;color:#2a2520"><div style="width:14px;height:14px;border-radius:50%;background:${color};margin:0 auto"></div><h1 style="font-size:23px;margin:16px 0 8px;color:${color}">${title}</h1><p style="color:#6f665b;font-size:15px;line-height:1.55">${body}</p><p style="margin-top:22px"><a href="https://ops.folkpaths.com/" style="display:inline-block;background:#7e3a2c;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:12px">Open Folkpaths</a></p></div>`;
   return new NextResponse(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 

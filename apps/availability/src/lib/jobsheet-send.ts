@@ -4,7 +4,7 @@ import { notifyGuide } from "@/lib/booking-import";
 import { SLOT_TIMES } from "@/lib/slots";
 import { computeTotals, thb, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 
-const BASE = "https://guide.folkpaths.com";
+const BASE = "https://ops.folkpaths.com";
 
 // Whole-baht (no decimals) — payment amounts in the breakdown read as round numbers.
 const baht = (v: number) => `฿${Math.round(v).toLocaleString("en-US")}`;

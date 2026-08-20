@@ -57,7 +57,7 @@ describe("paymentBubble", () => {
       if (a?.type === "uri") uris.push(String(a.uri));
     });
     expect(uris).toContain("https://drive.google.com/file/d/abc123/view-e-slip");
-    expect(uris).toContain("https://guide.folkpaths.com/pay");
+    expect(uris).toContain("https://ops.folkpaths.com/pay");
     // Every link LINE will accept must be https.
     expect(uris.every((u) => u.startsWith("https://"))).toBe(true);
   });

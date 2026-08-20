@@ -1,6 +1,6 @@
 # Folkpaths Guide App — UX Copy Review (EN + TH)
 
-**App:** guide.folkpaths.com — guide availability & job dispatch board
+**App:** ops.folkpaths.com — guide availability & job dispatch board
 **Scope:** review existing copy across the app, both languages
 **Tone target:** friendly, warm, professional
 **Priority flagged by you:** make the availability boxes clearer (Red = Busy, Green = Available, Grey = Day Off)

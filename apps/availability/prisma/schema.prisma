@@ -769,7 +769,7 @@ model PaymentTransaction {
 // batch records what was actually settled even if a sheet is edited afterwards.
 // A tour payout (guideId+date+slotIdx) belongs to at most ONE batch at a time — the
 // unique on PaymentBatchItem enforces "not in two active batches"; deleting a batch
-// cascade-deletes its items, freeing those payouts to be re-batched. guide.folkpaths
+// cascade-deletes its items, freeing those payouts to be re-batched. ops.folkpaths
 // stays the operational record; PEAK remains the accounting mirror.
 // ─────────────────────────────────────────────────────────────────────────────
 model PaymentBatch {

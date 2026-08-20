@@ -2,7 +2,7 @@
 
 Your code lives on GitHub (`Toeyydev/FP`) and Railway auto-deploys the `main`
 branch. That pipeline is what lets you make changes from anywhere — describe what
-you want in plain language, it gets pushed to `main`, and **guide.folkpaths.com
+you want in plain language, it gets pushed to `main`, and **ops.folkpaths.com
 updates automatically in ~2 minutes**.
 
 ---
@@ -40,6 +40,6 @@ Capable, but the Claude Code web flow above is simpler and it's the same assista
   easy. **Bigger or risky changes** are safer on desktop, where the live database
   can be checked before and after.
 - **How to confirm a deploy landed:** open
-  `https://guide.folkpaths.com/api/version` — when it shows the new commit, the
+  `https://ops.folkpaths.com/api/version` — when it shows the new commit, the
   change is live. If a page still looks old, close and reopen the app once (it
   caches).
