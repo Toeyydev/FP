@@ -95,6 +95,8 @@ export default function JobSheetEditor() {
   const [peak, setPeak] = useState<PeakInfo>(null);
   const [peakAccounts, setPeakAccounts] = useState<{ code: string; name: string }[]>([]);
   const [contactEdit, setContactEdit] = useState<string | null>(null); // inline PEAK-contact mapping
+  const [peakContacts, setPeakContacts] = useState<{ id: string; name: string; taxNumber?: string; code?: string }[] | null>(null);
+  const [contactsError, setContactsError] = useState("");
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -370,6 +372,19 @@ export default function JobSheetEditor() {
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
   }
 
+  // The guides already exist in PEAK, so this is a LINK, not a creation. Fetched
+  // only while the mapping control is open — most sheet loads never need it.
+  useEffect(() => {
+    if (contactEdit === null || peakContacts !== null) return;
+    fetch("/api/peak/contacts", { cache: "no-store" })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) setPeakContacts(d.contacts ?? []);
+        else { setPeakContacts([]); setContactsError(d.error || "Could not load the PEAK contact list."); }
+      })
+      .catch(() => { setPeakContacts([]); setContactsError("Could not reach the server to load PEAK contacts."); });
+  }, [contactEdit, peakContacts]);
+
   // Operator: record (or clear) the guide's PEAK Contact id. This is the mapping
   // whose absence blocks every sync, so it is editable right where that block is
   // reported rather than on a separate admin screen. Writes to the guide's profile,
@@ -379,7 +394,13 @@ export default function JobSheetEditor() {
     setBusy(true); setMsg(value.trim() ? "Mapping guide to PEAK…" : "Clearing mapping…");
     const r = await fetch("/api/jobsheet/peak-contact", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId: sheet.guideId, peakContactId: value.trim() }),
+      body: JSON.stringify({
+        guideId: sheet.guideId,
+        peakContactId: value.trim(),
+        // Snapshot the name from the list so the sheet can say WHO it is mapped to
+        // rather than showing an opaque id.
+        peakContactName: peakContacts?.find((c) => c.id === value.trim())?.name,
+      }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
@@ -1403,19 +1424,37 @@ export default function JobSheetEditor() {
                 mapping is missing, and reachable via "Change" once it is set. */}
             {peak && (contactEdit !== null || !peak.contactMapped) ? (
               <div className="js-contact-map">
-                <label htmlFor="peakContact">PEAK Contact ID</label>
-                <input id="peakContact" value={contactEdit ?? ""} placeholder="e.g. 1a2b3c4d…" autoComplete="off"
-                  onChange={(ev) => setContactEdit(ev.target.value)}
-                  onKeyDown={(ev) => { if (ev.key === "Enter") savePeakContact(contactEdit ?? ""); if (ev.key === "Escape") setContactEdit(null); }} />
+                <label htmlFor="peakContact">PEAK Contact</label>
+                {/* The guide already exists in PEAK, so pick them from the list.
+                    Falls back to entering the id by hand if the list will not load,
+                    so a PEAK outage never blocks the mapping. */}
+                {peakContacts === null ? (
+                  <div className="hint">Loading PEAK contacts…</div>
+                ) : peakContacts.length ? (
+                  <select id="peakContact" value={contactEdit ?? ""} onChange={(ev) => setContactEdit(ev.target.value)}>
+                    <option value="">— not mapped —</option>
+                    {peakContacts.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}{c.taxNumber ? ` · ${c.taxNumber}` : ""}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input id="peakContact" value={contactEdit ?? ""} placeholder="PEAK contact id" autoComplete="off"
+                    onChange={(ev) => setContactEdit(ev.target.value)}
+                    onKeyDown={(ev) => { if (ev.key === "Enter") savePeakContact(contactEdit ?? ""); if (ev.key === "Escape") setContactEdit(null); }} />
+                )}
                 <div className="row" style={{ marginTop: 5 }}>
                   <button className="btn sm primary" disabled={busy} onClick={() => savePeakContact(contactEdit ?? "")}>Save</button>
                   {peak.contactMapped && <button className="btn sm ghost" disabled={busy} onClick={() => setContactEdit(null)}>Cancel</button>}
                 </div>
-                <div className="hint">The guide&apos;s supplier record in PEAK. Stored on their profile and reused by every job — never matched by name.</div>
+                <div className="hint">
+                  {contactsError
+                    ? `${contactsError} Enter the id by hand, or retry once PEAK responds.`
+                    : "The guide's existing supplier record in PEAK. Stored on their profile and reused by every job — never matched by name."}
+                </div>
               </div>
             ) : peak?.contactMapped ? (
               <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--ink-soft)" }}>
-                Guide mapped to PEAK contact{header?.peakContactName ? ` · ${header.peakContactName}` : ""}
+                Guide mapped to PEAK contact{header?.peakContactName ? ` · ${header.peakContactName}` : ""}{!header?.peakContactName && header?.peakContactId ? ` · ${header.peakContactId}` : ""}
                 {canEdit && <button className="btn sm ghost" style={{ marginLeft: 6, padding: "1px 6px" }} onClick={() => setContactEdit(header?.peakContactId ?? "")}>Change</button>}
               </div>
             ) : null}
