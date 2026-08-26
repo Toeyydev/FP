@@ -8,7 +8,8 @@ import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense,
 import { nextJobRef } from "@/lib/jobref";
 import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
 import { canViewFinance } from "@/lib/roles";
-import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
+import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility, type PeakAccountMap } from "@/lib/peak-sync";
+import { isMapped } from "@/lib/peak-accounts";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
@@ -17,13 +18,23 @@ function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
 }
 
-// Category → PEAK account, from the SAME env the payout builder already uses
-// (lib/peak-payout). Unset means unconfigured, which makes rows report UNMAPPED —
-// deliberately, rather than inventing an account code. No PEAK call is made.
-function peakAccountMap() {
-  const svc = process.env.PEAK_ACCT_EXPENSES || "";
-  if (!svc) return {};
-  return { entrance: { code: svc }, transport: { code: svc }, meal: { code: svc } };
+// Category → PEAK account, from the mappings an operator saved on the PEAK sync
+// page. This is what makes a job sheet inherit the chart automatically instead of
+// asking again per job. Unmapped stays unmapped — never a fallback account, and
+// never a code inferred from anything. No PEAK call is made.
+//
+// OTHER_TOUR_COST is deliberately absent: it has no standing account, and its row
+// carries its own peakAccountCode chosen on the sheet (see lib/peak-sync).
+async function peakAccountMap(): Promise<PeakAccountMap> {
+  const rows = await prisma.peakAccountMapping.findMany({
+    select: { folkopsCategory: true, peakAccountCode: true, peakAccountName: true, isActive: true },
+  });
+  const out: PeakAccountMap = {};
+  for (const [expenseType, key] of [["entrance", "ENTRANCE_TICKET"], ["transport", "TRANSPORTATION"], ["meal", "MEAL_REFRESHMENT"]] as const) {
+    const m = rows.find((r) => r.folkopsCategory === key);
+    if (isMapped(m)) out[expenseType] = { code: m!.peakAccountCode!, name: m!.peakAccountName ?? undefined };
+  }
+  return out;
 }
 
 // Header fields auto-pulled from the guide's profile (operator is authorized to see PII).
@@ -212,7 +223,7 @@ export async function GET(req: NextRequest) {
   // PEAK readiness for this sheet. Pure computation over data already loaded —
   // no PEAK call, nothing posted. `accounts` is config, `peak` is the verdict the
   // sidebar renders and the Sync action would gate on.
-  const accounts = peakAccountMap();
+  const accounts = await peakAccountMap();
   const peak = !isOps ? null : (() => {
     const exps = ((existing?.expenses as Expense[]) ?? defaultExpenses) as Expense[];
     const gf = ((existing?.guideFee && Object.keys(existing.guideFee as object).length ? existing.guideFee : DEFAULT_GUIDE_FEE) as unknown) as GuideFee;

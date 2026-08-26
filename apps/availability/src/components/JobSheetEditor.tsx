@@ -93,6 +93,7 @@ export default function JobSheetEditor() {
   const [history, setHistory] = useState<HistoryEvent[]>([]); // real recorded events only
   const [histTab, setHistTab] = useState<"timeline" | "files">("timeline");
   const [peak, setPeak] = useState<PeakInfo>(null);
+  const [peakAccounts, setPeakAccounts] = useState<{ code: string; name: string }[]>([]);
   const [contactEdit, setContactEdit] = useState<string | null>(null); // inline PEAK-contact mapping
 
   const load = useCallback(async () => {
@@ -109,6 +110,20 @@ export default function JobSheetEditor() {
     setGuideNote(s?.guideExpensesNote ?? "");
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
+  // Other Tour Cost has no standing account (it covers too many different things),
+  // so those rows pick one here. The chart is only fetched when such a row exists —
+  // most sheets have none and should not pay for the call.
+  const needsAccountPicker = !!sheet?.expenses?.some(
+    (e) => !isReviewExpense(e) && expenseCategory(e) === "other" && expenseAmount(e) > 0,
+  );
+  useEffect(() => {
+    if (!needsAccountPicker || !canEdit || peakAccounts.length) return;
+    fetch("/api/peak/accounts", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.ok && setPeakAccounts(d.accounts ?? []))
+      .catch(() => {});
+  }, [needsAccountPicker, canEdit, peakAccounts.length]);
+
   useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected })).catch(() => {}); }, []);
 
   // Entrance-fee items (Grand Palace, Wat Pho, Wat Arun) are paid only for guests
@@ -804,6 +819,22 @@ export default function JobSheetEditor() {
                       : acct === "UNMAPPED"
                         ? <span className="js-acct warn" title={expenseCategory(e) ? "No PEAK account is configured for this category yet" : "Choose an expense category so this line can be mapped to an account"}>{expenseCategory(e) ? "No account" : "Unmapped"}</span>
                         : <span className="js-acct warn" title={paid === "UNSPECIFIED" ? "Set Paid By — it decides whether the guide is reimbursed for this line" : "Other Tour Cost is never auto-approved — confirm the accounting mapping for this line"}>Needs review</span>}
+                  {/* Per-row account for Other Tour Cost. Never guessed: until the
+                      operator chooses one the row stays "Needs review" and blocks sync
+                      (see expenseMappingStatus in lib/peak-sync). */}
+                  {!already && canEdit && expenseCategory(e) === "other" && (
+                    <div className="js-row-acct">
+                      <input list="js-peak-accounts" value={e.peakAccountCode ?? ""} placeholder="Search PEAK account…"
+                        title="Other Tour Cost has no standing account — choose the one this expense belongs to"
+                        aria-label="PEAK account for this expense"
+                        onChange={(ev) => {
+                          const code = ev.target.value.trim();
+                          const acct = peakAccounts.find((a) => a.code === code);
+                          setExpense(i, { peakAccountCode: code || null, peakAccountName: acct?.name ?? null });
+                        }} />
+                      {e.peakAccountCode && <span>{e.peakAccountName || peakAccounts.find((a) => a.code === e.peakAccountCode)?.name || "not in the PEAK list"}</span>}
+                    </div>
+                  )}
                   {!already && canEdit && paid === "COMPANY_DIRECT" && (
                     <button type="button" className="btn sm ghost js-dupe-mark" title="This cost is already in PEAK under a supplier invoice or receipt — keep it in the job's cost but never post it again"
                       onClick={() => setExpense(i, { alreadyRecordedInPeak: true, sourceDocumentType: "SUPPLIER_INVOICE" })}>Already in PEAK</button>
@@ -813,6 +844,13 @@ export default function JobSheetEditor() {
               </tr>
               );
             })}
+            {needsAccountPicker && canEdit && (
+              <tr className="no-print"><td colSpan={8} style={{ padding: 0, border: 0 }}>
+                <datalist id="js-peak-accounts">
+                  {peakAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
+                </datalist>
+              </td></tr>
+            )}
             <tr className="js-total">
               <td colSpan={5} style={{ textAlign: "right" }}>TOTAL TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td>
               <td className="js-amt"><b>{thb(cost.tourExpenses)}</b></td>

@@ -12,6 +12,7 @@
 // would pay for the same thing twice. Only what the guide fronted with personal
 // money comes back to them.
 
+import { categoryForExpenseType, categoryLabel, isPerJobCategory } from "@/lib/peak-accounts";
 import {
   expenseAmount,
   expenseCategory,
@@ -284,7 +285,24 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
 
   const billed = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
   const needReview = billed.filter((e) => !e.alreadyRecordedInPeak && expenseMappingStatus(e, accounts) !== "READY");
-  if (needReview.length) reasons.push(needReview.length === 1 ? "1 expense needs account review" : `${needReview.length} expenses need account review`);
+
+  // Name the actual cause per §7. "2 expenses need account review" tells an
+  // operator nothing about where to go; "Transportation has no PEAK account
+  // mapping" points at the settings page, and "1 Other Tour Cost requires account
+  // review" points at the row. They are different fixes in different places.
+  const unmappedCats = new Set<string>();
+  let perJobUnresolved = 0;
+  let uncategorised = 0;
+  for (const e of needReview) {
+    const cat = categoryForExpenseType(e.expenseType);
+    if (!cat) { uncategorised++; continue; }
+    if (isPerJobCategory(cat)) { perJobUnresolved++; continue; }
+    if (canonicalPaidBy(e) === "UNSPECIFIED") { uncategorised++; continue; }
+    unmappedCats.add(cat);
+  }
+  for (const cat of unmappedCats) reasons.push(`${categoryLabel(cat)} has no PEAK account mapping`);
+  if (perJobUnresolved) reasons.push(`${perJobUnresolved} ${categoryLabel("OTHER_TOUR_COST")} require${perJobUnresolved === 1 ? "s" : ""} account review`);
+  if (uncategorised) reasons.push(uncategorised === 1 ? "1 expense needs a category or Paid By" : `${uncategorised} expenses need a category or Paid By`);
 
   // A company-direct row claiming to be in PEAK already must say WHICH document,
   // otherwise "already recorded" is an unverifiable assertion that could hide a

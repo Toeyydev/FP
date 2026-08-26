@@ -1,34 +1,46 @@
 import { describe, it, expect } from "vitest";
 import {
-  ACCOUNTING_CATEGORIES, REQUIRED_CATEGORIES, accountChartReady, categoryStatus,
-  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType,
+  ACCOUNTING_CATEGORIES, FIXED_CATEGORIES, accountChartReady, categoryStatus,
+  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, canMapGlobally,
   type AccountMapping,
 } from "@/lib/peak-accounts";
 
 const map = (k: string, code: string | null, name: string | null = "ต้นทุนการให้บริการ"): AccountMapping =>
   ({ folkopsCategory: k, peakAccountCode: code, peakAccountName: name });
-const allFour = REQUIRED_CATEGORIES.map((k) => map(k, "51010"));
+const allFixed = FIXED_CATEGORIES.map((k) => map(k, "51010"));
 
 describe("account chart readiness", () => {
-  it("the six categories exist and exactly four are required", () => {
+  it("the six categories exist and five take a fixed account", () => {
     expect(ACCOUNTING_CATEGORIES.map((c) => c.key)).toEqual([
       "GUIDE_FEE", "ENTRANCE_TICKET", "TRANSPORTATION", "MEAL_REFRESHMENT", "OTHER_TOUR_COST", "REVIEW_REWARD",
     ]);
-    expect(REQUIRED_CATEGORIES).toEqual(["GUIDE_FEE", "ENTRANCE_TICKET", "TRANSPORTATION", "MEAL_REFRESHMENT"]);
+    // REVIEW_REWARD is fixed now: it is consistently guide compensation, so asking
+    // per job was repetitive work for an answer that never changes.
+    expect(FIXED_CATEGORIES).toEqual(["GUIDE_FEE", "ENTRANCE_TICKET", "TRANSPORTATION", "MEAL_REFRESHMENT", "REVIEW_REWARD"]);
   });
 
   it("is ready once the four required categories carry a code", () => {
-    expect(accountChartReady(allFour)).toBe(true);
-    expect(missingRequired(allFour)).toEqual([]);
+    expect(accountChartReady(allFixed)).toBe(true);
+    expect(missingRequired(allFixed)).toEqual([]);
   });
 
-  it("OTHER_TOUR_COST and REVIEW_REWARD never block readiness", () => {
-    // Both deliberately unmapped — the chart is still ready.
-    expect(accountChartReady([...allFour, map("OTHER_TOUR_COST", null), map("REVIEW_REWARD", null)])).toBe(true);
+  it("OTHER_TOUR_COST never blocks readiness — it is resolved per job", () => {
+    expect(accountChartReady([...allFixed, map("OTHER_TOUR_COST", null)])).toBe(true);
+  });
+
+  it("REVIEW_REWARD DOES block readiness now that it takes a fixed account", () => {
+    const withoutReward = allFixed.filter((m) => m.folkopsCategory !== "REVIEW_REWARD");
+    expect(accountChartReady(withoutReward)).toBe(false);
+    expect(missingRequired(withoutReward)).toEqual(["REVIEW_REWARD"]);
+  });
+
+  it("Other Tour Cost cannot be mapped globally, the rest can", () => {
+    expect(canMapGlobally("OTHER_TOUR_COST")).toBe(false);
+    for (const k of FIXED_CATEGORIES) expect(canMapGlobally(k)).toBe(true);
   });
 
   it("one missing required category blocks it, and is named", () => {
-    const three = allFour.filter((m) => m.folkopsCategory !== "TRANSPORTATION");
+    const three = allFixed.filter((m) => m.folkopsCategory !== "TRANSPORTATION");
     expect(accountChartReady(three)).toBe(false);
     expect(missingRequired(three)).toEqual(["TRANSPORTATION"]);
   });
@@ -38,7 +50,7 @@ describe("account chart readiness", () => {
     // while booking nowhere.
     expect(isMapped(map("GUIDE_FEE", null, "ต้นทุนการให้บริการ"))).toBe(false);
     expect(isMapped(map("GUIDE_FEE", "  "))).toBe(false);
-    expect(accountChartReady(REQUIRED_CATEGORIES.map((k) => map(k, null)))).toBe(false);
+    expect(accountChartReady(FIXED_CATEGORIES.map((k) => map(k, null)))).toBe(false);
   });
 
   it("an inactive mapping does not count", () => {
@@ -47,8 +59,11 @@ describe("account chart readiness", () => {
 
   it("status distinguishes 'needs review' from 'not mapped'", () => {
     expect(categoryStatus("GUIDE_FEE", null)).toBe("NOT_MAPPED");
-    expect(categoryStatus("OTHER_TOUR_COST", null)).toBe("NEEDS_REVIEW");
-    expect(categoryStatus("REVIEW_REWARD", null)).toBe("NEEDS_REVIEW");
+    expect(categoryStatus("REVIEW_REWARD", null)).toBe("NOT_MAPPED");
+    // Never "not mapped": there is nothing to map here, so it must not read as a
+    // configuration error someone can fix on this page.
+    expect(categoryStatus("OTHER_TOUR_COST", null)).toBe("REVIEW_PER_JOB");
+    expect(categoryStatus("OTHER_TOUR_COST", map("OTHER_TOUR_COST", "51010"))).toBe("REVIEW_PER_JOB");
     expect(categoryStatus("GUIDE_FEE", map("GUIDE_FEE", "51010"))).toBe("MAPPED");
   });
 });
@@ -71,15 +86,15 @@ describe("job-sheet category bridge", () => {
   });
 
   it("resolves an account only through a saved mapping", () => {
-    expect(accountForExpenseType("transport", allFour)?.peakAccountCode).toBe("51010");
-    expect(accountForExpenseType("other", allFour)).toBe(null);      // not mapped
+    expect(accountForExpenseType("transport", allFixed)?.peakAccountCode).toBe("51010");
+    expect(accountForExpenseType("other", allFixed)).toBe(null);      // not mapped
     expect(accountForExpenseType("transport", [])).toBe(null);       // chart empty
   });
 
-  it("the four required categories can share one PEAK account and stay separate keys", () => {
-    const shared = REQUIRED_CATEGORIES.map((k) => map(k, "51010"));
+  it("the fixed categories can share one PEAK account and stay separate keys", () => {
+    const shared = FIXED_CATEGORIES.map((k) => map(k, "51010"));
     expect(new Set(shared.map((m) => m.peakAccountCode)).size).toBe(1);
-    expect(new Set(shared.map((m) => m.folkopsCategory)).size).toBe(4);
+    expect(new Set(shared.map((m) => m.folkopsCategory)).size).toBe(5);
     expect(accountChartReady(shared)).toBe(true);
   });
 });
