@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { guidePayoutTotal } from "@/lib/peak-sync";
 
 // Batch lifecycle. Plain strings (like the rest of the app's status fields). A batch
 // "occupies" its payouts while it exists — a payout can't be re-batched until the
@@ -68,9 +69,10 @@ export async function payoutSnapshot(guideId: string, date: string, slotIdx: num
     ? (sheet.guideFee as unknown as GuideFee)
     : DEFAULT_GUIDE_FEE;
   const t = computeTotals((sheet?.expenses as unknown as Expense[]) ?? [], gf);
+  const pay = guidePayoutTotal((sheet?.expenses as unknown as Expense[]) ?? [], gf);
   return {
     guideFee: money2(t.netGuideFee),
-    reimbursement: money2(t.totalExpenses),
+    reimbursement: money2(pay.payoutExpenses),
     totalPayable: money2(t.grandTotal),
     ref: sheet?.ref ?? null,
     tourId: sheet?.tourId ?? assignment?.tourId ?? "",

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
 import { SLOT_TIMES } from "@/lib/slots";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { guidePayoutTotal } from "@/lib/peak-sync";
 import { money2 } from "@/lib/payment-batch";
 
 export const dynamic = "force-dynamic";
@@ -51,9 +52,10 @@ export async function GET(req: NextRequest) {
     const sheet = sheetByKey.get(kk);
     const gf = sheet?.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? (sheet.guideFee as unknown as GuideFee) : DEFAULT_GUIDE_FEE;
     const t = computeTotals((sheet?.expenses as unknown as Expense[]) ?? [], gf);
+    const pay = guidePayoutTotal((sheet?.expenses as unknown as Expense[]) ?? [], gf);
     if (money2(t.grandTotal) <= 0) continue;
     const g = byGuide.get(k.guideId) ?? { guideId: k.guideId, guide: gName(k.guideId), total: 0, jobs: [] };
-    g.jobs.push({ date: k.date, slotIdx: k.slotIdx, time: SLOT_TIMES[k.slotIdx] ?? "", tour: tName(k.tourId), ref: sheet?.ref ?? null, guideFee: money2(t.netGuideFee), reimbursement: money2(t.totalExpenses), totalPayable: money2(t.grandTotal) });
+    g.jobs.push({ date: k.date, slotIdx: k.slotIdx, time: SLOT_TIMES[k.slotIdx] ?? "", tour: tName(k.tourId), ref: sheet?.ref ?? null, guideFee: money2(t.netGuideFee), reimbursement: money2(pay.payoutExpenses), totalPayable: money2(pay.payout) });
     g.total = money2(g.total + t.grandTotal);
     byGuide.set(k.guideId, g);
   }
