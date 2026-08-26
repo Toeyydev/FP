@@ -24,7 +24,7 @@ const STATUS_LABEL: Record<Row["status"], string> = {
   REVIEW_PER_JOB: "Review per Job",
 };
 
-export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
+export default function AccountChartMapping({ canEdit, environment }: { canEdit: boolean; environment?: "SANDBOX" | "PRODUCTION" | "UNKNOWN" }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [ready, setReady] = useState(false);
   const [remaining, setRemaining] = useState(0);
@@ -97,6 +97,20 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
           </span>
         )}
       </div>
+
+      {/* An empty account list on Sandbox is not evidence that Folkpaths has no
+          chart of accounts — it is a different company's data. Say so before the
+          table, or the absence reads as a FolkOPS fault. */}
+      {environment !== "PRODUCTION" && (
+        <div className="acct-warn-bar">
+          <b>{environment === "SANDBOX" ? "PEAK Sandbox connected" : "PEAK environment not recognised"}</b>
+          <span>
+            Accounts and payment data shown here belong to the {environment === "SANDBOX" ? "Sandbox" : "connected"} environment and may not
+            match the Folkpaths Production account. An empty list here does not mean Folkpaths has no chart of accounts.
+            Mappings saved now cannot be validated against Production.
+          </span>
+        </div>
+      )}
 
       {accountsError && (
         <div className="acct-warn-bar">

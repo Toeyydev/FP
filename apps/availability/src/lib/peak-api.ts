@@ -147,6 +147,43 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
   return { ok: false, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
 }
 
+// Identity of the connected PEAK account (read-only).
+// GET /api/v1/User/detail, wrapper PeakUser. This is the only way to answer "whose
+// books are we actually looking at" — the merchant name and tax number say whether
+// the credentials belong to Folkpaths or to a sandbox demo company.
+//
+// Returns SAFE fields only. The response also carries the user's personal name,
+// email and address; none of that is needed to identify an environment, so none of
+// it is passed on.
+export type PeakIdentity = { merchantName: string; taxNumber: string | null; package: string | null; branchCode: string | null };
+
+export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const headers = await authedHeaders();
+  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
+  let r: Response;
+  try { r = await fetch(`${API}/User/detail`, { method: "GET", headers }); }
+  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
+  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const wrap = peakWrap<Record<string, unknown>>(j, "peakUser");
+  if (!r.ok) return { ok: false, code: wrap?.resCode as string, desc: sanitizePeakError((wrap?.resDesc as string) || `HTTP ${r.status}`) };
+  if (!wrap || typeof wrap !== "object") {
+    return { ok: false, desc: `PEAK replied 200 but no user detail was found. Response keys: [${Object.keys(j ?? {}).slice(0, 8).join(", ") || "none"}]` };
+  }
+  const str = (v: unknown) => (v == null ? null : String(v).trim() || null);
+  return {
+    ok: true,
+    identity: {
+      merchantName: str(wrap.name) ?? "",
+      taxNumber: str(wrap.taxNumber),
+      package: str(wrap.package),
+      branchCode: str(wrap.branchCode),
+    },
+    code: wrap.resCode as string,
+    desc: wrap.resDesc as string,
+  };
+}
+
 // Chart of accounts (read-only) — the account code + name list an operator picks
 // from when mapping FolkOPS categories. GET /api/v1/DailyJournals/accountcode per
 // PEAK's API reference; response wrapper is PeakAccountCode -> accountCode[].
@@ -219,7 +256,7 @@ export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCod
 export type PeakPaymentMethod = { id: string; code?: string; name: string; type?: string; bankName?: string; accountNumber?: string };
 
 export type PaymentMethodParse =
-  | { methods: PeakPaymentMethod[]; meta: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number } }
+  | { methods: PeakPaymentMethod[]; meta: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number; sampleKeys: string[] } }
   | { error: string };
 
 export function parsePeakPaymentMethods(j: Record<string, unknown>): PaymentMethodParse {
@@ -255,10 +292,11 @@ export function parsePeakPaymentMethods(j: Record<string, unknown>): PaymentMeth
   // rawCount vs methods.length is the whole point: it separates "PEAK only has one
   // payment method" from "we silently dropped the others". Without it, a short list
   // is indistinguishable from a parsing bug.
-  return { methods, meta: { wrapperKeys, arrayKey, rawCount: raw.length, droppedNoId: raw.length - methods.length } };
+  const sampleKeys = raw.length && raw[0] && typeof raw[0] === "object" ? Object.keys(raw[0]).slice(0, 12) : [];
+  return { methods, meta: { wrapperKeys, arrayKey, rawCount: raw.length, droppedNoId: raw.length - methods.length, sampleKeys } };
 }
 
-export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[]; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number } }>> {
+export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[]; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number; sampleKeys: string[] } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   const headers = await authedHeaders();
   if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
