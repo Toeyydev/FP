@@ -519,10 +519,21 @@ a.glink:hover{text-decoration:underline}
   border:1px solid var(--green-line);background:var(--green-bg);border-radius:10px;padding:10px 14px}
 .js-netpay-main{display:flex;justify-content:space-between;align-items:baseline;gap:18px}
 .js-netpay-main>span{font-weight:700;font-size:13.5px}
-.js-netpay-main b{font-size:19px;font-weight:800;color:var(--primary);font-variant-numeric:tabular-nums}
+.js-netpay-main b{font-size:23px;font-weight:800;color:var(--primary);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+/* Hands off from the cost summary to the figure that is actually paid. */
+.js-summary .js-sum-hand{border-bottom:0;justify-content:flex-end;font-size:10.5px;
+  color:var(--ink-soft);padding-top:5px;letter-spacing:.02em}
 .js-netpay-status{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:8px;
   padding-top:8px;border-top:1px solid var(--green-line);font-size:12.5px}
 .js-netpay small{display:block;font-size:9.5px;font-weight:500;color:var(--ink-soft)}
+/* How Net Pay is built. A sheet whose expenses were all settled by the company
+   otherwise looks like the tour expenses vanished between the Summary and here. */
+.np-parts{margin-top:7px;padding-top:7px;border-top:1px solid var(--green-line);
+  display:flex;flex-direction:column;gap:2px;font-size:11.5px}
+.np-parts>div{display:flex;justify-content:space-between;gap:16px;color:var(--ink-soft)}
+.np-parts b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.np-parts .np-note{display:block;margin-top:4px;line-height:1.45;color:var(--ink-soft)}
+.np-parts .np-note.warn{color:var(--assign)}
 /* Job notes, in the summary area where the money is read. */
 .js-notes{margin-left:auto;width:fit-content;min-width:280px;max-width:100%}
 .js-notes-label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);font-weight:700;margin-bottom:4px}
