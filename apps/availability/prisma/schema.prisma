@@ -50,6 +50,12 @@ model User {
   emergencyPhone    String?
   emergencyRelation String?
   licenseNo         String? // tour-guide licence no. (manual) — printed on the job order
+  // Stable PEAK Contact (supplier) mapping. The ID is the identity — never resolve
+  // a guide to a PEAK contact by display name at sync time, or a renamed nickname
+  // silently creates a second supplier and splits their ledger.
+  peakContactId     String?
+  peakContactCode   String?
+  peakContactName   String? // snapshot of the name in PEAK, for display/mismatch checks
   signature         String? // AES-encrypted PNG data-URI of the guide's signature
   // Verified profile (sensitive PII — stored AES-encrypted via lib/crypto).
   taxId             String?
@@ -404,6 +410,24 @@ model JobSheet {
   // NULL); later saves touch updatedAt but never this. Historical sheets stay
   // NULL until their next save (display falls back to approvedAt — lib/certifier).
   certifiedAt       DateTime?
+  // ── Accounting dates ──────────────────────────────────────────────────────
+  // Both default to the TOUR date (see lib/peak-sync.defaultAccountingDates), so a
+  // document never lands in the period someone happened to press Sync in.
+  // paymentDate is the ACTUAL transfer date and is set when the payout is made.
+  accountingDate    String? // "YYYY-MM-DD" — the period this job books into
+  documentDate      String? // "YYYY-MM-DD" — the PEAK document date
+  paymentDate       String? // "YYYY-MM-DD" — when the guide was actually paid
+  // ── PEAK sync state ───────────────────────────────────────────────────────
+  // NOT_READY | READY | SYNCING | SYNCED | FAILED | BLOCKED. Null = never attempted.
+  peakSyncStatus    String?
+  peakDocumentId    String? // PEAK's internal id for the created expense
+  peakDocumentNo    String? // the EXP-… number shown to humans
+  syncedAt          DateTime?
+  syncError         String? // last failure, sanitised — never contains credentials
+  // Fingerprint of the payload at the last successful sync. Re-posting an unchanged
+  // sheet is refused (it would duplicate); a changed one requires an operator
+  // decision rather than a silent overwrite. See lib/peak-sync.peakPayloadHash.
+  lastPayloadHash   String?
   createdById       String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -456,20 +480,20 @@ model TourReport {
 // Per-tour payment state (Pending → Approved → Paid). The amount is computed
 // live from the job sheet (net fee + reimbursements); this just tracks the state.
 model TourPayment {
-  id         String    @id @default(cuid())
-  guideId    String
-  date       String // "YYYY-MM-DD"
-  slotIdx    Int
-  tourId     String
-  status     String    @default("PENDING") // PENDING | APPROVED | PAID
-  approvedBy String?
-  approvedAt DateTime?
-  paidAt     DateTime?
-  peakRef    String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
-  eslipUrl   String? // payment slip in Drive — one slip can cover a merged batch of tours
-  slips      Json? // split payment: [{ amount, url, at, name? }] — several transfers that sum to this tour's payout; eslipUrl mirrors the latest for back-compat
+  id          String    @id @default(cuid())
+  guideId     String
+  date        String // "YYYY-MM-DD"
+  slotIdx     Int
+  tourId      String
+  status      String    @default("PENDING") // PENDING | APPROVED | PAID
+  approvedBy  String?
+  approvedAt  DateTime?
+  paidAt      DateTime?
+  peakRef     String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
+  eslipUrl    String? // payment slip in Drive — one slip can cover a merged batch of tours
+  slips       Json? // split payment: [{ amount, url, at, name? }] — several transfers that sum to this tour's payout; eslipUrl mirrors the latest for back-compat
   paidBatchNo String? // FP-BATCH-… that settled this tour — provenance, so un-marking a batch only reverts ITS tours
-  updatedAt  DateTime  @updatedAt
+  updatedAt   DateTime  @updatedAt
 
   @@unique([guideId, date, slotIdx])
   @@index([guideId])

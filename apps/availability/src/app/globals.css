@@ -385,6 +385,102 @@ a.glink:hover{text-decoration:underline}
 .js-summary>div{display:flex;justify-content:space-between;gap:18px;padding:3px 0;border-bottom:1px solid #eee}
 .js-summary span{color:#555}
 .js-summary .grand b{background:#bfe3bf;padding:2px 8px;font-style:italic}
+/* A section's one-line purpose, inline in its heading bar (TOUR EXPENSES →
+   "Company cost in this job"). Muted so the heading still reads first. */
+.js-section .js-sub{display:block;font-size:10.5px;font-weight:500;color:#5c6b60;letter-spacing:0;margin-top:1px}
+/* Amount cells: the editable price × qty sits left, the computed figure right, so
+   a column of totals stays scannable while every row is still editable. */
+.js-exp-table td,.js-pay-table td{vertical-align:middle}
+.js-amt{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.js-amt b{display:inline-block;min-width:74px;font-weight:700}
+.js-amt-in{display:inline-flex;align-items:center;gap:3px;margin-right:8px}
+.js-amt-in>span{color:var(--ink-soft);font-size:11px}
+.js-pay-table td:first-child{width:auto}
+/* Accounting-readiness pills. Green = the category maps to an account; amber = a
+   human still has to decide. Never a plain colour swap — the words carry it. */
+.js-acct{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.js-acct.ok{background:var(--green-bg);border:1px solid var(--green-line);color:var(--green)}
+.js-acct.warn{background:var(--assign-bg);border:1px solid var(--assign-line);color:var(--assign)}
+/* Already booked in PEAK from its own document: neither "ready" (nothing to post)
+   nor "needs review" (nothing wrong) — a third, settled state. */
+.js-acct.done{background:#EEF0FF;border:1px solid #B9C0F0;color:#3A44A8}
+/* The gap between what this sheet owes and what Payments still transfers. Amber,
+   not red: it is a discrepancy to confirm, not a failure. */
+.js-netpay-warn{margin-top:8px;padding-top:8px;border-top:1px solid var(--green-line);
+  font-size:11.5px;line-height:1.45;color:var(--assign)}
+.js-netpay-warn b{display:block;font-weight:700}
+.js-netpay-warn span{color:var(--ink-soft)}
+/* "Recheck" — a figure that is arithmetically right but built on incomplete data.
+   Amber, and attached to BOTH the number and an itemised list, because a single
+   quiet line under a total is exactly what someone about to transfer money skims. */
+.js-recheck-tag{display:inline-block;margin-left:6px;padding:0 5px;border-radius:4px;
+  background:var(--assign-bg);border:1px solid var(--assign-line);color:var(--assign);
+  font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;font-style:normal;
+  vertical-align:1px}
+.js-recheck{margin:12px 0 0 auto;width:fit-content;min-width:330px;max-width:100%;
+  border:1px solid var(--assign-line);background:var(--assign-bg);border-radius:10px;padding:10px 13px}
+.js-recheck-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  font-size:12.5px;font-weight:800;color:var(--assign);letter-spacing:.01em}
+.js-recheck-head span{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--assign);opacity:.75}
+.js-recheck ul{margin:7px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:7px}
+.js-recheck li{display:flex;flex-direction:column;gap:1px;padding-left:11px;position:relative;font-size:11.5px;line-height:1.45}
+.js-recheck li::before{content:"";position:absolute;left:0;top:6px;width:4px;height:4px;border-radius:50%;background:var(--assign)}
+.js-recheck li b{color:var(--assign);font-weight:700;font-variant-numeric:tabular-nums}
+.js-recheck li span{color:var(--ink-soft)}
+/* Sheet edited after it was posted to PEAK — an operator decision, never automatic. */
+.js-sync-warn{margin-top:6px;padding:6px 8px;background:var(--assign-bg);
+  border:1px solid var(--assign-line);border-radius:7px;font-size:11px;line-height:1.4;color:var(--assign)}
+.js-sync-warn b{display:block;font-weight:700;margin-bottom:2px}
+.js-sync-warn span{color:var(--ink-soft)}
+/* Why this sheet cannot sync — each item is the thing to go fix. */
+.js-sync-reasons{margin:5px 0 0;padding-left:16px;font-size:11.5px;color:var(--ink-soft);line-height:1.5}
+.js-sync-reasons li{margin-bottom:1px}
+/* Inline PEAK-contact mapping, in the sidebar where the block is reported. */
+.js-contact-map{margin-top:7px;padding:8px;background:var(--grey-bg);border:1px solid var(--line);border-radius:8px}
+.js-contact-map label{display:block;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-soft);font-weight:700;margin-bottom:3px}
+.js-contact-map input{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:6px;
+  padding:4px 7px;font:inherit;font-size:12px;background:var(--card);color:var(--ink)}
+.js-contact-map input:focus{outline:none;border-color:var(--primary)}
+.js-contact-map .row{display:flex;gap:6px;align-items:center}
+.js-contact-map .hint{margin-top:5px;font-size:10.5px;color:var(--ink-soft);line-height:1.4}
+/* Marking a company-paid cost as already booked in PEAK. Compact: it lives inside
+   the Account Status cell, so the table gains no column. */
+.js-dupe{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.js-dupe input{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:5px;
+  padding:2px 5px;font:inherit;font-size:11px;background:var(--card);color:var(--ink)}
+.js-dupe input:focus{outline:none;border-color:var(--primary)}
+.js-dupe .btn{padding:1px 5px;font-size:10.5px}
+.js-dupe-mark{display:block;margin-top:3px;padding:1px 5px !important;font-size:10.5px !important;color:var(--ink-soft)}
+/* Carried-over payment line: inside the summary block but outside its total. */
+.js-summary .js-sum-note{border-bottom:0;color:var(--ink-soft);font-size:12.5px}
+.js-summary .js-sum-note b{font-weight:600}
+/* Net pay to the guide — the one figure that answers "what do we transfer?".
+   Deliberately separated from company cost above it. */
+.js-netpay{margin:12px 0 0;margin-left:auto;width:fit-content;min-width:280px;max-width:100%;
+  border:1px solid var(--green-line);background:var(--green-bg);border-radius:10px;padding:10px 14px}
+.js-netpay-main{display:flex;justify-content:space-between;align-items:baseline;gap:18px}
+.js-netpay-main>span{font-weight:700;font-size:13.5px}
+.js-netpay-main b{font-size:19px;font-weight:800;color:var(--primary);font-variant-numeric:tabular-nums}
+.js-netpay-status{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:8px;
+  padding-top:8px;border-top:1px solid var(--green-line);font-size:12.5px}
+.js-netpay small{display:block;font-size:9.5px;font-weight:500;color:var(--ink-soft)}
+/* Job notes, in the summary area where the money is read. */
+.js-notes{margin-left:auto;width:fit-content;min-width:280px;max-width:100%}
+.js-notes-label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);font-weight:700;margin-bottom:4px}
+.js-notes-label small{text-transform:none;letter-spacing:0;font-weight:500;margin-left:5px}
+.js-notes textarea{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  font:inherit;font-size:13px;resize:vertical;background:var(--card)}
+.js-notes textarea:focus{outline:none;border-color:var(--ink-soft)}
+/* History & files — activity, not part of the printed accounting document. */
+.js-history{margin-top:22px;border-top:1px solid var(--line);padding-top:4px}
+.js-timeline{list-style:none;margin:0;padding:0;font-size:13px}
+.js-timeline li{display:flex;gap:12px;align-items:baseline;padding:6px 2px;border-bottom:1px solid var(--line)}
+.js-timeline li:last-child{border-bottom:0}
+.js-tl-at{flex:none;width:112px;color:var(--ink-soft);font-size:12px;font-variant-numeric:tabular-nums}
+.js-tl-label{flex:1}
+.js-tl-by{flex:none;color:var(--ink-soft);font-size:12px}
+@media (max-width:560px){.js-timeline li{flex-wrap:wrap}.js-tl-at{width:100%}}
 .print-only{display:none}
 @media print{
   #appBar,.js-bar,.no-print,nav,header{display:none !important}
