@@ -14,7 +14,7 @@ import PeakPaymentMethods from "@/components/PeakPaymentMethods";
 type Row = { guideId: string; guide: string; date: string; slotIdx: number; time: string; ref: string | null; amount: number; peakRef: string | null; paidAt: string | null; batchNo: string | null };
 type Data = {
   period: string;
-  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[]; paymentMethodId?: string | null; baseUrl?: string; baseUrlSource?: string };
+  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[]; paymentMethodId?: string | null; baseUrl?: string; baseUrlSource?: string; baseUrlOverridden?: string | null; environment?: "SANDBOX" | "PRODUCTION" | "UNKNOWN"; environmentLabel?: string; apiHost?: string };
   refs: { total: number; synced: number; missing: Row[]; recorded: Row[] };
 };
 
@@ -83,11 +83,13 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                 <span className="att-dot" style={{ background: cfg.sandbox ? "var(--assign)" : "var(--green)", marginTop: 5 }} />
                 <span>
-                  Endpoint: {cfg.sandbox ? "UAT sandbox" : "production"}
+                  Environment: <b style={{ color: cfg.environment === "PRODUCTION" ? "var(--green)" : "var(--assign)" }}>{cfg.environmentLabel ?? "Unknown"}</b>
+                  {cfg.apiHost && <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-soft)" }}>API host: {cfg.apiHost}</span>}
                   {/* Show the host itself: "sandbox" above is only a substring test
                       on this URL, and the data you see comes from whatever this
                       points at. */}
                   {cfg.baseUrl && <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-soft)", wordBreak: "break-all" }}>{cfg.baseUrl}{cfg.baseUrlSource ? ` · from ${cfg.baseUrlSource}` : ""}</span>}
+                  {cfg.baseUrlOverridden && <span style={{ display: "block", fontSize: 11.5, color: "var(--assign)" }}>{cfg.baseUrlOverridden} is set but ignored</span>}
                 </span>
               </div>
             )}
@@ -98,7 +100,7 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
           </div>
         </section>
 
-        <div style={{ marginBottom: 14 }}><AccountChartMapping canEdit={canEdit} /></div>
+        <div style={{ marginBottom: 14 }}><AccountChartMapping canEdit={canEdit} environment={cfg?.environment} /></div>
 
         {canEdit && <PeakPaymentMethods configuredId={cfg?.paymentMethodId ?? null} />}
 

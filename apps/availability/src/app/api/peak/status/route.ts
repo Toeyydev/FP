@@ -6,6 +6,7 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { peakConfigured, peakEnabled, peakBaseUrl } from "@/lib/peak-api";
 import { peakPayoutReady } from "@/lib/peak-payout";
 import { accountChartReady, missingRequired } from "@/lib/peak-accounts";
+import { classifyPeakHost, endpointSource } from "@/lib/peak-env";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 export const dynamic = "force-dynamic";
@@ -71,14 +72,21 @@ export async function GET(req: NextRequest) {
       // PEAK record reference, not a credential — needed to show which method the
       // current PEAK_PAYMENT_METHOD resolves to.
       paymentMethodId: process.env.PEAK_PAYMENT_METHOD || null,
-      sandbox: /dev|sandbox/i.test(peakBaseUrl), // pointing at UAT, not production
+      // Classified by HOSTNAME, not a substring: the old /dev|sandbox/ test would
+      // label any host containing "dev" a sandbox and could report an unrecognised
+      // host as production — the reading that makes someone trust sandbox figures.
+      environment: classifyPeakHost(peakBaseUrl).environment, // SANDBOX | PRODUCTION | UNKNOWN
+      environmentLabel: classifyPeakHost(peakBaseUrl).label,
+      apiHost: classifyPeakHost(peakBaseUrl).host,
+      sandbox: classifyPeakHost(peakBaseUrl).environment === "SANDBOX", // kept for existing callers
       // The actual API host. Not a credential — a public endpoint — and the only
       // way to confirm WHICH PEAK environment this connection reaches. The
       // `sandbox` flag above is just a substring test on this and can be wrong.
       baseUrl: peakBaseUrl,
       // Which env var supplied it, since PEAK_API_BASE_URL silently overrides
       // PEAK_BASE_URL and a stale value in the winner is invisible otherwise.
-      baseUrlSource: process.env.PEAK_API_BASE_URL ? "PEAK_API_BASE_URL" : process.env.PEAK_BASE_URL ? "PEAK_BASE_URL" : "default (UAT)",
+      baseUrlSource: endpointSource({ PEAK_API_BASE_URL: process.env.PEAK_API_BASE_URL, PEAK_BASE_URL: process.env.PEAK_BASE_URL }).source,
+      baseUrlOverridden: endpointSource({ PEAK_API_BASE_URL: process.env.PEAK_API_BASE_URL, PEAK_BASE_URL: process.env.PEAK_BASE_URL }).overridden,
     },
     refs: {
       total: rows.length,
