@@ -164,8 +164,15 @@ export function jobSheetTotals(
     companyDirectTotal: sumWhere((e) => canonicalPaidBy(e) === "COMPANY_DIRECT"),
     advanceSpentTotal: sumWhere((e) => canonicalPaidBy(e) === "GUIDE_ADVANCE"),
     unspecifiedTotal: sumWhere((e) => canonicalPaidBy(e) === "UNSPECIFIED"),
-    // Unchanged on purpose (§1): tour expenses + gross fee + this job's own reward.
-    totalCompanyCost: cost.jobExpenses,
+    // Owner decision 2026-08-26: the Summary no longer lists Additional Guide
+    // Payment, so the reward is excluded from this total too — otherwise the
+    // visible lines would stop adding up to it, which is the exact confusion the
+    // "of which" regroup fixed. NOTE: on a job that DID earn a reward this now
+    // understates actual company outlay by that amount; the reward is still paid
+    // (it remains in netPayToGuide) and still appears in its own section.
+    // lib/jobsheet's jobCostBreakdown().jobExpenses keeps the full figure for the
+    // printed document.
+    totalCompanyCost: cost.tourExpenses + t.gross,
     netPayToGuide,
     // What Payments/batches/my-pay still transfer: expenses + net fee, company-direct
     // rows included. Surfaced so the sheet can show the gap honestly instead of

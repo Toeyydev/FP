@@ -941,11 +941,11 @@ export default function JobSheetEditor() {
             Tour Expenses: this is what the company OWES the guide, not what the tour
             cost. Every figure comes from computeTotals (lib/jobsheet) — the same math
             Payments pays on; nothing is recalculated here. */}
-        <h3 className="js-section" style={{ background: "#f4d9c4" }}>GUIDE PAYMENT<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small><span className="js-sub">Earning for this job</span></h3>
+        <h3 className="js-section" style={{ background: "#f4d9c4" }}>GUIDE PAYMENT<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
         <table className="js-table js-pay-table">
           <tbody>
             <tr>
-              <td><TH en="Guide Fee (Agreed)" th="ค่าจ้างที่ตกลง" /></td>
+              <td><TH en="Guide Fee" th="ค่าจ้างมัคคุเทศก์" /></td>
               <td className="js-amt">
                 {!ro && (
                   <span className="js-amt-in no-print">
@@ -1156,10 +1156,9 @@ export default function JobSheetEditor() {
           <div className="js-sum-sub"><span>of which reimbursable to guide{flagged("reimbursementDue") && <em className="js-recheck-tag">recheck</em>}<small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: money.reimbursementDue > 0 ? "#b45309" : undefined }}>{thb(money.reimbursementDue)}</b></div>
           {money.companyDirectTotal > 0 && <div className="js-sum-sub"><span>of which paid direct by company<small>บริษัทชำระโดยตรง</small></span><b>{thb(money.companyDirectTotal)}</b></div>}
           {money.unspecifiedTotal > 0 && <div className="js-sum-sub warn"><span>of which Paid By not set<small>ยังไม่ระบุแหล่งเงิน</small></span><b>{thb(money.unspecifiedTotal)}</b></div>}
-          <div><span>Guide Fee (Agreed)<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์ที่ตกลง</small></span><b>{thb(money.guideFeeGross)}</b></div>
+          <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(money.guideFeeGross)}</b></div>
           <div className="js-sum-sub"><span>of which withheld as tax (WHT)<small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>{thb(money.wht)}</b></div>
-          {money.additionalGuidePayment > 0 && <div><span>Additional Guide Payment<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รายการจ่ายเพิ่มเติม</small></span><b>{thb(money.additionalGuidePayment)}</b></div>}
-          <div className="grand"><span>Total Company Cost (This Job)<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุนของงานนี้</small></span><b>{thb(money.totalCompanyCost)}</b></div>
+          <div className="grand"><span>Total Company Cost<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุน</small></span><b>{thb(money.totalCompanyCost)}</b></div>
           {cost.reviewOther > 0 && <div className="js-sum-note"><span>Paid with this job, earned on another<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้</small></span><b>{thb(cost.reviewOther)}</b></div>}
         </div>
 
