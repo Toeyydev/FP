@@ -3,6 +3,7 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/google-drive";
 import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
+import { jobSheetTotals } from "@/lib/peak-sync";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { readFile } from "node:fs/promises";
@@ -35,6 +36,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
     const t = computeTotals(expenses, guideFee);
     const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
+    const money = jobSheetTotals(expenses, guideFee, sheet.ref, bookings);
     const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
     const guideName = u?.fullName || u?.displayName || guideId;
     const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
@@ -128,7 +130,7 @@ ${advanceHtml}
         <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Withholding Tax <span style="font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
         <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Net Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์สุทธิ</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
         ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
-        <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Total Job Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">รวมค่าใช้จ่ายของงาน</span></b></td><td align="right"><b>${esc(thb(cost.jobExpenses))}</b></td></tr>
+        <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Net Pay to Guide <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนที่ต้องชำระให้มัคคุเทศก์</span></b></td><td align="right"><b>${esc(thb(money.netPayToGuide))}</b></td></tr>
       </tbody></table>
       ${certHtml}
     </body></html>`;
