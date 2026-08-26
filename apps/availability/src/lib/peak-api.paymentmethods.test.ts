@@ -36,6 +36,31 @@ describe("PEAK payment-method parsing", () => {
     expect("methods" in r && r.methods).toHaveLength(2);
   });
 
+  it("prefers a payment-named array over an unrelated one", () => {
+    // Picking "the first array" could latch onto something else entirely and
+    // quietly return the wrong list — which is indistinguishable from PEAK only
+    // having one method.
+    const r = parsePeakPaymentMethods({ peakPaymentMethods: { auditTrail: [{ id: "x" }], paymentMethods: methods } });
+    expect("methods" in r && r.methods.map((m) => m.id)).toEqual(["pm-1", "pm-2"]);
+    expect("meta" in r && r.meta.arrayKey).toBe("paymentMethods");
+  });
+
+  it("reports raw vs kept so a short list can be diagnosed", () => {
+    // The whole point: separates "PEAK has one method" from "we dropped the rest".
+    const r = parsePeakPaymentMethods({ peakPaymentMethods: { paymentMethods: [...methods, { name: "no id" }] } });
+    if (!("meta" in r)) throw new Error("expected meta");
+    expect(r.meta.rawCount).toBe(3);
+    expect(r.meta.droppedNoId).toBe(1);
+    expect(r.methods).toHaveLength(2);
+  });
+
+  it("a genuinely single-method response reports rawCount 1, nothing dropped", () => {
+    const cash = [{ id: "f97fbb93-ec33-45f0-862d-2362122ae2e4", code: "CSH001", name: "เงินสด" }];
+    const r = parsePeakPaymentMethods({ peakPaymentMethods: { paymentMethods: cash } });
+    if (!("meta" in r)) throw new Error("expected meta");
+    expect(r.meta).toMatchObject({ rawCount: 1, droppedNoId: 0 });
+  });
+
   it("an unrecognised shape is an error naming the keys seen, never silence", () => {
     const r = parsePeakPaymentMethods({ peakPaymentMethods: { totalMethods: 2 } });
     expect("error" in r).toBe(true);

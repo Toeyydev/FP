@@ -34,8 +34,10 @@ export async function GET() {
     return NextResponse.json({
       ok: false, methods: [],
       error: "PEAK returned no payment methods. If you have bank accounts set up in PEAK, this is a parsing problem — send this message to support.",
-      peakCode: res.code ?? null,
+      peakCode: res.code ?? null, meta: res.meta ?? null,
     }, { status: 502 });
   }
-  return NextResponse.json({ ok: true, methods });
+  // meta separates "PEAK only has one payment method" from "we dropped the rest".
+  // Structural facts only — key names and counts, never a record's contents.
+  return NextResponse.json({ ok: true, methods, meta: res.meta ?? null });
 }

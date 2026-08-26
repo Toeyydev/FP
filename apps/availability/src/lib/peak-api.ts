@@ -204,23 +204,30 @@ export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCod
 // the same defence added after the chart call shipped unverified.
 export type PeakPaymentMethod = { id: string; code?: string; name: string; type?: string; bankName?: string; accountNumber?: string };
 
-export function parsePeakPaymentMethods(j: Record<string, unknown>): { methods: PeakPaymentMethod[] } | { error: string } {
+export type PaymentMethodParse =
+  | { methods: PeakPaymentMethod[]; meta: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number } }
+  | { error: string };
+
+export function parsePeakPaymentMethods(j: Record<string, unknown>): PaymentMethodParse {
   const wrap = peakWrap<Record<string, unknown>>(j ?? {}, "peakPaymentMethods");
-  // Every other PEAK list nests its array under a singular-ish key
-  // (peakAccountCode -> accountCode, PeakContactGroups -> groups), so look for the
-  // first array rather than hard-coding a name the docs never state.
-  const entry = wrap && typeof wrap === "object"
-    ? Object.entries(wrap).find(([, v]) => Array.isArray(v))
-    : undefined;
-  if (!entry) {
+  const wrapperKeys = wrap && typeof wrap === "object" ? Object.keys(wrap) : [];
+
+  // Prefer an array whose key actually names payment methods; only then fall back
+  // to "the first array present". Picking the first array blindly could latch onto
+  // an unrelated collection and quietly return the wrong list.
+  const arrays = wrapperKeys.filter((k) => Array.isArray((wrap as Record<string, unknown>)[k]));
+  const arrayKey = arrays.find((k) => /payment|method|bank|account/i.test(k)) ?? arrays[0];
+
+  if (!arrayKey) {
     const topKeys = Object.keys(j ?? {}).slice(0, 8);
-    const innerKeys = wrap && typeof wrap === "object" ? Object.keys(wrap).slice(0, 8) : [];
     return {
       error: `PEAK replied 200 but no payment-method array was found. Response keys: [${topKeys.join(", ") || "none"}]` +
-             (innerKeys.length ? `; inside the wrapper: [${innerKeys.join(", ")}]` : ""),
+             (wrapperKeys.length ? `; inside the wrapper: [${wrapperKeys.slice(0, 8).join(", ")}]` : ""),
     };
   }
-  const methods = (entry[1] as PeakPaymentMethod[])
+
+  const raw = ((wrap as Record<string, unknown>)[arrayKey] ?? []) as PeakPaymentMethod[];
+  const methods = raw
     .filter((m) => (m?.id ?? "").toString().trim())
     .map((m) => ({
       id: String(m.id).trim(),
@@ -230,22 +237,29 @@ export function parsePeakPaymentMethods(j: Record<string, unknown>): { methods: 
       bankName: m.bankName ? String(m.bankName).trim() : undefined,
       accountNumber: m.accountNumber ? String(m.accountNumber).trim() : undefined,
     }));
-  return { methods };
+
+  // rawCount vs methods.length is the whole point: it separates "PEAK only has one
+  // payment method" from "we silently dropped the others". Without it, a short list
+  // is indistinguishable from a parsing bug.
+  return { methods, meta: { wrapperKeys, arrayKey, rawCount: raw.length, droppedNoId: raw.length - methods.length } };
 }
 
-export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[] }>> {
+export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[]; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   const headers = await authedHeaders();
   if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
   let r: Response;
-  try { r = await fetch(`${API}/PaymentMethods`, { method: "GET", headers }); }
+  // PEAK pages at 10 entries per page by default and this call sent no params at
+  // all, so a company with more than ten payment methods would silently see only
+  // the first page. Ask for the lot.
+  try { r = await fetch(`${API}/PaymentMethods?limit=200`, { method: "GET", headers }); }
   catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
   const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakPaymentMethods");
   if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
   const parsed = parsePeakPaymentMethods(j);
   if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
-  return { ok: true, methods: parsed.methods, code: wrap?.resCode, desc: wrap?.resDesc };
+  return { ok: true, methods: parsed.methods, meta: parsed.meta, code: wrap?.resCode, desc: wrap?.resDesc };
 }
 
 // Vendor/contact list (read-only) — the guides that already exist in PEAK, so an
