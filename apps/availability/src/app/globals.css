@@ -468,6 +468,9 @@ a.glink:hover{text-decoration:underline}
 .js-contact-map input{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:6px;
   padding:4px 7px;font:inherit;font-size:12px;background:var(--card);color:var(--ink)}
 .js-contact-map input:focus{outline:none;border-color:var(--primary)}
+.js-contact-map select{width:100%;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:6px;
+  padding:4px 7px;font:inherit;font-size:12px;background:var(--card);color:var(--ink);cursor:pointer}
+.js-contact-map select:focus{outline:none;border-color:var(--primary)}
 .js-contact-map .row{display:flex;gap:6px;align-items:center}
 .js-contact-map .hint{margin-top:5px;font-size:10.5px;color:var(--ink-soft);line-height:1.4}
 /* Marking a company-paid cost as already booked in PEAK. Compact: it lives inside

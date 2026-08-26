@@ -248,15 +248,52 @@ export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMe
   return { ok: true, methods: parsed.methods, code: wrap?.resCode, desc: wrap?.resDesc };
 }
 
-// Vendor/contact list — used to map a guide -> a PEAK contact id.
-export async function getContacts(): Promise<Res<{ contacts?: unknown[] }>> {
+// Vendor/contact list (read-only) — the guides that already exist in PEAK, so an
+// operator LINKS to one instead of pasting an opaque id.
+// GET /api/v1/Contacts/list, wrapper PeakContacts -> contacts[].
+//
+// PEAK pages at 10 entries by default, so `limit` is always sent: a picker that
+// silently showed the first ten guides would look like the rest do not exist.
+export type PeakContact = { id: string; name: string; code?: string; taxNumber?: string; type?: string };
+
+export function parsePeakContacts(j: Record<string, unknown>): { contacts: PeakContact[] } | { error: string } {
+  const wrap = peakWrap<{ contacts?: unknown; resCode?: string; resDesc?: string }>(j ?? {}, "peakContacts");
+  const list = wrap?.contacts;
+  if (!Array.isArray(list)) {
+    const topKeys = Object.keys(j ?? {}).slice(0, 8);
+    const innerKeys = wrap && typeof wrap === "object" ? Object.keys(wrap).slice(0, 8) : [];
+    return {
+      error: `PEAK replied 200 but no contact array was found. Response keys: [${topKeys.join(", ") || "none"}]` +
+             (innerKeys.length ? `; inside the wrapper: [${innerKeys.join(", ")}]` : ""),
+    };
+  }
+  const contacts = (list as PeakContact[])
+    .filter((c) => (c?.id ?? "").toString().trim())
+    .map((c) => ({
+      id: String(c.id).trim(),
+      name: String(c.name ?? "").trim(),
+      code: c.code ? String(c.code).trim() : undefined,
+      taxNumber: c.taxNumber ? String(c.taxNumber).trim() : undefined,
+      type: c.type != null ? String(c.type).trim() : undefined,
+    }));
+  return { contacts };
+}
+
+export async function getContacts(opts: { searchText?: string; limit?: number; page?: number } = {}): Promise<Res<{ contacts?: PeakContact[] }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   const headers = await authedHeaders();
   if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
+  const qs = new URLSearchParams();
+  if (opts.searchText?.trim()) qs.set("searchText", opts.searchText.trim());
+  qs.set("limit", String(Math.min(Math.max(opts.limit ?? 200, 1), 500)));
+  if (opts.page) qs.set("page", String(opts.page));
   let r: Response;
-  try { r = await fetch(`${API}/Contacts/list`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: `network: ${(e as Error).message}` }; }
+  try { r = await fetch(`${API}/Contacts/list?${qs.toString()}`, { method: "GET", headers }); }
+  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = peakWrap<{ contacts?: unknown[]; resCode?: string; resDesc?: string }>(j, "peakContacts");
-  return { ok: r.ok, contacts: wrap?.contacts, code: wrap?.resCode, desc: wrap?.resDesc };
+  const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakContacts");
+  if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
+  const parsed = parsePeakContacts(j);
+  if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
+  return { ok: true, contacts: parsed.contacts, code: wrap?.resCode, desc: wrap?.resDesc };
 }
