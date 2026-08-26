@@ -718,8 +718,6 @@ export default function JobSheetEditor() {
             <th className="no-print" style={{ width: 106 }} title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid By" th="แหล่งเงินที่ใช้ชำระ" /></th>
             <th className="no-print" style={{ width: 84 }}><TH en="Receipt" th="หลักฐาน" /></th>
             <th style={{ width: 152, textAlign: "right" }}><TH en="Amount (THB)" th="จำนวนเงิน" /></th>
-            <th style={{ width: 62 }}><TH en="VAT" th="ภาษีมูลค่าเพิ่ม" /></th>
-            <th style={{ width: 62 }}><TH en="WHT" th="หัก ณ ที่จ่าย" /></th>
             <th className="no-print" style={{ width: 92 }}><TH en="Account Status" th="สถานะบัญชี" /></th>
             <th className="no-print" style={{ width: 34 }}><TH en="Actions" th="จัดการ" /></th>
           </tr></thead>
@@ -782,22 +780,6 @@ export default function JobSheetEditor() {
                   )}
                   <b>{thb(expenseAmount(e))}</b>
                 </td>
-                {/* VAT / WHT are presentation + future PEAK mapping only: they feed NO
-                    total here. The guide fee's 3% WHT is separate and stays on GuideFee. */}
-                <td>
-                  {ro ? (e.vat === "vat7" ? "VAT 7%" : "No VAT") : (
-                    <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={e.vat ?? "none"} onChange={(ev) => setExpense(i, { vat: ev.target.value })} title="Tour expenses carry no VAT by default — this does not change any total">
-                      <option value="none">No VAT</option><option value="vat7">VAT 7%</option>
-                    </select>
-                  )}
-                </td>
-                <td>
-                  {ro ? (e.wht === "wht3" ? "WHT 3%" : "No WHT") : (
-                    <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={e.wht ?? "none"} onChange={(ev) => setExpense(i, { wht: ev.target.value })} title="Tour expenses carry no withholding tax by default — this does not change any total">
-                      <option value="none">No WHT</option><option value="wht3">WHT 3%</option>
-                    </select>
-                  )}
-                </td>
                 <td className="no-print">
                   {/* Duplicate protection, settable only on COMPANY_DIRECT rows: a cost
                       the guide fronted cannot already be in PEAK under a supplier's own
@@ -834,7 +816,6 @@ export default function JobSheetEditor() {
             <tr className="js-total">
               <td colSpan={5} style={{ textAlign: "right" }}>TOTAL TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td>
               <td className="js-amt"><b>{thb(cost.tourExpenses)}</b></td>
-              <td colSpan={2} />
               <td className="no-print">
                 {/* Reflects the expense ROWS only. A missing guide contact blocks the
                     sheet but says nothing about this table — flagging it here would
