@@ -16,6 +16,7 @@ type Method = { id: string; code?: string; name: string; type?: string; bankName
 
 export default function PeakPaymentMethods({ configuredId }: { configuredId: string | null }) {
   const [methods, setMethods] = useState<Method[] | null>(null);
+  const [meta, setMeta] = useState<{ wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number } | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<string>("");
 
@@ -23,6 +24,7 @@ export default function PeakPaymentMethods({ configuredId }: { configuredId: str
     fetch("/api/peak/payment-methods", { cache: "no-store" })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
+        setMeta(d.meta ?? null);
         if (r.ok && d.ok) setMethods(d.methods ?? []);
         else { setMethods([]); setError(d.error || "Could not load PEAK payment methods."); }
       })
@@ -55,24 +57,36 @@ export default function PeakPaymentMethods({ configuredId }: { configuredId: str
           </div>
         )}
 
+        {/* Structural diagnosis: without it, "one method" is indistinguishable from
+            a parsing bug that dropped the others. */}
+        {meta && (
+          <div className="acct-sub" style={{ marginBottom: 8 }}>
+            PEAK returned <b style={{ color: "var(--ink)" }}>{meta.rawCount}</b> payment method{meta.rawCount === 1 ? "" : "s"} under <code>{meta.arrayKey}</code>
+            {meta.droppedNoId > 0 && <> · <b style={{ color: "var(--assign)" }}>{meta.droppedNoId} had no id and were skipped</b></>}
+            {meta.rawCount === 1 && meta.droppedNoId === 0 && <> — if a bank account is missing, it is not in the PEAK environment this connection points at.</>}
+          </div>
+        )}
+
         {methods === null ? (
           <div>{Array.from({ length: 2 }).map((_, i) => <div key={i} className="skel-row" />)}</div>
         ) : methods.length ? (
           <div className="grid-scroll">
             <table className="acct-table">
               <thead><tr>
-                <th style={{ width: 250 }}>Method</th>
-                <th style={{ width: 190 }}>Bank / account</th>
-                <th>PEAK id</th>
+                <th style={{ width: 210 }}>Method</th>
+                <th style={{ width: 200 }}>Bank / account</th>
+                <th style={{ width: 110 }}>PEAK code</th>
+                <th>PEAK payment method id</th>
               </tr></thead>
               <tbody>
                 {methods.map((m) => (
                   <tr key={m.id} style={m.id === configuredId ? { background: "var(--green-bg)" } : undefined}>
                     <td>
                       <div style={{ fontWeight: 600 }}>{m.name || "—"}</div>
-                      {m.code && <div className="acct-code">code {m.code}</div>}
+                      {m.type && <div className="acct-code">{m.type}</div>}
                     </td>
-                    <td className="acct-sub">{[m.bankName, m.accountNumber].filter(Boolean).join(" · ") || m.type || "—"}</td>
+                    <td className="acct-sub">{[m.bankName, m.accountNumber].filter(Boolean).join(" · ") || "—"}</td>
+                    <td className="acct-sub">{m.code || "—"}</td>
                     <td>
                       <code className="acct-id">{m.id}</code>
                       <button type="button" className="btn sm ghost" style={{ marginLeft: 6, padding: "1px 6px" }}
