@@ -35,9 +35,11 @@ export async function GET() {
   if (!accounts.length) {
     return NextResponse.json({
       ok: false, accounts: [],
-      error: "PEAK returned no accounts. If your chart of accounts is not empty, this is a parsing problem — send this message to support.",
-      peakCode: res.code ?? null,
+      error: res.meta?.rawCount
+        ? `PEAK returned ${res.meta.rawCount} account row(s) but none had a usable code — the fields present are: [${res.meta.sampleKeys.join(", ")}]. This is a field-mapping problem.`
+        : "PEAK returned an empty account list. If your chart of accounts is not empty in this PEAK environment, this is a parsing problem — send this message to support.",
+      peakCode: res.code ?? null, meta: res.meta ?? null,
     }, { status: 502 });
   }
-  return NextResponse.json({ ok: true, accounts });
+  return NextResponse.json({ ok: true, accounts, meta: res.meta ?? null });
 }

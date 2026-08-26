@@ -72,6 +72,13 @@ export async function GET(req: NextRequest) {
       // current PEAK_PAYMENT_METHOD resolves to.
       paymentMethodId: process.env.PEAK_PAYMENT_METHOD || null,
       sandbox: /dev|sandbox/i.test(peakBaseUrl), // pointing at UAT, not production
+      // The actual API host. Not a credential — a public endpoint — and the only
+      // way to confirm WHICH PEAK environment this connection reaches. The
+      // `sandbox` flag above is just a substring test on this and can be wrong.
+      baseUrl: peakBaseUrl,
+      // Which env var supplied it, since PEAK_API_BASE_URL silently overrides
+      // PEAK_BASE_URL and a stale value in the winner is invisible otherwise.
+      baseUrlSource: process.env.PEAK_API_BASE_URL ? "PEAK_API_BASE_URL" : process.env.PEAK_BASE_URL ? "PEAK_BASE_URL" : "default (UAT)",
     },
     refs: {
       total: rows.length,

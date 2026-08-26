@@ -34,12 +34,38 @@ describe("PEAK chart-of-accounts parsing", () => {
     expect("accounts" in r && r.accounts).toHaveLength(2);
   });
 
+  it("tolerates a differently-named account array", () => {
+    // `accounts` instead of `accountCode` is still plainly the account list, and
+    // rejecting it would be pedantry that costs a working dropdown.
+    const r = parsePeakAccounts({ peakAccountCode: { accounts: real } });
+    expect("accounts" in r && r.accounts).toHaveLength(2);
+    expect("meta" in r && r.meta.arrayKey).toBe("accounts");
+  });
+
   it("an unrecognised shape is an ERROR naming the keys seen, never silence", () => {
-    const r = parsePeakAccounts({ peakAccountCode: { accounts: real } }); // wrong array key
+    const r = parsePeakAccounts({ peakAccountCode: { totalRecord: 2, resCode: "0000" } });
     expect("error" in r).toBe(true);
     if (!("error" in r)) return;
-    expect(r.error).toContain("peakAccountCode");   // the top-level key present
-    expect(r.error).toContain("accounts");          // the inner key we did not expect
+    expect(r.error).toContain("totalRecord");
+  });
+
+  it("rows present but no usable code are REPORTED, not silently emptied", () => {
+    // The reported symptom: an empty dropdown. If PEAK names the code field
+    // something else, every row is filtered out and the list looks empty — so the
+    // field names actually received are what gets surfaced.
+    const r = parsePeakAccounts({ peakAccountCode: { accountCode: [{ accountNo: "510104", accountName: "ต้นทุนการให้บริการ" }] } });
+    if (!("meta" in r)) throw new Error("expected meta");
+    expect(r.accounts).toHaveLength(0);
+    expect(r.meta.rawCount).toBe(1);
+    expect(r.meta.droppedNoCode).toBe(1);
+    expect(r.meta.sampleKeys).toEqual(["accountNo", "accountName"]);
+  });
+
+  it("the field-name diagnostic carries no values", () => {
+    const r = parsePeakAccounts({ peakAccountCode: { accountCode: [{ accountNo: "510104", accountName: "ต้นทุนการให้บริการ" }] } });
+    if (!("meta" in r)) throw new Error("expected meta");
+    expect(r.meta.sampleKeys.join(",")).not.toContain("510104");
+    expect(r.meta.sampleKeys.join(",")).not.toContain("ต้นทุน");
   });
 
   it("names the top-level keys when the wrapper itself is different", () => {

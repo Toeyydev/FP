@@ -164,25 +164,39 @@ export type PeakAccountCode = { code: string; name: string; nameEn?: string };
 // (never their values — the payload is business data). A 200 whose shape we
 // misread would otherwise look like a working call with no accounts, which is the
 // worst outcome because it is silent.
-export function parsePeakAccounts(j: Record<string, unknown>): { accounts: PeakAccountCode[] } | { error: string } {
-  const wrap = peakWrap<{ accountCode?: unknown; resCode?: string; resDesc?: string }>(j ?? {}, "peakAccountCode");
-  const list = wrap?.accountCode;
-  if (!Array.isArray(list)) {
+export type AccountParse =
+  | { accounts: PeakAccountCode[]; meta: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoCode: number; sampleKeys: string[] } }
+  | { error: string };
+
+export function parsePeakAccounts(j: Record<string, unknown>): AccountParse {
+  const wrap = peakWrap<Record<string, unknown>>(j ?? {}, "peakAccountCode");
+  const wrapperKeys = wrap && typeof wrap === "object" ? Object.keys(wrap) : [];
+  const arrays = wrapperKeys.filter((k) => Array.isArray((wrap as Record<string, unknown>)[k]));
+  const arrayKey = arrays.find((k) => /account|code|chart/i.test(k)) ?? arrays[0];
+
+  if (!arrayKey) {
     const topKeys = Object.keys(j ?? {}).slice(0, 8);
-    const innerKeys = wrap && typeof wrap === "object" ? Object.keys(wrap).slice(0, 8) : [];
     return {
-      error:
-        `PEAK replied 200 but no account array was found. Response keys: [${topKeys.join(", ") || "none"}]` +
-        (innerKeys.length ? `; inside the wrapper: [${innerKeys.join(", ")}]` : ""),
+      error: `PEAK replied 200 but no account array was found. Response keys: [${topKeys.join(", ") || "none"}]` +
+             (wrapperKeys.length ? `; inside the wrapper: [${wrapperKeys.slice(0, 8).join(", ")}]` : ""),
     };
   }
-  const accounts = (list as PeakAccountCode[])
+
+  const raw = ((wrap as Record<string, unknown>)[arrayKey] ?? []) as PeakAccountCode[];
+  // The FIELD NAMES of the first entry. This is the diagnostic that matters when
+  // the array has rows but none survive: if PEAK calls the code something other
+  // than `code`, every row is filtered out and the list looks empty. Names only —
+  // the chart of accounts is business data.
+  const sampleKeys = raw.length && raw[0] && typeof raw[0] === "object" ? Object.keys(raw[0]).slice(0, 12) : [];
+
+  const accounts = raw
     .filter((a) => (a?.code ?? "").toString().trim())
     .map((a) => ({ code: String(a.code).trim(), name: String(a.name ?? "").trim(), nameEn: a.nameEn ? String(a.nameEn).trim() : undefined }));
-  return { accounts };
+
+  return { accounts, meta: { wrapperKeys, arrayKey, rawCount: raw.length, droppedNoCode: raw.length - accounts.length, sampleKeys } };
 }
 
-export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[] }>> {
+export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[]; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoCode: number; sampleKeys: string[] } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   const headers = await authedHeaders();
   if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
@@ -194,7 +208,7 @@ export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCod
   if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
   const parsed = parsePeakAccounts(j);
   if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
-  return { ok: true, accounts: parsed.accounts, code: wrap?.resCode, desc: wrap?.resDesc };
+  return { ok: true, accounts: parsed.accounts, meta: parsed.meta, code: wrap?.resCode, desc: wrap?.resDesc };
 }
 
 // Payment methods (read-only) — the bank/cash accounts a payment can settle to.
