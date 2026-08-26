@@ -385,6 +385,23 @@ model ProductMap {
 // The full Folkpath job sheet for one assigned job (guide × date × slot).
 // Living document: the operator edits pax/costs/tickets anytime and re-saves.
 // bookings / expenses / guideFee are JSON so rows can be added/removed freely.
+// Which PEAK account each FolkOPS category books to. One row per category
+// (folkopsCategory is unique), so a mapping is updated in place rather than
+// accumulating duplicates. Both the CODE and the name are stored: the code is what
+// PEAK books against, the name is a snapshot so the UI can show what was chosen
+// even if the chart is re-fetched later. Additive table — nothing existing reads it
+// yet, and an empty table simply means "chart not configured".
+model PeakAccountMapping {
+  id              String   @id @default(cuid())
+  folkopsCategory String   @unique // GUIDE_FEE | ENTRANCE_TICKET | TRANSPORTATION | MEAL_REFRESHMENT | OTHER_TOUR_COST | REVIEW_REWARD
+  peakAccountCode String? // null = not mapped; a mapping without a code does not count
+  peakAccountName String? // display snapshot of the account name in PEAK
+  isActive        Boolean  @default(true)
+  updatedById     String? // operator who last changed it
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
 model JobSheet {
   id                String    @id @default(cuid())
   ref               String? // FOLK-BKK-YYYYMMDD-NN

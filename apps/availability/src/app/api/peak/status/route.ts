@@ -5,6 +5,7 @@ import { canViewFinance } from "@/lib/roles";
 import { SLOT_TIMES } from "@/lib/slots";
 import { peakConfigured, peakEnabled, peakBaseUrl } from "@/lib/peak-api";
 import { peakPayoutReady } from "@/lib/peak-payout";
+import { accountChartReady, missingRequired } from "@/lib/peak-accounts";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +25,13 @@ export async function GET(req: NextRequest) {
   const period = req.nextUrl.searchParams.get("period") || thisMonth;
   if (!/^\d{4}-\d{2}$/.test(period)) return NextResponse.json({ error: "bad-period" }, { status: 400 });
   const start = `${period}-01`, end = `${period}-31`;
+
+  // Saved chart mapping. accountChartReady is now driven by these rows, not by the
+  // PEAK_ACCT_* env vars — an operator configures it in the app.
+  const chartRows = await prisma.peakAccountMapping.findMany({
+    select: { folkopsCategory: true, peakAccountCode: true, peakAccountName: true, isActive: true },
+  });
+  const chartReady = accountChartReady(chartRows);
 
   const [pays, sheets, guides] = await Promise.all([
     prisma.tourPayment.findMany({ where: { date: { gte: start, lte: end }, status: "PAID" }, select: { guideId: true, date: true, slotIdx: true, peakRef: true, paidAt: true, paidBatchNo: true } }),
@@ -52,7 +60,14 @@ export async function GET(req: NextRequest) {
     config: {
       configured: peakConfigured,      // developer credentials present
       enabled: peakEnabled,            // + owner user token present
-      chartReady: peakPayoutReady,     // account-chart env mapping present
+      chartReady,                      // the 4 required categories carry a PEAK account code
+      chartMissing: missingRequired(chartRows), // which required categories still need one
+      // §8: connected + chart-ready still does NOT mean anything posts. Real
+      // posting is additionally gated by peakPayoutReady (contact type / payment
+      // method env) inside lib/peak-payout, and no Sync action calls it. Sent as
+      // its own flag so the card states dormancy as fact rather than inferring it.
+      autoPostingEnabled: false,
+      payoutConfigReady: peakPayoutReady, // env side of the posting gate, for diagnostics
       sandbox: /dev|sandbox/i.test(peakBaseUrl), // pointing at UAT, not production
     },
     refs: {
