@@ -180,7 +180,7 @@ export default function JobSheetEditor() {
   const money = jobSheetTotals(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
   // Which figures are not yet safe to pay from, and why. Marked AT the number as
   // well as listed, so nobody reads a total without seeing that it is provisional.
-  const recheck = figuresNeedRecheck(sheet.expenses, money);
+  const recheck = figuresNeedRecheck(sheet.expenses, money, {}, peak?.rows?.map((r) => r?.mappingStatus));
   const flagged = (f: "totalTourExpenses" | "reimbursementDue" | "netPayToGuide") => recheck.some((r) => r.field === f);
   const ro = !canEdit; // read-only (guide view)
   // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
@@ -664,9 +664,13 @@ export default function JobSheetEditor() {
        </div>
        {/* Financial summary — live from the same computeTotals the payout uses. */}
        <div className="kpi-row no-print" style={{ marginBottom: 14 }}>
-         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(t.netGuideFee)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
-         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(t.totalExpenses)}</b><span>Reimbursement</span></div>
-         <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(t.grandTotal)}</b><span>Guide payable</span></div>
+         {/* Must match the Summary at the bottom of this same page. These read
+             computeTotals() directly and showed the pre-correction payout, so the
+             top of the sheet said 2,815 while the bottom said 1,815 — and
+             "Reimbursement" was total expenses, not what the guide is owed back. */}
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(money.netGuideFee)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(money.reimbursementDue)}</b><span>Reimbursement due</span></div>
+         <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(money.netPayToGuide)}</b><span>Net pay to guide</span></div>
        </div>
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
@@ -1360,7 +1364,7 @@ export default function JobSheetEditor() {
               {payment?.paidAt && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
               {payment?.slip && <a href={payment.slip} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>Slip</a>}
             </div>
-            <div style={{ fontSize: 12.5, marginTop: 5 }}>Payable <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(t.grandTotal)}</b></div>
+            <div style={{ fontSize: 12.5, marginTop: 5 }}>Payable <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(money.netPayToGuide)}</b></div>
           </div>
 
           {hasAdvance && (
