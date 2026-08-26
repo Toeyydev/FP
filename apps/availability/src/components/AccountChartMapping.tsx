@@ -99,7 +99,7 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
       {accountsError && (
         <div className="acct-warn-bar">
           <b>PEAK account list unavailable</b>
-          <span>{accountsError} Saved mappings are still shown; new accounts cannot be chosen until PEAK responds.</span>
+          <span>{accountsError} Saved mappings still work, and you can type an account code by hand in the meantime.</span>
         </div>
       )}
 
@@ -144,7 +144,7 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
                             <datalist id={`peak-accounts-${c.key}`}>
                               {accounts.map((a) => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
                             </datalist>
-                            <div className="acct-code">{code ? (nameFor(code) || c.peakAccountName || "account not in the PEAK list") : "Not mapped"}</div>
+                            <div className="acct-code">{code ? (nameFor(code) || c.peakAccountName || (accounts.length ? "account not in the PEAK list" : "typed manually — PEAK list unavailable")) : "Not mapped"}</div>
                           </>
                         ) : (
                           <div>{c.peakAccountCode ? `${c.peakAccountCode} — ${c.peakAccountName ?? ""}` : "—"}</div>

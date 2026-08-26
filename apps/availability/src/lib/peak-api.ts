@@ -156,6 +156,32 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
 // the Client Token handshake is untouched.
 export type PeakAccountCode = { code: string; name: string; nameEn?: string };
 
+// Pure parser for the chart response, exported so the shape can be unit tested —
+// this call has never run against PEAK, so the parsing is the part most likely to
+// be wrong and the part hardest to verify live.
+//
+// Returns either the accounts, or a diagnostic naming the KEYS actually present
+// (never their values — the payload is business data). A 200 whose shape we
+// misread would otherwise look like a working call with no accounts, which is the
+// worst outcome because it is silent.
+export function parsePeakAccounts(j: Record<string, unknown>): { accounts: PeakAccountCode[] } | { error: string } {
+  const wrap = peakWrap<{ accountCode?: unknown; resCode?: string; resDesc?: string }>(j ?? {}, "peakAccountCode");
+  const list = wrap?.accountCode;
+  if (!Array.isArray(list)) {
+    const topKeys = Object.keys(j ?? {}).slice(0, 8);
+    const innerKeys = wrap && typeof wrap === "object" ? Object.keys(wrap).slice(0, 8) : [];
+    return {
+      error:
+        `PEAK replied 200 but no account array was found. Response keys: [${topKeys.join(", ") || "none"}]` +
+        (innerKeys.length ? `; inside the wrapper: [${innerKeys.join(", ")}]` : ""),
+    };
+  }
+  const accounts = (list as PeakAccountCode[])
+    .filter((a) => (a?.code ?? "").toString().trim())
+    .map((a) => ({ code: String(a.code).trim(), name: String(a.name ?? "").trim(), nameEn: a.nameEn ? String(a.nameEn).trim() : undefined }));
+  return { accounts };
+}
+
 export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[] }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   const headers = await authedHeaders();
@@ -164,12 +190,11 @@ export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCod
   try { r = await fetch(`${API}/DailyJournals/accountcode`, { method: "GET", headers }); }
   catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = peakWrap<{ accountCode?: PeakAccountCode[]; resCode?: string; resDesc?: string }>(j, "peakAccountCode");
-  const accounts = (wrap?.accountCode ?? [])
-    .filter((a) => (a?.code ?? "").trim())
-    .map((a) => ({ code: String(a.code).trim(), name: String(a.name ?? "").trim(), nameEn: a.nameEn ? String(a.nameEn).trim() : undefined }));
+  const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakAccountCode");
   if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
-  return { ok: true, accounts, code: wrap?.resCode, desc: wrap?.resDesc };
+  const parsed = parsePeakAccounts(j);
+  if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
+  return { ok: true, accounts: parsed.accounts, code: wrap?.resCode, desc: wrap?.resDesc };
 }
 
 // Vendor/contact list — used to map a guide -> a PEAK contact id.

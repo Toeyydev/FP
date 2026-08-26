@@ -29,5 +29,15 @@ export async function GET() {
     // PEAK's own reason, already sanitised of anything credential-shaped.
     return NextResponse.json({ ok: false, accounts: [], error: res.desc ?? "PEAK rejected the account request", peakCode: res.code ?? null }, { status: 502 });
   }
-  return NextResponse.json({ ok: true, accounts: res.accounts ?? [] });
+  // A successful call that returns nothing is still a dead end for the operator —
+  // say so rather than rendering an empty search box with no explanation.
+  const accounts = res.accounts ?? [];
+  if (!accounts.length) {
+    return NextResponse.json({
+      ok: false, accounts: [],
+      error: "PEAK returned no accounts. If your chart of accounts is not empty, this is a parsing problem — send this message to support.",
+      peakCode: res.code ?? null,
+    }, { status: 502 });
+  }
+  return NextResponse.json({ ok: true, accounts });
 }
