@@ -151,6 +151,23 @@ export default function JobSheetEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(sheet?.bookings?.map((b) => [b.tickets, b.actualPax, b.bookedPax]))]);
 
+  // MUST stay above the `if (!sheet) return` below. React counts hooks per render:
+  // an effect placed after that early return does not run while `sheet` is null and
+  // does once it loads, which is "Rendered more hooks than during the previous
+  // render" — the whole page then dies with a client-side exception.
+  // The guides already exist in PEAK, so this is a LINK, not a creation. Fetched
+  // only while the mapping control is open — most sheet loads never need it.
+  useEffect(() => {
+    if (contactEdit === null || peakContacts !== null) return;
+    fetch("/api/peak/contacts", { cache: "no-store" })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) setPeakContacts(d.contacts ?? []);
+        else { setPeakContacts([]); setContactsError(d.error || "Could not load the PEAK contact list."); }
+      })
+      .catch(() => { setPeakContacts([]); setContactsError("Could not reach the server to load PEAK contacts."); });
+  }, [contactEdit, peakContacts]);
+
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);
@@ -371,19 +388,6 @@ export default function JobSheetEditor() {
     setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt } : s);
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
   }
-
-  // The guides already exist in PEAK, so this is a LINK, not a creation. Fetched
-  // only while the mapping control is open — most sheet loads never need it.
-  useEffect(() => {
-    if (contactEdit === null || peakContacts !== null) return;
-    fetch("/api/peak/contacts", { cache: "no-store" })
-      .then(async (r) => {
-        const d = await r.json().catch(() => ({}));
-        if (r.ok && d.ok) setPeakContacts(d.contacts ?? []);
-        else { setPeakContacts([]); setContactsError(d.error || "Could not load the PEAK contact list."); }
-      })
-      .catch(() => { setPeakContacts([]); setContactsError("Could not reach the server to load PEAK contacts."); });
-  }, [contactEdit, peakContacts]);
 
   // Operator: record (or clear) the guide's PEAK Contact id. This is the mapping
   // whose absence blocks every sync, so it is editable right where that block is
