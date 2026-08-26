@@ -352,3 +352,34 @@ describe("figures that need rechecking are named, not implied", () => {
     expect(figuresNeedRecheck(clean, t, ACCOUNTS)).toEqual([]);
   });
 });
+
+describe("Total Company Cost excludes withholding tax", () => {
+  // The Summary lists WHT, so it must be unmistakable that it is NOT added:
+  // the fee is a cost of ฿1,000 whether ฿30 of it goes to the guide or the
+  // Revenue Department. Reimbursement Due is likewise a SUBSET of tour expenses,
+  // not an extra line — adding either would overstate what the job cost.
+  const fee: GuideFee = { price: 1000, time: 1, whtPct: 3 };
+  const rows: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "company" }];
+
+  it("reproduces the live sheet: 50 + 1,000 = 1,050, WHT of 30 excluded", () => {
+    const t = jobSheetTotals(rows, fee, null, []);
+    expect(t.totalTourExpenses).toBe(50);
+    expect(t.guideFeeGross).toBe(1000);
+    expect(t.wht).toBe(30);
+    expect(t.totalCompanyCost).toBe(1050);
+  });
+
+  it("changing the WHT rate never changes what the job cost the company", () => {
+    for (const whtPct of [0, 3, 5, 15]) {
+      expect(jobSheetTotals(rows, { ...fee, whtPct }, null, []).totalCompanyCost).toBe(1050);
+    }
+  });
+
+  it("Reimbursement Due is inside Total Tour Expenses, not added to it", () => {
+    const guidePaid: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "guide" }];
+    const t = jobSheetTotals(guidePaid, fee, null, []);
+    expect(t.reimbursementDue).toBe(50);
+    expect(t.totalTourExpenses).toBe(50);   // the same 50, not 100
+    expect(t.totalCompanyCost).toBe(1050);
+  });
+});
