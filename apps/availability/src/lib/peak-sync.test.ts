@@ -218,10 +218,20 @@ describe("§9 sync eligibility", () => {
     expect(e.reasons).toContain("Guide is not mapped to a PEAK Contact");
   });
 
-  it("unreviewed expenses make it NOT_READY, and are counted", () => {
+  it("names WHAT is unresolved, not just how many", () => {
+    // "2 expenses need account review" tells an operator nothing about where to go.
+    // An unresolved Other Tour Cost is fixed on the row; a missing category mapping
+    // is fixed in settings. Different places, so different messages.
     const e = peakSyncEligibility({ ...ready(), expenses: EXAMPLE }); // Other Tour Cost unresolved
     expect(e.status).toBe("NOT_READY");
-    expect(e.reasons).toContain("1 expense needs account review");
+    expect(e.reasons).toContain("1 Other Tour Cost requires account review");
+  });
+
+  it("a category with no saved chart mapping is named", () => {
+    // Boat fare is Transportation; drop that mapping and the message must say so.
+    const { transport: _drop, ...withoutTransport } = ACCOUNTS;
+    const e = peakSyncEligibility({ ...ready(), accounts: withoutTransport });
+    expect(e.reasons).toContain("Transportation has no PEAK account mapping");
   });
 
   it("a missing accounting date blocks it", () => {

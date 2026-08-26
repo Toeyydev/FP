@@ -394,6 +394,9 @@ model ProductMap {
 model PeakAccountMapping {
   id              String   @id @default(cuid())
   folkopsCategory String   @unique // GUIDE_FEE | ENTRANCE_TICKET | TRANSPORTATION | MEAL_REFRESHMENT | OTHER_TOUR_COST | REVIEW_REWARD
+  // PEAK's /DailyJournals/accountcode returns { code, name, nameEn } and no id, so
+  // this is reserved and stays null until PEAK exposes one. Never invent a value.
+  peakAccountId   String?
   peakAccountCode String? // null = not mapped; a mapping without a code does not count
   peakAccountName String? // display snapshot of the account name in PEAK
   isActive        Boolean  @default(true)

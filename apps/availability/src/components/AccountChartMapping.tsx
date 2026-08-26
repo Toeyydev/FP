@@ -13,20 +13,21 @@ import { useCallback, useEffect, useState } from "react";
 
 type PeakAccount = { code: string; name: string; nameEn?: string };
 type Row = {
-  key: string; label: string; th: string; example: string; required: boolean; note: string | null;
+  key: string; label: string; th: string; example: string; scope: "FIXED" | "PER_JOB"; note: string | null;
   peakAccountCode: string | null; peakAccountName: string | null;
-  status: "MAPPED" | "NEEDS_REVIEW" | "NOT_MAPPED";
+  status: "MAPPED" | "NOT_MAPPED" | "REVIEW_PER_JOB";
 };
 
 const STATUS_LABEL: Record<Row["status"], string> = {
   MAPPED: "Mapped",
-  NEEDS_REVIEW: "Needs review",
   NOT_MAPPED: "Not mapped",
+  REVIEW_PER_JOB: "Review per Job",
 };
 
 export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [ready, setReady] = useState(false);
+  const [remaining, setRemaining] = useState(0);
   const [accounts, setAccounts] = useState<PeakAccount[]>([]);
   const [accountsError, setAccountsError] = useState<string>("");
   const [draft, setDraft] = useState<Record<string, string>>({}); // category -> account code
@@ -39,6 +40,7 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
     const d = await r.json();
     setRows(d.categories);
     setReady(!!d.accountChartReady);
+    setRemaining((d.missingRequired ?? []).length);
     setDraft(Object.fromEntries((d.categories as Row[]).map((c) => [c.key, c.peakAccountCode ?? ""])));
   }, []);
 
@@ -56,12 +58,14 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
       .catch(() => setAccountsError("Could not reach the server to load PEAK accounts."));
   }, []);
 
-  const dirty = !!rows?.some((c) => (draft[c.key] ?? "") !== (c.peakAccountCode ?? ""));
+  const dirty = !!rows?.some((c) => c.scope === "FIXED" && (draft[c.key] ?? "") !== (c.peakAccountCode ?? ""));
 
   async function save() {
     if (!rows) return;
     setBusy(true); setMsg("");
-    const mappings = rows.map((c) => {
+    // Per-job categories are never sent — there is nothing to save and the server
+    // rejects them.
+    const mappings = rows.filter((c) => c.scope === "FIXED").map((c) => {
       const code = (draft[c.key] ?? "").trim();
       // Send the name that belongs to the chosen code, so the stored snapshot can
       // never drift from the code it labels.
@@ -87,7 +91,7 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
         <span className="hint">Map FolkOPS expense categories to PEAK accounts.</span>
         {rows && (
           <span style={{ marginLeft: "auto" }} className={`acct-ready ${ready ? "ok" : "warn"}`}>
-            {ready ? "Account chart mapping configured" : "Account chart mapping not configured"}
+            {ready ? "Account chart mapping configured" : `Account chart mapping not configured${remaining ? ` · ${remaining} mapping${remaining === 1 ? "" : "s"} remaining` : ""}`}
           </span>
         )}
       </div>
@@ -116,17 +120,21 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
                   const code = draft[c.key] ?? "";
                   // Live status from the DRAFT, so choosing an account flips the
                   // pill before saving rather than after a round trip.
-                  const status: Row["status"] = code.trim() ? "MAPPED" : c.required ? "NOT_MAPPED" : "NEEDS_REVIEW";
+                  const status: Row["status"] = c.scope === "PER_JOB" ? "REVIEW_PER_JOB" : code.trim() ? "MAPPED" : "NOT_MAPPED";
                   return (
                     <tr key={c.key}>
                       <td>
                         <div style={{ fontWeight: 600 }}>{c.label}</div>
                         <div className="acct-sub">{c.th}</div>
-                        {!c.required && <div className="acct-code">manual review</div>}
+                        {c.scope === "PER_JOB" && <div className="acct-code">Manual review required</div>}
                       </td>
-                      <td className="acct-sub">{c.example}{c.note ? <div style={{ marginTop: 2 }}>{c.note}</div> : null}</td>
+                      <td className="acct-sub">{c.example}</td>
                       <td>
-                        {canEdit ? (
+                        {c.scope === "PER_JOB" ? (
+                          // A standing account here would be applied to every one-off
+                          // cost this category exists to hold, so there is no control.
+                          <div className="acct-sub">{c.note ?? "Select the PEAK account on the Job Sheet when this category is used."}</div>
+                        ) : canEdit ? (
                           <>
                             <input
                               className="acct-input" list={`peak-accounts-${c.key}`} value={code} placeholder="Search code or name…"
@@ -154,8 +162,8 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
 
           <div className="acct-foot">
             <span className="acct-sub">
-              Guide Fee, Entrance Ticket, Transportation and Meal / Refreshment must be mapped before the chart counts as
-              configured. Other Tour Cost and Review Reward are left for review on purpose and never block it.
+              Choose each account once here and every future Job Sheet uses it automatically. Other Tour Cost is the one
+              exception — it covers too many different things to share a single account, so it is chosen on the Job Sheet.
             </span>
             {msg && <span className="acct-msg">{msg}</span>}
             {canEdit && <button className="btn primary" disabled={busy || !dirty} onClick={save}>{busy ? "Saving…" : "Save mappings"}</button>}

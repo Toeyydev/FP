@@ -475,6 +475,13 @@ a.glink:hover{text-decoration:underline}
 .js-dupe input:focus{outline:none;border-color:var(--primary)}
 .js-dupe .btn{padding:1px 5px;font-size:10.5px}
 .js-dupe-mark{display:block;margin-top:3px;padding:1px 5px !important;font-size:10.5px !important;color:var(--ink-soft)}
+/* Per-row PEAK account, for Other Tour Cost only. Lives inside the Account Status
+   cell so the expense table gains no column. */
+.js-row-acct{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.js-row-acct input{width:100%;box-sizing:border-box;border:1px solid var(--assign-line);border-radius:5px;
+  padding:2px 5px;font:inherit;font-size:11px;background:var(--card);color:var(--ink)}
+.js-row-acct input:focus{outline:none;border-color:var(--primary)}
+.js-row-acct span{font-size:10px;color:var(--ink-soft);line-height:1.3}
 /* Carried-over payment line: inside the summary block but outside its total. */
 .js-summary .js-sum-note{border-bottom:0;color:var(--ink-soft);font-size:12.5px}
 .js-summary .js-sum-note b{font-weight:600}
