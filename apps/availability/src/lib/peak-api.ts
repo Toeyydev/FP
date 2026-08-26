@@ -147,6 +147,31 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
   return { ok: false, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
 }
 
+// Chart of accounts (read-only) — the account code + name list an operator picks
+// from when mapping FolkOPS categories. GET /api/v1/DailyJournals/accountcode per
+// PEAK's API reference; response wrapper is PeakAccountCode -> accountCode[].
+//
+// Deliberately READ-ONLY: this cannot create or post anything. It reuses the same
+// authedHeaders()/peakWrap()/sanitizePeakError() path as getContacts() below, so
+// the Client Token handshake is untouched.
+export type PeakAccountCode = { code: string; name: string; nameEn?: string };
+
+export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[] }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const headers = await authedHeaders();
+  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
+  let r: Response;
+  try { r = await fetch(`${API}/DailyJournals/accountcode`, { method: "GET", headers }); }
+  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
+  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const wrap = peakWrap<{ accountCode?: PeakAccountCode[]; resCode?: string; resDesc?: string }>(j, "peakAccountCode");
+  const accounts = (wrap?.accountCode ?? [])
+    .filter((a) => (a?.code ?? "").trim())
+    .map((a) => ({ code: String(a.code).trim(), name: String(a.name ?? "").trim(), nameEn: a.nameEn ? String(a.nameEn).trim() : undefined }));
+  if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
+  return { ok: true, accounts, code: wrap?.resCode, desc: wrap?.resDesc };
+}
+
 // Vendor/contact list — used to map a guide -> a PEAK contact id.
 export async function getContacts(): Promise<Res<{ contacts?: unknown[] }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };

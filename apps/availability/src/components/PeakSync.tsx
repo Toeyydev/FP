@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import OperatorNav from "@/components/OperatorNav";
+import AccountChartMapping from "@/components/AccountChartMapping";
 
 // Operational PEAK monitoring — no credentials, no developer config. Shows the
 // integration's real state honestly: today PEAK refs are recorded manually on
@@ -12,7 +13,7 @@ import OperatorNav from "@/components/OperatorNav";
 type Row = { guideId: string; guide: string; date: string; slotIdx: number; time: string; ref: string | null; amount: number; peakRef: string | null; paidAt: string | null; batchNo: string | null };
 type Data = {
   period: string;
-  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean };
+  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[] };
   refs: { total: number; synced: number; missing: Row[]; recorded: Row[] };
 };
 
@@ -56,7 +57,10 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
   }
 
   const cfg = d?.config;
-  const autoReady = !!(cfg?.enabled && cfg?.chartReady);
+  // Deliberately NOT derived from connected + chartReady: a configured chart does
+  // not switch posting on. The server states dormancy explicitly (§8) and a
+  // controlled UAT expense test comes first.
+  const autoPosting = cfg?.autoPostingEnabled === true;
 
   return (
     <div className="op-layout">
@@ -67,20 +71,22 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
         {/* Integration state — booleans only, never credentials. */}
         <section className="panel" style={{ marginBottom: 14 }}>
           <div className="panel-head"><h2>PEAK accounting</h2>
-            <span className="hint">{autoReady ? "auto-posting configured" : "reference tracking — auto-posting dormant"}</span>
+            <span className="hint">{autoPosting ? "auto-posting enabled" : "reference tracking — auto-posting dormant"}</span>
             {canEdit && <button className="btn sm" style={{ marginLeft: "auto" }} disabled={test.busy} onClick={testConnection} title="Contacts the PEAK API once to verify the credentials work">{test.busy ? "Testing…" : "Test connection"}</button>}
           </div>
           <div style={{ padding: "10px 16px 14px", display: "grid", gap: 7, fontSize: 13 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.configured} /> Developer credentials {cfg?.configured ? "set" : "not set"}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.enabled} /> Owner user token {cfg?.enabled ? "set" : "not set"}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.chartReady} /> Account chart mapping {cfg?.chartReady ? "configured" : "not configured"}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.chartReady} /> Account chart mapping {cfg?.chartReady ? "configured" : "not configured"}{!cfg?.chartReady && cfg?.chartMissing?.length ? <span style={{ color: "var(--ink-soft)" }}> · {cfg.chartMissing.length} categor{cfg.chartMissing.length === 1 ? "y" : "ies"} to map</span> : null}</div>
             {cfg && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="att-dot" style={{ background: cfg.sandbox ? "var(--assign)" : "var(--green)" }} /> Endpoint: {cfg.sandbox ? "UAT sandbox" : "production"}</div>}
             {test.msg && <div style={{ fontWeight: 600, color: test.ok ? "var(--green)" : "var(--danger)" }}>{test.msg}</div>}
-            {!autoReady && <div style={{ fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.5 }}>
+            {!autoPosting && <div style={{ fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.5 }}>
               Until credentials and the account chart are set (and the accountant confirms the mapping), EXP- expense refs are recorded manually on <a href="/payments">Payments</a>. Nothing here blocks paying guides.
             </div>}
           </div>
         </section>
+
+        <div style={{ marginBottom: 14 }}><AccountChartMapping canEdit={canEdit} /></div>
 
         {/* Reference coverage — the operational to-do: paid tours missing a ref. */}
         <section className="panel">
