@@ -455,6 +455,19 @@ a.glink:hover{text-decoration:underline}
 /* Carried-over payment line: inside the summary block but outside its total. */
 .js-summary .js-sum-note{border-bottom:0;color:var(--ink-soft);font-size:12.5px}
 .js-summary .js-sum-note b{font-weight:600}
+/* "of which" lines: a BREAKDOWN of the line above, never part of the total.
+   Indented, smaller and quieter so the eye can add the full-weight lines without
+   them — which is what makes the grand total read as correct. Withholding Tax
+   lives here because it is withheld from the guide's fee and remitted, not an
+   extra cost to the company; Reimbursement Due because it is the guide-paid
+   subset of tour expenses already counted above. */
+.js-summary .js-sum-sub{border-bottom:0;padding:1px 0 1px 15px;font-size:12px}
+.js-summary .js-sum-sub span{color:var(--ink-soft);font-weight:400}
+.js-summary .js-sum-sub small{display:block;font-size:9px;color:var(--ink-soft);font-weight:400}
+.js-summary .js-sum-sub b{font-weight:600;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.js-summary .js-sum-sub.warn span,.js-summary .js-sum-sub.warn b{color:var(--assign)}
+/* Restore the separating rule on the next full-weight line after a breakdown. */
+.js-summary .js-sum-sub + div:not(.js-sum-sub){border-top:1px solid #eee}
 /* Net pay to the guide — the one figure that answers "what do we transfer?".
    Deliberately separated from company cost above it. */
 .js-netpay{margin:12px 0 0;margin-left:auto;width:fit-content;min-width:280px;max-width:100%;
