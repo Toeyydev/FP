@@ -1150,15 +1150,19 @@ export default function JobSheetEditor() {
               the expense rows are summed ONCE, there (lib/jobsheet). A review reward
               earned on ANOTHER job is paid out with this transfer but is deliberately
               not part of this job's cost, so it sits outside the Total. */}
+          {/* Only the three full-weight lines sum into Total Company Cost. The
+              indented "of which" lines are BREAKDOWNS of the line above them:
+              WHT is withheld from the guide's fee and remitted, not extra cost,
+              and Reimbursement Due is the guide-paid SUBSET of tour expenses —
+              adding either would double-count. Listed flat, they made the total
+              look like it did not add up. */}
           <div><span>Total Tour Expenses{flagged("totalTourExpenses") && <em className="js-recheck-tag">recheck</em>}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว (ต้นทุนบริษัท)</small></span><b>{thb(money.totalTourExpenses)}</b></div>
+          <div className="js-sum-sub"><span>of which reimbursable to guide{flagged("reimbursementDue") && <em className="js-recheck-tag">recheck</em>}<small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: money.reimbursementDue > 0 ? "#b45309" : undefined }}>{thb(money.reimbursementDue)}</b></div>
+          {money.companyDirectTotal > 0 && <div className="js-sum-sub"><span>of which paid direct by company<small>บริษัทชำระโดยตรง</small></span><b>{thb(money.companyDirectTotal)}</b></div>}
+          {money.unspecifiedTotal > 0 && <div className="js-sum-sub warn"><span>of which Paid By not set<small>ยังไม่ระบุแหล่งเงิน</small></span><b>{thb(money.unspecifiedTotal)}</b></div>}
           <div><span>Guide Fee (Agreed)<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์ที่ตกลง</small></span><b>{thb(money.guideFeeGross)}</b></div>
+          <div className="js-sum-sub"><span>of which withheld as tax (WHT)<small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>{thb(money.wht)}</b></div>
           {money.additionalGuidePayment > 0 && <div><span>Additional Guide Payment<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รายการจ่ายเพิ่มเติม</small></span><b>{thb(money.additionalGuidePayment)}</b></div>}
-          <div><span>Withholding Tax<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(money.wht)}</b></div>
-          <div><span>Reimbursement Due{flagged("reimbursementDue") && <em className="js-recheck-tag">recheck</em>}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: money.reimbursementDue > 0 ? "#b45309" : undefined }}>{thb(money.reimbursementDue)}</b></div>
-          {/* Company Direct is a real cost of the job but is NOT owed to the guide —
-              shown so the gap between the two totals below is self-explanatory. */}
-          {money.companyDirectTotal > 0 && <div className="js-sum-note"><span>…of which paid direct by company<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>บริษัทชำระโดยตรง (ไม่คืนให้มัคคุเทศก์)</small></span><b>{thb(money.companyDirectTotal)}</b></div>}
-          {money.unspecifiedTotal > 0 && <div className="js-sum-note"><span style={{ color: "var(--assign)" }}>…of which Paid By not set<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยังไม่ระบุแหล่งเงิน — ยังไม่คืนให้มัคคุเทศก์</small></span><b style={{ color: "var(--assign)" }}>{thb(money.unspecifiedTotal)}</b></div>}
           <div className="grand"><span>Total Company Cost (This Job)<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุนของงานนี้</small></span><b>{thb(money.totalCompanyCost)}</b></div>
           {cost.reviewOther > 0 && <div className="js-sum-note"><span>Paid with this job, earned on another<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้</small></span><b>{thb(cost.reviewOther)}</b></div>}
         </div>
