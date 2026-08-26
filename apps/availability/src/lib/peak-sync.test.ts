@@ -69,8 +69,8 @@ describe("§12 Summary — the spec's worked example", () => {
     expect(t.additionalGuidePayment).toBe(100);
     expect(t.wht).toBe(45);
     expect(t.reimbursementDue).toBe(260);
-    expect(t.totalCompanyCost).toBe(2440);
-    expect(t.netPayToGuide).toBe(1815);
+    expect(t.totalCompanyCost).toBe(2340);   // 840 + 1,500 — reward excluded
+    expect(t.netPayToGuide).toBe(1815);     // …but the guide is still paid it
   });
 
   it("Net Pay excludes Company Direct expenses — the bug this update fixes", () => {
@@ -86,8 +86,19 @@ describe("§12 Summary — the spec's worked example", () => {
     expect(t.netGuideFee + t.additionalGuidePayment + t.reimbursementDue).toBe(t.netPayToGuide);
   });
 
-  it("Total Company Cost keeps its existing formula", () => {
-    expect(t.totalTourExpenses + t.guideFeeGross + t.additionalOwnedByJob).toBe(t.totalCompanyCost);
+  it("Total Company Cost is exactly the lines the Summary shows", () => {
+    // The Summary lists Total Tour Expenses and Guide Fee and nothing else that
+    // sums, so the total must equal those two — a reader can add them up.
+    expect(t.totalTourExpenses + t.guideFeeGross).toBe(t.totalCompanyCost);
+  });
+
+  it("a review reward is paid to the guide but not counted as company cost", () => {
+    // Owner decision: the Summary dropped the Additional Guide Payment line, so
+    // the reward is out of the total. It is STILL paid — this deliberately
+    // understates company outlay on jobs that earned one.
+    expect(t.additionalGuidePayment).toBe(100);
+    expect(t.netPayToGuide - t.netGuideFee - t.reimbursementDue).toBe(100);
+    expect(t.totalCompanyCost).toBe(t.totalTourExpenses + t.guideFeeGross);
   });
 
   it("WHT applies to the guide fee only, never to reimbursement", () => {
@@ -107,7 +118,7 @@ describe("§12 Summary — the spec's worked example", () => {
       FEE, null, [],
     );
     expect(withAdvance.totalTourExpenses).toBe(840);   // still a cost of the tour
-    expect(withAdvance.totalCompanyCost).toBe(2440);   // still the company's money
+    expect(withAdvance.totalCompanyCost).toBe(2340);   // still the company's money
     expect(withAdvance.reimbursementDue).toBe(200);    // …but not owed to the guide
     expect(withAdvance.netPayToGuide).toBe(1755);
   });
@@ -168,7 +179,7 @@ describe("§4 duplicate protection", () => {
   it("…but still counts as a cost of the job", () => {
     const t = jobSheetTotals([alreadyBooked, ...EXAMPLE.slice(1)], FEE, null, []);
     expect(t.totalTourExpenses).toBe(840);
-    expect(t.totalCompanyCost).toBe(2440);
+    expect(t.totalCompanyCost).toBe(2340);
   });
 
   it("claiming already-recorded without a source document blocks sync", () => {
@@ -314,7 +325,7 @@ describe("expense-table readiness is narrower than sheet eligibility", () => {
     expect(t.totalTourExpenses).toBe(760);
     expect(t.reimbursementDue).toBe(260);   // unchanged — that row was company-paid
     expect(t.netPayToGuide).toBe(1815);     // unchanged — never included company-direct
-    expect(t.totalCompanyCost).toBe(2360);  // 760 + 1500 + 100
+    expect(t.totalCompanyCost).toBe(2260);  // 760 + 1,500 — reward excluded
   });
 });
 
