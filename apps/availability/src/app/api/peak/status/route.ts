@@ -68,6 +68,9 @@ export async function GET(req: NextRequest) {
       // its own flag so the card states dormancy as fact rather than inferring it.
       autoPostingEnabled: false,
       payoutConfigReady: peakPayoutReady, // env side of the posting gate, for diagnostics
+      // PEAK record reference, not a credential — needed to show which method the
+      // current PEAK_PAYMENT_METHOD resolves to.
+      paymentMethodId: process.env.PEAK_PAYMENT_METHOD || null,
       sandbox: /dev|sandbox/i.test(peakBaseUrl), // pointing at UAT, not production
     },
     refs: {

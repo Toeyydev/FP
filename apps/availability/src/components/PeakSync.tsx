@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import OperatorNav from "@/components/OperatorNav";
 import AccountChartMapping from "@/components/AccountChartMapping";
+import PeakPaymentMethods from "@/components/PeakPaymentMethods";
 
 // Operational PEAK monitoring — no credentials, no developer config. Shows the
 // integration's real state honestly: today PEAK refs are recorded manually on
@@ -13,7 +14,7 @@ import AccountChartMapping from "@/components/AccountChartMapping";
 type Row = { guideId: string; guide: string; date: string; slotIdx: number; time: string; ref: string | null; amount: number; peakRef: string | null; paidAt: string | null; batchNo: string | null };
 type Data = {
   period: string;
-  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[] };
+  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[]; paymentMethodId?: string | null };
   refs: { total: number; synced: number; missing: Row[]; recorded: Row[] };
 };
 
@@ -87,6 +88,8 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
         </section>
 
         <div style={{ marginBottom: 14 }}><AccountChartMapping canEdit={canEdit} /></div>
+
+        {canEdit && <PeakPaymentMethods configuredId={cfg?.paymentMethodId ?? null} />}
 
         {/* Reference coverage — the operational to-do: paid tours missing a ref. */}
         <section className="panel">
