@@ -18,7 +18,7 @@ const ymd = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
 // Build the PEAK expense payload for a guide's transfer (1+ tours paid together).
 // Pure/testable — no network. Returns the payload + the computed net paid amount.
 export async function buildPayoutExpense(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string) {
-  const u = await prisma.user.findFirst({ where: { guideId }, select: { displayName: true, fullName: true, taxId: true } });
+  const u = await prisma.user.findFirst({ where: { guideId }, select: { displayName: true, fullName: true, taxId: true, peakContactId: true } });
   const name = u?.fullName || u?.displayName || guideId;
   const taxNumber = decrypt(u?.taxId) || "";
   const sheets = await prisma.jobSheet.findMany({
@@ -41,7 +41,14 @@ export async function buildPayoutExpense(guideId: string, jobs: { date: string; 
   const expense: Record<string, unknown> = {
     issuedDate: dt,
     dueDate: dt,
-    contact: { name, type: CONTACT_TYPE, taxNumber },
+    // Prefer the guide's stored PEAK Contact id. Sending a NAME asks PEAK to match
+    // or create a contact, so the first time a nickname is edited the payout would
+    // land on a second contact and split that guide's ledger. The id is the
+    // identity; name/type is only a fallback for a guide not yet mapped, and
+    // postGuidePayout refuses that path unless CONTACT_TYPE is configured.
+    contact: u?.peakContactId
+      ? { id: u.peakContactId }
+      : { name, type: CONTACT_TYPE, taxNumber },
     products,
     reference: refs.join(", "),
     remark: `Folkpaths payout · ${guideId}`,
@@ -50,14 +57,23 @@ export async function buildPayoutExpense(guideId: string, jobs: { date: string; 
   return { expense, netPaid, tours: sheets.length, refs };
 }
 
-// Whether the account-chart config is present (in addition to PEAK creds).
-export const peakPayoutReady = !!(ACC_FEE && CONTACT_TYPE && PAY_METHOD);
+// Whether the posting config is present (in addition to PEAK creds). CONTACT_TYPE
+// is no longer required here: a mapped guide is posted by contact id, and the
+// name+type fallback is checked per guide in postGuidePayout instead of blocking
+// every payout on a value most jobs never need.
+export const peakPayoutReady = !!(ACC_FEE && PAY_METHOD);
 
 // Post the payout to PEAK. Dormant until PEAK creds + account-chart config are set.
 export async function postGuidePayout(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string): Promise<{ ok: boolean; code?: string; desc?: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not connected (env not set)" };
-  if (!peakPayoutReady) return { ok: false, desc: "PEAK account-chart config not set (PEAK_ACCT_GUIDE_FEE / PEAK_CONTACT_TYPE / PEAK_PAYMENT_METHOD)" };
+  if (!peakPayoutReady) return { ok: false, desc: "PEAK posting config not set (PEAK_ACCT_GUIDE_FEE / PEAK_PAYMENT_METHOD)" };
   const { expense } = await buildPayoutExpense(guideId, jobs, paymentDate);
+  // Refuse rather than let PEAK create a contact from a name: an unmapped guide
+  // with no CONTACT_TYPE fallback would silently produce a duplicate supplier.
+  const contact = expense.contact as { id?: string } | undefined;
+  if (!contact?.id && !CONTACT_TYPE) {
+    return { ok: false, desc: `Guide ${guideId} is not mapped to a PEAK Contact (and no PEAK_CONTACT_TYPE fallback is set)` };
+  }
   const r = await createExpenseAllInOne(expense);
   return { ok: r.ok, code: r.code, desc: r.desc };
 }

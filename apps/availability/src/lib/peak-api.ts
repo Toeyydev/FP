@@ -197,6 +197,57 @@ export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCod
   return { ok: true, accounts: parsed.accounts, code: wrap?.resCode, desc: wrap?.resDesc };
 }
 
+// Payment methods (read-only) — the bank/cash accounts a payment can settle to.
+// GET /api/v1/PaymentMethods, wrapper PeakPaymentMethods. PEAK's docs list the
+// object's fields but not the array key inside the wrapper, so the parser accepts
+// the documented naming pattern and REPORTS what it found when it cannot match —
+// the same defence added after the chart call shipped unverified.
+export type PeakPaymentMethod = { id: string; code?: string; name: string; type?: string; bankName?: string; accountNumber?: string };
+
+export function parsePeakPaymentMethods(j: Record<string, unknown>): { methods: PeakPaymentMethod[] } | { error: string } {
+  const wrap = peakWrap<Record<string, unknown>>(j ?? {}, "peakPaymentMethods");
+  // Every other PEAK list nests its array under a singular-ish key
+  // (peakAccountCode -> accountCode, PeakContactGroups -> groups), so look for the
+  // first array rather than hard-coding a name the docs never state.
+  const entry = wrap && typeof wrap === "object"
+    ? Object.entries(wrap).find(([, v]) => Array.isArray(v))
+    : undefined;
+  if (!entry) {
+    const topKeys = Object.keys(j ?? {}).slice(0, 8);
+    const innerKeys = wrap && typeof wrap === "object" ? Object.keys(wrap).slice(0, 8) : [];
+    return {
+      error: `PEAK replied 200 but no payment-method array was found. Response keys: [${topKeys.join(", ") || "none"}]` +
+             (innerKeys.length ? `; inside the wrapper: [${innerKeys.join(", ")}]` : ""),
+    };
+  }
+  const methods = (entry[1] as PeakPaymentMethod[])
+    .filter((m) => (m?.id ?? "").toString().trim())
+    .map((m) => ({
+      id: String(m.id).trim(),
+      code: m.code ? String(m.code).trim() : undefined,
+      name: String(m.name ?? "").trim(),
+      type: m.type ? String(m.type).trim() : undefined,
+      bankName: m.bankName ? String(m.bankName).trim() : undefined,
+      accountNumber: m.accountNumber ? String(m.accountNumber).trim() : undefined,
+    }));
+  return { methods };
+}
+
+export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[] }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const headers = await authedHeaders();
+  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
+  let r: Response;
+  try { r = await fetch(`${API}/PaymentMethods`, { method: "GET", headers }); }
+  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
+  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakPaymentMethods");
+  if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
+  const parsed = parsePeakPaymentMethods(j);
+  if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
+  return { ok: true, methods: parsed.methods, code: wrap?.resCode, desc: wrap?.resDesc };
+}
+
 // Vendor/contact list — used to map a guide -> a PEAK contact id.
 export async function getContacts(): Promise<Res<{ contacts?: unknown[] }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
