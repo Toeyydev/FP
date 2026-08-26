@@ -394,3 +394,29 @@ describe("Total Company Cost excludes withholding tax", () => {
     expect(t.totalCompanyCost).toBe(1050);
   });
 });
+
+describe("the document's bottom line is the payment, not the cost", () => {
+  // The printed job sheet is handed to the guide, so its final figure must be what
+  // they actually receive. Cost and payment differ by the withholding tax and by
+  // any expense the company paid the vendor directly — labelling one and showing
+  // the other would misstate a payment on a signed document.
+  it("reproduces the reported sheet: fee 1,500, no expenses", () => {
+    const t = jobSheetTotals([], { price: 1500, time: 1, whtPct: 3 }, null, []);
+    expect(t.totalCompanyCost).toBe(1500);  // what the old "Total Job Expenses" showed
+    expect(t.netPayToGuide).toBe(1455);     // what the guide is actually paid
+    expect(t.totalCompanyCost - t.netPayToGuide).toBe(45); // exactly the WHT
+  });
+
+  it("company-direct expenses widen the gap and must never inflate the payment", () => {
+    const rows: Expense[] = [{ description: "Tickets", price: 500, pax: 1, expenseType: "entrance", paidBy: "company" }];
+    const t = jobSheetTotals(rows, { price: 1500, time: 1, whtPct: 3 }, null, []);
+    expect(t.totalCompanyCost).toBe(2000);  // 500 + 1,500
+    expect(t.netPayToGuide).toBe(1455);     // the guide fronted nothing
+  });
+
+  it("guide-paid expenses are reimbursed on top of the net fee", () => {
+    const rows: Expense[] = [{ description: "Boat", price: 200, pax: 1, expenseType: "transport", paidBy: "guide" }];
+    const t = jobSheetTotals(rows, { price: 1500, time: 1, whtPct: 3 }, null, []);
+    expect(t.netPayToGuide).toBe(1655);     // 1,455 + 200 back
+  });
+});

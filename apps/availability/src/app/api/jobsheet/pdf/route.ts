@@ -5,6 +5,7 @@ import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { jobSheetTotals } from "@/lib/peak-sync";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -94,6 +95,7 @@ export async function GET(req: NextRequest) {
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
   const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
+  const money = jobSheetTotals(expenses, guideFee, sheet.ref, bookings);
   // No saved sheet (e.g. exported from Incoming bookings before assignment) →
   // make the guest list, expenses and guide details fillable on the page so the
   // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
@@ -290,7 +292,12 @@ export async function GET(req: NextRequest) {
       <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
       <div><span>Net Guide Fee <small>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
       ${guidePersonalTotal(expenses) > 0 ? `<div><span>Reimbursement Due <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style="color:#b45309">${thb(guidePersonalTotal(expenses))}</b></div>` : ""}
-      <div class="grand"><span>Total Job Expenses <small>รวมค่าใช้จ่ายของงาน</small></span><b id="grandTot">${thb(cost.jobExpenses)}</b></div>
+      <!-- The document's bottom line is what we actually transfer to the guide, not
+           what the job cost the company. Those differ by the withholding tax (and by
+           any expense the company paid the vendor direct), so this MUST use
+           netPayToGuide - relabelling the cost figure would overstate the payment on
+           a document the guide receives. -->
+      <div class="grand"><span>Net Pay to Guide <small>จำนวนที่ต้องชำระให้มัคคุเทศก์</small></span><b id="grandTot">${thb(money.netPayToGuide)}</b></div>
     </div>
     <div class="approve">
       <div class="certnote">${esc(CERT_STATEMENT_TH)}</div>
