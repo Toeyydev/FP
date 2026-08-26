@@ -27,9 +27,14 @@ export function normalizePeakBase(raw?: string | null): string {
 }
 
 const API = normalizePeakBase(process.env.PEAK_API_BASE_URL || process.env.PEAK_BASE_URL);
-const CONNECT_ID = process.env.PEAK_CONNECT_ID || "";
-const CONNECT_KEY = process.env.PEAK_CONNECT_KEY || "";
-const USER_TOKEN = process.env.PEAK_USER_TOKEN || "";
+// Trimmed on read, like the base URL above. A credential pasted into Railway with a
+// trailing newline or a stray space is non-empty — so peakConfigured goes green — but
+// signs a wrong HMAC and sends a wrong connectId, which reads as "credentials rejected"
+// with no way to tell it apart from a genuinely bad key. Trimming also makes a
+// whitespace-only value report as missing (red dot) instead of silently failing.
+const CONNECT_ID = (process.env.PEAK_CONNECT_ID || "").trim();
+const CONNECT_KEY = (process.env.PEAK_CONNECT_KEY || "").trim();
+const USER_TOKEN = (process.env.PEAK_USER_TOKEN || "").trim();
 const SIGN_SECRET = (process.env.PEAK_SIGN_SECRET || "connectId") === "connectKey" ? CONNECT_KEY : CONNECT_ID;
 // Verified against the PEAK UAT sandbox: the Time-Signature is HMAC-SHA1(connectId,
 // timestamp) hex-encoded. Overridable, but hex is the working default (base64 →
