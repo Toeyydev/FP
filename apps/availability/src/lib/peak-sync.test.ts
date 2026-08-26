@@ -430,3 +430,31 @@ describe("the document's bottom line is the payment, not the cost", () => {
     expect(t.netPayToGuide).toBe(1655);     // 1,455 + 200 back
   });
 });
+
+describe("the recheck panel must not contradict the expense table", () => {
+  // The browser does not know which PEAK accounts are configured; the server does.
+  // Recomputing client-side with an empty map reported rows as unready while the
+  // table beside them showed "Ready to sync" — two statements about the same rows.
+  const rows: Expense[] = [
+    { description: "Grand Palace ticket", price: 500, pax: 2, expenseType: "entrance", paidBy: "company" },
+    { description: "Boat", price: 100, pax: 2, expenseType: "transport", paidBy: "guide" },
+  ];
+  const fee: GuideFee = { price: 1500, time: 1, whtPct: 3 };
+
+  it("trusts the server's row status when given", () => {
+    const t = jobSheetTotals(rows, fee, null, []);
+    const withServer = figuresNeedRecheck(rows, t, {}, ["READY", "READY"]);
+    expect(withServer.some((r) => r.short.includes("not ready for accounting"))).toBe(false);
+  });
+
+  it("still flags rows the server itself reports as unready", () => {
+    const t = jobSheetTotals(rows, fee, null, []);
+    const r = figuresNeedRecheck(rows, t, {}, ["READY", "NEEDS_REVIEW"]);
+    expect(r.some((x) => x.short.includes("1 expense is not ready"))).toBe(true);
+  });
+
+  it("falls back to local computation when no server status is supplied", () => {
+    const t = jobSheetTotals(rows, fee, null, []);
+    expect(figuresNeedRecheck(rows, t).some((x) => x.short.includes("not ready"))).toBe(true);
+  });
+});

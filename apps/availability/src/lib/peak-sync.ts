@@ -194,7 +194,16 @@ export function jobSheetTotals(
 export type RecheckField = "totalTourExpenses" | "reimbursementDue" | "netPayToGuide";
 export type Recheck = { field: RecheckField; short: string; detail: string; amount?: number };
 
-export function figuresNeedRecheck(expenses: Expense[], totals: JobSheetTotals, accounts: PeakAccountMap = {}): Recheck[] {
+export function figuresNeedRecheck(
+  expenses: Expense[],
+  totals: JobSheetTotals,
+  accounts: PeakAccountMap = {},
+  // Per-row status as the SERVER computed it (it knows which accounts are
+  // configured; the browser does not). Without this the client recomputes with an
+  // empty account map and reports rows as unready that the table beside it is
+  // showing as Ready — two contradictory statements about the same rows.
+  rowStatuses?: (("READY" | "NEEDS_REVIEW" | "UNMAPPED") | null | undefined)[],
+): Recheck[] {
   const out: Recheck[] = [];
   const rows = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
 
@@ -226,7 +235,12 @@ export function figuresNeedRecheck(expenses: Expense[], totals: JobSheetTotals, 
     });
   }
 
-  const unmapped = rows.filter((e) => !e.alreadyRecordedInPeak && expenseMappingStatus(e, accounts) !== "READY");
+  const statusOf = (e: Expense) => {
+    if (!rowStatuses) return expenseMappingStatus(e, accounts);
+    const i = (expenses ?? []).indexOf(e);
+    return rowStatuses[i] ?? expenseMappingStatus(e, accounts);
+  };
+  const unmapped = rows.filter((e) => !e.alreadyRecordedInPeak && statusOf(e) !== "READY");
   if (unmapped.length) {
     out.push({
       field: "totalTourExpenses",

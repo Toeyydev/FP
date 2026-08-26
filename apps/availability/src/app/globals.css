@@ -382,7 +382,11 @@ a.glink:hover{text-decoration:underline}
 /* ---- Job sheet editor ---- */
 .jobsheet .js-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;flex-wrap:wrap}
 .jobsheet .js-sheet{max-width:1000px;margin:0 auto}
-.js-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #2f7d32;padding-bottom:10px;margin-bottom:12px}
+.js-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #2f7d32;padding-bottom:10px;margin-bottom:12px}
+/* Without wrapping, the meta table overflowed the panel next to the finance
+   sidebar and clipped the Job No. — the sheet's primary identifier. */
+.js-head>.js-brand{flex:1 1 260px;min-width:0}
+.js-head>.js-meta{flex:0 1 auto;max-width:100%}
 .js-brand b{font-size:22px;letter-spacing:1px}
 .js-meta{border-collapse:collapse;font-size:13px}
 .js-meta td{border:1px solid #cfcfcf;padding:3px 9px}
@@ -417,6 +421,11 @@ a.glink:hover{text-decoration:underline}
 /* Amount cells: the editable price × qty sits left, the computed figure right, so
    a column of totals stays scannable while every row is still editable. */
 .js-exp-table td,.js-pay-table td{vertical-align:middle}
+/* Eight columns of fixed-ish widths were crushing Description to a few characters
+   ("Grand Pa", "Chao Ph"). Give the table a floor and let its .scroll-x wrapper
+   scroll on narrow screens instead of squeezing the one free-text column. */
+.js-exp-table{min-width:880px}
+.js-exp-table td:nth-child(3) input{min-width:150px}
 .js-amt{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .js-amt b{display:inline-block;min-width:74px;font-weight:700}
 .js-amt-in{display:inline-flex;align-items:center;gap:3px;margin-right:8px}
