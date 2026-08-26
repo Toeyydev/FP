@@ -4,15 +4,26 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { nextJobRef } from "@/lib/jobref";
+import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
 import { canViewFinance } from "@/lib/roles";
+import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
+}
+
+// Category → PEAK account, from the SAME env the payout builder already uses
+// (lib/peak-payout). Unset means unconfigured, which makes rows report UNMAPPED —
+// deliberately, rather than inventing an account code. No PEAK call is made.
+function peakAccountMap() {
+  const svc = process.env.PEAK_ACCT_EXPENSES || "";
+  if (!svc) return {};
+  return { entrance: { code: svc }, transport: { code: svc }, meal: { code: svc } };
 }
 
 // Header fields auto-pulled from the guide's profile (operator is authorized to see PII).
@@ -22,6 +33,12 @@ async function guideHeader(guideId: string) {
   return {
     guideId: u.guideId, name: u.fullName || u.displayName, email: u.email,
     tel: u.phone || "", taxId: decrypt(u.taxId), address: decrypt(u.currentAddress) || decrypt(u.idCardAddress),
+    licenseNo: u.licenseNo || "", // tour-guide licence — recorded via /api/jobsheet/license
+    // Stable supplier mapping. Its ABSENCE is what blocks sync — never fall back to
+    // resolving this guide by name at post time.
+    peakContactId: u.peakContactId || null,
+    peakContactCode: u.peakContactCode || null,
+    peakContactName: u.peakContactName || null,
   };
 }
 
@@ -58,8 +75,11 @@ export async function GET(req: NextRequest) {
     } catch { /* ref is best-effort; never block opening the sheet */ }
   }
 
-  // Whether this guide has checked in for the tour — gates the guide's no-show boxes.
-  const checkedIn = (await prisma.checkin.count({ where: { guideId, date, slotIdx } })) > 0;
+  // Check-ins for this tour. Fetched as rows (not a count) so the job timeline can
+  // show WHEN the guide arrived/started/completed; `checkedIn` is unchanged —
+  // "the guide has checked in" — and still gates the guide's no-show boxes.
+  const checkins = await prisma.checkin.findMany({ where: { guideId, date, slotIdx }, select: { type: true, at: true }, orderBy: { at: "asc" } });
+  const checkedIn = checkins.length > 0;
 
   // Paid state for this slot. Once the operator has uploaded the slip / marked it paid
   // (per-tour TourPayment, or the guide's whole-month payroll), the guide's summary
@@ -109,7 +129,7 @@ export async function GET(req: NextRequest) {
   // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true },
     orderBy: { createdAt: "asc" },
   });
   // Actual Pax on a live-scaffolded row: derived from the guide's no-show report —
@@ -144,6 +164,98 @@ export async function GET(req: NextRequest) {
     guideFee: sheet.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? sheet.guideFee : DEFAULT_GUIDE_FEE,
   });
 
+  // ── Job meta + timeline ────────────────────────────────────────────────────
+  // Everything below is READ-ONLY presentation assembled from records that already
+  // exist. Nothing is invented: an event appears only when its row/timestamp is
+  // really there, so an empty timeline means nothing happened, not "not implemented".
+  // Operator-only: the guide's view renders neither the timeline nor the header
+  // meta, so a guide's page load must not pay for these queries at all.
+  type AuditRow = { action: string; actorId: string | null; createdAt: Date };
+  const [report, auditRows, operatorUser] = isOps
+    ? await Promise.all([
+      prisma.tourReport.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { submittedAt: true, noShow: true, leftEarly: true } }),
+      existing ? prisma.auditLog.findMany({ where: { entityType: "JobSheet", entityId: existing.id }, select: { action: true, actorId: true, createdAt: true }, orderBy: { createdAt: "asc" }, take: 60 }) : Promise.resolve([] as AuditRow[]),
+      existing?.createdById ? prisma.user.findUnique({ where: { id: existing.createdById }, select: { displayName: true } }) : Promise.resolve(null),
+    ])
+    : [null, [] as AuditRow[], null];
+  const actorIds = [...new Set(auditRows.map((r) => r.actorId).filter((x): x is string => !!x))];
+  const actors = actorIds.length ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
+  const actorName = (id: string | null) => (id ? actors.find((u) => u.id === id)?.displayName ?? null : null);
+
+  // Audit actions worth showing on a job's own timeline, in the operator's words.
+  const AUDIT_LABELS: Record<string, string> = {
+    "jobsheet.saved": "Job sheet saved",
+    "jobsheet.imported": "Job sheet imported",
+    "jobsheet.guide_expenses": "Guide submitted expenses",
+    "jobsheet.receipt_uploaded": "Receipt attached",
+    "jobsheet.receipt_removed": "Receipt removed",
+    "jobsheet.drive_saved": "Saved to Drive",
+    "jobsheet.drive_saved_pdf": "PDF saved to Drive",
+    "jobsheet.attendance_synced": "Attendance synced",
+  };
+  const CHECKIN_LABELS: Record<string, string> = { ARRIVE: "Guide arrived at meeting point", START: "Tour started", COMPLETE: "Tour completed" };
+  const ev: { at: string; label: string; by?: string | null }[] = [];
+  const push = (at: Date | string | null | undefined, label: string, by?: string | null) => { if (at) ev.push({ at: new Date(at).toISOString(), label, by: by ?? null }); };
+  push(assignment?.createdAt, "Guide assigned");
+  push(existing?.createdAt, "Job sheet created", operatorUser?.displayName ?? null);
+  for (const c of checkins) push(c.at, CHECKIN_LABELS[c.type] ?? `Check-in: ${c.type}`);
+  push(report?.submittedAt, `End-of-tour report submitted${report && (report.noShow || report.leftEarly) ? ` · ${report.noShow} no-show, ${report.leftEarly} left early` : ""}`);
+  push(existing?.guideExpensesAt, "Guide expense report received");
+  push(existing?.approvedAt, "Expenses approved");
+  push(payment.paidAt, "Payment recorded");
+  for (const r of auditRows) { const l = AUDIT_LABELS[r.action]; if (l) push(r.createdAt, l, actorName(r.actorId)); }
+  const history = isOps ? ev.sort((a, b) => a.at.localeCompare(b.at)) : [];
+
+  // Header facts that live outside the sheet JSON. `ota` is the booking channel
+  // (bokun/gyg/viator/manual) of this job's guests; `lead` is the first guest —
+  // the booking the operator calls about. Both derived, nothing stored.
+  // PEAK readiness for this sheet. Pure computation over data already loaded —
+  // no PEAK call, nothing posted. `accounts` is config, `peak` is the verdict the
+  // sidebar renders and the Sync action would gate on.
+  const accounts = peakAccountMap();
+  const peak = !isOps ? null : (() => {
+    const exps = ((existing?.expenses as Expense[]) ?? defaultExpenses) as Expense[];
+    const gf = ((existing?.guideFee && Object.keys(existing.guideFee as object).length ? existing.guideFee : DEFAULT_GUIDE_FEE) as unknown) as GuideFee;
+    const dates = defaultAccountingDates(date, existing ?? undefined);
+    const state = {
+      peakSyncStatus: existing?.peakSyncStatus ?? null,
+      peakDocumentId: existing?.peakDocumentId ?? null,
+      peakDocumentNo: existing?.peakDocumentNo ?? null,
+      syncedAt: existing?.syncedAt ?? null,
+      syncError: existing?.syncError ?? null,
+      lastPayloadHash: existing?.lastPayloadHash ?? null,
+    };
+    const eligibility = peakSyncEligibility({
+      expenses: exps, guideFee: gf, approved: isApproved(existing?.approvalStatus),
+      peakContactId: header?.peakContactId, accountingDate: dates.accountingDate,
+      accounts, jobRef: existing?.ref, bookings: (existing?.bookings as Booking[]) ?? [], state,
+    });
+    return {
+      ...state,
+      ...dates,
+      paymentDate: existing?.paymentDate ?? null,
+      accountsConfigured: Object.keys(accounts).length > 0,
+      rowsReady: expenseRowsReady(exps, accounts), // the expense TABLE only — not the whole sheet
+      contactMapped: !!header?.peakContactId,
+      eligibility,
+      // Per-row disposition so the table can label each line without duplicating
+      // the rules on the client.
+      // Indexed to match sheet.expenses so the client can look up rows[i] directly.
+      // Review rewards are guide compensation, not tour cost — they are never mapped
+      // to an expense account, so they carry NULL rather than a meaningless
+      // "UNMAPPED / BLOCKED" that a later caller could wrongly count as a blocker.
+      rows: exps.map((e) => (isReviewExpense(e) ? null : { mappingStatus: expenseMappingStatus(e, accounts), disposition: expenseDisposition(e, accounts) })),
+    };
+  })();
+
+  const jobMeta = !isOps ? null : {
+    operator: operatorUser?.displayName ?? null,
+    ota: [...new Set(linked.map((b) => b.source).filter(Boolean))].join(" · ") || null,
+    lead: linked[0]?.customerName ?? null,
+    leadRef: linked[0] ? bookingRef(linked[0].externalRef, linked[0].confirmationCode) : null,
+    meetingPoint: tour?.meetingPoint ?? null,
+  };
+
   // Saved sheet: keep it live. Surface any booking that arrived AFTER it was saved
   // (e.g. a late add), so the assigned job always reflects the real guest list —
   // while keeping the operator's edits to the rows already on the sheet.
@@ -153,7 +265,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -208,7 +320,7 @@ export async function GET(req: NextRequest) {
       .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -217,38 +329,11 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, checkedIn, payment, advance,
+    header, tour, saved: false, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
 
-// Numeric fields are .nullish() (null OR undefined -> null): imported/edge sheets can
-// store gaps, and JSON.stringify drops undefined keys on re-save, so requiring a
-// present number would reject an otherwise-valid save. Strings/extra keys are lenient.
-const num = z.number().nullish().transform((v) => v ?? null);
-const numOpt = z.number().nullable().optional(); // present → number|null; absent → omitted (not stored)
-const bookingZ = z.object({ name: z.string().max(200).optional().default(""), bookingNo: z.string().max(120).optional().default(""), bookedPax: num, actualPax: num, tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
-// Expense rows: description/price/pax are the billed reimbursement; the rest are
-// OPTIONAL finance metadata kept verbatim in the JSON. zod strips unknown keys, so a
-// field MUST be listed here to survive a save — this is why `unit` used to vanish.
-const expenseZ = z.object({
-  description: z.string().max(160).optional().default(""), price: num, pax: num,
-  unit: z.string().max(24).optional(),
-  expenseType: z.string().max(40).optional(),
-  paidBy: z.string().max(24).optional(),
-  reimbursementRequired: z.boolean().optional(),
-  estimatedAmount: numOpt,
-  actualAmount: numOpt,
-  receiptUrl: z.string().max(2000).optional(),
-  receiptFileId: z.string().max(200).optional(),
-  receiptName: z.string().max(200).optional(),
-  receiptAt: z.string().max(40).optional(),
-  receiptBy: z.string().max(60).optional(),
-  notes: z.string().max(500).optional(),
-  relatedBookingNo: z.string().max(60).optional(),
-  relatedJobRef: z.string().max(60).optional(),
-});
-const guideFeeZ = z.object({ price: num, time: num, whtPct: num }).nullish().transform((v) => v ?? { price: null, time: null, whtPct: null });
 
 // PUT — operator only. Upserts the sheet; assigns a FOLK-BKK-… ref on first save.
 export async function PUT(req: NextRequest) {

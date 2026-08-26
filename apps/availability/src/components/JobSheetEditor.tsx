@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, expenseAmount, fillDownExpensePax, guidePersonalTotal, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
+import { canonicalPaidBy, figuresNeedRecheck, jobSheetTotals } from "@/lib/peak-sync";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -11,8 +12,22 @@ import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
-type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string } | null;
-type Tour = { id: string; name: string; time: string; durationMin?: number | null } | null;
+type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string; licenseNo?: string; peakContactId?: string | null; peakContactCode?: string | null; peakContactName?: string | null } | null;
+type Tour = { id: string; name: string; time: string; durationMin?: number | null; meetingPoint?: string | null } | null;
+// Read-only job facts assembled server-side from records that already exist.
+type JobMeta = { operator: string | null; ota: string | null; lead: string | null; leadRef: string | null; meetingPoint: string | null } | null;
+type HistoryEvent = { at: string; label: string; by?: string | null };
+// PEAK readiness, computed server-side (lib/peak-sync). Read-only here: this screen
+// never posts to PEAK and never invents a document number.
+type PeakRow = null | { mappingStatus: "READY" | "NEEDS_REVIEW" | "UNMAPPED"; disposition: "SYNC" | "ALREADY_RECORDED" | "BLOCKED" };
+type PeakInfo = {
+  peakSyncStatus: string | null; peakDocumentId: string | null; peakDocumentNo: string | null;
+  syncedAt: string | null; syncError: string | null; lastPayloadHash: string | null;
+  accountingDate: string | null; documentDate: string | null; paymentDate: string | null;
+  accountsConfigured: boolean; contactMapped: boolean; rowsReady: boolean;
+  eligibility: { status: "NOT_READY" | "READY" | "SYNCING" | "SYNCED" | "FAILED" | "BLOCKED"; canSync: boolean; reasons: string[]; changedSinceSync: boolean };
+  rows: PeakRow[];
+} | null;
 
 // Google Calendar "add event" link — opens a pre-filled event the guide saves
 // in one tap (Google then sends its own reminders). Bangkok time → UTC.
@@ -74,6 +89,11 @@ export default function JobSheetEditor() {
   const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null });
   const [advBusy, setAdvBusy] = useState(false);
   const [showCross, setShowCross] = useState(false); // expand the cross-check again after approval
+  const [jobMeta, setJobMeta] = useState<JobMeta>(null); // operator / OTA / lead guest / meeting point
+  const [history, setHistory] = useState<HistoryEvent[]>([]); // real recorded events only
+  const [histTab, setHistTab] = useState<"timeline" | "files">("timeline");
+  const [peak, setPeak] = useState<PeakInfo>(null);
+  const [contactEdit, setContactEdit] = useState<string | null>(null); // inline PEAK-contact mapping
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -81,6 +101,7 @@ export default function JobSheetEditor() {
     const d = await r.json();
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null);
     setAdvance(d.advance ?? { advances: [], returns: [] });
+    setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
     // expense lines (with prices) as a starting template to fill in.
     const s = d.sheet as Sheet;
@@ -119,6 +140,14 @@ export default function JobSheetEditor() {
   // Cost view: tour operating rows, plus a review reward only when it belongs to
   // THIS job (lib/jobsheet) — a carried-over reward is payment, not job cost.
   const cost = jobCostBreakdown(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
+  // Every figure the Summary shows, derived once (lib/peak-sync). Net Pay excludes
+  // Company Direct rows — the company already paid those vendors directly, so
+  // reimbursing them would pay for the same thing twice.
+  const money = jobSheetTotals(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
+  // Which figures are not yet safe to pay from, and why. Marked AT the number as
+  // well as listed, so nobody reads a total without seeing that it is provisional.
+  const recheck = figuresNeedRecheck(sheet.expenses, money);
+  const flagged = (f: "totalTourExpenses" | "reimbursementDue" | "netPayToGuide") => recheck.some((r) => r.field === f);
   const ro = !canEdit; // read-only (guide view)
   // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
   // tour start (that's when who turned up is known). Operators can mark any time.
@@ -324,6 +353,25 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg(d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
     setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt } : s);
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
+  }
+
+  // Operator: record (or clear) the guide's PEAK Contact id. This is the mapping
+  // whose absence blocks every sync, so it is editable right where that block is
+  // reported rather than on a separate admin screen. Writes to the guide's profile,
+  // not to this sheet — one guide, one contact, reused by every job.
+  async function savePeakContact(value: string) {
+    if (!sheet) return;
+    setBusy(true); setMsg(value.trim() ? "Mapping guide to PEAK…" : "Clearing mapping…");
+    const r = await fetch("/api/jobsheet/peak-contact", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: sheet.guideId, peakContactId: value.trim() }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg(d.error === "no-guide" ? "Guide not found." : d.error === "forbidden" ? "Operator only." : "Couldn't save the mapping."); return; }
+    setContactEdit(null);
+    setMsg(d.peakContactId ? "Guide mapped to PEAK contact ✓" : "PEAK contact mapping cleared");
+    load(); // re-evaluates sync eligibility server-side
   }
 
   // Operator: attach / detach a supporting receipt on ONE expense line. Auto-saves
@@ -608,12 +656,26 @@ export default function JobSheetEditor() {
           </tbody></table>
         </div>
 
-        {/* Guide / tour block (auto-filled from profile) */}
+        {/* Job header — the facts an operator needs before reading any money.
+            Every field below is existing data: the sheet, the guide's profile, the
+            tour record, or this job's bookings (jobMeta, assembled server-side).
+            The guide's PII rows stay — the printed sheet is an accounting document. */}
         <div className="js-guide">
           <div><span>Tour Date <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>วันที่นำเที่ยว</small></span><b>{date}</b></div>
           <div><span>Time <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>เวลาเริ่มทัวร์</small></span><b style={{ color: "var(--primary)" }}>{SLOT_TIMES[sheet.slotIdx] ?? tour?.time ?? ""}</b></div>
           <div><span>Tour Name <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ชื่อรายการนำเที่ยว</small></span><b style={{ color: "var(--primary)" }}>{tour?.name || ""}</b></div>
+          <div><span>Pax <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>จำนวนผู้เดินทาง</small></span><b>{sum("actualPax") || sum("bookedPax") || "—"}</b></div>
+          {/* .js-guide is a 4-column grid whose rows use display:contents, so every
+              CHILD of this div is a grid item — a label and exactly one value. An
+              extra element here (e.g. a separate span for the channel) adds a third
+              item and shifts every following label/value pair by one cell, which
+              desyncs the whole header. Keep the value a single node. */}
+          <div><span>Booking Ref. / OTA <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>เลขที่การจอง / ช่องทาง</small></span><b style={{ fontWeight: 400 }}>{`${jobMeta?.leadRef || sheet.bookings[0]?.bookingNo || "—"}${jobMeta?.ota ? ` · ${jobMeta.ota}` : ""}`}</b></div>
+          <div><span>Customer Lead <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ชื่อผู้จองหลัก</small></span>{jobMeta?.lead || sheet.bookings[0]?.name || "—"}</div>
+          <div><span>Meeting Point <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>จุดนัดพบ</small></span>{jobMeta?.meetingPoint || tour?.meetingPoint || "—"}</div>
+          <div><span>Operator <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ผู้จัดงาน</small></span>{jobMeta?.operator || "—"}</div>
           <div><span>Guide Name <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ชื่อมัคคุเทศก์</small></span>{header?.name || ""}</div>
+          <div><span>Guide License ID <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>เลขที่ใบอนุญาตมัคคุเทศก์</small></span>{header?.licenseNo || "—"}</div>
           <div><span>Tax ID <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>เลขประจำตัวผู้เสียภาษี</small></span>{header?.taxId || "—"}</div>
           <div><span>Address <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ที่อยู่</small></span>{header?.address || "—"}</div>
           <div><span>E-mail <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>อีเมล</small></span>{header?.email || ""}</div>
@@ -648,44 +710,145 @@ export default function JobSheetEditor() {
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
         </div>
 
-        {/* Expenses */}
+        {/* TOUR EXPENSES — company cost in this job. Accounting mapping keys off
+            the CATEGORY (lib/jobsheet), never the description. */}
         <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
-        <h3 className="js-section" style={{ background: "#fff8c4" }}>Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small></h3>
-        <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Unit Price" th="ราคาต่อหน่วย" /></th><th></th><th><TH en="Qty" th="จำนวน" /></th><th><TH en="Unit" th="หน่วย" /></th><th><TH en="Amount" th="จำนวนเงิน" /></th><th className="no-print" title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid by" th="แหล่งเงินที่ใช้ชำระ" /></th><th className="no-print"><TH en="Document" th="หลักฐานประกอบค่าใช้จ่าย" /></th><th className="no-print" /></tr></thead>
+        <h3 className="js-section" style={{ background: "#fff8c4" }}>TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small><span className="js-sub">Company cost in this job</span></h3>
+        <table className="js-table js-exp-table">
+          <thead><tr>
+            <th style={{ width: 26 }}>#</th>
+            <th style={{ width: 132 }}><TH en="Expense Category" th="ประเภทค่าใช้จ่าย" /></th>
+            <th><TH en="Description" th="รายการ" /></th>
+            <th className="no-print" style={{ width: 106 }} title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid By" th="แหล่งเงินที่ใช้ชำระ" /></th>
+            <th className="no-print" style={{ width: 84 }}><TH en="Receipt" th="หลักฐาน" /></th>
+            <th style={{ width: 152, textAlign: "right" }}><TH en="Amount (THB)" th="จำนวนเงิน" /></th>
+            <th style={{ width: 62 }}><TH en="VAT" th="ภาษีมูลค่าเพิ่ม" /></th>
+            <th style={{ width: 62 }}><TH en="WHT" th="หัก ณ ที่จ่าย" /></th>
+            <th className="no-print" style={{ width: 92 }}><TH en="Account Status" th="สถานะบัญชี" /></th>
+            <th className="no-print" style={{ width: 34 }}><TH en="Actions" th="จัดการ" /></th>
+          </tr></thead>
           <tbody>
-            {sheet.expenses.map((e, i) => ({ e, i })).filter(({ e }) => !isReviewExpense(e)).map(({ e, i }) => (
+            {sheet.expenses.map((e, i) => ({ e, i })).filter(({ e }) => !isReviewExpense(e)).map(({ e, i }, n) => {
+              // Server-computed status for this row when available (it knows which
+              // PEAK accounts are configured); the local rule is the fallback.
+              const pr = peak?.rows?.[i];
+              const acct = pr?.mappingStatus ?? (expenseAccountingStatus(e) === "READY" ? "READY" : "NEEDS_REVIEW");
+              const already = pr?.disposition === "ALREADY_RECORDED" || !!e.alreadyRecordedInPeak;
+              const paid = canonicalPaidBy(e);
+              return (
               <tr key={i}>
+                <td style={{ color: "var(--ink-soft)" }}>{n + 1}</td>
+                <td>
+                  {ro ? expenseCategoryLabel(e) : (
+                    <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(expenseCategory(e) ? {} : { color: "var(--ink-soft)" }) }}
+                      value={expenseCategory(e) ?? ""} onChange={(ev) => setExpense(i, { expenseType: ev.target.value })}
+                      title="The stable category this expense is booked under. Accounting maps on THIS, not on the description.">
+                      <option value="">— choose —</option>
+                      {EXPENSE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+                  )}
+                </td>
                 <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
-                <td><input style={{ ...L, width: 70 }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} /></td>
-                <td style={{ textAlign: "center" }}>×</td>
-                <td><input style={{ ...L, width: 54 }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></td>
-                <td><select style={{ ...L, width: 54, appearance: "none", WebkitAppearance: "none", MozAppearance: "none", textAlign: "center", backgroundImage: "none", cursor: "pointer" }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })} title="เลือกหน่วย">{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select></td>
-                <td style={{ textAlign: "right" }}>{thb(expenseAmount(e))}</td>
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /
-                      "operator") read as Company. "Guide Advance" rows feed the settlement. */}
-                  <select style={{ ...L, width: 116, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(e.paidBy === "advance" ? { borderColor: "var(--primary)", fontWeight: 600 } : e.paidBy === "guide" ? { borderColor: "#b45309", fontWeight: 600 } : {}) }} value={e.paidBy === "advance" ? "advance" : e.paidBy === "guide" ? "guide" : "company"} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} = ${x.th}`).join(" · ")}>
+                      "operator") read as Company. "Guide Advance" rows feed the settlement.
+                      Deliberately NOT an input to the accounting category — who fronted the
+                      cash says nothing about what the cost is. */}
+                  {/* An untagged row now shows "— not set —" rather than defaulting the display to
+                      Company Direct. Who paid decides whether the guide is reimbursed, so
+                      guessing it silently either overpays or underpays a real person. */}
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} = ${x.th}`).join(" · ")}>
+                    {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
                     {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </td>
                 <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
                   {e.receiptUrl ? (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <a href={e.receiptUrl} target="_blank" rel="noopener noreferrer" title={e.receiptName || "View receipt"} style={{ fontSize: 12, fontWeight: 700, color: "var(--green,#2f7d4f)" }}>📎 View</a>
-                      <button type="button" className="btn sm danger" title="Remove receipt" onClick={() => removeReceipt(i)}>×</button>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <a href={e.receiptUrl} target="_blank" rel="noopener noreferrer" title={e.receiptName || "View receipt"} style={{ fontSize: 11.5, fontWeight: 700, color: "var(--green,#2f7d4f)", maxWidth: 78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.receiptName || "View"}</a>
+                      {canEdit && <button type="button" className="btn sm danger" title="Remove receipt" onClick={() => removeReceipt(i)}>×</button>}
                     </span>
-                  ) : (
+                  ) : canEdit ? (
                     <label className="btn sm" style={{ cursor: "pointer", margin: 0 }} title="Attach a receipt (image or PDF, max 10 MB)">
-                      📎 Add
+                      Attach
                       <input type="file" accept="image/*,application/pdf" hidden onChange={(ev) => { const f = ev.target.files?.[0]; ev.currentTarget.value = ""; if (f) uploadReceipt(i, f); }} />
                     </label>
+                  ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}
+                </td>
+                <td className="js-amt">
+                  {!ro && (
+                    <span className="js-amt-in no-print">
+                      <input style={{ ...L, width: 60, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} title="Unit price" />
+                      <span>×</span>
+                      <input style={{ ...L, width: 44, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} title="Quantity" />
+                      <select style={{ ...L, width: 50, appearance: "none", WebkitAppearance: "none", textAlign: "center", backgroundImage: "none", cursor: "pointer" }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })} title="เลือกหน่วย">{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+                    </span>
+                  )}
+                  <b>{thb(expenseAmount(e))}</b>
+                </td>
+                {/* VAT / WHT are presentation + future PEAK mapping only: they feed NO
+                    total here. The guide fee's 3% WHT is separate and stays on GuideFee. */}
+                <td>
+                  {ro ? (e.vat === "vat7" ? "VAT 7%" : "No VAT") : (
+                    <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={e.vat ?? "none"} onChange={(ev) => setExpense(i, { vat: ev.target.value })} title="Tour expenses carry no VAT by default — this does not change any total">
+                      <option value="none">No VAT</option><option value="vat7">VAT 7%</option>
+                    </select>
                   )}
                 </td>
-                <td className="no-print"><button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button></td>
+                <td>
+                  {ro ? (e.wht === "wht3" ? "WHT 3%" : "No WHT") : (
+                    <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={e.wht ?? "none"} onChange={(ev) => setExpense(i, { wht: ev.target.value })} title="Tour expenses carry no withholding tax by default — this does not change any total">
+                      <option value="none">No WHT</option><option value="wht3">WHT 3%</option>
+                    </select>
+                  )}
+                </td>
+                <td className="no-print">
+                  {/* Duplicate protection, settable only on COMPANY_DIRECT rows: a cost
+                      the guide fronted cannot already be in PEAK under a supplier's own
+                      invoice. Marking it keeps the row in this job's cost but excludes it
+                      from the payload, so it is never booked twice. The document number
+                      is required by peakSyncEligibility — "it's already in there" without
+                      saying where is an unverifiable claim that could hide a real expense. */}
+                  {already
+                    ? <span className="js-dupe">
+                        <span className="js-acct done" title="Counted as this job's cost, never posted to PEAK again">Already recorded</span>
+                        {canEdit && (
+                          <>
+                            <input value={e.sourceDocumentNo ?? ""} placeholder="Document no." title="Supplier invoice / receipt number this cost was booked under"
+                              onChange={(ev) => setExpense(i, { sourceDocumentNo: ev.target.value, sourceDocumentType: e.sourceDocumentType || "SUPPLIER_INVOICE" })} />
+                            <button type="button" className="btn sm ghost" title="This cost is not in PEAK yet — include it in the sync"
+                              onClick={() => setExpense(i, { alreadyRecordedInPeak: false, sourceDocumentNo: undefined, sourceDocumentType: undefined })}>Undo</button>
+                          </>
+                        )}
+                      </span>
+                    : acct === "READY"
+                      ? <span className="js-acct ok" title={`Maps to ${PEAK_SERVICE_COST_LABEL}`}>Ready to sync</span>
+                      : acct === "UNMAPPED"
+                        ? <span className="js-acct warn" title={expenseCategory(e) ? "No PEAK account is configured for this category yet" : "Choose an expense category so this line can be mapped to an account"}>{expenseCategory(e) ? "No account" : "Unmapped"}</span>
+                        : <span className="js-acct warn" title={paid === "UNSPECIFIED" ? "Set Paid By — it decides whether the guide is reimbursed for this line" : "Other Tour Cost is never auto-approved — confirm the accounting mapping for this line"}>Needs review</span>}
+                  {!already && canEdit && paid === "COMPANY_DIRECT" && (
+                    <button type="button" className="btn sm ghost js-dupe-mark" title="This cost is already in PEAK under a supplier invoice or receipt — keep it in the job's cost but never post it again"
+                      onClick={() => setExpense(i, { alreadyRecordedInPeak: true, sourceDocumentType: "SUPPLIER_INVOICE" })}>Already in PEAK</button>
+                  )}
+                </td>
+                <td className="no-print">{canEdit && <button className="btn sm danger" title="Remove this expense line" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button>}</td>
               </tr>
-            ))}
-            <tr className="js-total"><td colSpan={5} style={{ textAlign: "right" }}>Total Tour Expenses<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td><td style={{ textAlign: "right" }}><b>{thb(cost.tourExpenses)}</b></td><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+              );
+            })}
+            <tr className="js-total">
+              <td colSpan={5} style={{ textAlign: "right" }}>TOTAL TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td>
+              <td className="js-amt"><b>{thb(cost.tourExpenses)}</b></td>
+              <td colSpan={2} />
+              <td className="no-print">
+                {/* Reflects the expense ROWS only. A missing guide contact blocks the
+                    sheet but says nothing about this table — flagging it here would
+                    send the operator hunting through rows that are all correct. */}
+                {peak?.rowsReady
+                  ? <span className="js-acct ok" title={`Every expense line has an accepted account (${PEAK_SERVICE_COST_LABEL})`}>Ready to sync</span>
+                  : <span className="js-acct warn" title="One or more lines have no accepted accounting category yet">Needs review</span>}
+              </td>
+              <td className="no-print" />
+            </tr>
           </tbody>
         </table>
         {!ro && (() => {
@@ -778,19 +941,35 @@ export default function JobSheetEditor() {
         {/* Guide fee */}
         <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
         <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
-        <h3 className="js-section" style={{ background: "#f4d9c4" }}>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></h3>
-        <table className="js-table">
-          <thead><tr><th><TH en="Description" th="รายการ" /></th><th><TH en="Rate" th="อัตราค่าจ้าง" /></th><th></th><th><TH en="Qty" th="จำนวนครั้ง" /></th><th><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></th><th><TH en="WHT" th="ภาษีหัก ณ ที่จ่าย" /></th><th><TH en="Net Payable" th="ยอดจ่ายสุทธิ" /></th></tr></thead>
+        {/* GUIDE PAYMENT — the guide's earning for this job. Kept strictly out of
+            Tour Expenses: this is what the company OWES the guide, not what the tour
+            cost. Every figure comes from computeTotals (lib/jobsheet) — the same math
+            Payments pays on; nothing is recalculated here. */}
+        <h3 className="js-section" style={{ background: "#f4d9c4" }}>GUIDE PAYMENT<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small><span className="js-sub">Earning for this job</span></h3>
+        <table className="js-table js-pay-table">
           <tbody>
             <tr>
-              <td>Guide Fee<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าจ้างมัคคุเทศก์"}</small></td>
-              <td><input style={{ ...L, width: 100 }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, price: numOrNull(e.target.value) } })} /></td>
-              <td style={{ textAlign: "center" }}>×</td>
-              <td><input style={{ ...L, width: 60 }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, time: numOrNull(e.target.value) } })} /></td>
-              <td><input style={{ ...L, width: 60 }} type="number" value={sheet.guideFee.whtPct ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} /></td>
-              <td style={{ textAlign: "right" }}>{thb(t.wht)}</td>
-              <td style={{ textAlign: "right" }}><b>{thb(t.netGuideFee)}</b></td>
+              <td><TH en="Guide Fee (Agreed)" th="ค่าจ้างที่ตกลง" /></td>
+              <td className="js-amt">
+                {!ro && (
+                  <span className="js-amt-in no-print">
+                    <input style={{ ...L, width: 84, textAlign: "right" }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, price: numOrNull(e.target.value) } })} title="Agreed rate" />
+                    <span>×</span>
+                    <input style={{ ...L, width: 44, textAlign: "right" }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, time: numOrNull(e.target.value) } })} title="Number of times/days" />
+                  </span>
+                )}
+                <b>{thb(t.gross)}</b>
+              </td>
             </tr>
+            <tr>
+              <td><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></td>
+              <td className="js-amt">
+                {!ro && <span className="js-amt-in no-print"><input style={{ ...L, width: 52, textAlign: "right" }} type="number" value={sheet.guideFee.whtPct ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} title="Withholding tax rate on the guide fee — applies to the fee only, never to tour expenses" /></span>}
+                <b>{sheet.guideFee.whtPct ?? 0}%</b>
+              </td>
+            </tr>
+            <tr><td><TH en="WHT Amount" th="ภาษีหัก ณ ที่จ่าย" /></td><td className="js-amt"><b>{thb(t.wht)}</b></td></tr>
+            <tr className="js-total"><td><TH en="Net to Pay" th="ยอดจ่ายสุทธิ" /></td><td className="js-amt"><b>{thb(t.netGuideFee)}</b></td></tr>
           </tbody>
         </table>
 
@@ -802,11 +981,12 @@ export default function JobSheetEditor() {
           if (!rows.length && ro) return null;
           return (
             <div style={{ marginTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
-              <h3 className="js-section" style={{ background: "#efe7f3" }}>Additional Guide Payment<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายการจ่ายเพิ่มเติมให้มัคคุเทศก์"}</small></h3>
+              <h3 className="js-section" style={{ background: "#efe7f3" }}>Additional Guide Payment / Review Reward<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายการจ่ายเพิ่มเติมให้มัคคุเทศก์"}</small><span className="js-sub">Separate from tour expenses and the base guide fee</span></h3>
               <table className="js-table">
                 <thead><tr>
-                  <th style={{ textAlign: "left" }}><TH en="Description" th="รายการ" /></th>
-                  <th style={{ width: 170 }}><TH en="Booking No." th="เลขที่การจองที่รีวิว" /></th>
+                  <th style={{ textAlign: "left" }}><TH en="Payment Type" th="ประเภทการจ่าย" /></th>
+                  <th style={{ width: 150 }}><TH en="Related Job No." th="เลขที่การจองที่รีวิว" /></th>
+                  <th className="no-print" style={{ width: 180 }}><TH en="Note" th="หมายเหตุ" /></th>
                   <th style={{ width: 120, textAlign: "right" }}><TH en="Amount" th="จำนวนเงิน" /></th>
                   <th className="no-print" style={{ width: 34 }} />
                 </tr></thead>
@@ -815,8 +995,16 @@ export default function JobSheetEditor() {
                     const own = reviewBelongsToJob(e, sheet.ref, sheet.bookings);
                     return (
                       <tr key={i}>
-                        <td>{ro ? (e.description || "Review Reward") : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)" }}>ค่าตอบแทนรีวิว{own ? "" : " · จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้"}</small></td>
+                        {/* Payment Type is still stored as the row's description, and
+                            isReviewExpense() classifies a row by that text starting with
+                            "Review" (lib/jobsheet) — it decides payouts, the PDF and the
+                            guide's Pay screen. So a type that drops the prefix would move
+                            this row into Tour Expenses. Warn in place rather than silently
+                            reclassifying; giving these rows their own stored kind is a
+                            data migration, out of scope here. */}
+                        <td>{ro ? (e.description || "Review Reward") : <input style={{ ...L, ...(isReviewExpense(e) ? {} : { borderColor: "var(--danger)" }) }} value={e.description} title='Must start with "Review" (e.g. "Review reward") — this is what keeps the row in Additional Guide Payment instead of Tour Expenses.' onChange={(ev) => setExpense(i, { description: ev.target.value })} />}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)" }}>ค่าตอบแทนรีวิว{own ? "" : " · จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้"}</small></td>
                         <td>{ro ? (e.relatedBookingNo || e.relatedJobRef || "—") : <input style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedBookingNo ?? ""} placeholder="GYG… (เว้นว่าง = แขกงานนี้)" title="Booking no. of the guest who left the review — a booking on this job's guest list counts as this job's cost; any other booking is paid out here without inflating this job" onChange={(ev) => setExpense(i, { relatedBookingNo: ev.target.value })} />}</td>
+                        <td className="no-print">{ro ? (e.notes || "—") : <input style={L} value={e.notes ?? ""} placeholder="e.g. great review from customer" onChange={(ev) => setExpense(i, { notes: ev.target.value })} />}</td>
                         <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{ro ? thb(expenseAmount(e)) : <span style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}><input style={{ ...L, width: 58, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} />×<input style={{ ...L, width: 40, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></span>}</td>
                         <td className="no-print">{canEdit && <button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button>}</td>
                       </tr>
@@ -824,7 +1012,7 @@ export default function JobSheetEditor() {
                   })}
                   {rows.length > 0 && (
                     <tr className="js-total">
-                      <td colSpan={2} style={{ textAlign: "right" }}>Total Additional Payment<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมรายการจ่ายเพิ่มเติม"}</small></td>
+                      <td colSpan={3} style={{ textAlign: "right" }}>Total Additional Payment<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมรายการจ่ายเพิ่มเติม"}</small></td>
                       <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}><b>{thb(cost.reviewOwn + cost.reviewOther)}</b></td>
                       <td className="no-print" />
                     </tr>
@@ -840,14 +1028,7 @@ export default function JobSheetEditor() {
 
         </div>
 
-        {/* Internal operations note — operator-only, never shown to the guide */}
-        {canEdit && (
-          <div className="no-print" style={{ marginTop: 16, display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
-            <h3 className="js-section" style={{ background: "#eaf1ff" }}>Internal note</h3>
-            <textarea value={sheet.operatorNote ?? ""} maxLength={2000} onChange={(e) => up({ operatorNote: e.target.value })} rows={3} placeholder="e.g. Confirm van with supplier · guest paid deposit only" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, padding: "8px 10px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>Internal operations note — not shown to the guide. Remember to Save.</div>
-          </div>
-        )}
+
        </fieldset>
 
        {/* Advance / Settlement — money sent to the guide BEFORE the tour, the spend
@@ -961,18 +1142,77 @@ export default function JobSheetEditor() {
             cash movements, never added to totals. The Payments payout figure
             (expenses + net fee) is a different number and lives in Payments. */}
         {(() => {
-          const personal = guidePersonalTotal(sheet.expenses);
           return (
+        <>
         <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Financial Summary<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
-          <div><span>Tour Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว</small></span><b>{thb(cost.tourExpenses)}</b></div>
-          <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(t.gross)}</b></div>
-          {cost.reviewOwn > 0 && <div><span>Review Reward<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าตอบแทนรีวิว</small></span><b>{thb(cost.reviewOwn)}</b></div>}
-          <div><span>Withholding Tax<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(t.wht)}</b></div>
-          <div><span>Net Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>{thb(t.netGuideFee)}</b></div>
-          {personal > 0 && <div><span>Reimbursement Due<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: "#b45309" }}>{thb(personal)}</b></div>}
-          <div className="grand"><span>Total Job Expenses<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมค่าใช้จ่ายของงาน</small></span><b>{thb(cost.jobExpenses)}</b></div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>SUMMARY<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
+          {/* Company cost. Every figure is read from jobCostBreakdown/computeTotals —
+              the expense rows are summed ONCE, there (lib/jobsheet). A review reward
+              earned on ANOTHER job is paid out with this transfer but is deliberately
+              not part of this job's cost, so it sits outside the Total. */}
+          <div><span>Total Tour Expenses{flagged("totalTourExpenses") && <em className="js-recheck-tag">recheck</em>}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว (ต้นทุนบริษัท)</small></span><b>{thb(money.totalTourExpenses)}</b></div>
+          <div><span>Guide Fee (Agreed)<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์ที่ตกลง</small></span><b>{thb(money.guideFeeGross)}</b></div>
+          {money.additionalGuidePayment > 0 && <div><span>Additional Guide Payment<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รายการจ่ายเพิ่มเติม</small></span><b>{thb(money.additionalGuidePayment)}</b></div>}
+          <div><span>Withholding Tax<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ภาษีหัก ณ ที่จ่าย</small></span><b>{thb(money.wht)}</b></div>
+          <div><span>Reimbursement Due{flagged("reimbursementDue") && <em className="js-recheck-tag">recheck</em>}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: money.reimbursementDue > 0 ? "#b45309" : undefined }}>{thb(money.reimbursementDue)}</b></div>
+          {/* Company Direct is a real cost of the job but is NOT owed to the guide —
+              shown so the gap between the two totals below is self-explanatory. */}
+          {money.companyDirectTotal > 0 && <div className="js-sum-note"><span>…of which paid direct by company<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>บริษัทชำระโดยตรง (ไม่คืนให้มัคคุเทศก์)</small></span><b>{thb(money.companyDirectTotal)}</b></div>}
+          {money.unspecifiedTotal > 0 && <div className="js-sum-note"><span style={{ color: "var(--assign)" }}>…of which Paid By not set<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ยังไม่ระบุแหล่งเงิน — ยังไม่คืนให้มัคคุเทศก์</small></span><b style={{ color: "var(--assign)" }}>{thb(money.unspecifiedTotal)}</b></div>}
+          <div className="grand"><span>Total Company Cost (This Job)<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุนของงานนี้</small></span><b>{thb(money.totalCompanyCost)}</b></div>
+          {cost.reviewOther > 0 && <div className="js-sum-note"><span>Paid with this job, earned on another<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้</small></span><b>{thb(cost.reviewOther)}</b></div>}
         </div>
+
+        {/* What the guide actually receives, and where that payment stands. Kept
+            visually apart from company cost — they are different questions.
+            Net Pay to Guide is computeTotals().grandTotal, the exact figure Payments
+            transfers; it is never re-derived here. */}
+        <div className="js-netpay" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
+          <div className="js-netpay-main">
+            <span>Net Pay to Guide{flagged("netPayToGuide") && <em className="js-recheck-tag">recheck</em>}<small>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span>
+            <b>{thb(money.netPayToGuide)}</b>
+          </div>
+          <div className="js-netpay-status">
+            <span>Payment Status<small>สถานะการจ่ายเงิน</small></span>
+            {payment?.paid
+              ? <span className="badge active">✓ Paid{payment.paidAt ? ` · ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span>
+              : payment?.status === "APPROVED"
+                ? <span className="badge pending">Approved — not yet paid</span>
+                : <span className="badge muted">Pending</span>}
+          </div>
+          {/* Payments still transfers expenses + net fee, company-direct rows
+              included. Until that screen adopts this formula the two figures differ,
+              and hiding that would let someone pay the wrong amount believing the
+              sheet agreed with it. */}
+          {/* Everything that makes a figure above provisional, itemised. A quiet
+              one-liner was too easy to read past on a number someone is about to
+              transfer money against. */}
+          {recheck.length > 0 && (
+            <div className="js-recheck">
+              <div className="js-recheck-head">Recheck before paying<span>{recheck.length} thing{recheck.length === 1 ? "" : "s"} to confirm</span></div>
+              <ul>
+                {recheck.map((r, i) => (
+                  <li key={i}>
+                    <b>{r.short}{r.amount ? ` · ${thb(r.amount)}` : ""}</b>
+                    <span>{r.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Job notes — kept in the summary area where the money is read. Uses the
+            existing operatorNote field; editable only where the sheet is. */}
+        {(canEdit || (sheet.operatorNote ?? "").trim()) && (
+          <div className="js-notes no-print" style={{ marginTop: 12 }}>
+            <div className="js-notes-label">Notes<small>หมายเหตุ</small></div>
+            {canEdit
+              ? <textarea value={sheet.operatorNote ?? ""} maxLength={2000} onChange={(e) => up({ operatorNote: e.target.value })} rows={2} placeholder="Internal operations note — not shown to the guide" />
+              : <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{sheet.operatorNote}</div>}
+          </div>
+        )}
+        </>
           );
         })()}
        </div>
@@ -998,6 +1238,54 @@ export default function JobSheetEditor() {
            <div style={{ fontSize: 12.5, color: "var(--ink-soft,#666)", marginTop: 4 }}>{(() => { const d = fmtCertDate(certificationDate(sheet)); return d ? `วันที่ ${d}` : canEdit ? "date set on first save" : "\u2014"; })()}</div>
          </div>
        </div>
+       {/* HISTORY & FILES — everything here is a record that already exists:
+           timeline events come from the sheet/assignment/check-in/report/payment
+           timestamps and the audit log (assembled in /api/jobsheet); files are the
+           receipts, advance slips and payment slip already stored in Drive. Nothing
+           is synthesised, so an empty tab means nothing was recorded. */}
+       {canEdit && (
+       <div className="js-history no-print">
+         <h3 className="js-section" style={{ background: "#eef0f3" }}>HISTORY &amp; FILES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ประวัติและเอกสาร"}</small></h3>
+         <div className="subtabs" style={{ margin: "10px 0" }}>
+           {([["timeline", "Timeline"], ["files", "Files"]] as const).map(([k, l]) => (
+             <button key={k} type="button" className={`subtab${histTab === k ? " active" : ""}`} onClick={() => setHistTab(k)}>{l}</button>
+           ))}
+         </div>
+         {histTab === "timeline" ? (
+           history.length ? (
+             <ol className="js-timeline">
+               {history.map((h, i) => (
+                 <li key={i}>
+                   <span className="js-tl-at">{dtShort(h.at)}</span>
+                   <span className="js-tl-label">{h.label}</span>
+                   {h.by && <span className="js-tl-by">{h.by}</span>}
+                 </li>
+               ))}
+             </ol>
+           ) : <div className="op-empty" style={{ padding: 14 }}>No recorded events for this job yet.</div>
+         ) : (() => {
+           const files: { name: string; url: string; kind: string }[] = [];
+           sheet.expenses.forEach((e, i) => { if (e.receiptUrl) files.push({ name: e.receiptName || `Receipt ${i + 1}`, url: e.receiptUrl, kind: `Receipt · ${e.description || "expense"}` }); });
+           advance.advances.forEach((a) => { if (a.slipUrl) files.push({ name: `Advance slip · ${thb(a.amount)}`, url: a.slipUrl, kind: "Guide advance" }); });
+           advance.returns.forEach((a) => { if (a.slipUrl) files.push({ name: `Return slip · ${thb(a.amount)}`, url: a.slipUrl, kind: "Advance return" }); });
+           if (payment?.slip) files.push({ name: "Payment slip", url: payment.slip, kind: "Guide payment" });
+           return files.length ? (
+             <table className="js-table">
+               <thead><tr><th><TH en="File" th="เอกสาร" /></th><th style={{ width: 220 }}><TH en="Type" th="ประเภท" /></th><th style={{ width: 70 }} /></tr></thead>
+               <tbody>
+                 {files.map((f, i) => (
+                   <tr key={i}>
+                     <td style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</td>
+                     <td style={{ color: "var(--ink-soft)" }}>{f.kind}</td>
+                     <td><a className="btn sm" href={f.url} target="_blank" rel="noopener noreferrer">Open</a></td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+           ) : <div className="op-empty" style={{ padding: 14 }}>No files attached to this job yet.</div>;
+         })()}
+       </div>
+       )}
       </section>
 
       {/* Finance / accounting side panel — operator-only snapshot of where this job
@@ -1044,9 +1332,78 @@ export default function JobSheetEditor() {
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
-            {payment?.peakRef
-              ? <div style={{ marginTop: 4, fontFamily: "monospace", fontSize: 12.5, fontWeight: 700 }}>{payment.peakRef}</div>
-              : <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>No expense ref yet — recorded when the payout is posted (Payments).</div>}
+            {/* Read-only mirror of the ref recorded on Payments. This screen never
+                creates a PEAK expense and never invents a number: no ref means no
+                ref. There is no "last sync" line because nothing syncs yet — the
+                app has no field for it, and a timestamp we cannot source would be
+                a fabrication. */}
+            <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>PEAK Expense</div>
+            {(() => {
+              const el = peak?.eligibility;
+              const docNo = peak?.peakDocumentNo || payment?.peakRef;
+              // Synced: show the real document number and when. Never a generated one.
+              if (docNo) return (
+                <>
+                  <div style={{ marginTop: 2, fontFamily: "monospace", fontSize: 12.5, fontWeight: 700 }}>{docNo}</div>
+                  {peak?.syncedAt && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)" }}>Synced {new Date(peak.syncedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</div>}
+                  {!peak?.syncedAt && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)" }}>Recorded manually on Payments.</div>}
+                  {el?.changedSinceSync && (
+                    <div className="js-sync-warn">
+                      <b>Accounting data changed after PEAK sync</b>
+                      <span>Review the changes and update PEAK deliberately — nothing is re-posted automatically.</span>
+                    </div>
+                  )}
+                </>
+              );
+              if (el?.status === "FAILED") return (
+                <>
+                  <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>Sync failed</div>
+                  {peak?.syncError && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>{peak.syncError}</div>}
+                </>
+              );
+              if (el?.status === "SYNCING") return <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700 }}>Syncing…</div>;
+              if (el?.status === "READY") return (
+                <>
+                  <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--green)" }}>Ready to sync</div>
+                  <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Posting is not enabled yet — the ref is recorded on Payments.</div>
+                </>
+              );
+              // Not ready / blocked: say exactly what to fix, not just that it failed.
+              return (
+                <>
+                  <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700 }}>Not ready</div>
+                  {el?.reasons?.length ? (
+                    <ul className="js-sync-reasons">{el.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                  ) : <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)" }}>Recorded on Payments once the payout is posted.</div>}
+                </>
+              );
+            })()}
+            {peak && !peak.accountsConfigured && (
+              <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>No PEAK expense account is configured (PEAK_ACCT_EXPENSES), so no row can be mapped yet.</div>
+            )}
+            {/* The blocking reason is actionable right here. Shown whenever the
+                mapping is missing, and reachable via "Change" once it is set. */}
+            {peak && (contactEdit !== null || !peak.contactMapped) ? (
+              <div className="js-contact-map">
+                <label htmlFor="peakContact">PEAK Contact ID</label>
+                <input id="peakContact" value={contactEdit ?? ""} placeholder="e.g. 1a2b3c4d…" autoComplete="off"
+                  onChange={(ev) => setContactEdit(ev.target.value)}
+                  onKeyDown={(ev) => { if (ev.key === "Enter") savePeakContact(contactEdit ?? ""); if (ev.key === "Escape") setContactEdit(null); }} />
+                <div className="row" style={{ marginTop: 5 }}>
+                  <button className="btn sm primary" disabled={busy} onClick={() => savePeakContact(contactEdit ?? "")}>Save</button>
+                  {peak.contactMapped && <button className="btn sm ghost" disabled={busy} onClick={() => setContactEdit(null)}>Cancel</button>}
+                </div>
+                <div className="hint">The guide&apos;s supplier record in PEAK. Stored on their profile and reused by every job — never matched by name.</div>
+              </div>
+            ) : peak?.contactMapped ? (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--ink-soft)" }}>
+                Guide mapped to PEAK contact{header?.peakContactName ? ` · ${header.peakContactName}` : ""}
+                {canEdit && <button className="btn sm ghost" style={{ marginLeft: 6, padding: "1px 6px" }} onClick={() => setContactEdit(header?.peakContactId ?? "")}>Change</button>}
+              </div>
+            ) : null}
+            {peak?.accountingDate && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--ink-soft)" }}>Accounting date <b style={{ color: "var(--ink)" }}>{peak.accountingDate}</b>{peak.accountingDate === sheet.date ? " (tour date)" : ""}</div>
+            )}
           </div>
 
           <a className="btn sm" href="/payments" style={{ display: "inline-block" }}>Open Payments</a>

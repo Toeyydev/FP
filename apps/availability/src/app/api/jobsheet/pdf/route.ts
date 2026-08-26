@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -120,13 +120,16 @@ export async function GET(req: NextRequest) {
   // Paid-by (แหล่งเงินที่ใช้ชำระ): compact read-only labels — Company / Advance /
   // Guide are the sanctioned short forms; never truncated composites.
   const paidByShort = (v?: string) => (v === "advance" ? "Advance" : v === "guide" ? "Guide" : "Company");
-  const expRow = (desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
-    ? `<tr data-exp><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
-    : `<tr><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
+  const expRow = (cat: string, desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
+    ? `<tr data-exp><td>${cat}</td><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
+    : `<tr><td>${cat}</td><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
   // Review-reward rows are guide compensation — rendered with the Guide Fee
   // section, never inside Tour Expenses (presentation only; data unchanged).
-  let expenseRows = expenses.filter((e) => !isReviewExpense(e)).map((e) => expRow(esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
-  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "", "");
+  // An uncategorised row prints "—", never a guessed category: the printed sheet
+  // must show exactly what is stored (see expenseCategory in lib/jobsheet).
+  const catShort = (e: Expense) => (expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—");
+  let expenseRows = expenses.filter((e) => !isReviewExpense(e)).map((e) => expRow(catShort(e), esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
+  if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "", "", "");
 
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${esc(ref)}</title>
@@ -234,9 +237,9 @@ export async function GET(req: NextRequest) {
 
     <h3 class="exp">Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></h3>
     <table>
-      <thead><tr><th>Description<small>รายการ</small></th><th class="n">Unit Price<small>ราคาต่อหน่วย</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th><th class="c">Paid by<small>แหล่งเงินที่ใช้ชำระ</small></th></tr></thead>
+      <thead><tr><th style="width:104px">Expense Category<small>ประเภทค่าใช้จ่าย</small></th><th>Description<small>รายการ</small></th><th class="n">Unit Price<small>ราคาต่อหน่วย</small></th><th class="c"></th><th class="n">Qty<small>จำนวน</small></th><th class="c">Unit<small>หน่วย</small></th><th class="n">Amount<small>จำนวนเงิน</small></th><th class="c">Paid by<small>แหล่งเงินที่ใช้ชำระ</small></th></tr></thead>
       <tbody>${expenseRows}
-        <tr class="tot"><td colspan="4" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(cost.tourExpenses)}</td><td></td></tr>
+        <tr class="tot"><td colspan="6" style="text-align:right">Total Tour Expenses <small>รวมค่าใช้จ่ายในการนำเที่ยว</small></td><td class="n" id="expTot">${thb(cost.tourExpenses)}</td><td></td></tr>
       </tbody>
     </table>
 

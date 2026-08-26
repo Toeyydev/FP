@@ -40,6 +40,27 @@ export type Expense = {
   receiptAt?: string; // ISO timestamp the receipt was attached
   receiptBy?: string; // User.id who attached it
   notes?: string;
+  // Tax presentation for the accounting export. Tour expenses are NOT taxed like the
+  // guide fee: these are display/mapping metadata that deliberately feed NO total —
+  // computeTotals still bills price × pax, and the guide fee's WHT stays in GuideFee.
+  // Unset reads as "No VAT" / "No WHT", which is the case for every row today.
+  vat?: string; // "none" | "vat7"
+  wht?: string; // "none" | "wht3"
+  // PEAK account mapping. Resolved from the CATEGORY through configuration and
+  // recorded here once chosen, so a posted row keeps the account it was booked to
+  // even if the category→account map is later re-pointed. Never inferred from the
+  // description. See lib/peak-sync for the status rules.
+  peakAccountCode?: string | null;
+  peakAccountId?: string | null;
+  peakAccountName?: string | null;
+  mappingStatus?: string; // "READY" | "NEEDS_REVIEW" | "UNMAPPED" — derived; stored only when an operator overrides
+  // Duplicate protection for company-direct costs that already reached PEAK by
+  // their own supplier invoice or receipt. Such a row stays in this job's cost
+  // reporting but is excluded from the expense payload, so it is never booked twice.
+  sourceDocumentType?: string; // "JOB_SHEET" | "SUPPLIER_INVOICE" | "RECEIPT" | "OTHER"
+  sourceDocumentNo?: string;
+  peakExistingDocumentId?: string | null;
+  alreadyRecordedInPeak?: boolean;
   // Review-reward rows only: the BOOKING the review came from (GYG ref etc.).
   // Empty = a guest of this job; a booking no. on this sheet's guest list =
   // earned here; any other booking no. = reward earned on an earlier job,
@@ -50,14 +71,16 @@ export type Expense = {
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
 // The standard items that appear on every new sheet (prices editable per job).
+// Categories are set HERE, at the source, because these are known company items —
+// never inferred from the description at read time (see expenseCategory).
 export const DEFAULT_EXPENSES: Expense[] = [
-  { description: "Water (Inc. Guide)", price: 10, pax: null },
-  { description: "Ferry (Inc. Guide)", price: null, pax: null, unit: "เที่ยว" },
-  { description: "Grand Palace", price: 500, pax: null },
-  { description: "Wat Pho", price: 300, pax: null },
-  { description: "Wat Arun", price: 200, pax: null },
-  { description: "Lotus (Inc. Guide)", price: 10, pax: null },
-  { description: "Bus (Inc. Guide)", price: 15, pax: null },
+  { description: "Water (Inc. Guide)", price: 10, pax: null, expenseType: "meal" },
+  { description: "Ferry (Inc. Guide)", price: null, pax: null, unit: "เที่ยว", expenseType: "transport" },
+  { description: "Grand Palace", price: 500, pax: null, expenseType: "entrance" },
+  { description: "Wat Pho", price: 300, pax: null, expenseType: "entrance" },
+  { description: "Wat Arun", price: 200, pax: null, expenseType: "entrance" },
+  { description: "Lotus (Inc. Guide)", price: 10, pax: null, expenseType: "other" },
+  { description: "Bus (Inc. Guide)", price: 15, pax: null, expenseType: "transport" },
 ];
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
 
@@ -177,6 +200,62 @@ export function jobCostBreakdown(expenses: Expense[], guideFee: GuideFee, jobRef
   const tourExpenses = tourOperatingExpenses(expenses);
   return { ...t, tourExpenses, reviewOwn, reviewOther, jobExpenses: tourExpenses + reviewOwn + t.gross };
 }
+// ── Tour-expense categories (accounting mapping) ─────────────────────────────
+// The STORED key is Expense.expenseType — the short keys this app has always
+// written. They stay the storage format, so no existing sheet needs migrating.
+// `code` is the stable accounting identifier the business/spec uses when talking
+// about a category outside the app; `label` is display only.
+//
+// Rule: an expense is mapped to an account by its CATEGORY KEY, never by its
+// description. Descriptions are free text an operator retypes per job — using one
+// as an accounting key silently misfiles the expense the first time it changes.
+//
+// All four categories are expected to land on the same PEAK account group
+// (ต้นทุนการให้บริการ), but they stay separate here for operational reporting.
+// No PEAK account code is hard-coded: there is no account-mapping mechanism yet,
+// and inventing one now would be a guess (see PEAK_SERVICE_COST_LABEL).
+export type ExpenseCategoryKey = "entrance" | "transport" | "meal" | "other";
+export const EXPENSE_CATEGORIES = [
+  { key: "entrance", code: "ENTRANCE_TICKET", label: "Entrance Ticket", th: "ค่าบัตรเข้าชม" },
+  { key: "transport", code: "TRANSPORTATION", label: "Transportation", th: "ค่าพาหนะ" },
+  { key: "meal", code: "MEAL_REFRESHMENT", label: "Meal / Refreshment", th: "ค่าอาหารและเครื่องดื่ม" },
+  { key: "other", code: "OTHER_TOUR_COST", label: "Other Tour Cost", th: "ค่าใช้จ่ายอื่นในการนำเที่ยว" },
+] as const;
+// The PEAK account group these categories are expected to map to. A LABEL, not a
+// code — displayed so the accountant can confirm the intent; nothing posts on it.
+export const PEAK_SERVICE_COST_LABEL = "ต้นทุนการให้บริการ";
+
+// Resolve a stored expenseType to a category key. Accepts the short storage key
+// and the canonical CODE form, so a row written either way reads back the same.
+// Returns null when the row has never been categorised — which is "needs review",
+// never a silent default.
+export function expenseCategory(e: Pick<Expense, "expenseType">): ExpenseCategoryKey | null {
+  const raw = (e.expenseType ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  const hit = EXPENSE_CATEGORIES.find((c) => c.key === raw || c.code.toLowerCase() === raw);
+  return hit ? (hit.key as ExpenseCategoryKey) : null;
+}
+export function expenseCategoryLabel(e: Pick<Expense, "expenseType">): string {
+  const k = expenseCategory(e);
+  return EXPENSE_CATEGORIES.find((c) => c.key === k)?.label ?? "Uncategorised";
+}
+
+// Is this row's category settled enough to go to accounting unattended?
+// OTHER_TOUR_COST is deliberately NOT auto-approved (it is the catch-all — what
+// belongs in it can only be decided per job), and neither is an untagged row.
+export type ExpenseAccountingStatus = "READY" | "REVIEW";
+export function expenseAccountingStatus(e: Pick<Expense, "expenseType">): ExpenseAccountingStatus {
+  const k = expenseCategory(e);
+  return k && k !== "other" ? "READY" : "REVIEW";
+}
+// Sheet-level readiness: every tour-expense row carrying an amount is READY.
+// Review-reward rows are guide compensation, not tour cost — they are not counted.
+// A sheet with no billed expense rows is not "ready", it is simply empty.
+export function tourExpenseAccountingReady(expenses: Expense[]): boolean {
+  const rows = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
+  return rows.length > 0 && rows.every((e) => expenseAccountingStatus(e) === "READY");
+}
+
 // Expenses the guide paid with PERSONAL money — the only category that can
 // create a reimbursement due to the guide (advance-paid rows were company money
 // already in the guide's hands and must never be reimbursed twice).
