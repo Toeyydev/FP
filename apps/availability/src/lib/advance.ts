@@ -13,10 +13,20 @@ import { expenseAmount, type Expense } from "@/lib/jobsheet";
 //   company → Company Direct (บริษัทชำระโดยตรง)
 //   advance → Guide Advance (ชำระจากเงินทดรองจ่าย) — counts toward Advance Used
 //   guide   → Guide Personal (มัคคุเทศก์สำรองจ่าย) — counts toward Reimbursement Due
+// The STORED values never change — "company" | "advance" | "guide" are what every
+// sheet already holds. Only the labels do.
+//
+// "Guide Advance" was dangerously ambiguous: it means the COMPANY advanced money TO
+// the guide, but it reads naturally as "the guide advanced the money" — the exact
+// opposite, and the opposite answer to whether the guide gets reimbursed. An owner
+// hit this and asked why ฿144 the guide had fronted showed as ฿0 reimbursable.
+//
+// Each label now names WHO paid, and `effect` states the consequence, because that
+// is the thing the choice actually decides.
 export const PAYMENT_SOURCES = [
-  { value: "company", label: "Company Direct", th: "บริษัทชำระโดยตรง" },
-  { value: "advance", label: "Guide Advance", th: "ชำระจากเงินทดรองจ่าย" },
-  { value: "guide", label: "Guide Personal", th: "มัคคุเทศก์สำรองจ่าย" },
+  { value: "company", label: "Company paid direct", th: "บริษัทชำระโดยตรง", effect: "not reimbursed" },
+  { value: "advance", label: "From company advance", th: "ชำระจากเงินทดรองที่บริษัทให้ไว้", effect: "settles against the advance" },
+  { value: "guide", label: "Guide paid own money", th: "มัคคุเทศก์สำรองจ่ายเอง", effect: "reimbursed to the guide" },
 ] as const;
 export const isAdvanceExpense = (e: Pick<Expense, "paidBy">): boolean => e.paidBy === "advance";
 

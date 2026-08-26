@@ -424,7 +424,7 @@ a.glink:hover{text-decoration:underline}
 /* Eight columns of fixed-ish widths were crushing Description to a few characters
    ("Grand Pa", "Chao Ph"). Give the table a floor and let its .scroll-x wrapper
    scroll on narrow screens instead of squeezing the one free-text column. */
-.js-exp-table{min-width:880px}
+.js-exp-table{min-width:940px}
 .js-exp-table td:nth-child(3) input{min-width:150px}
 .js-amt{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .js-amt b{display:inline-block;min-width:74px;font-weight:700}

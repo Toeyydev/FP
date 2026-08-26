@@ -759,7 +759,7 @@ export default function JobSheetEditor() {
             <th style={{ width: 26 }}>#</th>
             <th style={{ width: 132 }}><TH en="Expense Category" th="ประเภทค่าใช้จ่าย" /></th>
             <th><TH en="Description" th="รายการ" /></th>
-            <th className="no-print" style={{ width: 106 }} title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid By" th="แหล่งเงินที่ใช้ชำระ" /></th>
+            <th className="no-print" style={{ width: 150 }} title="Source of money used to pay this line — Guide Advance rows settle against the advance below; Guide Personal rows create reimbursement due"><TH en="Paid By" th="แหล่งเงินที่ใช้ชำระ" /></th>
             <th className="no-print" style={{ width: 84 }}><TH en="Receipt" th="หลักฐาน" /></th>
             <th style={{ width: 152, textAlign: "right" }}><TH en="Amount (THB)" th="จำนวนเงิน" /></th>
             <th className="no-print" style={{ width: 92 }}><TH en="Account Status" th="สถานะบัญชี" /></th>
@@ -795,9 +795,9 @@ export default function JobSheetEditor() {
                   {/* An untagged row now shows "— not set —" rather than defaulting the display to
                       Company Direct. Who paid decides whether the guide is reimbursed, so
                       guessing it silently either overpays or underpays a real person. */}
-                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} = ${x.th}`).join(" · ")}>
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
-                    {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
                 </td>
                 <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
