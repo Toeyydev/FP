@@ -78,9 +78,14 @@ describe("§12 Summary — the spec's worked example", () => {
     // 580 of the 840 was paid straight to the vendor by the company. Paying it to
     // the guide as well is paying for the same thing twice.
     expect(t.companyDirectTotal).toBe(580);
-    expect(t.legacyPayout).toBe(2395);       // what Payments still transfers
-    expect(t.payoutDiffersFromPayments).toBe(true);
-    expect(t.legacyPayout - t.netPayToGuide).toBe(580);
+    expect(t.settledByCompany).toBe(580);
+  });
+
+  it("a fully tagged sheet no longer disagrees with Payments", () => {
+    // Every row here says who paid, so Payments applies the same rule and the two
+    // screens land on the same number — nothing left to recheck.
+    expect(t.legacyPayout).toBe(t.netPayToGuide);
+    expect(t.payoutDiffersFromPayments).toBe(false);
   });
 
   it("Net Pay = net fee + additional + reimbursement, and nothing else", () => {
@@ -351,11 +356,18 @@ describe("figures that need rechecking are named, not implied", () => {
     expect(hit!.amount).toBe(60);
   });
 
-  it("a divergent Payments figure is called out on Net Pay", () => {
-    const t = jobSheetTotals(EXAMPLE, FEE, null, []);
-    const hit = figuresNeedRecheck(EXAMPLE, t, ACCOUNTS).find((x) => x.field === "netPayToGuide");
+  it("a divergent Payments figure is called out — only when it really diverges", () => {
+    // Untagged money is still paid by Payments but excluded from Net Pay, so the
+    // two genuinely differ and the operator must be told.
+    const untagged: Expense[] = [{ description: "Legacy row", price: 300, pax: 1 }];
+    const t2 = jobSheetTotals(untagged, FEE, null, []);
+    const hit = figuresNeedRecheck(untagged, t2, ACCOUNTS).find((x) => x.field === "netPayToGuide");
     expect(hit).toBeTruthy();
-    expect(hit!.amount).toBe(580);
+    expect(hit!.amount).toBe(300);
+
+    // …and stays quiet on a fully tagged sheet, where they now agree.
+    const t3 = jobSheetTotals(EXAMPLE, FEE, null, []);
+    expect(figuresNeedRecheck(EXAMPLE, t3, ACCOUNTS).some((x) => x.field === "netPayToGuide")).toBe(false);
   });
 
   it("a described row with no amount is flagged — it silently adds nothing", () => {

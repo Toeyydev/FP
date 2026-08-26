@@ -130,7 +130,8 @@ export type JobSheetTotals = {
   unspecifiedTotal: number;         // untagged rows: cannot be attributed yet
   totalCompanyCost: number;         // what this job cost the company
   netPayToGuide: number;            // what we transfer to the guide
-  legacyPayout: number;             // what Payments still transfers today
+  legacyPayout: number;             // what Payments transfers today (guidePayoutTotal)
+  settledByCompany: number;         // tour expenses the company already settled
   payoutDiffersFromPayments: boolean;
 };
 
@@ -153,6 +154,10 @@ export function jobSheetTotals(
   // §12: what we owe the guide is their own money back plus what they earned —
   // never a cost the company already settled directly with the vendor.
   const netPayToGuide = t.netGuideFee + additionalGuidePayment + reimbursementDue;
+  const paymentsFigure = guidePayoutTotal(expenses, guideFee).payout;
+  // Tour expenses that are real company cost but not owed to the guide, because a
+  // person recorded that the company already settled them.
+  const settled = sumWhere((e) => { const p = canonicalPaidBy(e); return p === "COMPANY_DIRECT" || p === "GUIDE_ADVANCE"; });
 
   return {
     totalTourExpenses: cost.tourExpenses,
@@ -175,11 +180,15 @@ export function jobSheetTotals(
     // printed document.
     totalCompanyCost: cost.tourExpenses + t.gross,
     netPayToGuide,
-    // What Payments/batches/my-pay still transfer: expenses + net fee, company-direct
-    // rows included. Surfaced so the sheet can show the gap honestly instead of
-    // quietly disagreeing with the screen that moves the money.
-    legacyPayout: t.grandTotal,
-    payoutDiffersFromPayments: Math.round(netPayToGuide * 100) !== Math.round(t.grandTotal * 100),
+    // What Payments actually transfers today. This MUST track the real rule in
+    // guidePayoutTotal, not computeTotals().grandTotal — comparing against a formula
+    // Payments no longer uses made the sheet warn about a difference that had
+    // already been fixed, which is worse than not warning at all.
+    legacyPayout: paymentsFigure,
+    payoutDiffersFromPayments: Math.round(netPayToGuide * 100) !== Math.round(paymentsFigure * 100),
+    // The part of tour expenses the guide is NOT paid for, and why — so the Net Pay
+    // box can explain itself instead of looking like money went missing.
+    settledByCompany: settled,
   };
 }
 

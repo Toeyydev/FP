@@ -1207,6 +1207,9 @@ export default function JobSheetEditor() {
           <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(money.guideFeeGross)}</b></div>
           <div className="js-sum-sub"><span>of which withheld as tax (WHT)<small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>{thb(money.wht)}</b></div>
           <div className="grand"><span>Total Company Cost<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุน</small></span><b>{thb(money.totalCompanyCost)}</b></div>
+          {/* Total Company Cost is what the job cost; it is NOT what to transfer.
+              Reading one as the other is the mistake this line exists to prevent. */}
+          <div className="js-sum-hand">what the job cost — not the amount to transfer ↓</div>
           {cost.reviewOther > 0 && <div className="js-sum-note"><span>Paid with this job, earned on another<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้</small></span><b>{thb(cost.reviewOther)}</b></div>}
         </div>
 
@@ -1216,8 +1219,29 @@ export default function JobSheetEditor() {
             transfers; it is never re-derived here. */}
         <div className="js-netpay" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
           <div className="js-netpay-main">
-            <span>Net Pay to Guide{flagged("netPayToGuide") && <em className="js-recheck-tag">recheck</em>}<small>ยอดจ่ายสุทธิให้มัคคุเทศก์</small></span>
+            {/* The one number an operator acts on. Everything above it is cost
+                reporting; this is the transfer. Say that outright rather than
+                leaving them to work out which figure to use. */}
+            <span>Transfer to guide{flagged("netPayToGuide") && <em className="js-recheck-tag">recheck</em>}<small>ยอดที่ต้องโอนให้มัคคุเทศก์</small></span>
             <b>{thb(money.netPayToGuide)}</b>
+          </div>
+          {/* Show how the figure is built. Without this, a sheet whose expenses were
+              all settled by the company looks like the tour expenses simply vanished
+              between the Summary above and this box. */}
+          <div className="np-parts">
+            <div><span>Guide fee after WHT</span><b>{thb(money.netGuideFee)}</b></div>
+            {money.additionalGuidePayment > 0 && <div><span>Additional payment</span><b>{thb(money.additionalGuidePayment)}</b></div>}
+            <div><span>Reimbursement for expenses</span><b>{thb(money.reimbursementDue)}</b></div>
+            {money.settledByCompany > 0 && (
+              <div className="np-note">
+                <span>{thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it{money.advanceSpentTotal > 0 ? " (guide advance)" : " (paid direct)"}.</span>
+              </div>
+            )}
+            {money.unspecifiedTotal > 0 && (
+              <div className="np-note warn">
+                <span>{thb(money.unspecifiedTotal)} has no Paid By set, so it is being paid to the guide. Tag those rows if the company settled them.</span>
+              </div>
+            )}
           </div>
           <div className="js-netpay-status">
             <span>Payment Status<small>สถานะการจ่ายเงิน</small></span>
