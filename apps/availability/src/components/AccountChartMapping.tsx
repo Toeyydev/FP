@@ -30,6 +30,7 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
   const [remaining, setRemaining] = useState(0);
   const [accounts, setAccounts] = useState<PeakAccount[]>([]);
   const [accountsError, setAccountsError] = useState<string>("");
+  const [accountsMeta, setAccountsMeta] = useState<{ arrayKey: string; rawCount: number; droppedNoCode: number; sampleKeys: string[] } | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({}); // category -> account code
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -52,6 +53,7 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
     fetch("/api/peak/accounts", { cache: "no-store" })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
+        setAccountsMeta(d.meta ?? null);
         if (r.ok && d.ok) setAccounts(d.accounts ?? []);
         else setAccountsError(d.error || "Could not load the PEAK chart of accounts.");
       })
@@ -100,6 +102,12 @@ export default function AccountChartMapping({ canEdit }: { canEdit: boolean }) {
         <div className="acct-warn-bar">
           <b>PEAK account list unavailable</b>
           <span>{accountsError} Saved mappings still work, and you can type an account code by hand in the meantime.</span>
+          {accountsMeta && (
+            <span style={{ display: "block", marginTop: 4 }}>
+              PEAK returned <b>{accountsMeta.rawCount}</b> row(s) under <code>{accountsMeta.arrayKey}</code>
+              {accountsMeta.sampleKeys.length ? <> · fields present: <code>{accountsMeta.sampleKeys.join(", ")}</code></> : null}
+            </span>
+          )}
         </div>
       )}
 

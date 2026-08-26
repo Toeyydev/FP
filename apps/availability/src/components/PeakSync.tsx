@@ -14,7 +14,7 @@ import PeakPaymentMethods from "@/components/PeakPaymentMethods";
 type Row = { guideId: string; guide: string; date: string; slotIdx: number; time: string; ref: string | null; amount: number; peakRef: string | null; paidAt: string | null; batchNo: string | null };
 type Data = {
   period: string;
-  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[]; paymentMethodId?: string | null };
+  config: { configured: boolean; enabled: boolean; chartReady: boolean; sandbox: boolean; autoPostingEnabled?: boolean; chartMissing?: string[]; paymentMethodId?: string | null; baseUrl?: string; baseUrlSource?: string };
   refs: { total: number; synced: number; missing: Row[]; recorded: Row[] };
 };
 
@@ -79,7 +79,18 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.configured} /> Developer credentials {cfg?.configured ? "set" : "not set"}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.enabled} /> Owner user token {cfg?.enabled ? "set" : "not set"}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><Dot on={!!cfg?.chartReady} /> Account chart mapping {cfg?.chartReady ? "configured" : "not configured"}{!cfg?.chartReady && cfg?.chartMissing?.length ? <span style={{ color: "var(--ink-soft)" }}> · {cfg.chartMissing.length} categor{cfg.chartMissing.length === 1 ? "y" : "ies"} to map</span> : null}</div>
-            {cfg && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="att-dot" style={{ background: cfg.sandbox ? "var(--assign)" : "var(--green)" }} /> Endpoint: {cfg.sandbox ? "UAT sandbox" : "production"}</div>}
+            {cfg && (
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <span className="att-dot" style={{ background: cfg.sandbox ? "var(--assign)" : "var(--green)", marginTop: 5 }} />
+                <span>
+                  Endpoint: {cfg.sandbox ? "UAT sandbox" : "production"}
+                  {/* Show the host itself: "sandbox" above is only a substring test
+                      on this URL, and the data you see comes from whatever this
+                      points at. */}
+                  {cfg.baseUrl && <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-soft)", wordBreak: "break-all" }}>{cfg.baseUrl}{cfg.baseUrlSource ? ` · from ${cfg.baseUrlSource}` : ""}</span>}
+                </span>
+              </div>
+            )}
             {test.msg && <div style={{ fontWeight: 600, color: test.ok ? "var(--green)" : "var(--danger)" }}>{test.msg}</div>}
             {!autoPosting && <div style={{ fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.5 }}>
               Until credentials and the account chart are set (and the accountant confirms the mapping), EXP- expense refs are recorded manually on <a href="/payments">Payments</a>. Nothing here blocks paying guides.
