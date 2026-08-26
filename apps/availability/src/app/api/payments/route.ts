@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { guidePayoutTotal } from "@/lib/peak-sync";
 import { canViewFinance } from "@/lib/roles";
 import { type Slip } from "@/lib/payments/slips";
 
@@ -66,11 +67,16 @@ export async function GET(req: NextRequest) {
     const t = s
       ? computeTotals((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee))
       : computeTotals([], DEFAULT_GUIDE_FEE);
+    // What we actually transfer: expenses the company already settled (advance or
+    // paid direct) are excluded, untagged rows are not — see lib/peak-sync.
+    const p = s
+      ? guidePayoutTotal((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee))
+      : guidePayoutTotal([], DEFAULT_GUIDE_FEE);
     const g = (byGuide[a.guideId] ??= { guideId: a.guideId, guide: gName(a.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
-    g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
+    g.tours += 1; g.netFee += t.netGuideFee; g.expenses += p.payoutExpenses; g.payout += p.payout;
     const covered = coveredByMonth(a.guideId, a.date, a.createdAt);
     const ps = payStatusOf.get(k) ?? "PENDING";
-    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), ref: s?.ref ?? null, amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(a.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses) });
+    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), ref: s?.ref ?? null, amount: r2(p.payout), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(a.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(p.payoutExpenses) });
   }
 
   // Imported / orphan job sheets — a sheet exists but no assignment row (e.g. a
@@ -82,11 +88,12 @@ export async function GET(req: NextRequest) {
     if (assignKeys.has(k)) continue;       // already counted via its assignment
     if (s.date > cap) continue;            // future tour, not yet earned
     const t = computeTotals((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
+    const p = guidePayoutTotal((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
     const g = (byGuide[s.guideId] ??= { guideId: s.guideId, guide: gName(s.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
-    g.tours += 1; g.netFee += t.netGuideFee; g.expenses += t.totalExpenses; g.payout += t.grandTotal;
+    g.tours += 1; g.netFee += t.netGuideFee; g.expenses += p.payoutExpenses; g.payout += p.payout;
     const covered = coveredByMonth(s.guideId, s.date, s.createdAt);
     const ps = payStatusOf.get(k) ?? "PENDING";
-    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), ref: s.ref ?? null, amount: r2(t.grandTotal), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(s.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses) });
+    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), ref: s.ref ?? null, amount: r2(p.payout), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(s.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(p.payoutExpenses) });
   }
 
   const rows = Object.values(byGuide)

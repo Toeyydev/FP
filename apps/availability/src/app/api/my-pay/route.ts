@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { computeTotals, reviewRewardTotal, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { guidePayoutTotal } from "@/lib/peak-sync";
 
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -51,6 +52,7 @@ export async function GET(req: NextRequest) {
     const period = date.slice(0, 7);
     const exp = (expenses as Expense[]) ?? [];
     const t = computeTotals(exp, gfOf(guideFee));
+    const pay = guidePayoutTotal(exp, gfOf(guideFee));
     // Review reward is a normal expense line, already in the tour total — break it
     // out so the guide sees what a review earned them (part of `amount`, not extra).
     const reviewReward = r2(reviewRewardTotal(exp));
@@ -58,7 +60,7 @@ export async function GET(req: NextRequest) {
     const pp = payOf.get(k);
     const paid = covered || pp?.status === "PAID";
     const slip = pp?.eslipUrl ?? (covered ? statusOfPeriod(period)?.eslipUrl ?? null : null);
-    (monthMap[period] ??= []).push({ date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "", tour: tName(tourId), ref, amount: r2(t.grandTotal), fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses), reviewReward, paid, paidAt: pp?.paidAt ?? statusOfPeriod(period)?.paidAt ?? null, slip });
+    (monthMap[period] ??= []).push({ date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "", tour: tName(tourId), ref, amount: r2(pay.payout), fee: r2(t.netGuideFee), expenses: r2(pay.payoutExpenses), reviewReward, paid, paidAt: pp?.paidAt ?? statusOfPeriod(period)?.paidAt ?? null, slip });
   };
 
   for (const a of assigns) { const s = sheetOf.get(`${a.date}|${a.slotIdx}`); addTour(a.date, a.slotIdx, a.tourId, s?.ref ?? null, s?.expenses, s?.guideFee, a.createdAt); }

@@ -256,6 +256,42 @@ function thbLike(v: number): string {
   return `฿${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// ── What Payments actually transfers ─────────────────────────────────────────
+// computeTotals().grandTotal pays the guide for EVERY expense row, including ones
+// the company had already settled — a guide advance handed over before the tour, or
+// an invoice the company paid the vendor direct. Both are money already spent on the
+// guide's behalf; paying them again in the payout pays twice.
+//
+// The rule is deliberately narrow, because the two cases are not alike:
+//   · explicitly tagged company/advance → EXCLUDED. Nothing is being judged here;
+//     someone recorded who paid, and it was not the guide.
+//   · not tagged at all → INCLUDED, exactly as before. Nobody recorded who paid,
+//     and guessing would either underpay a guide who fronted cash or pay one twice.
+//     Those sheets keep their existing payout until a person tags the rows.
+//
+// Review rewards are always included: they are compensation the guide earns.
+export type GuidePayout = {
+  payoutExpenses: number;   // expense rows that are still owed to the guide
+  payout: number;           // + net guide fee — what to transfer
+  excludedTagged: number;   // company/advance rows deliberately left out
+  untaggedIncluded: number; // rows still paid only because nobody said who paid
+};
+
+export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): GuidePayout {
+  const t = computeTotals(expenses, guideFee);
+  let payoutExpenses = 0, excludedTagged = 0, untaggedIncluded = 0;
+  for (const e of expenses ?? []) {
+    const amt = expenseAmount(e);
+    if (!amt) continue;
+    if (isReviewExpense(e)) { payoutExpenses += amt; continue; }
+    const paid = canonicalPaidBy(e);
+    if (paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE") { excludedTagged += amt; continue; }
+    if (paid === "UNSPECIFIED") untaggedIncluded += amt;
+    payoutExpenses += amt;
+  }
+  return { payoutExpenses, payout: payoutExpenses + t.netGuideFee, excludedTagged, untaggedIncluded };
+}
+
 // ── Sync status ──────────────────────────────────────────────────────────────
 export type PeakSyncStatus = "NOT_READY" | "READY" | "SYNCING" | "SYNCED" | "FAILED" | "BLOCKED";
 

@@ -11,9 +11,10 @@ import {
   peakPayloadHash,
   defaultAccountingDates,
   figuresNeedRecheck,
+  guidePayoutTotal,
   type PeakAccountMap,
 } from "@/lib/peak-sync";
-import type { Expense, GuideFee } from "@/lib/jobsheet";
+import { computeTotals, type Expense, type GuideFee } from "@/lib/jobsheet";
 
 // The worked example from the spec: a 2-pax Grand Palace job.
 //   Grand Palace ticket  500  Company Direct
@@ -456,5 +457,58 @@ describe("the recheck panel must not contradict the expense table", () => {
   it("falls back to local computation when no server status is supplied", () => {
     const t = jobSheetTotals(rows, fee, null, []);
     expect(figuresNeedRecheck(rows, t).some((x) => x.short.includes("not ready"))).toBe(true);
+  });
+});
+
+describe("what Payments transfers", () => {
+  const fee: GuideFee = { price: 1500, time: 1, whtPct: 3 }; // net 1,455
+
+  it("excludes expenses the company already settled — the reported sheet", () => {
+    // Water/Ferry/Bus paid from a guide advance: the money is already in the
+    // guide's hands, so paying it again in the payout pays twice.
+    const rows: Expense[] = [
+      { description: "Water (Inc. Guide)", price: 10, pax: 4, paidBy: "advance" },
+      { description: "Ferry (Inc. Guide)", price: 11, pax: 4, paidBy: "advance" },
+      { description: "Bus (Inc. Guide)", price: 15, pax: 4, paidBy: "advance" },
+    ];
+    const r = guidePayoutTotal(rows, fee);
+    expect(r.excludedTagged).toBe(144);
+    expect(r.payout).toBe(1455);                       // was 1,599
+    expect(r.payout).toBe(jobSheetTotals(rows, fee, null, []).netPayToGuide); // both screens agree
+  });
+
+  it("company-direct is excluded too", () => {
+    const rows: Expense[] = [{ description: "Tickets", price: 500, pax: 1, paidBy: "company" }];
+    expect(guidePayoutTotal(rows, fee).payout).toBe(1455);
+  });
+
+  it("guide-personal is still reimbursed", () => {
+    const rows: Expense[] = [{ description: "Boat", price: 200, pax: 1, paidBy: "guide" }];
+    expect(guidePayoutTotal(rows, fee).payout).toBe(1655);
+  });
+
+  it("UNTAGGED rows keep the old payout — never a guess about someone's wages", () => {
+    const rows: Expense[] = [{ description: "Legacy row", price: 300, pax: 1 }];
+    const r = guidePayoutTotal(rows, fee);
+    expect(r.untaggedIncluded).toBe(300);
+    expect(r.payout).toBe(1755);                                   // unchanged
+    expect(r.payout).toBe(computeTotals(rows, fee).grandTotal);     // identical to before
+  });
+
+  it("review rewards are always paid", () => {
+    const rows: Expense[] = [
+      { description: "Review reward", price: 100, pax: 1 },
+      { description: "Tickets", price: 500, pax: 1, paidBy: "company" },
+    ];
+    expect(guidePayoutTotal(rows, fee).payout).toBe(1555);
+  });
+
+  it("a fully tagged sheet makes the two screens agree exactly", () => {
+    const rows: Expense[] = [
+      { description: "Tickets", price: 500, pax: 1, expenseType: "entrance", paidBy: "company" },
+      { description: "Boat", price: 200, pax: 1, expenseType: "transport", paidBy: "guide" },
+      { description: "Review reward", price: 100, pax: 1 },
+    ];
+    expect(guidePayoutTotal(rows, fee).payout).toBe(jobSheetTotals(rows, fee, null, []).netPayToGuide);
   });
 });
