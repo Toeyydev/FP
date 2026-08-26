@@ -34,13 +34,24 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
   useEffect(() => { load(period); }, [period, load]);
 
   // Live connection check — the only thing on this page that talks to PEAK.
+  // /api/peak/test-connection performs the Client Token handshake ONLY: no contact
+  // lookup, no expense, no database access. It reports a rejection as a 502 (and a
+  // misconfigured deploy as a 503) whose body still carries PEAK's own reason, so the
+  // body is read BEFORE the status is judged — bailing on !r.ok would throw away the
+  // one thing this button exists to show.
   async function testConnection() {
     setTest({ busy: true, msg: "Contacting PEAK…" });
     try {
-      const r = await fetch("/api/peak/test", { cache: "no-store" });
+      const r = await fetch("/api/peak/test-connection", { cache: "no-store" });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setTest({ busy: false, msg: "Test failed — operator only, or the server rejected the request.", ok: false }); return; }
-      setTest({ busy: false, ok: !!j.connected, msg: j.connected ? `Connected ✓ (${j.baseUrl?.includes("dev") ? "sandbox" : "production"})` : `Not connected — ${j.resDesc || j.error || "credentials not set or rejected"}` });
+      if (r.status === 401 || r.status === 403) { setTest({ busy: false, ok: false, msg: "Test failed — operator access required." }); return; }
+      // Which endpoint we reached comes from the status feed's own base-URL check;
+      // the connection test deliberately returns nothing but the verdict.
+      if (j.connected) { setTest({ busy: false, ok: true, msg: `Connected ✓ (${d?.config && !d.config.sandbox ? "production" : "sandbox"})` }); return; }
+      // PEAK's own resDesc (already sanitised server-side) plus its result code —
+      // that pair is what distinguishes a bad key from a bad timestamp or wrong host.
+      const why = [j.error, j.peakCode ? `code ${j.peakCode}` : ""].filter(Boolean).join(" · ");
+      setTest({ busy: false, ok: false, msg: `Not connected — ${why || `PEAK rejected the request (HTTP ${r.status})`}` });
     } catch { setTest({ busy: false, ok: false, msg: "Network error contacting the server." }); }
   }
 
