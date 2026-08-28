@@ -5,6 +5,7 @@ import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
 import { signOfferAction } from "@/lib/offer-token";
+import { PUBLIC_BASE_URL, siteUrl } from "@/lib/site";
 
 // Create and broadcast a job offer to every available guide (in-app + push +
 // LINE buttons). Reused by the operator endpoint and by auto re-offer on cancel.
@@ -76,13 +77,13 @@ export async function createOffer(o: {
     await sendPushToUser(g.id, { title: "New job offer", body: btnText, url: "/", tag: `offer-${offer.id}` });
     // Email is the catch-all channel: reaches guides with no app install / no LINE.
     if (g.email) {
-      const acceptUrl = `https://guide.folkpaths.com/api/offers/respond?token=${signOfferAction(offer.id, g.guideId!, "accept")}`;
-      const denyUrl = `https://guide.folkpaths.com/api/offers/respond?token=${signOfferAction(offer.id, g.guideId!, "deny")}`;
+      const acceptUrl = `${PUBLIC_BASE_URL}/api/offers/respond?token=${signOfferAction(offer.id, g.guideId!, "accept")}`;
+      const denyUrl = `${PUBLIC_BASE_URL}/api/offers/respond?token=${signOfferAction(offer.id, g.guideId!, "deny")}`;
       await sendEmail({
         to: g.email,
         subject: `New job offer \u2014 ${tour.name}`,
-        text: `${summary}\n\n\u2705 Accept this job: ${acceptUrl}\n\u274c Pass: ${denyUrl}\n\n(or open the app: https://guide.folkpaths.com/)`,
-        html: `<p>You have a new job offer:</p><p><b>${tour.name}</b><br>${dateLabel} \u00b7 ${timeLabel}${o.pax != null ? ` \u00b7 ${o.pax} pax` : ""}${o.note ? `<br>${o.note}` : ""}</p><p><a href="${acceptUrl}" style="display:inline-block;background:#2e7d4f;color:#fff;text-decoration:none;font-weight:700;padding:11px 20px;border-radius:10px">\u2705 Accept this job</a>&nbsp;&nbsp;<a href="${denyUrl}" style="color:#c2604a">Pass</a></p><p style="font-size:13px;color:#888">One tap \u2014 no login needed. Or <a href="https://guide.folkpaths.com/">open the app</a>.</p>`,
+        text: `${summary}\n\n\u2705 Accept this job: ${acceptUrl}\n\u274c Pass: ${denyUrl}\n\n(or open the app: ${siteUrl()})`,
+        html: `<p>You have a new job offer:</p><p><b>${tour.name}</b><br>${dateLabel} \u00b7 ${timeLabel}${o.pax != null ? ` \u00b7 ${o.pax} pax` : ""}${o.note ? `<br>${o.note}` : ""}</p><p><a href="${acceptUrl}" style="display:inline-block;background:#2e7d4f;color:#fff;text-decoration:none;font-weight:700;padding:11px 20px;border-radius:10px">\u2705 Accept this job</a>&nbsp;&nbsp;<a href="${denyUrl}" style="color:#c2604a">Pass</a></p><p style="font-size:13px;color:#888">One tap \u2014 no login needed. Or <a href="${siteUrl()}">open the app</a>.</p>`,
       }).catch(() => {});
     }
     if (lineEnabled && g.lineUserId) {

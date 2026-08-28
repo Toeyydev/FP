@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { signOfferAction } from "@/lib/offer-token";
 import { createOffer } from "@/lib/offers";
+import { PUBLIC_BASE_URL } from "@/lib/site";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
     liveId = r.offerId;
   }
 
-  const base = "https://guide.folkpaths.com";
+  const base = PUBLIC_BASE_URL;
   return NextResponse.json({
     acceptUrl: `${base}/api/offers/respond?token=${signOfferAction(liveId, guideId, "accept")}`,
     denyUrl: `${base}/api/offers/respond?token=${signOfferAction(liveId, guideId, "deny")}`,
