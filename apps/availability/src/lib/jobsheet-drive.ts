@@ -77,7 +77,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     // Certification footer — same certifier + first-save date as the app/PDF; the
     // PNG is inlined base64 so the Doc conversion never depends on a live fetch.
     const certDate = certificationDate(sheet);
-    let sigSrc = `https://guide.folkpaths.com${JOB_SHEET_CERTIFIER.signatureUrl}`;
+    let sigSrc = `https://ops.folkpaths.com${JOB_SHEET_CERTIFIER.signatureUrl}`;
     try { sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`; } catch { /* fall back to the public URL */ }
     const certHtml = `
       <div style="margin-top:26px;border-top:1px dashed #cdd3cf;padding-top:12px">

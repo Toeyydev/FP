@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     liveId = r.offerId;
   }
 
-  const base = "https://guide.folkpaths.com";
+  const base = "https://ops.folkpaths.com";
   return NextResponse.json({
     acceptUrl: `${base}/api/offers/respond?token=${signOfferAction(liveId, guideId, "accept")}`,
     denyUrl: `${base}/api/offers/respond?token=${signOfferAction(liveId, guideId, "deny")}`,

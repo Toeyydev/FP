@@ -13,7 +13,7 @@ Legend (matching PEAK's flow diagrams):
 
 ## 1. Trigger
 
-🟨 On **guide.folkpaths.com → Payments**, the operator settles a **transfer** to a
+🟨 On **ops.folkpaths.com → Payments**, the operator settles a **transfer** to a
 guide. A transfer covers **one or several tours** paid together (already how the
 app works — one slip / one PEAK ref per transfer). Options today:
 - **📎 Slip · covers N** — one bank slip covers all the guide's pending tours, or

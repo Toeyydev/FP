@@ -9,10 +9,10 @@ import { exchangeCode } from "@/lib/google-calendar";
 export async function GET(req: NextRequest) {
   const session = await auth();
   const code = req.nextUrl.searchParams.get("code");
-  const back = (status: string) => NextResponse.redirect(new URL(`/profile?cal=${status}`, `https://${req.headers.get("x-forwarded-host") || req.headers.get("host") || "guide.folkpaths.com"}`));
+  const back = (status: string) => NextResponse.redirect(new URL(`/profile?cal=${status}`, `https://${req.headers.get("x-forwarded-host") || req.headers.get("host") || "ops.folkpaths.com"}`));
   if (!session?.user?.id || !code) return back("error");
 
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "guide.folkpaths.com";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "ops.folkpaths.com";
   try {
     const { refreshToken, email } = await exchangeCode(host, code);
     if (!refreshToken) return back("noToken"); // happens if the user already granted before without prompt=consent

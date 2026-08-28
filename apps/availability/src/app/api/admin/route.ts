@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     const firstName = (reqRow.name || "").split(" ")[0] || "there";
     await prisma.notification.create({ data: { userId: guide.id, kind: "approved", message: `You're approved! Welcome to Folkpaths, ${firstName}. Log in to set your availability and start getting jobs.` } });
     await sendPushToUser(guide.id, { title: "You're approved 🎉", body: "Welcome to Folkpaths — log in to set your availability.", url: "/", tag: "approved" });
-    await sendEmail({ to: reqRow.email, subject: "Your Folkpaths guide account is approved", text: `Hi ${firstName},\n\nGood news — your Folkpaths guide account (${guide.guideId}) has been approved.\n\nLog in at https://guide.folkpaths.com to set your availability and start receiving job offers.\n\nWelcome aboard!\nFolkpaths` });
+    await sendEmail({ to: reqRow.email, subject: "Your Folkpaths guide account is approved", text: `Hi ${firstName},\n\nGood news — your Folkpaths guide account (${guide.guideId}) has been approved.\n\nLog in at https://ops.folkpaths.com to set your availability and start receiving job offers.\n\nWelcome aboard!\nFolkpaths` });
     return NextResponse.json({ ok: true, guideId: guide.guideId });
   }
 
@@ -238,7 +238,7 @@ export async function POST(req: NextRequest) {
         const r = await sendEmail({
           to: g.email,
           subject: "Connect your LINE to Folkpaths",
-          text: `Hi ${firstName},\n\nConnect your LINE to Folkpaths to get job offers and job sheets on LINE.\n\nOpen https://guide.folkpaths.com/profile and tap "Connect LINE" — it takes one tap.\n\nThanks!\nFolkpaths`,
+          text: `Hi ${firstName},\n\nConnect your LINE to Folkpaths to get job offers and job sheets on LINE.\n\nOpen https://ops.folkpaths.com/profile and tap "Connect LINE" — it takes one tap.\n\nThanks!\nFolkpaths`,
         }).catch(() => ({ sent: false }));
         if (r.sent) emailed++;
       }

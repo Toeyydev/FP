@@ -43,7 +43,7 @@ export async function notifyGuide(guideId: string, message: string, title: strin
     // Email is the catch-all: most guides have no push or LINE, so without this a
     // cancellation / group-change notice would never reach them. Skip placeholders.
     const realEmail = u.email && !/@(?:guides\.)?folkpath\.local$/i.test(u.email);
-    if (realEmail) await sendEmail({ to: u.email!, subject: title, text: message, html: `<p>${message}</p><p style="font-size:13px;color:#888"><a href="https://guide.folkpaths.com/">Open Folkpaths</a></p>` }).catch(() => {});
+    if (realEmail) await sendEmail({ to: u.email!, subject: title, text: message, html: `<p>${message}</p><p style="font-size:13px;color:#888"><a href="https://ops.folkpaths.com/">Open Folkpaths</a></p>` }).catch(() => {});
   } catch { /* best-effort */ }
 }
 
