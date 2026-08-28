@@ -8,6 +8,7 @@ import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate 
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { PUBLIC_BASE_URL } from "@/lib/site";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -77,7 +78,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     // Certification footer — same certifier + first-save date as the app/PDF; the
     // PNG is inlined base64 so the Doc conversion never depends on a live fetch.
     const certDate = certificationDate(sheet);
-    let sigSrc = `https://guide.folkpaths.com${JOB_SHEET_CERTIFIER.signatureUrl}`;
+    let sigSrc = `${PUBLIC_BASE_URL}${JOB_SHEET_CERTIFIER.signatureUrl}`;
     try { sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`; } catch { /* fall back to the public URL */ }
     const certHtml = `
       <div style="margin-top:26px;border-top:1px dashed #cdd3cf;padding-top:12px">

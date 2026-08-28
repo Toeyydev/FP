@@ -3,16 +3,17 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { exchangeCode } from "@/lib/google-calendar";
+import { PUBLIC_HOST } from "@/lib/site";
 
 // GET — Google redirects here after consent. Exchange the code for a refresh
 // token and store the connection for the signed-in user.
 export async function GET(req: NextRequest) {
   const session = await auth();
   const code = req.nextUrl.searchParams.get("code");
-  const back = (status: string) => NextResponse.redirect(new URL(`/profile?cal=${status}`, `https://${req.headers.get("x-forwarded-host") || req.headers.get("host") || "guide.folkpaths.com"}`));
+  const back = (status: string) => NextResponse.redirect(new URL(`/profile?cal=${status}`, `https://${req.headers.get("x-forwarded-host") || req.headers.get("host") || PUBLIC_HOST}`));
   if (!session?.user?.id || !code) return back("error");
 
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "guide.folkpaths.com";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || PUBLIC_HOST;
   try {
     const { refreshToken, email } = await exchangeCode(host, code);
     if (!refreshToken) return back("noToken"); // happens if the user already granted before without prompt=consent
