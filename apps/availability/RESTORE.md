@@ -1,4 +1,4 @@
-# Database restore runbook — guide.folkpaths.com
+# Database restore runbook — ops.folkpaths.com
 
 A backup you have never restored is not a backup. Do this **once now** as a drill,
 then any time you actually need it. Backups are produced nightly by

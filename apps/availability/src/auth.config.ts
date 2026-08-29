@@ -7,7 +7,7 @@ const REFRESH_COOKIE = "folkpath_rt";
 // Edge-safe base config (NO database / Node-only imports here). Used by the
 // middleware. Providers that touch the DB are added in auth.ts.
 export const authConfig = {
-  // Use the browser's Host header (guide.folkpaths.com) for redirects/cookies,
+  // Use the browser's Host header (ops.folkpaths.com) for redirects/cookies,
   // not the Railway upstream hostname baked into AUTH_URL.
   trustHost: true,
   session: { strategy: "jwt", maxAge: ACCESS_TTL_SEC },
@@ -41,7 +41,7 @@ export const authConfig = {
 
       // Build redirects from the REAL public host (the browser's Host header), so
       // the user is never bounced onto the Railway upstream hostname / AUTH_URL —
-      // they stay on whatever domain they're using (e.g. guide.folkpaths.com).
+      // they stay on whatever domain they're using (e.g. ops.folkpaths.com).
       const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || request.nextUrl.host;
       const proto = request.headers.get("x-forwarded-proto") || (request.nextUrl.protocol.replace(":", "")) || "https";
       const base = `${proto}://${host}`;

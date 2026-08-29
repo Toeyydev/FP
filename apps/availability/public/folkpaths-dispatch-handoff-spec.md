@@ -1,7 +1,7 @@
 # Folkpaths — Availability & Dispatch System
 
 **Developer handoff spec · v1**
-App: guide.folkpaths.com (bilingual EN/TH PWA · guide availability & job dispatch)
+App: ops.folkpaths.com (bilingual EN/TH PWA · guide availability & job dispatch)
 Audience: solo operator (Folkpaths) + freelance tour guides
 Reference mockups: `folkpaths-availability-manager.html` (guide), `folkpaths-operator-dispatch.html` (operator)
 
