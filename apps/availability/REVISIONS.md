@@ -1,4 +1,4 @@
-# Folkpaths guide.folkpaths.com — revision spec
+# Folkpaths ops.folkpaths.com — revision spec
 
 Changes from the latest working session. The code edits are already applied in the
 repo (review the diff before committing); this file states the intended behaviour

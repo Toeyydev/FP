@@ -1,4 +1,4 @@
-# Security punch-list — guide.folkpaths.com
+# Security punch-list — ops.folkpaths.com
 
 Review date: 2026-06-08. Checked against `folkpaths-dispatch-handoff-spec.md` §13 and `folkpaths-security-checklist.md`.
 

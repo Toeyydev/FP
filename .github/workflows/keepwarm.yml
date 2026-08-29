@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Ping app
         run: |
-          code=$(curl -sS -o /dev/null -w "%{http_code}" -m 30 https://guide.folkpaths.com/api/version)
+          code=$(curl -sS -o /dev/null -w "%{http_code}" -m 30 https://ops.folkpaths.com/api/version)
           echo "GET /api/version -> HTTP $code"
           # 2xx/3xx means the app answered (warm). Anything else is a real problem.
           case "$code" in
