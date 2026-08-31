@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { paymentCoverage } from "@/lib/payment-coverage";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -101,12 +102,22 @@ export async function GET(req: NextRequest) {
     prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
     prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
   ]);
+  // A month-level payroll only settles jobs that had already happened when the
+  // transfer was made — see lib/payment-coverage. Without that check, a payroll
+  // run on the 19th marked a tour on the 30th as paid before it took place.
+  const cover = paymentCoverage(date, tourPay, payroll);
   const payment = {
-    paid: tourPay?.status === "PAID" || payroll?.status === "paid",
-    paidAt: tourPay?.paidAt ?? payroll?.paidAt ?? null,
-    slip: tourPay?.eslipUrl ?? payroll?.eslipUrl ?? null,
-    status: tourPay?.status ?? (payroll?.status === "paid" ? "PAID" : null), // per-tour state for the finance sidebar
-    peakRef: tourPay?.peakRef ?? payroll?.peakRef ?? null, // accounting ref (recorded on Payments)
+    paid: cover.paid,
+    paidAt: cover.paidAt,
+    // The slip and the accounting ref follow whichever record actually paid it;
+    // showing a payroll slip against a job that payroll did not cover would be
+    // evidence for a transfer that never included this tour.
+    slip: cover.source === "tour" ? tourPay?.eslipUrl ?? null : cover.source === "payroll" ? payroll?.eslipUrl ?? null : null,
+    status: cover.paid ? "PAID" : tourPay?.status ?? null, // per-tour state for the finance sidebar
+    peakRef: cover.source === "tour" ? tourPay?.peakRef ?? null : cover.source === "payroll" ? payroll?.peakRef ?? null : null,
+    // Lets the sidebar say WHICH payment settled it, so a month-end date next to
+    // a mid-month tour reads as the payroll run it is, not as an error.
+    source: cover.source,
   };
 
   // Guide advance + returns for this job — cash movements, settled against the

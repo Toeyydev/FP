@@ -422,9 +422,15 @@ a.glink:hover{text-decoration:underline}
    a column of totals stays scannable while every row is still editable. */
 .js-exp-table td,.js-pay-table td{vertical-align:middle}
 /* Eight columns of fixed-ish widths were crushing Description to a few characters
-   ("Grand Pa", "Chao Ph"). Give the table a floor and let its .scroll-x wrapper
+   ("Grand Pa", "Chao Ph"). Give the table a floor and let its .js-table-scroll wrapper
    scroll on narrow screens instead of squeezing the one free-text column. */
 .js-exp-table{min-width:940px}
+/* .js-exp-table has a 940px floor, which is wider than the sheet gets in the
+   two-column operator layout. Scroll the table inside its own box rather than let
+   `.panel{overflow:hidden}` silently cut off Paid By and the amount columns.
+   Print is untouched — the PDF renders the full table at its natural width. */
+.js-table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+@media print{.js-table-scroll{overflow:visible}}
 .js-exp-table td:nth-child(3) input{min-width:150px}
 .js-amt{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .js-amt b{display:inline-block;min-width:74px;font-weight:700}
@@ -1109,8 +1115,16 @@ body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
 /* Job-sheet detail layout: the sheet + a finance/accounting side panel (operator).
    Single column on tablet/mobile — the side panel stacks underneath. */
 .js-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; }
-.js-fin-side { position: sticky; top: 12px; }
-@media (max-width: 1100px) { .js-detail-grid { grid-template-columns: 1fr; } .js-fin-side { position: static; } }
+.js-detail-grid > * { min-width: 0; }
+.js-fin-side { position: sticky; top: 12px; grid-column: 2; }
+/* Two-column mode only: the sheet must FILL its column. `.jobsheet .js-sheet` sets
+   `margin: 0 auto`, and auto side margins make a grid item fit-content sized — so
+   the sheet ignored the 854px column, grew to its ~978px min-content and slid
+   underneath the sticky finance panel, which then painted over it. Resetting the
+   margins here restores stretch sizing; the auto-centring still applies in the
+   single-column layout below, where it is what makes the sheet look right. */
+@media screen and (min-width: 1101px) { .js-detail-grid > .js-sheet { width: 100%; margin-left: 0; margin-right: 0; } }
+@media (max-width: 1100px) { .js-detail-grid { grid-template-columns: 1fr; } .js-fin-side { position: static; grid-column: 1; } }
 
 /* ════════════════════════════════════════════════════════════════════════════
    OPERATOR SHELL THEME — neutral SaaS look (Linear/Stripe-like), Folkpaths green.
@@ -1241,3 +1255,23 @@ body:has(.op-layout) .wrap{max-width:1440px}
 /* Final documents: no browser-printed date/title/URL — the page margin is
    ours (padding), not the browser's header/footer band. */
 @media print{@page{margin:0}body{padding:12mm}}
+
+/* Summary row: company cost beside the transfer, instead of three fit-content
+   blocks queuing down the right-hand edge with the left half of the sheet empty.
+   SCREEN ONLY — the printed job sheet keeps its existing single-column flow, so
+   the PDF an accountant already knows is unchanged. */
+@media screen and (min-width:900px){
+  .js-money-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:22px;align-items:start;margin-top:14px}
+  .js-money-col{min-width:0;display:flex;flex-direction:column}
+  /* Beat the fit-content + auto-margin rules that pushed each block right. */
+  .js-money-row .js-summary,
+  .js-money-row .js-netpay,
+  .js-money-row .js-notes{margin-left:0;margin-right:0;width:auto;min-width:0;max-width:none}
+  .js-money-row .js-summary{margin-top:0}
+  .js-money-row .js-netpay{margin-top:0}
+  /* The transfer box now sits to the RIGHT of this hint, not below it, so the
+     arrow has to point that way or it sends the reader to the wrong place. */
+  .js-money-row .js-sum-arrow{visibility:hidden;position:relative}
+  .js-money-row .js-sum-arrow::after{content:"→";visibility:visible;position:absolute;left:0}
+}
