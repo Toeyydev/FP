@@ -73,7 +73,7 @@ export default function JobSheetEditor() {
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
   const [checkedIn, setCheckedIn] = useState(false);
-  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null } | null>(null); // paid state + slip (from the operator)
+  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
@@ -376,6 +376,16 @@ export default function JobSheetEditor() {
   // Operator: sign off (or un-sign) the actual expenses before payout / PEAK sync.
   // Auto-saves first so approval always ties to the persisted figures. Records
   // approvedBy/approvedAt server-side; the pill in the toolbar reflects the state.
+  // A month-level payroll date sitting next to a mid-month tour date looks like a
+  // mistake unless it says what it is. Name the payment that settled the job.
+  const paidLabel = (): string => {
+    if (!payment?.paidAt) return "";
+    const d = new Date(payment.paidAt);
+    const day = d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    if (payment.source !== "payroll") return ` · ${day}`;
+    return ` · ${d.toLocaleDateString("en-GB", { month: "short" })} payroll, ${day}`;
+  };
+
   async function toggleApprove() {
     if (!sheet) return;
     if (!saved) { const ok = await save(); if (!ok) return; }
@@ -387,6 +397,12 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg(d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
     setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt } : s);
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
+    // PEAK readiness is computed SERVER-side and one of its reasons is "Job sheet
+    // is not approved". Without this refetch the panel kept the stale list and
+    // contradicted the ✓ Approved badge printed four lines above it — on the one
+    // screen where an operator decides whether money is ready to move.
+    // Safe to reload: the sheet was saved above before approval was sent.
+    await load();
   }
 
   // Operator: record (or clear) the guide's PEAK Contact id. This is the mapping
@@ -595,7 +611,7 @@ export default function JobSheetEditor() {
                 {paid && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--ok-bg, #eef7f0)", border: "1px solid var(--ok-line, #cfe6d6)", borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700, color: "var(--green, #2f7d4f)" }}>
-                      <span>✓ Paid{payment?.paidAt ? ` · ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span>
+                      <span>✓ Paid{paidLabel()}</span>
                       {payment?.slip && <a href={payment.slip} target="_blank" rel="noopener noreferrer" style={{ color: "var(--green, #2f7d4f)", fontWeight: 700 }}>View slip</a>}
                     </div>
                     <div style={{ color: "var(--ink-soft)", marginTop: 3 }}>These are the operator&apos;s final figures — they match your transfer.</div>
@@ -754,6 +770,7 @@ export default function JobSheetEditor() {
             the CATEGORY (lib/jobsheet), never the description. */}
         <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#fff8c4" }}>TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small><span className="js-sub">Company cost in this job</span></h3>
+        <div className="js-table-scroll">
         <table className="js-table js-exp-table">
           <thead><tr>
             <th style={{ width: 26 }}>#</th>
@@ -895,6 +912,7 @@ export default function JobSheetEditor() {
             </tr>
           </tbody>
         </table>
+        </div>
         {!ro && (() => {
           // Flag clearly unusual quantities vs the job's passenger count (guests
           // + guide). Warn only — the operator may proceed if it's intentional.
@@ -1188,6 +1206,8 @@ export default function JobSheetEditor() {
         {(() => {
           return (
         <>
+        <div className="js-money-row">
+          <div className="js-money-col">
         <div className="js-summary" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>SUMMARY<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>สรุปรายการทางการเงิน</small></div>
           {/* Company cost. Every figure is read from jobCostBreakdown/computeTotals —
@@ -1209,9 +1229,11 @@ export default function JobSheetEditor() {
           <div className="grand"><span>Total Company Cost<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุน</small></span><b>{thb(money.totalCompanyCost)}</b></div>
           {/* Total Company Cost is what the job cost; it is NOT what to transfer.
               Reading one as the other is the mistake this line exists to prevent. */}
-          <div className="js-sum-hand">what the job cost — not the amount to transfer ↓</div>
+          <div className="js-sum-hand">what the job cost — not the amount to transfer<span className="js-sum-arrow" aria-hidden="true"> ↓</span></div>
           {cost.reviewOther > 0 && <div className="js-sum-note"><span>Paid with this job, earned on another<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้</small></span><b>{thb(cost.reviewOther)}</b></div>}
         </div>
+          </div>
+          <div className="js-money-col">
 
         {/* What the guide actually receives, and where that payment stands. Kept
             visually apart from company cost — they are different questions.
@@ -1246,7 +1268,7 @@ export default function JobSheetEditor() {
           <div className="js-netpay-status">
             <span>Payment Status<small>สถานะการจ่ายเงิน</small></span>
             {payment?.paid
-              ? <span className="badge active">✓ Paid{payment.paidAt ? ` · ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span>
+              ? <span className="badge active">✓ Paid{paidLabel()}</span>
               : payment?.status === "APPROVED"
                 ? <span className="badge pending">Approved — not yet paid</span>
                 : <span className="badge muted">Pending</span>}
@@ -1283,6 +1305,8 @@ export default function JobSheetEditor() {
               : <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{sheet.operatorNote}</div>}
           </div>
         )}
+          </div>
+        </div>
         </>
           );
         })()}
@@ -1385,7 +1409,7 @@ export default function JobSheetEditor() {
                 : payment?.status === "APPROVED"
                   ? <span className="badge pending">Approved</span>
                   : <span className="badge muted">Pending</span>}
-              {payment?.paidAt && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+              {payment?.paidAt && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{paidLabel().replace(/^ · /, "")}</span>}
               {payment?.slip && <a href={payment.slip} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>Slip</a>}
             </div>
             <div style={{ fontSize: 12.5, marginTop: 5 }}>Payable <b style={{ fontVariantNumeric: "tabular-nums" }}>{thb(money.netPayToGuide)}</b></div>
