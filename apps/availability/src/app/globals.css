@@ -529,8 +529,6 @@ a.glink:hover{text-decoration:underline}
 /* Hands off from the cost summary to the figure that is actually paid. */
 .js-summary .js-sum-hand{border-bottom:0;justify-content:flex-end;font-size:10.5px;
   color:var(--ink-soft);padding-top:5px;letter-spacing:.02em}
-.js-netpay-status{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:8px;
-  padding-top:8px;border-top:1px solid var(--green-line);font-size:12.5px}
 .js-netpay small{display:block;font-size:9.5px;font-weight:500;color:var(--ink-soft)}
 /* How Net Pay is built. A sheet whose expenses were all settled by the company
    otherwise looks like the tour expenses vanished between the Summary and here. */
@@ -558,6 +556,18 @@ a.glink:hover{text-decoration:underline}
 @media (max-width:560px){.js-timeline li{flex-wrap:wrap}.js-tl-at{width:100%}}
 .print-only{display:none}
 @media print{
+  /* THE PAGE IS THE CONSTRAINT ON PAPER. A4 is ~794px at 96dpi, but the 940px
+     floor that keeps Description readable on screen made the sheet 976px wide —
+     so ~227px of every row, including the amount columns and the totals, hung off
+     the right edge and was silently cut. `.panel{overflow:hidden}` did the
+     cutting, which is why it produced no scrollbar and no warning.
+     On paper the floor is dropped and the tables reflow to the page. */
+  .js-sheet{max-width:100% !important;width:100% !important;margin:0 !important}
+  .js-exp-table,.js-pay-table,.js-table{min-width:0 !important}
+  .panel{overflow:visible !important}
+  /* Long free text (descriptions, tour names) must wrap rather than force the
+     table wider than the paper. */
+  .js-table td,.js-table th{overflow-wrap:anywhere;word-break:break-word}
   #appBar,.js-bar,.no-print,nav,header{display:none !important}
   .wrap{padding:0 !important}
   .panel{box-shadow:none !important;border:none !important}
@@ -1260,7 +1270,7 @@ body:has(.op-layout) .wrap{max-width:1440px}
    blocks queuing down the right-hand edge with the left half of the sheet empty.
    SCREEN ONLY — the printed job sheet keeps its existing single-column flow, so
    the PDF an accountant already knows is unchanged. */
-@media screen and (min-width:900px){
+@media screen and (min-width:900px), print{
   .js-money-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
     gap:22px;align-items:start;margin-top:14px}
   .js-money-col{min-width:0;display:flex;flex-direction:column}
