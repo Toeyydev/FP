@@ -1,50 +1,101 @@
 # Folkpaths ops.folkpaths.com — revision spec
 
-Changes from the latest working session. The code edits are already applied in the
-repo (review the diff before committing); this file states the intended behaviour
-so Cursor's context stays in sync.
+Working notes on **intended behaviour**, so an assistant picking up the repo has the
+"why" that the diff alone doesn't carry.
 
-## Incoming bookings (operator inbox)
-1. **Filter out past-dated tours.** The inbox (default `GET /api/bookings`) only
-   shows bookings dated today-or-later in Asia/Bangkok time. Bookings with a `null`
-   date are kept (they still need a date assigned). Nothing is deleted — past
-   bookings remain in the full "All bookings" (`?view=all`) history.
-2. **Date-grouped collapsible accordion** for "Ready to offer":
-   - one row per tour-day; only days that actually have tours appear.
-   - each day header shows formatted date, a "N tours" chip, total pax, and an
-     "over 10" flag if any slot-group exceeds 10 pax.
-   - collapsed by default (nearest day open); click a day to expand and reveal
-     that day's slot-jobs with the existing Offer / Assign guide / Split actions.
+**This file is not a changelog** — `git log` is. It holds the behaviour contract for
+recent work plus a small set of standing rules that are easy to get wrong. For
+security status, `SECURITY-PUNCHLIST.md` is the authority; this file only points at it.
 
-## All bookings (BookingsTable)
-3. **Bulk delete.** With rows selected, a "Delete" button in the bulk bar removes
-   them permanently (one confirm) via `POST /api/bookings {action:"delete", ids:[]}`.
+Last refreshed: 2026-08-16.
 
-## Roster day stats bar (AppClient `opDay`)
-4. **Count guides, not slots.** Four numbers for the selected day:
-   - Available = guides with ≥1 open slot
-   - Assigned  = guides with a job that day
-   - Busy      = guides with SOME busy slots but not the whole day
-   - Day off   = guides who blocked the WHOLE day
-   (i18n keys `guidesAvailable` / `assigned` / `busy` / `dayOff` — EN + TH.)
+---
 
-## Capacity
-5. **Hard cap 10 pax** per guide/group. `src/lib/capacity.ts`: `PAX_PER_GUIDE = 10`,
-   `SPLIT_AT = 11`. Over 10 → operator alert + manual split (whole bookings only).
+## Current work
 
-## Security
-6. (done) `next.config.mjs` sends HSTS, X-Frame-Options, X-Content-Type-Options,
-   Referrer-Policy, Permissions-Policy, and a minimal CSP.
-7. (done) `src/lib/crypto.ts` refuses to boot in production without `AUTH_SECRET`.
-8. (TODO) Rate-limit / lockout the email+password login (`auth.ts`) — currently
-   brute-forceable. See `SECURITY-PUNCHLIST.md`.
-9. (TODO) Require auth on the Bokun webhook (set `BOKUN_WEBHOOK_TOKEN` now; prefer
-   HMAC). See `SECURITY-PUNCHLIST.md`.
+### Review rewards name a JOB, not a booking (PR #105 — open, not yet merged)
+The **Additional Guide Payment** table is part of an accounting document, so its
+reference column now reads **Related Job No. / เลขที่งานที่เกี่ยวข้อง**, never a raw
+booking ref.
 
-## Job sheet
-10. **Operator PDF export.** `/api/jobsheet/pdf` returns a print-ready A4 job sheet
-    (Thai-safe, mirrors the Excel content); a "PDF" button sits next to "Excel".
+- Reward earned by a guest of *this* job → prints this sheet's ref (`FOLK-BKK-…`).
+- Reward carried over from another job → prints *that* job's ref.
+- The operator may still type either form. A booking no. (`GYG…`) is backstage: the
+  PDF resolves it to a job. A job ref (`FOLK-BKK-…`) is stored as-is.
+- Resolution lives in `resolveRelatedJobRef` (`lib/jobsheet.ts`) and matches
+  **exactly** on `bookingNo`. The SQL `ILIKE` in `api/jobsheet/pdf` only *narrows*
+  candidate rows — it must never decide the answer, or `GYG12` prints the job number
+  belonging to `GYG123`. If you touch this, keep the exact match.
+- `reviewBelongsToJob` still decides whose *cost* a reward is. Presentation changed;
+  `reviewOwn`/`reviewOther`, job expenses and the payout did not.
+
+### Standing rule: the guide fee's net line
+Every surface says **Net Guide Fee / ค่าจ้างมัคคุเทศก์สุทธิ** — editor, PDF, Excel,
+Drive. Don't reintroduce "Net Payable"; the accountant reads these side by side.
+
+---
+
+## Standing rules that are easy to get wrong
+
+### Capacity — 12 pax, split at 13
+`src/lib/capacity.ts` is the **single source of truth**: `PAX_PER_GUIDE = 12`,
+`SPLIT_AT = 13`. Raised from 10/11 per operator decision on 7 Aug 2026 (PR #53).
+API routes and UI import it — never hardcode a cap. Over the cap → operator alert and
+a manual split of **whole bookings only** (never split a party).
+
+> Older docs (including this file before today, and `SECURITY-PUNCHLIST.md` §3) still
+> say 10/11. The code and its comment are correct; the docs lagged.
+
+### Roster day stats count GUIDES, not slots
+Four numbers for the selected day in `AppClient` (`opDay`):
+Available = guides with ≥1 open slot · Assigned = guides with a job that day ·
+Busy = guides with *some* busy slots but not the whole day · Day off = guides who
+blocked the **whole** day. (i18n keys `guidesAvailable` / `assigned` / `busy` / `dayOff`, EN + TH.)
+
+### No-show pax ≠ no-show bookings
+Different units — see the comment above `noShowStats` in `lib/jobsheet.ts`. A no-show
+is a booking that did not come **at all**; partial reductions are guests trimming, not
+no-shows, and stay out of both numbers.
+
+---
+
+## Shipped earlier (June–August 2026)
+
+Kept for context — these describe behaviour still in the product.
+
+1. **Incoming bookings filters past-dated tours.** Default `GET /api/bookings` shows
+   today-or-later (Asia/Bangkok). `null`-dated bookings are kept (they still need a
+   date). Nothing is deleted — past bookings stay in `?view=all`.
+2. **Date-grouped accordion** for "Ready to offer": one row per tour-day, each header
+   showing the date, an "N tours" chip, total pax, and an over-cap flag. Collapsed by
+   default with the nearest day open.
+3. **Bulk delete** in `BookingsTable` — one confirm, via `POST /api/bookings {action:"delete", ids:[]}`.
+4. **Operator PDF export** — `/api/jobsheet/pdf` returns a print-ready A4 job sheet
+   (Thai-safe, mirrors the Excel content), alongside the "Excel" button.
+5. **Job sheet as an accounting document** — guide advances and settlement, a
+   certification date + fixed signature, Thai annotations throughout, and the
+   review-reward separation that PR #105 above completes.
+
+---
+
+## Security status
+
+`SECURITY-PUNCHLIST.md` is the authority. Two items as of 2026-08-16:
+
+- ✅ **Login rate-limit / lockout — done.** `lib/ratelimit.ts` wired into `auth.ts`:
+  8 failures in 15 min locks that email for 15 min, reset on success. Caveat: buckets
+  are in-memory (per-process), correct for a single Railway instance only.
+- ⚠️ **Bokun webhook — still open until an env var is set.** The route accepts
+  `x-webhook-token` (preferred) or `?token=`, and warns on every call when unset, but
+  **if `BOKUN_WEBHOOK_TOKEN` is unset the endpoint accepts anyone's POST.** Set it in
+  Railway and add the matching header to the Bokun webhook URL. HMAC (like the LINE
+  webhook) is the better fix later.
+
+> ⚠️ **This repository is public.** `SECURITY-PUNCHLIST.md`, `CLAUDE.md` and this file
+> describe the above openly, including the route path. That is a live production
+> endpoint — closing it is the fix, not un-documenting it.
 
 ## Deploy reminder
-- Set `AUTH_SECRET` in Railway before deploying — the app now requires it, and it
-  is the key that decrypts all stored documents/PII. Never lose or rotate it casually.
+`AUTH_SECRET` must be set in Railway. It is the key that decrypts all stored
+documents and PII — never lose or rotate it casually. The app refuses to boot in
+production without it (`lib/crypto.ts`).
