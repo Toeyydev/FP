@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "update") {
-    const p = z.object({ id: z.string().min(1), name: z.string().max(160).optional(), time: z.string().max(20).optional(), durationMin: z.number().int().min(15).max(720).nullable().optional(), meetingPoint: z.string().max(200).nullable().optional(), itinerary: z.string().max(4000).nullable().optional(), included: z.string().max(2000).nullable().optional(), bring: z.string().max(2000).nullable().optional() }).safeParse(body);
+    const p = z.object({ id: z.string().min(1), name: z.string().max(160).optional(), time: z.string().max(20).optional(), durationMin: z.number().int().min(15).max(720).nullable().optional(), meetingPoint: z.string().max(200).nullable().optional(), itinerary: z.string().max(4000).nullable().optional(), included: z.string().max(2000).nullable().optional(), bring: z.string().max(2000).nullable().optional(), priceAdult: z.number().min(0).max(1000000).nullable().optional(), priceChild: z.number().min(0).max(1000000).nullable().optional(), defaultCapacity: z.number().int().min(1).max(999).nullable().optional() }).safeParse(body);
     if (!p.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const { id, ...rest } = p.data;
     const data: Record<string, unknown> = {};

@@ -192,7 +192,11 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
 // A live booking was cancelled (e.g. a GetYourGuide cancellation arriving via the
 // Bokun webhook). If its slot is assigned to a guide, re-sync the guide's pax and
 // tell them in real time so they aren't left expecting a guest who won't show.
-async function onBookingCancelled(b: { date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
+// Exported so the reservation desk's cancel path runs the same assignment and
+// guide-notification side effects as an OTA cancellation. A desk cancellation
+// that quietly skipped these would leave a guide rostered for guests who are no
+// longer coming.
+export async function onBookingCancelled(b: { date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
   try {
     if (!b.date || b.slotIdx == null) return;
     const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true, googleEventId: true, opsGoogleEventId: true, date: true, slotIdx: true } });
