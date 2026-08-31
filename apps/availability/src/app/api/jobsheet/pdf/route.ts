@@ -168,10 +168,31 @@ export async function GET(req: NextRequest) {
   td.n, th.n { text-align:right; } td.c { text-align:center; }
   .tot td { font-weight:600; background:#fafafa; border-bottom:0; }
   tr:has(+ .tot) td { border-bottom:0; }
-  .summary { margin-top:16px; margin-left:auto; width:fit-content; min-width:280px; max-width:100%; }
+  /* Company cost beside the transfer. Previously one fit-content column pinned to
+     the right, leaving the left half of an A4 page empty. */
+  .money-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;
+               align-items:start; break-inside:avoid; page-break-inside:avoid; }
+  .summary { margin:0; width:auto; min-width:0; max-width:100%; }
   .summary > div { gap:18px; }
   .summary div { display:flex; justify-content:space-between; padding:5px 8px; }
   .summary .grand { background:#bfe3bf; font-weight:600; border-radius:4px; font-size:14px; }
+  .sum-head { font-weight:700; margin-bottom:2px; padding:0 8px;
+              display:flex; justify-content:space-between; }
+  .summary .sub { padding:1px 8px 1px 22px; font-size:10.5px; color:#6b746f; }
+  .summary .sub b { font-weight:600; color:#6b746f; }
+  .summary .handoff { justify-content:flex-end; font-size:10px; color:#8a8f8b; padding-top:4px; }
+  .netpay { border:1px solid #cbe5d6; background:#eef7f0; border-radius:8px; padding:10px 12px; }
+  .netpay div { display:flex; justify-content:space-between; gap:14px; padding:3px 0; }
+  .netpay .netpay-top { align-items:baseline; padding:0 0 7px; margin-bottom:6px;
+                        border-bottom:1px solid #cbe5d6; }
+  .netpay .netpay-top span { font-weight:700; font-size:13px; }
+  .netpay .netpay-top b { font-size:17px; font-weight:700; color:#14532d; }
+  /* Thai gloss sits under its English label, as it does everywhere else on the
+     sheet — .summary already does this and .netpay must match. */
+  .netpay span small { display:block; margin-left:0; }
+  .netpay .note { display:block; font-size:10px; color:#6b746f; line-height:1.5;
+                  padding-top:7px; margin-top:5px; border-top:1px solid #cbe5d6; }
+  @media (max-width:640px){ .money-row { grid-template-columns:1fr; } }
   .prepnote { background:#fbf4e8; border:1px solid #ecd9bf; color:#7e3a2c; border-radius:8px; padding:8px 12px; font-size:11.5px; margin:14px 0 2px; }
   [contenteditable="true"] { background:#fff7e8; outline:none; border-radius:3px; min-width:18px; }
   [contenteditable="true"]:focus { background:#fff2cf; box-shadow:0 0 0 2px #e9c98a inset; }
@@ -284,20 +305,38 @@ export async function GET(req: NextRequest) {
         <tr><td class="st" colspan="3">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(st)}</td></tr>
       </tbody></table></div>`;
     })() : ""}
-    <div class="summary" style="break-inside:avoid;page-break-inside:avoid">
-      <div style="font-weight:700;margin-bottom:2px">Financial Summary <small>สรุปรายการทางการเงิน</small></div>
-      <div><span>Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว</small></span><b id="sumExp">${thb(cost.tourExpenses)}</b></div>
-      <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
-      ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
-      <div><span>Withholding Tax <small>ภาษีหัก ณ ที่จ่าย</small></span><b>${thb(t.wht)}</b></div>
-      <div><span>Net Guide Fee <small>ค่าจ้างมัคคุเทศก์สุทธิ</small></span><b>${thb(t.netGuideFee)}</b></div>
-      ${guidePersonalTotal(expenses) > 0 ? `<div><span>Reimbursement Due <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style="color:#b45309">${thb(guidePersonalTotal(expenses))}</b></div>` : ""}
-      <!-- The document's bottom line is what we actually transfer to the guide, not
-           what the job cost the company. Those differ by the withholding tax (and by
-           any expense the company paid the vendor direct), so this MUST use
-           netPayToGuide - relabelling the cost figure would overstate the payment on
-           a document the guide receives. -->
-      <div class="grand"><span>Net Pay to Guide <small>จำนวนที่ต้องชำระให้มัคคุเทศก์</small></span><b id="grandTot">${thb(money.netPayToGuide)}</b></div>
+    <!-- Two blocks, side by side, matching the operator screen: what the job COST
+         the company on the left, what gets TRANSFERRED to the guide on the right.
+         They are different questions and were previously run together into one
+         column ending at "Net Pay to Guide", which invited reading the cost as the
+         payment. They differ by the withholding tax and by anything the company
+         settled with the vendor directly. -->
+    <div class="money-row">
+      <div class="summary">
+        <div class="sum-head">SUMMARY <small>สรุปรายการทางการเงิน</small></div>
+        <div><span>Total Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว (ต้นทุนบริษัท)</small></span><b id="sumExp">${thb(cost.tourExpenses)}</b></div>
+        ${money.reimbursementDue > 0 ? `<div class="sub"><span>of which reimbursable to guide <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
+        ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
+        <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
+        <div class="sub"><span>of which withheld as tax (WHT) <small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>${thb(t.wht)}</b></div>
+        <!-- id kept on the figure the fillable prep script actually recomputes
+             (expenses + review + gross fee). It previously sat on "Net Pay to
+             Guide", so typing into the prep sheet overwrote the payment figure
+             with the company-cost one. -->
+        <div class="grand"><span>Total Company Cost <small>รวมต้นทุน</small></span><b id="grandTot">${thb(money.totalCompanyCost)}</b></div>
+        <div class="handoff">what the job cost — not the amount to transfer →</div>
+      </div>
+
+      <div class="netpay">
+        <div class="netpay-top">
+          <span>Transfer to guide <small>ยอดที่ต้องโอนให้มัคคุเทศก์</small></span>
+          <b>${thb(money.netPayToGuide)}</b>
+        </div>
+        <div><span>Guide fee after WHT <small>ค่าจ้างหลังหักภาษี</small></span><b>${thb(t.netGuideFee)}</b></div>
+        ${money.additionalGuidePayment > 0 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment)}</b></div>` : ""}
+        ${money.reimbursementDue > 0 ? `<div><span>Reimbursement for expenses <small>คืนเงินสำรองจ่าย</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
+        ${money.settledByCompany > 0 ? `<div class="note">${thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it.<br><small>ค่าใช้จ่ายส่วนนี้บริษัทชำระให้ผู้ขายโดยตรงแล้ว</small></div>` : ""}
+      </div>
     </div>
     <div class="approve">
       <div class="certnote">${esc(CERT_STATEMENT_TH)}</div>

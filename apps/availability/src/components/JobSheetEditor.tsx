@@ -1042,7 +1042,12 @@ export default function JobSheetEditor() {
           const rows = sheet.expenses.map((e, i) => ({ e, i })).filter(({ e }) => isReviewExpense(e));
           if (!rows.length && ro) return null;
           return (
-            <div style={{ marginTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
+            // An operator still needs the empty table on screen to add a row to.
+            // On paper it is a heading and column titles over nothing, so the
+            // printed evidence document simply omits the section — the same way
+            // it omits any other section that has nothing to certify.
+            <div className={rows.length ? undefined : "no-print"}
+                 style={{ marginTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
               <h3 className="js-section" style={{ background: "#efe7f3" }}>Additional Guide Payment / Review Reward<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายการจ่ายเพิ่มเติมให้มัคคุเทศก์"}</small><span className="js-sub">Separate from tour expenses and the base guide fee</span></h3>
               <table className="js-table">
                 <thead><tr>
@@ -1265,14 +1270,13 @@ export default function JobSheetEditor() {
               </div>
             )}
           </div>
-          <div className="js-netpay-status">
-            <span>Payment Status<small>สถานะการจ่ายเงิน</small></span>
-            {payment?.paid
-              ? <span className="badge active">✓ Paid{paidLabel()}</span>
-              : payment?.status === "APPROVED"
-                ? <span className="badge pending">Approved — not yet paid</span>
-                : <span className="badge muted">Pending</span>}
-          </div>
+          {/* Payment status deliberately does NOT appear here. The job sheet is the
+              evidence document — it certifies that the tour ran, what it cost, and
+              what is owed, and it gets signed. Whether the transfer has since gone
+              out is mutable state that changes AFTER certification, so printing it
+              on a signed document means the paper and the truth disagree the moment
+              anything moves. It lives on the operator's Finance panel (no-print)
+              and on Payments, which is the record of what was actually transferred. */}
           {/* Payments still transfers expenses + net fee, company-direct rows
               included. Until that screen adopts this formula the two figures differ,
               and hiding that would let someone pay the wrong amount believing the
