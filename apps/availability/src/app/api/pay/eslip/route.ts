@@ -107,6 +107,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, link, slips, slipsTotal: st.slipsTotal, payout: st.payout, remaining: st.remaining, paid: st.paid, warn: st.warn, delta: st.delta, count: slips.length, driveError, peakRef: peakCode ?? data.peakRef });
   }
 
+  // ---- Guard: never let a second slip overwrite the first ----
+  // Without an amount this path REPLACES eslipUrl and marks every listed tour PAID.
+  // That is right for one transfer covering several tours, and wrong for a second
+  // transfer topping up a tour that was short: the first slip would be unlinked
+  // (the file survives in Drive, nothing points at it) and the tour would read as
+  // fully settled while money was still owed. Splitting a payment has its own
+  // path, which sums the slips and only marks PAID at an exact match.
+  const alreadySlipped = await prisma.tourPayment.findMany({
+    where: { OR: jobs.map((j) => ({ guideId, date: j.date, slotIdx: j.slotIdx })) },
+    select: { date: true, slotIdx: true, eslipUrl: true, slips: true },
+  });
+  const hasSlipAlready = alreadySlipped.filter(
+    (p) => p.eslipUrl || (Array.isArray(p.slips) && p.slips.length > 0),
+  );
+  if (hasSlipAlready.length) {
+    return NextResponse.json({
+      error: "slip-exists",
+      detail: `${hasSlipAlready.length} of these tours already has a slip. To record a second transfer use "Add another transfer", which asks for the amount and only marks the tour paid once the slips add up. · งานนี้มีสลิปแล้ว ถ้าจะบันทึกการโอนอีกครั้งให้ใช้ปุ่ม "โอนเพิ่ม" ซึ่งจะถามยอดและจะขึ้นว่าจ่ายครบเมื่อรวมกันพอดี`,
+    }, { status: 409 });
+  }
+
   const dates = [...new Set(jobs.map((j) => j.date))].sort();
   const earliest = dates[0];
   const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();

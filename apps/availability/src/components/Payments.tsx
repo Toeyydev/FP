@@ -191,6 +191,21 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // Split payment: add ONE slip (with its amount) to a single tour. Several slips
   // can be added and must sum to the tour's payout ("the right number") before it
   // shows Paid. A mismatch is reported so the operator can correct the amount.
+  // The transfer amount is the one number that must not be retyped from memory —
+  // or read off another screen. The operator reported taking it from PEAK and
+  // picking the wrong column there (gross instead of net of withholding tax, a
+  // 3% miss). FolkOPS already knows the exact figure; make it one tap to copy so
+  // there is no reason to look anywhere else.
+  const [copied, setCopied] = useState<string>("");
+  const copyAmount = (key: string, amount: number) => {
+    // Plain digits, no ฿ and no thousands separator — this is pasted into a
+    // banking app, which rejects both.
+    const plain = amount.toFixed(2);
+    navigator.clipboard?.writeText(plain)
+      .then(() => { setCopied(key); setTimeout(() => setCopied(""), 1500); })
+      .catch(() => {});
+  };
+
   async function addSplitSlip(guideId: string, job: Job, file: File) {
     const remaining = matchState(job.slips ?? [], job.amount).remaining;
     const suggested = remaining > 0 ? String(remaining) : "";
@@ -360,7 +375,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
                   <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
                   <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>
-                    {thb(j.amount)}
+                    <button type="button" className="pay-copy"
+                      title={`Copy ${thb(j.amount)} to paste into your banking app · คัดลอกยอดไปวางในแอปธนาคาร`}
+                      onClick={() => copyAmount(`${r.guideId}|${j.date}|${j.slotIdx}`, j.amount)}>
+                      {thb(j.amount)}
+                      <span className="pay-copy-tag">{copied === `${r.guideId}|${j.date}|${j.slotIdx}` ? "copied" : "copy"}</span>
+                    </button>
                     {(j.expenses ?? 0) > 0 && <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Guide fee (after WHT) + expense reimbursement">fee {thb(j.fee)} + reimb. {thb(j.expenses)}</span>}
                   </span>
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}

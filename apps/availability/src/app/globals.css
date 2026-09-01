@@ -1292,3 +1292,15 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .gs-exp-head{font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;
   color:var(--ink-soft);margin:2px 0 4px;display:flex;gap:6px;align-items:baseline}
 .gs-exp-head small{font-size:10.5px;font-weight:500;letter-spacing:0;text-transform:none}
+
+/* The payout amount as a copy control. It reads as the number it always was —
+   the button affordance only appears on hover/focus — because the figure itself
+   is what the operator scans down the column for. */
+.pay-copy{font:inherit;font-variant-numeric:tabular-nums;color:inherit;background:none;
+  border:1px solid transparent;border-radius:7px;padding:1px 6px;cursor:pointer;
+  display:inline-flex;align-items:baseline;gap:6px}
+.pay-copy:hover,.pay-copy:focus-visible{border-color:var(--line-strong);background:var(--grey-bg)}
+.pay-copy-tag{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-faint);opacity:0;transition:opacity .12s}
+.pay-copy:hover .pay-copy-tag,.pay-copy:focus-visible .pay-copy-tag{opacity:1}
+.pay-copy-tag:not(:empty){color:var(--green)}
