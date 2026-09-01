@@ -120,6 +120,32 @@ export function expenseAmount(e: Expense): number {
 export function isReviewExpense(e: { description?: string | null }): boolean {
   return (e.description || "").trim().toLowerCase().startsWith("review");
 }
+// What the GUIDE is shown they will receive.
+//
+// Two rules this exists to hold together:
+//   * Tour expenses come from whichever list is authoritative right now — the
+//     guide's own report while it is open, the operator's record once it is not.
+//   * The review reward ALWAYS comes from the operator's record and is added
+//     once. It is compensation the operator awards, not something a guide reports,
+//     so it must not disappear when the guide files a report that has no review
+//     lines in it — and must not be counted twice when their report was seeded
+//     from the operator's rows, which already contained them.
+export type GuidePayoutView = { tourExpenses: number; reviewReward: number; total: number };
+
+export function guidePayoutView(args: {
+  operatorExpenses: Expense[];
+  reportedExpenses: Expense[];
+  netGuideFee: number;
+  /** true while the guide's own report is the live figure (tour done, not yet paid) */
+  useReported: boolean;
+}): GuidePayoutView {
+  const tourOnly = (rows: Expense[]) =>
+    (rows ?? []).filter((e) => !isReviewExpense(e)).reduce((sum, e) => sum + expenseAmount(e), 0);
+  const tourExpenses = tourOnly(args.useReported ? args.reportedExpenses : args.operatorExpenses);
+  const reviewReward = reviewRewardTotal(args.operatorExpenses);
+  return { tourExpenses, reviewReward, total: args.netGuideFee + tourExpenses + reviewReward };
+}
+
 export function reviewRewardTotal(expenses: Expense[]): number {
   return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
 }

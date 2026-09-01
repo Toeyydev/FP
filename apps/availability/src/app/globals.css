@@ -1285,3 +1285,10 @@ body:has(.op-layout) .wrap{max-width:1440px}
   .js-money-row .js-sum-arrow{visibility:hidden;position:relative}
   .js-money-row .js-sum-arrow::after{content:"→";visibility:visible;position:absolute;left:0}
 }
+
+/* Heading over the operator's recorded expenses in the guide's view. Needed only
+   while the guide's own report is open, where two expense lists sit together and
+   must not be mistaken for each other. */
+.gs-exp-head{font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;
+  color:var(--ink-soft);margin:2px 0 4px;display:flex;gap:6px;align-items:baseline}
+.gs-exp-head small{font-size:10.5px;font-weight:500;letter-spacing:0;text-transform:none}

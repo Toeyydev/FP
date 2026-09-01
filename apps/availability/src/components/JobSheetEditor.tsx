@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal, guidePayoutView } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
 import { canonicalPaidBy, figuresNeedRecheck, jobSheetTotals } from "@/lib/peak-sync";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -547,8 +547,20 @@ export default function JobSheetEditor() {
         // Once paid (slip uploaded), the report flow closes and the summary shows the
         // operator's FINAL official expenses (t.totalExpenses) — which equal the transfer.
         const canReport = (checkedIn || sheet.date <= today) && !paid; // tour done & not yet paid → guide reports
-        const expShown = canReport ? guideExpTotal : t.totalExpenses;
-        const grandShown = t.netGuideFee + expShown;
+        // The review reward is guide COMPENSATION recorded by the operator — never
+        // something the guide reports on. It was being lost: while the report window
+        // is open the guide's payout is built from their own rows, and a guide who
+        // has filed a report has no review lines in it, so the reward silently
+        // vanished from "You'll receive". Take it from the operator's record and add
+        // it once — that also stops it double-counting when the report was seeded
+        // from those same rows.
+        const payoutView = guidePayoutView({
+          operatorExpenses: sheet.expenses, reportedExpenses: guideExp,
+          netGuideFee: t.netGuideFee, useReported: canReport,
+        });
+        const reviewReward = payoutView.reviewReward;
+        const expShown = payoutView.tourExpenses;
+        const grandShown = payoutView.total;
         return (
           <section className="panel guide-sum">
             <div className="gs-head">
@@ -592,7 +604,15 @@ export default function JobSheetEditor() {
               </div>
               <div>
                 <h3>Payout</h3>
-                {!canReport && (exp.length ? (
+                {/* The operator's recorded expenses, ALWAYS visible. This list used to
+                    be hidden behind !canReport — that is, until the job was marked
+                    paid — so for most of a job's life an operator's correction was
+                    invisible to the guide it concerned. A guide who has already filed
+                    their own report saw only their own figures and had no way to tell
+                    that Folkpaths had recorded something different. */}
+                {exp.length ? (
+                  <>
+                  {canReport && <div className="gs-exp-head">Recorded by Folkpaths<small>ที่บริษัทบันทึกไว้</small></div>}
                   <ul className="gs-exp">
                     {exp.map((e, i) => (
                       <li key={i}>
@@ -602,10 +622,12 @@ export default function JobSheetEditor() {
                     ))}
                     <li className="gs-total"><span>Total expenses</span><b>{thb(t.totalExpenses)}</b></li>
                   </ul>
-                ) : <div className="gs-empty">No expenses recorded.</div>)}
+                  </>
+                ) : <div className="gs-empty">No expenses recorded.</div>}
                 <div className="gs-payout">
                   <div className="gs-payout-row"><span>Expenses{canReport ? " (your report)" : " (reimbursed)"}</span><b>{thb(expShown)}</b></div>
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
+                  {reviewReward > 0 && <div className="gs-payout-row"><span>Review reward<br /><small className="gs-calc">ค่าตอบแทนรีวิว</small></span><b>{thb(reviewReward)}</b></div>}
                   <div className="gs-payout-row gs-grand"><span>You&apos;ll receive</span><b>{thb(grandShown)}</b></div>
                 </div>
                 {hasAdvance && (
