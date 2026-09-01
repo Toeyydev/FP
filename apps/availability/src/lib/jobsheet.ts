@@ -118,7 +118,13 @@ export function expenseAmount(e: Expense): number {
 // normal expense (rate × count, e.g. 2 × ฿50) but surfaced on its own line on the
 // job sheet and the guide's Pay so they can see what a review earned them.
 export function isReviewExpense(e: { description?: string | null }): boolean {
-  return (e.description || "").trim().toLowerCase().startsWith("review");
+  const d = (e.description || "").trim().toLowerCase();
+  // Thai counts too. Operators work in both languages, and a row typed
+  // "ค่ารีวิว" used to fall through as an ordinary tour expense — booked to
+  // ต้นทุนการให้บริการ instead of ค่ารีวิวลูกค้า, and left out of the guide's
+  // reward. A silent misclassification of someone's pay is not an acceptable
+  // outcome for choosing the wrong keyboard.
+  return d.startsWith("review") || d.includes("รีวิว");
 }
 // What the GUIDE is shown they will receive.
 //

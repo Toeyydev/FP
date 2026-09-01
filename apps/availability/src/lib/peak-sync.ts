@@ -200,7 +200,7 @@ export function jobSheetTotals(
 // that understatement is invisible unless we say so at the number itself.
 //
 // Each reason names the affected figure, what is wrong, and what to do about it.
-export type RecheckField = "totalTourExpenses" | "reimbursementDue" | "netPayToGuide";
+export type RecheckField = "totalTourExpenses" | "reimbursementDue" | "netPayToGuide" | "reviewReward";
 export type Recheck = { field: RecheckField; short: string; detail: string; amount?: number };
 
 export function figuresNeedRecheck(
@@ -214,6 +214,24 @@ export function figuresNeedRecheck(
   rowStatuses?: (("READY" | "NEEDS_REVIEW" | "UNMAPPED") | null | undefined)[],
 ): Recheck[] {
   const out: Recheck[] = [];
+
+  // A review reward is priced per review: price x count. Leaving the count blank
+  // makes the row worth ZERO while still reading "Review 50" on screen, so it
+  // looks recorded and pays nothing. Nineteen such rows were sitting in
+  // production across eight guides. Say it plainly rather than let the row look
+  // done.
+  const zeroReviews = (expenses ?? []).filter(
+    (e) => isReviewExpense(e) && (e.price ?? 0) > 0 && expenseAmount(e) === 0,
+  );
+  if (zeroReviews.length) {
+    const n = zeroReviews.length;
+    out.push({
+      field: "reviewReward",
+      short: `${n} review reward${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} worth ฿0 · ค่าตอบแทนรีวิวเป็น ฿0`,
+      detail: `The count is blank, so the row pays nothing however large the rate — enter how many reviews it covers. · ช่องจำนวนว่าง บรรทัดนี้จึงจ่าย ฿0 ไม่ว่าเรตจะเท่าไหร่ กรุณาใส่จำนวนรีวิว`,
+    });
+  }
+
   const rows = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
 
   const untagged = rows.filter((e) => canonicalPaidBy(e) === "UNSPECIFIED");
