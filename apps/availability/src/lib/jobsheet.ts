@@ -118,8 +118,40 @@ export function expenseAmount(e: Expense): number {
 // normal expense (rate × count, e.g. 2 × ฿50) but surfaced on its own line on the
 // job sheet and the guide's Pay so they can see what a review earned them.
 export function isReviewExpense(e: { description?: string | null }): boolean {
-  return (e.description || "").trim().toLowerCase().startsWith("review");
+  const d = (e.description || "").trim().toLowerCase();
+  // Thai counts too. Operators work in both languages, and a row typed
+  // "ค่ารีวิว" used to fall through as an ordinary tour expense — booked to
+  // ต้นทุนการให้บริการ instead of ค่ารีวิวลูกค้า, and left out of the guide's
+  // reward. A silent misclassification of someone's pay is not an acceptable
+  // outcome for choosing the wrong keyboard.
+  return d.startsWith("review") || d.includes("รีวิว");
 }
+// What the GUIDE is shown they will receive.
+//
+// Two rules this exists to hold together:
+//   * Tour expenses come from whichever list is authoritative right now — the
+//     guide's own report while it is open, the operator's record once it is not.
+//   * The review reward ALWAYS comes from the operator's record and is added
+//     once. It is compensation the operator awards, not something a guide reports,
+//     so it must not disappear when the guide files a report that has no review
+//     lines in it — and must not be counted twice when their report was seeded
+//     from the operator's rows, which already contained them.
+export type GuidePayoutView = { tourExpenses: number; reviewReward: number; total: number };
+
+export function guidePayoutView(args: {
+  operatorExpenses: Expense[];
+  reportedExpenses: Expense[];
+  netGuideFee: number;
+  /** true while the guide's own report is the live figure (tour done, not yet paid) */
+  useReported: boolean;
+}): GuidePayoutView {
+  const tourOnly = (rows: Expense[]) =>
+    (rows ?? []).filter((e) => !isReviewExpense(e)).reduce((sum, e) => sum + expenseAmount(e), 0);
+  const tourExpenses = tourOnly(args.useReported ? args.reportedExpenses : args.operatorExpenses);
+  const reviewReward = reviewRewardTotal(args.operatorExpenses);
+  return { tourExpenses, reviewReward, total: args.netGuideFee + tourExpenses + reviewReward };
+}
+
 export function reviewRewardTotal(expenses: Expense[]): number {
   return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
 }
