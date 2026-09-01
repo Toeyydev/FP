@@ -202,12 +202,12 @@ export default function JobSheetEditor() {
     setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, noShowPax: ns, status: noShowStatus(ns, x.bookedPax), actualPax: Math.max(0, (x.bookedPax ?? 0) - ns) } : x) } : s);
     if (!b.bookingNo) return;
     // Record it first — the API also mirrors the count / status / actual pax onto the sheet.
-    await fetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => {});
+    await jfetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => {});
     // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
     // record reflects it immediately (best-effort; needs a saved sheet + Drive).
     if (drive.enabled && drive.connected) {
       try {
-        const r = await fetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx }) });
+        const r = await jfetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx }) });
         setMsg(r.ok ? (ns > 0 ? "No-show saved & uploaded to Drive ✓" : "Updated & uploaded to Drive ✓") : "No-show saved ✓");
       } catch { setMsg("No-show saved ✓"); }
     } else setMsg(ns > 0 ? "No-show saved ✓" : "Updated ✓");
@@ -254,7 +254,7 @@ export default function JobSheetEditor() {
       try { blob = await shrinkImage(advForm.file); } catch { /* keep original */ }
       fd.append("file", blob, shrunkName(advForm.file.name, blob));
     }
-    const r = await fetch("/api/jobsheet/advance", { method: "POST", body: fd });
+    const r = await jfetch("/api/jobsheet/advance", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setAdvBusy(false);
     if (!r.ok) {
@@ -274,7 +274,7 @@ export default function JobSheetEditor() {
     if (!sheet) return;
     if (!confirm(`Remove this ${kind === "advance" ? "advance" : "return"} of ${thb(row.amount)}? The full record is kept in the audit log; any slip stays in Drive.`)) return;
     setAdvBusy(true);
-    const r = await fetch("/api/jobsheet/advance", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, id: row.id, guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx }) });
+    const r = await jfetch("/api/jobsheet/advance", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, id: row.id, guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx }) });
     const d = await r.json().catch(() => ({}));
     setAdvBusy(false);
     if (!r.ok) { setMsg("Couldn't remove it."); return; }
@@ -291,7 +291,7 @@ export default function JobSheetEditor() {
     if (!sheet) return;
     setExpBusy(true); setMsg("");
     const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
-    const r = await fetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
+    const r = await jfetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
     if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
   }
@@ -349,23 +349,35 @@ export default function JobSheetEditor() {
   // `override` lets a caller save fields it just computed WITHOUT waiting for the
   // async setState to land (e.g. accept-guide-expenses saves the merged list right
   // away). Falls back to current sheet state when omitted.
+  // A dropped request must never leave the screen stuck. fetch() REJECTS on a
+  // network failure — a phone losing signal mid-save, the server restarting, the
+  // PWA going offline — and every handler below sets busy=true before awaiting it.
+  // An unhandled rejection therefore skips setBusy(false), leaving Save, Approve
+  // and the rest disabled until the page is reloaded, with nothing on screen to
+  // say why. A synthetic failed Response keeps each handler on its normal !r.ok
+  // path, which already clears busy and shows a message.
+  const jfetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    try { return await fetch(url, init); }
+    catch { return new Response(JSON.stringify({ error: "offline" }), { status: 503, headers: { "content-type": "application/json" } }); }
+  };
+
   async function save(override?: Partial<Sheet>): Promise<boolean> {
     setBusy(true); setMsg("");
     const s = { ...sheet!, ...override };
-    const r = await fetch("/api/jobsheet", {
+    const r = await jfetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "" }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
+    if (!r.ok) { setMsg(d.error === "offline" ? "No connection — your changes are still here. Try Save again." : d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
     setSheet(d.sheet); setSaved(true); setMsg("Saved ✓"); return true;
   }
   async function sendToGuide() {
     // Auto-save first so you never hit a "save first" dead-end.
     if (!saved) { const ok = await save(); if (!ok) return; }
     setBusy(true); setMsg("Sending…");
-    const r = await fetch("/api/jobsheet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: sheet!.date, guideId: sheet!.guideId }) });
+    const r = await jfetch("/api/jobsheet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: sheet!.date, guideId: sheet!.guideId }) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg("Send failed."); return; }
@@ -391,10 +403,10 @@ export default function JobSheetEditor() {
     if (!saved) { const ok = await save(); if (!ok) return; }
     const approve = !isApproved(sheet.approvalStatus);
     setBusy(true); setMsg(approve ? "Approving…" : "Removing approval…");
-    const r = await fetch("/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, approve }) });
+    const r = await jfetch("/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, approve }) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
+    if (!r.ok) { setMsg(d.error === "offline" ? "No connection — nothing was changed. Try again." : d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
     setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt } : s);
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
     // PEAK readiness is computed SERVER-side and one of its reasons is "Job sheet
@@ -412,7 +424,7 @@ export default function JobSheetEditor() {
   async function savePeakContact(value: string) {
     if (!sheet) return;
     setBusy(true); setMsg(value.trim() ? "Mapping guide to PEAK…" : "Clearing mapping…");
-    const r = await fetch("/api/jobsheet/peak-contact", {
+    const r = await jfetch("/api/jobsheet/peak-contact", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         guideId: sheet.guideId,
@@ -442,7 +454,7 @@ export default function JobSheetEditor() {
     const fd = new FormData();
     fd.append("guideId", sheet.guideId); fd.append("date", sheet.date); fd.append("slotIdx", String(sheet.slotIdx)); fd.append("expenseIndex", String(i));
     fd.append("file", blob, shrunkName(file.name, blob));
-    const r = await fetch("/api/jobsheet/receipt", { method: "POST", body: fd });
+    const r = await jfetch("/api/jobsheet/receipt", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg(d.error === "too-large" ? "Receipt too large (max 10 MB)." : d.error === "bad-type" ? "Upload an image or a PDF." : (d.error === "not-connected" || d.error === "not-configured") ? "Connect Google Drive first." : d.error === "no-sheet" ? "Save the sheet first." : "Couldn't attach the receipt."); return; }
@@ -452,7 +464,7 @@ export default function JobSheetEditor() {
     if (!sheet) return;
     if (!confirm("Remove this receipt from the expense line? The file stays in Drive.")) return;
     setBusy(true); setMsg("Removing receipt…");
-    const r = await fetch("/api/jobsheet/receipt", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenseIndex: i }) });
+    const r = await jfetch("/api/jobsheet/receipt", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenseIndex: i }) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg("Couldn't remove the receipt."); return; }
@@ -468,7 +480,7 @@ export default function JobSheetEditor() {
     const who = header?.name || sheet.guideId;
     if (!confirm(`Return this tour to the operator?\n${who} · ${when} · ${tour?.name ?? sheet.tourId}\n\n${sheet.guideId} is unassigned and the tour's bookings go back to the inbox to re-dispatch. The guide is notified.`)) return;
     setBusy(true); setMsg("Returning to operator…");
-    const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, release: true }) });
+    const r = await jfetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, release: true }) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg(d.error === "tour-in-progress" ? "Can't return — the guide already checked into this tour. Undo it from the Tour Log instead." : "Failed to return the job."); return; }
@@ -484,7 +496,7 @@ export default function JobSheetEditor() {
     const who = header?.name || sheet.guideId;
     if (!confirm(`Delete this job sheet?\n${who} · ${when} · ${tour?.name ?? sheet.tourId}\n\nDeletes the job sheet, the guide's assignment, payment, check-in, report and rating — AND removes this slot's bookings (including OTA/Bokun ones) so they don't re-appear as a job. Cancel them on the OTA first. Cannot be undone.`)) return;
     setBusy(true); setMsg("Deleting…");
-    const r = await fetch("/api/jobsheet", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, guardStarted: true }) });
+    const r = await jfetch("/api/jobsheet", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, guardStarted: true }) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg(d.error === "tour-in-progress" ? "This tour has already started — delete it from Payments / Tour Log instead." : d.error === "forbidden" ? "Operator only." : "Delete failed."); return; }
