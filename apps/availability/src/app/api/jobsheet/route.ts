@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { sheetRowFate, rowStays } from "@/lib/sheet-reconcile";
 import { paymentCoverage } from "@/lib/payment-coverage";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -322,6 +323,21 @@ export async function GET(req: NextRequest) {
       select: { externalRef: true, confirmationCode: true },
     }) : [];
     const movedRefSet = new Set(elsewhere.flatMap(refKeys));
+    // A guest who CANCELLED must come off the sheet. Until now reconcile could not
+    // even see them: allAtSlot loads only PENDING/OFFERED/ASSIGNED, so a cancelled
+    // row matched nothing, was not "moved" and was not "handed to another guide" —
+    // and so fell through the filter below and stayed for ever. Production carried
+    // 39 such rows across 20 sheets, 110 pax of guests who were not coming: tickets
+    // bought for them, and a payout computed on their heads.
+    const cancelledHere = savedRefs.length ? await prisma.booking.findMany({
+      where: {
+        date, slotIdx,
+        status: { in: ["CANCELLED", "IGNORED"] },
+        OR: [{ externalRef: { in: savedRefs } }, { confirmationCode: { in: savedRefs } }],
+      },
+      select: { externalRef: true, confirmationCode: true },
+    }) : [];
+    const cancelledRefSet = new Set(cancelledHere.flatMap(refKeys));
     // A guest re-tagged to ANOTHER guide at this same slot (a hybrid split) must drop
     // off this guide's saved sheet, so the two guides' sheets stay separated.
     const otherGuideRefSet = new Set(allAtSlot.filter((b) => b.assignedGuideId && b.assignedGuideId !== guideId).flatMap(refKeys));
@@ -334,7 +350,11 @@ export async function GET(req: NextRequest) {
         if (matched.has(r)) return true;                    // still active at this slot
         const rRef = rowRef(r);
         if (!rRef) return true;                             // manual row — always keep
-        return !movedRefSet.has(rRef) && !otherGuideRefSet.has(rRef); // drop if re-slotted elsewhere OR handed to another guide here
+        // The rule itself lives in lib/sheet-reconcile so it can be tested.
+        return rowStays(sheetRowFate({
+          matched: false, ref: rRef,
+          cancelledRefs: cancelledRefSet, movedRefs: movedRefSet, otherGuideRefs: otherGuideRefSet,
+        }));
       })
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked
