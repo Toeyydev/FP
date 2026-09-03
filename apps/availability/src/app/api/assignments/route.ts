@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { paxIndex } from "@/lib/assigned-pax";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -36,11 +37,19 @@ export async function GET(req: NextRequest) {
     select: { guideId: true, date: true, slotIdx: true, tourId: true, pax: true, note: true },
   });
 
+  // The board shows the guide their own job card. Assignment.pax is frozen at the
+  // offer, so recount the month's bookings — otherwise a guest moved onto the
+  // departure afterwards is invisible right up until the guide opens the sheet.
+  const livePax = paxIndex(await prisma.booking.findMany({
+    where: { date: { startsWith: month }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    select: { tourId: true, date: true, slotIdx: true, pax: true, assignedGuideId: true },
+  }));
+
   const out: Record<string, Record<number, Record<number, Job>>> = {};
   for (const r of rows) {
     const byDay = (out[r.guideId] ??= {});
     const byIdx = (byDay[dayOf(r.date)] ??= {});
-    byIdx[r.slotIdx] = { tour: r.tourId, pax: r.pax, note: r.note };
+    byIdx[r.slotIdx] = { tour: r.tourId, pax: livePax.for(r.tourId, r.date, r.slotIdx, r.guideId) ?? r.pax, note: r.note };
   }
   return NextResponse.json(out);
 }
