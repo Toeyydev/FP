@@ -3,7 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { timeRangeLabel, sweepExpiredOffers, createOffer } from "@/lib/offers";
+import { timeRangeLabel, sweepExpiredOffers, createOffer, acceptOffer } from "@/lib/offers";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 
 function ops(role?: string) {
@@ -107,6 +107,49 @@ export async function POST(req: NextRequest) {
     detail: { date, slotIdx, tourId, candidates: r.candidates, lineSent: r.lineSent },
   });
   return NextResponse.json({ ok: true, offerId: r.offerId, candidates: r.candidates, lineSent: r.lineSent });
+}
+
+// PATCH { id, guideId } — operator only. Take an OPEN offer and give it to a
+// named guide, without waiting for them to tap accept.
+//
+// 182 offers in production expired with nobody accepting. Some guides never
+// respond in the app at all — the job is agreed by phone or LINE and the offer
+// just sits there until it lapses, leaving the operator to build the assignment
+// by hand afterwards. This closes the offer the same way an acceptance would, so
+// one action produces the assignment, the job sheet and the audit trail.
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({ id: z.string().min(1), guideId: z.string().min(1) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { id, guideId } = parsed.data;
+
+  const guide = await prisma.user.findUnique({ where: { guideId }, select: { guideId: true } });
+  if (!guide) return NextResponse.json({ error: "unknown-guide" }, { status: 400 });
+
+  // Reuse the guide's own accept path so every rule it enforces still applies —
+  // the clash check that stops one guide holding two overlapping tours, the
+  // assignment, the job sheet, the calendar. An operator acting for a guide must
+  // not get a laxer path than the guide would.
+  const r = await acceptOffer(id, guideId);
+  if (!r.ok) {
+    const why = r.reason === "taken" ? "Another guide already took this offer."
+      : r.reason === "expired" ? "This offer has expired — create a new one, or assign the guide directly."
+      : r.reason === "clash" ? "That guide already has a tour overlapping this one."
+      : r.reason === "not-offered" ? "This offer was not sent to that guide."
+      : r.reason === "already-yours" ? "That guide already has this job."
+      : "This offer is no longer open.";
+    return NextResponse.json({ error: r.reason ?? "closed", detail: why }, { status: 409 });
+  }
+
+  await audit({
+    actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
+    // A distinct action from the guide's own acceptance: the record must show
+    // that the operator decided this, not that the guide agreed to it.
+    action: "offer.assigned_by_operator", entityType: "JobOffer", entityId: id,
+    detail: { guideId },
+  });
+  return NextResponse.json({ ok: true, guideId });
 }
 
 // DELETE { id } — operator only. Cancels/removes a job offer and clears it from

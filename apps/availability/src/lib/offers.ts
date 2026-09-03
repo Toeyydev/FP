@@ -152,7 +152,7 @@ export function timeRangeLabel(slotIdx: number, durationMin?: number | null): st
 
 export type AcceptResult =
   | { ok: true; offer: { id: string; date: string; slotIdx: number; tourId: string } }
-  | { ok: false; reason: "taken" | "expired" | "closed" | "not-offered" | "clash"; clashSlotIdx?: number };
+  | { ok: false; reason: "taken" | "expired" | "closed" | "not-offered" | "clash" | "already-yours"; clashSlotIdx?: number };
 
 // Atomic first-wins accept. The conditional updateMany (status OPEN + not expired)
 // can only succeed for ONE concurrent caller, so a race resolves to a single winner.
@@ -160,10 +160,25 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
   if (!offer) return { ok: false, reason: "closed" };
   if (offer.status === "ASSIGNED") return { ok: false, reason: "taken" };
-  if (offer.status !== "OPEN") return { ok: false, reason: "closed" };
-  if (offer.expiresAt.getTime() < Date.now()) {
+  if (offer.status !== "OPEN" && offer.status !== "EXPIRED") return { ok: false, reason: "closed" };
+
+  // A LATE accept is still worth taking. Offers expire in about two hours because
+  // some jobs are urgent and the operator needs to know quickly that nobody has
+  // taken one — that short life is deliberate and stays. But expiry only ends the
+  // ASKING; it does not fill the job. 59% of offers expired unclaimed (182 of 308),
+  // and the operator then assigned someone by hand anyway — so a guide tapping
+  // Accept an hour late was being turned away from a job that was still empty and
+  // about to be given to them regardless.
+  //
+  // The one thing that must still refuse is a job somebody is already on.
+  const expired = offer.expiresAt.getTime() < Date.now();
+  if (expired) {
     await prisma.jobOffer.updateMany({ where: { id: offerId, status: "OPEN" }, data: { status: "EXPIRED" } });
-    return { ok: false, reason: "expired" };
+    const filled = await prisma.assignment.findFirst({
+      where: { date: offer.date, slotIdx: offer.slotIdx },
+      select: { guideId: true },
+    });
+    if (filled) return { ok: false, reason: filled.guideId === guideId ? "already-yours" : "taken" };
   }
 
   // Don't let one guide hold two tours that clash in time. Offers are broadcast
@@ -181,8 +196,13 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   }
 
   // The race-safe claim: only one updateMany matches status=OPEN and flips it.
+  // The race-safe claim. In time: only a live OPEN offer matches. Late: the offer
+  // is EXPIRED and unclaimed, and assignedGuideId being null is what makes this
+  // first-wins — two late taps cannot both succeed.
   const won = await prisma.jobOffer.updateMany({
-    where: { id: offerId, status: "OPEN", expiresAt: { gt: new Date() } },
+    where: expired
+      ? { id: offerId, status: "EXPIRED", assignedGuideId: null }
+      : { id: offerId, status: "OPEN", expiresAt: { gt: new Date() } },
     data: { status: "ASSIGNED", assignedGuideId: guideId },
   });
   if (won.count !== 1) return { ok: false, reason: "taken" };
