@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
+import { paxIndex } from "@/lib/assigned-pax";
 import { sendPushToUser } from "@/lib/push";
 import { untagGuideSlotBookings } from "@/lib/offers";
 
@@ -25,13 +26,15 @@ export async function GET() {
 
   // Reconcile pax to the SOURCE OF TRUTH (actual bookings for each tour instance),
   // so My Tours matches the job sheet/summary instead of the free-hand offer number.
-  const bookedPax: Record<string, number> = {};
+  let livePax = paxIndex([]);
   if (rows.length) {
     const bookings = await prisma.booking.findMany({
       where: { OR: rows.map((a) => ({ tourId: a.tourId, date: a.date, slotIdx: a.slotIdx })), status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-      select: { tourId: true, date: true, slotIdx: true, pax: true },
+      select: { tourId: true, date: true, slotIdx: true, pax: true, assignedGuideId: true },
     });
-    for (const b of bookings) { const k = `${b.tourId}|${b.date}|${b.slotIdx}`; bookedPax[k] = (bookedPax[k] ?? 0) + (b.pax ?? 0); }
+    // Shared with the operator board, so the two screens can never disagree —
+    // and split slots give each guide their own share, not the whole departure.
+    livePax = paxIndex(bookings);
   }
 
   // Current lifecycle state per tour instance (latest check-in event).
@@ -46,7 +49,7 @@ export async function GET() {
 
   return NextResponse.json({
     items: rows.map((a) => {
-      const real = bookedPax[`${a.tourId}|${a.date}|${a.slotIdx}`];
+      const real = livePax.for(a.tourId, a.date, a.slotIdx, guideId);
       return {
         date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
         tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: real && real > 0 ? real : a.pax, note: a.note,

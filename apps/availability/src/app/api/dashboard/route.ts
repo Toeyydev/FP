@@ -6,6 +6,7 @@ import { guidesNeeded } from "@/lib/capacity";
 import { reconcileAssignedBookings, autoSyncBokun } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { cached, withTimeout } from "@/lib/api-cache";
+import { paxIndex } from "@/lib/assigned-pax";
 import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { money2 } from "@/lib/payment-batch";
 
@@ -74,12 +75,15 @@ async function buildDashboard() {
   // Today-only extras for the operations table (empty maps for other dates).
   const sheetX = new Map(todaySheets.map((s) => [`${s.guideId}|${s.slotIdx}`, s]));
   const payX = new Map(todayPays.map((p) => [`${p.guideId}|${p.slotIdx}`, p.status]));
+  // Recount pax from live bookings. Assignment.pax is frozen at the offer, so a
+  // booking added or moved onto the departure afterwards never reached the board.
+  const livePax = paxIndex(bookings);
   const fmt = (a: (typeof assigns)[number]) => {
     const c = ck[`${a.guideId}|${a.date}|${a.slotIdx}`];
     const state = c ? c.type : "NONE";
     const overdue = a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx);
     const x = a.date === today ? sheetX.get(`${a.guideId}|${a.slotIdx}`) : undefined;
-    return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue, report: rep[`${a.guideId}|${a.date}|${a.slotIdx}`] ?? null, ref: x?.ref ?? null, expenseReported: !!x?.guideExpensesAt, payStatus: (a.date === today ? payX.get(`${a.guideId}|${a.slotIdx}`) : undefined) ?? null };
+    return { date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "", tour: a.tour?.name ?? a.tourId, guideId: a.guideId, guide: gName(a.guideId), pax: livePax.for(a.tourId, a.date, a.slotIdx, a.guideId) ?? a.pax, state, checkedAt: c ? c.at.toISOString() : null, overdue, report: rep[`${a.guideId}|${a.date}|${a.slotIdx}`] ?? null, ref: x?.ref ?? null, expenseReported: !!x?.guideExpensesAt, payStatus: (a.date === today ? payX.get(`${a.guideId}|${a.slotIdx}`) : undefined) ?? null };
   };
 
   const tomorrow = bkk(1);
