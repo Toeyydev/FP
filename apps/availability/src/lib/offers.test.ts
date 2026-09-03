@@ -50,6 +50,11 @@ describe("offers — labels", () => {
   });
 });
 
+// A date far enough ahead that the test can never rot into "already happened".
+// createOffer refuses a past departure, so a hard-coded date eventually fails.
+const futureDate = () => new Date(Date.now() + 30 * 86_400_000 + 7 * 3_600_000).toISOString().slice(0, 10);
+const bkkToday = () => new Date(Date.now() + 7 * 3_600_000).toISOString().slice(0, 10);
+
 describe("offers — createOffer single-guide window", () => {
   it("gives a job offered to one specific guide a 2-hour accept window", async () => {
     prismaMock.tour.findUnique.mockResolvedValue({ id: "t1", name: "City Tour" });
@@ -63,7 +68,7 @@ describe("offers — createOffer single-guide window", () => {
     prismaMock.jobOffer.create.mockResolvedValue({ id: "of-new" });
 
     const before = Date.now();
-    const r = await createOffer({ tourId: "t1", date: "2026-06-20", slotIdx: 5, onlyGuideId: "G-003" });
+    const r = await createOffer({ tourId: "t1", date: futureDate(), slotIdx: 5, onlyGuideId: "G-003" });
     const after = Date.now();
 
     expect(r.candidates).toBe(1);
@@ -244,5 +249,33 @@ describe("offers — untagGuideSlotBookings (orphaned-tag prevention)", () => {
       where: { date: "2026-07-20", slotIdx: 2, assignedGuideId: "G-014" },
       data: { assignedGuideId: null, status: "PENDING" },
     });
+  });
+});
+
+describe("offers — a tour that already ran cannot be offered", () => {
+  it("refuses a past date without touching the DB or LINE", async () => {
+    const yesterday = new Date(Date.now() + 7 * 3_600_000 - 86_400_000).toISOString().slice(0, 10);
+    const r = await createOffer({ tourId: "t1", date: yesterday, slotIdx: 0 });
+    expect(r.past).toBe(true);
+    expect(r.offerId).toBeNull();
+    expect(r.candidates).toBe(0);
+    expect(r.lineSent).toBe(0);
+    expect(prismaMock.jobOffer.create).not.toHaveBeenCalled();
+    expect(prismaMock.tour.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("still allows today — a tour later the same day is offerable", async () => {
+    prismaMock.tour.findUnique.mockResolvedValue({ id: "t1", name: "City Tour" });
+    prismaMock.blockedDate.findUnique.mockResolvedValue(null);
+    prismaMock.blockedSlot.findUnique.mockResolvedValue(null);
+    prismaMock.user.findMany.mockResolvedValue([{ id: "u3", guideId: "G-003", displayName: "Somchai", lineUserId: null, email: null }]);
+    prismaMock.availability.findMany.mockResolvedValue([]);
+    prismaMock.assignment.findMany.mockResolvedValue([]);
+    prismaMock.leaveRequest.findMany.mockResolvedValue([]);
+    prismaMock.jobOffer.create.mockResolvedValue({ id: "of-today" });
+
+    const r = await createOffer({ tourId: "t1", date: bkkToday(), slotIdx: 3, onlyGuideId: "G-003" });
+    expect(r.past).toBeUndefined();
+    expect(r.candidates).toBe(1);
   });
 });
