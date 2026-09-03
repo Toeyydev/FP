@@ -145,19 +145,7 @@ model Tour {
   bring          String?
   durationMin    Int? // default tour length (prefills offer duration)
 
-  // ── Reservation system ──────────────────────────────────────────────────
-  // Sell price per person, in `currency`. Null means "not for direct sale yet":
-  // the reservation desk refuses to price a booking rather than inventing a
-  // number. Child price is optional — null means children pay the adult price.
-  priceAdult      Decimal? @db.Decimal(10, 2)
-  priceChild      Decimal? @db.Decimal(10, 2)
-  currency        String   @default("THB")
-  // Seats offered on a departure when one is generated for this tour. The
-  // per-departure capacity is what actually sells; this is only the default.
-  defaultCapacity Int?
-
   assignments Assignment[]
-  departures  Departure[]
 }
 
 model Availability {
@@ -367,111 +355,9 @@ model Booking {
   noShow           Boolean  @default(false) // any guest on this booking didn't arrive (kept in sync: noShowPax > 0)
   noShowPax        Int      @default(0) // how many of this booking's `pax` didn't arrive (0..pax) — supports partial no-shows (e.g. booked 8, came 5 → 3)
 
-  // ── Reservation system (additive; every field nullable) ──────────────────
-  // The departure this booking consumes a seat on. Null for the OTA backlog that
-  // predates the reservation system — capacity math falls back to matching on
-  // (tourId, date, startTime), so an unlinked OTA booking still occupies seats
-  // and cannot be oversold against.
-  departureId String?
-  departure   Departure? @relation(fields: [departureId], references: [id])
-
-  // Party breakdown. `pax` stays the single source of truth for headcount and is
-  // kept equal to adults + children; these only say how that total splits, which
-  // is what prices it. Null on OTA bookings that never sent a breakdown.
-  adults   Int?
-  children Int?
-
-  // Money, in `currency`. gross = what the customer paid. commissionAmount = what
-  // the channel keeps. net = what Folkpaths actually receives. Stored as a
-  // SNAPSHOT at booking time so a later rate change never rewrites history, and
-  // left null when unknown rather than guessed.
-  grossAmount      Decimal? @db.Decimal(10, 2)
-  commissionPct    Decimal? @db.Decimal(5, 2)
-  commissionAmount Decimal? @db.Decimal(10, 2)
-  netAmount        Decimal? @db.Decimal(10, 2)
-  currency         String   @default("THB")
-
-  // Customer-facing reference for a direct booking (FP-XXXXXX). Unique so it can
-  // be looked up on its own; null for OTA bookings, which carry the channel's ref.
-  voucherCode String? @unique
-
   @@unique([source, externalId])
   @@index([date])
   @@index([status])
-  @@index([departureId])
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RESERVATION SYSTEM
-//
-// The inventory half of FolkOPS: what is on sale, how many seats are left, and
-// what a seat costs. Bookings (OTA and direct alike) consume seats from here.
-//
-// Deliberately separate from Assignment: a Departure is what a CUSTOMER can buy,
-// an Assignment is which GUIDE runs it. One departure may need several guides
-// (see lib/capacity: 12 pax each), and a departure exists whether or not a guide
-// has been assigned yet — selling must not wait on rostering.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// One tour, on one date, at one time, with a seat count. The unit of inventory.
-model Departure {
-  id      String @id @default(cuid())
-  tourId  String
-  tour    Tour   @relation(fields: [tourId], references: [id], onDelete: Cascade)
-  date    String // "YYYY-MM-DD"
-  time    String // "HH:MM"
-  // Index into lib/slots SLOT_TIMES when `time` is one of the ops grid slots.
-  // Null for an off-grid departure — it still sells, it just has no slot column
-  // on the dispatch board.
-  slotIdx Int?
-
-  // Seats offered. Sold seats are counted from Bookings, never stored here: a
-  // denormalised counter is the classic overselling bug, because a booking can be
-  // created, cancelled, split or imported by five different code paths.
-  capacity Int
-
-  // OPEN sells. CLOSED stops new bookings but keeps the ones already taken
-  // (used for cutoff, or when no guide is available). CANCELLED means the
-  // departure is off — existing bookings need moving or refunding.
-  status String @default("OPEN") // OPEN | CLOSED | CANCELLED
-
-  // Price override for this one departure, in the tour's currency. Null = use the
-  // tour's standard price. This is how a promotion or a private charter is priced
-  // without touching the tour everyone else books.
-  priceAdult Decimal? @db.Decimal(10, 2)
-  priceChild Decimal? @db.Decimal(10, 2)
-
-  note      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  bookings Booking[]
-
-  // One departure per tour per date per time — the constraint that stops two
-  // operators creating duplicate inventory for the same trip.
-  @@unique([tourId, date, time])
-  @@index([date])
-  @@index([status])
-}
-
-// A place bookings come from, and what that place costs in commission.
-//
-// This exists to answer the question the whole reservation system is for: how
-// much is Folkpaths paying OTAs, and what would going direct have saved?
-// commissionPct is ALWAYS operator-entered — never defaulted to a plausible
-// industry number, because every figure derived from it is money.
-model SalesChannel {
-  id            String   @id // direct | bokun | gyg | viator | klook | walk_in | phone | line
-  name          String
-  // Percent of gross the channel keeps, e.g. 25.00. Null = not set yet; the
-  // commission report shows those bookings as "rate not set" rather than free.
-  commissionPct Decimal? @db.Decimal(5, 2)
-  // True for channels Folkpaths owns end-to-end — the ones that pay no
-  // commission and are the point of the exercise.
-  isDirect      Boolean  @default(false)
-  active        Boolean  @default(true)
-  sortOrder     Int      @default(0)
-  updatedAt     DateTime @updatedAt
 }
 
 // Web Push subscription (one per browser/device) for home-screen job alerts.
