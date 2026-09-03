@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { timeRangeLabel, sweepExpiredOffers, createOffer, acceptOffer } from "@/lib/offers";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
+import { paxIndex } from "@/lib/assigned-pax";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -35,6 +36,14 @@ export async function GET() {
     return true;
   });
 
+  // Recount pax from live bookings: both Assignment.pax and JobOffer.pax are
+  // frozen at the moment the offer went out, so anything booked, moved in, or
+  // cancelled since then never showed up on the dispatch view.
+  const livePax = paxIndex(await prisma.booking.findMany({
+    where: { date: { gte: today }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    select: { tourId: true, date: true, slotIdx: true, pax: true, assignedGuideId: true },
+  }));
+
   const tourIds = [...new Set(offers.map((o) => o.tourId))];
   const guideIds = [...new Set([
     ...offers.flatMap((o) => o.responses.map((r) => r.guideId)),
@@ -62,13 +71,13 @@ export async function GET() {
       const state = c ? c.type : "NONE";
       return {
         guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
-        time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: a.pax, note: a.note,
+        time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: livePax.for(a.tourId, a.date, a.slotIdx, a.guideId) ?? a.pax, note: a.note,
         state, checkedAt: c ? c.at.toISOString() : null, overdue: a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx),
       };
     }),
     offers: offers.map((o) => ({
       id: o.id, tourId: o.tourId, tourName: tourName.get(o.tourId) ?? o.tourId, date: o.date, slotIdx: o.slotIdx,
-      time: timeRangeLabel(o.slotIdx, o.durationMin), pax: o.pax, note: o.note, status: o.status, expiresAt: o.expiresAt,
+      time: timeRangeLabel(o.slotIdx, o.durationMin), pax: livePax.for(o.tourId, o.date, o.slotIdx, o.assignedGuideId ?? "") ?? o.pax, note: o.note, status: o.status, expiresAt: o.expiresAt,
       assignedGuide: gName(o.assignedGuideId),
       soloGuideId: o.responses.length === 1 ? o.responses[0].guideId : null, // single-guide offer → prep its sheet
       candidates: o.responses.length,
