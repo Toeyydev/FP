@@ -12,6 +12,25 @@ const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-G
 export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // Find a past job by booking reference or guest name. The date filters answer
+  // "what ran that week"; this answers "who guided THIS guest", which is what you
+  // need when a guest writes back weeks later quoting a booking number and nobody
+  // remembers the date.
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<null | { date: string; time: string; tourName: string | null; guideId: string | null; guideName: string | null; sheetRef: string | null; slotIdx: number; guests: { name: string; ref: string; pax: number | null; status: string | null }[] }[]>(null);
+  const [searching, setSearching] = useState(false);
+  const runSearch = async (term: string) => {
+    setQ(term);
+    if (term.trim().length < 3) { setHits(null); return; }
+    setSearching(true);
+    try {
+      const r = await fetch(`/api/tour-log/search?q=${encodeURIComponent(term.trim())}`, { cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      setHits(r.ok ? (d.hits ?? []) : []);
+    } catch { setHits([]); }
+    setSearching(false);
+  };
+
   const [rows, setRows] = useState<Row[]>([]);
 
   const load = useCallback(async (f?: string, t?: string) => {
@@ -44,8 +63,49 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
           <input className="search" style={{ flex: "none", width: 150 }} type="date" value={from} onChange={(e) => { setFrom(e.target.value); load(e.target.value, to); }} />
           <label style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-soft)" }}>To</label>
           <input className="search" style={{ flex: "none", width: 150 }} type="date" value={to} onChange={(e) => { setTo(e.target.value); load(from, e.target.value); }} />
+          <input className="search" style={{ flex: "none", width: 250 }} value={q}
+            placeholder="Booking no. or guest name · เลขจองหรือชื่อแขก"
+            onChange={(e) => runSearch(e.target.value)} />
           <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{rows.length} tours</span>
         </div>
+        {hits !== null && (
+          <div className="tl-hits">
+            <div className="tl-hits-head">
+              {searching ? "Searching…" : hits.length
+                ? `${hits.length} job${hits.length === 1 ? "" : "s"} match “${q}” · ignores the date range above`
+                : `Nothing matches “${q}” · ไม่พบ`}
+            </div>
+            {hits.map((h, i) => (
+              <div className="tl-hit" key={i}>
+                <div className="tl-hit-when">
+                  <b>{dShort(h.date)}</b><span>{h.time}</span>
+                </div>
+                <div className="tl-hit-who">
+                  {/* The answer to the question being asked. */}
+                  {h.guideName
+                    ? <b><span className="gid">{h.guideId}</span> {h.guideName}</b>
+                    : <b style={{ color: "var(--assign)" }}>No guide assigned · ยังไม่มีไกด์</b>}
+                  <span>{h.tourName ?? "—"}</span>
+                </div>
+                <div className="tl-hit-guests">
+                  {h.guests.map((g, j) => (
+                    <div key={j}>
+                      {g.name || "—"}
+                      {g.ref && <span className="tl-ref">{g.ref}</span>}
+                      {g.pax != null && <span className="tl-pax">{g.pax} pax</span>}
+                      {g.status === "CANCELLED" && <span className="tl-cancelled">cancelled</span>}
+                    </div>
+                  ))}
+                </div>
+                {h.guideId && (
+                  <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(h.guideId)}&date=${h.date}&slotIdx=${h.slotIdx}`}>
+                    {h.sheetRef ?? "Job sheet"}
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="grid-scroll">
           <table className="acct-table">
             <thead><tr><th>Date</th><th>Tour</th><th>Guide</th><th>Pax</th><th>Check-in</th><th>Started</th><th>Done</th><th>Report</th><th /></tr></thead>
