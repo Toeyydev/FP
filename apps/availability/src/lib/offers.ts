@@ -23,11 +23,24 @@ async function cleanupPreppedSheet(guideId: string, date: string, slotIdx: numbe
   } catch { /* best-effort cleanup */ }
 }
 
+// Today in Bangkok (UTC+7, no DST) — the operator's calendar day, not the server's.
+function bangkokToday(): string {
+  return new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 export async function createOffer(o: {
   tourId: string; date: string; slotIdx: number; pax?: number | null; note?: string | null;
   durationMin?: number | null; ttlMinutes?: number; createdById?: string | null; excludeGuideId?: string | null;
   onlyGuideId?: string | null;
-}): Promise<{ offerId: string | null; candidates: number; lineSent: number; noTour?: boolean }> {
+}): Promise<{ offerId: string | null; candidates: number; lineSent: number; noTour?: boolean; past?: boolean }> {
+  // A tour that already ran cannot be offered. On 2026-09-03 "Offer selected" on
+  // a past departure pushed a LINE job offer to 16 guides for a tour from three
+  // days earlier; one accepted within a minute and ended up on record for a job
+  // another guide had actually led, which is who the payout would have followed.
+  // Past dates belong to the record-it path (POST /api/assignments), which writes
+  // the assignment directly and audits it as assign.recorded_past.
+  if (o.date < bangkokToday()) return { offerId: null, candidates: 0, lineSent: 0, past: true };
+
   const tour = await prisma.tour.findUnique({ where: { id: o.tourId } });
   if (!tour) return { offerId: null, candidates: 0, lineSent: 0, noTour: true };
 

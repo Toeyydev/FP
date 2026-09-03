@@ -57,14 +57,23 @@ export default function BookingsTable({ onOpen, initialMonth = "" }: { onOpen?: 
     const groups: Record<string, Row[]> = {};
     for (const b of chosen) { const k = `${b.tourId}|${b.date}|${b.slotIdx}`; (groups[k] ??= []).push(b); }
     let made = 0;
+    const past: string[] = [];
     for (const [k, items] of Object.entries(groups)) {
       const [tourId, date, slotIdx] = k.split("|");
       const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
       const note = `${items.length} booking(s): ${items.map((b) => bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—").join(", ")}`.slice(0, 280);
       const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx: Number(slotIdx), pax: pax && pax <= 10 ? pax : undefined, note }) });
-      if (r.ok) made++;
+      if (r.ok) { made++; continue; }
+      // This tab is where past bookings live, so a tour that already ran is an easy
+      // mis-click. Say so instead of reporting a silent "Created 0 offer(s)".
+      const err = await r.json().catch(() => ({}));
+      if (err?.error === "past-date" && !past.includes(date)) past.push(date);
     }
-    setSel(new Set()); setMsg(`Created ${made} offer(s) from ${chosen.length} booking(s).`); await load();
+    setSel(new Set());
+    setMsg(past.length
+      ? `${past.join(", ")} already happened — no offer sent. Record the guide on the board instead.`
+      : `Created ${made} offer(s) from ${chosen.length} booking(s).`);
+    await load();
   }
 
   // Permanently delete the selected bookings (operator confirms once).

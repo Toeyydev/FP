@@ -110,6 +110,8 @@ export async function POST(req: NextRequest) {
 
   const r = await createOffer({ tourId, date, slotIdx, pax, note, durationMin, ttlMinutes: parsed.data.ttlMinutes, createdById: session!.user!.id ?? null, onlyGuideId: guideId ?? null });
   if (r.noTour) return NextResponse.json({ error: "no-tour" }, { status: 400 });
+  // The tour already ran — offering it would ask a guide to accept the past.
+  if (r.past) return NextResponse.json({ error: "past-date" }, { status: 400 });
   await audit({
     actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
     action: "offer.created", entityType: "JobOffer", entityId: r.offerId ?? undefined,
