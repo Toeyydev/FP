@@ -26,7 +26,8 @@ type Finance = {
   batches: { open: number; openTotal: number; latestOpenNo: string | null; paidWeekTotal: number; paidWeekCount: number };
   peak: { synced: number; pendingRef: number };
 };
-type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[]; reportsPending?: number; finance?: Finance };
+type PastUnstaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; daysAgo: number };
+type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; pastUnstaffed?: PastUnstaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[]; reportsPending?: number; finance?: Finance };
 
 // Compact baht for KPI cards — whole-baht, no decimals (the tables keep 2dp via thb).
 const thb0 = (v: number) => `฿${Math.round(v).toLocaleString("en-US")}`;
@@ -207,7 +208,8 @@ export default function Dashboard() {
           const todayIn = d.todayTours.filter((t) => done.includes(t.state)).length;
           const todayOverdue = d.todayTours.filter((t) => t.overdue).length;
           const orphaned = d.orphaned ?? [];
-          const attention = d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length;
+          const past = d.pastUnstaffed ?? [];
+          const attention = past.length + d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length;
           return (
         <div className="dash">
           {/* Page header — title left, primary actions right. */}
@@ -297,6 +299,20 @@ export default function Dashboard() {
               <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">PDF</button>}</div>
               <div className="dash-list">
                 {attention === 0 && <div className="op-empty" style={{ padding: 14 }}>All operations are on track.</div>}
+                {/* Tours that already ran with nobody rostered. First in the list
+                    and never ageing out: each one is either a guide owed money for
+                    work already done, or a booking nobody honoured. Both need an
+                    answer, and until now both silently vanished the day after. */}
+                {past.map((u, i) => (
+                  <a key={`p${i}`} className="att-row att-past" href={`/bookings?focus=${u.date}`}
+                     title="This tour ran with no guide on the system — record who guided it, or close the bookings">
+                    <span className="dr-main">
+                      <b>{dShort(u.date)} · {u.time}</b> — ran with no guide
+                      <div className="dr-sub">{u.tour} · {u.pax} pax · {u.daysAgo} day{u.daysAgo === 1 ? "" : "s"} ago</div>
+                    </span>
+                    <span className="att-go">Record →</span>
+                  </a>
+                ))}
                 {d.leaveRequests.map((l) => (
                   <div key={l.id} className="dash-row">
                     <span className="dr-main"><b>{l.guide}</b> · leave {dShort(l.fromDate)}{l.toDate !== l.fromDate ? `–${dShort(l.toDate)}` : ""}<div className="dr-sub">{l.reason || "leave request"}</div></span>

@@ -68,6 +68,35 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
   const { guideId, date, slotIdx, tourId, pax, note } = parsed.data;
 
+  // RECORDING A TOUR THAT ALREADY RAN.
+  //
+  // Every other path here goes through a 2-hour offer the guide must accept. For
+  // a date in the past there is nothing to accept: the tour happened. Offers also
+  // require the guide to be free in the availability grid, which nobody fills in
+  // retrospectively, so a past assignment always failed with guide-unavailable —
+  // leaving no way to record who actually guided.
+  //
+  // That is not hypothetical. Gigi guided 4 pax on 31 August, agreed off-channel
+  // because her acceptance kept expiring, and the system held no assignment, no
+  // job sheet and no payment for it. Work done and unpaid, invisible.
+  //
+  // So a past-dated assignment is written DIRECTLY, operator-only, and audited as
+  // its own action — it is a record of fact, not a dispatch decision.
+  const todayBkk = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  if (date < todayBkk) {
+    const a = await prisma.assignment.upsert({
+      where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
+      create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
+      update: { tourId, pax: pax ?? null, note: note ?? null },
+    });
+    await audit({
+      actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
+      action: "assign.recorded_past", entityType: "Assignment", entityId: a.id,
+      detail: { guideId, date, slotIdx, tourId, reason: "tour already ran — recorded by operator" },
+    });
+    return NextResponse.json({ ok: true, recorded: true, past: true });
+  }
+
   if (await prisma.blockedDate.findUnique({ where: { date } })) {
     return NextResponse.json({ error: "date-blocked" }, { status: 409 });
   }

@@ -1323,3 +1323,9 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .tl-pax{margin-left:7px;font-size:11px}
 .tl-cancelled{margin-left:7px;font-size:10px;font-weight:700;text-transform:uppercase;
   letter-spacing:.05em;color:var(--danger)}
+
+/* A tour that already ran with nobody rostered. Given the danger colour, not the
+   usual amber: unlike everything else in Needs attention this cannot be fixed by
+   dispatching sooner — the work is done and somebody may be unpaid for it. */
+.att-row.att-past{border-left:3px solid var(--danger);background:var(--danger-bg)}
+.att-row.att-past .att-go{color:var(--danger);font-weight:700}

@@ -99,6 +99,52 @@ async function buildDashboard() {
     inst[k].pax += b.pax ?? 0; inst[k].count += 1;
     if (b.status === "PENDING") inst[k].pending = true;
   }
+  // TOURS THAT ALREADY RAN WITH NOBODY ROSTERED.
+  //
+  // Everything above looks forward (today..+7), so the moment a date passes an
+  // unstaffed job drops off the dashboard and is never seen again. That is how
+  // 31 August ended up with 4 pax, a guide who really ran it, and no assignment,
+  // no job sheet and no payment — the work was done and became invisible.
+  //
+  // These do not age out. A past tour with guests and no guide is either someone
+  // owed money or a booking nobody honoured, and both need answering.
+  const pastFrom = bkk(-45);
+  const pastUnstaffed: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; daysAgo: number }[] = [];
+  {
+    const pastBookings = await prisma.booking.findMany({
+      where: {
+        date: { gte: pastFrom, lt: today },
+        tourId: { not: null }, slotIdx: { not: null },
+        status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
+      },
+      select: { tourId: true, date: true, slotIdx: true, pax: true },
+    });
+    if (pastBookings.length) {
+      const pastAssigns = await prisma.assignment.findMany({
+        where: { date: { gte: pastFrom, lt: today } },
+        select: { date: true, slotIdx: true },
+      });
+      const staffed = new Set(pastAssigns.map((a) => `${a.date}|${a.slotIdx}`));
+      const agg: Record<string, { date: string; slotIdx: number; tourId: string; pax: number; count: number }> = {};
+      for (const b of pastBookings) {
+        const k = `${b.date}|${b.slotIdx}`;
+        if (staffed.has(k)) continue;                     // somebody is on it
+        (agg[`${k}|${b.tourId}`] ??= { date: b.date!, slotIdx: b.slotIdx!, tourId: b.tourId!, pax: 0, count: 0 });
+        agg[`${k}|${b.tourId}`].pax += b.pax ?? 0;
+        agg[`${k}|${b.tourId}`].count += 1;
+      }
+      const dayMs = 86400000;
+      for (const i of Object.values(agg)) {
+        pastUnstaffed.push({
+          date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "",
+          tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax, count: i.count,
+          daysAgo: Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${i.date}T00:00:00Z`)) / dayMs)),
+        });
+      }
+      pastUnstaffed.sort((a, b) => b.date.localeCompare(a.date));
+    }
+  }
+
   const sortKey = (a: { date: string; slotIdx: number }) => a.date + String(a.slotIdx).padStart(2, "0");
   const unassigned: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number }[] = [];
   const understaffed: { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number }[] = [];
@@ -143,7 +189,7 @@ async function buildDashboard() {
 
   const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
   const { reportsPending, finance } = await buildFinance(today, nowMin, startMin);
-  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, conflicts, orphaned, leaveRequests, reportsPending, finance };
+  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, pastUnstaffed, conflicts, orphaned, leaveRequests, reportsPending, finance };
 }
 
 // Money + follow-up state for the operator's "what needs me" view. All figures are
