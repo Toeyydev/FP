@@ -176,7 +176,16 @@ export async function POST(req: NextRequest) {
     }).safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const { id, ...rest } = parsed.data;
-    const b = await prisma.booking.update({ where: { id }, data: rest });
+    // Moving a booking's date or slot is a REBOOKING the operator made outside the
+    // channel — a guest switching tour date, say. Pin it, or the 30-minute OTA sync
+    // overwrites the move on its next pass and drags the guest back to Bokun's date.
+    // The pin is only ever set here, by a human act; it is never inferred, and the
+    // sync already honours it (lib/booking-import slotFields).
+    const moved = rest.date !== undefined || rest.slotIdx !== undefined;
+    const b = await prisma.booking.update({
+      where: { id },
+      data: moved ? { ...rest, datePinned: true } : rest,
+    });
     // Learn the product → tour mapping so future bookings of this product auto-map,
     // and back-apply it to other pending bookings of the same product. NEVER learn
     // from a bare channel name (e.g. "GetYourGuide") — that would overwrite the
