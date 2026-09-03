@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from "next-auth";
+import { returnTarget } from "@/lib/auth-redirect";
 import { NextResponse } from "next/server";
 
 const ACCESS_TTL_SEC = 8 * 60 * 60; // keep in sync with lib/sessionTokens (edge can't import it — pulls prisma)
@@ -24,7 +25,11 @@ export const authConfig = {
         p.startsWith("/api/auth") || p.startsWith("/api/claim") || p.startsWith("/api/request") ||
         p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version") ||
         p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/google/health" ||
-        p.startsWith("/api/passkey") || p.startsWith("/api/offers/respond");
+        p.startsWith("/api/passkey") || p.startsWith("/api/offers/respond") ||
+        // The guest booking page and the endpoints it calls. Public by design —
+        // this is the shopfront. Everything under /api/public is read-only about
+        // inventory or creates a booking, and never exposes another guest's data.
+        p.startsWith("/book") || p.startsWith("/api/public");
       if (isPublic) return true;
       if (auth?.user) {
         // Accountant is a finance-only role: confine page navigation to the money
@@ -50,11 +55,15 @@ export const authConfig = {
       // bounce through the refresh route to silently re-mint the access session.
       // Pass the real host (Node routes only see Railway's internal host) so the
       // re-minted Secure cookie + redirect stay on this domain (no redirect loop).
+      // Carry the query string too, or every deep link into a filtered view
+      // (e.g. /bookings?date=…) comes back as a bare page and looks like the
+      // link did nothing.
+      const target = returnTarget(p, request.nextUrl.search);
       if (request.cookies.get(REFRESH_COOKIE)) {
-        return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(p)}&h=${encodeURIComponent(host)}`, base));
+        return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(target)}&h=${encodeURIComponent(host)}`, base));
       }
       // Otherwise send them to sign in — on the same domain.
-      return NextResponse.redirect(new URL(`/start?callbackUrl=${encodeURIComponent(p)}`, base));
+      return NextResponse.redirect(new URL(`/start?callbackUrl=${encodeURIComponent(target)}`, base));
     },
     jwt({ token, user }) {
       if (user) {
