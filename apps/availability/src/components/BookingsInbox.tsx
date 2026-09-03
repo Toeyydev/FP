@@ -34,6 +34,15 @@ export default function BookingsInbox() {
   const [dur, setDur] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [tab, setTab] = useState<"inbox" | "all">("inbox");
+  // ?date=YYYY-MM-DD opens the full history on that month. The Inbox deliberately
+  // hides anything before today, so a link to a PAST tour — which is exactly what
+  // the dashboard's "Record" on an unstaffed past tour is — landed on a list that
+  // could never contain it. It looked like the button did nothing.
+  const [deepMonth, setDeepMonth] = useState("");
+  useEffect(() => {
+    const d = new URLSearchParams(window.location.search).get("date") || "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) { setDeepMonth(d.slice(0, 7)); setTab("all"); }
+  }, []);
   const [monthFilter, setMonthFilter] = useState(""); // YYYY-MM filter for the inbox
   const [guides, setGuides] = useState<{ guideId: string; displayName: string; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
@@ -262,7 +271,7 @@ export default function BookingsInbox() {
         <button className={`subtab ${tab === "all" ? "active" : ""}`} onClick={() => setTab("all")}>All bookings</button>
       </div></div>
 
-      {tab === "all" && <BookingsTable onOpen={openDetail} />}
+      {tab === "all" && <BookingsTable onOpen={openDetail} initialMonth={deepMonth} />}
 
       {tab === "inbox" && (
       <section className="panel">

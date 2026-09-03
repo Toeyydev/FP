@@ -22,13 +22,16 @@ function statusBadge(s: string) {
 
 // Full Bookings table — the operational source of truth (all sources, all
 // statuses, searchable + filterable). Read-only list for now (slice 1).
-export default function BookingsTable({ onOpen }: { onOpen?: (id: string) => void }) {
+export default function BookingsTable({ onOpen, initialMonth = "" }: { onOpen?: (id: string) => void; initialMonth?: string }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [tours, setTours] = useState<Tour[]>([]);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [source, setSource] = useState("");
-  const [month, setMonth] = useState(""); // YYYY-MM filter
+  // Pre-set when arrived at from a deep link — the dashboard's "Record" on a past
+  // unstaffed tour lands here, and the operator must not have to work out which
+  // month to pick before they can see the tour they just clicked.
+  const [month, setMonth] = useState(initialMonth); // YYYY-MM filter
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState("");
 
