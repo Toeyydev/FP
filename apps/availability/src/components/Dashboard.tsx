@@ -304,7 +304,7 @@ export default function Dashboard() {
                     work already done, or a booking nobody honoured. Both need an
                     answer, and until now both silently vanished the day after. */}
                 {past.map((u, i) => (
-                  <a key={`p${i}`} className="att-row att-past" href={`/bookings?focus=${u.date}`}
+                  <a key={`p${i}`} className="att-row att-past" href={`/bookings?date=${u.date}`}
                      title="This tour ran with no guide on the system — record who guided it, or close the bookings">
                     <span className="dr-main">
                       <b>{dShort(u.date)} · {u.time}</b> — ran with no guide
