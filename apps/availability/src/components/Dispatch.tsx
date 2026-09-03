@@ -75,10 +75,11 @@ export default function Dispatch() {
     setSaving(false);
     if (!r.ok) { setMsg(j.error === "guide-unavailable" ? "That guide can't take this slot." : "Assign failed."); return; }
     setAssignFor(null);
-    // This creates the assignment outright — there is no acceptance step. Saying
-    // "awaiting acceptance" made operators think the job was still hanging on the
-    // guide, so they waited (or re-sent an offer) for something already done.
-    setMsg(`✅ Assigned to ${pick} — the job is theirs, no acceptance needed.`);
+    // POST /api/assignments sends a 2-hour OFFER to this one guide; the Assignment
+    // is created only when they accept. I briefly changed this to claim the job was
+    // already theirs — it is not, and saying so would have had operators walk away
+    // from a job still waiting on a tap.
+    setMsg(`📨 Offered to ${pick} — they still have to accept (2h).`);
     await load();
   }
   async function deleteOffer(o: Offer) {
