@@ -19,16 +19,27 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 // event for their own assignment. Server stores the moment + captured GPS.
 export async function POST(req: NextRequest) {
   const session = await auth();
-  const guideId = session?.user?.guideId;
-  if (!guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const role = session?.user?.role;
+  const ops = role === "OPERATOR" || role === "ADMIN";
+  const ownGuideId = session?.user?.guideId;
 
   const parsed = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     slotIdx: z.number().int().min(0),
     type: z.enum(TYPES),
     lat: z.number().optional(), lng: z.number().optional(), accuracyM: z.number().int().optional(),
+    // Operators only: record this for a guide who cannot do it themselves. Some
+    // guides never check in, and the job then sits at "Not checked in" for ever,
+    // with no start or finish time on the Tour Log and nothing to chase but the
+    // guide. An operator recording it is worth far more than a permanent blank.
+    forGuideId: z.string().min(1).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+
+  const onBehalf = parsed.data.forGuideId && parsed.data.forGuideId !== ownGuideId;
+  if (onBehalf && !ops) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const guideId = onBehalf ? parsed.data.forGuideId! : ownGuideId;
+  if (!guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const { date, slotIdx, type, lat, lng, accuracyM } = parsed.data;
 
   // Time-gate: a tour can't be checked in / started / completed more than 90 min
@@ -49,7 +60,12 @@ export async function POST(req: NextRequest) {
     withinGeofence = distanceM <= (mp.meetingRadiusM ?? 150);
   }
 
-  await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type, lat: lat ?? null, lng: lng ?? null, accuracyM: accuracyM ?? null, distanceM, withinGeofence } });
+  await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type, lat: lat ?? null, lng: lng ?? null, accuracyM: accuracyM ?? null, distanceM, withinGeofence,
+    // NULL for a guide's own check-in (the GPS-verified case); set only when
+    // an operator recorded it for them, which carries no location proof.
+    recordedById: onBehalf ? (session!.user!.id ?? null) : null,
+    recordedByRole: onBehalf ? (role ?? null) : null,
+  } });
   await audit({ actorId: session!.user!.id ?? null, actorRole: "GUIDE", action: `checkin.${type.toLowerCase()}`, entityType: "Assignment", detail: { date, slotIdx, tourId: assignment.tourId, lat, lng } });
   return NextResponse.json({ ok: true, type });
 }

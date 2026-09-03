@@ -123,10 +123,50 @@ describe("offers — acceptOffer (first-to-accept race)", () => {
     expect(r).toEqual({ ok: false, reason: "closed" });
   });
 
-  it("marks an expired offer expired and does not assign", async () => {
+  // Expiry ends the ASKING, it does not fill the job. Offers live ~2h because some
+  // jobs are urgent and the operator must learn quickly that nobody took one — but
+  // 182 of 308 expired unclaimed and the operator then assigned someone by hand,
+  // so a guide tapping Accept late was turned away from a job still sitting empty.
+  it("ACCEPTS a late tap while the job is still unfilled", async () => {
     prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ expiresAt: new Date(Date.now() - 1000) }));
+    prismaMock.assignment.findFirst.mockResolvedValue(null);   // nobody on the slot
+    prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 1 });
     const r = await acceptOffer("of1", "G-003");
-    expect(r).toEqual({ ok: false, reason: "expired" });
+    expect(r.ok).toBe(true);
+    expect(prismaMock.assignment.upsert).toHaveBeenCalled();
+  });
+
+  it("still marks the offer EXPIRED before deciding, so it never sits OPEN for ever", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ expiresAt: new Date(Date.now() - 1000) }));
+    prismaMock.assignment.findFirst.mockResolvedValue(null);
+    prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 1 });
+    await acceptOffer("of1", "G-003");
+    expect(prismaMock.jobOffer.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "EXPIRED" }) }),
+    );
+  });
+
+  it("refuses a late tap once another guide is on the job", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ expiresAt: new Date(Date.now() - 1000) }));
+    prismaMock.assignment.findFirst.mockResolvedValue({ guideId: "G-009", slotIdx: 2 });
+    const r = await acceptOffer("of1", "G-003");
+    expect(r).toEqual({ ok: false, reason: "taken" });
+    expect(prismaMock.assignment.upsert).not.toHaveBeenCalled();
+  });
+
+  it("tells a guide who already holds the job that it is theirs, not that it was taken", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ expiresAt: new Date(Date.now() - 1000) }));
+    prismaMock.assignment.findFirst.mockResolvedValue({ guideId: "G-003", slotIdx: 2 });
+    const r = await acceptOffer("of1", "G-003");
+    expect(r).toEqual({ ok: false, reason: "already-yours" });
+  });
+
+  it("a late claim is still first-wins — the second tap loses", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ expiresAt: new Date(Date.now() - 1000) }));
+    prismaMock.assignment.findFirst.mockResolvedValue(null);
+    prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 0 }); // someone claimed it first
+    const r = await acceptOffer("of1", "G-003");
+    expect(r).toEqual({ ok: false, reason: "taken" });
     expect(prismaMock.assignment.upsert).not.toHaveBeenCalled();
   });
 
