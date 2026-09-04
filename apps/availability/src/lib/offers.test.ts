@@ -279,3 +279,47 @@ describe("offers — a tour that already ran cannot be offered", () => {
     expect(r.candidates).toBe(1);
   });
 });
+
+describe("offers — an offer closed early is still acceptable while the job is empty", () => {
+  // Superseded (operator sent a fresh offer for the slot) or handed back after a
+  // decline: status is EXPIRED but expiresAt is still in the future.
+  const closedEarly = (id: string) => ({
+    id, status: "EXPIRED", assignedGuideId: null,
+    date: "2099-01-05", slotIdx: 0, tourId: "t1", pax: 3, note: null,
+    expiresAt: new Date(Date.now() + 60 * 60_000), // clock has NOT passed
+  });
+
+  it("lets the guide take it when nobody is on the job", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(closedEarly("of-old"));
+    prismaMock.assignment.findFirst.mockResolvedValue(null);
+    prismaMock.jobOffer.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.assignment.upsert.mockResolvedValue({});
+    prismaMock.jobOfferResponse.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.notification.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.user.findFirst.mockResolvedValue({ displayName: "Gigi", lineUserId: null });
+    prismaMock.user.findMany.mockResolvedValue([]);
+    prismaMock.tour.findUnique.mockResolvedValue({ name: "City Tour" });
+
+    const r = await acceptOffer("of-old", "G-016");
+    expect(r.ok).toBe(true);
+    // Claimed through the EXPIRED-and-unclaimed branch, not the live-OPEN one.
+    const where = prismaMock.jobOffer.updateMany.mock.calls.at(-1)[0].where;
+    expect(where).toMatchObject({ id: "of-old", status: "EXPIRED", assignedGuideId: null });
+  });
+
+  it("still refuses when another guide is already on the job", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(closedEarly("of-old2"));
+    prismaMock.assignment.findFirst.mockResolvedValue({ guideId: "G-017" });
+    const r = await acceptOffer("of-old2", "G-016");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("taken");
+  });
+
+  it("tells the guide it is already theirs rather than refusing", async () => {
+    prismaMock.jobOffer.findUnique.mockResolvedValue(closedEarly("of-old3"));
+    prismaMock.assignment.findFirst.mockResolvedValue({ guideId: "G-016" });
+    const r = await acceptOffer("of-old3", "G-016");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("already-yours");
+  });
+});

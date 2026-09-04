@@ -184,8 +184,16 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   // about to be given to them regardless.
   //
   // The one thing that must still refuse is a job somebody is already on.
-  const expired = offer.expiresAt.getTime() < Date.now();
-  if (expired) {
+  //
+  // "Late" is about the offer no longer being live, which is NOT the same as the
+  // clock having passed. An offer is also closed early when the operator sends a
+  // fresh one for the same slot, or when everyone asked has declined — its status
+  // goes EXPIRED while expiresAt is still in the future. Reading only the clock
+  // put those in the in-time branch, where the claim requires status OPEN, so it
+  // matched nothing and the guide was told "another guide already took this one"
+  // for a job that was standing empty. Gigi hit exactly this on 2026-09-05 08:30.
+  const late = offer.status === "EXPIRED" || offer.expiresAt.getTime() < Date.now();
+  if (late) {
     await prisma.jobOffer.updateMany({ where: { id: offerId, status: "OPEN" }, data: { status: "EXPIRED" } });
     const filled = await prisma.assignment.findFirst({
       where: { date: offer.date, slotIdx: offer.slotIdx },
@@ -213,7 +221,7 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   // is EXPIRED and unclaimed, and assignedGuideId being null is what makes this
   // first-wins — two late taps cannot both succeed.
   const won = await prisma.jobOffer.updateMany({
-    where: expired
+    where: late
       ? { id: offerId, status: "EXPIRED", assignedGuideId: null }
       : { id: offerId, status: "OPEN", expiresAt: { gt: new Date() } },
     data: { status: "ASSIGNED", assignedGuideId: guideId },
