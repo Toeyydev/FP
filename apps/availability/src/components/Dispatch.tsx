@@ -61,7 +61,12 @@ export default function Dispatch() {
     const r = await fetch(`/api/offers/candidates?date=${o.date}&slotIdx=${o.slotIdx}`, { cache: "no-store" });
     const j = await r.json().catch(() => ({ guides: [] }));
     setCands(j.guides ?? []);
-    setPick(j.guides?.[0]?.guideId ?? "");
+    // Deliberately left unset. This used to default to guides[0], so opening the
+    // dialog and pressing Send offered the job to whoever happened to be first in
+    // the list — the operator never chose them. After a guide declined, re-opening
+    // it landed on the next name down and it looked like the system was picking
+    // guides by itself. The list has no ranking, so first is not a recommendation.
+    setPick("");
   }
   async function confirmAssign() {
     if (!assignFor || !pick) return;
@@ -79,7 +84,7 @@ export default function Dispatch() {
     // is created only when they accept. I briefly changed this to claim the job was
     // already theirs — it is not, and saying so would have had operators walk away
     // from a job still waiting on a tap.
-    setMsg(`📨 Offered to ${pick} — they still have to accept (2h).`);
+    setMsg(`📨 Offered to ${pick} ${cands?.find((g) => g.guideId === pick)?.displayName ?? ""} — they still have to accept (2h).`);
     await load();
   }
   async function deleteOffer(o: Offer) {
@@ -319,6 +324,7 @@ export default function Dispatch() {
                 <div>
                   <label className="fl">Guide</label>
                   <select value={pick} onChange={(e) => setPick(e.target.value)}>
+                    <option value="">— Choose a guide —</option>
                     {cands.map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} {g.displayName}</option>)}
                   </select>
                   <div className="hint" style={{ marginTop: 8 }}>They get a 2-hour offer to accept. If they don&apos;t, it returns here.</div>
