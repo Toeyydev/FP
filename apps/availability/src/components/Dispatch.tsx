@@ -45,7 +45,11 @@ export default function Dispatch() {
     setDidFocus(true);
     if (!fd || fs == null) return;
     const a = data.assignments.find((x: Assignment) => x.date === fd && x.slotIdx === Number(fs));
-    if (a) { openSplit(a); window.history.replaceState(null, "", "/jobs"); }
+    window.history.replaceState(null, "", "/jobs");
+    // Say something when the tour has no guide to split from. Silence here read as
+    // the Assign button being broken: the page loaded and simply nothing happened.
+    if (a) openSplit(a);
+    else setMsg("That tour has no guide yet — offer it to someone first, then split it if you need a second guide.");
     // openSplit is stable enough for a one-shot; guarded by didFocus.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, didFocus]);
