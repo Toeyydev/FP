@@ -29,7 +29,10 @@ export const authConfig = {
         // The guest booking page and the endpoints it calls. Public by design —
         // this is the shopfront. Everything under /api/public is read-only about
         // inventory or creates a booking, and never exposes another guest's data.
-        p.startsWith("/book") || p.startsWith("/api/public");
+        // Exactly the shopfront page (/book/<tourId>), never a bare prefix:
+        // "/bookings".startsWith("/book") is true, and the operator booking inbox
+        // must stay gated. That prefix reached production once already (#148/#149).
+        p === "/book" || p.startsWith("/book/") || p.startsWith("/api/public/");
       if (isPublic) return true;
       if (auth?.user) {
         // Accountant is a finance-only role: confine page navigation to the money
