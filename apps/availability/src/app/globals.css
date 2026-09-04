@@ -1329,3 +1329,43 @@ body:has(.op-layout) .wrap{max-width:1440px}
    dispatching sooner — the work is done and somebody may be unpaid for it. */
 .att-row.att-past{border-left:3px solid var(--danger);background:var(--danger-bg)}
 .att-row.att-past .att-go{color:var(--danger);font-weight:700}
+/* ── Reservation desk ────────────────────────────────────────────────────────
+   Seat bar, booking drawer and price quote. The seat bar is the one thing an
+   operator reads before speaking to a customer, so it is legible at a glance and
+   turns amber only when a departure is genuinely oversold — never merely full. */
+.res-bar{height:7px;border-radius:999px;background:var(--line);overflow:hidden}
+.res-bar-fill{display:block;height:100%;background:var(--primary);border-radius:999px;
+  transition:width .18s ease}
+.res-bar-fill.over{background:var(--assign)}
+
+/* Drawer, not a modal: the departure list stays visible behind it, so the seat
+   count the operator just read is still on screen while they take the booking. */
+.res-scrim{position:fixed;inset:0;background:rgba(20,22,20,.34);z-index:70;
+  display:flex;justify-content:flex-end}
+.res-drawer{width:min(460px,100%);height:100%;border-radius:0;overflow-y:auto;
+  box-shadow:-8px 0 28px rgba(0,0,0,.16)}
+@media (max-width:560px){.res-drawer{width:100%}}
+
+.res-quote{margin-top:12px;padding:10px 12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--grey-bg);font-size:13px}
+.res-quote-line{display:flex;justify-content:space-between;gap:14px;padding:2px 0}
+.res-quote-line.total{margin-top:4px;padding-top:6px;border-top:1px solid var(--line);
+  font-weight:700;font-size:14.5px}
+
+/* .acct-input is width:100% by design (it fills a table cell). In a toolbar that
+   makes every control stretch to the full row and stack, so widths are restored
+   to content size here rather than weakened globally. */
+.res-toolbar{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.res-toolbar .acct-input{width:auto}
+.res-toolbar input[type=date]{width:145px}
+.res-toolbar select{max-width:240px}
+
+/* Tour pricing block — whether a tour can be sold at all, so it leads the panel
+   and states its own status rather than leaving a blank box to interpret. */
+.tour-sell{border:1px solid var(--line);border-radius:11px;background:var(--grey-bg);padding:11px 13px}
+.tour-sell-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:800;
+  color:var(--ink-soft);display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
+.tour-sell-h span{font-size:11.5px;letter-spacing:0;text-transform:none;font-weight:600;color:var(--ink-soft)}
+.tour-sell-r{display:flex;gap:10px;flex-wrap:wrap}
+.tour-sell-r label{font-size:12.5px;display:flex;flex-direction:column;gap:3px;font-weight:600}
+.tour-sell-r input{width:130px}

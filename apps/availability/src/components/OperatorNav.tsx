@@ -17,6 +17,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
   {
     label: "Operations",
     items: [
+      { key: "reservations", label: "Reservations", href: "/reservations" },
       { key: "bookings", label: "Bookings", href: "/bookings" },
       { key: "board", label: "Availability board", href: "/board" },
       { key: "jobs", label: "Jobs", href: "/jobs" },

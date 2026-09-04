@@ -7,6 +7,7 @@ import { OperatorNav } from "@/components/OperatorNav";
 type Tour = {
   id: string; name: string; time: string; durationMin: number | null;
   meetingPoint: string | null; itinerary: string | null; included: string | null; bring: string | null;
+  priceAdult: string | number | null; priceChild: string | number | null; defaultCapacity: number | null;
   bookings: number; assignments: number;
 };
 
@@ -41,6 +42,17 @@ export default function Tours() {
         if (!Number.isInteger(n) || n < 15 || n > 720) { setMsg("Duration must be a whole number of minutes between 15 and 720."); return; }
         body.durationMin = n;
       }
+    }
+    // A blank price means "not on sale yet" — sent as null, never coerced to 0,
+    // because a tour priced at zero would happily sell for nothing.
+    for (const k of ["priceAdult", "priceChild", "defaultCapacity"] as const) {
+      if (d[k] === undefined) continue;
+      const raw = d[k] as unknown as string | number | null;
+      if (raw === "" || raw == null) { body[k] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) { setMsg("Prices and seat counts must be positive numbers."); return; }
+      if (k === "defaultCapacity" && (!Number.isInteger(n) || n < 1)) { setMsg("Seats must be a whole number of 1 or more."); return; }
+      body[k] = n;
     }
     const r = await fetch("/api/tours", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     setMsg(r.ok ? "✅ Saved" : "Save failed — please check the field values."); if (r.ok) await load();
@@ -106,6 +118,28 @@ export default function Tours() {
               </div>
               {open[t.id] && (
                 <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                  <div className="tour-sell">
+                    <div className="tour-sell-h">
+                      Direct sale
+                      <span>{field(t, "priceAdult") === "" || field(t, "priceAdult") == null
+                        ? "Not on sale — the reservation desk cannot quote this tour"
+                        : "On sale on the reservation desk and the booking page"}</span>
+                    </div>
+                    <div className="tour-sell-r">
+                      <label>Adult price ฿
+                        <input className="search" style={inp} inputMode="decimal" placeholder="not set"
+                          value={(field(t, "priceAdult") as string) ?? ""}
+                          onChange={(e) => set(t.id, "priceAdult", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+                      <label>Child price ฿
+                        <input className="search" style={inp} inputMode="decimal" placeholder="same as adult"
+                          value={(field(t, "priceChild") as string) ?? ""}
+                          onChange={(e) => set(t.id, "priceChild", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+                      <label>Seats per departure
+                        <input className="search" style={inp} inputMode="numeric" placeholder="12"
+                          value={(field(t, "defaultCapacity") as string) ?? ""}
+                          onChange={(e) => set(t.id, "defaultCapacity", e.target.value.replace(/\D/g, ""))} /></label>
+                    </div>
+                  </div>
                   <label style={{ fontSize: 12.5 }}>Meeting point<input className="search" style={inp} value={(field(t, "meetingPoint") as string) ?? ""} onChange={(e) => set(t.id, "meetingPoint", e.target.value)} placeholder="(set coordinates on Meeting points)" /></label>
                   <label style={{ fontSize: 12.5 }}>Itinerary<textarea className="search" style={{ ...inp, minHeight: 60, resize: "vertical" }} value={(field(t, "itinerary") as string) ?? ""} onChange={(e) => set(t.id, "itinerary", e.target.value)} /></label>
                   <label style={{ fontSize: 12.5 }}>Included<textarea className="search" style={{ ...inp, minHeight: 44, resize: "vertical" }} value={(field(t, "included") as string) ?? ""} onChange={(e) => set(t.id, "included", e.target.value)} /></label>
