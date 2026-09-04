@@ -330,14 +330,14 @@ export default function Dashboard() {
                   </a>
                 ))}
                 {orphaned.map((o, i) => (
-                  <a key={`o${i}`} className="att-row" href={`/bookings?focus=${o.date}`} title="Guests tagged to a guide with no assignment — re-dispatch them">
+                  <a key={`o${i}`} className="att-row" href={`/bookings?date=${o.date}`} title="Guests tagged to a guide with no assignment — re-dispatch them">
                     <span className="att-dot" style={{ background: "var(--danger)" }} />
                     <span><b>{o.tour}</b><div className="dr-sub">{dShort(o.date)} {o.time} · {o.pax} pax tagged to {o.guide}</div></span>
                     <span className="att-go">Fix →</span>
                   </a>
                 ))}
                 {d.unassigned.map((u, i) => (
-                  <a key={`u${i}`} className="att-row" href={`/bookings?focus=${u.date}`} title="Open Bookings to dispatch this tour">
+                  <a key={`u${i}`} className="att-row" href={`/bookings?date=${u.date}`} title="Open Bookings to dispatch this tour">
                     <span className="att-dot" style={{ background: "var(--assign)" }} />
                     <span><b>{u.tour}</b><div className="dr-sub">{dShort(u.date)} {u.time} · {u.pax} pax · needs {u.need}</div></span>
                     <span className="att-go">Assign →</span>

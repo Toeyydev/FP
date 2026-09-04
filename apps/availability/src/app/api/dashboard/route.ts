@@ -156,7 +156,16 @@ async function buildDashboard() {
     const have = guidesByInst[`${i.date}|${i.slotIdx}|${i.tourId}`] ?? 0;
     const need = guidesNeeded(i.pax);
     const base = { date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "", tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax };
-    if (have === 0 && i.pending) unassigned.push({ ...base, count: i.count, need });
+    // Zero guides is NEVER "understaffed" — nobody is on the job at all, and the
+    // two rows lead to different places: unassigned opens Bookings to dispatch,
+    // understaffed opens the split dialog, which needs a guide to split FROM.
+    //
+    // This used to also require i.pending (at least one booking still PENDING).
+    // But sending an offer flips the slot's bookings to OFFERED, so the moment a
+    // job was offered and nobody took it, it silently moved into understaffed as
+    // "0/1 guides" — a row whose Assign button opened a split for a tour that had
+    // no guide, and so did nothing at all.
+    if (have === 0) unassigned.push({ ...base, count: i.count, need });
     else if (have < need) understaffed.push({ ...base, have, need });
   }
   unassigned.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
