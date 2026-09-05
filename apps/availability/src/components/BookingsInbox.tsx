@@ -38,16 +38,29 @@ export default function BookingsInbox() {
   // hides anything before today, so a link to a PAST tour — which is exactly what
   // the dashboard's "Record" on an unstaffed past tour is — landed on a list that
   // could never contain it. It looked like the button did nothing.
-  const [deepMonth, setDeepMonth] = useState("");
-  useEffect(() => {
-    const d = new URLSearchParams(window.location.search).get("date") || "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) { setDeepMonth(d.slice(0, 7)); setTab("all"); }
-  }, []);
   const [monthFilter, setMonthFilter] = useState(""); // YYYY-MM filter for the inbox
   const [guides, setGuides] = useState<{ guideId: string; displayName: string; online: boolean; languages: string }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
   const [availMap, setAvailMap] = useState<Record<string, string[]>>({}); // "date|slot" -> available guideIds
   const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
+  const [deepMonth, setDeepMonth] = useState("");
+  useEffect(() => {
+    const d = new URLSearchParams(window.location.search).get("date") || "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    if (d < today) {
+      // Past tour (the dashboard's "Record"): only the All tab can show it.
+      setDeepMonth(d.slice(0, 7));
+      setTab("all");
+    } else {
+      // A tour still to come (the dashboard's "Assign"). It belongs on the Inbox,
+      // where each tour has its own guide picker with "Offer to guide" / "Assign
+      // now". The All tab lists bookings flat and its only bulk action is a
+      // broadcast to every free guide — which is not what Assign means. Open the
+      // day's group so the tour is on screen rather than behind a collapsed date.
+      setOpenDates((x) => ({ ...x, [d]: true }));
+    }
+  }, []);
   // Load the guide list (presence) and rank best-match first: online before offline,
   // then more tours (the API already returns guides ordered by tour count).
   useEffect(() => {
