@@ -26,45 +26,63 @@ enum AccountState {
 }
 
 model User {
-  id             String       @id @default(cuid())
-  email          String       @unique
-  passwordHash   String? // null until the account is claimed
-  role           Role         @default(GUIDE)
-  state          AccountState @default(INVITED)
-  displayName    String // nickname shown on the roster
-  fullName       String?
-  guideId        String?      @unique // G-001..G-025; null for operator/admin
-  phone          String?
-  languages      String[]     @default([])
-  qualifications String[]     @default([]) // tour ids the guide can run
-  offerBlocked   Boolean      @default(false) // operator blocked this guide from receiving job offers
-  consentAt      DateTime? // acknowledged handling customer booking data
-  claimedAt      DateTime?
-  createdAt      DateTime     @default(now())
-  lastSeenAt     DateTime? // presence — updated while the app is open (online/offline)
+  id              String       @id @default(cuid())
+  email           String       @unique
+  passwordHash    String? // null until the account is claimed
+  role            Role         @default(GUIDE)
+  state           AccountState @default(INVITED)
+  displayName     String // nickname shown on the roster
+  fullName        String?
+  // Thai and English legal names are both needed: Thai for the job order and for
+  // PEAK, English for OTA-facing paperwork. Kept separate from `fullName`, which
+  // predates the guide application and is whatever the operator typed.
+  fullNameThai    String?
+  fullNameEnglish String?
+  guideId         String?      @unique // G-001..G-025; null for operator/admin
+  phone           String?
+  languages       String[]     @default([])
+  qualifications  String[]     @default([]) // tour ids the guide can run
+  offerBlocked    Boolean      @default(false) // operator blocked this guide from receiving job offers
+  consentAt       DateTime? // acknowledged handling customer booking data
+  claimedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  lastSeenAt      DateTime? // presence — updated while the app is open (online/offline)
 
-  lineId            String? // LINE id/handle the guide typed (reference)
-  lineUserId        String? @unique // real LINE Messaging API user id (captured on link)
-  lineLinkCode      String? // one-time code to link their LINE to this account
-  emergencyName     String?
-  emergencyPhone    String?
-  emergencyRelation String?
-  licenseNo         String? // tour-guide licence no. (manual) — printed on the job order
+  lineId                  String? // LINE id/handle the guide typed (reference)
+  lineUserId              String?   @unique // real LINE Messaging API user id (captured on link)
+  lineLinkCode            String? // one-time code to link their LINE to this account
+  emergencyName           String?
+  emergencyPhone          String?
+  emergencyRelation       String?
+  // Health data — AES-encrypted sensitive personal data (lib/crypto). Held only
+  // so an operator can act correctly if a guide is taken ill on tour. Never in a
+  // list payload, a notification, an email or an audit entry; decrypted solely
+  // when an operator opens the record. Nullable: every account created before
+  // this existed has none, and a guide may decline to give any.
+  medicalConditionStatus  String? // encrypted "NONE" | "HAS_CONDITION"
+  medicalConditionDetails String? // encrypted free text; null when status is NONE
+  emergencyInstructions   String? // encrypted free text; optional
+  licenseNo               String? // tour-guide licence no. (manual) — printed on the job order
+  licenseExpiry           DateTime? // stored as a real date; the applicant enters it as Buddhist DD/MM/BBBB
   // Stable PEAK Contact (supplier) mapping. The ID is the identity — never resolve
   // a guide to a PEAK contact by display name at sync time, or a renamed nickname
   // silently creates a second supplier and splits their ledger.
-  peakContactId     String?
-  peakContactCode   String?
-  peakContactName   String? // snapshot of the name in PEAK, for display/mismatch checks
-  signature         String? // AES-encrypted PNG data-URI of the guide's signature
+  peakContactId           String?
+  peakContactCode         String?
+  peakContactName         String? // snapshot of the name in PEAK, for display/mismatch checks
+  signature               String? // AES-encrypted PNG data-URI of the guide's signature
   // Verified profile (sensitive PII — stored AES-encrypted via lib/crypto).
-  taxId             String?
-  idCardAddress     String?
-  currentAddress    String?
-  bankName          String?
-  bankAccountNo     String?
-  bankAccountName   String?
-  bankBranch        String?
+  taxId                   String?
+  // Thai national ID from the guide application. Deliberately NOT folded into
+  // taxId: they are the same 13 digits for an individual, but that is a business
+  // rule nobody has confirmed, and silently merging them would be unrecoverable.
+  nationalId              String?
+  idCardAddress           String?
+  currentAddress          String?
+  bankName                String?
+  bankAccountNo           String?
+  bankAccountName         String?
+  bankBranch              String?
 
   availability   Availability[]
   assignments    Assignment[]
@@ -252,7 +270,48 @@ model AccessRequest {
   note            String?
   createdAt       DateTime     @default(now())
 
+  // --- Guide application from FolkOPS Mobile ---
+  // Every field is optional so the older web sign-up (name/nickname/phone/email
+  // /password only) keeps validating unchanged.
+  fullNameThai            String?
+  fullNameEnglish         String?
+  nationalId              String? // AES-encrypted (lib/crypto)
+  licenseNo               String? // XX-XXXXX
+  licenseExpiry           DateTime? // parsed from Buddhist DD/MM/BBBB at the API edge
+  bankName                String? // AES-encrypted
+  bankAccountName         String? // AES-encrypted
+  bankAccountNo           String? // AES-encrypted
+  preferredLanguage       String? // "th" | "en" — which language to write to them in
+  privacyVersion          String? // which Privacy Notice they accepted
+  privacyConsentAt        DateTime?
+  // Health data — AES-encrypted sensitive personal data (lib/crypto), copied to
+  // the User account as ciphertext on approval without ever being decrypted.
+  medicalConditionStatus  String? // encrypted "NONE" | "HAS_CONDITION"
+  medicalConditionDetails String? // encrypted free text; null when status is NONE
+  emergencyInstructions   String? // encrypted free text; optional
+
+  documents AccessRequestDocument[]
+
   @@index([state])
+}
+
+// Documents supporting a pending application, AES-encrypted exactly as
+// GuideDocument is. They live here only until an operator decides: on approval
+// they are copied into GuideDocument inside the approval transaction; on
+// rejection or deletion of the request they go with it (onDelete: Cascade).
+// Never served from a public URL — see api/admin/request-document/[id].
+model AccessRequestDocument {
+  id         String        @id @default(cuid())
+  request    AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId  String
+  kind       String // ID_CARD | GUIDE_LICENSE | BANK_BOOK
+  filename   String
+  mimeType   String
+  size       Int
+  data       Bytes // encrypted
+  uploadedAt DateTime      @default(now())
+
+  @@index([requestId])
 }
 
 // "Remember me" persistent session. Opaque token, only its SHA-256 hash is stored.
