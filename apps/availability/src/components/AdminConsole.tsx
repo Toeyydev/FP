@@ -1,12 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { useLang } from "@/components/Providers";
 
 type Account = { id: string; guideId: string | null; displayName: string; email: string; role: string; state: string; claimedAt: string | null; lineLinked?: boolean; lineId?: string | null; lineLinkCode?: string | null };
-type Req = { id: string; name: string; nickname: string | null; phone: string | null; email: string; believedGuideId: string | null; createdAt: string };
+type ReqDoc = { id: string; kind: string; mimeType: string; size: number };
+type Req = {
+  id: string; name: string; nickname: string | null; phone: string | null; email: string;
+  believedGuideId: string | null; createdAt: string;
+  // Present only on applications from FolkOPS Mobile; the older web sign-up has none.
+  fullNameThai?: string | null; fullNameEnglish?: string | null;
+  licenseNo?: string | null; licenseExpiry?: string | null;
+  preferredLanguage?: string | null; privacyVersion?: string | null; privacyConsentAt?: string | null;
+  nationalIdMasked?: string; bankName?: string; bankAccountName?: string; bankAccountNoMasked?: string;
+  // Flags only — the list never carries what the applicant declared.
+  hasHealthInfo?: boolean; hasEmergencyInstructions?: boolean;
+  documents?: ReqDoc[];
+};
+
+/** The full application, fetched one at a time from the gated detail endpoint.
+ *  This is the only shape that ever holds decrypted health information. */
+type ReqDetail = Req & {
+  medicalConditionStatus?: string | null;
+  medicalConditionDetails?: string | null;
+  emergencyInstructions?: string | null;
+};
 type LineContact = { id: string; displayName: string | null; pictureUrl: string | null; suggestedGuideId: string | null };
 type Data = { accounts: Account[]; requests: Req[]; isAdmin: boolean; lineOaUrl: string | null; lineLoginEnabled?: boolean; lineContacts?: LineContact[] };
 
@@ -18,6 +38,92 @@ function lineInvite(name: string, code: string, oaUrl: string | null, connectLin
     `1) Add our Folkpaths Official Account${oaUrl ? `: ${oaUrl}` : " (search our OA)"}\n` +
     `2) Send this code in the chat: ${code}\n` +
     `You'll get a "✓ Connected" reply. 🙏`;
+}
+
+/** A mobile application carries the extra fields; a legacy web sign-up does not. */
+function hasApplication(rq: Req): boolean {
+  return Boolean(rq.fullNameThai || rq.fullNameEnglish || rq.licenseNo || (rq.documents?.length ?? 0) > 0);
+}
+
+const DOC_LABEL: Record<string, string> = {
+  ID_CARD: "ID card",
+  GUIDE_LICENSE: "Guide licence",
+  BANK_BOOK: "Bank book",
+};
+
+/** The application, shown only when the operator asks for it.
+ *  Sensitive values arrive already masked from the API — the console never holds
+ *  a full national ID or account number. The real documents open one at a time
+ *  through the gated endpoint, which audits each view. */
+function ApplicationDetail({ rq }: { rq: ReqDetail }) {
+  const field = (label: string, value: React.ReactNode) => (
+    <div style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
+      <span style={{ color: "var(--ink-soft)", minWidth: 132 }}>{label}</span>
+      <span>{value || "—"}</span>
+    </div>
+  );
+  const expiry = rq.licenseExpiry ? new Date(rq.licenseExpiry) : null;
+  const lapsed = expiry ? expiry.getTime() < Date.now() : false;
+  return (
+    <div style={{ padding: "10px 14px", background: "#f7f9f8", borderTop: "1px solid var(--line)" }}>
+      <div style={{ display: "grid", gap: 18, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+        <div>
+          {field("Name (Thai)", rq.fullNameThai)}
+          {field("Name (English)", rq.fullNameEnglish)}
+          {field("National ID", rq.nationalIdMasked)}
+          {field("Licence no.", rq.licenseNo)}
+          {field("Licence expiry", expiry
+            ? <span style={lapsed ? { color: "var(--danger)", fontWeight: 700 } : undefined}>
+                {expiry.toISOString().slice(0, 10)}{lapsed ? " · expired" : ""}
+              </span>
+            : null)}
+        </div>
+        <div>
+          {field("Bank", rq.bankName)}
+          {field("Account name", rq.bankAccountName)}
+          {field("Account no.", rq.bankAccountNoMasked)}
+          {field("Language", rq.preferredLanguage === "th" ? "ไทย" : rq.preferredLanguage === "en" ? "English" : null)}
+          {field("Privacy notice", rq.privacyConsentAt
+            ? `${rq.privacyVersion ?? "accepted"} · ${new Date(rq.privacyConsentAt).toISOString().slice(0, 10)}`
+            : null)}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+        <div style={{ fontSize: 11.5, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700, marginBottom: 4 }}>
+          Health &amp; emergency · ข้อมูลสุขภาพและกรณีฉุกเฉิน
+        </div>
+        {rq.medicalConditionStatus === "HAS_CONDITION" ? (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>
+              Medical condition disclosed · แจ้งโรคประจำตัว
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 2, whiteSpace: "pre-wrap" }}>{rq.medicalConditionDetails || "—"}</div>
+          </>
+        ) : rq.medicalConditionStatus === "NONE" ? (
+          <div style={{ fontSize: 13 }}>No known medical conditions · ไม่มีโรคประจำตัว</div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>not provided · ไม่ได้ระบุ</div>
+        )}
+        {rq.emergencyInstructions && (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>Emergency instructions · คำแนะนำกรณีฉุกเฉิน</div>
+            <div style={{ fontSize: 12.5, whiteSpace: "pre-wrap" }}>{rq.emergencyInstructions}</div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 11.5, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Documents</span>
+        {(rq.documents ?? []).length === 0 ? (
+          <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>none attached</span>
+        ) : (rq.documents ?? []).map((d) => (
+          <a key={d.id} className="btn sm" href={`/api/admin/request-document/${d.id}`} target="_blank" rel="noreferrer">
+            {DOC_LABEL[d.kind] ?? d.kind} · {Math.round(d.size / 1024)} KB
+          </a>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 async function post(body: unknown) {
@@ -35,6 +141,19 @@ export default function AdminConsole() {
   const [opEmail, setOpEmail] = useState("");
   const [opRole, setOpRole] = useState<"OPERATOR" | "ACCOUNTANT">("OPERATOR"); const [opName, setOpName] = useState("");
   const [linkSel, setLinkSel] = useState<Record<string, string>>({}); // requestId -> existing guide userId to link
+  const [openReq, setOpenReq] = useState<Record<string, boolean>>({}); // requestId -> application details shown
+  const [reqDetail, setReqDetail] = useState<Record<string, ReqDetail>>({}); // fetched on open, never preloaded
+
+  // Health data is fetched only when an operator actually opens a record, so it
+  // is never sitting in the page for every pending applicant at once.
+  const openDetail = useCallback(async (id: string) => {
+    setOpenReq((m) => ({ ...m, [id]: !m[id] }));
+    if (reqDetail[id]) return;
+    const r = await fetch(`/api/admin/request-detail/${id}`, { cache: "no-store" });
+    if (!r.ok) return;
+    const d = (await r.json()) as ReqDetail;
+    setReqDetail((m) => ({ ...m, [id]: d }));
+  }, [reqDetail]);
   const [lineCodes, setLineCodes] = useState<Record<string, string>>({}); // userId -> freshly generated code
   const [copiedId, setCopiedId] = useState("");
   const [contactSel, setContactSel] = useState<Record<string, string>>({}); // contactId -> chosen guide userId
@@ -165,7 +284,8 @@ export default function AdminConsole() {
                     const autoMatch = unclaimed.find((g) => g.email.toLowerCase() === rq.email.toLowerCase());
                     const sel = linkSel[rq.id] ?? "";
                     return (
-                      <tr key={rq.id}>
+                      <Fragment key={rq.id}>
+                      <tr>
                         <td>{rq.name}</td>
                         <td>{rq.nickname ?? "—"}</td>
                         <td style={{ color: "var(--ink-soft)" }}>{rq.phone ?? "—"}</td>
@@ -177,10 +297,27 @@ export default function AdminConsole() {
                           </select>
                         </td>
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          {hasApplication(rq) && (
+                            <>
+                              <button className="btn sm ghost" onClick={() => openDetail(rq.id)}>
+                                {openReq[rq.id] ? "Hide details" : "Details"}
+                              </button>{" "}
+                            </>
+                          )}
                           <button className="btn sm primary" onClick={() => act({ action: "approveRequest", requestId: rq.id, ...(sel ? { guideUserId: sel } : {}) }, rq.name)}>{t("approve")}</button>{" "}
                           <button className="btn sm danger" onClick={() => act({ action: "rejectRequest", requestId: rq.id })}>{t("reject")}</button>
                         </td>
                       </tr>
+                      {openReq[rq.id] && (
+                        <tr>
+                          <td colSpan={6} style={{ padding: 0 }}>
+                            {reqDetail[rq.id]
+                              ? <ApplicationDetail rq={reqDetail[rq.id]} />
+                              : <div className="op-empty" style={{ padding: 12 }}>Loading application…</div>}
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
