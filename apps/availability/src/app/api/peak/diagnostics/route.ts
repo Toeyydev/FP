@@ -6,6 +6,7 @@ import { classifyPeakHost, endpointSource } from "@/lib/peak-env";
 import {
   peakBaseUrl, peakConfigured, peakEnabled,
   getAccountCodes, getContacts, getPaymentMethods, getUserDetail, sanitizePeakError,
+  type PeakEnvelope,
 } from "@/lib/peak-api";
 
 export const dynamic = "force-dynamic";
@@ -65,23 +66,56 @@ export async function GET() {
 
   // Tax numbers identify a legal entity; enough to confirm which company without
   // reproducing the whole number.
+  // The envelope is reported whether the call succeeded or failed. A zero count
+  // means nothing on its own — it is the HTTP status, the wrapper PEAK used and
+  // its resCode that say whether the list is genuinely empty or the request never
+  // reached the data. Structure and status only: no row contents, ever.
+  const envelopeOf = (res: { envelope?: PeakEnvelope }) =>
+    res.envelope
+      ? {
+          httpStatus: res.envelope.httpStatus,
+          wrapperName: res.envelope.wrapperName,
+          wrapperFields: res.envelope.wrapperKeys,
+          resCode: res.envelope.resCode,
+          resDesc: res.envelope.resDesc,   // sanitized in peak-api before it gets here
+          arrayKey: res.envelope.arrayKey,
+          rawCount: res.envelope.rawCount,
+        }
+      : null;
+
   const maskTax = (t: string | null | undefined) => (!t ? null : t.length <= 4 ? "••••" : `${"•".repeat(Math.max(0, t.length - 4))}${t.slice(-4)}`);
 
   const id = "identity" in identityRes ? identityRes.identity : undefined;
-  const identity = identityRes.ok && id
-    ? { merchantName: id.merchantName, taxNumberMasked: maskTax(id.taxNumber), package: id.package, branchCode: id.branchCode }
-    : { error: identityRes.desc ?? "could not read PEAK user detail" };
+  const identity = {
+    ok: identityRes.ok,
+    ...(identityRes.ok && id
+      ? { merchantName: id.merchantName, taxNumberMasked: maskTax(id.taxNumber), package: id.package, branchCode: id.branchCode }
+      : { error: identityRes.desc ?? "could not read PEAK user detail" }),
+    peak: envelopeOf(identityRes as { envelope?: PeakEnvelope }),
+  };
 
-  const listInfo = (res: { ok: boolean; desc?: string; meta?: { arrayKey: string; rawCount: number; sampleKeys: string[] } }, kept: number) =>
-    res.ok
+  const listInfo = (
+    res: { ok: boolean; desc?: string; envelope?: PeakEnvelope; meta?: { arrayKey: string; rawCount: number; sampleKeys: string[] } },
+    kept: number,
+  ) => ({
+    ok: res.ok,
+    ...(res.ok
       ? { rawCount: res.meta?.rawCount ?? kept, usableCount: kept, arrayKey: res.meta?.arrayKey ?? null, fieldsOnFirstRow: res.meta?.sampleKeys ?? [] }
-      : { error: res.desc ?? "request failed" };
+      : { error: res.desc ?? "request failed" }),
+    peak: envelopeOf(res),
+  });
 
   const accounts = listInfo(accountsRes as never, ("accounts" in accountsRes ? accountsRes.accounts?.length : 0) ?? 0);
   const paymentMethods = listInfo(methodsRes as never, ("methods" in methodsRes ? methodsRes.methods?.length : 0) ?? 0);
-  const contacts = contactsRes.ok
-    ? { rawCount: ("contacts" in contactsRes ? contactsRes.contacts?.length : 0) ?? 0 }
-    : { error: contactsRes.desc ?? "request failed" };
+  const contacts = {
+    ok: contactsRes.ok,
+    ...(contactsRes.ok
+      // Count only. Contact rows are people and companies — names, tax numbers
+      // and codes — and none of that belongs in a diagnostic.
+      ? { rawCount: ("contacts" in contactsRes ? contactsRes.contacts?.length : 0) ?? 0 }
+      : { error: contactsRes.desc ?? "request failed" }),
+    peak: envelopeOf(contactsRes as { envelope?: PeakEnvelope }),
+  };
 
   // §6: the saved mappings came from a chart someone read in PEAK's web UI. If that
   // was a different environment from this one, the codes will not exist here — and
@@ -101,5 +135,22 @@ export async function GET() {
       : [],
   };
 
-  return NextResponse.json({ connection, variables, identity, accounts, paymentMethods, contacts, mappingCheck });
+  // §6. GET /DailyJournals/accountcode is the path this client has always used for
+  // the chart of accounts, but it is not confirmed against the current Production
+  // API and has never returned rows here. Rather than swap in a guessed endpoint,
+  // the diagnostic states the position and the saved manual mapping stands.
+  const accountCodeEndpoint = {
+    path: "GET /DailyJournals/accountcode",
+    status: accountsRes.ok && ((("meta" in accountsRes ? accountsRes.meta?.rawCount : 0) ?? 0) > 0)
+      ? "responded with rows"
+      : "unconfirmed on this environment — no rows have ever been returned",
+    note: "Not replaced with an alternative endpoint: none is documented for the chart of accounts. "
+        + "FolkOPS category → PEAK account codes stay manually mapped, and nothing auto-posts.",
+  };
+
+  return NextResponse.json({
+    connection, variables, identity, accounts, paymentMethods, contacts,
+    accountCodeEndpoint, mappingCheck,
+    readOnly: true,
+  });
 }
