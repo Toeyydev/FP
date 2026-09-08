@@ -1329,3 +1329,17 @@ body:has(.op-layout) .wrap{max-width:1440px}
    dispatching sooner — the work is done and somebody may be unpaid for it. */
 .att-row.att-past{border-left:3px solid var(--danger);background:var(--danger-bg)}
 .att-row.att-past .att-go{color:var(--danger);font-weight:700}
+
+/* Who is being mapped, above the PEAK contact picker. FolkOPS holds the guide's
+   legal name; PEAK holds its own. They are shown side by side so the operator
+   compares them, rather than being made to look already reconciled. */
+.js-contact-who{display:flex;gap:8px;align-items:baseline;margin-bottom:6px;font-size:12.5px}
+.js-contact-who b{font-variant-numeric:tabular-nums}
+.js-contact-who span{color:var(--ink-soft)}
+
+/* A suggested PEAK contact. Deliberately looks like a prompt, not a selection —
+   nothing is saved until the operator picks it and presses Save. */
+.js-contact-suggest{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;
+  padding:8px 10px;margin-bottom:6px;border:1px dashed var(--line);border-radius:8px;
+  background:var(--warn-bg,#fffbe9);font-size:12.5px}
+.js-contact-suggest .hint{margin:0}
