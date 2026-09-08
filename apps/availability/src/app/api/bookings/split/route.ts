@@ -10,6 +10,7 @@ import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { pushTourToCalendars, removeTourEvents } from "@/lib/tour-calendar-sync";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const CAP = PAX_PER_GUIDE;
@@ -91,6 +92,10 @@ export async function POST(req: NextRequest) {
     // Any guest still tagged to this dropped guide (not moved into a new group) is
     // freed back to the inbox, so it isn't left orphaned on a guide with no assignment.
     await prisma.booking.updateMany({ where: { date, slotIdx, assignedGuideId: a.guideId }, data: { assignedGuideId: null, status: "PENDING" } });
+    if (await hasHistoricalJobSheet({ guideId: a.guideId, date, slotIdx })) {
+      const c = historicalDeleteConflict();
+      return NextResponse.json(c.body, { status: c.status });
+    }
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),

@@ -66,14 +66,18 @@ model User {
   bankAccountName   String?
   bankBranch        String?
 
-  availability   Availability[]
-  assignments    Assignment[]
-  invites        Invite[]
-  otps           Otp[]
-  refreshTokens  RefreshToken[]
-  passwordResets PasswordReset[]
-  documents      GuideDocument[]
-  notifications  Notification[]
+  // Historical backlog: a guide can be the confirmed guide on many reviews, and an
+  // operator the reviewer on many. Two named relations because User is referenced twice.
+  historicalReviewsGuide    HistoricalJobReview[] @relation("HistReviewGuide")
+  historicalReviewsReviewed HistoricalJobReview[] @relation("HistReviewReviewer")
+  availability              Availability[]
+  assignments               Assignment[]
+  invites                   Invite[]
+  otps                      Otp[]
+  refreshTokens             RefreshToken[]
+  passwordResets            PasswordReset[]
+  documents                 GuideDocument[]
+  notifications             Notification[]
 }
 
 // Company-wide whole-day blackout (holiday / closed day). Blocks all availability
@@ -145,7 +149,8 @@ model Tour {
   bring          String?
   durationMin    Int? // default tour length (prefills offer duration)
 
-  assignments Assignment[]
+  historicalReviews HistoricalJobReview[]
+  assignments       Assignment[]
 }
 
 model Availability {
@@ -327,33 +332,34 @@ model JobOffer {
 // hand. Gathered in the Bookings Inbox, grouped by date+tour+slot, then turned
 // into a job offer. `raw` keeps the full payload so parsing can be refined.
 model Booking {
-  id               String   @id @default(cuid())
-  source           String   @default("bokun") // bokun | gyg | viator | manual
-  externalId       String? // Bokun booking id
-  confirmationCode String? // Bokun confirmation code
-  externalRef      String? // original OTA booking number (GetYourGuide / Viator ref)
-  productName      String?
-  tourId           String? // mapped to our Tour (null until mapped)
-  date             String? // "YYYY-MM-DD" start date
-  startTime        String? // "HH:MM"
-  slotIdx          Int? // mapped slot index
-  pax              Int?
-  customerName     String?
-  nationality      String?
-  email            String?
-  phone            String?
-  specialRequests  String?
-  notes            String?
-  bookingDate      String? // "YYYY-MM-DD" when the booking was made
-  paymentStatus    String   @default("unpaid") // unpaid | paid | deposit
-  status           String   @default("PENDING") // PENDING | OFFERED | ASSIGNED | CANCELLED | IGNORED
-  assignedGuideId  String? // set when an over-capacity slot is split across guides
-  datePinned       Boolean  @default(false) // operator moved this booking's date/slot by hand (a rebooking outside the OTA) — the sync must NOT drag it back to the channel's date
-  raw              Json?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  noShow           Boolean  @default(false) // any guest on this booking didn't arrive (kept in sync: noShowPax > 0)
-  noShowPax        Int      @default(0) // how many of this booking's `pax` didn't arrive (0..pax) — supports partial no-shows (e.g. booked 8, came 5 → 3)
+  id                          String                       @id @default(cuid())
+  source                      String                       @default("bokun") // bokun | gyg | viator | manual
+  externalId                  String? // Bokun booking id
+  confirmationCode            String? // Bokun confirmation code
+  externalRef                 String? // original OTA booking number (GetYourGuide / Viator ref)
+  productName                 String?
+  tourId                      String? // mapped to our Tour (null until mapped)
+  date                        String? // "YYYY-MM-DD" start date
+  startTime                   String? // "HH:MM"
+  slotIdx                     Int? // mapped slot index
+  pax                         Int?
+  customerName                String?
+  nationality                 String?
+  email                       String?
+  phone                       String?
+  specialRequests             String?
+  notes                       String?
+  bookingDate                 String? // "YYYY-MM-DD" when the booking was made
+  paymentStatus               String                       @default("unpaid") // unpaid | paid | deposit
+  status                      String                       @default("PENDING") // PENDING | OFFERED | ASSIGNED | CANCELLED | IGNORED
+  assignedGuideId             String? // set when an over-capacity slot is split across guides
+  datePinned                  Boolean                      @default(false) // operator moved this booking's date/slot by hand (a rebooking outside the OTA) — the sync must NOT drag it back to the channel's date
+  raw                         Json?
+  createdAt                   DateTime                     @default(now())
+  updatedAt                   DateTime                     @updatedAt
+  noShow                      Boolean                      @default(false) // any guest on this booking didn't arrive (kept in sync: noShowPax > 0)
+  noShowPax                   Int                          @default(0) // how many of this booking's `pax` didn't arrive (0..pax) — supports partial no-shows (e.g. booked 8, came 5 → 3)
+  historicalJobReviewBookings HistoricalJobReviewBooking[]
 
   @@unique([source, externalId])
   @@index([date])
@@ -405,52 +411,150 @@ model PeakAccountMapping {
   updatedAt       DateTime @updatedAt
 }
 
+// Where a job sheet came from. NORMAL is every sheet that existed before the
+// historical backlog: the default preserves their behaviour exactly, and a
+// non-null enum keeps the PEAK check total rather than three-valued.
+enum JobSheetOrigin {
+  NORMAL
+  HISTORICAL_BACKFILL
+}
+
+// The operator-controlled lifecycle of one historical tour instance under review.
+// Nothing here is inferred: the system never sets CONFIRMED_OPERATED,
+// CONFIRMED_CANCELLED or CUSTOMER_NO_SHOW on its own.
+enum HistoricalReviewStatus {
+  NEEDS_REVIEW
+  CONFIRMED_OPERATED
+  CONFIRMED_CANCELLED
+  CUSTOMER_NO_SHOW
+  GUIDE_UNKNOWN
+  NEEDS_EVIDENCE
+  READY_TO_RECONSTRUCT
+  RECONSTRUCTED_DRAFT
+  EXCLUDED
+  COMPLETED
+}
+
+// One tour instance that has NO job sheet and needs an operator to say what
+// happened. Instances that already have a sheet never get a row here — the
+// backlog is a list of what is missing, and normal sheets stay outside this
+// lifecycle entirely.
+model HistoricalJobReview {
+  id String @id @default(cuid())
+
+  // "YYYY-MM-DD#NN" — the tour date and zero-padded slot. Deliberately excludes
+  // tourId, which is MUTABLE (product mapping assigns it after import): a key
+  // containing it would create a second row the first time a product was mapped.
+  instanceKey String @unique
+  date        String
+  slotIdx     Int
+
+  // Snapshots because a Tour can be deleted (api/tours deletes outright) and the
+  // evidence must survive it.
+  tourId           String?
+  tour             Tour?   @relation(fields: [tourId], references: [id], onDelete: SetNull)
+  tourIdSnapshot   String?
+  tourNameSnapshot String?
+
+  reviewStatus HistoricalReviewStatus @default(NEEDS_REVIEW)
+
+  // Chosen by an operator, never inferred. SetNull keeps the review when a guide
+  // account is deleted; the snapshot preserves who was named.
+  confirmedGuideId       String?
+  confirmedGuide         User?   @relation("HistReviewGuide", fields: [confirmedGuideId], references: [guideId], onDelete: SetNull)
+  confirmedGuideSnapshot String?
+
+  // Restrict, not SetNull: a reconstructed draft must not be swept away by the
+  // generic cleanup paths that delete sheets by (guideId, date, slotIdx). Only
+  // reconstructed sheets are ever linked here, so normal sheets are unaffected.
+  jobSheetId String?   @unique
+  jobSheet   JobSheet? @relation(fields: [jobSheetId], references: [id], onDelete: Restrict)
+
+  exclusionReason String?
+  reviewNotes     String?
+  // Operational classification only — see HISTORICAL_AUDIT_KEYS. Never customer
+  // names, contact details, bank or tax numbers, or raw imported payloads.
+  auditSnapshot   Json?
+
+  reviewedById String?
+  reviewedBy   User?     @relation("HistReviewReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+
+  bookings  HistoricalJobReviewBooking[]
+  createdAt DateTime                     @default(now())
+  updatedAt DateTime                     @updatedAt
+
+  @@index([reviewStatus])
+  @@index([date])
+}
+
+// Which imported bookings a review is based on. A real foreign key, not a string
+// array — but nullable with SetNull, plus immutable snapshots, so deleting an
+// imported booking cannot erase the evidence a review was built from.
+model HistoricalJobReviewBooking {
+  id                 String   @id @default(cuid())
+  historicalReviewId String
+  bookingId          String?
+  bookingIdSnapshot  String
+  bookingRefSnapshot String?
+  linkedAt           DateTime @default(now())
+
+  historicalReview HistoricalJobReview @relation(fields: [historicalReviewId], references: [id], onDelete: Cascade)
+  booking          Booking?            @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@unique([historicalReviewId, bookingIdSnapshot])
+  @@index([bookingId])
+}
+
 model JobSheet {
-  id                String    @id @default(cuid())
-  ref               String? // FOLK-BKK-YYYYMMDD-NN
-  guideId           String
-  date              String // "YYYY-MM-DD"
-  slotIdx           Int
-  tourId            String
-  status            String    @default("Confirmed")
-  bookings          Json      @default("[]") // [{name, bookingNo, bookedPax, actualPax, tickets, status}]
-  expenses          Json      @default("[]") // [{description, price, pax}] — operator's official set
-  guideFee          Json      @default("{}") // {price, time, whtPct}
-  guideExpenses     Json? // [{description, price, pax}] — guide's own report, to cross-check
-  guideExpensesAt   DateTime? // when the guide last submitted their expense report
-  guideExpensesNote String? // free-text note the guide adds with their expense report
-  operatorNote      String? // free-text comment the operator adds for the guide (shown on the guide's sheet)
+  id                 String               @id @default(cuid())
+  origin             JobSheetOrigin       @default(NORMAL)
+  reconstructionNote String? // written once at reconstruction; never edited
+  historicalReview   HistoricalJobReview?
+  ref                String? // FOLK-BKK-YYYYMMDD-NN
+  guideId            String
+  date               String // "YYYY-MM-DD"
+  slotIdx            Int
+  tourId             String
+  status             String               @default("Confirmed")
+  bookings           Json                 @default("[]") // [{name, bookingNo, bookedPax, actualPax, tickets, status}]
+  expenses           Json                 @default("[]") // [{description, price, pax}] — operator's official set
+  guideFee           Json                 @default("{}") // {price, time, whtPct}
+  guideExpenses      Json? // [{description, price, pax}] — guide's own report, to cross-check
+  guideExpensesAt    DateTime? // when the guide last submitted their expense report
+  guideExpensesNote  String? // free-text note the guide adds with their expense report
+  operatorNote       String? // free-text comment the operator adds for the guide (shown on the guide's sheet)
   // Finance/accounting approval — the operator signs off the actual expenses before
   // payout / PEAK sync. Additive + nullable: an unset value reads as "not approved".
-  approvalStatus    String? // null | "APPROVED" (lifecycle grows later: DRAFT → READY_FOR_REVIEW → APPROVED)
-  approvedBy        String? // User.id of the operator who approved
-  approvedAt        DateTime?
+  approvalStatus     String? // null | "APPROVED" (lifecycle grows later: DRAFT → READY_FOR_REVIEW → APPROVED)
+  approvedBy         String? // User.id of the operator who approved
+  approvedAt         DateTime?
   // First successful operator save — the certification date printed under the
   // authorized signature on the sheet/PDF. Stamped once server-side (only while
   // NULL); later saves touch updatedAt but never this. Historical sheets stay
   // NULL until their next save (display falls back to approvedAt — lib/certifier).
-  certifiedAt       DateTime?
+  certifiedAt        DateTime?
   // ── Accounting dates ──────────────────────────────────────────────────────
   // Both default to the TOUR date (see lib/peak-sync.defaultAccountingDates), so a
   // document never lands in the period someone happened to press Sync in.
   // paymentDate is the ACTUAL transfer date and is set when the payout is made.
-  accountingDate    String? // "YYYY-MM-DD" — the period this job books into
-  documentDate      String? // "YYYY-MM-DD" — the PEAK document date
-  paymentDate       String? // "YYYY-MM-DD" — when the guide was actually paid
+  accountingDate     String? // "YYYY-MM-DD" — the period this job books into
+  documentDate       String? // "YYYY-MM-DD" — the PEAK document date
+  paymentDate        String? // "YYYY-MM-DD" — when the guide was actually paid
   // ── PEAK sync state ───────────────────────────────────────────────────────
   // NOT_READY | READY | SYNCING | SYNCED | FAILED | BLOCKED. Null = never attempted.
-  peakSyncStatus    String?
-  peakDocumentId    String? // PEAK's internal id for the created expense
-  peakDocumentNo    String? // the EXP-… number shown to humans
-  syncedAt          DateTime?
-  syncError         String? // last failure, sanitised — never contains credentials
+  peakSyncStatus     String?
+  peakDocumentId     String? // PEAK's internal id for the created expense
+  peakDocumentNo     String? // the EXP-… number shown to humans
+  syncedAt           DateTime?
+  syncError          String? // last failure, sanitised — never contains credentials
   // Fingerprint of the payload at the last successful sync. Re-posting an unchanged
   // sheet is refused (it would duplicate); a changed one requires an operator
   // decision rather than a silent overwrite. See lib/peak-sync.peakPayloadHash.
-  lastPayloadHash   String?
-  createdById       String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  lastPayloadHash    String?
+  createdById        String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
   @@unique([guideId, date, slotIdx])
   @@index([date])

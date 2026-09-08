@@ -9,6 +9,8 @@ import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { bookingRef } from "@/lib/booking-ref";
 import { siteUrl } from "@/lib/site";
+import { hasHistoricalJobSheet } from "@/lib/historical-guard";
+import { audit } from "@/lib/audit";
 
 export type ImportResult = "created" | "updated" | "skipped";
 
@@ -212,6 +214,19 @@ async function onBookingCancelled(b: { date: string | null; slotIdx: number | nu
         // from their schedule. Never touch a tour that's already been paid.
         const paid = await prisma.tourPayment.findFirst({ where: { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, status: "PAID" }, select: { id: true } });
         try { await removeTourEvents(a); } catch { /* calendar cleanup is best-effort */ }
+        // A reconstructed historical sheet is evidence an operator built by hand;
+        // a later OTA cancellation must not delete it. Skip this assignment's
+        // cleanup entirely rather than let the FK abort the whole sync loop —
+        // and skip the notifications with it, since nothing was removed.
+        if (await hasHistoricalJobSheet({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx })) {
+          // Leave a trail so this is visible without reading logs. Ids and dates
+          // only: no customer name, no contact detail, nothing from the payload.
+          await audit({
+            action: "historical.cleanup_skipped", entityType: "JobSheet",
+            detail: { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, reason: "reconstructed historical sheet protected" },
+          }).catch(() => {});
+          continue;
+        }
         if (!paid) {
           const where = { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx };
           await prisma.$transaction([

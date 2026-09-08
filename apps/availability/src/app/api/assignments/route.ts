@@ -10,6 +10,7 @@ import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { audit } from "@/lib/audit";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -173,6 +174,13 @@ export async function DELETE(req: NextRequest) {
   // offer this guide had accepted for the slot. (Completed tours are removed from
   // the Tour Log instead, which keeps the sheet for the payment record.)
   if (existing) {
+    // A reconstructed historical sheet must not be swept away by un-assigning a
+    // guide. Refuse before anything is deleted, so the operator is told what to
+    // do rather than losing the record.
+    if (await hasHistoricalJobSheet({ guideId, date, slotIdx })) {
+      const c = historicalDeleteConflict();
+      return NextResponse.json(c.body, { status: c.status });
+    }
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId, date, slotIdx } }),

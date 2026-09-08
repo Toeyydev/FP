@@ -2,6 +2,12 @@ import { prisma } from "@/lib/db";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { createExpenseAllInOne, peakEnabled } from "@/lib/peak-api";
 
+/** Thrown rather than returned, so a caller cannot ignore it by reading `.ok`. */
+export class HistoricalSheetNotPostable extends Error {
+  readonly code = "historical-sheet-not-postable";
+  constructor(message: string) { super(message); this.name = "HistoricalSheetNotPostable"; }
+}
+
 // Account-chart values are business-specific — set in Railway, never hard-coded.
 // Until they're set the payload is still built (for logging) but the codes are
 // blank, so we'd never post a real expense with wrong accounts.
@@ -22,8 +28,22 @@ export async function buildPayoutExpense(guideId: string, jobs: { date: string; 
   const u = await prisma.user.findFirst({ where: { guideId }, select: { peakContactId: true } });
   const sheets = await prisma.jobSheet.findMany({
     where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) },
-    select: { ref: true, expenses: true, guideFee: true },
+    select: { ref: true, expenses: true, guideFee: true, origin: true },
   });
+  // The guard that actually blocks posting. peakSyncEligibility is only consulted
+  // by the job-sheet screen for display — postGuidePayout never calls it — so a
+  // reason added there would change a label and nothing else. Every posting path
+  // (single e-slip, batch e-slip, the manual test route) reaches PEAK through
+  // this function, so refusing here refuses everywhere.
+  //
+  // A reconstructed sheet has no guide-submitted expenses and no verified figures;
+  // posting one would book invented numbers into the ledger.
+  const historical = sheets.filter((x) => x.origin === "HISTORICAL_BACKFILL");
+  if (historical.length) {
+    throw new HistoricalSheetNotPostable(
+      `${historical.length} job sheet(s) in this payout were reconstructed from historical records and cannot be posted to PEAK`,
+    );
+  }
   let gross = 0, wht = 0, totalExp = 0;
   const refs: string[] = [];
   for (const s of sheets) {
@@ -68,7 +88,13 @@ export const peakPayoutReady = !!(ACC_FEE && PAY_METHOD);
 export async function postGuidePayout(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string): Promise<{ ok: boolean; code?: string; desc?: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not connected (env not set)" };
   if (!peakPayoutReady) return { ok: false, desc: "PEAK posting config not set (PEAK_ACCT_GUIDE_FEE / PEAK_PAYMENT_METHOD)" };
-  const { expense } = await buildPayoutExpense(guideId, jobs, paymentDate);
+  let expense: Record<string, unknown>;
+  try {
+    ({ expense } = await buildPayoutExpense(guideId, jobs, paymentDate));
+  } catch (e) {
+    if (e instanceof HistoricalSheetNotPostable) return { ok: false, code: e.code, desc: e.message };
+    throw e;
+  }
   // Refuse an unmapped guide outright. Posting without a contact id would make
   // PEAK match or create one from whatever we sent — and with English names here
   // against Thai names there, that means a duplicate supplier every time.

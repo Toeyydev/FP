@@ -5,6 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
+import HistoricalBacklog from "@/components/HistoricalBacklog";
 
 type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
@@ -24,7 +25,7 @@ function StateTag({ a }: { a: Assignment }) {
 
 export default function Dispatch() {
   const [data, setData] = useState<{ assignments: Assignment[]; offers: Offer[] } | null>(null);
-  const [tab, setTab] = useState<"assigned" | "offers">("assigned");
+  const [tab, setTab] = useState<"assigned" | "offers" | "historical">("assigned");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -195,11 +196,14 @@ export default function Dispatch() {
       <div id="appBar"><div className="subtabs">
         <button className={`subtab ${tab === "assigned" ? "active" : ""}`} onClick={() => setTab("assigned")}>Assigned jobs ({data.assignments.length})</button>
         <button className={`subtab ${tab === "offers" ? "active" : ""}`} onClick={() => setTab("offers")}>Offers ({openOffers.length} waiting{unfilled.length ? `, ${unfilled.length} unfilled` : ""})</button>
+        <button className={`subtab ${tab === "historical" ? "active" : ""}`} onClick={() => setTab("historical")}>Historical backlog</button>
       </div>
         <div className="nav"><a className="btn sm" href="/tour-log">📋 Past tours</a><a className="btn sm" href="/dashboard">Dashboard</a></div>
       </div>
 
-      {tab === "assigned" ? (
+      {tab === "historical" ? (
+        <HistoricalBacklog />
+      ) : tab === "assigned" ? (
         <section className="panel">
           <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today only — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>

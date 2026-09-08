@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -104,6 +105,10 @@ export async function DELETE(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, date, slotIdx } = parsed.data;
   const where = { guideId, date, slotIdx };
+  if (await hasHistoricalJobSheet(where)) {
+    const c = historicalDeleteConflict();
+    return NextResponse.json(c.body, { status: c.status });
+  }
   await prisma.$transaction([
     prisma.tourPayment.deleteMany({ where }),
     prisma.jobSheet.deleteMany({ where }), // also clears it from the monthly payroll
