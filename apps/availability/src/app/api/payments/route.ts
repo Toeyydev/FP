@@ -7,6 +7,7 @@ import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@
 import { guidePayoutTotal } from "@/lib/peak-sync";
 import { canViewFinance } from "@/lib/roles";
 import { type Slip } from "@/lib/payments/slips";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const thisMonth = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
@@ -172,6 +173,10 @@ export async function DELETE(req: NextRequest) {
     for (const b of list) if (!split || b.assignedGuideId === guideId) deletedBookings.push(b);
   }
   const doomedIds = deletedBookings.map((b) => b.id);
+  if (await hasHistoricalJobSheet(where)) {
+    const c = historicalDeleteConflict();
+    return NextResponse.json(c.body, { status: c.status });
+  }
   await prisma.$transaction([
     prisma.jobSheet.deleteMany({ where }),
     prisma.tourPayment.deleteMany({ where }),

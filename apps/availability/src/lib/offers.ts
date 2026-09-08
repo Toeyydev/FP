@@ -6,6 +6,7 @@ import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
 import { signOfferAction } from "@/lib/offer-token";
 import { PUBLIC_BASE_URL, siteUrl } from "@/lib/site";
+import { hasHistoricalJobSheet } from "@/lib/historical-guard";
 
 // Create and broadcast a job offer to every available guide (in-app + push +
 // LINE buttons). Reused by the operator endpoint and by auto re-offer on cancel.
@@ -19,6 +20,12 @@ async function cleanupPreppedSheet(guideId: string, date: string, slotIdx: numbe
       prisma.checkin.count({ where: { guideId, date, slotIdx } }),
     ]);
     if (assigned || checked > 0) return;
+    // A reconstructed historical sheet is never "prepped" work — it is a record an
+    // operator built by hand. Checked explicitly rather than left to the FK: the
+    // catch below would swallow that error, and relying on an exception to protect
+    // evidence is not a guarantee. Nothing else here changes, so no offer status
+    // and no payment state moves because the delete was declined.
+    if (await hasHistoricalJobSheet({ guideId, date, slotIdx })) return;
     await prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } });
   } catch { /* best-effort cleanup */ }
 }

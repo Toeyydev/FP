@@ -15,6 +15,7 @@ import { isMapped } from "@/lib/peak-accounts";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -251,6 +252,7 @@ export async function GET(req: NextRequest) {
     const eligibility = peakSyncEligibility({
       expenses: exps, guideFee: gf, approved: isApproved(existing?.approvalStatus),
       peakContactId: header?.peakContactId, accountingDate: dates.accountingDate,
+      origin: existing?.origin ?? null,
       accounts, jobRef: existing?.ref, bookings: (existing?.bookings as Booking[]) ?? [], state,
     });
     return {
@@ -498,6 +500,10 @@ export async function DELETE(req: NextRequest) {
   const splitHere = atSlot.some((b) => b.assignedGuideId);
   const deletedBookings = splitHere ? atSlot.filter((b) => b.assignedGuideId === guideId) : atSlot;
   const doomedIds = deletedBookings.map((b) => b.id);
+  if (await hasHistoricalJobSheet(where)) {
+    const c = historicalDeleteConflict();
+    return NextResponse.json(c.body, { status: c.status });
+  }
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),

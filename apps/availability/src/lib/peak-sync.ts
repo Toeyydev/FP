@@ -341,6 +341,9 @@ export type SyncEligibilityInput = {
   jobRef?: string | null;
   bookings?: Booking[];
   state?: PeakSyncState;
+  /** "HISTORICAL_BACKFILL" for a reconstructed sheet. Display only — the block
+   *  that matters is in buildPayoutExpense, which every posting path goes through. */
+  origin?: string | null;
 };
 
 export type SyncEligibility = {
@@ -356,6 +359,8 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
   const { expenses, guideFee, approved, peakContactId, accountingDate, accounts = {}, jobRef, bookings, state } = input;
   const reasons: string[] = [];
 
+  if (input.origin === "HISTORICAL_BACKFILL")
+    reasons.push("Reconstructed from historical records — not eligible for PEAK sync");
   if (!approved) reasons.push("Job sheet is not approved");
   if (!peakContactId) reasons.push("Guide is not mapped to a PEAK Contact");
   if (!accountingDate) reasons.push("No accounting date set");
