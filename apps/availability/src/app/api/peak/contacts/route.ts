@@ -29,7 +29,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, contacts: [], error: res.desc ?? "PEAK rejected the contact request", peakCode: res.code ?? null }, { status: 502 });
   }
 
-  const contacts = res.contacts ?? [];
+  // Mask before anything leaves the server. The picker exists so an operator can
+  // RECOGNISE the right contact, which the Thai name, the PEAK contact code and
+  // the last digits of a tax number do. The full tax number identifies a legal
+  // person and is never needed to make that choice, so it never reaches the
+  // browser — the raw value stops here.
+  const mask = (v?: string) => {
+    const t = (v ?? "").trim();
+    if (!t) return null;
+    return t.length <= 4 ? "••••" : `${"•".repeat(Math.min(t.length - 4, 8))}${t.slice(-4)}`;
+  };
+  const contacts = (res.contacts ?? []).map((c) => ({
+    id: c.id,
+    name: c.name,                    // Thai, as PEAK holds it — what the operator matches on
+    code: c.code ?? null,            // PEAK contact code, for verification
+    taxNumberMasked: mask(c.taxNumber),
+    // PEAK's contact list does not return bank details, so there are none to show.
+    // Reported explicitly rather than left as a silently missing field.
+    bankMasked: null as string | null,
+  }));
   if (!contacts.length) {
     return NextResponse.json({
       ok: false, contacts: [],
@@ -39,5 +57,10 @@ export async function GET(req: NextRequest) {
       peakCode: res.code ?? null,
     }, { status: 502 });
   }
-  return NextResponse.json({ ok: true, contacts });
+  return NextResponse.json({
+    ok: true,
+    contacts,
+    // So the UI can say why no bank column is shown, instead of looking broken.
+    bankDetailsAvailable: false,
+  });
 }

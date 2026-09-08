@@ -9,6 +9,7 @@ import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate 
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
+import { suggestPeakContact } from "@/lib/peak-contact-suggest";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -95,7 +96,10 @@ export default function JobSheetEditor() {
   const [peak, setPeak] = useState<PeakInfo>(null);
   const [peakAccounts, setPeakAccounts] = useState<{ code: string; name: string }[]>([]);
   const [contactEdit, setContactEdit] = useState<string | null>(null); // inline PEAK-contact mapping
-  const [peakContacts, setPeakContacts] = useState<{ id: string; name: string; taxNumber?: string; code?: string }[] | null>(null);
+  const [peakContacts, setPeakContacts] = useState<{ id: string; name: string; code?: string | null; taxNumberMasked?: string | null }[] | null>(null);
+  // Narrows the list. Finding the right contact stays a human act — this only
+  // helps them look.
+  const [contactSearch, setContactSearch] = useState("");
   const [contactsError, setContactsError] = useState("");
 
   const load = useCallback(async () => {
@@ -421,6 +425,16 @@ export default function JobSheetEditor() {
   // whose absence blocks every sync, so it is editable right where that block is
   // reported rather than on a separate admin screen. Writes to the guide's profile,
   // not to this sheet — one guide, one contact, reused by every job.
+  // A suggestion, not a selection: derived for display only and never written.
+  // The operator clicks it into the list and then presses Save — two acts, so an
+  // inattentive click cannot commit the wrong supplier.
+  const contactSuggestion = peakContacts && sheet
+    ? suggestPeakContact({ guideId: sheet.guideId, legalName: header?.name }, peakContacts)
+    : null;
+  const suggestedContact = contactSuggestion
+    ? peakContacts?.find((c) => c.id === contactSuggestion.contactId) ?? null
+    : null;
+
   async function savePeakContact(value: string) {
     if (!sheet) return;
     setBusy(true); setMsg(value.trim() ? "Mapping guide to PEAK…" : "Clearing mapping…");
@@ -432,11 +446,23 @@ export default function JobSheetEditor() {
         // Snapshot the name from the list so the sheet can say WHO it is mapped to
         // rather than showing an opaque id.
         peakContactName: peakContacts?.find((c) => c.id === value.trim())?.name,
+        peakContactCode: peakContacts?.find((c) => c.id === value.trim())?.code ?? undefined,
       }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "no-guide" ? "Guide not found." : d.error === "forbidden" ? "Operator only." : "Couldn't save the mapping."); return; }
+    if (!r.ok) {
+      setMsg(
+        d.error === "contact-already-linked"
+          // Naming the other guide matters: the usual cause is the wrong pick,
+          // not a genuinely shared supplier.
+          ? `That PEAK contact is already linked to ${d.conflict?.guideId ?? "another guide"}${d.conflict?.displayName ? ` (${d.conflict.displayName})` : ""}. Pick the right contact, or ask an admin if it really is the same person.`
+          : d.error === "no-guide" ? "Guide not found."
+          : d.error === "forbidden" ? "Operator only."
+          : "Couldn't save the mapping.",
+      );
+      return;
+    }
     setContactEdit(null);
     setMsg(d.peakContactId ? "Guide mapped to PEAK contact ✓" : "PEAK contact mapping cleared");
     load(); // re-evaluates sync eligibility server-side
@@ -1522,15 +1548,56 @@ export default function JobSheetEditor() {
                 {/* The guide already exists in PEAK, so pick them from the list.
                     Falls back to entering the id by hand if the list will not load,
                     so a PEAK outage never blocks the mapping. */}
+                {/* Who is being mapped, in the name FolkOPS holds. Shown against
+                    PEAK's own list so the operator compares the two themselves. */}
+                <div className="js-contact-who">
+                  <b>{sheet.guideId}</b>
+                  <span>{header?.name || sheet.guideId}</span>
+                </div>
                 {peakContacts === null ? (
                   <div className="hint">Loading PEAK contacts…</div>
                 ) : peakContacts.length ? (
-                  <select id="peakContact" value={contactEdit ?? ""} onChange={(ev) => setContactEdit(ev.target.value)}>
-                    <option value="">— not mapped —</option>
-                    {peakContacts.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}{c.taxNumber ? ` · ${c.taxNumber}` : ""}</option>
-                    ))}
-                  </select>
+                  <>
+                    {/* Offered, never applied. Clicking only moves the selection
+                        into the list; saving is still a separate press. */}
+                    {suggestedContact && contactEdit !== suggestedContact.id && (
+                      <div className="js-contact-suggest">
+                        <div>
+                          <b>Suggested:</b> {suggestedContact.name}
+                          {suggestedContact.code ? ` · ${suggestedContact.code}` : ""}
+                          <div className="hint" style={{ marginTop: 2 }}>{contactSuggestion!.explanation} Check it before saving.</div>
+                        </div>
+                        <button className="btn sm" type="button" onClick={() => setContactEdit(suggestedContact.id)}>Use this</button>
+                      </div>
+                    )}
+                    <input
+                      className="search" type="search" value={contactSearch} autoComplete="off"
+                      placeholder="Search PEAK contacts by name or code…"
+                      onChange={(ev) => setContactSearch(ev.target.value)}
+                    />
+                    <select
+                      id="peakContact" size={6} value={contactEdit ?? ""}
+                      onChange={(ev) => setContactEdit(ev.target.value)}
+                      style={{ width: "100%", marginTop: 5 }}
+                    >
+                      <option value="">— not mapped —</option>
+                      {peakContacts
+                        .filter((c) => {
+                          const q = contactSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return c.name.toLowerCase().includes(q) || (c.code ?? "").toLowerCase().includes(q);
+                        })
+                        .map((c) => (
+                          // Code and the last digits of a tax number are for
+                          // VERIFYING the pick. Full numbers never leave the server.
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                            {c.code ? ` · ${c.code}` : ""}
+                            {c.taxNumberMasked ? ` · ${c.taxNumberMasked}` : ""}
+                          </option>
+                        ))}
+                    </select>
+                  </>
                 ) : (
                   <input id="peakContact" value={contactEdit ?? ""} placeholder="PEAK contact id" autoComplete="off"
                     onChange={(ev) => setContactEdit(ev.target.value)}
@@ -1543,7 +1610,7 @@ export default function JobSheetEditor() {
                 <div className="hint">
                   {contactsError
                     ? `${contactsError} Enter the id by hand, or retry once PEAK responds.`
-                    : "The guide's existing supplier record in PEAK. Stored on their profile and reused by every job — never matched by name."}
+                    : "Pick the guide's existing supplier record in PEAK. Confirm it by the contact code or the last digits of the tax number — a suggestion is only ever a prompt. The id you choose is stored on the guide's profile and reused by every job; payouts never resolve a contact by name."}
                 </div>
               </div>
             ) : peak?.contactMapped ? (

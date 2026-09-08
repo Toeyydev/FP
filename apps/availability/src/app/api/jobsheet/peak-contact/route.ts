@@ -27,6 +27,8 @@ export async function POST(req: NextRequest) {
     peakContactId: z.string().max(60),
     peakContactCode: z.string().max(60).optional(),
     peakContactName: z.string().max(120).optional(),
+    // Set only when an admin has seen the conflict and chosen to proceed.
+    resolveConflict: z.boolean().optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
@@ -39,6 +41,37 @@ export async function POST(req: NextRequest) {
 
   const guide = await prisma.user.findUnique({ where: { guideId }, select: { id: true, peakContactId: true } });
   if (!guide) return NextResponse.json({ error: "no-guide" }, { status: 404 });
+
+  // One PEAK contact belongs to one guide. Two guides pointing at the same
+  // supplier would merge two people's payouts into one ledger in PEAK, and the
+  // resulting statement cannot be untangled afterwards — so this is refused by
+  // default. An ADMIN who has looked at both guides can override deliberately;
+  // an operator cannot, because the honest fix is usually that one of the two
+  // mappings was simply wrong.
+  if (peakContactId) {
+    const clash = await prisma.user.findFirst({
+      where: { peakContactId, guideId: { not: guideId } },
+      select: { guideId: true, displayName: true },
+    });
+    if (clash && !(parsed.data.resolveConflict && session!.user!.role === "ADMIN")) {
+      return NextResponse.json({
+        error: "contact-already-linked",
+        conflict: { guideId: clash.guideId, displayName: clash.displayName },
+        resolvableByAdmin: true,
+      }, { status: 409 });
+    }
+    if (clash) {
+      // Overridden: record who did it and what it collided with, before the write.
+      await audit({
+        actorId: session!.user!.id ?? null,
+        actorRole: session!.user!.role ?? null,
+        action: "peak.contact_conflict_overridden",
+        entityType: "User",
+        entityId: guide.id,
+        detail: { guideId, peakContactId, alsoLinkedTo: clash.guideId },
+      });
+    }
+  }
 
   await prisma.user.updateMany({ where: { guideId }, data: { peakContactId, peakContactCode, peakContactName } });
   await audit({
