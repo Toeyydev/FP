@@ -2,10 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { audit } from "@/lib/audit";
 import { instanceKeyFor, sanitizeAuditSnapshot } from "@/lib/historical-review";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * A P2002 raised by the unique index on HistoricalJobReview.instanceKey — the
+ * signature of two generation runs racing on the same tour instance.
+ *
+ * Prisma reports the offending constraint in `meta.target`, whose shape differs
+ * by connector and version: Postgres usually gives the index name as a string
+ * ("HistoricalJobReview_instanceKey_key"), while other paths give an array of
+ * field names (["instanceKey"]). Both are accepted; anything else is not this
+ * conflict. A P2002 with no target at all is deliberately NOT matched — an
+ * unidentifiable constraint failure is not something to tell a caller to retry.
+ */
+function isInstanceKeyConflict(e: unknown): boolean {
+  const err = e as { code?: string; meta?: { target?: unknown } };
+  if (err?.code !== "P2002") return false;
+  const target = err.meta?.target;
+  if (typeof target === "string") return target.includes("instanceKey");
+  if (Array.isArray(target)) return target.some((t) => String(t).includes("instanceKey"));
+  return false;
+}
 
 // POST — build the backlog for one month. ADMIN only, and a dry run by default so
 // the counts can be seen before anything is written.
@@ -78,56 +97,107 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  let created = 0;
-  for (const p of planned) {
-    const rows = inst.get(p.instanceKey)!;
-    const tourId = rows.find((r) => r.tourId)?.tourId ?? null;
-    const live = rows.filter((r) => r.status !== "CANCELLED");
-    const snapshot = sanitizeAuditSnapshot({
-      classification: live.length === 0 ? "CANCELLED_OR_NOT_OPERATED" : "REQUIRES_MANUAL_REVIEW",
-      matchMethod: "date+slot",
-      bookingCount: rows.length,
-      livePax: live.reduce((s, r) => s + (r.pax ?? 0), 0),
-      cancelledCount: rows.filter((r) => r.status === "CANCELLED").length,
-      archivedCount: rows.filter((r) => r.status === "IGNORED").length,
-      channels: [...new Set(rows.map((r) => r.source))],
-      bookingStatuses: [...new Set(rows.map((r) => r.status))],
-      generatedAt: new Date().toISOString().slice(0, 10),
-      auditVersion: "stage1-2026-09",
-    });
+  // One transaction for the whole run. Without it a failure part-way left the
+  // rows written so far in place, the rest absent, and — because the audit call
+  // came after the loop — no trace that a partial run had happened at all. A
+  // retry recovered it, since each instance is looked up before it is written and
+  // an existing one is skipped, but only if someone knew to retry. Now the month
+  // either lands whole or not at all.
+  //
+  // The timeout is raised well above Prisma's 5s default: this is ~53 existence checks and inserts plus
+  // their link inserts in sequence, and a transaction that times out half way is
+  // the exact failure this patch exists to remove.
+  // Two concurrent runs both see no row, both insert, and the loser hits the
+  // unique index on instanceKey. That is the intended outcome: the constraint is
+  // the final protection and is never relaxed to avoid the error. The losing
+  // transaction rolls back whole — no partial month, no duplicate — and because
+  // generation is idempotent, retrying afterwards creates only what is missing.
+  let created: number;
+  try {
+    ({ created } = await prisma.$transaction(async (tx) => {
+      let created = 0;
+      for (const p of planned) {
+        const rows = inst.get(p.instanceKey)!;
+        const tourId = rows.find((r) => r.tourId)?.tourId ?? null;
+        const live = rows.filter((r) => r.status !== "CANCELLED");
+        const snapshot = sanitizeAuditSnapshot({
+          classification: live.length === 0 ? "CANCELLED_OR_NOT_OPERATED" : "REQUIRES_MANUAL_REVIEW",
+          matchMethod: "date+slot",
+          bookingCount: rows.length,
+          livePax: live.reduce((s, r) => s + (r.pax ?? 0), 0),
+          cancelledCount: rows.filter((r) => r.status === "CANCELLED").length,
+          archivedCount: rows.filter((r) => r.status === "IGNORED").length,
+          channels: [...new Set(rows.map((r) => r.source))],
+          bookingStatuses: [...new Set(rows.map((r) => r.status))],
+          generatedAt: new Date().toISOString().slice(0, 10),
+          auditVersion: "stage1-2026-09",
+        });
 
-    // Upsert on instanceKey: re-running is safe and never overwrites a decision,
-    // because everything an operator sets lives only in `create`.
-    const row = await prisma.historicalJobReview.upsert({
-      where: { instanceKey: p.instanceKey },
-      update: {},
-      create: {
-        instanceKey: p.instanceKey, date: p.date, slotIdx: p.slotIdx,
-        tourId, tourIdSnapshot: tourId, tourNameSnapshot: tourId ? (tourName.get(tourId) ?? null) : null,
-        auditSnapshot: snapshot,
-        // reviewStatus defaults to NEEDS_REVIEW. Nothing is inferred: not even the
-        // all-cancelled instances are pre-confirmed as cancelled.
-      },
-      select: { id: true, createdAt: true, updatedAt: true },
-    });
-    const isNew = row.createdAt.getTime() === row.updatedAt.getTime();
-    if (isNew) {
-      created++;
-      await prisma.historicalJobReviewBooking.createMany({
-        data: rows.map((r) => ({
-          historicalReviewId: row.id, bookingId: r.id, bookingIdSnapshot: r.id,
-          bookingRefSnapshot: (r.externalRef || r.confirmationCode || "").trim() || null,
-        })),
-        skipDuplicates: true,
+        // Ask whether the row exists rather than inferring it afterwards. The
+        // previous version upserted with `update: {}` and read creation off
+        // `createdAt === updatedAt` — but @updatedAt is not touched by an empty
+        // update, so a review created by an earlier run and never edited since
+        // still satisfies that equality. Every rerun counted such rows as new:
+        // `created` was wrong, the audit entry recorded that wrong number, and the
+        // link insert ran again for rows that already had links. The data survived
+        // on the unique index and skipDuplicates; the reported semantics did not.
+        const existing = await tx.historicalJobReview.findUnique({
+          where: { instanceKey: p.instanceKey },
+          select: { id: true },
+        });
+        // Nothing to do, and deliberately nothing written: an existing review
+        // carries operator decisions and this run must not touch them.
+        if (existing) continue;
+
+        const row = await tx.historicalJobReview.create({
+          data: {
+            instanceKey: p.instanceKey, date: p.date, slotIdx: p.slotIdx,
+            tourId, tourIdSnapshot: tourId, tourNameSnapshot: tourId ? (tourName.get(tourId) ?? null) : null,
+            auditSnapshot: snapshot,
+            // reviewStatus defaults to NEEDS_REVIEW. Nothing is inferred: not even
+            // the all-cancelled instances are pre-confirmed as cancelled.
+          },
+          select: { id: true },
+        });
+        created++;
+
+        await tx.historicalJobReviewBooking.createMany({
+          data: rows.map((r) => ({
+            historicalReviewId: row.id, bookingId: r.id, bookingIdSnapshot: r.id,
+            bookingRefSnapshot: (r.externalRef || r.confirmationCode || "").trim() || null,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // Written through tx, not the audit() helper: that helper uses the global
+      // client and swallows failures, so it would commit outside this transaction
+      // and could silently leave a completed run unrecorded.
+      await tx.auditLog.create({
+        data: {
+          actorId: session!.user!.id ?? null,
+          actorRole: session!.user!.role ?? null,
+          action: "historical.generated",
+          entityType: "HistoricalJobReview",
+          detail: { month, created, skippedExistingSheet } as object,
+        },
       });
-    }
-  }
 
-  await audit({
-    actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
-    action: "historical.generated", entityType: "HistoricalJobReview",
-    detail: { month, created, skippedExistingSheet },
-  });
+      return { created };
+    }, { timeout: 120_000, maxWait: 15_000 }));
+  } catch (e) {
+    // Only the instanceKey race is a retryable generation conflict. Two other
+    // unique constraints live on these tables — HistoricalJobReview.jobSheetId
+    // and HistoricalJobReviewBooking(historicalReviewId, bookingIdSnapshot) —
+    // and neither should ever fire here: generation never sets jobSheetId, and
+    // the link insert passes skipDuplicates. If one of them ever did fire it
+    // would mean something is wrong that retrying will not fix, so it must stay
+    // an unexpected error rather than be dressed up as "try again".
+    if (isInstanceKeyConflict(e)) {
+      return NextResponse.json({ error: "concurrent-generation", retry: true }, { status: 409 });
+    }
+    throw e;
+  }
 
   return NextResponse.json({ ok: true, month, created, skippedExistingSheet });
 }
