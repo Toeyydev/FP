@@ -6,6 +6,26 @@ import { instanceKeyFor, sanitizeAuditSnapshot } from "@/lib/historical-review";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * A P2002 raised by the unique index on HistoricalJobReview.instanceKey — the
+ * signature of two generation runs racing on the same tour instance.
+ *
+ * Prisma reports the offending constraint in `meta.target`, whose shape differs
+ * by connector and version: Postgres usually gives the index name as a string
+ * ("HistoricalJobReview_instanceKey_key"), while other paths give an array of
+ * field names (["instanceKey"]). Both are accepted; anything else is not this
+ * conflict. A P2002 with no target at all is deliberately NOT matched — an
+ * unidentifiable constraint failure is not something to tell a caller to retry.
+ */
+function isInstanceKeyConflict(e: unknown): boolean {
+  const err = e as { code?: string; meta?: { target?: unknown } };
+  if (err?.code !== "P2002") return false;
+  const target = err.meta?.target;
+  if (typeof target === "string") return target.includes("instanceKey");
+  if (Array.isArray(target)) return target.some((t) => String(t).includes("instanceKey"));
+  return false;
+}
+
 // POST — build the backlog for one month. ADMIN only, and a dry run by default so
 // the counts can be seen before anything is written.
 //
@@ -166,9 +186,14 @@ export async function POST(req: NextRequest) {
       return { created };
     }, { timeout: 120_000, maxWait: 15_000 }));
   } catch (e) {
-    // P2002 = unique constraint. Reported as a conflict rather than a 500 with
-    // Prisma internals: the caller's correct response is simply to run again.
-    if ((e as { code?: string }).code === "P2002") {
+    // Only the instanceKey race is a retryable generation conflict. Two other
+    // unique constraints live on these tables — HistoricalJobReview.jobSheetId
+    // and HistoricalJobReviewBooking(historicalReviewId, bookingIdSnapshot) —
+    // and neither should ever fire here: generation never sets jobSheetId, and
+    // the link insert passes skipDuplicates. If one of them ever did fire it
+    // would mean something is wrong that retrying will not fix, so it must stay
+    // an unexpected error rather than be dressed up as "try again".
+    if (isInstanceKeyConflict(e)) {
       return NextResponse.json({ error: "concurrent-generation", retry: true }, { status: 409 });
     }
     throw e;

@@ -230,16 +230,48 @@ describe("rerun detection — regression for the createdAt === updatedAt bug", (
     expect(state.audits.length).toBe(0);
   });
 
-  it("returns 409 rather than a 500 when a concurrent run wins the unique index", async () => {
+  /** A Prisma unique-constraint error naming a particular target. */
+  const p2002 = (target: unknown) => {
+    const err = new Error("Unique constraint failed") as Error & { code: string; meta?: { target?: unknown } };
+    err.code = "P2002";
+    if (target !== undefined) err.meta = { target };
+    return err;
+  };
+  const throwing = (err: Error) => async () => { throw err; };
+
+  // Postgres reports the index name; other paths report the field list. Both are
+  // the instanceKey race and both must be retryable.
+  it.each([
+    ["index name", "HistoricalJobReview_instanceKey_key"],
+    ["field array", ["instanceKey"]],
+  ])("returns 409 for an instanceKey conflict reported as a %s", async (_label, target) => {
     prismaMock.booking.findMany.mockResolvedValue(bookings(3));
-    prismaMock.$transaction.mockImplementation(async () => {
-      const err = new Error("Unique constraint failed") as Error & { code: string };
-      err.code = "P2002";
-      throw err;
-    });
+    prismaMock.$transaction.mockImplementation(throwing(p2002(target)));
     const res = await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" });
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: "concurrent-generation", retry: true });
+    expect(state.reviews.length).toBe(0);   // the losing transaction rolled back whole
+  });
+
+  // A different unique constraint means something retrying will not fix. It must
+  // stay an unexpected error rather than be dressed up as a generation conflict.
+  it.each([
+    ["the booking-link constraint", "HistoricalJobReviewBooking_historicalReviewId_bookingIdSnap_key"],
+    ["jobSheetId", ["jobSheetId"]],
+    ["an unrelated table", "JobSheet_guideId_date_slotIdx_key"],
+    ["no target at all", undefined],
+  ])("does NOT convert a P2002 on %s into a retryable 409", async (_label, target) => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(3));
+    prismaMock.$transaction.mockImplementation(throwing(p2002(target)));
+    await expect(post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" })).rejects.toThrow();
     expect(state.reviews.length).toBe(0);
+  });
+
+  it("does not convert a non-P2002 Prisma error into a 409", async () => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(3));
+    const err = new Error("Transaction timed out") as Error & { code: string };
+    err.code = "P2028";
+    prismaMock.$transaction.mockImplementation(throwing(err));
+    await expect(post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" })).rejects.toThrow();
   });
 });
