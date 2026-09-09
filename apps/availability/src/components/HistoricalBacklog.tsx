@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { loadBacklog } from "@/lib/historical-backlog-load";
 
 type Row = {
   id: string; instanceKey: string; date: string; slotIdx: number;
@@ -31,14 +32,16 @@ const TONE: Record<string, string> = {
 
 export default function HistoricalBacklog() {
   const [data, setData] = useState<Data | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
-    const r = await fetch("/api/historical?month=2026-05", { cache: "no-store" });
-    if (!r.ok) { setMsg("Couldn't load the backlog."); return; }
-    setData(await r.json());
+    setError(null);
+    const res = await loadBacklog<Data>();
+    if (res.ok) setData(res.data);
+    else setError(res.error);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -66,6 +69,16 @@ export default function HistoricalBacklog() {
     await load();
   }
 
+  // Before the loading fallback, or a failure is indistinguishable from a slow
+  // load — which is exactly how a 403 spent an afternoon looking like a hang.
+  if (error) {
+    return (
+      <div className="op-empty" style={{ padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ color: "var(--danger)" }}>{error}</span>
+        <button className="btn sm" onClick={() => { void load(); }}>Retry</button>
+      </div>
+    );
+  }
   if (!data) return <div className="op-empty" style={{ padding: 16 }}>Loading the historical backlog…</div>;
 
   return (
