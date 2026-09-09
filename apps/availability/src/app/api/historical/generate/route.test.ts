@@ -6,6 +6,12 @@ const prismaMock = vi.hoisted(() => ({
   tour: { findMany: vi.fn() },
   historicalJobReview: { upsert: vi.fn() },
   historicalJobReviewBooking: { createMany: vi.fn() },
+  auditLog: { create: vi.fn() },
+  // Generation now runs in one interactive transaction, so the writes happen on
+  // `tx`. Hand the callback the same delegates the assertions already inspect —
+  // the point of these tests is WHAT is written, which the transaction did not
+  // change; atomicity itself is covered in atomic.test.ts.
+  $transaction: vi.fn(async (fn) => fn(prismaMock)),
 }));
 const authMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));

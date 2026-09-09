@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { audit } from "@/lib/audit";
 import { instanceKeyFor, sanitizeAuditSnapshot } from "@/lib/historical-review";
 
 export const dynamic = "force-dynamic";
@@ -78,6 +77,17 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // One transaction for the whole run. Without it a failure part-way left the
+  // rows written so far in place, the rest absent, and — because the audit call
+  // came after the loop — no trace that a partial run had happened at all. A
+  // retry recovered it (instanceKey is unique and `update: {}` never overwrites),
+  // but only if someone knew to retry. Now the month either lands whole or not at
+  // all.
+  //
+  // The timeout is raised well above Prisma's 5s default: this is ~53 upserts plus
+  // their link inserts in sequence, and a transaction that times out half way is
+  // the exact failure this patch exists to remove.
+  const { created } = await prisma.$transaction(async (tx) => {
   let created = 0;
   for (const p of planned) {
     const rows = inst.get(p.instanceKey)!;
@@ -98,7 +108,7 @@ export async function POST(req: NextRequest) {
 
     // Upsert on instanceKey: re-running is safe and never overwrites a decision,
     // because everything an operator sets lives only in `create`.
-    const row = await prisma.historicalJobReview.upsert({
+    const row = await tx.historicalJobReview.upsert({
       where: { instanceKey: p.instanceKey },
       update: {},
       create: {
@@ -113,7 +123,7 @@ export async function POST(req: NextRequest) {
     const isNew = row.createdAt.getTime() === row.updatedAt.getTime();
     if (isNew) {
       created++;
-      await prisma.historicalJobReviewBooking.createMany({
+      await tx.historicalJobReviewBooking.createMany({
         data: rows.map((r) => ({
           historicalReviewId: row.id, bookingId: r.id, bookingIdSnapshot: r.id,
           bookingRefSnapshot: (r.externalRef || r.confirmationCode || "").trim() || null,
@@ -123,11 +133,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  await audit({
-    actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
-    action: "historical.generated", entityType: "HistoricalJobReview",
-    detail: { month, created, skippedExistingSheet },
-  });
+    // Written through tx, not the audit() helper: that helper uses the global
+    // client and swallows failures, so it would commit outside this transaction
+    // and could silently leave a completed run unrecorded.
+    await tx.auditLog.create({
+      data: {
+        actorId: session!.user!.id ?? null,
+        actorRole: session!.user!.role ?? null,
+        action: "historical.generated",
+        entityType: "HistoricalJobReview",
+        detail: { month, created, skippedExistingSheet } as object,
+      },
+    });
+
+    return { created };
+  }, { timeout: 120_000, maxWait: 15_000 });
 
   return NextResponse.json({ ok: true, month, created, skippedExistingSheet });
 }
