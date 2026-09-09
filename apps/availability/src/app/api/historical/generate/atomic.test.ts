@@ -27,11 +27,17 @@ function transactionThatCommits() {
     const staged = { reviews: [] as unknown[], links: [] as unknown[], audits: [] as unknown[] };
     let seq = 0;
     const tx = {
-      historicalJobReview: { upsert: vi.fn(async (a: { create: unknown }) => {
-        staged.reviews.push(a.create);
-        const at = new Date(2026, 0, 1, 0, 0, seq++);
-        return { id: `r${staged.reviews.length}`, createdAt: at, updatedAt: at };
-      }) },
+      historicalJobReview: {
+        // Rows already committed by an earlier run are visible; staged ones too.
+        findUnique: vi.fn(async (a: { where: { instanceKey: string } }) =>
+          [...state.reviews, ...staged.reviews].some((r) => (r as { instanceKey: string }).instanceKey === a.where.instanceKey)
+            ? { id: "existing" } : null),
+        create: vi.fn(async (a: { data: unknown }) => {
+          staged.reviews.push(a.data);
+          seq++;
+          return { id: `r${staged.reviews.length}` };
+        }),
+      },
       historicalJobReviewBooking: { createMany: vi.fn(async (a: { data: unknown[] }) => { staged.links.push(...a.data); }) },
       auditLog: { create: vi.fn(async (a: { data: unknown }) => { staged.audits.push(a.data); }) },
     };
@@ -48,12 +54,14 @@ function transactionThatFailsAt(n: number) {
   return async (fn: (tx: unknown) => Promise<unknown>) => {
     const staged = { reviews: [] as unknown[] };
     const tx = {
-      historicalJobReview: { upsert: vi.fn(async (a: { create: unknown }) => {
-        if (staged.reviews.length === n) throw new Error("connection lost");
-        staged.reviews.push(a.create);
-        const at = new Date();
-        return { id: `r${staged.reviews.length}`, createdAt: at, updatedAt: at };
-      }) },
+      historicalJobReview: {
+        findUnique: vi.fn(async () => null),
+        create: vi.fn(async (a: { data: unknown }) => {
+          if (staged.reviews.length === n) throw new Error("connection lost");
+          staged.reviews.push(a.data);
+          return { id: `r${staged.reviews.length}` };
+        }),
+      },
       historicalJobReviewBooking: { createMany: vi.fn() },
       auditLog: { create: vi.fn() },
     };
@@ -130,5 +138,108 @@ describe("historical generation is atomic", () => {
     authMock.mockResolvedValue({ user: { id: "admin_1", role: "ADMIN" } });
     expect((await post({ month: "2026-04" })).status).toBe(400);
     expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("rerun detection — regression for the createdAt === updatedAt bug", () => {
+  // A review created by an earlier run and never edited since. Its @updatedAt was
+  // never touched, so createdAt === updatedAt — which the previous code read as
+  // "this run created it".
+  const untouched = (instanceKey: string) => {
+    const at = new Date("2026-09-01T00:00:00.000Z");
+    return { instanceKey, createdAt: at, updatedAt: at, reviewStatus: "NEEDS_REVIEW" };
+  };
+
+  it("counts 0 created when every row already exists and was never edited", async () => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(10));
+    // Seed all ten as pre-existing, untouched rows.
+    state.reviews = Array.from({ length: 10 }, (_, i) =>
+      untouched(`2026-05-${String((i % 28) + 1).padStart(2, "0")}#${String(i % 4).padStart(2, "0")}`));
+    const before = state.reviews.length;
+
+    prismaMock.$transaction.mockImplementation(transactionThatCommits());
+    const res = await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).created).toBe(0);          // was 10 under the old logic
+    expect(state.reviews.length).toBe(before);            // nothing new
+    expect(state.links.length).toBe(0);                   // no redundant link inserts
+    const entry = state.audits[0] as { detail: { created: number } };
+    expect(entry.detail.created).toBe(0);                 // audit records the truth
+  });
+
+  it("first run creates N, second and third create 0", async () => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(10));
+    prismaMock.$transaction.mockImplementation(transactionThatCommits());
+
+    const first = await (await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" })).json();
+    expect(first.created).toBe(10);
+    const afterFirst = { reviews: state.reviews.length, links: state.links.length };
+
+    const second = await (await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" })).json();
+    expect(second.created).toBe(0);
+
+    const third = await (await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" })).json();
+    expect(third.created).toBe(0);
+
+    // Reviews and links untouched by the reruns.
+    expect(state.reviews.length).toBe(afterFirst.reviews);
+    expect(state.links.length).toBe(afterFirst.links);
+  });
+
+  it("never writes to a review carrying operator decisions", async () => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(1));
+    const decided = {
+      instanceKey: "2026-05-01#00",
+      reviewStatus: "READY_TO_RECONSTRUCT",
+      confirmedGuideId: "G-013",
+      reviewNotes: "spoke to the guide, tour ran",
+    };
+    state.reviews = [decided];
+
+    prismaMock.$transaction.mockImplementation(transactionThatCommits());
+    const res = await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" });
+
+    expect((await res.json()).created).toBe(0);
+    expect(state.reviews).toEqual([decided]);   // byte-for-byte unchanged
+    expect(state.reviews[0]).toMatchObject({
+      reviewStatus: "READY_TO_RECONSTRUCT", confirmedGuideId: "G-013",
+      reviewNotes: "spoke to the guide, tour ran",
+    });
+  });
+
+  it("rolls the whole run back when the audit write fails after the rows", async () => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(5));
+    prismaMock.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const staged: unknown[] = [];
+      const tx = {
+        historicalJobReview: {
+          findUnique: vi.fn(async () => null),
+          create: vi.fn(async (a: { data: unknown }) => { staged.push(a.data); return { id: `r${staged.length}` }; }),
+        },
+        historicalJobReviewBooking: { createMany: vi.fn() },
+        // The last write in the transaction fails.
+        auditLog: { create: vi.fn(async () => { throw new Error("audit write failed"); }) },
+      };
+      return fn(tx); // rejects → nothing merged into `state`
+    });
+
+    await expect(post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" })).rejects.toThrow();
+    expect(state.reviews.length).toBe(0);
+    expect(state.links.length).toBe(0);
+    expect(state.audits.length).toBe(0);
+  });
+
+  it("returns 409 rather than a 500 when a concurrent run wins the unique index", async () => {
+    prismaMock.booking.findMany.mockResolvedValue(bookings(3));
+    prismaMock.$transaction.mockImplementation(async () => {
+      const err = new Error("Unique constraint failed") as Error & { code: string };
+      err.code = "P2002";
+      throw err;
+    });
+    const res = await post({ month: "2026-05", apply: true, confirm: "GENERATE 2026-05" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "concurrent-generation", retry: true });
+    expect(state.reviews.length).toBe(0);
   });
 });

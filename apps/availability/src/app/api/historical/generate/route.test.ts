@@ -4,7 +4,7 @@ const prismaMock = vi.hoisted(() => ({
   booking: { findMany: vi.fn() },
   jobSheet: { findMany: vi.fn() },
   tour: { findMany: vi.fn() },
-  historicalJobReview: { upsert: vi.fn() },
+  historicalJobReview: { findUnique: vi.fn(), create: vi.fn() },
   historicalJobReviewBooking: { createMany: vi.fn() },
   auditLog: { create: vi.fn() },
   // Generation now runs in one interactive transaction, so the writes happen on
@@ -67,7 +67,7 @@ describe("dry run writes NOTHING", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.dryRun).toBe(true);
-    expect(prismaMock.historicalJobReview.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.historicalJobReview.create).not.toHaveBeenCalled();
     expect(prismaMock.historicalJobReviewBooking.createMany).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
@@ -81,43 +81,55 @@ describe("dry run writes NOTHING", () => {
     const res = await post({ apply: true });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe("confirmation-required");
-    expect(prismaMock.historicalJobReview.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.historicalJobReview.create).not.toHaveBeenCalled();
   });
   it("refuses a wrong confirmation string", async () => {
     const res = await post({ apply: true, confirm: "yes" });
     expect(res.status).toBe(400);
-    expect(prismaMock.historicalJobReview.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.historicalJobReview.create).not.toHaveBeenCalled();
   });
 });
 
 describe("what a real run would write (not executed against production)", () => {
   beforeEach(() => {
-    prismaMock.historicalJobReview.upsert.mockImplementation(async () => {
+    prismaMock.historicalJobReview.findUnique.mockResolvedValue(null);
+    prismaMock.historicalJobReview.create.mockImplementation(async () => {
       const t = new Date();
       return { id: "hr_new", createdAt: t, updatedAt: t };
     });
     prismaMock.historicalJobReviewBooking.createMany.mockResolvedValue({ count: 2 });
   });
 
-  it("writes review fields only on create, so a re-run cannot overwrite a decision", async () => {
+  it("only ever inserts — an existing review is skipped, never updated", async () => {
     await post({ apply: true, confirm: "GENERATE 2026-05" });
-    for (const call of prismaMock.historicalJobReview.upsert.mock.calls) {
-      expect(call[0].update).toEqual({});           // nothing is ever updated
-      expect(call[0].create.reviewStatus).toBeUndefined(); // defaults to NEEDS_REVIEW
+    // The route no longer upserts: there is no update path at all, so a rerun
+    // cannot overwrite a decision. Existing rows are skipped by findUnique.
+    expect(prismaMock.historicalJobReview).not.toHaveProperty("update");
+    expect(prismaMock.historicalJobReview).not.toHaveProperty("upsert");
+    for (const call of prismaMock.historicalJobReview.create.mock.calls) {
+      expect(call[0].data.reviewStatus).toBeUndefined(); // defaults to NEEDS_REVIEW
     }
+  });
+
+  it("skips an instance that already has a review, creating nothing for it", async () => {
+    prismaMock.historicalJobReview.findUnique.mockResolvedValue({ id: "already-there" });
+    const res = await post({ apply: true, confirm: "GENERATE 2026-05" });
+    expect((await res.json()).created).toBe(0);
+    expect(prismaMock.historicalJobReview.create).not.toHaveBeenCalled();
+    expect(prismaMock.historicalJobReviewBooking.createMany).not.toHaveBeenCalled();
   });
 
   it("infers no guide and no cancellation", async () => {
     await post({ apply: true, confirm: "GENERATE 2026-05" });
-    for (const call of prismaMock.historicalJobReview.upsert.mock.calls) {
-      expect(call[0].create.confirmedGuideId).toBeUndefined();
-      expect(call[0].create.reviewStatus).toBeUndefined();
+    for (const call of prismaMock.historicalJobReview.create.mock.calls) {
+      expect(call[0].data.confirmedGuideId).toBeUndefined();
+      expect(call[0].data.reviewStatus).toBeUndefined();
     }
   });
 
   it("stores an audit snapshot carrying no personal data", async () => {
     await post({ apply: true, confirm: "GENERATE 2026-05" });
-    const snap = prismaMock.historicalJobReview.upsert.mock.calls[0][0].create.auditSnapshot;
+    const snap = prismaMock.historicalJobReview.create.mock.calls[0][0].data.auditSnapshot;
     expect(Object.keys(snap).sort()).toEqual([
       "archivedCount", "auditVersion", "bookingCount", "bookingStatuses",
       "cancelledCount", "channels", "classification", "generatedAt", "livePax", "matchMethod",
