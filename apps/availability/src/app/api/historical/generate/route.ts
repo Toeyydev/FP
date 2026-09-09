@@ -100,9 +100,9 @@ export async function POST(req: NextRequest) {
   // One transaction for the whole run. Without it a failure part-way left the
   // rows written so far in place, the rest absent, and — because the audit call
   // came after the loop — no trace that a partial run had happened at all. A
-  // retry recovered it (instanceKey is unique and `update: {}` never overwrites),
-  // but only if someone knew to retry. Now the month either lands whole or not at
-  // all.
+  // retry recovered it, since each instance is looked up before it is written and
+  // an existing one is skipped, but only if someone knew to retry. Now the month
+  // either lands whole or not at all.
   //
   // The timeout is raised well above Prisma's 5s default: this is ~53 existence checks and inserts plus
   // their link inserts in sequence, and a transaction that times out half way is
@@ -115,73 +115,73 @@ export async function POST(req: NextRequest) {
   let created: number;
   try {
     ({ created } = await prisma.$transaction(async (tx) => {
-    let created = 0;
-    for (const p of planned) {
-      const rows = inst.get(p.instanceKey)!;
-      const tourId = rows.find((r) => r.tourId)?.tourId ?? null;
-      const live = rows.filter((r) => r.status !== "CANCELLED");
-      const snapshot = sanitizeAuditSnapshot({
-        classification: live.length === 0 ? "CANCELLED_OR_NOT_OPERATED" : "REQUIRES_MANUAL_REVIEW",
-        matchMethod: "date+slot",
-        bookingCount: rows.length,
-        livePax: live.reduce((s, r) => s + (r.pax ?? 0), 0),
-        cancelledCount: rows.filter((r) => r.status === "CANCELLED").length,
-        archivedCount: rows.filter((r) => r.status === "IGNORED").length,
-        channels: [...new Set(rows.map((r) => r.source))],
-        bookingStatuses: [...new Set(rows.map((r) => r.status))],
-        generatedAt: new Date().toISOString().slice(0, 10),
-        auditVersion: "stage1-2026-09",
-      });
+      let created = 0;
+      for (const p of planned) {
+        const rows = inst.get(p.instanceKey)!;
+        const tourId = rows.find((r) => r.tourId)?.tourId ?? null;
+        const live = rows.filter((r) => r.status !== "CANCELLED");
+        const snapshot = sanitizeAuditSnapshot({
+          classification: live.length === 0 ? "CANCELLED_OR_NOT_OPERATED" : "REQUIRES_MANUAL_REVIEW",
+          matchMethod: "date+slot",
+          bookingCount: rows.length,
+          livePax: live.reduce((s, r) => s + (r.pax ?? 0), 0),
+          cancelledCount: rows.filter((r) => r.status === "CANCELLED").length,
+          archivedCount: rows.filter((r) => r.status === "IGNORED").length,
+          channels: [...new Set(rows.map((r) => r.source))],
+          bookingStatuses: [...new Set(rows.map((r) => r.status))],
+          generatedAt: new Date().toISOString().slice(0, 10),
+          auditVersion: "stage1-2026-09",
+        });
 
-      // Ask whether the row exists rather than inferring it afterwards. The
-      // previous version upserted with `update: {}` and read creation off
-      // `createdAt === updatedAt` — but @updatedAt is not touched by an empty
-      // update, so a review created by an earlier run and never edited since
-      // still satisfies that equality. Every rerun counted such rows as new:
-      // `created` was wrong, the audit entry recorded that wrong number, and the
-      // link insert ran again for rows that already had links. The data survived
-      // on the unique index and skipDuplicates; the reported semantics did not.
-      const existing = await tx.historicalJobReview.findUnique({
-        where: { instanceKey: p.instanceKey },
-        select: { id: true },
-      });
-      // Nothing to do, and deliberately nothing written: an existing review
-      // carries operator decisions and this run must not touch them.
-      if (existing) continue;
+        // Ask whether the row exists rather than inferring it afterwards. The
+        // previous version upserted with `update: {}` and read creation off
+        // `createdAt === updatedAt` — but @updatedAt is not touched by an empty
+        // update, so a review created by an earlier run and never edited since
+        // still satisfies that equality. Every rerun counted such rows as new:
+        // `created` was wrong, the audit entry recorded that wrong number, and the
+        // link insert ran again for rows that already had links. The data survived
+        // on the unique index and skipDuplicates; the reported semantics did not.
+        const existing = await tx.historicalJobReview.findUnique({
+          where: { instanceKey: p.instanceKey },
+          select: { id: true },
+        });
+        // Nothing to do, and deliberately nothing written: an existing review
+        // carries operator decisions and this run must not touch them.
+        if (existing) continue;
 
-      const row = await tx.historicalJobReview.create({
+        const row = await tx.historicalJobReview.create({
+          data: {
+            instanceKey: p.instanceKey, date: p.date, slotIdx: p.slotIdx,
+            tourId, tourIdSnapshot: tourId, tourNameSnapshot: tourId ? (tourName.get(tourId) ?? null) : null,
+            auditSnapshot: snapshot,
+            // reviewStatus defaults to NEEDS_REVIEW. Nothing is inferred: not even
+            // the all-cancelled instances are pre-confirmed as cancelled.
+          },
+          select: { id: true },
+        });
+        created++;
+
+        await tx.historicalJobReviewBooking.createMany({
+          data: rows.map((r) => ({
+            historicalReviewId: row.id, bookingId: r.id, bookingIdSnapshot: r.id,
+            bookingRefSnapshot: (r.externalRef || r.confirmationCode || "").trim() || null,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // Written through tx, not the audit() helper: that helper uses the global
+      // client and swallows failures, so it would commit outside this transaction
+      // and could silently leave a completed run unrecorded.
+      await tx.auditLog.create({
         data: {
-          instanceKey: p.instanceKey, date: p.date, slotIdx: p.slotIdx,
-          tourId, tourIdSnapshot: tourId, tourNameSnapshot: tourId ? (tourName.get(tourId) ?? null) : null,
-          auditSnapshot: snapshot,
-          // reviewStatus defaults to NEEDS_REVIEW. Nothing is inferred: not even
-          // the all-cancelled instances are pre-confirmed as cancelled.
+          actorId: session!.user!.id ?? null,
+          actorRole: session!.user!.role ?? null,
+          action: "historical.generated",
+          entityType: "HistoricalJobReview",
+          detail: { month, created, skippedExistingSheet } as object,
         },
-        select: { id: true },
       });
-      created++;
-
-      await tx.historicalJobReviewBooking.createMany({
-        data: rows.map((r) => ({
-          historicalReviewId: row.id, bookingId: r.id, bookingIdSnapshot: r.id,
-          bookingRefSnapshot: (r.externalRef || r.confirmationCode || "").trim() || null,
-        })),
-        skipDuplicates: true,
-      });
-    }
-
-    // Written through tx, not the audit() helper: that helper uses the global
-    // client and swallows failures, so it would commit outside this transaction
-    // and could silently leave a completed run unrecorded.
-    await tx.auditLog.create({
-      data: {
-        actorId: session!.user!.id ?? null,
-        actorRole: session!.user!.role ?? null,
-        action: "historical.generated",
-        entityType: "HistoricalJobReview",
-        detail: { month, created, skippedExistingSheet } as object,
-      },
-    });
 
       return { created };
     }, { timeout: 120_000, maxWait: 15_000 }));
