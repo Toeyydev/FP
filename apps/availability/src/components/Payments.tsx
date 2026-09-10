@@ -8,6 +8,7 @@ import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { matchState, type Slip } from "@/lib/payments/slips";
+import SplitSlipDialog, { type SlipUpload } from "@/components/SplitSlipDialog";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; fee: number; expenses: number };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
@@ -18,6 +19,7 @@ type Candidate = { date: string; slotIdx: number; time: string; tourId: string; 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
 export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
+  const [slipBatch, setSlipBatch] = useState<{ guideId: string; job: Job; files: File[] } | null>(null);
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
@@ -206,26 +208,29 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       .catch(() => {});
   };
 
-  async function addSplitSlip(guideId: string, job: Job, file: File) {
-    const remaining = matchState(job.slips ?? [], job.amount).remaining;
-    const suggested = remaining > 0 ? String(remaining) : "";
-    const entered = prompt(`Amount on this slip (฿) — tour payout is ${thb(job.amount)}${(job.slips?.length ?? 0) ? `, ${thb(remaining)} still to pay` : ""}:`, suggested);
-    if (entered === null) return;
-    const amount = Number(entered.replace(/[,\s]/g, ""));
-    if (!Number.isFinite(amount) || amount <= 0) { alert("Enter a valid amount in baht."); return; }
+  // One slip up to the server. Returns the balance still outstanding afterwards —
+  // the server is the authority on the running total, not anything computed here.
+  async function uploadOneSlip(guideId: string, job: Job, file: File, amount: number): Promise<SlipUpload> {
     const fd = new FormData();
     fd.append("guideId", guideId);
     fd.append("jobs", JSON.stringify([{ date: job.date, slotIdx: job.slotIdx }]));
     fd.append("amount", String(amount));
-    const blob = await shrinkImage(file);
-    fd.append("file", blob, shrunkName(file.name, blob));
-    const r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
+    let r: Response;
+    try {
+      const blob = await shrinkImage(file);
+      fd.append("file", blob, shrunkName(file.name, blob));
+      r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
+    } catch {
+      return { ok: false, error: "Couldn't reach the server — this slip was not saved." };
+    }
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { alert(d.hint || d.detail || `Slip upload failed (${r.status}).`); return; }
-    if (d.driveError) alert(`Slip amount saved, but the Drive copy failed: ${d.driveError}`);
-    if (d.warn) alert(d.warn === "over" ? `Slips now total ${thb(d.slipsTotal)} — that's ${thb(Math.abs(d.delta))} OVER the ${thb(d.payout)} payout. Not marked paid; remove or fix a slip.` : `Added. ${thb(d.slipsTotal)} of ${thb(d.payout)} paid — ${thb(d.remaining)} still to go.`);
-    load(period);
+    if (!r.ok) return { ok: false, error: d.hint || d.detail || `Upload failed (HTTP ${r.status}).` };
+    // The amount is recorded even when the Drive copy fails; say so rather than
+    // letting the row read as a clean success.
+    if (d.driveError) return { ok: false, error: `Amount saved, but the Drive copy failed: ${d.driveError}` };
+    return { ok: true, remaining: Number(d.remaining ?? 0) };
   }
+
   async function removeSplitSlip(guideId: string, job: Job, slip: Slip) {
     if (!confirm(`Remove this slip (${thb(slip.amount)})? The Drive file stays; the tour total is recalculated.`)) return;
     const r = await fetch("/api/pay/eslip", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: job.date, slotIdx: job.slotIdx, at: slip.at }) });
@@ -388,7 +393,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                   {j.paid && j.eslipUrl && !hasSlips && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
                   {canEdit && !j.paid && !hasSlips && <label className="btn sm" style={{ cursor: "pointer" }} title="Pay this tour in full with one slip (one transfer) — marks it paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
-                  {canEdit && !j.paid && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Add a split-payment slip with its amount — several slips must add up to this tour's payout before it shows Paid">＋ Split slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) addSplitSlip(r.guideId, j, f); e.target.value = ""; }} /></label>}
+                  {canEdit && !j.paid && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Add one or more split-payment slips. Enter each transfer amount; all slips must add up to the payout before it shows Paid">＋ Split slips<input type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => { const files = e.target.files; if (files?.length) setSlipBatch({ guideId: r.guideId, job: j, files: Array.from(files) }); e.target.value = ""; }} /></label>}
                   {canEdit && (j.paid
                     ? <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>
                     : <button className="btn sm primary" title="Mark this one job paid (you can add its PEAK ref)" onClick={() => { const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
@@ -619,6 +624,18 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       </section>
         </div>
       </div>
+
+      {slipBatch && (
+        <SplitSlipDialog
+          files={slipBatch.files}
+          payout={slipBatch.job.amount}
+          existingSlips={slipBatch.job.slips ?? []}
+          context={`${slipBatch.guideId} · ${slipBatch.job.date}`}
+          upload={(file, amount) => uploadOneSlip(slipBatch.guideId, slipBatch.job, file, amount)}
+          onClose={() => setSlipBatch(null)}
+          onFinished={() => { setSlipBatch(null); load(period); }}
+        />
+      )}
     </div>
   );
 }
