@@ -64,3 +64,13 @@ export async function rotateRefreshToken(tokenPlain: string, userAgent?: string 
 export async function revokeAllForUser(userId: string) {
   await prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
 }
+
+// Revoke one sign-in — the family this token belongs to, every rotation of it —
+// and leave the user's other devices alone. Returns the owner's id, or null for
+// a token we never issued.
+export async function revokeRefreshFamily(tokenPlain: string): Promise<string | null> {
+  const row = await prisma.refreshToken.findUnique({ where: { tokenHash: sha256(tokenPlain) }, select: { family: true, userId: true } });
+  if (!row) return null;
+  await prisma.refreshToken.updateMany({ where: { family: row.family, revokedAt: null }, data: { revokedAt: new Date() } });
+  return row.userId;
+}

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/db";
-import { SLOT_TIMES } from "@/lib/slots";
+import { guideTourDetails } from "@/lib/guide-schedule";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -19,24 +18,7 @@ export async function GET(req: NextRequest) {
   const guideId = isOps ? (req.nextUrl.searchParams.get("guideId") || session.user.guideId || "") : (session.user.guideId || "");
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
 
-  const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
-  if (!assignment) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
-
-  const [tour, bookings] = await Promise.all([
-    prisma.tour.findUnique({ where: { id: assignment.tourId } }),
-    prisma.booking.findMany({
-      where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
-      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true },
-    }),
-  ]);
-
-  return NextResponse.json({
-    date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
-    pax: assignment.pax, note: assignment.note,
-    tour: tour ? {
-      id: tour.id, name: tour.name, time: tour.time,
-      meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
-    } : null,
-    bookings,
-  });
+  const details = await guideTourDetails(guideId, date, slotIdx);
+  if (!details) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
+  return NextResponse.json(details);
 }
