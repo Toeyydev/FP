@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 // Finance-relevant audit actions only — the accounting trail, not the whole
 // operational log (offers, bookings, logins etc. stay out of this view).
-const FINANCE_PREFIXES = ["payment", "payroll", "pay.", "bonus", "payment_batch", "jobsheet.approved", "jobsheet.unapproved", "jobsheet.receipt"];
+const FINANCE_PREFIXES = ["payment", "payroll", "pay.", "bonus", "payment_batch", "review", "jobsheet.approved", "jobsheet.unapproved", "jobsheet.receipt"];
 
 // GET ?before=<ISO>&q=<text> — newest-first page of the finance audit trail
 // (100 rows; pass `before` = last row's createdAt to page further). Read-only,
