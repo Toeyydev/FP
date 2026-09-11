@@ -4,7 +4,8 @@ import { guideTourDetails } from "@/lib/guide-schedule";
 
 // GET ?date&slotIdx — one of the guide's own assigned tours in full, for FolkOPS
 // Mobile. Unlike /api/tour-details there is no guideId parameter to honour: the
-// token alone decides whose tour this is.
+// token alone decides whose tour this is. On a split departure it lists only the
+// guide's own share of the bookings.
 export async function GET(req: Request) {
   const a = await authenticateMobile(req);
   if (!a.ok) return NextResponse.json({ error: a.error }, { status: a.status });
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "bad-query" }, { status: 400 });
   }
 
-  const details = await guideTourDetails(a.user.guideId, date, slotIdx);
+  const details = await guideTourDetails(a.user.guideId, date, slotIdx, { ownShareOnly: true });
   if (!details) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
   return NextResponse.json(details);
 }

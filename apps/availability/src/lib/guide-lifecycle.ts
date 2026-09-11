@@ -15,6 +15,9 @@ export type CheckinType = (typeof CHECKIN_TYPES)[number];
 // A guide may report no-shows from the start until this long after it.
 export const NO_SHOW_WINDOW_MS = 30 * 60_000;
 
+// Bookings still going ahead — the ones a guide's tour details list.
+const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
+
 // When a departure starts, in epoch ms: its slot time on that date, in Bangkok (UTC+7).
 export function slotStartMs(date: string, slotIdx: number): number {
   const [sh, sm] = (SLOT_TIMES[slotIdx] ?? "00:00").split(":").map(Number);
@@ -91,9 +94,11 @@ export async function assignedTourId(guideId: string, date: string, slotIdx: num
 // matching Booking (so it appears in the operator's Tour Log) and mirrors the count /
 // status / actual pax onto a saved sheet, re-syncing ticket expenses.
 //
-// With `tourId`, only a booking on that tour counts, and one that isn't there is
-// refused — another tour leaving in the same slot is not the guide's to touch.
-// FolkOPS Mobile always passes it; the web route (/api/jobsheet/noshow) does not yet.
+// With `tourId`, only a booking the guide's tour details list counts — a live one
+// on that tour and, on a split departure, one handed to this guide — and any other
+// is refused: another tour leaving in the same slot, a co-guide's group, or a
+// booking not yet handed to either guide are not this guide's to change. FolkOPS
+// Mobile always passes it; the web route (/api/jobsheet/noshow) does not yet.
 export async function recordNoShow(o: {
   guideId: string;
   date: string;
@@ -117,8 +122,15 @@ export async function recordNoShow(o: {
     if (!started || !inWindow) return { ok: false, status: 403, error: "not-in-window" };
   }
 
-  // The booking, by its reference on this departure (and on this tour, when scoped).
-  const where = { date, slotIdx, ...(o.tourId ? { tourId: o.tourId } : {}), OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
+  // The booking, by its reference on this departure — within the guide's share of
+  // their tour, when scoped (a departure is split once any live booking on it is
+  // tagged to a guide).
+  let scope: { tourId?: string; status?: { in: string[] }; assignedGuideId?: string } = {};
+  if (o.tourId) {
+    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null } } })) > 0;
+    scope = { tourId: o.tourId, status: { in: LIVE_STATUSES }, ...(split ? { assignedGuideId: guideId } : {}) };
+  }
+  const where = { date, slotIdx, ...scope, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
   const b = await prisma.booking.findFirst({ where, select: { pax: true } });
   if (o.tourId && !b) return { ok: false, status: 404, error: "booking-not-found" };
 

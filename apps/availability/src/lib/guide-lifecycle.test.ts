@@ -3,7 +3,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   assignment: { findUnique: vi.fn() },
   checkin: { create: vi.fn(), count: vi.fn() },
-  booking: { findFirst: vi.fn(), updateMany: vi.fn() },
+  booking: { findFirst: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   jobSheet: { findUnique: vi.fn(), update: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -21,6 +21,7 @@ beforeEach(() => {
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { meetingLat: 13.7437, meetingLng: 100.493, meetingRadiusM: null } });
   prismaMock.checkin.count.mockResolvedValue(1);
   prismaMock.booking.findFirst.mockResolvedValue({ pax: 4 });
+  prismaMock.booking.count.mockResolvedValue(0);
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
 });
 
@@ -99,19 +100,32 @@ describe("recordNoShow", () => {
     expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ action: "booking.noshow_cleared" }));
   });
 
+  const LIVE = { in: ["PENDING", "OFFERED", "ASSIGNED"] };
+  const refs = (ref: string) => [{ externalRef: ref }, { confirmationCode: ref }];
+
   it("scoped to a tour, refuses a booking that isn't on it and writes nothing", async () => {
     prismaMock.booking.findFirst.mockResolvedValue(null);
     expect(await noShow({ tourId: "T-001", bookingNo: "GYG9" })).toEqual({ ok: false, status: 404, error: "booking-not-found" });
-    expect(prismaMock.booking.findFirst.mock.calls[0][0].where).toEqual({ date: "2026-09-11", slotIdx: 0, tourId: "T-001", OR: [{ externalRef: "GYG9" }, { confirmationCode: "GYG9" }] });
+    expect(prismaMock.booking.findFirst.mock.calls[0][0].where).toEqual({ date: "2026-09-11", slotIdx: 0, tourId: "T-001", status: LIVE, OR: refs("GYG9") });
     expect(prismaMock.booking.updateMany).not.toHaveBeenCalled();
     expect(prismaMock.jobSheet.findUnique).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it("scoped to a split departure, looks only within the guide's own group", async () => {
+    prismaMock.booking.count.mockResolvedValue(2); // the operator has tagged bookings to guides
+    await noShow({ tourId: "T-001", bookingNo: "GYG1" });
+    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null } } });
+    const where = { date: "2026-09-11", slotIdx: 0, tourId: "T-001", status: LIVE, assignedGuideId: "G-001", OR: refs("GYG1") };
+    expect(prismaMock.booking.findFirst.mock.calls[0][0].where).toEqual(where);
+    expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual(where);
+  });
+
   it("unscoped — the web route — still matches by date, slot and reference, as before", async () => {
     prismaMock.booking.findFirst.mockResolvedValue(null);
     expect(await noShow({ bookingNo: "GYG9" })).toEqual({ ok: true, noShowPax: 2 });
-    expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual({ date: "2026-09-11", slotIdx: 0, OR: [{ externalRef: "GYG9" }, { confirmationCode: "GYG9" }] });
+    expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual({ date: "2026-09-11", slotIdx: 0, OR: refs("GYG9") });
+    expect(prismaMock.booking.count).not.toHaveBeenCalled();
   });
 
   it("mirrors the count onto a saved job sheet, leaving the other bookings alone", async () => {

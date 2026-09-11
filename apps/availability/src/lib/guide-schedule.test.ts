@@ -91,9 +91,39 @@ describe("guideTourDetails", () => {
       tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
       bookings: [{ customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1 }],
     });
+    // assignedGuideId is read to work out a split guide's share, and never sent.
     const select = prismaMock.booking.findMany.mock.calls[0][0].select;
-    expect(Object.keys(select).sort()).toEqual(["confirmationCode", "customerName", "externalRef", "noShowPax", "pax", "source"]);
+    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "noShowPax", "pax", "source"]);
     expect(prismaMock.checkin.findFirst.mock.calls[0][0]).toEqual({ where: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 }, orderBy: { at: "desc" }, select: { type: true } });
+  });
+
+  describe("a split departure", () => {
+    const row = (ref: string, assignedGuideId: string | null) => ({ customerName: ref, confirmationCode: null, externalRef: ref, pax: 2, source: "gyg", noShowPax: 0, assignedGuideId });
+    const refs = (details: Awaited<ReturnType<typeof guideTourDetails>>) => details?.bookings.map((b) => b.externalRef);
+
+    beforeEach(() => {
+      prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 4, note: null });
+      prismaMock.tour.findUnique.mockResolvedValue(null);
+    });
+
+    it("gives FolkOPS Mobile only the guide's own share — not the co-guide's, nor a booking not yet handed out", async () => {
+      prismaMock.booking.findMany.mockResolvedValue([row("MINE", "G-001"), row("THEIRS", "G-002"), row("UNPLACED", null)]);
+      const details = await guideTourDetails("G-001", "2026-09-11", 0, { ownShareOnly: true });
+      expect(refs(details)).toEqual(["MINE"]);
+      expect(details?.bookings[0]).not.toHaveProperty("assignedGuideId");
+    });
+
+    it("gives the only guide of an untagged departure every booking", async () => {
+      prismaMock.booking.findMany.mockResolvedValue([row("A", null), row("B", null)]);
+      expect(refs(await guideTourDetails("G-001", "2026-09-11", 0, { ownShareOnly: true }))).toEqual(["A", "B"]);
+    });
+
+    it("leaves the web view as it was: the whole departure", async () => {
+      prismaMock.booking.findMany.mockResolvedValue([row("MINE", "G-001"), row("THEIRS", "G-002"), row("UNPLACED", null)]);
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(refs(details)).toEqual(["MINE", "THEIRS", "UNPLACED"]);
+      expect(details?.bookings.every((b) => !("assignedGuideId" in b))).toBe(true);
+    });
   });
 
   it("has no check-in state before the guide checks in", async () => {

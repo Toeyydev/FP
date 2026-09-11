@@ -42,9 +42,9 @@ describe("GET /api/mobile/tour-details", () => {
     expect((await res.json()).error).toBe("not-assigned");
   });
 
-  it("only ever reads the token holder's own tour, whatever guideId the query names", async () => {
+  it("only ever reads the token holder's own tour — their own share of it — whatever guideId the query names", async () => {
     const res = await get("date=2026-09-11&slotIdx=0&guideId=G-999", token);
     expect(res.status).toBe(200);
-    expect(guideTourDetails).toHaveBeenCalledWith("G-001", "2026-09-11", 0);
+    expect(guideTourDetails).toHaveBeenCalledWith("G-001", "2026-09-11", 0, { ownShareOnly: true });
   });
 });

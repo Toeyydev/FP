@@ -69,11 +69,20 @@ export async function guideSchedule(guideId: string, nowMs: number = Date.now())
   });
 }
 
+// The bookings that are one guide's on a departure. A split departure tags each
+// booking with its guide (assignedGuideId): there a guide has only their own, and a
+// booking not yet handed to either guide belongs to neither — the operator places
+// it. An untagged departure has one guide, who has them all.
+export function guideShare<T extends { assignedGuideId: string | null }>(bookings: T[], guideId: string): T[] {
+  return bookings.some((b) => b.assignedGuideId) ? bookings.filter((b) => b.assignedGuideId === guideId) : bookings;
+}
+
 // The full details for one assigned job: the assignment + operator tour info +
 // the booking customers with the no-shows recorded against each, and how far the
 // guide has got (latest check-in). Null when the guide is not assigned to that
-// departure.
-export async function guideTourDetails(guideId: string, date: string, slotIdx: number) {
+// departure. `ownShareOnly` (FolkOPS Mobile) lists only the guide's share of a
+// split departure; the web My Tours still lists the whole departure.
+export async function guideTourDetails(guideId: string, date: string, slotIdx: number, opts: { ownShareOnly?: boolean } = {}) {
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return null;
 
@@ -81,11 +90,13 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     prisma.tour.findUnique({ where: { id: assignment.tourId } }),
     prisma.booking.findMany({
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
-      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true },
+      // assignedGuideId is read to work out the guide's share, never sent.
+      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, assignedGuideId: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
   ]);
 
+  const shown = opts.ownShareOnly ? guideShare(bookings, guideId) : bookings;
   return {
     date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
     pax: assignment.pax, note: assignment.note, checkinState: lastCheckin?.type ?? null,
@@ -93,6 +104,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings,
+    bookings: shown.map((b) => ({ customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax })),
   };
 }
