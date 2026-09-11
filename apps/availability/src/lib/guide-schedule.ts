@@ -70,22 +70,25 @@ export async function guideSchedule(guideId: string, nowMs: number = Date.now())
 }
 
 // The full details for one assigned job: the assignment + operator tour info +
-// the booking customers. Null when the guide is not assigned to that departure.
+// the booking customers with the no-shows recorded against each, and how far the
+// guide has got (latest check-in). Null when the guide is not assigned to that
+// departure.
 export async function guideTourDetails(guideId: string, date: string, slotIdx: number) {
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return null;
 
-  const [tour, bookings] = await Promise.all([
+  const [tour, bookings, lastCheckin] = await Promise.all([
     prisma.tour.findUnique({ where: { id: assignment.tourId } }),
     prisma.booking.findMany({
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
-      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true },
+      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true },
     }),
+    prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
   ]);
 
   return {
     date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
-    pax: assignment.pax, note: assignment.note,
+    pax: assignment.pax, note: assignment.note, checkinState: lastCheckin?.type ?? null,
     tour: tour ? {
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,

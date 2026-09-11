@@ -3,7 +3,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   assignment: { findMany: vi.fn(), findUnique: vi.fn() },
   booking: { findMany: vi.fn() },
-  checkin: { findMany: vi.fn() },
+  checkin: { findMany: vi.fn(), findFirst: vi.fn() },
   tour: { findUnique: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -15,6 +15,7 @@ beforeEach(() => {
   prismaMock.assignment.findMany.mockResolvedValue([]);
   prismaMock.booking.findMany.mockResolvedValue([]);
   prismaMock.checkin.findMany.mockResolvedValue([]);
+  prismaMock.checkin.findFirst.mockResolvedValue(null);
 });
 
 describe("bangkokToday", () => {
@@ -76,19 +77,28 @@ describe("guideTourDetails", () => {
     expect(await guideTourDetails("G-001", "2026-09-11", 0)).toBeNull();
     expect(prismaMock.assignment.findUnique.mock.calls[0][0].where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } });
     expect(prismaMock.booking.findMany).not.toHaveBeenCalled();
+    expect(prismaMock.checkin.findFirst).not.toHaveBeenCalled();
   });
 
-  it("returns the tour info and the bookings, without guest contact details", async () => {
+  it("returns the tour info, the bookings with their no-shows, and the latest check-in — without guest contact details", async () => {
     prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 8, note: "Meet 15 min early" });
     prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water", meetingLat: 13.74 });
-    prismaMock.booking.findMany.mockResolvedValue([{ customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg" }]);
+    prismaMock.booking.findMany.mockResolvedValue([{ customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1 }]);
+    prismaMock.checkin.findFirst.mockResolvedValue({ type: "ARRIVE" });
 
     expect(await guideTourDetails("G-001", "2026-09-11", 0)).toEqual({
-      date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early",
+      date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early", checkinState: "ARRIVE",
       tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
-      bookings: [{ customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg" }],
+      bookings: [{ customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1 }],
     });
     const select = prismaMock.booking.findMany.mock.calls[0][0].select;
-    expect(Object.keys(select).sort()).toEqual(["confirmationCode", "customerName", "externalRef", "pax", "source"]);
+    expect(Object.keys(select).sort()).toEqual(["confirmationCode", "customerName", "externalRef", "noShowPax", "pax", "source"]);
+    expect(prismaMock.checkin.findFirst.mock.calls[0][0]).toEqual({ where: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 }, orderBy: { at: "desc" }, select: { type: true } });
+  });
+
+  it("has no check-in state before the guide checks in", async () => {
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 8, note: null });
+    prismaMock.tour.findUnique.mockResolvedValue(null);
+    expect(await guideTourDetails("G-001", "2026-09-11", 0)).toMatchObject({ checkinState: null, tour: null, bookings: [] });
   });
 });
