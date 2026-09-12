@@ -23,11 +23,14 @@ async function main() {
     await prisma.tour.upsert({ where: { id }, create: { id, name, time }, update: { name, time } });
   }
 
-  // Bootstrap admin (active)
+  // Bootstrap admin (active). The seed runs on every deploy (preDeployCommand), so the
+  // update MUST NOT reset the password — otherwise a deploy silently reverts an admin
+  // password changed in the app back to ADMIN_PASSWORD. Set the hash only on first
+  // create; on an existing admin just keep the account ADMIN + ACTIVE.
   await prisma.user.upsert({
     where: { email: adminEmail },
     create: { email: adminEmail, displayName: "Folkpath Admin", role: "ADMIN", state: "ACTIVE", passwordHash: bcrypt.hashSync(adminPw, 10) },
-    update: { role: "ADMIN", state: "ACTIVE", passwordHash: bcrypt.hashSync(adminPw, 10) },
+    update: { role: "ADMIN", state: "ACTIVE" },
   });
 
   // No guide records are pre-seeded. Each guide self-registers (free-flow sign-up
