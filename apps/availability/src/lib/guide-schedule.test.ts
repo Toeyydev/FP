@@ -105,7 +105,11 @@ describe("guideTourDetails", () => {
     prismaMock.booking.findMany.mockResolvedValue([{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, phone: "+39333111222" }]);
     prismaMock.checkin.findFirst.mockResolvedValue({ type: "ARRIVE" });
 
-    expect(await guideTourDetails("G-001", "2026-09-11", 0)).toEqual({
+    const details = await guideTourDetails("G-001", "2026-09-11", 0);
+    // The job's own costs ride along; they have their own tests below.
+    expect(Array.isArray(details?.expenses)).toBe(true);
+    expect({ ...details, expenses: undefined }).toEqual({
+      expenses: undefined,
       date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early", checkinState: "ARRIVE",
       tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
       // `id` is sent so the app can report this booking's no-shows precisely.
@@ -140,7 +144,7 @@ describe("guideTourDetails", () => {
     expect(details?.bookings.map((b) => b.tickets)).toEqual(["included", "not", ""]);
     expect(prismaMock.jobSheet.findUnique.mock.calls[0][0]).toEqual({
       where: { guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } },
-      select: { bookings: true },
+      select: { bookings: true, expenses: true },
     });
   });
 
@@ -149,6 +153,49 @@ describe("guideTourDetails", () => {
     prismaMock.tour.findUnique.mockResolvedValue(null);
     prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Emily", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 0 }]);
     expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+  });
+
+  describe("the job's expense lines", () => {
+    beforeEach(() => {
+      prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 4, note: null });
+      prismaMock.booking.findMany.mockResolvedValue([]);
+    });
+
+    it("uses the operator's own set when the sheet has one", async () => {
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Wat Pho Evening", time: "17:30" });
+      prismaMock.jobSheet.findUnique.mockResolvedValue({
+        bookings: [],
+        expenses: [
+          { description: "Wat Pho ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance" },
+          { description: "Water (Inc. Guide)", price: 10, pax: 3, expenseType: "meal", paidBy: "guide" },
+        ],
+      });
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(details?.expenses).toEqual([
+        { description: "Wat Pho ticket", price: 300, pax: 2, unit: null, expenseType: "entrance", paidBy: "advance" },
+        { description: "Water (Inc. Guide)", price: 10, pax: 3, unit: null, expenseType: "meal", paidBy: "guide" },
+      ]);
+    });
+
+    it("falls back to the standard set for the tour when no sheet exists yet", async () => {
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30" });
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(details?.expenses.length).toBeGreaterThan(0);
+      expect(details?.expenses.every((e) => typeof e.description === "string")).toBe(true);
+    });
+
+    it("leaves out review rewards, which are the guide's pay and not a tour cost", async () => {
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30" });
+      prismaMock.jobSheet.findUnique.mockResolvedValue({
+        bookings: [],
+        expenses: [
+          { description: "Wat Pho ticket", price: 300, pax: 2 },
+          { description: "Review Reward", price: 100, pax: 1, expenseType: "review_reward" },
+        ],
+      });
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(details?.expenses.map((e) => e.description)).toEqual(["Wat Pho ticket"]);
+    });
   });
 
   describe("a split departure", () => {

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { paxIndex } from "@/lib/assigned-pax";
 import { bookingRef } from "@/lib/booking-ref";
-import type { Booking as SheetBooking } from "@/lib/jobsheet";
+import { defaultExpensesForTour, isReviewExpense, type Booking as SheetBooking, type Expense } from "@/lib/jobsheet";
 
 // A guide's own tours, as the web My Tours (/api/schedule, /api/tour-details) and
 // FolkOPS Mobile (/api/mobile/*) both show them. The routes differ only in how
@@ -115,7 +115,7 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, phone: true, assignedGuideId: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
-    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { bookings: true } }),
+    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { bookings: true, expenses: true } }),
   ]);
 
   // Whether a booking's guests already have their entrance tickets is the
@@ -128,6 +128,15 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     if (row?.bookingNo) ticketsByRef.set(row.bookingNo, row.tickets ?? "");
   }
 
+  // The costs this tour actually runs up. The operator's saved set when there is
+  // one, otherwise the standard set for this tour — so a guide reporting an evening
+  // Wat Pho tour is not handed the Grand Palace's tickets to delete by hand.
+  // Review rewards are the guide's compensation, not a tour cost, and are left out.
+  const sheetExpenses = (sheet?.expenses as Expense[] | null) ?? null;
+  const expenses = (sheetExpenses?.length ? sheetExpenses : defaultExpensesForTour(tour?.name))
+    .filter((e) => !isReviewExpense(e))
+    .map((e) => ({ description: e.description, price: e.price ?? null, pax: e.pax ?? null, unit: e.unit ?? null, expenseType: e.expenseType ?? null, paidBy: e.paidBy ?? null }));
+
   const shown = opts.ownShareOnly ? guideShare(bookings, guideId) : bookings;
   return {
     date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
@@ -136,6 +145,7 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
+    expenses,
     bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: b.phone, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
   };
 }
