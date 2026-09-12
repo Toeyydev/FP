@@ -18,6 +18,12 @@ describe("availabilitySaveError", () => {
     expect(availabilitySaveError(409, "date-blocked")).toBe("dayBlocked");
   });
 
+  it("explains a slot that already holds a job", () => {
+    // Two different 409s: the office blocked the whole day, or this one slot has
+    // a job on it. They need different messages or the guide cannot tell which.
+    expect(availabilitySaveError(409, "slot-assigned")).toBe("slotAssigned");
+  });
+
   it("falls back to a plain failure for anything unrecognised", () => {
     expect(availabilitySaveError(400, "bad body")).toBe("saveFailed");
     expect(availabilitySaveError(403, "guides only")).toBe("saveFailed");
@@ -29,5 +35,7 @@ describe("availabilitySaveError", () => {
     // A 500 carrying a stale body must not be reported as a blocked day.
     expect(availabilitySaveError(500, "date-blocked")).toBe("saveFailed");
     expect(availabilitySaveError(403, "date-blocked")).toBe("saveFailed");
+    expect(availabilitySaveError(500, "slot-assigned")).toBe("saveFailed");
+    expect(availabilitySaveError(400, "slot-assigned")).toBe("saveFailed");
   });
 });
