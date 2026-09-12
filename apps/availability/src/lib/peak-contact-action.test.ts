@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { contactSaveDecision, contactSaveHint } from "./peak-contact-action";
+import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "./peak-contact-action";
 
 describe("contactSaveDecision", () => {
   it("refuses to save nothing — the bug that logged 17 phantom clears", () => {
@@ -34,5 +34,23 @@ describe("contactSaveDecision", () => {
     expect(contactSaveHint(contactSaveDecision("", null))).toMatch(/Pick the guide/);
     expect(contactSaveHint(contactSaveDecision("CT-1", "CT-1"))).toMatch(/already mapped/);
     expect(contactSaveHint(contactSaveDecision("CT-1", null))).toBeUndefined();
+  });
+});
+
+describe("contactBoxOpen", () => {
+  it("is open for an unmapped guide even before the operator touches it", () => {
+    // The regression: this is the state of every guide in production, and the
+    // fetch used to skip it, so the list never arrived.
+    expect(contactBoxOpen(null, false)).toBe(true);
+  });
+
+  it("is closed for a mapped guide until they open it", () => {
+    expect(contactBoxOpen(null, true)).toBe(false);
+  });
+
+  it("is open once the operator opens it, mapped or not", () => {
+    expect(contactBoxOpen("", true)).toBe(true);
+    expect(contactBoxOpen("CT-1", true)).toBe(true);
+    expect(contactBoxOpen("", false)).toBe(true);
   });
 });
