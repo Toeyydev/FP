@@ -105,7 +105,12 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
       // assignedGuideId is read to work out the guide's share, never sent.
       // `id` is sent: the app needs it to report per-booking no-shows precisely.
-      select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, assignedGuideId: true },
+      // `phone` IS sent — the guide calls the guest from the job screen. The channel
+      // passes it unmasked (contactDetailsHidden=false on every booking checked), and
+      // parseBokun drops it when that flag says otherwise. The OTA relay email is
+      // deliberately never carried: mail to it goes back through the channel, not to
+      // the guest, so it would only look like a contact detail without being one.
+      select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, phone: true, assignedGuideId: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
   ]);
@@ -118,6 +123,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: b.phone })),
   };
 }
