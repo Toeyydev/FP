@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal, guidePayoutView } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
 import { canonicalPaidBy, figuresNeedRecheck, jobSheetTotals } from "@/lib/peak-sync";
+import { contactSaveDecision, contactSaveHint } from "@/lib/peak-contact-action";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -474,18 +475,26 @@ export default function JobSheetEditor() {
     ? peakContacts?.find((c) => c.id === contactSuggestion.contactId) ?? null
     : null;
 
-  async function savePeakContact(value: string) {
+  // Does the box hold something worth writing? Drives both the button and the guard.
+  const contactDecision = contactSaveDecision(contactEdit, header?.peakContactId);
+
+  // `intent` is required to clear, because an empty id is destructive at the API.
+  // Mapping refuses a blank outright instead of quietly clearing the mapping.
+  async function savePeakContact(value: string, intent: "map" | "unlink" = "map") {
     if (!sheet) return;
-    setBusy(true); setMsg(value.trim() ? "Mapping guide to PEAK…" : "Clearing mapping…");
+    const decision = contactSaveDecision(value, header?.peakContactId);
+    if (intent === "map" && decision.action !== "save") { setMsg(contactSaveHint(decision) ?? ""); return; }
+    const nextId = decision.action === "save" ? decision.contactId : "";
+    setBusy(true); setMsg(intent === "unlink" ? "Removing mapping…" : "Mapping guide to PEAK…");
     const r = await jfetch("/api/jobsheet/peak-contact", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         guideId: sheet.guideId,
-        peakContactId: value.trim(),
+        peakContactId: nextId,
         // Snapshot the name from the list so the sheet can say WHO it is mapped to
         // rather than showing an opaque id.
-        peakContactName: peakContacts?.find((c) => c.id === value.trim())?.name,
-        peakContactCode: peakContacts?.find((c) => c.id === value.trim())?.code ?? undefined,
+        peakContactName: peakContacts?.find((c) => c.id === nextId)?.name,
+        peakContactCode: peakContacts?.find((c) => c.id === nextId)?.code ?? undefined,
       }),
     });
     const d = await r.json().catch(() => ({}));
@@ -503,7 +512,7 @@ export default function JobSheetEditor() {
       return;
     }
     setContactEdit(null);
-    setMsg(d.peakContactId ? "Guide mapped to PEAK contact ✓" : "PEAK contact mapping cleared");
+    setMsg(d.peakContactId ? "Guide mapped to PEAK contact ✓" : "PEAK contact mapping removed");
     load(); // re-evaluates sync eligibility server-side
   }
 
@@ -1643,11 +1652,28 @@ export default function JobSheetEditor() {
                 ) : (
                   <input id="peakContact" value={contactEdit ?? ""} placeholder="PEAK contact id" autoComplete="off"
                     onChange={(ev) => setContactEdit(ev.target.value)}
-                    onKeyDown={(ev) => { if (ev.key === "Enter") savePeakContact(contactEdit ?? ""); if (ev.key === "Escape") setContactEdit(null); }} />
+                    onKeyDown={(ev) => { if (ev.key === "Enter") savePeakContact(contactEdit ?? "", "map"); if (ev.key === "Escape") setContactEdit(null); }} />
                 )}
                 <div className="row" style={{ marginTop: 5 }}>
-                  <button className="btn sm primary" disabled={busy} onClick={() => savePeakContact(contactEdit ?? "")}>Save</button>
+                  <button
+                    className="btn sm primary"
+                    disabled={busy || contactDecision.action !== "save"}
+                    title={contactSaveHint(contactDecision)}
+                    onClick={() => savePeakContact(contactEdit ?? "", "map")}
+                  >Save</button>
                   {peak.contactMapped && <button className="btn sm ghost" disabled={busy} onClick={() => setContactEdit(null)}>Cancel</button>}
+                  {/* Removing a mapping blocks every future sync for this guide, so
+                      it is a deliberate press with its own confirmation — never the
+                      side effect of pressing Save on an empty box. */}
+                  {peak.contactMapped && (
+                    <button
+                      className="btn sm ghost" disabled={busy}
+                      style={{ marginLeft: "auto", color: "var(--danger, #b3261e)" }}
+                      onClick={() => {
+                        if (confirm(`Remove the PEAK contact mapping for ${sheet.guideId}? Job sheets for this guide cannot be synced to PEAK until it is mapped again.`)) savePeakContact("", "unlink");
+                      }}
+                    >Unlink</button>
+                  )}
                 </div>
                 <div className="hint">
                   {contactsError
