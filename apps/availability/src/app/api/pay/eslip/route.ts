@@ -7,7 +7,7 @@ import { Prisma } from "@prisma/client";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import { peakEnabled, sanitizePeakError } from "@/lib/peak-api";
-import { postGuidePayout, peakPayoutReady, peakPostOutcome } from "@/lib/peak-payout";
+import { postGuidePayout, peakPayoutReady, peakPostOutcome, peakAlreadyBooked } from "@/lib/peak-payout";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { matchState, type Slip } from "@/lib/payments/slips";
 
@@ -29,13 +29,37 @@ async function postAndRecord(
   jobs: { date: string; slotIdx: number }[],
   paymentDate: string,
   actor: { actorId: string | null; actorRole: string | null },
-): Promise<{ code: string | null; failure: string | null }> {
-  let outcome: { code: string | null; failure: string | null };
+): Promise<{ code: string | null; failure: string | null; skipped: string | null }> {
+  // Two routes reach the ledger, and for one job they are the SAME cost: a job sheet
+  // posts its own expense document (api/jobsheet/peak-sync), and this posts the
+  // transfer. Booking both leaves PEAK holding two documents for one job, and PEAK
+  // cannot merge them — someone voids one by hand.
+  let sheets: { date: string; slotIdx: number; peakDocumentNo: string | null; peakDocumentId: string | null }[];
   try {
-    outcome = peakPostOutcome(await postGuidePayout(guideId, jobs, paymentDate));
+    sheets = await prisma.jobSheet.findMany({
+      where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) },
+      select: { date: true, slotIdx: true, peakDocumentNo: true, peakDocumentId: true },
+    });
+  } catch (e) {
+    // Unable to tell whether the sheets already booked this. Posting blind risks the
+    // duplicate above, so don't — and say why rather than looking like a refusal.
+    const reason = `could not check whether the job sheets already posted: ${sanitizePeakError(e)}`;
+    await audit({ ...actor, action: "pay.peak_post_failed", entityType: "Assignment", detail: { guideId, jobs, reason } });
+    return { code: null, failure: reason, skipped: null };
+  }
+  const already = peakAlreadyBooked(sheets);
+  if (already) {
+    // Not a failure: the cost IS in the ledger, exactly once, which is the point.
+    await audit({ ...actor, action: "pay.peak_post_skipped", entityType: "Assignment", detail: { guideId, jobs, reason: already } });
+    return { code: null, failure: null, skipped: already };
+  }
+
+  let outcome: { code: string | null; failure: string | null; skipped: string | null };
+  try {
+    outcome = { ...peakPostOutcome(await postGuidePayout(guideId, jobs, paymentDate)), skipped: null };
   } catch (e) {
     // Sanitised before it can reach an audit row or an HTTP response.
-    outcome = { code: null, failure: sanitizePeakError(e) };
+    outcome = { code: null, failure: sanitizePeakError(e), skipped: null };
   }
   // Nothing below may throw out of this function: the transfer has already left the
   // bank and the slip is already filed, so a failure to WRITE DOWN the result must
@@ -53,7 +77,7 @@ async function postAndRecord(
   } catch (e) {
     // PEAK may well have booked the expense; we simply could not record it here.
     // Say both, so nobody reads a blank ref as "nothing was posted".
-    return { code: outcome.code, failure: `could not record the PEAK result: ${sanitizePeakError(e)}` };
+    return { code: outcome.code, failure: `could not record the PEAK result: ${sanitizePeakError(e)}`, skipped: null };
   }
   return outcome;
 }
@@ -141,15 +165,17 @@ export async function POST(req: NextRequest) {
     // Only when the tour first becomes fully paid: post to PEAK + notify the guide once.
     let peakCode: string | null = null;
     let peakFailure: string | null = null;
+    let peakSkipped: string | null = null;
     if (st.paid && !wasPaid) {
       if (peakEnabled && peakPayoutReady && !data.peakRef) {
         const posted = await postAndRecord(guideId, [j], now.toISOString().slice(0, 10), { actorId: uid, actorRole: session!.user!.role ?? null });
         peakCode = posted.code;
         peakFailure = posted.failure;
+        peakSkipped = posted.skipped;
       }
       try { await sendPaymentNotice(guideId, [j], undefined, link ?? undefined); } catch { /* best-effort */ }
     }
-    return NextResponse.json({ ok: true, link, slips, slipsTotal: st.slipsTotal, payout: st.payout, remaining: st.remaining, paid: st.paid, warn: st.warn, delta: st.delta, count: slips.length, driveError, peakRef: peakCode ?? data.peakRef, peakFailure });
+    return NextResponse.json({ ok: true, link, slips, slipsTotal: st.slipsTotal, payout: st.payout, remaining: st.remaining, paid: st.paid, warn: st.warn, delta: st.delta, count: slips.length, driveError, peakRef: peakCode ?? data.peakRef, peakFailure, peakSkipped });
   }
 
   // ---- Guard: never let a second slip overwrite the first ----
@@ -205,16 +231,18 @@ export async function POST(req: NextRequest) {
   // a no-op today. Never blocks the payment.
   let peakCode: string | null = null;
   let peakFailure: string | null = null;
+  let peakSkipped: string | null = null;
   if (peakEnabled && peakPayoutReady && !peakRef) {
     const posted = await postAndRecord(guideId, jobs, now.toISOString().slice(0, 10), { actorId: uid, actorRole: session!.user!.role ?? null });
     peakCode = posted.code;
     peakFailure = posted.failure;
+    peakSkipped = posted.skipped;
   }
 
   // Tell the guide their payment landed — short summary + completed tour details.
   try { await sendPaymentNotice(guideId, jobs, undefined, link); } catch { /* best-effort */ }
 
-  return NextResponse.json({ ok: true, link, count: jobs.length, peakRef: peakCode ?? peakRef, peakFailure });
+  return NextResponse.json({ ok: true, link, count: jobs.length, peakRef: peakCode ?? peakRef, peakFailure, peakSkipped });
 }
 
 // DELETE { guideId, date, slotIdx, at } — remove ONE split-payment slip (by its
