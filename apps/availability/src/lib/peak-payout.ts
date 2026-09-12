@@ -100,6 +100,30 @@ export function peakPostOutcome(r: { ok: boolean; code?: string; desc?: string }
   return { code: null, failure: (r.desc ?? "").trim() || "PEAK returned no document number and no reason" };
 }
 
+/**
+ * Whether these jobs are already in PEAK from their own job sheets — in which case
+ * the TRANSFER must not book them a second time.
+ *
+ * Two routes reach the ledger: a job sheet posts its own expense document
+ * (api/jobsheet/peak-sync), and a payment posts the transfer. For one job they are
+ * the same cost. PEAK cannot merge two documents, so a duplicate has to be voided by
+ * hand in the ledger — which is why this refuses rather than trying to be clever
+ * about posting only the remainder: the payout payload is ONE document covering
+ * every job in the transfer, so a partial post would not match the money that moved.
+ *
+ * Returns the message to record, or null when nothing has been posted yet.
+ */
+export function peakAlreadyBooked(
+  sheets: { date: string; slotIdx: number; peakDocumentNo?: string | null; peakDocumentId?: string | null }[],
+): string | null {
+  const booked = (sheets ?? []).filter((s) => (s.peakDocumentId ?? "") || (s.peakDocumentNo ?? "").trim());
+  if (!booked.length) return null;
+  const where = booked
+    .map((s) => `${s.date} slot${s.slotIdx}${(s.peakDocumentNo ?? "").trim() ? ` (${s.peakDocumentNo!.trim()})` : ""}`)
+    .join(", ");
+  return `Already in PEAK from the job sheet: ${where}. The transfer was not posted again.`;
+}
+
 // Post the payout to PEAK. Dormant until PEAK creds + account-chart config are set.
 export async function postGuidePayout(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string): Promise<{ ok: boolean; code?: string; desc?: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not connected (env not set)" };
