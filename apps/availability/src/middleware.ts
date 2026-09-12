@@ -9,5 +9,8 @@ export const config = {
   // Exclude auth API, Next internals, and static/PWA files (manifest, service
   // worker, icons) — otherwise unauthenticated requests for them get redirected
   // to /start and the app isn't installable.
-  matcher: ["/((?!api/auth|api/health|_next/static|_next/image|favicon.ico|manifest.webmanifest|manifest.json|sw.js|service-worker.js|offline.html|.*\\.png$).*)"],
+  //
+  // `privacy` is public on purpose: Google Play will not accept a privacy policy
+  // that sits behind a login, and everything else on this site needs one.
+  matcher: ["/((?!api/auth|api/health|privacy|_next/static|_next/image|favicon.ico|manifest.webmanifest|manifest.json|sw.js|service-worker.js|offline.html|.*\\.png$).*)"],
 };
