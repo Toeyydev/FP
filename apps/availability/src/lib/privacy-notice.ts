@@ -15,7 +15,7 @@
  */
 
 /** Matches PRIVACY_NOTICE_VERSION in the app (src/config/env.ts). */
-export const NOTICE_VERSION = "2026-09-06";
+export const NOTICE_VERSION = "2026-09-12";
 
 export type NoticeSection = { title: string; body: string };
 
@@ -27,6 +27,10 @@ export const thaiSections: NoticeSection[] = [
   {
     title: "ข้อมูลที่เราเก็บรวบรวม",
     body: "เราเก็บข้อมูลระบุตัวตน ได้แก่ ชื่อ–นามสกุลภาษาไทยและภาษาอังกฤษ และเลขประจำตัวประชาชน ข้อมูลติดต่อ ได้แก่ หมายเลขโทรศัพท์และอีเมล ข้อมูลใบอนุญาต ได้แก่ เลขที่ใบอนุญาตมัคคุเทศก์และวันหมดอายุ ข้อมูลบัญชีธนาคาร ได้แก่ ชื่อธนาคาร ชื่อเจ้าของบัญชี และเลขบัญชี เอกสารแนบสามรายการ ได้แก่ รูปบัตรประชาชน รูปใบอนุญาตมัคคุเทศก์ และหลักฐานบัญชีธนาคาร รหัสผ่านที่ท่านตั้งไว้สำหรับเข้าสู่ระบบ ข้อมูลผู้ติดต่อกรณีฉุกเฉิน ได้แก่ ชื่อ หมายเลขโทรศัพท์ และความสัมพันธ์หากท่านระบุไว้ ภาษาที่ท่านเลือกใช้งาน และบันทึกการรับทราบประกาศฉบับนี้ ซึ่งประกอบด้วยเวอร์ชันของประกาศและวันเวลาที่ท่านกดยืนยัน นอกจากนี้เราเก็บข้อมูลสุขภาพตามที่อธิบายในหัวข้อ “ข้อมูลสุขภาพและข้อมูลติดต่อฉุกเฉิน”",
+  },
+  {
+    title: "ข้อมูลที่เก็บระหว่างปฏิบัติงานผ่านแอป FolkOPS",
+    body: "เมื่อท่านใช้แอป FolkOPS ระหว่างปฏิบัติงาน เราเก็บข้อมูลเพิ่มเติมดังนี้ (๑) ตำแหน่งที่ตั้งของอุปกรณ์ เฉพาะขณะที่ท่านกดปุ่มเช็กอิน เริ่มทัวร์ หรือจบทัวร์ โดยบันทึกพิกัดละติจูด–ลองจิจูด ความแม่นยำ และระยะห่างจากจุดนัดพบที่คำนวณได้ เพื่อยืนยันว่าท่านอยู่ ณ จุดนัดพบตามเวลาที่กำหนด แอปไม่ติดตามตำแหน่งของท่านอย่างต่อเนื่อง ไม่อ่านตำแหน่งขณะทำงานเบื้องหลัง และหากท่านไม่อนุญาตให้เข้าถึงตำแหน่ง ท่านยังเช็กอินได้ตามปกติ เพียงแต่จะไม่มีข้อมูลยืนยันตำแหน่งแนบไปด้วย (๒) บันทึกการปฏิบัติงาน ได้แก่ เวลาเช็กอิน เริ่มและจบทัวร์ จำนวนผู้เดินทางที่มาจริงและที่ไม่มา รายงานหลังจบทัวร์ และหมายเหตุที่ท่านกรอก (๓) รายการค่าใช้จ่ายที่ท่านรายงาน และการรับ–คืนเงินทดรองจ่าย รวมถึงรูปสลิปการโอนที่ท่านแนบ ส่วนการแจ้งเตือนก่อนวันทัวร์นั้น แอปตั้งเวลาไว้ในเครื่องของท่านเองจากตารางงานของท่าน โดยไม่มีการส่งข้อมูลออกจากเครื่องเพื่อการนี้",
   },
   {
     title: "วัตถุประสงค์",
@@ -90,6 +94,10 @@ export const englishSections: NoticeSection[] = [
   {
     title: "Personal data we collect",
     body: "We collect identity data, being your Thai and English name and Thai National ID number; contact data, being your telephone number and email address; licence data, being your guide licence number and expiry date; bank account data, being the bank name, account holder name and account number; three attached documents, being your ID card image, guide licence image and bank account evidence; the password you set for signing in; the name and phone number of your emergency contact and, if you give it, their relationship to you; your chosen interface language; and a record of your acknowledgement of this Notice, consisting of the Notice version and the date and time you confirmed it. We also collect health information as described in “Health and emergency contact information”.",
+  },
+  {
+    title: "Information collected while you work in the FolkOPS app",
+    body: "When you use the FolkOPS app on a tour, we collect the following in addition to the above. (1) Your device's location, only at the moment you press check in, start tour or complete tour: the latitude and longitude, its accuracy, and the distance calculated from the meeting point, so that your presence at the meeting point at the appointed time can be confirmed. The app does not track your location continuously, does not read it in the background, and if you do not grant location access you can still check in — the record simply carries no location. (2) Your work record: the times you checked in, started and completed each tour, how many guests arrived and how many did not, your end-of-tour report, and any notes you write. (3) The expenses you report, and money advanced to you and returned by you, including any transfer slip you attach. The reminder you receive the evening before a tour is scheduled on your own device from your own schedule; nothing leaves your phone for it.",
   },
   {
     title: "Purposes of processing",
