@@ -9,6 +9,7 @@ import InstallPrompt from "@/components/InstallPrompt";
 import { GuideTabs } from "@/components/GuideTabs";
 import { OperatorNav } from "@/components/OperatorNav";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
+import { availabilitySaveError, type AvailabilitySaveError } from "@/lib/availability-errors";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import { gcalUrl } from "@/lib/gcal";
@@ -334,18 +335,45 @@ export default function AppClient({
 
   // ---- mutations ----
   // Availability auto-saves on every tap; saveState drives the Save bar so the
-  // guide always sees that their changes are stored.
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-  async function putAvail(d: Date, slots: boolean[]) {
-    if (!profileGate.complete) { toast(t("completeProfileFirst")); return; }
+  // guide always sees whether the change actually reached the server. A save that
+  // fails quietly is indistinguishable from an app that forgets — which is exactly
+  // how a guide lost two weeks of availability after the site changed domain.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  // Writes that did not land, keyed by date so the Save bar can send every one of
+  // them again — a week bulk edit is seven writes, and retrying only the last would
+  // lose the other six just as quietly.
+  const pendingWrites = useRef(new Map<string, { date: Date; slots: boolean[]; reason: AvailabilitySaveError }>());
+  /** Saves one day. Returns whether it landed; `quiet` leaves the talking to the caller. */
+  async function putAvail(d: Date, slots: boolean[], opts?: { quiet?: boolean }): Promise<boolean> {
+    if (!profileGate.complete) { if (!opts?.quiet) toast(t("completeProfileFirst")); return false; }
+    const key = ymd(d);
     setSaveState("saving");
     try {
-      await fetch("/api/availability", {
-        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: ymd(d), slots }),
+      const res = await fetch("/api/availability", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: key, slots }),
       });
-      await load();
-      setSaveState("saved");
-    } catch { setSaveState("idle"); }
+      // fetch() resolves on 4xx/5xx — without this check a refusal passes for a save.
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const reason = availabilitySaveError(res.status, body?.error);
+        pendingWrites.current.set(key, { date: d, slots, reason });
+        setSaveState("error");
+        if (!opts?.quiet) toast(t(reason));
+        return false;
+      }
+      pendingWrites.current.delete(key);
+      if (!opts?.quiet) await load();
+      // Anything still unsaved keeps the bar red, even though this one write worked.
+      setSaveState(pendingWrites.current.size ? "error" : "saved");
+      return true;
+    } catch {
+      // The request never reached the server: offline, or an installed PWA still
+      // opening from its cache against a host that no longer resolves.
+      pendingWrites.current.set(key, { date: d, slots, reason: "saveFailedOffline" });
+      setSaveState("error");
+      if (!opts?.quiet) toast(t("saveFailedOffline"));
+      return false;
+    }
   }
   const toggleSlot = (d: Date, idx: number) => {
     const cur = (getAvail(guideId!, d) ?? EMPTY).slice();
@@ -358,17 +386,21 @@ export default function AppClient({
     return putAvail(d, SLOTS.map((s) => (asg[s.idx] ? cur[s.idx] : val)));
   };
   async function weekBulk(val: boolean) {
+    if (!profileGate.complete) { toast(t("completeProfileFirst")); return; }
     const ws = weekStart(anchor);
+    // These seven writes used to be fired off without reading a single response,
+    // so a week that saved nothing still reported success. They go through
+    // putAvail now, and the week is only called done if every day landed.
+    let failed: AvailabilitySaveError | null = null;
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i);
       const asg = getAssign(guideId!, d);
       const cur = getAvail(guideId!, d) ?? EMPTY;
-      await fetch("/api/availability", {
-        method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ date: ymd(d), slots: SLOTS.map((s) => (asg[s.idx] ? cur[s.idx] : val)) }),
-      });
+      const ok = await putAvail(d, SLOTS.map((s) => (asg[s.idx] ? cur[s.idx] : val)), { quiet: true });
+      if (!ok && !failed) failed = pendingWrites.current.get(ymd(d))?.reason ?? "saveFailed";
     }
     await load();
+    if (failed) { toast(t(failed)); return; }
     toast(val ? t("weekAllFree") : t("weekCleared"));
   }
   // Assigning sends the guide a 2-hour job offer (not an instant booking). The
@@ -784,12 +816,33 @@ export default function AppClient({
           })}
         </div>
         <div className="savebar">
-          <span className="savebar-status">
-            {saveState === "saving" ? t("saving") : `${t("allSaved")} ✓`}
+          <span className={`savebar-status${saveState === "error" ? " err" : ""}`}>
+            {saveState === "saving" ? t("saving") : saveState === "error" ? t("notSaved") : `${t("allSaved")} ✓`}
           </span>
           <button className="btn primary" disabled={saveState === "saving"}
-            onClick={async () => { setSaveState("saving"); await load(); setSaveState("saved"); toast(t("saved")); }}>
-            {t("saveChanges")}
+            onClick={async () => {
+              // Every tap saves itself, so this button exists to send failed writes
+              // again and to re-check against the server — never to report a save
+              // that did not happen.
+              const pending = [...pendingWrites.current.values()];
+              if (pending.length) {
+                setSaveState("saving");
+                for (const w of pending) await putAvail(w.date, w.slots, { quiet: true });
+                await load();
+                const stuck = pendingWrites.current.values().next().value;
+                // Set this here rather than trusting the loop: putAvail returns early
+                // when the profile gate is shut, and a saveState left on "saving"
+                // disables this button for good.
+                setSaveState(stuck ? "error" : "saved");
+                toast(stuck ? t(stuck.reason) : t("allSaved"));
+                return;
+              }
+              setSaveState("saving");
+              await load();
+              setSaveState("saved");
+              toast(t("allSaved"));
+            }}>
+            {saveState === "error" ? t("retry") : t("saveChanges")}
           </button>
         </div>
       </>
