@@ -97,21 +97,23 @@ describe("guideTourDetails", () => {
     expect(prismaMock.checkin.findFirst).not.toHaveBeenCalled();
   });
 
-  it("returns the tour info, the bookings with their no-shows, and the latest check-in — without guest contact details", async () => {
+  it("returns the tour info, the bookings with their no-shows and phone, and the latest check-in", async () => {
     prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 8, note: "Meet 15 min early" });
     prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water", meetingLat: 13.74 });
-    prismaMock.booking.findMany.mockResolvedValue([{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1 }]);
+    prismaMock.booking.findMany.mockResolvedValue([{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, phone: "+39333111222" }]);
     prismaMock.checkin.findFirst.mockResolvedValue({ type: "ARRIVE" });
 
     expect(await guideTourDetails("G-001", "2026-09-11", 0)).toEqual({
       date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early", checkinState: "ARRIVE",
       tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
       // `id` is sent so the app can report this booking's no-shows precisely.
-      bookings: [{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1 }],
+      bookings: [{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, phone: "+39333111222" }],
     });
     // assignedGuideId is read to work out a split guide's share, and never sent.
     const select = prismaMock.booking.findMany.mock.calls[0][0].select;
-    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "source"]);
+    // phone is now selected and sent; the OTA relay email still is not, and never should be.
+    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "phone", "source"]);
+    expect(Object.keys(select)).not.toContain("email");
     expect(prismaMock.checkin.findFirst.mock.calls[0][0]).toEqual({ where: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 }, orderBy: { at: "desc" }, select: { type: true } });
   });
 
