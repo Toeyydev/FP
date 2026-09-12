@@ -225,23 +225,74 @@ export async function clientToken(force = false): Promise<Res<{ token?: string }
   return res;
 }
 
-async function authedHeaders(): Promise<Record<string, string> | null> {
-  const ct = await clientToken();
-  if (!ct.ok || !ct.token) return null;
-  return { "content-type": "application/json", "Client-Token": ct.token, "User-Token": USER_TOKEN, ...sigHeaders() };
+/**
+ * Does this reply say PEAK rejected our client token?
+ *
+ * The token is cached for 50 minutes, and nothing used to notice when PEAK stopped
+ * accepting it: every real call then failed with "Invalid Client Token" until the
+ * cache aged out, while "Test connection" kept passing because it forces a fresh
+ * one. The account-chart page showed exactly that — green credentials, a working
+ * payment-method list, and an unavailable account list, all at once.
+ */
+export function clientTokenRejected(httpStatus: number, resCode?: string | null, resDesc?: string | null): boolean {
+  if (httpStatus === 401) return true;
+  const d = `${resDesc ?? ""} ${resCode ?? ""}`.toLowerCase();
+  if (!d.includes("token")) return false;
+  return d.includes("invalid") || d.includes("expire") || d.includes("unauthor");
+}
+
+/**
+ * One authenticated call: build headers, send, parse the body.
+ *
+ * `retry` (default on) sends the call a SECOND time with a freshly minted token when
+ * the first reply says the token was rejected — that is the whole fix for a stale
+ * cache, and it is safe for a read.
+ *
+ * `fresh` mints a new token before the FIRST attempt. Writes use this instead of the
+ * retry: replaying a write after a failure risks a second document if the first one
+ * reached PEAK and only the reply was lost, whereas one extra handshake beforehand
+ * costs nothing and removes the stale-token failure outright.
+ */
+async function authedCall(
+  url: string,
+  init: RequestInit,
+  wrapperKey: string,
+  opts: { fresh?: boolean; retry?: boolean } = {},
+): Promise<{ r: Response; j: Record<string, unknown> } | { error: string }> {
+  const attempt = async (fresh: boolean): Promise<{ r: Response; j: Record<string, unknown> } | { error: string }> => {
+    const ct = await clientToken(fresh);
+    if (!ct.ok || !ct.token) return { error: ct.desc ? sanitizePeakError(ct.desc) : "could not obtain PEAK client token" };
+    const headers = { "content-type": "application/json", "Client-Token": ct.token, "User-Token": USER_TOKEN, ...sigHeaders() };
+    try {
+      const r = await fetch(url, { ...init, headers });
+      return { r, j: await r.json().catch(() => ({} as Record<string, unknown>)) };
+    } catch (e) {
+      return { error: sanitizePeakError(`network: ${(e as Error).message}`) };
+    }
+  };
+
+  const first = await attempt(!!opts.fresh);
+  if ("error" in first || opts.retry === false) return first;
+  const { envelope } = readPeakEnvelope(first.j, wrapperKey, first.r.status);
+  if (!clientTokenRejected(first.r.status, envelope.resCode, envelope.resDesc)) return first;
+  // The cached token is dead. Drop it so the next caller does not inherit it either.
+  cached = null;
+  return attempt(true);
 }
 
 // One combined expense + payment (peakExpenses.expenses[] shape). Returns the
 // created document `code` (the EXP-… reference).
 export async function createExpenseAllInOne(expense: Record<string, unknown>): Promise<Res<{ id?: string; link?: string }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
-  try {
-    r = await fetch(`${API}/Expenses/allinone`, { method: "POST", headers, body: JSON.stringify({ peakExpenses: { expenses: [expense], getResult: 1 } }) });
-  } catch (e) { return { ok: false, desc: `network: ${(e as Error).message}` }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  // A write gets a fresh token up front and is never replayed — see authedCall.
+  const call = await authedCall(
+    `${API}/Expenses/allinone`,
+    { method: "POST", body: JSON.stringify({ peakExpenses: { expenses: [expense], getResult: 1 } }) },
+    "peakExpenses",
+    { fresh: true, retry: false },
+  );
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
   const wrap = peakWrap<{ expenses?: Array<{ code?: string; id?: string; documentLink?: string; resCode?: string; resDesc?: string }>; resDesc?: string }>(j, "peakExpenses");
   const e = wrap?.expenses?.[0];
   if (e?.code) return { ok: true, code: e.code, id: e.id, link: e.documentLink, desc: e.resDesc };
@@ -260,12 +311,9 @@ export type PeakIdentity = { merchantName: string; taxNumber: string | null; pac
 
 export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity; envelope?: PeakEnvelope }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
-  try { r = await fetch(`${API}/User/detail`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const call = await authedCall(`${API}/User/detail`, { method: "GET" }, "peakUser");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
   const { envelope, wrap } = readPeakEnvelope(j, "peakUser", r.status);
   // Identity carries no array; "data" here means a merchant name came back.
   const hasData = Boolean(wrap && typeof wrap === "object" && String(wrap.name ?? "").trim());
@@ -294,7 +342,7 @@ export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity; en
 // PEAK's API reference; response wrapper is PeakAccountCode -> accountCode[].
 //
 // Deliberately READ-ONLY: this cannot create or post anything. It reuses the same
-// authedHeaders()/peakWrap()/sanitizePeakError() path as getContacts() below, so
+// authedCall()/peakWrap()/sanitizePeakError() path as getContacts() below, so
 // the Client Token handshake is untouched.
 export type PeakAccountCode = { code: string; name: string; nameEn?: string };
 
@@ -340,16 +388,13 @@ export function parsePeakAccounts(j: Record<string, unknown>): AccountParse {
 
 export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[]; envelope?: PeakEnvelope; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoCode: number; sampleKeys: string[] } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
   // No query string. PEAK's paging parameters are documented for the list
   // endpoints below; this path is NOT confirmed against the current Production
   // API (see the note above), so adding parameters it may not accept would only
   // add a second reason for it to fail.
-  try { r = await fetch(`${API}/DailyJournals/accountcode`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const call = await authedCall(`${API}/DailyJournals/accountcode`, { method: "GET" }, "peakAccountCode");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
   const { envelope } = readPeakEnvelope(j, "peakAccountCode", r.status);
   const parsed = parsePeakAccounts(j);
   const hasData = !("error" in parsed) && parsed.meta.rawCount > 0;
@@ -409,9 +454,7 @@ export function parsePeakPaymentMethods(j: Record<string, unknown>): PaymentMeth
 
 export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[]; envelope?: PeakEnvelope; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number; sampleKeys: string[] } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
+
   // PEAK pages at 10 entries per page by default and this call sent no params at
   // all, so a company with more than ten payment methods would silently see only
   // the first page. Ask for the lot.
@@ -420,9 +463,9 @@ export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMe
   // document back), and this client only uses it on Expenses/allinone. Sending it
   // to a GET would be guessing.
   const pmQs = new URLSearchParams({ page: "1", limit: String(PEAK_LIST_LIMIT) });
-  try { r = await fetch(`${API}/PaymentMethods?${pmQs.toString()}`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const call = await authedCall(`${API}/PaymentMethods?${pmQs.toString()}`, { method: "GET" }, "peakPaymentMethods");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
   const { envelope } = readPeakEnvelope(j, "peakPaymentMethods", r.status);
   const parsed = parsePeakPaymentMethods(j);
   const hasData = !("error" in parsed) && parsed.meta.rawCount > 0;
@@ -465,18 +508,15 @@ export function parsePeakContacts(j: Record<string, unknown>): { contacts: PeakC
 
 export async function getContacts(opts: { searchText?: string; limit?: number; page?: number } = {}): Promise<Res<{ contacts?: PeakContact[]; envelope?: PeakEnvelope }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
   const qs = new URLSearchParams();
   if (opts.searchText?.trim()) qs.set("searchText", opts.searchText.trim());
   qs.set("limit", String(Math.min(Math.max(opts.limit ?? PEAK_LIST_LIMIT, 1), PEAK_MAX_LIST_LIMIT)));
   // Always paged: an omitted page has meant "page 1" in every reply seen, but
   // saying so makes the request reproducible when a count looks wrong.
   qs.set("page", String(Math.max(opts.page ?? 1, 1)));
-  let r: Response;
-  try { r = await fetch(`${API}/Contacts/list?${qs.toString()}`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const call = await authedCall(`${API}/Contacts/list?${qs.toString()}`, { method: "GET" }, "peakContacts");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
   const { envelope } = readPeakEnvelope(j, "peakContacts", r.status);
   const parsed = parsePeakContacts(j);
   const hasData = !("error" in parsed) && parsed.contacts.length > 0;
