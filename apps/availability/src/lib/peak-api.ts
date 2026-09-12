@@ -194,6 +194,27 @@ type Res<T> = { ok: boolean; code?: string; desc?: string } & T;
 
 let cached: { token: string; at: number } | null = null;
 
+// Nothing here used to time out. A PEAK call that never answers left the request
+// open indefinitely, and the Job Sheet then sat on "Loading PEAK contacts…" —
+// the exact same screen as the bug where the request was never sent at all
+// (#185). An unbounded wait that looks identical to a missing request is not a
+// failure anyone can diagnose, so every call now has a deadline and says so.
+const READ_TIMEOUT_MS = 15_000;
+const TOKEN_TIMEOUT_MS = 10_000;
+// A write waits longer before giving up, because abandoning it early is what
+// creates the "did the document get created?" question.
+const WRITE_TIMEOUT_MS = 30_000;
+
+// AbortSignal.timeout rejects with a TimeoutError; say that plainly instead of
+// reporting it as a generic network fault.
+export function callFailure(e: unknown, ms: number): string {
+  const err = e as { name?: string; message?: string };
+  if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+    return `PEAK did not respond within ${Math.round(ms / 1000)}s`;
+  }
+  return sanitizePeakError(`network: ${err?.message ?? String(e)}`);
+}
+
 // One ClientToken attempt. PEAK's docs name the secret field `password`; this
 // client shipped sending `connectKey`, which commit 076b3c0 proved the UAT
 // sandbox accepts. Both carry the same PEAK_CONNECT_KEY value, so we try the
@@ -205,8 +226,9 @@ async function requestClientToken(field: "password" | "connectKey"): Promise<Res
       method: "POST",
       headers: { "content-type": "application/json", ...sigHeaders() },
       body: JSON.stringify({ peakClientToken: { connectId: CONNECT_ID, [field]: CONNECT_KEY } }),
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     });
-  } catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
+  } catch (e) { return { ok: false, desc: callFailure(e, TOKEN_TIMEOUT_MS) }; }
   const j = await r.json().catch(() => ({} as Record<string, unknown>));
   const t = peakWrap<{ token?: string; resCode?: string; resDesc?: string }>(j, "peakClientToken");
   if (t?.token) return { ok: true, token: t.token, code: t.resCode, desc: t.resDesc };
@@ -257,17 +279,18 @@ async function authedCall(
   url: string,
   init: RequestInit,
   wrapperKey: string,
-  opts: { fresh?: boolean; retry?: boolean } = {},
+  opts: { fresh?: boolean; retry?: boolean; timeoutMs?: number } = {},
 ): Promise<{ r: Response; j: Record<string, unknown> } | { error: string }> {
   const attempt = async (fresh: boolean): Promise<{ r: Response; j: Record<string, unknown> } | { error: string }> => {
     const ct = await clientToken(fresh);
     if (!ct.ok || !ct.token) return { error: ct.desc ? sanitizePeakError(ct.desc) : "could not obtain PEAK client token" };
     const headers = { "content-type": "application/json", "Client-Token": ct.token, "User-Token": USER_TOKEN, ...sigHeaders() };
+    const ms = opts.timeoutMs ?? READ_TIMEOUT_MS;
     try {
-      const r = await fetch(url, { ...init, headers });
+      const r = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(ms) });
       return { r, j: await r.json().catch(() => ({} as Record<string, unknown>)) };
     } catch (e) {
-      return { error: sanitizePeakError(`network: ${(e as Error).message}`) };
+      return { error: callFailure(e, ms) };
     }
   };
 
@@ -289,9 +312,15 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
     `${API}/Expenses/allinone`,
     { method: "POST", body: JSON.stringify({ peakExpenses: { expenses: [expense], getResult: 1 } }) },
     "peakExpenses",
-    { fresh: true, retry: false },
+    { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS },
   );
-  if ("error" in call) return { ok: false, desc: call.error };
+  // A write that timed out may still have reached PEAK. Say so, because the next
+  // step is to look in PEAK before reposting — not to press the button again.
+  if ("error" in call) {
+    return { ok: false, desc: call.error.includes("did not respond")
+      ? `${call.error}. The expense may or may not have been created — check PEAK before posting this job sheet again.`
+      : call.error };
+  }
   const { r, j } = call;
   const wrap = peakWrap<{ expenses?: Array<{ code?: string; id?: string; documentLink?: string; resCode?: string; resDesc?: string }>; resDesc?: string }>(j, "peakExpenses");
   const e = wrap?.expenses?.[0];
