@@ -34,3 +34,16 @@ export function contactSaveHint(d: ContactSaveDecision): string | undefined {
     ? "Pick the guide's contact in PEAK first."
     : "This guide is already mapped to that contact.";
 }
+
+// Is the PEAK Contact control on screen? Render and the effect that loads PEAK's
+// contact list MUST agree on this, and they did not: the box was shown when the
+// operator opened it OR the guide was unmapped, while the fetch ran only when the
+// operator had opened it. Every guide is unmapped, so the box sat open on
+// "Loading PEAK contacts…" having never sent the request — forever, on every job
+// sheet. That, not the stale client token, is why zero guides were ever mapped:
+// there was no list to pick from, and the only pressable button was Save.
+//
+// One predicate, used by both, so the two cannot drift apart again.
+export function contactBoxOpen(contactEdit: string | null, contactMapped: boolean): boolean {
+  return contactEdit !== null || !contactMapped;
+}

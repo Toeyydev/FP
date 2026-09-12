@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal, guidePayoutView } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
 import { canonicalPaidBy, figuresNeedRecheck, jobSheetTotals } from "@/lib/peak-sync";
-import { contactSaveDecision, contactSaveHint } from "@/lib/peak-contact-action";
+import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -163,9 +163,12 @@ export default function JobSheetEditor() {
   // does once it loads, which is "Rendered more hooks than during the previous
   // render" — the whole page then dies with a client-side exception.
   // The guides already exist in PEAK, so this is a LINK, not a creation. Fetched
-  // only while the mapping control is open — most sheet loads never need it.
+  // whenever the mapping control is on screen — which includes an unmapped guide,
+  // where the box opens by itself. Guarding on `contactEdit` alone meant the box
+  // sat on "Loading PEAK contacts…" without ever sending the request, because
+  // nothing had opened it. A mapped guide still fetches nothing until asked.
   useEffect(() => {
-    if (contactEdit === null || peakContacts !== null) return;
+    if (!peak || !contactBoxOpen(contactEdit, peak.contactMapped) || peakContacts !== null) return;
     // The guide goes with the request so the SERVER can suggest a contact: matching
     // on a tax number needs PEAK's full number, which never reaches the browser.
     const gid = sheet?.guideId;
@@ -176,7 +179,7 @@ export default function JobSheetEditor() {
         else { setPeakContacts([]); setContactsError(d.error || "Could not load the PEAK contact list."); }
       })
       .catch(() => { setPeakContacts([]); setContactsError("Could not reach the server to load PEAK contacts."); });
-  }, [contactEdit, peakContacts, sheet?.guideId]);
+  }, [contactEdit, peakContacts, sheet?.guideId, peak]);
 
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
@@ -1593,7 +1596,7 @@ export default function JobSheetEditor() {
             )}
             {/* The blocking reason is actionable right here. Shown whenever the
                 mapping is missing, and reachable via "Change" once it is set. */}
-            {peak && (contactEdit !== null || !peak.contactMapped) ? (
+            {peak && contactBoxOpen(contactEdit, peak.contactMapped) ? (
               <div className="js-contact-map">
                 <label htmlFor="peakContact">PEAK Contact</label>
                 {/* The guide already exists in PEAK, so pick them from the list.
