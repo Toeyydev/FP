@@ -10,8 +10,8 @@ import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense,
 import { nextJobRef } from "@/lib/jobref";
 import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
 import { canViewFinance } from "@/lib/roles";
-import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility, type PeakAccountMap } from "@/lib/peak-sync";
-import { isMapped } from "@/lib/peak-accounts";
+import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
+import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
@@ -19,25 +19,6 @@ import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } 
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
-}
-
-// Category → PEAK account, from the mappings an operator saved on the PEAK sync
-// page. This is what makes a job sheet inherit the chart automatically instead of
-// asking again per job. Unmapped stays unmapped — never a fallback account, and
-// never a code inferred from anything. No PEAK call is made.
-//
-// OTHER_TOUR_COST is deliberately absent: it has no standing account, and its row
-// carries its own peakAccountCode chosen on the sheet (see lib/peak-sync).
-async function peakAccountMap(): Promise<PeakAccountMap> {
-  const rows = await prisma.peakAccountMapping.findMany({
-    select: { folkopsCategory: true, peakAccountCode: true, peakAccountName: true, isActive: true },
-  });
-  const out: PeakAccountMap = {};
-  for (const [expenseType, key] of [["entrance", "ENTRANCE_TICKET"], ["transport", "TRANSPORTATION"], ["meal", "MEAL_REFRESHMENT"]] as const) {
-    const m = rows.find((r) => r.folkopsCategory === key);
-    if (isMapped(m)) out[expenseType] = { code: m!.peakAccountCode!, name: m!.peakAccountName ?? undefined };
-  }
-  return out;
 }
 
 // Header fields auto-pulled from the guide's profile (operator is authorized to see PII).

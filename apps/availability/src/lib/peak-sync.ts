@@ -416,6 +416,123 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
   return { status: "READY", canSync: true, reasons: [], changedSinceSync };
 }
 
+// ── The document ─────────────────────────────────────────────────────────────
+// Turn an eligible job sheet into the PEAK expense payload.
+//
+// Pure, like the rest of this module: no env, no network. Every account comes from
+// the chart the operator configured in the app, so this path needs none of the
+// PEAK_ACCT_* variables the per-payment payout path reads.
+//
+// Two deliberate differences from lib/peak-payout.buildPayoutExpense:
+//
+//   1. ONE LINE PER EXPENSE ROW, each on its own resolved account — not two lump
+//      lines on two env accounts. "Grand Palace" and "Lotus (Inc. Guide)" are the
+//      accounting evidence the sheet already holds; collapsing them loses the
+//      category separation the operator configured and an accountant then has to
+//      reconstruct by hand. Rows in the same category merge naturally in PEAK's
+//      reporting because they share an account code.
+//   2. NO paidPayments. A job sheet is approved before the transfer happens, so
+//      the document is an expense that is not yet settled. Telling PEAK it was paid
+//      would be recording a payment that has not been made.
+export type PeakExpenseLine = {
+  description: string;
+  quantity: number;
+  price: number;
+  accountCode: string;
+  vatType?: string;
+  withHoldingTaxAmount: number;
+};
+
+export type JobSheetExpenseDoc = {
+  expense: Record<string, unknown>;
+  lines: PeakExpenseLine[];
+  total: number;
+};
+
+/** Thrown rather than returned: a cost silently dropped from the ledger is worse
+ *  than a refusal, and a caller must not be able to ignore it by reading a field. */
+export class JobSheetNotPostable extends Error {
+  readonly code = "jobsheet-not-postable";
+  constructor(message: string) { super(message); this.name = "JobSheetNotPostable"; }
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const compact = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
+
+export function buildJobSheetExpense(input: {
+  guideId: string;
+  peakContactId: string;
+  expenses: Expense[];
+  guideFee: GuideFee;
+  accounts: PeakAccountMap;
+  /** The GUIDE_FEE account. Separate because PeakAccountMap only keys tour-expense
+   *  categories — the guide fee is not one of them. */
+  guideFeeAccount: PeakAccount | null;
+  accountingDate: string;
+  documentDate?: string | null;
+  jobRef?: string | null;
+  bookings?: Booking[];
+  vatType?: string;
+}): JobSheetExpenseDoc {
+  const { guideId, peakContactId, expenses, guideFee, accounts, guideFeeAccount, accountingDate, jobRef, bookings, vatType } = input;
+  if (!peakContactId) throw new JobSheetNotPostable("Guide is not mapped to a PEAK Contact");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(accountingDate ?? "")) throw new JobSheetNotPostable("No accounting date set");
+
+  const totals = jobSheetTotals(expenses, guideFee, jobRef, bookings);
+  const lines: PeakExpenseLine[] = [];
+
+  if (totals.guideFeeGross > 0) {
+    const code = (guideFeeAccount?.code ?? "").trim();
+    if (!code) throw new JobSheetNotPostable(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
+    lines.push({
+      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}`,
+      quantity: 1,
+      price: round2(totals.guideFeeGross),
+      accountCode: code,
+      vatType,
+      // WHT belongs to the guide fee alone — tour expenses are not taxed like it.
+      withHoldingTaxAmount: round2(totals.wht),
+    });
+  }
+
+  for (const e of syncableExpenses(expenses, accounts)) {
+    const account = resolveExpenseAccount(e, accounts);
+    // syncableExpenses only returns rows whose disposition is SYNC, which requires a
+    // resolved account — so this cannot normally happen. Refuse loudly if it ever
+    // does rather than post a line with a blank account code.
+    if (!account?.code) {
+      throw new JobSheetNotPostable(`"${e.description}" passed the readiness check with no PEAK account — refusing to post it to a blank account`);
+    }
+    lines.push({
+      description: e.description,
+      quantity: 1,
+      price: round2(expenseAmount(e)),
+      accountCode: account.code,
+      vatType,
+      withHoldingTaxAmount: 0,
+    });
+  }
+
+  if (!lines.length) throw new JobSheetNotPostable("Nothing to post");
+
+  const issued = compact(input.documentDate || accountingDate);
+  return {
+    lines,
+    total: round2(lines.reduce((sum, l) => sum + l.price, 0)),
+    expense: {
+      issuedDate: issued,
+      dueDate: issued,
+      // Contact id only, never a name: PEAK would match-or-create from a name, and
+      // our English legal names cannot match the Thai contacts, so every post would
+      // fork the guide's ledger into a fresh duplicate supplier.
+      contact: { id: peakContactId },
+      products: lines,
+      reference: jobRef ?? "",
+      remark: `Folkpaths job sheet · ${guideId} · ${accountingDate}`,
+    },
+  };
+}
+
 // ── Idempotency ──────────────────────────────────────────────────────────────
 // A stable fingerprint of everything that would be posted. Stored as
 // lastPayloadHash after a successful sync; if it still matches, re-posting would
