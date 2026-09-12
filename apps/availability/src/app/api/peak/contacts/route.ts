@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isOps } from "@/lib/roles";
+import { prisma } from "@/lib/db";
+import { decrypt } from "@/lib/crypto";
 import { getContacts, peakEnabled, sanitizePeakError } from "@/lib/peak-api";
+import { suggestPeakContact, type ContactSuggestion } from "@/lib/peak-contact-suggest";
 
 export const dynamic = "force-dynamic";
 
@@ -57,9 +60,32 @@ export async function GET(req: NextRequest) {
       peakCode: res.code ?? null,
     }, { status: 502 });
   }
+  // The suggestion is computed HERE, never in the browser. Matching on a tax number
+  // needs PEAK's FULL number, and that value is masked above precisely so it never
+  // leaves the server. Client-side matching would mean either shipping the raw number
+  // or comparing four digits — and a four-digit match can name the wrong legal person
+  // on an accounting document.
+  let suggestion: ContactSuggestion | null = null;
+  const guideId = req.nextUrl.searchParams.get("guideId")?.trim();
+  if (guideId) {
+    const g = await prisma.user.findUnique({
+      where: { guideId },
+      select: { guideId: true, fullName: true, displayName: true, taxId: true },
+    });
+    if (g?.guideId) {
+      suggestion = suggestPeakContact(
+        { guideId: g.guideId, legalName: g.fullName || g.displayName, taxId: decrypt(g.taxId) },
+        (res.contacts ?? []).map((c) => ({ id: c.id, name: c.name, code: c.code ?? null, taxNumber: c.taxNumber ?? null })),
+      );
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     contacts,
+    // Which contact to offer, and why — the explanation carries only the last four
+    // digits, never the number itself.
+    suggestion,
     // So the UI can say why no bank column is shown, instead of looking broken.
     bankDetailsAvailable: false,
   });

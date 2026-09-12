@@ -9,7 +9,6 @@ import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate 
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
-import { suggestPeakContact } from "@/lib/peak-contact-suggest";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -101,6 +100,9 @@ export default function JobSheetEditor() {
   // helps them look.
   const [contactSearch, setContactSearch] = useState("");
   const [contactsError, setContactsError] = useState("");
+  // Computed server-side (lib/peak-contact-suggest) because the strongest signal is
+  // the tax number, and the full number deliberately never leaves the server.
+  const [contactSuggestion, setContactSuggestion] = useState<{ contactId: string; reason: string; explanation: string } | null>(null);
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
@@ -163,14 +165,17 @@ export default function JobSheetEditor() {
   // only while the mapping control is open — most sheet loads never need it.
   useEffect(() => {
     if (contactEdit === null || peakContacts !== null) return;
-    fetch("/api/peak/contacts", { cache: "no-store" })
+    // The guide goes with the request so the SERVER can suggest a contact: matching
+    // on a tax number needs PEAK's full number, which never reaches the browser.
+    const gid = sheet?.guideId;
+    fetch(`/api/peak/contacts${gid ? `?guideId=${encodeURIComponent(gid)}` : ""}`, { cache: "no-store" })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
-        if (r.ok && d.ok) setPeakContacts(d.contacts ?? []);
+        if (r.ok && d.ok) { setPeakContacts(d.contacts ?? []); setContactSuggestion(d.suggestion ?? null); }
         else { setPeakContacts([]); setContactsError(d.error || "Could not load the PEAK contact list."); }
       })
       .catch(() => { setPeakContacts([]); setContactsError("Could not reach the server to load PEAK contacts."); });
-  }, [contactEdit, peakContacts]);
+  }, [contactEdit, peakContacts, sheet?.guideId]);
 
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
@@ -465,9 +470,6 @@ export default function JobSheetEditor() {
   // A suggestion, not a selection: derived for display only and never written.
   // The operator clicks it into the list and then presses Save — two acts, so an
   // inattentive click cannot commit the wrong supplier.
-  const contactSuggestion = peakContacts && sheet
-    ? suggestPeakContact({ guideId: sheet.guideId, legalName: header?.name }, peakContacts)
-    : null;
   const suggestedContact = contactSuggestion
     ? peakContacts?.find((c) => c.id === contactSuggestion.contactId) ?? null
     : null;
