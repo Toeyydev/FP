@@ -13,6 +13,7 @@ export type AvailabilitySaveError =
   | "saveFailedSignedOut"
   | "completeProfileFirst"
   | "dayBlocked"
+  | "slotAssigned"
   | "saveFailedOffline"
   | "saveFailed";
 
@@ -25,5 +26,6 @@ export function availabilitySaveError(status: number, error?: string | null): Av
   if (status === 401) return "saveFailedSignedOut";
   if (status === 403 && error === "profile-incomplete") return "completeProfileFirst";
   if (status === 409 && error === "date-blocked") return "dayBlocked";
+  if (status === 409 && error === "slot-assigned") return "slotAssigned";
   return "saveFailed";
 }
