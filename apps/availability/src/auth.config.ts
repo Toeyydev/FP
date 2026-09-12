@@ -1,5 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 import { returnTarget } from "@/lib/auth-redirect";
+import { canonicalHostFor } from "@/lib/retired-hosts";
+import { PUBLIC_HOST } from "@/lib/site";
 import { NextResponse } from "next/server";
 
 const ACCESS_TTL_SEC = 8 * 60 * 60; // keep in sync with lib/sessionTokens (edge can't import it — pulls prisma)
@@ -18,6 +20,18 @@ export const authConfig = {
   callbacks: {
     // Gate every route except the pre-login entry, sign-in, and provisioning flows.
     authorized({ auth, request }) {
+      // A retired domain lands on the live one before anything else is decided —
+      // public pages included, or a guide could sign in on the old host and end up
+      // with a session tied to the very origin we are emptying out. Temporary
+      // (307) on purpose: a permanent redirect sticks in browser caches long after
+      // we might want the old host back for something.
+      const moved = canonicalHostFor(request.headers.get("x-forwarded-host") || request.headers.get("host"), PUBLIC_HOST);
+      if (moved) {
+        const movedTo = new URL(request.url);
+        movedTo.protocol = "https:";
+        movedTo.host = moved; // assigning a bare hostname drops any port with it
+        return NextResponse.redirect(movedTo, 307);
+      }
       const p = request.nextUrl.pathname;
       const isPublic =
         p === "/start" || p.startsWith("/signin") || p.startsWith("/claim") || p.startsWith("/request") ||
