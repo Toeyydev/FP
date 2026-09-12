@@ -6,12 +6,57 @@ import { audit } from "@/lib/audit";
 import { Prisma } from "@prisma/client";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
-import { peakEnabled } from "@/lib/peak-api";
-import { postGuidePayout, peakPayoutReady } from "@/lib/peak-payout";
+import { peakEnabled, sanitizePeakError } from "@/lib/peak-api";
+import { postGuidePayout, peakPayoutReady, peakPostOutcome } from "@/lib/peak-payout";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { matchState, type Slip } from "@/lib/payments/slips";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
+
+// Post a transfer to PEAK and RECORD what happened, either way.
+//
+// Posting must never block a payment that has already left the bank — but a failure
+// that is only swallowed is how a paid tour ends up with no accounting document and
+// no way to find out why, months later at closing. Both callers used to read
+// `if (r.ok && r.code)` inside a bare `catch {}`: a refusal produced no ref, no audit
+// row and no message on screen. Now every attempt leaves a trail, and the reason goes
+// back to the operator who just pressed Pay.
+//
+// Only called once posting is actually switched on, so an unconfigured deployment
+// never writes "config not set" against every payment.
+async function postAndRecord(
+  guideId: string,
+  jobs: { date: string; slotIdx: number }[],
+  paymentDate: string,
+  actor: { actorId: string | null; actorRole: string | null },
+): Promise<{ code: string | null; failure: string | null }> {
+  let outcome: { code: string | null; failure: string | null };
+  try {
+    outcome = peakPostOutcome(await postGuidePayout(guideId, jobs, paymentDate));
+  } catch (e) {
+    // Sanitised before it can reach an audit row or an HTTP response.
+    outcome = { code: null, failure: sanitizePeakError(e) };
+  }
+  // Nothing below may throw out of this function: the transfer has already left the
+  // bank and the slip is already filed, so a failure to WRITE DOWN the result must
+  // not turn into a 500 that tells the operator their payment failed.
+  try {
+    if (outcome.code) {
+      await prisma.tourPayment.updateMany({
+        where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) },
+        data: { peakRef: outcome.code },
+      });
+      await audit({ ...actor, action: "pay.peak_posted", entityType: "Assignment", detail: { guideId, jobs, peakRef: outcome.code } });
+    } else {
+      await audit({ ...actor, action: "pay.peak_post_failed", entityType: "Assignment", detail: { guideId, jobs, reason: outcome.failure } });
+    }
+  } catch (e) {
+    // PEAK may well have booked the expense; we simply could not record it here.
+    // Say both, so nobody reads a blank ref as "nothing was posted".
+    return { code: outcome.code, failure: `could not record the PEAK result: ${sanitizePeakError(e)}` };
+  }
+  return outcome;
+}
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 
@@ -95,16 +140,16 @@ export async function POST(req: NextRequest) {
     await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: "pay.eslip_split", entityType: "Assignment", detail: { guideId, date: j.date, slotIdx: j.slotIdx, amount, slipsTotal: st.slipsTotal, payout: st.payout, paid: st.paid, drive: !!link } });
     // Only when the tour first becomes fully paid: post to PEAK + notify the guide once.
     let peakCode: string | null = null;
+    let peakFailure: string | null = null;
     if (st.paid && !wasPaid) {
-      try {
-        if (peakEnabled && peakPayoutReady && !data.peakRef) {
-          const r = await postGuidePayout(guideId, [j], now.toISOString().slice(0, 10));
-          if (r.ok && r.code) { peakCode = r.code; await prisma.tourPayment.update({ where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } }, data: { peakRef: r.code } }); }
-        }
-      } catch { /* PEAK posting is best-effort; payment already recorded */ }
+      if (peakEnabled && peakPayoutReady && !data.peakRef) {
+        const posted = await postAndRecord(guideId, [j], now.toISOString().slice(0, 10), { actorId: uid, actorRole: session!.user!.role ?? null });
+        peakCode = posted.code;
+        peakFailure = posted.failure;
+      }
       try { await sendPaymentNotice(guideId, [j], undefined, link ?? undefined); } catch { /* best-effort */ }
     }
-    return NextResponse.json({ ok: true, link, slips, slipsTotal: st.slipsTotal, payout: st.payout, remaining: st.remaining, paid: st.paid, warn: st.warn, delta: st.delta, count: slips.length, driveError, peakRef: peakCode ?? data.peakRef });
+    return NextResponse.json({ ok: true, link, slips, slipsTotal: st.slipsTotal, payout: st.payout, remaining: st.remaining, paid: st.paid, warn: st.warn, delta: st.delta, count: slips.length, driveError, peakRef: peakCode ?? data.peakRef, peakFailure });
   }
 
   // ---- Guard: never let a second slip overwrite the first ----
@@ -159,20 +204,17 @@ export async function POST(req: NextRequest) {
   // ref — dormant until PEAK is connected + account-chart config is set, so this is
   // a no-op today. Never blocks the payment.
   let peakCode: string | null = null;
-  try {
-    if (peakEnabled && peakPayoutReady && !peakRef) {
-      const r = await postGuidePayout(guideId, jobs, now.toISOString().slice(0, 10));
-      if (r.ok && r.code) {
-        peakCode = r.code;
-        await prisma.tourPayment.updateMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, data: { peakRef: r.code } });
-      }
-    }
-  } catch { /* PEAK posting is best-effort; payment already recorded */ }
+  let peakFailure: string | null = null;
+  if (peakEnabled && peakPayoutReady && !peakRef) {
+    const posted = await postAndRecord(guideId, jobs, now.toISOString().slice(0, 10), { actorId: uid, actorRole: session!.user!.role ?? null });
+    peakCode = posted.code;
+    peakFailure = posted.failure;
+  }
 
   // Tell the guide their payment landed — short summary + completed tour details.
   try { await sendPaymentNotice(guideId, jobs, undefined, link); } catch { /* best-effort */ }
 
-  return NextResponse.json({ ok: true, link, count: jobs.length, peakRef: peakCode ?? peakRef });
+  return NextResponse.json({ ok: true, link, count: jobs.length, peakRef: peakCode ?? peakRef, peakFailure });
 }
 
 // DELETE { guideId, date, slotIdx, at } — remove ONE split-payment slip (by its

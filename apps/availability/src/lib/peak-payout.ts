@@ -84,6 +84,22 @@ export async function buildPayoutExpense(guideId: string, jobs: { date: string; 
 // is refused rather than posted under a name.
 export const peakPayoutReady = !!(ACC_FEE && PAY_METHOD);
 
+/**
+ * What a posting attempt must leave behind — separated from the network call so the
+ * decision is testable on its own.
+ *
+ * The bug this exists to prevent: a refusal that produces no ref, no log and no
+ * message, leaving a PAID tour with no accounting document and nobody able to say
+ * why. `ok` without a code counts as a failure, because there is still nothing to
+ * record against the payment.
+ */
+export type PeakPostOutcome = { code: string; failure: null } | { code: null; failure: string };
+
+export function peakPostOutcome(r: { ok: boolean; code?: string; desc?: string }): PeakPostOutcome {
+  if (r.ok && (r.code ?? "").trim()) return { code: r.code!.trim(), failure: null };
+  return { code: null, failure: (r.desc ?? "").trim() || "PEAK returned no document number and no reason" };
+}
+
 // Post the payout to PEAK. Dormant until PEAK creds + account-chart config are set.
 export async function postGuidePayout(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string): Promise<{ ok: boolean; code?: string; desc?: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not connected (env not set)" };
