@@ -74,9 +74,13 @@ export default function TourDetails() {
                         a number was actually passed — an always-empty line reads as
                         broken data, not absent data. A number with no country code gets
                         no link and stays readable text: wa.me would open a chat with
-                        whoever owns it in a guessed country, which looks like it worked. */}
+                        whoever owns it in a guessed country, which looks like it worked.
+                        No target=_blank on purpose: the OS claims wa.me as a universal
+                        link and hands the tap straight to WhatsApp. Opening a tab first
+                        lands on wa.me's own "Continue to Chat" page instead, so the
+                        guide taps twice to reach the same chat. */}
                     {b.phone ? <><br />{wa
-                      ? <a href={wa} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, whiteSpace: "nowrap" }}>💬 {b.phone}</a>
+                      ? <a href={wa} style={{ fontSize: 12, whiteSpace: "nowrap" }}>💬 {b.phone}</a>
                       : <span style={{ fontSize: 12, whiteSpace: "nowrap", color: "var(--ink-soft)" }}>{b.phone}</span>}</> : null}
                   </td>
                   <td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td>
