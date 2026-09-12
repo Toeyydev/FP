@@ -97,6 +97,50 @@ describe("bookings — parseBokun", () => {
     expect(p.durationMin).toBe(180);
   });
 
+  // The guest's phone was in the payload all along; nothing read it, so every
+  // Booking.phone was empty. These pin down WHERE it may be read from, because the
+  // same payload also carries our own number under seller.phoneNumber.
+  it("reads the guest's phone from the customer, never the seller's", () => {
+    const p = parseBokun({
+      seller: { phoneNumber: "+6620000000", emailAddress: "ops@folkpaths.com" },
+      customer: { firstName: "Anna", lastName: "P", phoneNumber: "+39333111222", email: "x@reply.getyourguide.com", contactDetailsHidden: false },
+      activityBookings: [{ product: { title: "Walk" } }],
+    });
+    expect(p.phone).toBe("+39333111222");
+  });
+
+  it("falls back to the passenger, then the invoice recipient", () => {
+    const viaPassenger = parseBokun({
+      seller: { phoneNumber: "+6620000000" },
+      activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { phoneNumber: "+4477712345" } }] }],
+    });
+    expect(viaPassenger.phone).toBe("+4477712345");
+
+    const viaRecipient = parseBokun({
+      seller: { phoneNumber: "+6620000000" },
+      invoice: { recipient: { phoneNumber: "+15551234567" } },
+    });
+    expect(viaRecipient.phone).toBe("+15551234567");
+  });
+
+  it("drops the phone when the channel says the contact details are hidden", () => {
+    // GetYourGuide sets this when the guest's details are withheld. Sending our own
+    // number instead would be worse than sending none.
+    expect(parseBokun({
+      seller: { phoneNumber: "+6620000000" },
+      customer: { phoneNumber: "+39333111222", contactDetailsHidden: true },
+    }).phone).toBeUndefined();
+
+    expect(parseBokun({
+      activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { phoneNumber: "+4477712345", contactDetailsHidden: true } }] }],
+    }).phone).toBeUndefined();
+  });
+
+  it("has no phone when the payload carries none — not an empty string", () => {
+    expect(parseBokun({ seller: { phoneNumber: "+6620000000" }, customer: { firstName: "A" } }).phone).toBeUndefined();
+    expect(parseBokun({ customer: { phoneNumber: "   " } }).phone).toBeUndefined();
+  });
+
   it("returns mostly-undefined for an empty payload (no crash)", () => {
     const p = parseBokun({});
     expect(p.pax).toBeUndefined();

@@ -284,7 +284,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     if (!existing && p.externalRef) {
       const byRef = await prisma.booking.findFirst({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true } });
       if (byRef) {
-        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw } });
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
         return "updated";
       }
@@ -294,13 +294,13 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       create: {
         source, externalId: p.externalId, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null,
         productName: p.productName ?? null, tourId, date: p.date ?? null, startTime: p.startTime ?? null,
-        slotIdx: p.slotIdx ?? null, pax: p.pax ?? null, customerName: p.customerName ?? null,
+        slotIdx: p.slotIdx ?? null, pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null,
         status: cancelled ? "CANCELLED" : "PENDING", raw,
       },
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined,
         tourId: tourId ?? undefined, ...slotFields(existing?.datePinned ?? false),
-        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
+        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
       },
     });
     if (!existing && !(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
@@ -313,7 +313,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   if (ref) {
     const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true, status: true, datePinned: true } });
     if (dup) {
-      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
       if (cancelled && dup.status !== "CANCELLED") await onBookingCancelled(updated);
       return "updated";
     }
@@ -322,7 +322,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     data: {
       source, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null, productName: p.productName ?? null, tourId,
       date: p.date ?? null, startTime: p.startTime ?? null, slotIdx: p.slotIdx ?? null,
-      pax: p.pax ?? null, customerName: p.customerName ?? null, status: cancelled ? "CANCELLED" : "PENDING",
+      pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null, status: cancelled ? "CANCELLED" : "PENDING",
     },
   });
   if (!(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);

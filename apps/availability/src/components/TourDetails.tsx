@@ -7,7 +7,7 @@ import { bookingRef } from "@/lib/booking-ref";
 type Data = {
   date: string; slotIdx: number; time: string; pax: number | null; note: string | null;
   tour: { id: string; name: string; time: string; meetingPoint: string | null; itinerary: string | null; included: string | null; bring: string | null } | null;
-  bookings: { customerName: string | null; confirmationCode: string | null; externalRef: string | null; pax: number | null; source: string }[];
+  bookings: { customerName: string | null; confirmationCode: string | null; externalRef: string | null; pax: number | null; source: string; phone: string | null }[];
 };
 
 export default function TourDetails() {
@@ -62,7 +62,16 @@ export default function TourDetails() {
           <thead><tr><th>No.</th><th>Name</th><th>Booking ref</th><th>Pax</th><th>Channel</th></tr></thead>
           <tbody>
             {d.bookings.length ? d.bookings.map((b, i) => (
-              <tr key={i}><td>{i + 1}</td><td>{b.customerName || "—"}</td><td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td></tr>
+              <tr key={i}>
+                <td>{i + 1}</td>
+                <td>
+                  {b.customerName || "—"}
+                  {/* Tap to call. Shown only when a number was actually passed — an
+                      always-empty line reads as broken data, not absent data. */}
+                  {b.phone ? <><br /><a href={`tel:${b.phone}`} style={{ fontSize: 12, whiteSpace: "nowrap" }}>📞 {b.phone}</a></> : null}
+                </td>
+                <td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td>
+              </tr>
             )) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
           </tbody>
         </table>

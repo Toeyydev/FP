@@ -81,6 +81,7 @@ export function timeToSlot(time: string | undefined): number | undefined {
 export type ParsedBooking = {
   externalId?: string; confirmationCode?: string; externalRef?: string; productName?: string;
   date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string; durationMin?: number;
+  phone?: string; // the guest's own number, when the channel passes it unmasked
 };
 
 type Any = Record<string, unknown>;
@@ -129,6 +130,21 @@ export function parseBokun(raw: unknown): ParsedBooking {
   const last = r.customer ? obj(r.customer).lastName : deepFind(raw, ["lastName"]);
   const customerName = (first || last) ? `${first ?? ""} ${last ?? ""}`.trim() : undefined;
 
+  // Bokun DOES send the guest's phone — we just never read it, so every Booking.phone
+  // sat empty while the payload carried one. Read these explicit paths only: a deep
+  // search for "phoneNumber" also finds seller.phoneNumber, which is FOLKPATHS' own
+  // number and is present on every booking — that would give every guest our number.
+  // contactDetailsHidden is the channel telling us the guest's details are withheld;
+  // honour it. The email Bokun sends is an OTA relay address
+  // (@reply.getyourguide.com, @expmessaging.tripadvisor.com), not the guest's own, so
+  // it is deliberately not read here.
+  const cust = obj(r.customer);
+  const passenger = obj(obj(arr(ab.pricingCategoryBookings)[0]).passengerInfo);
+  const recipient = obj(obj(r.invoice).recipient);
+  const contactHidden = cust.contactDetailsHidden === true || passenger.contactDetailsHidden === true;
+  const phoneRaw = contactHidden ? undefined : (cust.phoneNumber ?? passenger.phoneNumber ?? recipient.phoneNumber);
+  const phone = phoneRaw != null && String(phoneRaw).trim() ? String(phoneRaw).trim().slice(0, 40) : undefined;
+
   const durHours = Number(product.duration ?? obj(ab.activity).durationHours) || 0;
   // Snap to a fixed slot, and make startTime mirror that slot so the two never diverge
   // (the slot is the operative time; a stale raw startTime must not contradict it).
@@ -141,7 +157,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     externalRef: externalRef != null ? String(externalRef) : undefined,
     productName: productName != null ? String(productName) : undefined,
     date, startTime: slotTime, slotIdx,
-    pax: pax || undefined, customerName,
+    pax: pax || undefined, customerName, phone,
     durationMin: durHours ? durHours * 60 : undefined,
   };
 }
