@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
-import { paxIndex } from "@/lib/assigned-pax";
+import { guideSchedule } from "@/lib/guide-schedule";
 import { sendPushToUser } from "@/lib/push";
 import { untagGuideSlotBookings } from "@/lib/offers";
 
@@ -13,50 +13,7 @@ export async function GET() {
   const session = await auth();
   const guideId = session?.user?.guideId;
   if (!guideId) return NextResponse.json({ items: [] });
-
-  // "Today" in Bangkok (UTC+7) so a tour earlier today still shows.
-  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-
-  const rows = await prisma.assignment.findMany({
-    where: { guideId, date: { gte: today } },
-    include: { tour: true },
-    orderBy: [{ date: "asc" }, { slotIdx: "asc" }],
-    take: 200,
-  });
-
-  // Reconcile pax to the SOURCE OF TRUTH (actual bookings for each tour instance),
-  // so My Tours matches the job sheet/summary instead of the free-hand offer number.
-  let livePax = paxIndex([]);
-  if (rows.length) {
-    const bookings = await prisma.booking.findMany({
-      where: { OR: rows.map((a) => ({ tourId: a.tourId, date: a.date, slotIdx: a.slotIdx })), status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-      select: { tourId: true, date: true, slotIdx: true, pax: true, assignedGuideId: true },
-    });
-    // Shared with the operator board, so the two screens can never disagree —
-    // and split slots give each guide their own share, not the whole departure.
-    livePax = paxIndex(bookings);
-  }
-
-  // Current lifecycle state per tour instance (latest check-in event).
-  const state: Record<string, string> = {};
-  if (rows.length) {
-    const checkins = await prisma.checkin.findMany({
-      where: { guideId, OR: rows.map((a) => ({ date: a.date, slotIdx: a.slotIdx })) },
-      orderBy: { at: "asc" }, select: { date: true, slotIdx: true, type: true },
-    });
-    for (const c of checkins) state[`${c.date}|${c.slotIdx}`] = c.type; // ordered asc → last wins
-  }
-
-  return NextResponse.json({
-    items: rows.map((a) => {
-      const real = livePax.for(a.tourId, a.date, a.slotIdx, guideId);
-      return {
-        date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
-        tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: real && real > 0 ? real : a.pax, note: a.note,
-        meetingPoint: a.tour?.meetingPoint ?? null, durationMin: a.tour?.durationMin ?? null, checkinState: state[`${a.date}|${a.slotIdx}`] ?? null,
-      };
-    }),
-  });
+  return NextResponse.json({ items: await guideSchedule(guideId) });
 }
 
 // POST { date, slotIdx, reason } — guide cancels their own tour (urgent). The
