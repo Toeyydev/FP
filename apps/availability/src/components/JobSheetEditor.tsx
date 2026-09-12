@@ -421,6 +421,43 @@ export default function JobSheetEditor() {
     await load();
   }
 
+  // Post this sheet to PEAK as an expense document.
+  //
+  // Every refusal comes from the server — the same peakSyncEligibility this panel
+  // renders — so the button re-implements none of the rules and simply shows what
+  // came back. On failure the server has already recorded FAILED + the reason, so
+  // reloading makes the panel agree with the message rather than contradict it.
+  async function syncToPeak(confirmRepost = false) {
+    if (!sheet) return;
+    if (!saved) { const ok = await save(); if (!ok) return; }
+    if (confirmRepost && !window.confirm(
+      "This sheet was already posted to PEAK and has changed since.\n\nPEAK cannot amend the first document, so posting again leaves TWO documents for this job. Continue?",
+    )) return;
+    setBusy(true); setMsg(confirmRepost ? "Posting a correction…" : "Posting to PEAK…");
+    const r = await jfetch("/api/jobsheet/peak-sync", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ...(confirmRepost ? { confirmRepost: true } : {}) }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) {
+      setMsg(
+        d.error === "offline" ? "No connection — nothing was posted. Try again."
+          : d.error === "changed-since-sync" ? `Already posted as ${d.documentNo ?? "a document"} and changed since — use Post a correction.`
+          : d.error === "not-eligible" ? (d.reasons?.[0] ?? "This sheet is not ready to post.")
+          : d.error === "not-postable" ? (d.reason ?? "This sheet cannot be posted.")
+          : d.error === "peak-not-connected" ? "PEAK is not connected on the server."
+          : d.error === "no-sheet" ? "Save the sheet first."
+          : d.error === "forbidden" ? "Operator only."
+          : d.reason ?? "Couldn't post to PEAK.",
+      );
+      await load();
+      return;
+    }
+    setMsg(`Posted to PEAK — ${d.documentNo}`);
+    await load();
+  }
+
   // Operator: record (or clear) the guide's PEAK Contact id. This is the mapping
   // whose absence blocks every sync, so it is editable right where that block is
   // reported rather than on a separate admin screen. Writes to the guide's profile,
@@ -1493,9 +1530,9 @@ export default function JobSheetEditor() {
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
             {/* Read-only mirror of the ref recorded on Payments. This screen never
                 creates a PEAK expense and never invents a number: no ref means no
-                ref. There is no "last sync" line because nothing syncs yet — the
-                app has no field for it, and a timestamp we cannot source would be
-                a fabrication. */}
+                ref. A synced sheet shows syncedAt; one whose number was typed in on
+                Payments says so instead, because a timestamp we cannot source would
+                be a fabrication. */}
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>PEAK Expense</div>
             {(() => {
               const el = peak?.eligibility;
@@ -1509,7 +1546,8 @@ export default function JobSheetEditor() {
                   {el?.changedSinceSync && (
                     <div className="js-sync-warn">
                       <b>Accounting data changed after PEAK sync</b>
-                      <span>Review the changes and update PEAK deliberately — nothing is re-posted automatically.</span>
+                      <span>Nothing is re-posted automatically. PEAK cannot amend the document above, so posting again adds a second one for this job.</span>
+                      <button className="btn sm" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak(true)}>Post a correction…</button>
                     </div>
                   )}
                 </>
@@ -1518,13 +1556,15 @@ export default function JobSheetEditor() {
                 <>
                   <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>Sync failed</div>
                   {peak?.syncError && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>{peak.syncError}</div>}
+                  <button className="btn sm" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Try again</button>
                 </>
               );
               if (el?.status === "SYNCING") return <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700 }}>Syncing…</div>;
               if (el?.status === "READY") return (
                 <>
                   <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--green)" }}>Ready to sync</div>
-                  <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Posting is not enabled yet — the ref is recorded on Payments.</div>
+                  <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Sync to PEAK</button>
+                  <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Creates an unpaid expense in PEAK, one line per row. The transfer is recorded separately.</div>
                 </>
               );
               // Not ready / blocked: say exactly what to fix, not just that it failed.
@@ -1538,7 +1578,7 @@ export default function JobSheetEditor() {
               );
             })()}
             {peak && !peak.accountsConfigured && (
-              <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>No PEAK expense account is configured (PEAK_ACCT_EXPENSES), so no row can be mapped yet.</div>
+              <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>No account chart is saved yet, so no row can be mapped. Set it on the PEAK sync page.</div>
             )}
             {/* The blocking reason is actionable right here. Shown whenever the
                 mapping is missing, and reachable via "Change" once it is set. */}
