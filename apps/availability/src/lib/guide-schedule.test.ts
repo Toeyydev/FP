@@ -5,6 +5,7 @@ const prismaMock = vi.hoisted(() => ({
   booking: { findMany: vi.fn() },
   checkin: { findMany: vi.fn(), findFirst: vi.fn() },
   tourReport: { findMany: vi.fn() },
+  jobSheet: { findUnique: vi.fn() },
   tour: { findUnique: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -18,6 +19,7 @@ beforeEach(() => {
   prismaMock.checkin.findMany.mockResolvedValue([]);
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.tourReport.findMany.mockResolvedValue([]);
+  prismaMock.jobSheet.findUnique.mockResolvedValue(null);
 });
 
 describe("bangkokToday", () => {
@@ -107,12 +109,44 @@ describe("guideTourDetails", () => {
       date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early", checkinState: "ARRIVE",
       tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
       // `id` is sent so the app can report this booking's no-shows precisely.
-      bookings: [{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1 }],
+      bookings: [{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, tickets: "" }],
     });
     // assignedGuideId is read to work out a split guide's share, and never sent.
     const select = prismaMock.booking.findMany.mock.calls[0][0].select;
     expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "source"]);
     expect(prismaMock.checkin.findFirst.mock.calls[0][0]).toEqual({ where: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 }, orderBy: { at: "desc" }, select: { type: true } });
+  });
+
+  it("carries the operator's ticket tag from the job sheet, matched by booking reference", async () => {
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 6, note: null });
+    prismaMock.tour.findUnique.mockResolvedValue(null);
+    prismaMock.booking.findMany.mockResolvedValue([
+      { id: "b1", customerName: "Emily", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 0 },
+      { id: "b2", customerName: "Daniel", confirmationCode: "FP-2", externalRef: null, pax: 1, source: "bokun", noShowPax: 0 },
+      { id: "b3", customerName: "Mai", confirmationCode: null, externalRef: "GYG9", pax: 3, source: "gyg", noShowPax: 0 },
+    ]);
+    // The sheet writes its rows under the OTA reference, or the Bokun code when
+    // there is no OTA one. The third booking has no row on the sheet at all.
+    prismaMock.jobSheet.findUnique.mockResolvedValue({
+      bookings: [
+        { name: "Emily", bookingNo: "GYG1", bookedPax: 2, actualPax: 2, tickets: "included", status: "" },
+        { name: "Daniel", bookingNo: "FP-2", bookedPax: 1, actualPax: 1, tickets: "not", status: "" },
+      ],
+    });
+
+    const details = await guideTourDetails("G-001", "2026-09-11", 0);
+    expect(details?.bookings.map((b) => b.tickets)).toEqual(["included", "not", ""]);
+    expect(prismaMock.jobSheet.findUnique.mock.calls[0][0]).toEqual({
+      where: { guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } },
+      select: { bookings: true },
+    });
+  });
+
+  it("says nothing about tickets when the departure has no job sheet", async () => {
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+    prismaMock.tour.findUnique.mockResolvedValue(null);
+    prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Emily", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 0 }]);
+    expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
   });
 
   describe("a split departure", () => {

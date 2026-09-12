@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { paxIndex } from "@/lib/assigned-pax";
+import { bookingRef } from "@/lib/booking-ref";
+import type { Booking as SheetBooking } from "@/lib/jobsheet";
 
 // A guide's own tours, as the web My Tours (/api/schedule, /api/tour-details) and
 // FolkOPS Mobile (/api/mobile/*) both show them. The routes differ only in how
@@ -99,7 +101,7 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return null;
 
-  const [tour, bookings, lastCheckin] = await Promise.all([
+  const [tour, bookings, lastCheckin, sheet] = await Promise.all([
     prisma.tour.findUnique({ where: { id: assignment.tourId } }),
     prisma.booking.findMany({
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
@@ -108,7 +110,18 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, assignedGuideId: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
+    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { bookings: true } }),
   ]);
+
+  // Whether a booking's guests already have their entrance tickets is the
+  // operator's own tag on the job sheet — nothing on the booking itself records
+  // it. Match the sheet's rows the way the sheet writes them: by booking
+  // reference. An untagged row, or no sheet at all, means "not said", and the
+  // guide is shown nothing rather than a guess.
+  const ticketsByRef = new Map<string, SheetBooking["tickets"]>();
+  for (const row of ((sheet?.bookings as SheetBooking[] | null) ?? [])) {
+    if (row?.bookingNo) ticketsByRef.set(row.bookingNo, row.tickets ?? "");
+  }
 
   const shown = opts.ownShareOnly ? guideShare(bookings, guideId) : bookings;
   return {
@@ -118,6 +131,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
   };
 }
