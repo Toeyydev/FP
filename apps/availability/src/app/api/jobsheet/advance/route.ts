@@ -4,8 +4,10 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { isOps } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
-import { notifyGuide, notifyOps } from "@/lib/booking-import";
+import { notifyGuide } from "@/lib/booking-import";
 import { thb } from "@/lib/jobsheet";
+import { uploadSlip } from "@/lib/advance-slip";
+import { recordAdvanceReturn } from "@/lib/guide-advance";
 
 // Guide advances + returns for one job (guideId + date + slotIdx). An advance is a
 // cash movement, never an expense (see lib/advance). Operators/admin record both;
@@ -13,27 +15,8 @@ import { thb } from "@/lib/jobsheet";
 // can never create or change an advance. Optional slip file goes to the same Drive
 // store as receipts/e-slips (Folkpaths Job Sheets / <month> / Advances).
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
-const OK_TYPES = /^(image\/(jpeg|jpg|png|webp)|application\/pdf)$/i;
 const key = (guideId: string, date: string, slotIdx: number) => ({ guideId, date, slotIdx });
 
-async function uploadSlip(userId: string | undefined, file: { size?: number; type?: string; name?: string; arrayBuffer?: () => Promise<ArrayBuffer> }, name: string, date: string): Promise<{ url: string; fileId: string } | { error: string; status: number }> {
-  const mime = file.type || "image/jpeg";
-  if (!OK_TYPES.test(mime)) return { error: "bad-type", status: 400 };
-  if ((file.size ?? 0) > 10 * 1024 * 1024) return { error: "too-large", status: 400 };
-  if (!googleDriveEnabled) return { error: "not-configured", status: 400 };
-  const refreshToken = await folkpathsDriveToken(userId);
-  if (!refreshToken) return { error: "not-connected", status: 400 };
-  const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
-  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
-  try {
-    const up = await saveBufferToDrive({ refreshToken, name: `${name}.${extOf(mime)}`, base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", monthFolder, "Advances"] });
-    return { url: up.link, fileId: up.id };
-  } catch (e) {
-    return { error: `drive-failed: ${(e as Error).message.slice(0, 160)}`, status: 502 };
-  }
-}
 
 // POST (multipart) — record an advance or a return on a job.
 // Fields: kind ("advance" | "return"), guideId, date, slotIdx, amount, at (ISO or
@@ -67,6 +50,22 @@ export async function POST(req: NextRequest) {
   // (they made the transfer) but never an advance.
   const opsUser = isOps(session.user.role);
   if (!opsUser && !(kind === "return" && session.user.guideId === guideId)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+
+  // A return goes through the shared rules (lib/guide-advance), which FolkOPS
+  // Mobile uses too, so a return filed from a phone is the same row — with its
+  // slip in the same Drive folder — as one typed here.
+  if (kind === "return") {
+    const r = await recordAdvanceReturn({
+      guideId, date, slotIdx, amount, at, method, txRef, note, advanceId,
+      slipFile: file, actorId: session.user.id ?? null, actorRole: session.user.role ?? null, byGuide: !opsUser,
+    });
+    if (!r.ok) return NextResponse.json({ error: r.error, ...(r.hint ? { hint: r.hint } : {}) }, { status: r.status });
+    const [advances, returns] = await Promise.all([
+      prisma.guideAdvance.findMany({ where: key(guideId, date, slotIdx), orderBy: { paidAt: "asc" } }),
+      prisma.guideAdvanceReturn.findMany({ where: key(guideId, date, slotIdx), orderBy: { returnedAt: "asc" } }),
+    ]);
+    return NextResponse.json({ ok: true, advances, returns });
+  }
 
   const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key(guideId, date, slotIdx) }, select: { id: true, ref: true } });
   if (!sheet) return NextResponse.json({ error: "no-sheet", hint: "Save the job sheet first." }, { status: 404 });
@@ -103,17 +102,6 @@ export async function POST(req: NextRequest) {
       "Advance payment sent",
       `${date} · ${thb(amount)} advance`,
     );
-  } else {
-    if (advanceId && !(await prisma.guideAdvance.findFirst({ where: { id: advanceId, ...key(guideId, date, slotIdx) } }))) return NextResponse.json({ error: "bad-advance" }, { status: 400 });
-    const row = await prisma.guideAdvanceReturn.create({ data: { ...key(guideId, date, slotIdx), advanceId, amount, returnedAt: at, method, txRef, note, slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null, createdById } });
-    await audit({ actorId: createdById, actorRole: session.user.role ?? null, action: "advance.return_recorded", entityType: "GuideAdvanceReturn", entityId: row.id, detail: { ref: sheet.ref, guideId, date, slotIdx, amount, method, txRef, slip: !!slip, byGuide: !opsUser } });
-    // Close the loop on returns too: a guide-recorded return alerts the operator to
-    // verify the transfer arrived; an operator-recorded one confirms to the guide.
-    if (opsUser) {
-      await notifyGuide(guideId, `Your advance return of ${thb(amount)} for the ${date} tour was recorded. Thank you!`, "Advance return recorded", `${date} · ${thb(amount)} returned`);
-    } else {
-      await notifyOps(`${guideId} recorded returning ${thb(amount)} of the ${date} tour advance${slip ? " (slip attached)" : ""}. Check the transfer arrived, then review the settlement on the job sheet.`, "Guide returned advance money", `${guideId} · ${date} · ${thb(amount)}`, { date });
-    }
   }
 
   const [advances, returns] = await Promise.all([
