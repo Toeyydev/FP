@@ -185,10 +185,18 @@ function sigHeaders(): Record<string, string> {
   return { "Time-Stamp": ts, "Time-Signature": sig };
 }
 
-// PEAK's documented list paging. 200 is what this client has always asked for;
-// 500 is the ceiling it will accept before rejecting the request.
+// PEAK's list paging. The 500 ceiling below was a guess and it was wrong: PEAK
+// answers a contacts page larger than 100 with
+//   Bad Json Request : 'limit' parameter must not exceed 100
+// as an application error inside an HTTP 200, so asking for 200 returned no
+// contacts at all and the picker had nothing to show. Contacts are therefore
+// clamped to 100 and read page by page.
 export const PEAK_LIST_LIMIT = 200;
 export const PEAK_MAX_LIST_LIMIT = 500;
+export const PEAK_CONTACTS_PAGE_MAX = 100;
+// Enough for 1,200 contacts. A cap at all is deliberate: if PEAK ever ignored
+// `page` this would otherwise read the same rows until the request died.
+const PEAK_CONTACTS_MAX_PAGES = 12;
 
 type Res<T> = { ok: boolean; code?: string; desc?: string } & T;
 
@@ -539,7 +547,9 @@ export async function getContacts(opts: { searchText?: string; limit?: number; p
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   const qs = new URLSearchParams();
   if (opts.searchText?.trim()) qs.set("searchText", opts.searchText.trim());
-  qs.set("limit", String(Math.min(Math.max(opts.limit ?? PEAK_LIST_LIMIT, 1), PEAK_MAX_LIST_LIMIT)));
+  // Clamped HERE, not at the call sites, so no caller can ask for a page PEAK
+  // will refuse — two of them were asking for 200.
+  qs.set("limit", String(Math.min(Math.max(opts.limit ?? PEAK_CONTACTS_PAGE_MAX, 1), PEAK_CONTACTS_PAGE_MAX)));
   // Always paged: an omitted page has meant "page 1" in every reply seen, but
   // saying so makes the request reproducible when a count looks wrong.
   qs.set("page", String(Math.max(opts.page ?? 1, 1)));
@@ -553,4 +563,65 @@ export async function getContacts(opts: { searchText?: string; limit?: number; p
   if (failure) return { ok: false, code: failure.code, desc: failure.desc, envelope };
   if ("error" in parsed) return { ok: false, code: envelope.resCode ?? undefined, desc: sanitizePeakError(envelope.resDesc || parsed.error), envelope };
   return { ok: true, contacts: parsed.contacts, code: envelope.resCode ?? undefined, desc: envelope.resDesc ?? undefined, envelope };
+}
+
+/**
+ * Every contact PEAK will give us, read one 100-row page at a time.
+ *
+ * The picker and the tax-number suggestion both need the WHOLE list: a guide
+ * sitting on page two is a guide who cannot be mapped, and the suggestion would
+ * silently report no match rather than admit it had not looked.
+ *
+ * A page that fails AFTER earlier pages arrived keeps what arrived and reports
+ * `truncated` — a partial list an operator can still pick from beats an error,
+ * as long as it does not claim to be complete.
+ */
+export async function getAllContacts(
+  opts: { searchText?: string } = {},
+): Promise<Res<{ contacts?: PeakContact[]; pages?: number; truncated?: boolean }>> {
+  return collectPagedById<PeakContact>(
+    (page) => getContacts({ searchText: opts.searchText, limit: PEAK_CONTACTS_PAGE_MAX, page })
+      .then((r) => ({ ok: r.ok, items: r.contacts, code: r.code, desc: r.desc })),
+    PEAK_CONTACTS_PAGE_MAX,
+    PEAK_CONTACTS_MAX_PAGES,
+  ).then((r) => ({ ok: r.ok, contacts: r.items, pages: r.pages, truncated: r.truncated, code: r.code, desc: r.desc }));
+}
+
+/**
+ * Read a PEAK list page by page and stop for the right reason.
+ *
+ * Separated from the call it makes so the decisions can be tested: where the
+ * list ends, what happens when a later page fails, and the case PEAK might
+ * hand us — the same rows again because it ignored `page`. Reading those rows
+ * forever is how a picker becomes a hang.
+ */
+export async function collectPagedById<T extends { id: string }>(
+  fetchPage: (page: number) => Promise<{ ok: boolean; items?: T[]; code?: string; desc?: string }>,
+  pageSize: number,
+  maxPages: number,
+): Promise<{ ok: boolean; items?: T[]; pages?: number; truncated?: boolean; code?: string; desc?: string }> {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  let page = 0;
+  let ended = false;
+  while (page < maxPages) {
+    page++;
+    const res = await fetchPage(page);
+    if (!res.ok) {
+      // Partial beats nothing, as long as it does not claim to be complete.
+      if (items.length) return { ok: true, items, pages: page - 1, truncated: true, desc: res.desc };
+      return { ok: false, code: res.code, desc: res.desc };
+    }
+    const got = res.items ?? [];
+    let added = 0;
+    for (const it of got) {
+      if (!it?.id || seen.has(it.id)) continue;
+      seen.add(it.id);
+      items.push(it);
+      added++;
+    }
+    // Short page = the end. Nothing new on a full page = PEAK is not paging.
+    if (got.length < pageSize || added === 0) { ended = true; break; }
+  }
+  return { ok: true, items, pages: page, truncated: !ended };
 }

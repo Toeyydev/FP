@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { isOps } from "@/lib/roles";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
-import { getContacts, peakEnabled, sanitizePeakError } from "@/lib/peak-api";
+import { getAllContacts, peakEnabled, sanitizePeakError } from "@/lib/peak-api";
 import { suggestPeakContact, type ContactSuggestion } from "@/lib/peak-contact-suggest";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,9 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") || undefined;
   let res;
   try {
-    res = await getContacts({ searchText: q, limit: 200 });
+    // Every page, not the first 100: the suggestion must look at the whole list
+    // before it can say a guide has no match.
+    res = await getAllContacts({ searchText: q });
   } catch (e) {
     return NextResponse.json({ ok: false, contacts: [], error: sanitizePeakError(e) }, { status: 502 });
   }

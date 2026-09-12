@@ -61,7 +61,7 @@ export async function GET() {
     getUserDetail().catch((e) => ({ ok: false, desc: sanitizePeakError(e) })),
     getAccountCodes().catch((e) => ({ ok: false, desc: sanitizePeakError(e) })),
     getPaymentMethods().catch((e) => ({ ok: false, desc: sanitizePeakError(e) })),
-    getContacts({ limit: 200 }).catch((e) => ({ ok: false, desc: sanitizePeakError(e) })),
+    getContacts().catch((e) => ({ ok: false, desc: sanitizePeakError(e) })),
   ]);
 
   // Tax numbers identify a legal entity; enough to confirm which company without
