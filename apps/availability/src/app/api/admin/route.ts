@@ -4,6 +4,9 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { issueInvite } from "@/lib/provision";
+import { maskEmail } from "@/lib/codes";
+import { maskTail } from "@/lib/signup-application";
+import { decrypt } from "@/lib/crypto";
 import { revokeAllForUser } from "@/lib/sessionTokens";
 import { randomBytes } from "crypto";
 import { sendPushToUser } from "@/lib/push";
@@ -25,13 +28,50 @@ export async function GET() {
       select: { id: true, guideId: true, displayName: true, email: true, role: true, state: true, claimedAt: true, lineUserId: true, lineId: true, lineLinkCode: true },
       orderBy: [{ role: "asc" }, { guideId: "asc" }, { email: "asc" }],
     }),
-    prisma.accessRequest.findMany({ where: { state: "PENDING" }, orderBy: { createdAt: "asc" } }),
+    prisma.accessRequest.findMany({
+      where: { state: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      // Explicit: the row now holds encrypted PII and a password hash, and a
+      // bare findMany would ship all of it to the browser.
+      select: {
+        id: true, name: true, nickname: true, phone: true, email: true,
+        believedGuideId: true, createdAt: true,
+        fullNameThai: true, fullNameEnglish: true, licenseNo: true, licenseExpiry: true,
+        preferredLanguage: true, privacyVersion: true, privacyConsentAt: true,
+        nationalId: true, bankName: true, bankAccountName: true, bankAccountNo: true,
+        // Health columns are read ONLY to say whether something was declared.
+        // Their values never reach the response — see the mapping below.
+        medicalConditionStatus: true, emergencyInstructions: true,
+        documents: { select: { id: true, kind: true, mimeType: true, size: true }, orderBy: { uploadedAt: "asc" } },
+      },
+    }),
   ]);
   // Don't leak the raw LINE user id — just whether they're linked.
   const accounts = rows.map(({ lineUserId, ...a }) => ({ ...a, lineLinked: Boolean(lineUserId) }));
+  // Decrypt only to mask. The console shows enough to recognise a person and to
+  // match a bank transfer; the full number is in the document the operator opens
+  // deliberately, which is auditable, rather than in a list payload.
+  const requestRows = requests.map((r) => {
+    const {
+      nationalId, bankName, bankAccountName, bankAccountNo,
+      medicalConditionStatus, emergencyInstructions, ...rest
+    } = r;
+    return {
+      ...rest,
+      nationalIdMasked: maskTail(decrypt(nationalId), 4),
+      bankName: decrypt(bankName),
+      bankAccountName: decrypt(bankAccountName),
+      bankAccountNoMasked: maskTail(decrypt(bankAccountNo), 4),
+      // Booleans only. The board shows that emergency information exists so an
+      // operator knows to open the record; what it says is not list material,
+      // and a row of medical text on a shared screen is a disclosure by itself.
+      hasHealthInfo: Boolean(medicalConditionStatus),
+      hasEmergencyInstructions: Boolean(emergencyInstructions),
+    };
+  });
   // Followers who added the OA but aren't matched to a guide yet (+ a suggestion).
   const lineContacts = await listUnlinkedContacts();
-  return NextResponse.json({ accounts, requests, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null, lineLoginEnabled, lineContacts });
+  return NextResponse.json({ accounts, requests: requestRows, isAdmin: session!.user!.role === "ADMIN", lineOaUrl: process.env.NEXT_PUBLIC_LINE_ADD_URL ?? null, lineLoginEnabled, lineContacts });
 }
 
 export async function POST(req: NextRequest) {
@@ -85,15 +125,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Approve a pending sign-up and ACTIVATE it, auto-assigning the next available
-  // guide id (first-come-first-serve). The guide never picks an id — it's internal.
-  // An explicit guideUserId can still be passed to override the auto-pick.
+  // Approve a pending sign-up and ACTIVATE it: link or mint a guide account, copy
+  // the password the applicant chose, and move their application and documents
+  // onto the account. They sign in with the email and password from the form —
+  // no invite, no claim step. The guide id is auto-assigned
+  // (first-come-first-serve) and never chosen by the applicant; an explicit
+  // guideUserId overrides the auto-pick.
   if (action === "approveRequest") {
     const schema = z.object({ requestId: z.string().min(1), guideUserId: z.string().min(1).optional() });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const reqRow = await prisma.accessRequest.findUnique({ where: { id: parsed.data.requestId } });
     if (!reqRow || reqRow.state !== "PENDING") return NextResponse.json({ error: "no-request" }, { status: 400 });
+    // Self-sign-up sets its own password, web and mobile alike; approval turns
+    // that into a live account. Without one there is nothing to activate.
     if (!reqRow.passwordHash) return NextResponse.json({ error: "no-password" }, { status: 400 });
     // The sign-up email becomes the login email; make sure it isn't already taken.
     const clash = await prisma.user.findUnique({ where: { email: reqRow.email } });
@@ -126,27 +171,75 @@ export async function POST(req: NextRequest) {
     }
     if (clash && clash.id !== guide.id) return NextResponse.json({ error: "email-in-use" }, { status: 400 });
 
-    await prisma.user.update({
-      where: { id: guide.id },
-      data: {
-        email: reqRow.email,
-        passwordHash: reqRow.passwordHash,
-        displayName: reqRow.nickname || guide.displayName,
-        fullName: reqRow.name,
-        state: "ACTIVE",
-        claimedAt: new Date(),
-      },
+    const application = reqRow.fullNameEnglish || reqRow.fullNameThai
+      ? {
+          fullNameThai: reqRow.fullNameThai,
+          fullNameEnglish: reqRow.fullNameEnglish,
+          nationalId: reqRow.nationalId,      // already encrypted at rest — moved as-is
+          licenseNo: reqRow.licenseNo,
+          licenseExpiry: reqRow.licenseExpiry,
+          bankName: reqRow.bankName,
+          bankAccountName: reqRow.bankAccountName,
+          bankAccountNo: reqRow.bankAccountNo,
+          // Ciphertext in, ciphertext out — approval never decrypts health data.
+          medicalConditionStatus: reqRow.medicalConditionStatus,
+          medicalConditionDetails: reqRow.medicalConditionDetails,
+          emergencyInstructions: reqRow.emergencyInstructions,
+          languages: reqRow.preferredLanguage ? [reqRow.preferredLanguage] : undefined,
+        }
+      : {};
+
+    // One transaction: an approved account whose documents did not move is a
+    // guide the operator can no longer verify, and the request row would already
+    // say APPROVED so nobody would look again.
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: guide.id },
+        data: {
+          email: reqRow.email,
+          displayName: reqRow.nickname || guide.displayName,
+          fullName: reqRow.name,
+          phone: reqRow.phone ?? guide.phone,
+          // The applicant already proved who they are with an ID card, a licence
+          // and a bank book, which the operator has just reviewed. Activation is
+          // that decision taking effect: their own password becomes live.
+          passwordHash: reqRow.passwordHash,
+          state: "ACTIVE",
+          claimedAt: new Date(),
+          ...application,
+        },
+      });
+      const docs = await tx.accessRequestDocument.findMany({ where: { requestId: reqRow.id } });
+      for (const d of docs) {
+        await tx.guideDocument.create({
+          data: {
+            userId: guide.id, kind: d.kind, filename: d.filename,
+            mimeType: d.mimeType, size: d.size, data: d.data, // stays encrypted; never decrypted here
+          },
+        });
+      }
+      await tx.accessRequest.update({
+        where: { id: reqRow.id },
+        data: { state: "APPROVED", linkedUserId: guide.id, reviewedById: actorId, reviewedAt: new Date() },
+      });
     });
-    await prisma.accessRequest.update({
-      where: { id: reqRow.id }, data: { state: "APPROVED", linkedUserId: guide.id, reviewedById: actorId, reviewedAt: new Date() },
-    });
-    await audit({ actorId, actorRole, action: "request.approved", entityType: "AccessRequest", entityId: reqRow.id, detail: { guideId: guide.guideId } });
+
+    await audit({ actorId, actorRole, action: "request.approved", entityType: "AccessRequest", entityId: reqRow.id, detail: { guideId: guide.guideId, email: maskEmail(reqRow.email) } });
     // Tell the new guide they're approved — in-app (seen on first login), push
     // (if subscribed), and email (the channel that reaches them before login).
     const firstName = (reqRow.name || "").split(" ")[0] || "there";
-    await prisma.notification.create({ data: { userId: guide.id, kind: "approved", message: `You're approved! Welcome to Folkpaths, ${firstName}. Log in to set your availability and start getting jobs.` } });
-    await sendPushToUser(guide.id, { title: "You're approved 🎉", body: "Welcome to Folkpaths — log in to set your availability.", url: "/", tag: "approved" });
-    await sendEmail({ to: reqRow.email, subject: "Your Folkpaths guide account is approved", text: `Hi ${firstName},\n\nGood news — your Folkpaths guide account (${guide.guideId}) has been approved.\n\nLog in at ${siteUrl()} to set your availability and start receiving job offers.\n\nWelcome aboard!\nFolkpaths` });
+    // They can sign in immediately, with the password they chose on the form —
+    // so the message says exactly that, and nothing about a code.
+    await prisma.notification.create({ data: { userId: guide.id, kind: "approved", message: `You're approved! Welcome to Folkpaths, ${firstName}. Sign in with the email and password you chose to set your availability and start getting jobs.` } });
+    await sendPushToUser(guide.id, { title: "You're approved 🎉", body: "Sign in with the password you chose at sign-up.", url: "/", tag: "approved" });
+    const th = reqRow.preferredLanguage === "th";
+    await sendEmail({
+      to: reqRow.email,
+      subject: th ? "ใบสมัครไกด์ Folkpaths ได้รับอนุมัติแล้ว" : "Your Folkpaths guide account is approved",
+      text: th
+        ? `สวัสดีคุณ ${reqRow.fullNameThai || firstName}\n\nใบสมัครไกด์ของคุณได้รับอนุมัติแล้ว (รหัสไกด์ ${guide.guideId})\n\nเข้าใช้งานได้ที่ ${siteUrl()} ด้วยอีเมลและรหัสผ่านที่คุณตั้งไว้ตอนสมัคร แล้วเริ่มระบุวันว่างเพื่อรับงานได้เลย\n\nยินดีต้อนรับสู่ Folkpaths`
+        : `Hi ${firstName},\n\nGood news — your Folkpaths guide account (${guide.guideId}) has been approved.\n\nSign in at ${siteUrl()} with the email and password you chose when you applied, to set your availability and start receiving job offers.\n\nWelcome aboard!\nFolkpaths`,
+    });
     return NextResponse.json({ ok: true, guideId: guide.guideId });
   }
 
