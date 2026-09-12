@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { bookingRef } from "@/lib/booking-ref";
+import { whatsappUrl } from "@/lib/contact-links";
 
 type Data = {
   date: string; slotIdx: number; time: string; pax: number | null; note: string | null;
@@ -61,18 +62,27 @@ export default function TourDetails() {
         <table className="js-table">
           <thead><tr><th>No.</th><th>Name</th><th>Booking ref</th><th>Pax</th><th>Channel</th></tr></thead>
           <tbody>
-            {d.bookings.length ? d.bookings.map((b, i) => (
-              <tr key={i}>
-                <td>{i + 1}</td>
-                <td>
-                  {b.customerName || "—"}
-                  {/* Tap to call. Shown only when a number was actually passed — an
-                      always-empty line reads as broken data, not absent data. */}
-                  {b.phone ? <><br /><a href={`tel:${b.phone}`} style={{ fontSize: 12, whiteSpace: "nowrap" }}>📞 {b.phone}</a></> : null}
-                </td>
-                <td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td>
-              </tr>
-            )) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
+            {d.bookings.length ? d.bookings.map((b, i) => {
+              const wa = whatsappUrl(b.phone);
+              return (
+                <tr key={i}>
+                  <td>{i + 1}</td>
+                  <td>
+                    {b.customerName || "—"}
+                    {/* WhatsApp rather than a call: the guests are overseas, and a
+                        message beats paying for an international call. Shown only when
+                        a number was actually passed — an always-empty line reads as
+                        broken data, not absent data. A number with no country code gets
+                        no link and stays readable text: wa.me would open a chat with
+                        whoever owns it in a guessed country, which looks like it worked. */}
+                    {b.phone ? <><br />{wa
+                      ? <a href={wa} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, whiteSpace: "nowrap" }}>💬 {b.phone}</a>
+                      : <span style={{ fontSize: 12, whiteSpace: "nowrap", color: "var(--ink-soft)" }}>{b.phone}</span>}</> : null}
+                  </td>
+                  <td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td>
+                </tr>
+              );
+            }) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
           </tbody>
         </table>
         {d.note && <div style={{ marginTop: 10, fontSize: 13 }}>📝 <b>Note:</b> {d.note}</div>}
