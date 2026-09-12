@@ -72,9 +72,18 @@ export const authConfig = {
       // (e.g. /bookings?date=…) comes back as a bare page and looks like the
       // link did nothing.
       const target = returnTarget(p, request.nextUrl.search);
-      if (request.cookies.get(REFRESH_COOKIE)) {
+      const isApi = p.startsWith("/api/");
+      // The silent re-mint only serves a GET: /api/session/refresh exports GET only,
+      // and a 307 preserves the method, so bouncing a PUT there lands on 405 and
+      // refreshes nothing. Pages keep bouncing on any method, exactly as before.
+      if (request.cookies.get(REFRESH_COOKIE) && (!isApi || request.method === "GET")) {
         return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(target)}&h=${encodeURIComponent(host)}`, base));
       }
+      // An API request gets a status code, not a login page. fetch() follows the
+      // redirect by default and /start answers 200, so redirecting an expired API
+      // call read as a SUCCESS at every client site that checks res.ok, and as a
+      // JSON parse error at the ones that do not — a save that silently did nothing.
+      if (isApi) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       // Otherwise send them to sign in — on the same domain.
       return NextResponse.redirect(new URL(`/start?callbackUrl=${encodeURIComponent(target)}`, base));
     },

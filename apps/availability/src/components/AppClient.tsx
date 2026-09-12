@@ -353,9 +353,13 @@ export default function AppClient({
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: key, slots }),
       });
       // fetch() resolves on 4xx/5xx — without this check a refusal passes for a save.
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        const reason = availabilitySaveError(res.status, body?.error);
+      // It also FOLLOWS redirects, so a save answered with a bounce to a page ends up
+      // reading that page's 200 as success. Treat any redirect as a lost write.
+      if (res.redirected || !res.ok) {
+        const body = res.redirected ? null : await res.json().catch(() => null);
+        const reason: AvailabilitySaveError = res.redirected
+          ? "saveFailedSignedOut"
+          : availabilitySaveError(res.status, body?.error);
         pendingWrites.current.set(key, { date: d, slots, reason });
         setSaveState("error");
         if (!opts?.quiet) toast(t(reason));
