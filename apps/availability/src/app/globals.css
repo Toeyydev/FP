@@ -673,10 +673,12 @@ a.glink:hover{text-decoration:underline}
   letter-spacing:.02em; color:#2f343b; line-height:1; }
 .brand .th-name{ font-size:12.5px; font-weight:600; color:#2f343b; margin-top:4px; letter-spacing:.01em; }
 
-/* ---- Availability Save bar (auto-save status + explicit Save) ---- */
+/* ---- Availability Save bar (auto-save status, and what went wrong) ---- */
 .savebar{ position:sticky; bottom:0; display:flex; align-items:center; justify-content:space-between;
   gap:12px; padding:12px 16px; margin-top:4px; background:var(--card); border-top:1px solid var(--line); }
 .savebar-status{ font-size:13px; font-weight:600; color:var(--green); }
+/* A failed save must not keep wearing the colour of a saved one. */
+.savebar-status.err{ color:var(--danger); }
 
 /* ---- Guide setup card: 2 steps to receive job offers ---- */
 .setup-card{background:#fff;border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:12px;
