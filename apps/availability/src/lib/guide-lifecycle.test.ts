@@ -36,10 +36,10 @@ const checkin = (over: Partial<Parameters<typeof recordCheckin>[0]> = {}, now = 
   recordCheckin({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, type: "ARRIVE", actorId: "u_1", ...over }, now);
 
 describe("recordCheckin", () => {
-  it("refuses more than 90 minutes before the start", async () => {
-    expect(await checkin({}, START - 91 * MIN)).toEqual({ ok: false, status: 400, error: "too-early" });
+  it("refuses more than 45 minutes before the start", async () => {
+    expect(await checkin({}, START - 46 * MIN)).toEqual({ ok: false, status: 400, error: "too-early" });
     expect(prismaMock.checkin.create).not.toHaveBeenCalled();
-    expect(await checkin({}, START - 90 * MIN)).toEqual({ ok: true, type: "ARRIVE" });
+    expect(await checkin({}, START - 45 * MIN)).toEqual({ ok: true, type: "ARRIVE" });
   });
 
   it("refuses a tour the guide is not assigned to", async () => {

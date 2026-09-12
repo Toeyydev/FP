@@ -15,6 +15,9 @@ export type CheckinType = (typeof CHECKIN_TYPES)[number];
 // A guide may report no-shows from the start until this long after it.
 export const NO_SHOW_WINDOW_MS = 30 * 60_000;
 
+// Check-in (and the steps after it) opens this long before the departure time.
+export const CHECKIN_OPENS_BEFORE_MS = 45 * 60_000;
+
 // Bookings still going ahead — the ones a guide's tour details list.
 const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
 
@@ -53,9 +56,9 @@ export async function recordCheckin(o: {
 }, nowMs: number = Date.now()): Promise<CheckinResult> {
   const { guideId, date, slotIdx, type, lat, lng, accuracyM } = o;
 
-  // Time-gate: a tour can't be checked in / started / completed more than 90 min
+  // Time-gate: a tour can't be checked in / started / completed more than 45 min
   // before it starts (prevents a guide running the lifecycle days early).
-  if (nowMs < slotStartMs(date, slotIdx) - 90 * 60 * 1000) return { ok: false, status: 400, error: "too-early" };
+  if (nowMs < slotStartMs(date, slotIdx) - CHECKIN_OPENS_BEFORE_MS) return { ok: false, status: 400, error: "too-early" };
 
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, include: { tour: { select: { meetingLat: true, meetingLng: true, meetingRadiusM: true } } } });
   if (!assignment) return { ok: false, status: 404, error: "not-assigned" };

@@ -615,12 +615,14 @@ export default function AppClient({
     START: { type: "COMPLETE", label: t("completeTour") },
     COMPLETE: null,
   };
-  // Check-in opens 90 min before the tour (prevents starting/completing days early).
+  // Check-in opens 45 min before the tour (prevents starting/completing days early).
+  // Keep in step with lib/guide-lifecycle.CHECKIN_OPENS_BEFORE_MS, or the button
+  // shows before the server will accept it.
   const tourStartMs = (date: string, time: string) => {
     const [y, mo, d] = date.split("-").map(Number); const [h, m] = (time || "00:00").split(":").map(Number);
     return Date.UTC(y, mo - 1, d, h, m) - 7 * 3600 * 1000;
   };
-  const checkInOpen = (date: string, time: string) => Date.now() >= tourStartMs(date, time) - 90 * 60 * 1000;
+  const checkInOpen = (date: string, time: string) => Date.now() >= tourStartMs(date, time) - 45 * 60 * 1000;
   // Whether to show the lifecycle action: ARRIVE is time-gated; once started, always.
   const showAction = (s: { date: string; time: string; checkinState: string | null }, next: { type: string } | null) =>
     !!next && (next.type !== "ARRIVE" || checkInOpen(s.date, s.time));
