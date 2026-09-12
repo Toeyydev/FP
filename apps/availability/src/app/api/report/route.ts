@@ -2,10 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { audit } from "@/lib/audit";
-import { SLOT_TIMES } from "@/lib/slots";
-import { notifyOps } from "@/lib/booking-import";
-import { applyReportedAttendance, noShowStatus, type Booking, type Expense } from "@/lib/jobsheet";
+import { submitTourReport } from "@/lib/guide-lifecycle";
 
 // GET ?date&slotIdx — the bookings for the signed-in guide's own tour (for the
 // no-show checklist in the report). Guide-only; returns [] if not assigned.
@@ -42,78 +39,8 @@ export async function POST(req: NextRequest) {
     comments: z.string().max(1000).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { date, slotIdx, bookedPax, leftEarly, comments } = parsed.data;
-  let noShow = parsed.data.noShow;
-  const noShowByRef = new Map<string, number>(); // booking ref → no-show pax, for the sheet
-  // Per-booking no-show counts (from the checklist): set each booking's noShowPax and
-  // derive the tour's total no-show pax from them. The report is authoritative, so any
-  // booking not listed is reset to "all came".
-  if (parsed.data.noShowCounts) {
-    const counts = parsed.data.noShowCounts;
-    await prisma.booking.updateMany({ where: { date, slotIdx }, data: { noShowPax: 0, noShow: false } });
-    const rows = await prisma.booking.findMany({ where: { id: { in: counts.map((c) => c.id) }, date, slotIdx }, select: { id: true, pax: true, externalRef: true, confirmationCode: true } });
-    const byId = new Map(rows.map((b) => [b.id, b]));
-    let total = 0;
-    for (const c of counts) {
-      const b = byId.get(c.id); if (!b) continue;
-      const ns = Math.min(Math.max(0, c.pax), b.pax ?? c.pax);
-      if (ns <= 0) continue;
-      await prisma.booking.update({ where: { id: c.id }, data: { noShowPax: ns, noShow: true } });
-      total += ns;
-      const ref = b.externalRef || b.confirmationCode || "";
-      if (ref) noShowByRef.set(ref, ns);
-    }
-    noShow = total;
-  }
 
-  const [sh, sm] = (SLOT_TIMES[slotIdx] ?? "00:00").split(":").map(Number);
-  const [yy, mm, dd] = date.split("-").map(Number);
-  if (Date.now() < Date.UTC(yy, mm - 1, dd, sh, sm) - 7 * 3600 * 1000 - 90 * 60 * 1000) return NextResponse.json({ error: "too-early" }, { status: 400 });
-
-  const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
-  if (!assignment) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
-
-  const completedPax = bookedPax != null ? Math.max(0, bookedPax - noShow - leftEarly) : null;
-  await prisma.tourReport.upsert({
-    where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-    create: { guideId, date, slotIdx, tourId: assignment.tourId, bookedPax: bookedPax ?? null, noShow, leftEarly, completedPax, comments: comments ?? null },
-    update: { bookedPax: bookedPax ?? null, noShow, leftEarly, completedPax, comments: comments ?? null, submittedAt: new Date() },
-  });
-  // Completing the report completes the tour.
-  await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type: "COMPLETE" } });
-
-  // Auto-update the job sheet to match the reported attendance: drop the absent
-  // guests (no-show + left-early) from the booking rows, re-sync the attraction
-  // ticket expenses to who actually showed, and flag the sheet so the operator
-  // confirms the money before it's paid. The guide's fixed fee is never changed.
-  const absent = noShow + leftEarly;
-  if (absent > 0) {
-    const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
-    if (sheet) {
-      let rows = (sheet.bookings as Booking[]) ?? [];
-      const expenses = (sheet.expenses as Expense[]) ?? [];
-      if (parsed.data.noShowCounts) {
-        // Apply the per-booking no-show counts precisely: each row's actual pax and
-        // status reflect exactly who didn't arrive (full → struck-through, partial → badge).
-        rows = rows.map((r) => {
-          const ns = Math.min(noShowByRef.get(r.bookingNo) ?? 0, r.bookedPax ?? 0);
-          return { ...r, noShowPax: ns, status: noShowStatus(ns, r.bookedPax), actualPax: Math.max(0, (r.bookedPax ?? 0) - ns) };
-        });
-        // Then remove any left-early pax generically and re-sync attraction tickets.
-        const applied = applyReportedAttendance(rows, expenses, leftEarly);
-        await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings as object, expenses: applied.expenses as object, status: "Review: no-show" } });
-      } else {
-        // Numeric fallback (no per-booking list): drop `absent` pax from the largest groups.
-        const applied = applyReportedAttendance(rows, expenses, absent);
-        await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings as object, expenses: applied.expenses as object, status: "Review: no-show" } });
-      }
-      await audit({ actorId: session!.user!.id ?? null, actorRole: "GUIDE", action: "jobsheet.attendance_synced", entityType: "JobSheet", detail: { date, slotIdx, absent } });
-    }
-  }
-  if (noShow > 0) {
-    const gName = (await prisma.user.findFirst({ where: { guideId }, select: { displayName: true } }))?.displayName ?? guideId;
-    await notifyOps(`${guideId} ${gName} reported ${noShow} no-show${noShow === 1 ? "" : "s"} on the ${date} tour.`, "Guide reported a no-show", `${date} · ${noShow} no-show`);
-  }
-  await audit({ actorId: session!.user!.id ?? null, actorRole: "GUIDE", action: "tour.reported", entityType: "Assignment", detail: { date, slotIdx, noShow, leftEarly } });
+  const r = await submitTourReport({ ...parsed.data, guideId, actorId: session.user?.id ?? null });
+  if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
   return NextResponse.json({ ok: true });
 }

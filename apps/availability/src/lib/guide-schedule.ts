@@ -18,6 +18,8 @@ export type ScheduleItem = {
   meetingPoint: string | null;
   durationMin: number | null;
   checkinState: string | null;
+  /** Whether the guide has filed the end-of-tour report for this departure. */
+  reported: boolean;
 };
 
 // "Today" in Bangkok (UTC+7) so a tour earlier today still shows.
@@ -51,12 +53,22 @@ export async function guideSchedule(guideId: string, nowMs: number = Date.now())
 
   // Current lifecycle state per tour instance (latest check-in event).
   const state: Record<string, string> = {};
+  // Which departures already have the guide's end-of-tour report, so the app can
+  // nudge for the ones still missing one.
+  const reported = new Set<string>();
   if (rows.length) {
-    const checkins = await prisma.checkin.findMany({
-      where: { guideId, OR: rows.map((a) => ({ date: a.date, slotIdx: a.slotIdx })) },
-      orderBy: { at: "asc" }, select: { date: true, slotIdx: true, type: true },
-    });
+    const [checkins, reports] = await Promise.all([
+      prisma.checkin.findMany({
+        where: { guideId, OR: rows.map((a) => ({ date: a.date, slotIdx: a.slotIdx })) },
+        orderBy: { at: "asc" }, select: { date: true, slotIdx: true, type: true },
+      }),
+      prisma.tourReport.findMany({
+        where: { guideId, OR: rows.map((a) => ({ date: a.date, slotIdx: a.slotIdx })) },
+        select: { date: true, slotIdx: true },
+      }),
+    ]);
     for (const c of checkins) state[`${c.date}|${c.slotIdx}`] = c.type; // ordered asc → last wins
+    for (const r of reports) reported.add(`${r.date}|${r.slotIdx}`);
   }
 
   return rows.map((a) => {
@@ -65,6 +77,7 @@ export async function guideSchedule(guideId: string, nowMs: number = Date.now())
       date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
       tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: real && real > 0 ? real : a.pax, note: a.note,
       meetingPoint: a.tour?.meetingPoint ?? null, durationMin: a.tour?.durationMin ?? null, checkinState: state[`${a.date}|${a.slotIdx}`] ?? null,
+      reported: reported.has(`${a.date}|${a.slotIdx}`),
     };
   });
 }
@@ -91,7 +104,8 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     prisma.booking.findMany({
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
       // assignedGuideId is read to work out the guide's share, never sent.
-      select: { customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, assignedGuideId: true },
+      // `id` is sent: the app needs it to report per-booking no-shows precisely.
+      select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, assignedGuideId: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
   ]);
@@ -104,6 +118,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings: shown.map((b) => ({ customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax })),
   };
 }
