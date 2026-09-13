@@ -359,6 +359,7 @@ model Booking {
   updatedAt                   DateTime                     @updatedAt
   noShow                      Boolean                      @default(false) // any guest on this booking didn't arrive (kept in sync: noShowPax > 0)
   noShowPax                   Int                          @default(0) // how many of this booking's `pax` didn't arrive (0..pax) — supports partial no-shows (e.g. booked 8, came 5 → 3)
+  cancelledAtSource           DateTime? // when the CHANNEL cancelled it (Bokun cancellationDate) — the source's own time, never when FolkOPS received it. Null = not cancelled, or the channel gave no time
   historicalJobReviewBookings HistoricalJobReviewBooking[]
 
   @@unique([source, externalId])

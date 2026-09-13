@@ -250,6 +250,46 @@ async function onBookingCancelled(b: { date: string | null; slotIdx: number | nu
   } catch { /* real-time alert + calendar sync are best-effort; the cancellation is already saved */ }
 }
 
+const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
+
+// One Bokun booking can sit in FolkOPS twice: the webhook stored it under its product
+// confirmation code (with Bokun's booking id as externalId), and the booking search later
+// stored it again under the channel's code ("GET-…"). Dedupe hid one of the two, and the
+// search only ever updates the copy carrying its own code — so a cancellation could land on
+// the hidden copy while the copy on the guide's job stayed live. When the search reports a
+// cancellation, cancel the other copies of the SAME product booking too (matched on the
+// product confirmation code, which is unique per product booking; a booking id alone can
+// cover several products). Hidden (IGNORED) copies are left alone; a copy that is already
+// cancelled only gains the channel's cancellation time. Returns the copies it cancelled.
+async function cancelOtherCopies(p: ParsedBooking, exceptId: string, cancelledAtSource: Date | undefined): Promise<{ id: string; date: string | null; slotIdx: number | null; customerName: string | null }[]> {
+  const code = p.productConfirmationCode?.trim();
+  if (!code || code === (p.confirmationCode || p.externalRef)) return [];
+  const copies = await prisma.booking.findMany({
+    where: { id: { not: exceptId }, confirmationCode: code, status: { in: [...LIVE_STATUSES, "CANCELLED"] } },
+    select: { id: true, status: true, date: true, slotIdx: true, customerName: true, cancelledAtSource: true },
+  });
+  const cancelledNow: { id: string; date: string | null; slotIdx: number | null; customerName: string | null }[] = [];
+  for (const c of copies) {
+    if (c.status === "CANCELLED") {
+      if (!c.cancelledAtSource && cancelledAtSource) await prisma.booking.update({ where: { id: c.id }, data: { cancelledAtSource } });
+      continue;
+    }
+    await prisma.booking.update({ where: { id: c.id }, data: { status: "CANCELLED", cancelledAtSource } });
+    await audit({
+      action: "booking.cancelled", entityType: "Booking", entityId: c.id,
+      detail: { ref: code, from: c.status, to: "CANCELLED", channelCode: p.confirmationCode ?? null, cancelledAtSource: cancelledAtSource?.toISOString() ?? null, reason: "the channel cancelled this booking; this record is another copy of it" },
+    });
+    cancelledNow.push(c);
+  }
+  return cancelledNow;
+}
+
+async function announceCancelled(bookings: { date: string | null; slotIdx: number | null; customerName: string | null }[]): Promise<void> {
+  const bySlot = new Map<string, (typeof bookings)[number]>();
+  for (const b of bookings) if (!bySlot.has(`${b.date}|${b.slotIdx}`)) bySlot.set(`${b.date}|${b.slotIdx}`, b);
+  for (const b of bySlot.values()) await onBookingCancelled(b);
+}
+
 export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown }): Promise<ImportResult> {
   let tourId: string | null = null;
   if (p.productName) {
@@ -268,6 +308,8 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   tourId = slotAwareTourId(tourId, p.slotIdx);
   const { source, cancelled } = opts;
   const raw = (opts.raw ?? undefined) as object | undefined;
+  // Recorded only with a cancellation, and only when the channel says when it happened.
+  const cancelledAtSource = cancelled && p.cancelledAt ? new Date(p.cancelledAt) : undefined;
 
   // A booking whose date/slot an operator pinned by hand (a rebooking arranged outside
   // the OTA) must survive the sync: when pinned, an import updates everything EXCEPT the
@@ -284,7 +326,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     if (!existing && p.externalRef) {
       const byRef = await prisma.booking.findFirst({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true } });
       if (byRef) {
-        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw } });
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
         return "updated";
       }
@@ -295,12 +337,12 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         source, externalId: p.externalId, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null,
         productName: p.productName ?? null, tourId, date: p.date ?? null, startTime: p.startTime ?? null,
         slotIdx: p.slotIdx ?? null, pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null,
-        status: cancelled ? "CANCELLED" : "PENDING", raw,
+        status: cancelled ? "CANCELLED" : "PENDING", cancelledAtSource, raw,
       },
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined,
         tourId: tourId ?? undefined, ...slotFields(existing?.datePinned ?? false),
-        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, raw,
+        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
       },
     });
     if (!existing && !(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
@@ -313,8 +355,10 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   if (ref) {
     const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true, status: true, datePinned: true } });
     if (dup) {
-      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined } });
-      if (cancelled && dup.status !== "CANCELLED") await onBookingCancelled(updated);
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
+      const copies = cancelled ? await cancelOtherCopies(p, dup.id, cancelledAtSource) : [];
+      // Tell the guide/ops once per slot, after every copy is cancelled, so the recount is right.
+      await announceCancelled([...(dup.status !== "CANCELLED" && cancelled ? [updated] : []), ...copies]);
       return "updated";
     }
   }
@@ -322,10 +366,11 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     data: {
       source, confirmationCode: p.confirmationCode ?? null, externalRef: p.externalRef ?? null, productName: p.productName ?? null, tourId,
       date: p.date ?? null, startTime: p.startTime ?? null, slotIdx: p.slotIdx ?? null,
-      pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null, status: cancelled ? "CANCELLED" : "PENDING",
+      pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null, status: cancelled ? "CANCELLED" : "PENDING", cancelledAtSource,
     },
   });
   if (!(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+  if (cancelled) await announceCancelled(await cancelOtherCopies(p, rec.id, cancelledAtSource));
   return "created";
 }
 

@@ -16,6 +16,14 @@ function deepFind(obj: unknown, keys: string[], seen = new Set<unknown>()): unkn
   return undefined;
 }
 
+// A channel timestamp (epoch ms / seconds, or a date string) as ISO; undefined if unreadable.
+function toISO(v: unknown): string | undefined {
+  if (v == null || v === "" || typeof v === "object" || typeof v === "boolean") return undefined;
+  const n = typeof v === "number" ? v : /^\d{10,}$/.test(String(v)) ? Number(v) : NaN;
+  const d = Number.isFinite(n) ? new Date(n > 1e12 ? n : n * 1000) : new Date(String(v));
+  return isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
 function toYMD(v: unknown): string | undefined {
   if (v == null) return undefined;
   // epoch millis or seconds
@@ -82,6 +90,13 @@ export type ParsedBooking = {
   externalId?: string; confirmationCode?: string; externalRef?: string; productName?: string;
   date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string; durationMin?: number;
   phone?: string; // the guest's own number, when the channel passes it unmasked
+  // The same Bokun booking reaches us in two shapes: the webhook's confirmation code is the
+  // product confirmation code, the booking search's is the channel's code ("GET-…") with the
+  // product code alongside. Keeping it lets an import find a copy stored the other way.
+  productConfirmationCode?: string;
+  // When the channel cancelled it (Bokun cancellationDate), as ISO. The source's own
+  // event time — never the moment FolkOPS happened to receive the cancellation.
+  cancelledAt?: string;
 };
 
 type Any = Record<string, unknown>;
@@ -102,6 +117,9 @@ export function parseBokun(raw: unknown): ParsedBooking {
     ?? deepFind(raw, ["productConfirmationCode", "confirmationCode", "bookingCode"]);
   // Original OTA ref if Bokun passes one; otherwise reuse the confirmation code.
   const externalRef = deepFind(raw, ["externalBookingReference", "externalReference", "resellerReference", "agencyReference"]) ?? confirmationCode;
+  // Read from known places only: a deep search could pick up another booking's id or code.
+  const productConfirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? r.productConfirmationCode;
+  const cancelledAt = toISO(r.cancellationDate ?? ab.cancellationDate);
 
   // Bokun encodes the local wall-clock start time as a UTC epoch — read it back
   // with UTC so 08:30 stays 08:30. Prefer the product-invoice timestamp (has the
@@ -159,6 +177,8 @@ export function parseBokun(raw: unknown): ParsedBooking {
     date, startTime: slotTime, slotIdx,
     pax: pax || undefined, customerName, phone,
     durationMin: durHours ? durHours * 60 : undefined,
+    productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
+    cancelledAt,
   };
 }
 

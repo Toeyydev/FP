@@ -97,6 +97,35 @@ describe("bookings — parseBokun", () => {
     expect(p.durationMin).toBe(180);
   });
 
+  // The booking search returns the same booking in another shape: the channel's code as
+  // confirmationCode, plus parentBookingId / productConfirmationCode — the two ids the webhook
+  // stored. Invented values.
+  it("reads the product code and the channel's cancellation time from a booking-search item", () => {
+    const p = parseBokun({
+      id: 770001, parentBookingId: 5550001, confirmationCode: "GET-5550001", productConfirmationCode: "ACME-T770001",
+      externalBookingReference: "GYGTEST0001", status: "CANCELLED", cancellationDate: Date.UTC(2026, 2, 1, 9, 0), creationDate: Date.UTC(2026, 0, 5),
+      startDate: Date.UTC(2026, 3, 10),
+    });
+    expect(p.confirmationCode).toBe("GET-5550001");
+    expect(p.externalId).toBeUndefined();
+    expect(p.productConfirmationCode).toBe("ACME-T770001");
+    expect(p.cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+  });
+
+  it("reads the same code from a webhook payload, where it is also the confirmation code", () => {
+    const p = parseBokun({ bookingId: 5550001, cancellationDate: "2026-03-01T09:00:00Z", activityBookings: [{ productConfirmationCode: "ACME-T770001" }] });
+    expect(p.externalId).toBe("5550001");
+    expect(p.confirmationCode).toBe("ACME-T770001");
+    expect(p.productConfirmationCode).toBe("ACME-T770001");
+    expect(p.cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+  });
+
+  it("has no cancellation time when the channel sends none or an unreadable one", () => {
+    expect(parseBokun({ confirmationCode: "GET-5550002" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ confirmationCode: "GET-5550002", cancellationDate: "not a date" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ confirmationCode: "GET-5550002", cancellationDate: 1772355600 }).cancelledAt).toBe("2026-03-01T09:00:00.000Z"); // seconds
+  });
+
   // The guest's phone was in the payload all along; nothing read it, so every
   // Booking.phone was empty. These pin down WHERE it may be read from, because the
   // same payload also carries our own number under seller.phoneNumber.
