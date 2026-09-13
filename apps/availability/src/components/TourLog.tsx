@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
-type Row = { date: string; time: string; tour: string; guideId: string; slotIdx: number; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; stars: number | null; completed: boolean; report: Report | null; noShows?: { name: string; ref: string; pax: number; noShowPax?: number }[] };
+type Row = { date: string; time: string; tour: string; guideId: string; slotIdx: number; guide: string; pax: number | null; arrive: string | null; start: string | null; complete: string | null; offSiteM: number | null; stars: number | null; completed: boolean; report: Report | null; noShows?: { name: string; ref: string; pax: number; noShowPax?: number; countsInReports?: "counts" | "cancelled-before-tour" | "needs-review" }[] };
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
@@ -125,17 +125,17 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
                       {r.report.noShow > 0 ? ` · ${r.report.noShow} no-show` : ""}
                       {r.report.leftEarly > 0 ? ` · ${r.report.leftEarly} left` : ""}
                       {r.report.comments ? <div style={{ color: "var(--danger)" }}>⚠ {r.report.comments}</div> : null}
+                    </>
+                  ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}
                       {r.noShows && r.noShows.length > 0 && (
                         <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                          {r.noShows.map((n, i) => { const nsp = n.noShowPax ?? n.pax; const partial = n.pax > 0 && nsp < n.pax; return (
-                            <span key={i} title={partial ? "Partial no-show" : "Reported no-show"} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: "var(--danger)", background: "var(--danger-bg)", border: "1px solid var(--danger-line)", borderRadius: 7, padding: "2px 7px" }}>
-                              ✗ {n.name}{n.ref ? ` · ${n.ref}` : ""}{partial ? ` · ${nsp} of ${n.pax} no-show` : (n.pax ? ` · ${n.pax} pax` : "")}
+                          {r.noShows.map((n, i) => { const nsp = n.noShowPax ?? n.pax; const partial = n.pax > 0 && nsp < n.pax; const before = n.countsInReports === "cancelled-before-tour"; const review = n.countsInReports === "needs-review"; return (
+                            <span key={i} title={before ? "Reported absent, but the channel cancelled or rebooked this booking before the tour — not counted as a no-show in reports" : review ? "Reported absent on a cancelled booking with no cancellation time from the channel — needs review" : partial ? "Partial no-show" : "Reported no-show"} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: before ? "var(--ink-soft)" : "var(--danger)", background: before ? "transparent" : "var(--danger-bg)", border: `1px ${review ? "dashed" : "solid"} ${before ? "var(--line)" : "var(--danger-line)"}`, borderRadius: 7, padding: "2px 7px" }}>
+                              ✗ {n.name}{n.ref ? ` · ${n.ref}` : ""}{partial ? ` · ${nsp} of ${n.pax} no-show` : (n.pax ? ` · ${n.pax} pax` : "")}{before ? " · cancelled before the tour" : review ? " · needs review" : ""}
                             </span>
                           ); })}
                         </div>
-                      )}
-                    </>
-                  ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
+                      )}</td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${r.date}&slotIdx=${r.slotIdx}`} title="Open this tour's job sheet — full job details">📄 Job sheet</a>{" "}
                     {canEdit && <button className="btn sm danger" title="Remove this tour log entry" onClick={() => removeRow(r)}>🗑</button>}
