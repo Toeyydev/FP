@@ -89,6 +89,7 @@ vi.mock("@/lib/peak-account-map", () => ({
 }));
 
 import { POST, PATCH } from "./route";
+import { POST as PREVIEW } from "./preview/route";
 
 const GUIDE = "G-TEST";
 const FEE = (price: number) => ({ price, time: 1, whtPct: 3 });
@@ -219,6 +220,36 @@ describe("POST /api/pay/peak-document — nothing is paid unless PEAK succeeds",
     expect(drive.save).not.toHaveBeenCalled();
     expect(peak.create).not.toHaveBeenCalled();
     expect(db.docs).toHaveLength(0);
+  });
+});
+
+describe("a billed expense with no Paid By stops the payment before PEAK", () => {
+  const unset = () => {
+    const j3 = db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!;
+    j3.expenses = [{ description: "Offering flowers", price: 95, pax: 1, expenseType: "other" }]; // Paid By missing
+  };
+
+  it("the preview refuses, naming the job sheet and row", async () => {
+    unset();
+    const res = await PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs: [J1, J2, J3] }),
+    }) as unknown as Parameters<typeof PREVIEW>[0]);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons.join(" ")).toContain('FOLK-BKK-20300512-01 row 1 "Offering flowers": Paid By is not set');
+  });
+
+  it("the real POST refuses with 409 — no slip upload, no PEAK document, no payment record, nothing paid", async () => {
+    unset();
+    const res = await payForm([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain('FOLK-BKK-20300512-01 row 1 "Offering flowers": Paid By is not set');
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(peak.attach).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays.filter((p) => p.status === "PAID" || p.peakPaymentRef)).toHaveLength(0);
   });
 });
 

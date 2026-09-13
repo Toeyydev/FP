@@ -178,9 +178,15 @@ export function buildGuidePaymentDocument(input: {
     }
 
     // Everything else still owed to the guide, grouped per job + category + account.
-    // Same rule as guidePayoutTotal: company-direct and advance rows were never the
-    // guide's money, so they are not in this transfer and not in this document.
+    // Company-direct and advance rows were never the guide's money, so they are not in
+    // this transfer and not in this document.
+    //
+    // `rowNo` is the row's number as the job sheet shows it: the expense table numbers
+    // every non-review row, including rows with no amount.
+    let rowNo = 0;
     for (const e of expenses) {
+      const review = isReviewExpense(e);
+      if (!review) rowNo++;
       const amt = expenseAmount(e);
       if (!amt) continue;
       const desc = (e.description ?? "").trim() || "an expense row";
@@ -200,6 +206,15 @@ export function buildGuidePaymentDocument(input: {
 
       const paid = canonicalPaidBy(e);
       if (paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE") continue;
+      // Who paid decides whether this money belongs in the transfer at all: a guide's
+      // own money is reimbursed, company money is not. Unknown is not a default — the
+      // Payments page counts such a row as owed, but a PEAK document would book it as a
+      // reimbursement nobody confirmed. Refused, like the job-sheet sync refuses it.
+      if (paid === "UNSPECIFIED") {
+        const raw = (e.paidBy ?? "").trim();
+        reasons.add(`${where} row ${rowNo} "${desc}": ${raw ? `Paid By "${raw}" is not recognised` : "Paid By is not set"} — set it on the job sheet (Guide Personal, Guide Advance or Company Direct)`);
+        continue;
+      }
 
       if (e.alreadyRecordedInPeak) {
         reasons.add(`"${desc}" on ${where} is marked as already in PEAK but is still being paid to the guide — it cannot be both`);

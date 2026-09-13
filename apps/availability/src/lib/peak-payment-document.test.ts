@@ -236,6 +236,53 @@ describe("what belongs in a payment document", () => {
   });
 });
 
+describe("Paid By must be known before a row is paid through PEAK", () => {
+  const job = (expenses: Expense[]) => ({ ...JOBS[0], expenses });
+
+  it("refuses a billed row with no Paid By, naming the job sheet and the row as the sheet numbers it", () => {
+    const rows: Expense[] = [
+      { description: "Temple ticket", price: 500, pax: null, expenseType: "entrance" },            // row 1: no amount, not billed
+      { description: "Water", price: 10, pax: 3, expenseType: "meal" },                            // row 2: billed, Paid By missing
+    ];
+    const reasons = reasonsOf(() => build({ jobs: [job(rows)] }));
+    expect(reasons).toEqual(expect.arrayContaining([
+      'FOLK-BKK-20300506-01 row 2 "Water": Paid By is not set — set it on the job sheet (Guide Personal, Guide Advance or Company Direct)',
+    ]));
+    expect(reasons.join(" ")).not.toContain("row 1");
+  });
+
+  it("refuses a Paid By value it does not recognise", () => {
+    const reasons = reasonsOf(() => build({ jobs: [job([{ description: "Ferry", price: 20, pax: 2, expenseType: "transport", paidBy: "cash?" }])] }));
+    expect(reasons.join(" ")).toContain('row 1 "Ferry": Paid By "cash?" is not recognised');
+  });
+
+  it("counts review-reward rows out of the numbering, and still pays a review reward with no Paid By", () => {
+    const rows: Expense[] = [
+      { description: "Review reward", price: 100, pax: 1 },                                        // not numbered, no Paid By needed
+      { description: "Water", price: 10, pax: 2, expenseType: "meal", paidBy: "guide" },
+      { description: "Bus", price: 15, pax: 2, expenseType: "transport" },                          // row 2
+    ];
+    expect(reasonsOf(() => build({ jobs: [job(rows)] })).join(" ")).toContain('row 2 "Bus": Paid By is not set');
+    const ok = build({ jobs: [job(rows.slice(0, 2))] });
+    expect(ok.lines.map((l) => l.description)).toContain("Review reward - FOLK-BKK-20300506-01");
+  });
+
+  it("still leaves company-direct and advance rows out without asking", () => {
+    const rows: Expense[] = [
+      { description: "Entrance", price: 500, pax: 2, expenseType: "entrance", paidBy: "company" },
+      { description: "Boat", price: 50, pax: 2, expenseType: "transport", paidBy: "advance" },
+    ];
+    expect(() => build({ jobs: [job(rows)] })).not.toThrow();
+  });
+
+  it("never reaches PEAK: the document is refused before anything is claimed", async () => {
+    const { calls, deps } = fakeStore();
+    await expect(async () => payJobsTogether(deps, build({ jobs: [job([{ description: "Water", price: 10, pax: 2, expenseType: "meal" }])] })))
+      .rejects.toBeInstanceOf(PaymentDocumentNotPostable);
+    expect(calls.claim + calls.upload + calls.createExpense.length + calls.posted).toBe(0);
+  });
+});
+
 describe("refusals, all reported at once", () => {
   it("names every problem in one go", () => {
     const reasons = reasonsOf(() => build({ peakContactId: null, paymentMethodId: "", jobs: [{ ...JOBS[0], ref: null }] }));
