@@ -11,6 +11,7 @@ import { bookingRef } from "@/lib/booking-ref";
 import { siteUrl } from "@/lib/site";
 import { hasHistoricalJobSheet } from "@/lib/historical-guard";
 import { audit } from "@/lib/audit";
+import { tourStartMs } from "@/lib/no-show-count";
 
 export type ImportResult = "created" | "updated" | "skipped";
 
@@ -194,11 +195,23 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
 // A live booking was cancelled (e.g. a GetYourGuide cancellation arriving via the
 // Bokun webhook). If its slot is assigned to a guide, re-sync the guide's pax and
 // tell them in real time so they aren't left expecting a guest who won't show.
-async function onBookingCancelled(b: { date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
+async function onBookingCancelled(b: { id?: string; confirmationCode?: string | null; date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
   try {
     if (!b.date || b.slotIdx == null) return;
     const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true, googleEventId: true, opsGoogleEventId: true, date: true, slotIdx: true } });
     if (!assigns.length) return;
+    // Owner rule (2026-09-13): a cancellation that arrives after the departure has started is
+    // history, not news. The booking keeps its CANCELLED status (and any no-show the guide
+    // reported), but nobody is messaged about a tour that already ran, and the tour's own
+    // records — assignment pax, job sheet, check-ins, report, payment — are left as they were.
+    // (FolkOPS stores no tour end time, so the departure's start on Bangkok time is the line.)
+    if (tourStartMs(b.date, b.slotIdx) <= Date.now()) {
+      await audit({
+        action: "booking.cancelled_after_start", entityType: "Booking", entityId: b.id,
+        detail: { ref: b.confirmationCode ?? null, date: b.date, slotIdx: b.slotIdx, guides: assigns.map((a) => a.guideId), kept: "status CANCELLED; no-show, assignment, job sheet and payment unchanged", notified: "nobody" },
+      }).catch(() => {});
+      return;
+    }
     const bks = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
     const split = bks.some((x) => x.assignedGuideId);
     const upcoming = b.date >= ymd(todayD());

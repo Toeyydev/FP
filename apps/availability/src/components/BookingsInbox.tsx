@@ -491,7 +491,19 @@ export default function BookingsInbox() {
                 <label>Status<select value={str(detail.status) || "PENDING"} onChange={(e) => setField("status", e.target.value)}>
                   {["PENDING", "OFFERED", "ASSIGNED", "CANCELLED", "IGNORED"].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
                 <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "end", color: detail.noShow ? "var(--danger)" : undefined, fontWeight: detail.noShow ? 700 : undefined }}>
-                  <input type="checkbox" checked={!!detail.noShow} onChange={async (e) => { const v = e.target.checked; setField("noShow", v); await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v }) }); load(); }} />
+                  <input type="checkbox" checked={!!detail.noShow} onChange={async (e) => {
+                    const v = e.target.checked;
+                    // Withdrawing a reported no-show is a deliberate edit: ask why, and change nothing without a reason.
+                    let reason: string | undefined;
+                    if (!v && (detail.noShow || Number(detail.noShowPax ?? 0) > 0)) {
+                      const given = window.prompt("Withdraw this reported no-show? Give the reason (kept in the audit log):", "");
+                      if (!given || !given.trim()) { setMsg("No-show kept — a reason is needed to withdraw it."); return; }
+                      reason = given.trim();
+                    }
+                    const r = await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v, reason }) });
+                    if (!r.ok) { setMsg("No-show not changed — try again."); return; }
+                    setField("noShow", v); load();
+                  }} />
                   No-show (guest didn&apos;t arrive)
                 </label>
                 <label>Payment<select value={str(detail.paymentStatus) || "unpaid"} onChange={(e) => setField("paymentStatus", e.target.value)}>

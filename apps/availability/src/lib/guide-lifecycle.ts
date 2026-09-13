@@ -200,7 +200,8 @@ export async function submitTourReport(o: {
 export type NoShowResult =
   | { ok: true; noShowPax: number }
   | { ok: false; status: 403; error: "not-in-window" }
-  | { ok: false; status: 404; error: "booking-not-found" };
+  | { ok: false; status: 404; error: "booking-not-found" }
+  | { ok: false; status: 400; error: "reason-required" };
 
 // The tour a guide is assigned to on one departure, or null if none.
 export async function assignedTourId(guideId: string, date: string, slotIdx: number): Promise<string | null> {
@@ -229,6 +230,7 @@ export async function recordNoShow(o: {
   actorId: string | null;
   actorRole: string;
   via: string; // where it came from, for the audit log
+  reason?: string | null; // required when an operator lowers or withdraws a reported no-show
 }, nowMs: number = Date.now()): Promise<NoShowResult> {
   const { guideId, date, slotIdx, bookingNo } = o;
 
@@ -252,11 +254,17 @@ export async function recordNoShow(o: {
   const where = { date, slotIdx, ...scope, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
   // Newest first: a GetYourGuide booking amended on the OTA keeps one reference across
   // several Bokun records, and only the latest is the guest's current booking.
-  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true }, orderBy: { createdAt: "desc" } });
+  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true, noShow: true, noShowPax: true }, orderBy: { createdAt: "desc" } });
   if (o.tourId && !b) return { ok: false, status: 404, error: "booking-not-found" };
 
   // Clamp the count to the booking's group size and persist it.
   const noShowPax = Math.min(o.noShowPax, b?.pax ?? o.noShowPax);
+  // Owner rule (2026-09-13): lowering or withdrawing a reported no-show is a deliberate edit.
+  // An operator must say why; the guide's own correction inside the reporting window is the
+  // report itself. Either way the audit keeps who changed it and the count before and after.
+  const previousNoShowPax = b ? (b.noShowPax || (b.noShow ? b.pax ?? 0 : 0)) : 0;
+  const reason = o.reason?.trim() || null;
+  if (o.operator && noShowPax < previousNoShowPax && !reason) return { ok: false, status: 400, error: "reason-required" };
   await prisma.booking.updateMany({ where, data: { noShowPax, noShow: noShowPax > 0 } });
 
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
@@ -291,6 +299,6 @@ export async function recordNoShow(o: {
     const expenses = syncAttractionTickets(rows, (sheet.expenses as Expense[]) ?? []);
     await prisma.jobSheet.update({ where: key, data: { bookings: rows as object, expenses: expenses as object } });
   }
-  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: noShowPax > 0 ? "booking.noshow" : "booking.noshow_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, noShowPax, by: o.via } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: noShowPax > 0 ? "booking.noshow" : "booking.noshow_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, previousNoShowPax, noShowPax, by: o.via, ...(reason ? { reason } : {}) } });
   return { ok: true, noShowPax };
 }

@@ -133,23 +133,54 @@ export function noShowSheetBooking(b: SlotBooking): NoShowSheetBooking {
  * The rows to save: the operator's rows, plus any of this guide's reported no-show guests
  * that are missing from them. A row matches a booking by EITHER of its references (the
  * OTA ref or the confirmation code), so a row saved under the other one is not duplicated.
- * Only live bookings count — a cancelled or moved guest is not put back.
+ *
+ * Owner rule (2026-09-13): removing a row must never make no-show evidence disappear quietly.
+ * So a reported no-show is put back even when its booking is now CANCELLED. A row still on the
+ * sheet that shows FEWER absent guests than were reported is not rewritten (that would change a
+ * saved — often paid — sheet behind the operator's back); it is reported as `mismatched` so the
+ * save says so and the audit keeps it. Withdrawing a no-show is a deliberate edit with a reason,
+ * made on the no-show itself (the booking's no-show control / recordNoShow).
+ * A guest moved to another departure is not at this slot, so is not put back here.
  */
+export type NoShowMismatch = { bookingNo: string; name: string; absentOnSheet: number; reported: number };
+
+// How many of a row's guests the sheet shows as absent: the explicit count; else the whole booking
+// when the row is marked "no-show" (older rows often left actual pax untouched); else booked − actual.
+export function absentOnRow(r: { noShowPax?: number | null; bookedPax?: number | null; actualPax?: number | null; status?: string | null }): number {
+  if (r.noShowPax != null) return r.noShowPax;
+  if (r.status === "no-show") return r.bookedPax ?? 0;
+  if (r.bookedPax != null && r.actualPax != null) return Math.max(0, r.bookedPax - r.actualPax);
+  return 0;
+}
+
 export function keepReportedNoShows<R extends { bookingNo?: string | null; name?: string | null }>(
   rows: R[],
   allAtSlot: SlotBooking[],
   guideId: string,
   ctx: SlotContext = {},
-): { rows: (R | NoShowSheetBooking)[]; restored: NoShowSheetBooking[] } {
+): { rows: (R | NoShowSheetBooking)[]; restored: NoShowSheetBooking[]; mismatched: NoShowMismatch[] } {
   const present = new Set(rows.map((r) => (r.bookingNo ?? "").trim()).filter(Boolean));
   // The same guest can sit on the sheet under a code the live record does not carry — a
   // legacy FOLK-T record whose voucher code only the sheet holds. Their name is on the
   // sheet already, so the rule is met; adding the row again would duplicate them.
   const names = new Set(rows.map((r) => guestNameKey(r.name)).filter(Boolean));
   const restored: NoShowSheetBooking[] = [];
-  for (const b of attributableBookings(allAtSlot, guideId, ctx)) {
+  const mismatched: NoShowMismatch[] = [];
+  // A reported no-show whose booking is now CANCELLED is judged like a live booking for attribution.
+  const judged = allAtSlot.map((b) => (b.status === "CANCELLED" && hasReportedNoShow(b) ? { ...b, status: "ASSIGNED" } : b));
+  const byRef = new Map<string, number>(); rows.forEach((r, i) => { const k = (r.bookingNo ?? "").trim(); if (k && !byRef.has(k)) byRef.set(k, i); });
+  for (const b of attributableBookings(judged, guideId, ctx)) {
     if (!hasReportedNoShow(b)) continue;
     const refs = refsOf(b);
+    const at = refs.map((r) => byRef.get(r)).find((i) => i != null);
+    if (at != null) {
+      // Still listed. If the row shows fewer absent guests than were reported, say so — never rewrite it.
+      const row = rows[at] as R & { noShowPax?: number | null; status?: string | null; bookedPax?: number | null; actualPax?: number | null };
+      const reported = noShowSheetBooking(b).noShowPax;
+      const shown = absentOnRow(row);
+      if (shown < reported) mismatched.push({ bookingNo: (row.bookingNo ?? "").trim(), name: row.name ?? "", absentOnSheet: shown, reported });
+      continue;
+    }
     if (!refs.length || refs.some((r) => present.has(r))) continue;
     const name = guestNameKey(b.customerName);
     if (name && names.has(name)) continue;
@@ -157,5 +188,5 @@ export function keepReportedNoShows<R extends { bookingNo?: string | null; name?
     refs.forEach((r) => present.add(r));
     if (name) names.add(name);
   }
-  return { rows: [...rows, ...restored], restored };
+  return { rows: [...rows, ...restored], restored, mismatched };
 }

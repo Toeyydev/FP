@@ -135,3 +135,37 @@ describe("keepReportedNoShows — review regressions", () => {
     expect(out).toHaveLength(2);
   });
 });
+
+describe("keepReportedNoShows — owner rule: no-show evidence is never dropped quietly", () => {
+  const row = (over: Record<string, unknown> = {}) => ({ name: "Guest E", bookingNo: "GYG-TEST-7", bookedPax: 3, actualPax: 3, tickets: "", status: "", ...over });
+  it("keeps a reported no-show whose booking is now CANCELLED", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", status: "CANCELLED", noShow: true, noShowPax: 2, pax: 3 })];
+    expect(keepReportedNoShows([], all, "G-TEST").restored.map((r) => [r.bookingNo, r.noShowPax])).toEqual([["GYG-TEST-7", 2]]);
+  });
+  it("reports — but never rewrites — a listed row that shows fewer absent guests than reported", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3 })];
+    const cleared = keepReportedNoShows([row()], all, "G-TEST");
+    expect(cleared.rows).toEqual([row()]);
+    expect(cleared.mismatched).toEqual([{ bookingNo: "GYG-TEST-7", name: "Guest E", absentOnSheet: 0, reported: 2 }]);
+    expect(keepReportedNoShows([row({ noShowPax: 1, actualPax: 2, status: "partial" })], all, "G-TEST").mismatched[0]).toMatchObject({ absentOnSheet: 1, reported: 2 });
+  });
+  it("reads the absence from actual pax on legacy rows without a count", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3 })];
+    expect(keepReportedNoShows([row({ actualPax: 1 })], all, "G-TEST").mismatched).toEqual([]);
+  });
+  it("a legacy row marked \"no-show\" whose actual pax was never lowered still shows the whole booking absent", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 3, pax: 3 })];
+    expect(keepReportedNoShows([row({ status: "no-show", actualPax: 3 })], all, "G-TEST").mismatched).toEqual([]);
+  });
+  it("leaves a row that already carries the reported count (or more) exactly as sent", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3 })];
+    const sent = [row({ noShowPax: 3, actualPax: 0, status: "no-show", tickets: "included" })];
+    const res = keepReportedNoShows(sent, all, "G-TEST");
+    expect(res.mismatched).toEqual([]);
+    expect(res.rows).toEqual(sent);
+  });
+  it("never flags a co-guide's guest on a split departure", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3, assignedGuideId: "G-OTHER" })];
+    expect(keepReportedNoShows([row()], all, "G-TEST", { guidesAtSlot: 2 }).mismatched).toEqual([]);
+  });
+});
