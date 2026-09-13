@@ -377,7 +377,7 @@ export async function PUT(req: NextRequest) {
     prisma.assignment.count({ where: { date: d.date, slotIdx: d.slotIdx } }),
     prisma.jobSheet.findMany({ where: { date: d.date, slotIdx: d.slotIdx, NOT: { guideId: d.guideId } }, select: { bookings: true } }),
   ]);
-  const { rows: bookings, restored, reinstated } = keepReportedNoShows(d.bookings, slotLive, d.guideId, {
+  const { rows: bookings, restored, mismatched } = keepReportedNoShows(d.bookings, slotLive, d.guideId, {
     guidesAtSlot, tourId: d.tourId || null, otherSheetRefs: sheetRefs(otherSheets),
   });
 
@@ -403,9 +403,9 @@ export async function PUT(req: NextRequest) {
     await prisma.assignment.updateMany({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, data: { pax: paxTotal } });
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
-  const reinstatedNoShows = reinstated.map((r) => r.bookingNo);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(reinstatedNoShows.length ? { reinstatedNoShows } : {}) } });
-  return NextResponse.json({ ok: true, sheet, restoredNoShows, reinstatedNoShows });
+  const noShowMismatches = mismatched;
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}) } });
+  return NextResponse.json({ ok: true, sheet, restoredNoShows, noShowMismatches });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.

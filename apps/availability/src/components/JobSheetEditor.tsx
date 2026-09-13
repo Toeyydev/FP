@@ -385,9 +385,14 @@ export default function JobSheetEditor() {
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg(d.error === "offline" ? "No connection — your changes are still here. Try Save again." : d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
-    const kept = [...(d.restoredNoShows ?? []), ...(d.reinstatedNoShows ?? [])];
+    const kept: string[] = d.restoredNoShows ?? [];
+    const differ: { bookingNo: string; absentOnSheet: number; reported: number }[] = d.noShowMismatches ?? [];
     setSheet(d.sheet); setSaved(true);
-    setMsg(kept.length ? `Saved ✓ — kept ${kept.length} reported no-show${kept.length === 1 ? "" : "s"} on the sheet (${kept.join(", ")}). To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason.` : "Saved ✓");
+    const parts = ["Saved ✓"];
+    if (kept.length) parts.push(`kept ${kept.length} reported no-show${kept.length === 1 ? "" : "s"} on the sheet (${kept.join(", ")})`);
+    if (differ.length) parts.push(`needs review: ${differ.map((m) => `${m.bookingNo} shows ${m.absentOnSheet} absent, the guide reported ${m.reported}`).join("; ")}`);
+    if (kept.length || differ.length) parts.push("To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason");
+    setMsg(parts.join(" — "));
     return true;
   }
   async function sendToGuide() {

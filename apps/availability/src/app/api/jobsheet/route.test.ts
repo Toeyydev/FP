@@ -57,7 +57,7 @@ describe("PUT /api/jobsheet — reported no-show guests stay on the sheet", () =
     ]);
     expect(body.sheet.bookings).toHaveLength(2); // the editor reloads from this, so the row reappears
     expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: "jobsheet.saved", detail: { ref: "FOLK-BKK-20300506-01", restoredNoShows: ["GYG-TEST-2"] } }));
-    expect(body.reinstatedNoShows).toEqual([]);
+    expect(body.noShowMismatches).toEqual([]);
   });
 
   it("saves exactly what the operator sent when no reported no-show is missing", async () => {
@@ -110,11 +110,18 @@ describe("PUT /api/jobsheet — owner rule: removing a row never quietly drops n
     expect(prismaMock.jobSheet.upsert.mock.calls[0][0].update.bookings).toEqual([]);
   });
 
-  it("a row kept on the sheet but with its no-show edited away gets the reported count back, and the save says so", async () => {
+  it("a row kept on the sheet that shows fewer absent guests than reported is saved as sent, and flagged for review", async () => {
     prismaMock.booking.findMany.mockResolvedValue([live({ customerName: "Guest D", externalRef: "GYG-TEST-5", pax: 3, noShow: true, noShowPax: 2 })]);
-    const body = await (await save([{ name: "Guest D", bookingNo: "GYG-TEST-5", bookedPax: 3, actualPax: 3, tickets: "included", status: "" }])).json();
-    expect(body.reinstatedNoShows).toEqual(["GYG-TEST-5"]);
-    expect(prismaMock.jobSheet.upsert.mock.calls[0][0].update.bookings).toEqual([{ name: "Guest D", bookingNo: "GYG-TEST-5", bookedPax: 3, actualPax: 1, tickets: "included", status: "partial", noShowPax: 2 }]);
-    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: "jobsheet.saved", detail: expect.objectContaining({ reinstatedNoShows: ["GYG-TEST-5"] }) }));
+    const sent = { name: "Guest D", bookingNo: "GYG-TEST-5", bookedPax: 3, actualPax: 3, tickets: "included", status: "" };
+    const body = await (await save([sent])).json();
+    expect(prismaMock.jobSheet.upsert.mock.calls[0][0].update.bookings).toEqual([sent]); // never rewritten
+    expect(body.noShowMismatches).toEqual([{ bookingNo: "GYG-TEST-5", name: "Guest D", absentOnSheet: 0, reported: 2 }]);
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: "jobsheet.saved", detail: expect.objectContaining({ noShowMismatches: body.noShowMismatches }) }));
+  });
+
+  it("a legacy row that records the absence as actual pax is not a mismatch", async () => {
+    prismaMock.booking.findMany.mockResolvedValue([live({ externalRef: "GYG-TEST-6", pax: 2, noShow: true, noShowPax: 2 })]);
+    const body = await (await save([{ name: "Guest F", bookingNo: "GYG-TEST-6", bookedPax: 2, actualPax: 0, tickets: "", status: "" }])).json();
+    expect(body.noShowMismatches).toEqual([]);
   });
 });
