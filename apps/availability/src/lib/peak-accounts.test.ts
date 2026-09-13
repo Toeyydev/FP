@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ACCOUNTING_CATEGORIES, FIXED_CATEGORIES, accountChartReady, categoryStatus,
-  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, canMapGlobally,
+  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, isPerJobCategory,
   type AccountMapping,
 } from "@/lib/peak-accounts";
 
@@ -24,8 +24,9 @@ describe("account chart readiness", () => {
     expect(missingRequired(allFixed)).toEqual([]);
   });
 
-  it("OTHER_TOUR_COST never blocks readiness — it is resolved per job", () => {
+  it("OTHER_TOUR_COST never blocks readiness, with or without a default", () => {
     expect(accountChartReady([...allFixed, map("OTHER_TOUR_COST", null)])).toBe(true);
+    expect(accountChartReady([...allFixed, map("OTHER_TOUR_COST", "51010")])).toBe(true);
   });
 
   it("REVIEW_REWARD DOES block readiness now that it takes a fixed account", () => {
@@ -34,9 +35,11 @@ describe("account chart readiness", () => {
     expect(missingRequired(withoutReward)).toEqual(["REVIEW_REWARD"]);
   });
 
-  it("Other Tour Cost cannot be mapped globally, the rest can", () => {
-    expect(canMapGlobally("OTHER_TOUR_COST")).toBe(false);
-    for (const k of FIXED_CATEGORIES) expect(canMapGlobally(k)).toBe(true);
+  it("Other Tour Cost is the only per-job category, and may still carry a default", () => {
+    // Per-job now means "a default is optional", not "a default is refused": the
+    // owner chose on 2026-09-13 to book every non-guide-fee tour cost to one account.
+    expect(isPerJobCategory("OTHER_TOUR_COST")).toBe(true);
+    for (const k of FIXED_CATEGORIES) expect(isPerJobCategory(k)).toBe(false);
   });
 
   it("one missing required category blocks it, and is named", () => {
@@ -60,10 +63,11 @@ describe("account chart readiness", () => {
   it("status distinguishes 'needs review' from 'not mapped'", () => {
     expect(categoryStatus("GUIDE_FEE", null)).toBe("NOT_MAPPED");
     expect(categoryStatus("REVIEW_REWARD", null)).toBe("NOT_MAPPED");
-    // Never "not mapped": there is nothing to map here, so it must not read as a
-    // configuration error someone can fix on this page.
+    // Never "not mapped" while empty: leaving it blank is a valid choice, so it
+    // must not read as a configuration error someone still has to fix.
     expect(categoryStatus("OTHER_TOUR_COST", null)).toBe("REVIEW_PER_JOB");
-    expect(categoryStatus("OTHER_TOUR_COST", map("OTHER_TOUR_COST", "51010"))).toBe("REVIEW_PER_JOB");
+    // With a default saved it is mapped like any other category.
+    expect(categoryStatus("OTHER_TOUR_COST", map("OTHER_TOUR_COST", "51010"))).toBe("MAPPED");
     expect(categoryStatus("GUIDE_FEE", map("GUIDE_FEE", "51010"))).toBe("MAPPED");
   });
 });

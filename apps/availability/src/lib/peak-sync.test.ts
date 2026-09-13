@@ -4,6 +4,7 @@ import {
   createsReimbursement,
   expenseMappingStatus,
   expenseDisposition,
+  resolveExpenseAccount,
   syncableExpenses,
   expenseRowsReady,
   jobSheetTotals,
@@ -154,13 +155,22 @@ describe("§2 account mapping", () => {
     expect(expenseMappingStatus(EXAMPLE[0], {})).toBe("UNMAPPED");
   });
 
-  it("Other Tour Cost stays NEEDS_REVIEW until an operator records the account", () => {
+  it("Other Tour Cost needs a choice only when no default is saved", () => {
     const other = EXAMPLE[3];
+    // Nothing on the row and no default: the account is never guessed.
     expect(expenseMappingStatus(other, ACCOUNTS)).toBe("NEEDS_REVIEW");
-    // Configuring an account for the catch-all category must NOT clear it.
-    expect(expenseMappingStatus(other, { ...ACCOUNTS, other: { code: "5010" } })).toBe("NEEDS_REVIEW");
-    // Only an explicit choice recorded on the row itself does.
+    // A default saved for the catch-all category clears it — the owner chose to
+    // book every tour cost that is not the guide fee to one account.
+    expect(expenseMappingStatus(other, { ...ACCOUNTS, other: { code: "5010" } })).toBe("READY");
+    // A choice recorded on the row itself still clears it without any default.
     expect(expenseMappingStatus({ ...other, peakAccountCode: "5010" }, ACCOUNTS)).toBe("READY");
+  });
+
+  it("the row's own account wins over the category default", () => {
+    // The default is a convenience, never an override: a row that names an account
+    // must book to that account.
+    const other = { ...EXAMPLE[3], peakAccountCode: "5020" };
+    expect(resolveExpenseAccount(other, { ...ACCOUNTS, other: { code: "5010" } })?.code).toBe("5020");
   });
 
   it("an untagged Paid By blocks the row even when the category is mapped", () => {
@@ -230,7 +240,13 @@ describe("§9 sync eligibility", () => {
     // is fixed in settings. Different places, so different messages.
     const e = peakSyncEligibility({ ...ready(), expenses: EXAMPLE }); // Other Tour Cost unresolved
     expect(e.status).toBe("NOT_READY");
-    expect(e.reasons).toContain("1 Other Tour Cost requires account review");
+    expect(e.reasons).toContain("1 Other Tour Cost has no PEAK account — choose one on the row, or set a default under PEAK sync");
+  });
+
+  it("a saved Other Tour Cost default resolves the row without touching it", () => {
+    const e = peakSyncEligibility({ ...ready(), expenses: EXAMPLE, accounts: { ...ACCOUNTS, other: { code: "5010" } } });
+    expect(e.reasons).toEqual([]);
+    expect(e.canSync).toBe(true);
   });
 
   it("a category with no saved chart mapping is named", () => {
