@@ -64,6 +64,8 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [jobInput, setJobInput] = useState<Record<string, string>>({});
+  const [guideInput, setGuideInput] = useState<Record<string, string>>({});
+  const [slotInput, setSlotInput] = useState<Record<string, string>>({});
   const [peakInput, setPeakInput] = useState<Record<string, string>>({});
 
   const load = useCallback(() => {
@@ -79,8 +81,10 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
 
   const resolve = async (r: Row, action: "confirm" | "dismiss", jobNo?: string) => {
     const job = jobNo?.trim() || r.matchedJobNo;
+    const guide = (guideInput[r.id] ?? r.guideId ?? "").trim();
+    const slot = slotInput[r.id] ?? "";
     const msg = action === "confirm"
-      ? `Confirm and mark ${job ?? "this payment"} PAID${r.guideId ? ` for guide ${r.guideId}` : ""}?`
+      ? `Confirm and mark ${job ?? "this payment"} PAID${guide ? ` for guide ${guide}` : ""}${slot ? `, slot ${slot}` : ""}?`
       : "Dismiss this payment from the review queue? It will not be marked paid.";
     if (!window.confirm(msg)) return;
     setBusy(r.id);
@@ -88,11 +92,11 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
       const res = await fetch("/api/payments/transactions/resolve", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: r.id, action, jobNo: jobNo?.trim() || undefined }),
+        body: JSON.stringify({ id: r.id, action, jobNo: jobNo?.trim() || undefined, guideId: guide || undefined, slotIdx: slot ? Number(slot) - 1 : undefined }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
-        const hint = e.error === "job-not-found" ? "No job sheet has that number." : e.error === "job-ambiguous" ? "More than one job sheet has that number." : (e.error ?? res.status);
+        const hint = e.error === "job-not-found" ? "No job sheet has that number." : e.error === "job-ambiguous" ? "More than one job sheet has that number. Enter its guide ID and, if needed, slot." : (e.error ?? res.status);
         window.alert(`Could not ${action} this payment: ${hint}`);
         return;
       }
@@ -197,7 +201,7 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
                   {(r.reason || r.driveLink || (canEdit && r.status === "PAYMENT_NEEDS_REVIEW")) && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
                       <span style={{ fontSize: 12.5, color: r.status === "PAYMENT_NEEDS_REVIEW" ? "var(--assign)" : "var(--ink-soft)" }}>{r.reason ?? ""}</span>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                         {r.driveLink && (
                           <a className="btn sm" href={r.driveLink} target="_blank" rel="noopener noreferrer">View slip</a>
                         )}
@@ -214,6 +218,14 @@ export default function PaymentSlips({ canEdit = false }: { canEdit?: boolean })
                                 <input value={jobInput[r.id] ?? ""} onChange={(e) => setJobInput((m) => ({ ...m, [r.id]: e.target.value }))}
                                   placeholder="Job no. (FOLK-BKK-…)" aria-label="Job number to link"
                                   style={{ border: "1px solid var(--line-strong)", borderRadius: 8, padding: "6px 9px", fontSize: 12.5, fontFamily: "inherit", width: 172, background: "var(--card)", color: "var(--ink)" }} />
+                                <label style={{ fontSize: 12.5 }}>Guide ID (if shared)
+                                  <input value={guideInput[r.id] ?? r.guideId ?? ""} onChange={(e) => setGuideInput((m) => ({ ...m, [r.id]: e.target.value }))}
+                                    style={{ width: 100, marginLeft: 6 }} />
+                                </label>
+                                <label style={{ fontSize: 12.5 }}>Slot (if shared)
+                                  <input type="number" min={1} step={1} value={slotInput[r.id] ?? ""} onChange={(e) => setSlotInput((m) => ({ ...m, [r.id]: e.target.value }))}
+                                    style={{ width: 64, marginLeft: 6 }} />
+                                </label>
                                 <button className="btn sm" disabled={busy === r.id || !(jobInput[r.id] ?? "").trim()} onClick={() => resolve(r, "confirm", jobInput[r.id])}
                                   style={{ background: "var(--primary)", borderColor: "var(--primary)", color: "#fff" }}>
                                   Link &amp; mark paid

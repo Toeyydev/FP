@@ -5,7 +5,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
 import { notifyGuide } from "@/lib/booking-import";
-import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, jobSheetDriveName, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
     if (!refreshToken && (pdfBase64 || eslipBase64)) driveError = "Google Drive isn't connected, so the copy wasn't saved.";
     if (pdfBase64 && refreshToken) {
       try {
-        const r = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const r = await saveBufferToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
         link = r.link;
       } catch (e) { driveError = (e as Error).message.slice(0, 200); }
     }
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
         // Slip evidence leads with the PEAK expense ref (EXP-xxxxx) when this
         // tour's payment has one, matching the saved PEAK entry name.
         const tpRef = (await prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { peakRef: true } }))?.peakRef;
-        const e = await saveBufferToDrive({ refreshToken, name: `${tpRef ? `${tpRef} — ` : ""}${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const e = await saveBufferToDrive({ refreshToken, name: `${tpRef ? `${tpRef} — ` : ""}${jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ` — e-slip.${eslipExt}`)}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         eslipLink = e.link;
       } catch (e) { driveError = driveError || (e as Error).message.slice(0, 200); }
     }
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
   </body></html>`;
 
   try {
-    const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {

@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { decrypt } from "@/lib/crypto";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
-import { nextJobRef } from "@/lib/jobref";
+import { ensureJobRef } from "@/lib/jobref";
 import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
 import { canViewFinance } from "@/lib/roles";
 import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
@@ -66,9 +66,7 @@ export async function GET(req: NextRequest) {
   // for the date the first time it's opened so the "No." always shows.
   if (existing && !existing.ref) {
     try {
-      const newRef = await nextJobRef(date);
-      await prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, data: { ref: newRef } });
-      existing.ref = newRef;
+      existing.ref = await ensureJobRef(existing.id, date);
     } catch { /* ref is best-effort; never block opening the sheet */ }
   }
 
@@ -364,8 +362,7 @@ export async function PUT(req: NextRequest) {
   const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
 
   const existing = await prisma.jobSheet.findUnique({ where: key });
-  let ref = existing?.ref ?? null;
-  if (!ref) ref = await nextJobRef(d.date);
+  let ref = existing?.ref ?? null; // a new sheet is numbered right after it is written (ensureJobRef)
   const operatorNote = d.operatorNote.trim() || null;
 
   // A guest the guide reported as a no-show stays on the sheet (owner rule, 2026-09-13).
@@ -389,6 +386,8 @@ export async function PUT(req: NextRequest) {
     create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
     update: { tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
   });
+  sheet.ref = await ensureJobRef(sheet.id, d.date);
+  ref = sheet.ref;
   // Certification timestamp — the FIRST successful save stamps the document (the
   // date printed under the authorized signature). Set-once at the DB level: the
   // NULL guard in the WHERE means rapid double-saves or later edits can never

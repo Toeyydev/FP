@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
 import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, type Expense } from "@/lib/jobsheet";
-import { nextJobRef } from "@/lib/jobref";
+import { ensureJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 import { attributableBookings, sheetRefs, toSheetBooking } from "@/lib/sheet-bookings";
 
@@ -88,7 +88,6 @@ export async function submitGuideExpenses(o: {
     // reconciled against live bookings — its guest list stayed empty for good.
     const a = await prisma.assignment.findUnique({ where: key, select: { tourId: true } });
     const tour = a?.tourId ? await prisma.tour.findUnique({ where: { id: a.tourId }, select: { name: true } }) : null;
-    const ref = await nextJobRef(date);
     // Written without an operator looking, so only guests attributable to THIS guide:
     // never another tour's, never one already on a co-guide's sheet, and on a departure
     // with two guides only the bookings tagged to this one (lib/sheet-bookings).
@@ -98,7 +97,8 @@ export async function submitGuideExpenses(o: {
     ]);
     const mine = attributableBookings(slotBookings, guideId, { guidesAtSlot, tourId: a?.tourId ?? null, otherSheetRefs: sheetRefs(otherSheets) });
     const guests = fillActualPax(mine.map(toSheetBooking));
-    await prisma.jobSheet.create({ data: { ref, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: guests, expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: o.actorId } });
+    const created = await prisma.jobSheet.create({ data: { ref: null, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: guests, expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: o.actorId } });
+    await ensureJobRef(created.id, date).catch(() => { /* numbered again when an operator opens it */ });
   }
 
   // Tell the operators a guide reported expenses to cross-check.

@@ -56,11 +56,14 @@ export async function resolveMatchContext(
   }
 
   if (classified.type === "JOB_NO" && classified.value) {
-    const sheets = await db.jobSheet.findMany({
+    const matches = await db.jobSheet.findMany({
       where: { ref: classified.value },
       select: { id: true, ref: true, guideId: true, expenses: true, guideFee: true },
     });
-    // Exactly one sheet must carry the ref; 0 or >1 is left unmatched for review.
+    const scoped = input.targetGuideId ? matches.filter((s) => s.guideId === input.targetGuideId) : matches;
+    const sheets = scoped.length ? scoped : matches;
+    ctx.jobReferenceAmbiguous = sheets.length > 1;
+    // Exactly one sheet must carry the ref within the selected guide; 0 or >1 is left unmatched for review.
     if (sheets.length === 1) {
       const s = sheets[0];
       const expected = computeTotals(

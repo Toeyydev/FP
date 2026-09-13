@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
-  const name = receiptDriveName({ ref: sheet.ref, guideId, date, index: expenseIndex, description: expenses[expenseIndex]?.description, ext: extOf(mime) });
+  const name = receiptDriveName({ ref: sheet.ref, guideId, date, slotIdx, index: expenseIndex, description: expenses[expenseIndex]?.description, ext: extOf(mime) });
 
   let up: { id: string; link: string };
   try {

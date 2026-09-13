@@ -506,6 +506,13 @@ model HistoricalJobReviewBooking {
   @@index([bookingId])
 }
 
+// The last job number handed out per tour date (FOLK-BKK-YYYYMMDD-NN). Reserved atomically
+// before a sheet is written, so two requests can never be given the same number; gaps are fine.
+model JobRefCounter {
+  date    String @id
+  lastSeq BigInt
+}
+
 model JobSheet {
   id                 String               @id @default(cuid())
   origin             JobSheetOrigin       @default(NORMAL)

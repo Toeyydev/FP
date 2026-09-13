@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
   const mime = file.type || "image/jpeg";
   const label = [transactionId, memo].filter(Boolean).join(" — ") || "slip";
-  const name = `${label} — e-slip.${extOf(mime)}`;
+  const name = `${label} — ${fileHash} — e-slip.${extOf(mime)}`;
 
   let drive: { id: string; link: string };
   try {

@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { canViewFinance } from "@/lib/roles";
-import { nextJobRef } from "@/lib/jobref";
+import { ensureJobRef } from "@/lib/jobref";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const PERIOD = /^\d{4}-\d{2}$/;
@@ -43,10 +43,9 @@ export async function POST(req: NextRequest) {
   let ref: string | null = null;
   if (d.date && d.slotIdx != null) {
     const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
-    const sheet = await prisma.jobSheet.findUnique({ where: key, select: { ref: true } });
+    const sheet = await prisma.jobSheet.findUnique({ where: key, select: { id: true, ref: true } });
     if (sheet) {
-      ref = sheet.ref ?? (await nextJobRef(d.date));
-      if (!sheet.ref) await prisma.jobSheet.update({ where: key, data: { ref } }).catch(() => {}); // keep sheet + bonus in sync
+      ref = await ensureJobRef(sheet.id, d.date);
     }
   }
   if (!ref) {

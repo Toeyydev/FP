@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   const mime = file.type || "image/jpeg";
   const monthFolder = `${bonus.period} ${MONTHS[Number(bonus.period.slice(5, 7)) - 1] ?? ""}`.trim();
   const tag = (slipRef || bonus.ref || `Bonus ${bonusId.slice(-6)}`).replace(/[\\/:*?"<>|]/g, " ").trim();
-  const name = `${tag} — ${guideName} — bonus.${extOf(mime)}`;
+  const name = `${tag} — ${guideName} — ${bonusId} — bonus.${extOf(mime)}`;
 
   let link: string;
   try {
