@@ -130,13 +130,14 @@ export async function PATCH(req: NextRequest) {
       const items = await prisma.paymentBatchItem.findMany({ where: { batchId: id }, select: { guideId: true, date: true, slotIdx: true, tourId: true } });
       const pays = items.length ? await prisma.tourPayment.findMany({
         where: { OR: items.map((it) => ({ guideId: it.guideId, date: it.date, slotIdx: it.slotIdx })) },
-        select: { guideId: true, date: true, slotIdx: true, status: true, paidBatchNo: true },
+        select: { guideId: true, date: true, slotIdx: true, status: true, paidBatchNo: true, peakPaymentRef: true },
       }) : [];
       const now = new Date();
       settled = { flipped: 0, skippedPaid: [] };
       for (const it of items) {
         const ex = pays.find((p) => p.guideId === it.guideId && p.date === it.date && p.slotIdx === it.slotIdx) ?? null;
-        if (batchPaidAction(ex, existing.batchNo) === "skip") { settled.skippedPaid.push({ guideId: it.guideId, date: it.date, slotIdx: it.slotIdx }); continue; }
+        // A tour in a combined PEAK payment document is settled by that document alone.
+        if (batchPaidAction(ex, existing.batchNo) === "skip" || ex?.peakPaymentRef) { settled.skippedPaid.push({ guideId: it.guideId, date: it.date, slotIdx: it.slotIdx }); continue; }
         await prisma.tourPayment.upsert({
           where: { guideId_date_slotIdx: { guideId: it.guideId, date: it.date, slotIdx: it.slotIdx } },
           create: { guideId: it.guideId, date: it.date, slotIdx: it.slotIdx, tourId: it.tourId, status: "PAID", paidAt: now, paidBatchNo: existing.batchNo },

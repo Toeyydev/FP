@@ -59,3 +59,25 @@ export function paymentCoverage(tourDate: string, tourPay: PayRecord, payroll: P
 
   return { paid: false, paidAt: null, source: null };
 }
+
+/**
+ * The Payments page's rule for "this job is already settled by the guide's whole-month
+ * payroll". Moved here verbatim from api/payments so the pay-together route refuses
+ * exactly the jobs that page shows as paid.
+ *
+ * It differs from paymentCoverage in two deliberate ways that page has always had: a
+ * paid payroll with no timestamp covers the job (legacy rows), and a job whose record
+ * was created AFTER the payment is not covered (a tour re-imported after the transfer
+ * correctly shows unpaid again).
+ */
+export function coveredByPayrollRun(
+  payroll: { status?: string | null; paidAt?: Date | null } | null | undefined,
+  tourDate: string,
+  recordCreatedAt: Date,
+): boolean {
+  if ((payroll?.status ?? "pending") !== "paid") return false;
+  if (!payroll?.paidAt) return true; // paid but no timestamp (legacy) — cover it
+  const paidThrough = new Date(payroll.paidAt.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10); // Bangkok date of the payment
+  if (tourDate > paidThrough) return false; // tour runs after the payment — not covered
+  return new Date(recordCreatedAt).getTime() <= new Date(payroll.paidAt).getTime();
+}

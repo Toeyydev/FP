@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
+import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -73,6 +74,10 @@ export async function POST(req: NextRequest) {
   const { guideId, status, peakRef } = parsed.data;
   const list = parsed.data.jobs?.length ? parsed.data.jobs : (parsed.data.date && parsed.data.slotIdx != null ? [{ date: parsed.data.date, slotIdx: parsed.data.slotIdx }] : []);
   if (!list.length) return NextResponse.json({ error: "no-jobs" }, { status: 400 });
+  // A job paid — or being paid — in a combined PEAK payment document changes only
+  // through that document, or its cost is settled twice. See lib/peak-payment-server.
+  const locks = await paymentDocumentLocks(list.map((j) => ({ guideId, ...j })));
+  if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
   const ref = peakRef?.trim() || null;
   const now = new Date();
   const uid = session!.user!.id ?? null;
@@ -105,6 +110,8 @@ export async function DELETE(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, date, slotIdx } = parsed.data;
   const where = { guideId, date, slotIdx };
+  const locks = await paymentDocumentLocks([where]);
+  if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
   if (await hasHistoricalJobSheet(where)) {
     const c = historicalDeleteConflict();
     return NextResponse.json(c.body, { status: c.status });

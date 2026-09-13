@@ -288,17 +288,20 @@ async function authedCall(
   init: RequestInit,
   wrapperKey: string,
   opts: { fresh?: boolean; retry?: boolean; timeoutMs?: number } = {},
-): Promise<{ r: Response; j: Record<string, unknown> } | { error: string }> {
-  const attempt = async (fresh: boolean): Promise<{ r: Response; j: Record<string, unknown> } | { error: string }> => {
+): Promise<{ r: Response; j: Record<string, unknown> } | { error: string; sent?: boolean }> {
+  // `sent` separates "never left" from "may have arrived". A token failure is the
+  // first; a timeout or dropped connection once the request was underway is the
+  // second — and for a write, the second means the document may exist.
+  const attempt = async (fresh: boolean): Promise<{ r: Response; j: Record<string, unknown> } | { error: string; sent?: boolean }> => {
     const ct = await clientToken(fresh);
-    if (!ct.ok || !ct.token) return { error: ct.desc ? sanitizePeakError(ct.desc) : "could not obtain PEAK client token" };
+    if (!ct.ok || !ct.token) return { error: ct.desc ? sanitizePeakError(ct.desc) : "could not obtain PEAK client token", sent: false };
     const headers = { "content-type": "application/json", "Client-Token": ct.token, "User-Token": USER_TOKEN, ...sigHeaders() };
     const ms = opts.timeoutMs ?? READ_TIMEOUT_MS;
     try {
       const r = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(ms) });
       return { r, j: await r.json().catch(() => ({} as Record<string, unknown>)) };
     } catch (e) {
-      return { error: callFailure(e, ms) };
+      return { error: callFailure(e, ms), sent: true };
     }
   };
 
@@ -313,7 +316,11 @@ async function authedCall(
 
 // One combined expense + payment (peakExpenses.expenses[] shape). Returns the
 // created document `code` (the EXP-… reference).
-export async function createExpenseAllInOne(expense: Record<string, unknown>): Promise<Res<{ id?: string; link?: string }>> {
+//
+// `uncertain` is set when the request may have reached PEAK and the answer was lost —
+// a transport error after sending, or a 5xx from in front of PEAK. A caller must not
+// treat that as "nothing was created": see lib/peak-payment-document.
+export async function createExpenseAllInOne(expense: Record<string, unknown>): Promise<Res<{ id?: string; link?: string; uncertain?: boolean }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   // A write gets a fresh token up front and is never replayed — see authedCall.
   const call = await authedCall(
@@ -325,15 +332,74 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
   // A write that timed out may still have reached PEAK. Say so, because the next
   // step is to look in PEAK before reposting — not to press the button again.
   if ("error" in call) {
-    return { ok: false, desc: call.error.includes("did not respond")
-      ? `${call.error}. The expense may or may not have been created — check PEAK before posting this job sheet again.`
+    const uncertain = !!call.sent;
+    return { ok: false, uncertain, desc: uncertain
+      ? `${call.error}. The expense may or may not have been created — check PEAK before posting again.`
       : call.error };
   }
   const { r, j } = call;
   const wrap = peakWrap<{ expenses?: Array<{ code?: string; id?: string; documentLink?: string; resCode?: string; resDesc?: string }>; resDesc?: string }>(j, "peakExpenses");
   const e = wrap?.expenses?.[0];
   if (e?.code) return { ok: true, code: e.code, id: e.id, link: e.documentLink, desc: e.resDesc };
-  return { ok: false, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
+  // PEAK's own refusals arrive as HTTP 200 with a resDesc: definite, nothing created.
+  // A 5xx with no PEAK body came from something in front of PEAK and proves nothing.
+  const uncertain = r.status >= 500 && !e?.resDesc && !wrap?.resDesc;
+  return { ok: false, uncertain, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
+}
+
+/**
+ * Whether PEAK's reply to Expenses/insertfile reports success.
+ *
+ * Its documented success is `{"resCode": "200", "resDesc": "Success"}` and its error
+ * `{"resCode": "400", ...}` — unlike the list endpoints, where an all-zero code means
+ * success (see peakCodeIsError). So this is decided on its own. An absent code counts
+ * as failure: reporting a slip as attached when it is not hides a missing document,
+ * while the opposite only asks someone to attach it by hand.
+ */
+export function insertFileSucceeded(httpStatus: number, j: Record<string, unknown>): { ok: boolean; desc: string } {
+  const wrap = peakWrap<{ resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakExpenses");
+  const code = String((j?.resCode ?? wrap?.resCode) ?? "").trim();
+  const desc = sanitizePeakError(String((j?.resDesc ?? wrap?.resDesc) ?? "").trim());
+  if (httpStatus >= 200 && httpStatus < 300 && (code === "200" || /^0+$/.test(code))) return { ok: true, desc: desc || "Success" };
+  return { ok: false, desc: desc || (code ? `PEAK code ${code}` : `HTTP ${httpStatus}, no result code`) };
+}
+
+// Attach a file to an existing expense document. POST /api/v1/Expenses/insertfile,
+// body { peakExpenses: { transactionId | transactionCode, file: { fileName, rawString, fileType } } }.
+//
+// PEAK's reference does not say how rawString is encoded. A JSON string cannot carry
+// raw image bytes, so it is sent as plain base64 with no data: prefix — verify that on
+// the first real attachment.
+//
+// It reuses the client token the document's create call minted moments earlier rather
+// than minting another, and retries only on a token rejection — which means nothing
+// was attached, so the retry cannot attach the slip twice.
+export async function insertExpenseFile(input: {
+  transactionId?: string | null;
+  transactionCode?: string | null;
+  fileName: string;
+  base64: string;
+  fileType: "image" | "document";
+}): Promise<{ ok: boolean; desc: string }> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (!input.transactionId && !input.transactionCode) return { ok: false, desc: "No PEAK document to attach the slip to" };
+  const call = await authedCall(
+    `${API}/Expenses/insertfile`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        peakExpenses: {
+          ...(input.transactionId ? { transactionId: input.transactionId } : {}),
+          ...(input.transactionCode ? { transactionCode: input.transactionCode } : {}),
+          file: { fileName: input.fileName, rawString: input.base64, fileType: input.fileType },
+        },
+      }),
+    },
+    "peakExpenses",
+    { fresh: false, retry: true, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  if ("error" in call) return { ok: false, desc: call.error };
+  return insertFileSucceeded(call.r.status, call.j);
 }
 
 // Identity of the connected PEAK account (read-only).

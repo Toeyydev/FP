@@ -6,6 +6,7 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
 import { notifyGuide } from "@/lib/booking-import";
 import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -65,7 +66,9 @@ export async function POST(req: NextRequest) {
     // e-slip IS the proof of (daily) payment — that business fact must land
     // even if the Drive copy hiccups (PDF e-slips, token refresh, large files).
     let paid = false;
-    if (eslipBase64) {
+    // A tour held by a combined PEAK payment document is paid through that document.
+    const locked = eslipBase64 ? (await paymentDocumentLocks([{ guideId, date, slotIdx }])).length > 0 : false;
+    if (eslipBase64 && !locked) {
       try {
         const now = new Date();
         await prisma.tourPayment.upsert({

@@ -10,6 +10,7 @@ import { peakEnabled, sanitizePeakError } from "@/lib/peak-api";
 import { postGuidePayout, peakPayoutReady, peakPostOutcome, peakAlreadyBooked } from "@/lib/peak-payout";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { matchState, type Slip } from "@/lib/payments/slips";
+import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 
@@ -103,6 +104,8 @@ export async function POST(req: NextRequest) {
   if (!guideId || !jobsParsed.success || jobsParsed.data.length === 0 || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
   const jobs = jobsParsed.data;
+  const locks = await paymentDocumentLocks(jobs.map((j) => ({ guideId, ...j })));
+  if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
 
   // Split-payment mode: an optional per-slip amount. When present, this slip is one
   // of several transfers that must sum to a SINGLE tour's payout, so it only applies

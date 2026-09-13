@@ -3,6 +3,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn(), update: vi.fn() },
   user: { findFirst: vi.fn() },
+  tourPayment: { findMany: vi.fn() },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 const createExpenseMock = vi.hoisted(() => vi.fn());
@@ -59,9 +60,25 @@ beforeEach(() => {
   prismaMock.jobSheet.update.mockResolvedValue({});
   prismaMock.user.findFirst.mockResolvedValue({ peakContactId: "ct-778" });
   createExpenseMock.mockResolvedValue({ ok: true, code: "EXP-20260900007", id: "peak-doc-1" });
+  prismaMock.tourPayment.findMany.mockResolvedValue([]); // no payment document holds the job
 });
 
 describe("POST /api/jobsheet/peak-sync — refusals", () => {
+  it("refuses a job already booked inside a combined payment document", async () => {
+    // "Pay N jobs together" put this job's fee and reimbursements in ONE document.
+    // Posting the sheet too would put the same cost in PEAK twice.
+    prismaMock.tourPayment.findMany.mockResolvedValue([
+      { date: JOB.date, slotIdx: JOB.slotIdx, peakPaymentRef: "FOLK-PAY-203005-01", peakRef: "EXP-TEST-0042" },
+    ]);
+    const res = await post(JOB);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("paid-in-payment-document");
+    expect(body.reason).toContain("EXP-TEST-0042");
+    expect(createExpenseMock).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+  });
+
   it("is operators only", async () => {
     authMock.mockResolvedValue({ user: { id: "g_1", role: "GUIDE" } });
     expect((await post(JOB)).status).toBe(403);

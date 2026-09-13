@@ -196,6 +196,25 @@ table.grid tbody tr:hover td.gname{background:var(--grey-bg)}
 .modal select,.modal input{width:100%;border:1px solid var(--line-strong);border-radius:10px;padding:9px 12px;font-family:inherit;font-size:14px;background:var(--paper)}
 .modal select:focus,.modal input:focus{outline:none;border-color:var(--ink-soft)}
 .modal .mfoot{display:flex;gap:9px;justify-content:flex-end;padding:13px 20px;border-top:1px solid var(--line);background:var(--paper);position:sticky;bottom:0}
+/* Pay N jobs together — one PEAK document (PeakPaymentDialog) */
+.paydoc-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);font-weight:700;display:block;margin-bottom:5px;padding:0}
+.paydoc-job{display:flex;align-items:center;gap:10px;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:10px;background:var(--paper);cursor:pointer}
+.paydoc-job:has(input:checked){border-color:var(--line-strong);background:var(--card)}
+.modal .paydoc-job input[type=checkbox]{width:auto;margin:0;flex:none;accent-color:var(--primary)}
+.paydoc-ref{display:block;font-size:11px;color:var(--ink-soft);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.paydoc-fields{border:0;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.paydoc-fields label{display:block;min-width:0}
+.modal .paydoc-fields input[type=file]{padding:6px 8px;font-size:12.5px}
+.paydoc-table td,.paydoc-table th{font-size:12.5px}
+.paydoc-table .r{text-align:right}
+.paydoc-table .num,.paydoc-sum .num,.paydoc-job .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.paydoc-sum{display:grid;gap:4px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.paydoc-hint{font-size:12px;color:var(--ink-soft)}
+.paydoc-credit{font-size:12.5px;padding:7px 10px;border-radius:9px;background:var(--card);border:1px dashed var(--line-strong);color:var(--ink)}
+.pay-doc-note{font-size:11px;font-weight:700;color:var(--ink-soft);white-space:nowrap}
+.pay-doc-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;padding:8px 10px;border-radius:10px;font-size:12.5px;background:#fff8c4;border:1px solid #ecd9bf;color:var(--ink)}
+.pay-doc-bar.danger{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}
+.pay-doc-tag{font-size:11px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-soft);white-space:nowrap}
 .dayedit{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .dayedit .pill{min-width:0;padding:9px 6px;font-size:12px}
 .assigned-note{background:var(--assign-bg);border:1px solid var(--assign-line);border-radius:11px;padding:11px 13px;font-size:13px}.assigned-note b{color:var(--assign)}
