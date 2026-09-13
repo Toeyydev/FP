@@ -10,11 +10,10 @@ type Sum = {
   noShows: number; noShowRate: number; checkins: number; onTimePct: number | null;
   noShowsReported: number; noShowsCancelledBeforeTour: number; noShowsNeedReview: number;
 };
-type NoShowCheck = { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: "cancelled-before-tour" | "needs-review"; reason: "cancelled-no-time" | "cancelled-before-tour" | "untagged-split" };
+type NoShowCheck = { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: "needs-review"; reason: "cancelled-and-no-show" | "untagged-split" };
 const CHECK_TEXT: Record<NoShowCheck["reason"], string> = {
-  "cancelled-no-time": "Needs review: cancelled, but the channel gave no cancellation time",
+  "cancelled-and-no-show": "No-show retained · source says Cancelled — needs review",
   "untagged-split": "Needs review: not tagged to a guide on a split departure",
-  "cancelled-before-tour": "Not counted: the channel cancelled or rebooked it before the tour",
 };
 type Data = {
   from: string; to: string; summary: Sum;
@@ -102,7 +101,7 @@ export default function Reports() {
               <div className="kpi"><b>{s.toursAssigned}</b><span>Tours assigned</span></div>
               <div className="kpi"><b>{s.guestsServed}</b><span>Guests served</span></div>
               <div className={`kpi ${s.noShowRate > 0 ? "warn" : ""}`}><b>{s.noShowRate}%</b><span>No-show rate ({s.noShows})</span>
-                {s.noShowsReported !== s.noShows && <small style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>Guides reported {s.noShowsReported} absent{s.noShowsCancelledBeforeTour ? ` · ${s.noShowsCancelledBeforeTour} cancelled before the tour` : ""}{s.noShowsNeedReview ? ` · ${s.noShowsNeedReview} need review` : ""}</small>}
+                {s.noShowsNeedReview > 0 && <small style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>{s.noShowsNeedReview} also cancelled · included in no-shows, needs review</small>}
               </div>
               <div className={`kpi ${s.onTimePct != null && s.onTimePct < 90 ? "warn" : ""}`}><b>{pct(s.onTimePct)}</b><span>On-time check-in</span></div>
             </div>
@@ -156,7 +155,7 @@ export default function Reports() {
 
             <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 12, lineHeight: 1.6 }}>
               <b>How these are counted:</b> a tour “ran” when it was assigned and the guide checked in or filed a report.
-              No-shows use the guide’s report where available, otherwise the guest-list flags. A guest reported absent is not counted when the channel cancelled or rebooked that booking before the tour’s start time (Bangkok), by the channel’s own cancellation time; cancelled at or after the start, the guide’s report stands. A cancelled booking with no time, or an untagged guest on a split departure, is listed for review instead. On-time = the first check-in within 5 min of the tour start. Revenue isn’t shown — booking prices aren’t stored.
+              No-shows use the guide’s report where available, otherwise the guest-list flags. Source cancellations remain recorded separately: a cancelled booking reported as a no-show stays in the count and is flagged for review, regardless of cancellation time. An untagged guest on a split departure is listed for review without counting the same guest for multiple guides. On-time = the first check-in within 5 min of the tour start. Revenue isn’t shown — booking prices aren’t stored.
             </div>
           </div>
         )}

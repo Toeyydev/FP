@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   for (const c of checkins) ranKeys.add(key(c.guideId, c.date, c.slotIdx));
   for (const r of reports) ranKeys.add(key(r.guideId, r.date, r.slotIdx));
   // Bookings the guide flagged absent, per slot (whatever their status is now), so every
-  // reported absence can be checked against when the channel cancelled the booking.
+  // reported absence can be checked against the channel status without being erased.
   const flaggedBySlot = new Map<string, typeof bookings>();
   for (const b of bookings) if (reportedAbsentPax(b) > 0 && b.date && b.slotIdx != null) {
     const k = `${b.date}|${b.slotIdx}`; flaggedBySlot.set(k, [...(flaggedBySlot.get(k) ?? []), b]);
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
   let guestsServed = 0;
   // reported = what guides reported absent · noShows = what the reports count as no-shows.
   const ns = { reported: 0, noShows: 0, cancelledBeforeTour: 0, needsReview: 0 };
-  const noShowChecks: { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: Exclude<NoShowOutcome, "counts">; reason: "cancelled-no-time" | "cancelled-before-tour" | "untagged-split" }[] = [];
+  const noShowChecks: { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: Exclude<NoShowOutcome, "counts">; reason: "cancelled-and-no-show" | "untagged-split" }[] = [];
   const untaggedSplitListed = new Set<string>();
   for (const a of ran) {
     const rep = reportByKey.get(key(a.guideId, a.date, a.slotIdx));
@@ -69,7 +69,6 @@ export async function GET(req: NextRequest) {
     // The guide's report where there is one, else the guest-list flags. On a departure split
     // across guides only the bookings tagged to this guide are theirs; an untagged one can't be
     // given to either guide, so it is listed for review once instead of counted for each.
-    const start = tourStartMs(a.date, a.slotIdx);
     const slotKey = `${a.date}|${a.slotIdx}`;
     const atSlot = flaggedBySlot.get(slotKey) ?? [];
     const split = (guidesAtSlot.get(slotKey) ?? 1) > 1;
@@ -79,11 +78,11 @@ export async function GET(req: NextRequest) {
     }
     const flagged = atSlot
       .filter((b) => (split ? b.assignedGuideId === a.guideId : true))
-      .map((b) => ({ b, absentPax: reportedAbsentPax(b), outcome: noShowOutcome(b, start) }));
+      .map((b) => ({ b, absentPax: reportedAbsentPax(b), outcome: noShowOutcome(b) }));
     const t = tourNoShows(rep ? (rep.noShow ?? 0) : null, flagged);
     ns.reported += t.reported; ns.noShows += t.counted; ns.cancelledBeforeTour += t.cancelledBeforeTour; ns.needsReview += t.needsReview;
     for (const f of flagged) if (f.outcome !== "counts") {
-      noShowChecks.push({ date: a.date, time: SLOT_TIMES[a.slotIdx] ?? "", guide: gName(a.guideId), ref: bookingRef(f.b.externalRef, f.b.confirmationCode), absentPax: f.absentPax, outcome: f.outcome, reason: f.outcome === "needs-review" ? "cancelled-no-time" : "cancelled-before-tour" });
+      noShowChecks.push({ date: a.date, time: SLOT_TIMES[a.slotIdx] ?? "", guide: gName(a.guideId), ref: bookingRef(f.b.externalRef, f.b.confirmationCode), absentPax: f.absentPax, outcome: f.outcome, reason: "cancelled-and-no-show" });
     }
   }
   const noShows = ns.noShows;

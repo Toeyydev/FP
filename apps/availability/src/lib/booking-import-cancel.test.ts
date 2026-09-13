@@ -199,3 +199,13 @@ describe("autoSyncBokun — reach and truncation", () => {
     expect(prismaMock.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "bokun.autosync.truncated" }) }));
   });
 });
+
+it("source cancellation never overwrites the guide's attendance fields", async () => {
+  copies = [webhookCopy({ noShow: true, noShowPax: 2 })];
+  await importParsed(searchItem(), { source: "GetYourGuide", cancelled: true });
+  expect(updatesTo("webhook-copy")[0]).toMatchObject({ status: "CANCELLED" });
+  for (const call of prismaMock.booking.update.mock.calls) {
+    expect(call[0].data).not.toHaveProperty("noShow");
+    expect(call[0].data).not.toHaveProperty("noShowPax");
+  }
+});
