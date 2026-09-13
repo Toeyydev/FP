@@ -257,19 +257,23 @@ const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
 // stored it again under the channel's code ("GET-…"). Dedupe hid one of the two, and the
 // search only ever updates the copy carrying its own code — so a cancellation could land on
 // the hidden copy while the copy on the guide's job stayed live. When the search reports a
-// cancellation, cancel the other copies of the SAME product booking too (matched on the
-// product confirmation code, which is unique per product booking; a booking id alone can
-// cover several products). Hidden (IGNORED) copies are left alone; a copy that is already
-// cancelled only gains the channel's cancellation time. Returns the copies it cancelled.
+// cancellation, cancel the other copies of the SAME product booking too: matched on the
+// product confirmation code (unique per product booking; a booking id alone can cover several
+// products, and an OTA ref is shared by every version of an amended booking), and refused when
+// the copy carries a different Bokun booking id. A rebooking is a NEW product booking with a
+// new code, so the confirmed new booking is never touched. Hidden (IGNORED) copies are left
+// alone; a copy already cancelled only gains the channel's time if it has none. Returns the
+// copies it cancelled.
 async function cancelOtherCopies(p: ParsedBooking, exceptId: string, cancelledAtSource: Date | undefined): Promise<{ id: string; date: string | null; slotIdx: number | null; customerName: string | null }[]> {
   const code = p.productConfirmationCode?.trim();
   if (!code || code === (p.confirmationCode || p.externalRef)) return [];
   const copies = await prisma.booking.findMany({
     where: { id: { not: exceptId }, confirmationCode: code, status: { in: [...LIVE_STATUSES, "CANCELLED"] } },
-    select: { id: true, status: true, date: true, slotIdx: true, customerName: true, cancelledAtSource: true },
+    select: { id: true, status: true, date: true, slotIdx: true, customerName: true, cancelledAtSource: true, externalId: true },
   });
   const cancelledNow: { id: string; date: string | null; slotIdx: number | null; customerName: string | null }[] = [];
   for (const c of copies) {
+    if (c.externalId && p.bokunBookingId && c.externalId !== p.bokunBookingId) continue; // contradicting source identity
     if (c.status === "CANCELLED") {
       if (!c.cancelledAtSource && cancelledAtSource) await prisma.booking.update({ where: { id: c.id }, data: { cancelledAtSource } });
       continue;
@@ -322,9 +326,13 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true } });
     // The SAME OTA booking can re-arrive under a different Bokun externalId (a
     // re-issue / channel remap). If we already hold this externalRef, update THAT
-    // record in place instead of creating a duplicate.
+    // record in place instead of creating a duplicate — but only a record nothing marks
+    // as a different booking. An OTA amendment keeps the OTA ref and gets a new Bokun
+    // booking and code; merging the two would let the old booking's cancellation cancel
+    // the confirmed new one (or leave the new one cancelled), whichever event came first.
     if (!existing && p.externalRef) {
-      const byRef = await prisma.booking.findFirst({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true } });
+      const sameRef = await prisma.booking.findMany({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true, externalId: true, confirmationCode: true } });
+      const byRef = sameRef.find((b) => (!b.externalId || b.externalId === p.externalId) && (!b.confirmationCode || b.confirmationCode === p.confirmationCode));
       if (byRef) {
         const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
@@ -353,7 +361,17 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   // No externalId: dedupe on confirmationCode / externalRef so re-import is safe.
   const ref = p.confirmationCode || p.externalRef;
   if (ref) {
-    const dup = await prisma.booking.findFirst({ where: { OR: [{ confirmationCode: ref }, { externalRef: ref }] }, select: { id: true, status: true, datePinned: true } });
+    const select = { id: true, status: true, datePinned: true, confirmationCode: true } as const;
+    const byCode = await prisma.booking.findFirst({ where: { confirmationCode: ref }, select });
+    const dup = byCode ?? await prisma.booking.findFirst({ where: { externalRef: ref }, select });
+    // A match on the ref alone does not prove it is the same booking: an OTA ref is shared by
+    // every version of an amended booking, so a cancelled old version could otherwise cancel
+    // the confirmed rebooking. Apply a cancellation only to a record with this exact code, or
+    // to the single record holding the ref with no code of its own.
+    if (dup && cancelled && !byCode && (dup.confirmationCode || (await prisma.booking.count({ where: { externalRef: ref } })) > 1)) {
+      await audit({ action: "booking.cancel_not_applied", entityType: "Booking", entityId: dup.id, detail: { ref, reason: "cancellation matched only by a shared booking ref, not by this record's own code — left unchanged" } });
+      return "skipped";
+    }
     if (dup) {
       const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
       const copies = cancelled ? await cancelOtherCopies(p, dup.id, cancelledAtSource) : [];
@@ -403,6 +421,14 @@ export async function importRawBooking(raw: unknown, opts?: { otaOnly?: boolean 
 // audit log (works across instances) plus a per-instance in-flight guard.
 // Best-effort and meant to be fire-and-forget — never throws into the caller.
 let autoSyncInFlight = false;
+const AUTO_SYNC_PAGES = 10;
+// Tour dates the auto-sync reads: the last 14 days through a year ahead — the manual Sync's
+// horizon. It used to stop 120 days out, so a cancellation for a tour further ahead stayed
+// live until someone pressed Sync or the date drifted into range.
+export function autoSyncWindow(nowMs: number): { from: string; to: string } {
+  const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  return { from: fmt(nowMs - 14 * 86400_000), to: fmt(nowMs + 365 * 86400_000) };
+}
 export async function autoSyncBokun(): Promise<void> {
   if (!bokunApiEnabled || autoSyncInFlight) return;
   autoSyncInFlight = true;
@@ -420,18 +446,17 @@ export async function autoSyncBokun(): Promise<void> {
     if (Math.random() < 0.05) {
       await prisma.auditLog.deleteMany({ where: { action: { in: ["bokun.autosync", "bokun.autosync.done"] }, createdAt: { lt: new Date(Date.now() - 3 * 86400_000) } } }).catch(() => {});
     }
-    const now = Date.now();
-    const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-    const from = fmt(now - 14 * 86400_000);
-    const to = fmt(now + 120 * 86400_000);
+    const { from, to } = autoSyncWindow(Date.now());
     let synced = 0;
     let firstPageFailed: { status: number; error?: string } | null = null;
-    for (let page = 1; page <= 10; page++) {
+    for (let page = 1; page <= AUTO_SYNC_PAGES; page++) {
       const res = await searchBookings({ from, to, page, pageSize: 100 });
       if (!res.ok) { if (page === 1) firstPageFailed = { status: res.status, error: res.error }; break; }
       if (res.items.length === 0) break;
       for (const item of res.items) { try { await importRawBooking(item, { otaOnly: true }); synced++; } catch { /* skip a bad item */ } }
       if (res.items.length < 100) break;
+      // The last allowed page was full: there may be more bookings this run never read. Say so.
+      if (page === AUTO_SYNC_PAGES) await prisma.auditLog.create({ data: { action: "bokun.autosync.truncated", entityType: "Booking", detail: { from, to, pagesRead: page, itemsRead: synced } } });
     }
     if (firstPageFailed) {
       // Don't fail silently: record the error, and if Bokun has been failing for a

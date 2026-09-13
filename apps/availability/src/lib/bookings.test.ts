@@ -126,6 +126,18 @@ describe("bookings — parseBokun", () => {
     expect(parseBokun({ confirmationCode: "GET-5550002", cancellationDate: 1772355600 }).cancelledAt).toBe("2026-03-01T09:00:00.000Z"); // seconds
   });
 
+  it("never guesses a time zone: a bare date or a time without a zone is unknown", () => {
+    expect(parseBokun({ cancellationDate: "2026-03-01" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ cancellationDate: "2026-03-01T16:00:00" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ cancellationDate: "2026-03-01T16:00:00+07:00" }).cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+    expect(parseBokun({ cancellationDate: "1772355600000" }).cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+  });
+
+  it("reads the Bokun booking id from either shape", () => {
+    expect(parseBokun({ parentBookingId: 5550001, confirmationCode: "GET-5550001" }).bokunBookingId).toBe("5550001");
+    expect(parseBokun({ bookingId: 5550001 }).bokunBookingId).toBe("5550001");
+  });
+
   // The guest's phone was in the payload all along; nothing read it, so every
   // Booking.phone was empty. These pin down WHERE it may be read from, because the
   // same payload also carries our own number under seller.phoneNumber.

@@ -16,11 +16,16 @@ function deepFind(obj: unknown, keys: string[], seen = new Set<unknown>()): unkn
   return undefined;
 }
 
-// A channel timestamp (epoch ms / seconds, or a date string) as ISO; undefined if unreadable.
+// A channel timestamp as ISO: epoch ms / seconds, or a date-time string that states its
+// time zone. Anything else (a bare date, a time with no zone, garbage) is undefined — the
+// moment would have to be guessed, and a guessed time is worse than an unknown one.
 function toISO(v: unknown): string | undefined {
   if (v == null || v === "" || typeof v === "object" || typeof v === "boolean") return undefined;
-  const n = typeof v === "number" ? v : /^\d{10,}$/.test(String(v)) ? Number(v) : NaN;
-  const d = Number.isFinite(n) ? new Date(n > 1e12 ? n : n * 1000) : new Date(String(v));
+  const s = String(v).trim();
+  let d: Date;
+  if (typeof v === "number" || /^\d{10,}$/.test(s)) { const n = Number(v); d = new Date(n > 1e12 ? n : n * 1000); }
+  else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i.test(s)) d = new Date(s);
+  else return undefined;
   return isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
@@ -91,9 +96,11 @@ export type ParsedBooking = {
   date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string; durationMin?: number;
   phone?: string; // the guest's own number, when the channel passes it unmasked
   // The same Bokun booking reaches us in two shapes: the webhook's confirmation code is the
-  // product confirmation code, the booking search's is the channel's code ("GET-…") with the
-  // product code alongside. Keeping it lets an import find a copy stored the other way.
+  // product confirmation code and its booking id is `bookingId`; the booking search's code is
+  // the channel's ("GET-…"), with the product code and `parentBookingId` alongside. Keeping
+  // both lets an import recognise a copy stored the other way — and refuse one that isn't.
   productConfirmationCode?: string;
+  bokunBookingId?: string;
   // When the channel cancelled it (Bokun cancellationDate), as ISO. The source's own
   // event time — never the moment FolkOPS happened to receive the cancellation.
   cancelledAt?: string;
@@ -118,6 +125,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
   // Original OTA ref if Bokun passes one; otherwise reuse the confirmation code.
   const externalRef = deepFind(raw, ["externalBookingReference", "externalReference", "resellerReference", "agencyReference"]) ?? confirmationCode;
   // Read from known places only: a deep search could pick up another booking's id or code.
+  const bokunBookingId = externalId ?? r.parentBookingId;
   const productConfirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? r.productConfirmationCode;
   const cancelledAt = toISO(r.cancellationDate ?? ab.cancellationDate);
 
@@ -178,6 +186,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     pax: pax || undefined, customerName, phone,
     durationMin: durHours ? durHours * 60 : undefined,
     productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
+    bokunBookingId: bokunBookingId != null && typeof bokunBookingId !== "object" ? String(bokunBookingId) : undefined,
     cancelledAt,
   };
 }
