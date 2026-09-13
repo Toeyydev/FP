@@ -1,7 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
-// Reports keep what guides reported absent, and count as no-shows only the absences that
-// were not cancelled or rebooked at the channel before the tour. All data is invented.
+// Reports retain guide attendance and flag conflicting cancellations. All data is invented.
 const prismaMock = vi.hoisted(() => ({
   booking: { findMany: vi.fn() },
   assignment: { findMany: vi.fn() },
@@ -60,21 +59,22 @@ const load = async () => {
 };
 
 describe("GET /api/reports — reported absent vs counted no-shows", () => {
-  it("keeps the guides' reported total and counts only real no-shows", async () => {
+  it("keeps the guides' reported total and retains every reported no-show despite cancellation", async () => {
     const { summary } = await load();
     expect(summary.noShowsReported).toBe(6);            // 2 + 1 + 2 (flags, no report) + 1
-    expect(summary.noShowsCancelledBeforeTour).toBe(2); // the booking rebooked a month earlier
-    expect(summary.noShowsNeedReview).toBe(2);          // cancelled, no channel time
-    expect(summary.noShows).toBe(2);                    // cancelled after the start (1) + live (1)
+    expect(summary.noShowsCancelledBeforeTour).toBe(0); // cancellations no longer subtract attendance
+    expect(summary.noShowsNeedReview).toBe(5);          // all cancelled bookings with reported absences
+    expect(summary.noShows).toBe(6);                    // every reported absence stays counted
     expect(summary.guestsServed).toBe(2 + 3 + 4 + 6);
-    expect(summary.noShowRate).toBe(Math.round((2 / (15 + 2)) * 1000) / 10);
+    expect(summary.noShowRate).toBe(Math.round((6 / (15 + 6)) * 1000) / 10);
   });
 
-  it("lists what was taken out of the count, review first", async () => {
+  it("lists conflicting bookings without taking them out of the count", async () => {
     const { noShowChecks } = await load();
     expect(noShowChecks).toEqual([
-      { date: "2026-03-04", time: "13:30", guide: "Guide Test", ref: "TEST-NO-TIME", absentPax: 2, outcome: "needs-review", reason: "cancelled-no-time" },
-      { date: "2026-03-02", time: "13:30", guide: "Guide Test", ref: "TEST-REBOOKED", absentPax: 2, outcome: "cancelled-before-tour", reason: "cancelled-before-tour" },
+      { date: "2026-03-04", time: "13:30", guide: "Guide Test", ref: "TEST-NO-TIME", absentPax: 2, outcome: "needs-review", reason: "cancelled-and-no-show" },
+      { date: "2026-03-03", time: "13:30", guide: "Guide Test", ref: "TEST-LATE-CANCEL", absentPax: 1, outcome: "needs-review", reason: "cancelled-and-no-show" },
+      { date: "2026-03-02", time: "13:30", guide: "Guide Test", ref: "TEST-REBOOKED", absentPax: 2, outcome: "needs-review", reason: "cancelled-and-no-show" },
     ]);
   });
 });
@@ -98,10 +98,21 @@ describe("GET /api/reports — a departure split across two guides", () => {
   it("gives each guide only their tagged guests, and lists an untagged one for review once", async () => {
     const { summary, noShowChecks } = await load();
     expect(summary.noShowsReported).toBe(2 + 3);          // G-TEST: 2 · G-OTHER: 3 — the untagged guest is not doubled
-    expect(summary.noShowsCancelledBeforeTour).toBe(3);   // G-OTHER's booking was cancelled a month earlier
-    expect(summary.noShows).toBe(2);
+    expect(summary.noShowsCancelledBeforeTour).toBe(0);   // cancellation is informational
+    expect(summary.noShows).toBe(5);
     expect(noShowChecks.filter((c: { reason: string }) => c.reason === "untagged-split")).toEqual([
       { date: "2026-03-10", time: "13:30", guide: "—", ref: "TEST-UNTAGGED", absentPax: 1, outcome: "needs-review", reason: "untagged-split" },
     ]);
   });
+});
+
+it("keeps a plain cancelled booking out of no-shows and in cancellation statistics", async () => {
+  const cancelled = booking({ date: "2026-03-04", status: "CANCELLED", noShow: false, noShowPax: 0, cancelledAtSource: new Date("2026-02-01T00:00:00Z") });
+  prismaMock.booking.findMany.mockImplementation(async (args: { select?: Record<string, boolean> }) => args.select?.noShow ? [cancelled] : []);
+  prismaMock.tourReport.findMany.mockResolvedValue([]);
+  const { summary, noShowChecks } = await load();
+  expect(summary.cancelled).toBe(1);
+  expect(summary.noShows).toBe(0);
+  expect(noShowChecks).toEqual([]);
+  expect(cancelled.status).toBe("CANCELLED");
 });

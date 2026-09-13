@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { canViewFinance } from "@/lib/roles";
-import { noShowOutcome, tourStartMs, type NoShowOutcome } from "@/lib/no-show-count";
+import { noShowOutcome, type NoShowOutcome } from "@/lib/no-show-count";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   for (const b of nsRows) {
     if (b.slotIdx == null || !b.date) continue;
     const k = `${b.date}|${b.slotIdx}`;
-    const list = nsMap.get(k) ?? []; list.push({ name: b.customerName || b.externalRef || b.confirmationCode || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShowPax: b.noShowPax || (b.pax ?? 0), g: b.assignedGuideId ?? null, countsInReports: noShowOutcome(b, tourStartMs(b.date, b.slotIdx)) });
+    const list = nsMap.get(k) ?? []; list.push({ name: b.customerName || b.externalRef || b.confirmationCode || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShowPax: b.noShowPax || (b.pax ?? 0), g: b.assignedGuideId ?? null, countsInReports: noShowOutcome(b) });
     nsMap.set(k, list);
   }
 

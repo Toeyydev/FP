@@ -41,7 +41,7 @@ describe("GET /api/tour-log — reported no-shows", () => {
     const { rows } = await res.json();
     expect(rows[0].report.noShow).toBe(5); // the guide's report is untouched
     expect(rows[0].noShows.map((n: { ref: string; countsInReports: string }) => [n.ref, n.countsInReports])).toEqual([
-      ["TEST-A", "cancelled-before-tour"], ["TEST-B", "needs-review"], ["TEST-C", "counts"],
+      ["TEST-A", "needs-review"], ["TEST-B", "needs-review"], ["TEST-C", "counts"],
     ]);
   });
 });
