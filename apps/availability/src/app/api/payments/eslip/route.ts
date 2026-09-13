@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
+import { paymentDocumentLocksInMonth } from "@/lib/peak-payment-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -23,6 +24,8 @@ export async function POST(req: NextRequest) {
   // Duck-type the file: the File global isn't defined in the Node server runtime.
   const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
   if (!/^\d{4}-\d{2}$/.test(period) || !guideId || !file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const locks = await paymentDocumentLocksInMonth(guideId, period, { unresolvedOnly: true });
+  if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
 
   const refreshToken = await folkpathsDriveToken(session!.user!.id ?? undefined);

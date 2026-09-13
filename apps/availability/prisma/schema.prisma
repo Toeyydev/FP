@@ -611,22 +611,66 @@ model TourReport {
 // Per-tour payment state (Pending → Approved → Paid). The amount is computed
 // live from the job sheet (net fee + reimbursements); this just tracks the state.
 model TourPayment {
-  id          String    @id @default(cuid())
-  guideId     String
-  date        String // "YYYY-MM-DD"
-  slotIdx     Int
-  tourId      String
-  status      String    @default("PENDING") // PENDING | APPROVED | PAID
-  approvedBy  String?
-  approvedAt  DateTime?
-  paidAt      DateTime?
-  peakRef     String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
-  eslipUrl    String? // payment slip in Drive — one slip can cover a merged batch of tours
-  slips       Json? // split payment: [{ amount, url, at, name? }] — several transfers that sum to this tour's payout; eslipUrl mirrors the latest for back-compat
-  paidBatchNo String? // FP-BATCH-… that settled this tour — provenance, so un-marking a batch only reverts ITS tours
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  guideId        String
+  date           String // "YYYY-MM-DD"
+  slotIdx        Int
+  tourId         String
+  status         String    @default("PENDING") // PENDING | APPROVED | PAID
+  approvedBy     String?
+  approvedAt     DateTime?
+  paidAt         DateTime?
+  peakRef        String? // PEAK expense ref for THIS payment (a transfer covers a batch of tours)
+  eslipUrl       String? // payment slip in Drive — one slip can cover a merged batch of tours
+  slips          Json? // split payment: [{ amount, url, at, name? }] — several transfers that sum to this tour's payout; eslipUrl mirrors the latest for back-compat
+  paidBatchNo    String? // FP-BATCH-… that settled this tour — provenance, so un-marking a batch only reverts ITS tours
+  // The combined PEAK payment document this tour was paid in ("Pay N jobs together").
+  // Set when the payment is CLAIMED, before PEAK is called, so a second click or a
+  // job-sheet sync cannot book the same cost again. Every tour in one transfer shares
+  // the same ref and document id. Cleared only when PEAK definitely refused the post.
+  peakPaymentRef String? // FOLK-PAY-YYYYMM-NN → GuidePaymentDocument.paymentRef
+  peakDocumentId String? // PEAK's internal id for that document (peakRef holds its EXP-… number)
+  updatedAt      DateTime  @updatedAt
 
   @@unique([guideId, date, slotIdx])
+  @@index([guideId])
+  @@index([status])
+  @@index([peakPaymentRef])
+}
+
+// One PEAK expense document that pays several of a guide's tours in one transfer:
+// one contact, one payment reference, one payment date, one Paid By account, one slip,
+// and a line per job and category. The row is written BEFORE the PEAK call and is the
+// lock and the audit trail — see lib/peak-payment-document.
+model GuidePaymentDocument {
+  id                String    @id @default(cuid())
+  paymentRef        String    @unique // FOLK-PAY-YYYYMM-NN — sent to PEAK as the document reference
+  guideId           String
+  paymentDate       String // "YYYY-MM-DD"
+  paymentMethodId   String // PEAK payment method (the Paid By account)
+  paymentMethodName String? // display only
+  jobs              Json // [{ date, slotIdx, ref, payout }] exactly as claimed
+  lines             Json // the line trace exactly as posted (job, kind, category, account, amount, wht)
+  total             Float // net paid — the transfer amount
+  // POSTING  claimed, PEAK not yet answered
+  // POSTED   PEAK created the document; every job is PAID
+  // FAILED   PEAK definitely refused (or the slip never uploaded); jobs released
+  // UNCERTAIN PEAK did not answer — the document may exist; jobs stay locked until a person checks PEAK
+  // VOIDED   an operator confirmed the document was voided in PEAK; jobs released
+  status            String    @default("POSTING")
+  error             String?
+  slipUrl           String?
+  peakDocumentId    String?
+  peakDocumentNo    String? // EXP-…
+  peakDocumentLink  String?
+  attachmentStatus  String? // ATTACHED | FAILED — the slip on the PEAK document; never affects paid state
+  attachmentError   String?
+  createdById       String?
+  resolvedById      String?
+  resolvedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
   @@index([guideId])
   @@index([status])
 }

@@ -16,6 +16,7 @@ import { bookingRef } from "@/lib/booking-ref";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
+import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -449,6 +450,8 @@ export async function DELETE(req: NextRequest) {
   const guardStarted = body?.guardStarted === true;
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const where = { guideId, date, slotIdx };
+  const locks = await paymentDocumentLocks([where]);
+  if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
 
   // Before-start-only delete (from the Job Sheet page): once the guide has checked in the
   // tour is live or done — refuse it, so a running/finished tour isn't wiped by accident.

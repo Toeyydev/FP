@@ -10,6 +10,7 @@ import {
   buildJobSheetExpense, defaultAccountingDates, peakPayloadHash, peakSyncEligibility, JobSheetNotPostable,
 } from "@/lib/peak-sync";
 import { peakAccountMap, guideFeeAccount } from "@/lib/peak-account-map";
+import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 // POST { guideId, date, slotIdx } — operator/admin only.
 //
@@ -42,6 +43,12 @@ export async function POST(req: NextRequest) {
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
 
   if (!peakEnabled) return NextResponse.json({ error: "peak-not-connected" }, { status: 503 });
+
+  // The other direction of the duplicate guard. "Pay N jobs together" books this job's
+  // fee and reimbursements inside ONE payment document; posting the sheet as well would
+  // put the same cost in PEAK twice.
+  const locks = await paymentDocumentLocks([{ guideId, date, slotIdx }]);
+  if (locks.length) return NextResponse.json({ error: "paid-in-payment-document", reason: locks[0], reasons: locks }, { status: 409 });
 
   const [sheet, guide, accounts, feeAccount] = await Promise.all([
     prisma.jobSheet.findUnique({ where: key }),
