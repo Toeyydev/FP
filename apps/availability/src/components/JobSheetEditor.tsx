@@ -119,9 +119,10 @@ export default function JobSheetEditor() {
     setGuideNote(s?.guideExpensesNote ?? "");
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
-  // Other Tour Cost has no standing account (it covers too many different things),
-  // so those rows pick one here. The chart is only fetched when such a row exists —
-  // most sheets have none and should not pay for the call.
+  // Other Tour Cost may have a standing default (set under PEAK sync), but a row
+  // can always override it here — the row's own account wins. The chart is only
+  // fetched when such a row exists: most sheets have none and should not pay for
+  // the call.
   const needsAccountPicker = !!sheet?.expenses?.some(
     (e) => !isReviewExpense(e) && expenseCategory(e) === "other" && expenseAmount(e) > 0,
   );
@@ -975,14 +976,15 @@ export default function JobSheetEditor() {
                       ? <span className="js-acct ok" title={`Maps to ${PEAK_SERVICE_COST_LABEL}`}>Ready to sync</span>
                       : acct === "UNMAPPED"
                         ? <span className="js-acct warn" title={expenseCategory(e) ? "No PEAK account is configured for this category yet" : "Choose an expense category so this line can be mapped to an account"}>{expenseCategory(e) ? "No account" : "Unmapped"}</span>
-                        : <span className="js-acct warn" title={paid === "UNSPECIFIED" ? "Set Paid By — it decides whether the guide is reimbursed for this line" : "Other Tour Cost is never auto-approved — confirm the accounting mapping for this line"}>Needs review</span>}
-                  {/* Per-row account for Other Tour Cost. Never guessed: until the
-                      operator chooses one the row stays "Needs review" and blocks sync
-                      (see expenseMappingStatus in lib/peak-sync). */}
+                        : <span className="js-acct warn" title={paid === "UNSPECIFIED" ? "Set Paid By — it decides whether the guide is reimbursed for this line" : "This Other Tour Cost has no account yet — choose one here, or set a default under PEAK sync"}>Needs review</span>}
+                  {/* Per-row account for Other Tour Cost, and the override for it:
+                      an account chosen here always beats the category default. With
+                      neither, the account is never guessed — the row stays "Needs
+                      review" and blocks sync (see expenseMappingStatus in peak-sync). */}
                   {!already && canEdit && expenseCategory(e) === "other" && (
                     <div className="js-row-acct">
                       <input list="js-peak-accounts" value={e.peakAccountCode ?? ""} placeholder="Search PEAK account…"
-                        title="Other Tour Cost has no standing account — choose the one this expense belongs to"
+                        title="The account this expense belongs to. Chosen here it always wins over the Other Tour Cost default set under PEAK sync"
                         aria-label="PEAK account for this expense"
                         onChange={(ev) => {
                           const code = ev.target.value.trim();
