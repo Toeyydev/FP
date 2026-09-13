@@ -6,7 +6,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   booking: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), updateMany: vi.fn(), upsert: vi.fn(), count: vi.fn() },
   assignment: { findMany: vi.fn(), update: vi.fn() },
-  auditLog: { create: vi.fn() },
+  auditLog: { create: vi.fn(), findFirst: vi.fn(), deleteMany: vi.fn() },
   productMap: { findUnique: vi.fn() },
   user: { findMany: vi.fn(), findFirst: vi.fn() },
   notification: { create: vi.fn(), findFirst: vi.fn() },
@@ -190,12 +190,22 @@ describe("autoSyncBokun — reach and truncation", () => {
     expect(autoSyncWindow(Date.UTC(2030, 0, 15, 12))).toEqual({ from: "2030-01-01", to: "2031-01-15" });
   });
 
-  it("records when the page limit may have cut the read short", async () => {
-    prismaMock.auditLog.findFirst = vi.fn().mockResolvedValue(null);
+  // autoSyncBokun prunes old sync markers on a random ~5% of runs. The mock used to lack
+  // auditLog.deleteMany, so on those runs the sync aborted before reading a page and this test
+  // failed at random (it failed CI on main once). Both branches are now exercised on purpose.
+  it.each([["without", 0.5], ["with", 0.01]])("records when the page limit may have cut the read short (%s the marker prune)", async (_label, roll) => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(roll as number);
+    prismaMock.auditLog.findFirst.mockResolvedValue(null);
+    prismaMock.auditLog.deleteMany.mockResolvedValue({ count: 0 });
     const direct = Array.from({ length: 100 }, (_, i) => ({ confirmationCode: `FOLK-DIRECT-${i}` })); // skipped by otaOnly
     bokunMock.searchBookings.mockResolvedValue({ ok: true, status: 200, items: direct });
-    await autoSyncBokun();
+    try {
+      await autoSyncBokun();
+    } finally {
+      random.mockRestore();
+    }
     expect(bokunMock.searchBookings).toHaveBeenCalledTimes(10);
+    expect(prismaMock.auditLog.deleteMany).toHaveBeenCalledTimes(roll === 0.01 ? 1 : 0);
     expect(prismaMock.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "bokun.autosync.truncated" }) }));
   });
 });
