@@ -1,10 +1,10 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
-  assignment: { findUnique: vi.fn() },
+  assignment: { findUnique: vi.fn(), count: vi.fn() },
   checkin: { create: vi.fn(), count: vi.fn() },
   booking: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
-  jobSheet: { findUnique: vi.fn(), update: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
   tourReport: { upsert: vi.fn() },
   user: { findFirst: vi.fn() },
 }));
@@ -29,6 +29,8 @@ beforeEach(() => {
   prismaMock.booking.count.mockResolvedValue(0);
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
   prismaMock.user.findFirst.mockResolvedValue({ displayName: "Mali" });
+  prismaMock.assignment.count.mockResolvedValue(1);
+  prismaMock.jobSheet.findMany.mockResolvedValue([]);
 });
 
 describe("slotStartMs", () => {
@@ -132,6 +134,66 @@ describe("recordNoShow", () => {
     expect(await noShow({ bookingNo: "GYG9" })).toEqual({ ok: true, noShowPax: 2 });
     expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual({ date: "2026-09-11", slotIdx: 0, OR: refs("GYG9") });
     expect(prismaMock.booking.count).not.toHaveBeenCalled();
+  });
+
+  // Owner rule (2026-09-13): a reported no-show guest stays on the job sheet.
+  it("adds a reported no-show guest to a saved sheet that does not list them, with the name", async () => {
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Guest B", externalRef: "GYG-TEST-2", confirmationCode: null, assignedGuideId: null, status: "OFFERED", tourId: "T-001" });
+    prismaMock.jobSheet.findUnique.mockResolvedValue({
+      tourId: "T-001",
+      bookings: [{ name: "Guest A", bookingNo: "GYG-TEST-1", bookedPax: 2, actualPax: 2, tickets: "", status: "" }],
+      expenses: [],
+    });
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 2 });
+    const rows = prismaMock.jobSheet.update.mock.calls[0][0].data.bookings;
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({ name: "Guest B", bookingNo: "GYG-TEST-2", bookedPax: 2, noShowPax: 2, actualPax: 0, status: "no-show" });
+  });
+
+  it("does not add a row when the no-show is cleared, or for a co-guide's guest on a split departure", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ tourId: "T-001", bookings: [], expenses: [] });
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Guest B", externalRef: "GYG-TEST-2", confirmationCode: null, assignedGuideId: null, status: "OFFERED", tourId: "T-001" });
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 0 });
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.bookings).toEqual([]);
+
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Co-guide's guest", externalRef: "GYG-TEST-3", confirmationCode: null, assignedGuideId: "G-OTHER", status: "OFFERED", tourId: "T-001" });
+    await noShow({ bookingNo: "GYG-TEST-3", noShowPax: 2, operator: true });
+    expect(prismaMock.jobSheet.update.mock.calls[1][0].data.bookings).toEqual([]);
+  });
+
+  it("never appends a superseded (cancelled) version, an untagged guest on a two-guide departure, a co-guide's listed guest, or a name already on the sheet", async () => {
+    const guest = { pax: 2, customerName: "Guest B", externalRef: "GYG-TEST-2", confirmationCode: "GET-TEST-2", assignedGuideId: null, status: "OFFERED", tourId: "T-001" };
+    const sheet = (rows: object[] = []) => ({ tourId: "T-001", bookings: rows, expenses: [] });
+
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet());
+    prismaMock.booking.findFirst.mockResolvedValue({ ...guest, status: "CANCELLED" });
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 2, operator: true });
+
+    prismaMock.booking.findFirst.mockResolvedValue(guest);
+    prismaMock.assignment.count.mockResolvedValue(2);
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 2, operator: true });
+    prismaMock.assignment.count.mockResolvedValue(1);
+
+    prismaMock.jobSheet.findMany.mockResolvedValue([{ bookings: [{ bookingNo: "GET-TEST-2" }] }]);
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 2, operator: true });
+    prismaMock.jobSheet.findMany.mockResolvedValue([]);
+
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet([{ name: "GUEST b", bookingNo: "VIA-TEST-2", bookedPax: 2, actualPax: 2, tickets: "", status: "" }]));
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 2, operator: true });
+
+    const written = prismaMock.jobSheet.update.mock.calls.map((c) => c[0].data.bookings.length);
+    expect(written).toEqual([0, 0, 0, 1]); // nothing appended in any case
+    // …and the newest record is the one looked up.
+    expect(prismaMock.booking.findFirst.mock.calls[0][0].orderBy).toEqual({ createdAt: "desc" });
+  });
+
+  it("matches a row saved under the booking's other reference instead of adding a duplicate", async () => {
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Guest A", externalRef: "GYG-TEST-1", confirmationCode: "GET-TEST-1", assignedGuideId: null });
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [{ name: "Guest A", bookingNo: "GET-TEST-1", bookedPax: 2, actualPax: 2, tickets: "", status: "" }], expenses: [] });
+    await noShow({ bookingNo: "GYG-TEST-1", noShowPax: 1 });
+    const rows = prismaMock.jobSheet.update.mock.calls[0][0].data.bookings;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ bookingNo: "GET-TEST-1", noShowPax: 1, actualPax: 1, status: "partial" });
   });
 
   it("mirrors the count onto a saved job sheet, leaving the other bookings alone", async () => {

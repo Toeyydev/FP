@@ -13,6 +13,7 @@ import { canViewFinance } from "@/lib/roles";
 import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
 import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
+import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, sheetRefs, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
@@ -134,27 +135,14 @@ export async function GET(req: NextRequest) {
   // the slot was SPLIT across guides, this guide sees only the bookings tagged to
   // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
-    where: { date, slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    where: { date, slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
     select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true },
     orderBy: { createdAt: "asc" },
   });
-  // Actual Pax on a live-scaffolded row: derived from the guide's no-show report —
-  // a full no-show → 0, a partial → who actually came, and blank (null) until any
-  // no-show is reported. (A hand-saved sheet already carries this; this is for the
-  // scaffold, which previously left it null even for a reported no-show.)
-  const liveActualPax = (b: { pax: number | null; noShow: boolean; noShowPax: number | null }) => {
-    const ns = b.noShowPax ?? (b.noShow ? (b.pax ?? 0) : 0);
-    return ns > 0 ? Math.max(0, (b.pax ?? 0) - ns) : null;
-  };
-  // Split slot → this guide's sheet is only the guests tagged to them. Untagged
-  // guests are NOT copied onto every guide's sheet (that duplicated one booking
-  // across two guides); they stay unassigned for the operator to place.
-  const splitHere = allAtSlot.some((b) => b.assignedGuideId);
-  const linked = splitHere ? allAtSlot.filter((b) => b.assignedGuideId === guideId) : allAtSlot;
-  type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
-  // Actual Pax stays blank until the guide reports after the tour (a no-show → 0,
-  // everyone else → their booked count). Booked Pax is always shown alongside.
-  const liveBookings: SheetBooking[] = linked.map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
+  // Split slot → this guide's sheet is only the guests tagged to them (lib/sheet-bookings,
+  // shared with the guide's expense report so a sheet gets the same guests either way).
+  const linked = guideSlotBookings(allAtSlot, guideId);
+  const liveBookings: SheetBooking[] = linked.map(toSheetBooking);
 
   // Standard expense template (labels + prices) with pax left BLANK — the operator
   // fills the counts via "fill down" on the sheet, so nothing is silently auto-scaled
@@ -343,7 +331,7 @@ export async function GET(req: NextRequest) {
       .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
     const added = linked
       .filter((lb) => !coveredLive.has(lb))
-      .map((b) => ({ name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: liveActualPax(b), tickets: "", status: b.noShow ? "no-show" : "" }));
+      .map(toSheetBooking);
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
     return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
@@ -380,10 +368,26 @@ export async function PUT(req: NextRequest) {
   if (!ref) ref = await nextJobRef(d.date);
   const operatorNote = d.operatorNote.trim() || null;
 
+  // A guest the guide reported as a no-show stays on the sheet (owner rule, 2026-09-13).
+  // Removing that row and saving puts it back — with its name, booked pax, and the
+  // reported count — so the job keeps its record of who did not come.
+  const [slotLive, guidesAtSlot, otherSheets] = await Promise.all([
+    prisma.booking.findMany({
+      where: { date: d.date, slotIdx: d.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.assignment.count({ where: { date: d.date, slotIdx: d.slotIdx } }),
+    prisma.jobSheet.findMany({ where: { date: d.date, slotIdx: d.slotIdx, NOT: { guideId: d.guideId } }, select: { bookings: true } }),
+  ]);
+  const { rows: bookings, restored } = keepReportedNoShows(d.bookings, slotLive, d.guideId, {
+    guidesAtSlot, tourId: d.tourId || null, otherSheetRefs: sheetRefs(otherSheets),
+  });
+
   let sheet = await prisma.jobSheet.upsert({
     where: key,
-    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
-    update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
+    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
+    update: { tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
   });
   // Certification timestamp — the FIRST successful save stamps the document (the
   // date printed under the authorized signature). Set-once at the DB level: the
@@ -395,12 +399,13 @@ export async function PUT(req: NextRequest) {
   }
   // Keep the assignment's pax in sync with the job sheet's booking total, so the
   // dispatch board ("On-going tours") and the LINE job sheet match the Job Details.
-  const paxTotal = d.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0);
+  const paxTotal = bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0);
   if (paxTotal > 0) {
     await prisma.assignment.updateMany({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, data: { pax: paxTotal } });
   }
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref } });
-  return NextResponse.json({ ok: true, sheet });
+  const restoredNoShows = restored.map((r) => r.bookingNo);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}) } });
+  return NextResponse.json({ ok: true, sheet, restoredNoShows });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.

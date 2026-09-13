@@ -3,6 +3,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { notifyOps } from "@/lib/booking-import";
 import { applyReportedAttendance, noShowStatus, syncAttractionTickets, type Booking, type Expense } from "@/lib/jobsheet";
+import { attributableBookings, guestNameKey, noShowSheetBooking, sheetRefs } from "@/lib/sheet-bookings";
 
 // What a guide records on an assigned tour while running it: the lifecycle
 // check-ins (ARRIVE → START → COMPLETE) and how many of each booking's guests
@@ -249,7 +250,9 @@ export async function recordNoShow(o: {
     scope = { tourId: o.tourId, status: { in: LIVE_STATUSES }, ...(split ? { assignedGuideId: guideId } : {}) };
   }
   const where = { date, slotIdx, ...scope, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
-  const b = await prisma.booking.findFirst({ where, select: { pax: true } });
+  // Newest first: a GetYourGuide booking amended on the OTA keeps one reference across
+  // several Bokun records, and only the latest is the guest's current booking.
+  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true }, orderBy: { createdAt: "desc" } });
   if (o.tourId && !b) return { ok: false, status: 404, error: "booking-not-found" };
 
   // Clamp the count to the booking's group size and persist it.
@@ -259,11 +262,32 @@ export async function recordNoShow(o: {
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
   const sheet = await prisma.jobSheet.findUnique({ where: key });
   if (sheet && Array.isArray(sheet.bookings)) {
-    const rows = (sheet.bookings as Booking[]).map((r) => {
-      if (r?.bookingNo !== bookingNo) return r;
+    // A row saved under either of the booking's references is this booking.
+    const refs = new Set([bookingNo, b?.externalRef, b?.confirmationCode].map((r) => (r ?? "").trim()).filter(Boolean));
+    let matched = false;
+    let rows: Booking[] = (sheet.bookings as Booking[]).map((r) => {
+      if (!refs.has((r?.bookingNo ?? "").trim())) return r;
+      matched = true;
       const ns = Math.min(noShowPax, r.bookedPax ?? noShowPax);
       return { ...r, noShowPax: ns, status: noShowStatus(ns, r.bookedPax), actualPax: Math.max(0, (r.bookedPax ?? 0) - ns) };
     });
+    // A reported no-show guest belongs on the sheet (owner rule, 2026-09-13). If the
+    // saved sheet does not list them — added late, or removed by hand — add their row.
+    // Only this guide's own guest: on a split departure, never a co-guide's booking.
+    const listedByName = rows.some((r) => guestNameKey(r?.name) && guestNameKey(r?.name) === guestNameKey(b?.customerName));
+    if (!matched && noShowPax > 0 && b && !listedByName) {
+      const [slotLive, guidesAtSlot, otherSheets] = await Promise.all([
+        prisma.booking.findMany({ where: { date, slotIdx, status: { in: LIVE_STATUSES } }, select: { externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true } }),
+        prisma.assignment.count({ where: { date, slotIdx } }),
+        prisma.jobSheet.findMany({ where: { date, slotIdx, NOT: { guideId } }, select: { bookings: true } }),
+      ]);
+      const ctx = { guidesAtSlot, tourId: sheet.tourId || null, otherSheetRefs: sheetRefs(otherSheets) };
+      // The booking itself must be attributable — live, this tour, not a co-guide's —
+      // judged alongside the rest of the departure so the split rule sees every tag.
+      const others = slotLive.filter((x) => !(x.confirmationCode === b.confirmationCode && x.externalRef === b.externalRef));
+      const mine = attributableBookings([...others, b], guideId, ctx).includes(b);
+      if (mine) rows = [...rows, noShowSheetBooking({ ...b, noShow: true, noShowPax }) as Booking];
+    }
     const expenses = syncAttractionTickets(rows, (sheet.expenses as Expense[]) ?? []);
     await prisma.jobSheet.update({ where: key, data: { bookings: rows as object, expenses: expenses as object } });
   }
