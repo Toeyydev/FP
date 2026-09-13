@@ -80,6 +80,43 @@ describe("submitGuideExpenses", () => {
     expect(Array.isArray(data.expenses)).toBe(true); // the operator's default catalogue
   });
 
+  // The bug: a sheet created by the guide's report had NO guests. The guide reports after
+  // the tour, so the sheet is past-dated when an operator opens it — and a past sheet is
+  // never reconciled against live bookings, so the empty guest list never filled in.
+  it("scaffolds the sheet WITH the slot's guests, not an empty guest list", async () => {
+    prismaMock.booking.findMany.mockResolvedValue([
+      { customerName: "Guest A", externalRef: "GYG-TEST-1", confirmationCode: "GET-TEST-1", pax: 2, assignedGuideId: null, noShow: false, noShowPax: 0, status: "OFFERED" },
+      { customerName: "Guest B", externalRef: null, confirmationCode: "VIA-TEST-2", pax: 1, assignedGuideId: null, noShow: false, noShowPax: 0, status: "ASSIGNED" },
+    ]);
+    await report();
+    const { bookings } = prismaMock.jobSheet.create.mock.calls[0][0].data;
+    expect(bookings.map((r: { name: string; bookingNo: string; bookedPax: number }) => [r.name, r.bookingNo, r.bookedPax])).toEqual([
+      ["Guest A", "GYG-TEST-1", 2],
+      ["Guest B", "VIA-TEST-2", 1],
+    ]);
+  });
+
+  it("fills Actual Pax on the scaffolded guests, since the guide has now reported", async () => {
+    prismaMock.booking.findMany.mockResolvedValue([
+      { customerName: "Guest A", externalRef: "GYG-TEST-1", confirmationCode: null, pax: 3, assignedGuideId: null, noShow: true, noShowPax: 1, status: "OFFERED" },
+      { customerName: "Guest B", externalRef: "GYG-TEST-2", confirmationCode: null, pax: 2, assignedGuideId: null, noShow: false, noShowPax: 0, status: "OFFERED" },
+    ]);
+    await report();
+    const { bookings } = prismaMock.jobSheet.create.mock.calls[0][0].data;
+    expect(bookings.map((r: { actualPax: number; status: string }) => [r.actualPax, r.status])).toEqual([[2, "partial"], [2, ""]]);
+  });
+
+  it("uses the same guest rule as the job-sheet page: split slots and cancelled bookings", async () => {
+    prismaMock.booking.findMany.mockResolvedValue([
+      { customerName: "Mine", externalRef: "GYG-TEST-1", confirmationCode: null, pax: 2, assignedGuideId: "G-001", noShow: false, noShowPax: 0, status: "OFFERED" },
+      { customerName: "Co-guide's", externalRef: "GYG-TEST-2", confirmationCode: null, pax: 4, assignedGuideId: "G-OTHER", noShow: false, noShowPax: 0, status: "OFFERED" },
+      { customerName: "Cancelled", externalRef: "GYG-TEST-3", confirmationCode: null, pax: 1, assignedGuideId: "G-001", noShow: false, noShowPax: 0, status: "CANCELLED" },
+    ]);
+    await report();
+    const { bookings } = prismaMock.jobSheet.create.mock.calls[0][0].data;
+    expect(bookings.map((r: { name: string }) => r.name)).toEqual(["Mine"]);
+  });
+
   it("tells the operators what was claimed, and records who did it", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     await report({ expenses: [{ description: "Water", price: 10, pax: 4 }, { description: "Ferry", price: 50, pax: 5 }] });
