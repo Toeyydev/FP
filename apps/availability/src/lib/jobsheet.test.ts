@@ -159,6 +159,13 @@ describe("jobsheet — enriched expense fields don't change the payout math", ()
 });
 
 describe("jobsheet — receiptDriveName", () => {
+  it("names a guide's receipt apart from the operator's row of the same number", () => {
+    const operator = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 0, description: "Grand Palace", ext: "jpg" });
+    const guide = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 0, description: "Grand Palace", ext: "jpg", from: "guide" });
+    expect(guide).toBe("FOLK-BKK-20260808-01-G1 Grand Palace — guide receipt.jpg");
+    expect(guide).not.toBe(operator);
+  });
+
   it("is unique per expense row (ref + E<n>) even for identical descriptions", () => {
     const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 0, description: "Grand Palace", ext: "jpg" });
     const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 1, description: "Grand Palace", ext: "jpg" });
