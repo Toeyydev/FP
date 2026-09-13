@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { guideSlotBookings, keepReportedNoShows, liveActualPax, noShowSheetBooking, toSheetBooking } from "./sheet-bookings";
+import { attributableBookings, guideSlotBookings, keepReportedNoShows, liveActualPax, noShowSheetBooking, sheetRefs, toSheetBooking } from "./sheet-bookings";
 
 // Invented bookings — this repo is public.
 const bk = (over: Record<string, unknown> = {}) => ({
@@ -73,5 +73,53 @@ describe("keepReportedNoShows — a reported no-show guest stays on the sheet", 
 
   it("reads a whole-booking flag with no count as everyone absent", () => {
     expect(noShowSheetBooking(bk({ pax: 3, noShow: true, noShowPax: 0 }))).toMatchObject({ noShowPax: 3, actualPax: 0, status: "no-show" });
+  });
+});
+
+// Regression tests from the 2026-09-13 review. Invented data, real shapes.
+describe("attributableBookings — who an automatic write may give this guide", () => {
+  it("on a departure with two guides, takes only bookings tagged to this guide", () => {
+    const all = [bk({ externalRef: "GYG-TEST-1", assignedGuideId: null }), bk({ externalRef: "GYG-TEST-2", assignedGuideId: "G-TEST" })];
+    expect(attributableBookings(all, "G-TEST", { guidesAtSlot: 2 }).map((b) => b.externalRef)).toEqual(["GYG-TEST-2"]);
+    // One guide: untagged guests are theirs, as before.
+    expect(attributableBookings(all.slice(0, 1), "G-TEST", { guidesAtSlot: 1 })).toHaveLength(1);
+  });
+
+  it("never takes a guest already on another guide's sheet, another tour's booking, or a cancelled one", () => {
+    const all = [
+      bk({ externalRef: "GYG-TEST-1" }),
+      bk({ externalRef: "GYG-TEST-2", tourId: "T-OTHER" }),
+      bk({ externalRef: "GYG-TEST-3", status: "CANCELLED" }),
+      bk({ externalRef: "GYG-TEST-4", tourId: "T-001" }),
+    ];
+    const ctx = { guidesAtSlot: 1, tourId: "T-001", otherSheetRefs: sheetRefs([{ bookings: [{ bookingNo: "GYG-TEST-1" }] }]) };
+    expect(attributableBookings(all, "G-TEST", ctx).map((b) => b.externalRef)).toEqual(["GYG-TEST-4"]);
+  });
+});
+
+describe("keepReportedNoShows — review regressions", () => {
+  const no = (over: Record<string, unknown>) => bk({ noShow: true, noShowPax: 2, ...over });
+
+  it("does not restore an untagged no-show on a two-guide departure (the shape of the 22 Aug mistake)", () => {
+    expect(keepReportedNoShows([], [no({ externalRef: "GYG-TEST-1" })], "G-TEST", { guidesAtSlot: 2 }).restored).toEqual([]);
+  });
+
+  it("does not restore a no-show that is on a co-guide's sheet", () => {
+    const ctx = { otherSheetRefs: new Set(["GYG-TEST-1"]) };
+    expect(keepReportedNoShows([], [no({ externalRef: "GYG-TEST-1" })], "G-TEST", ctx).restored).toEqual([]);
+  });
+
+  it("does not duplicate a guest the sheet lists under a code the live record lacks", () => {
+    // Legacy record: FOLK-T code + OTA number; the sheet row holds the voucher code.
+    const live = no({ customerName: "Guest A", externalRef: "1000000001", confirmationCode: "FOLK-T100000001" });
+    const rows = [{ name: "guest  a", bookingNo: "VIA-TEST-1", bookedPax: 2, actualPax: 0, tickets: "", status: "no-show" }];
+    expect(keepReportedNoShows(rows, [live], "G-TEST").restored).toEqual([]);
+  });
+
+  it("never alters the rows the operator saved", () => {
+    const rows = [{ name: "Guest A", bookingNo: "GYG-TEST-1", bookedPax: 3, actualPax: 1, tickets: "included", status: "partial" }];
+    const { rows: out } = keepReportedNoShows(rows, [no({ customerName: "Guest B", externalRef: "GYG-TEST-2" })], "G-TEST");
+    expect(out[0]).toBe(rows[0]);
+    expect(out).toHaveLength(2);
   });
 });

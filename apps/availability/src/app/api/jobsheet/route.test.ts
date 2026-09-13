@@ -3,9 +3,9 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // Saving a job sheet (PUT). Mocked at the seams only; the no-show rule is the real one.
 // All data is invented — this repo is public.
 const prismaMock = vi.hoisted(() => ({
-  jobSheet: { findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
-  assignment: { updateMany: vi.fn() },
+  assignment: { updateMany: vi.fn(), count: vi.fn() },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 const auditMock = vi.hoisted(() => vi.fn());
@@ -35,6 +35,8 @@ beforeEach(() => {
   authMock.mockResolvedValue({ user: { id: "op_1", role: "OPERATOR" } });
   prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", ref: "FOLK-BKK-20300506-01" });
   prismaMock.jobSheet.upsert.mockImplementation(async ({ update }: { update: object }) => ({ id: "js_1", certifiedAt: new Date(), ...update }));
+  prismaMock.assignment.count.mockResolvedValue(1);
+  prismaMock.jobSheet.findMany.mockResolvedValue([]);
 });
 
 describe("PUT /api/jobsheet — reported no-show guests stay on the sheet", () => {
@@ -63,6 +65,23 @@ describe("PUT /api/jobsheet — reported no-show guests stay on the sheet", () =
     expect((await res.json()).restoredNoShows).toEqual([]);
     expect(prismaMock.jobSheet.upsert.mock.calls[0][0].update.bookings).toHaveLength(1);
     expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ detail: { ref: "FOLK-BKK-20300506-01" } }));
+  });
+
+  it("on a two-guide departure, does not restore an untagged no-show — it may be the co-guide's guest", async () => {
+    prismaMock.assignment.count.mockResolvedValue(2);
+    prismaMock.booking.findMany.mockResolvedValue([live({ externalRef: "GYG-TEST-2", noShow: true, noShowPax: 2 })]);
+    const res = await save([{ name: "Guest A", bookingNo: "GYG-TEST-1", bookedPax: 2, actualPax: 2, tickets: "", status: "" }]);
+    expect((await res.json()).restoredNoShows).toEqual([]);
+    expect(prismaMock.jobSheet.upsert.mock.calls[0][0].update.bookings).toHaveLength(1);
+  });
+
+  it("does not restore a no-show listed on another guide's sheet, and never touches the operator's rows", async () => {
+    prismaMock.jobSheet.findMany.mockResolvedValue([{ bookings: [{ bookingNo: "GYG-TEST-2" }] }]);
+    prismaMock.booking.findMany.mockResolvedValue([live({ externalRef: "GYG-TEST-2", noShow: true, noShowPax: 1 })]);
+    const mine = { name: "Guest A", bookingNo: "GYG-TEST-1", bookedPax: 3, actualPax: 1, tickets: "included", status: "partial" };
+    await save([mine]);
+    expect(prismaMock.jobSheet.upsert.mock.calls[0][0].update.bookings).toEqual([mine]);
+    expect(prismaMock.jobSheet.findMany.mock.calls[0][0].where).toEqual({ date: "2030-05-06", slotIdx: 2, NOT: { guideId: "G-TEST" } });
   });
 
   it("loads only live bookings at this date and slot", async () => {

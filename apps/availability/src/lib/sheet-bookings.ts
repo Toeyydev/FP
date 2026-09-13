@@ -20,6 +20,7 @@ export type SlotBooking = {
   noShow?: boolean | null;
   noShowPax?: number | null;
   status?: string | null;
+  tourId?: string | null;
 };
 
 export type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
@@ -34,6 +35,54 @@ export type SheetBooking = { name: string; bookingNo: string; bookedPax: number 
 export function guideSlotBookings<T extends SlotBooking>(allAtSlot: T[], guideId: string): T[] {
   const splitHere = allAtSlot.some((b) => b.assignedGuideId);
   return splitHere ? allAtSlot.filter((b) => b.assignedGuideId === guideId) : allAtSlot;
+}
+
+/**
+ * What is known about a departure besides its bookings — used ONLY by writes that add
+ * guests without an operator looking (the guide-expense scaffold, the no-show restore on
+ * save, a no-show report). The job-sheet page's own scaffold is an operator view and
+ * keeps using guideSlotBookings as it always has.
+ */
+export type SlotContext = {
+  /** Guides assigned to this date + slot. */
+  guidesAtSlot?: number;
+  /** The tour this sheet is for; a booking mapped to another tour is never this guide's. */
+  tourId?: string | null;
+  /** Booking numbers already on OTHER guides' sheets at this date + slot. */
+  otherSheetRefs?: ReadonlySet<string>;
+};
+
+const refsOf = (b: SlotBooking) => [b.externalRef, b.confirmationCode].map((r) => (r ?? "").trim()).filter(Boolean);
+
+/** Guest names compared the way a person would: case- and spacing-insensitive. */
+export const guestNameKey = (name?: string | null) => (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Every booking number on these sheets. */
+export function sheetRefs(sheets: { bookings?: unknown }[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of sheets) for (const r of (Array.isArray(s.bookings) ? s.bookings : []) as { bookingNo?: string }[]) {
+    const ref = (r?.bookingNo ?? "").trim();
+    if (ref) out.add(ref);
+  }
+  return out;
+}
+
+/**
+ * The bookings an automatic write may attribute to this guide. Stricter than
+ * guideSlotBookings, because nobody reviews the result before it is saved:
+ *  - only live bookings, and only this sheet's tour
+ *  - never a guest already on another guide's sheet at this departure
+ *  - on a departure with more than one guide, only bookings TAGGED to this guide —
+ *    an untagged guest there could be either guide's (2026-09-13: a backfill that
+ *    treated one as "everyone's" put another guide's guest on this sheet)
+ */
+export function attributableBookings<T extends SlotBooking>(allAtSlot: T[], guideId: string, ctx: SlotContext = {}): T[] {
+  const candidates = allAtSlot.filter((b) =>
+    SHEET_BOOKING_STATUSES.includes(b.status ?? "")
+    && (!ctx.tourId || !b.tourId || b.tourId === ctx.tourId)
+    && !refsOf(b).some((r) => ctx.otherSheetRefs?.has(r)));
+  if ((ctx.guidesAtSlot ?? 1) > 1) return candidates.filter((b) => b.assignedGuideId === guideId);
+  return guideSlotBookings(candidates, guideId);
 }
 
 /**
@@ -83,20 +132,27 @@ export function noShowSheetBooking(b: SlotBooking): NoShowSheetBooking {
  * OTA ref or the confirmation code), so a row saved under the other one is not duplicated.
  * Only live bookings count — a cancelled or moved guest is not put back.
  */
-export function keepReportedNoShows<R extends { bookingNo?: string | null }>(
+export function keepReportedNoShows<R extends { bookingNo?: string | null; name?: string | null }>(
   rows: R[],
   allAtSlot: SlotBooking[],
   guideId: string,
+  ctx: SlotContext = {},
 ): { rows: (R | NoShowSheetBooking)[]; restored: NoShowSheetBooking[] } {
   const present = new Set(rows.map((r) => (r.bookingNo ?? "").trim()).filter(Boolean));
-  const live = allAtSlot.filter((b) => SHEET_BOOKING_STATUSES.includes(b.status ?? ""));
+  // The same guest can sit on the sheet under a code the live record does not carry — a
+  // legacy FOLK-T record whose voucher code only the sheet holds. Their name is on the
+  // sheet already, so the rule is met; adding the row again would duplicate them.
+  const names = new Set(rows.map((r) => guestNameKey(r.name)).filter(Boolean));
   const restored: NoShowSheetBooking[] = [];
-  for (const b of guideSlotBookings(live, guideId)) {
+  for (const b of attributableBookings(allAtSlot, guideId, ctx)) {
     if (!hasReportedNoShow(b)) continue;
-    const refs = [b.externalRef, b.confirmationCode].map((r) => (r ?? "").trim()).filter(Boolean);
+    const refs = refsOf(b);
     if (!refs.length || refs.some((r) => present.has(r))) continue;
+    const name = guestNameKey(b.customerName);
+    if (name && names.has(name)) continue;
     restored.push(noShowSheetBooking(b));
     refs.forEach((r) => present.add(r));
+    if (name) names.add(name);
   }
   return { rows: [...rows, ...restored], restored };
 }

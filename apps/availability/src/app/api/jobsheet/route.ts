@@ -13,7 +13,7 @@ import { canViewFinance } from "@/lib/roles";
 import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
 import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
-import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
+import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, sheetRefs, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
@@ -371,12 +371,18 @@ export async function PUT(req: NextRequest) {
   // A guest the guide reported as a no-show stays on the sheet (owner rule, 2026-09-13).
   // Removing that row and saving puts it back — with its name, booked pax, and the
   // reported count — so the job keeps its record of who did not come.
-  const slotLive = await prisma.booking.findMany({
-    where: { date: d.date, slotIdx: d.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true },
-    orderBy: { createdAt: "asc" },
+  const [slotLive, guidesAtSlot, otherSheets] = await Promise.all([
+    prisma.booking.findMany({
+      where: { date: d.date, slotIdx: d.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.assignment.count({ where: { date: d.date, slotIdx: d.slotIdx } }),
+    prisma.jobSheet.findMany({ where: { date: d.date, slotIdx: d.slotIdx, NOT: { guideId: d.guideId } }, select: { bookings: true } }),
+  ]);
+  const { rows: bookings, restored } = keepReportedNoShows(d.bookings, slotLive, d.guideId, {
+    guidesAtSlot, tourId: d.tourId || null, otherSheetRefs: sheetRefs(otherSheets),
   });
-  const { rows: bookings, restored } = keepReportedNoShows(d.bookings, slotLive, d.guideId);
 
   let sheet = await prisma.jobSheet.upsert({
     where: key,

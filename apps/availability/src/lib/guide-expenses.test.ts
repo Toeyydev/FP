@@ -1,9 +1,9 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
-  jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
-  assignment: { findUnique: vi.fn() },
+  assignment: { findUnique: vi.fn(), count: vi.fn() },
   tour: { findUnique: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -30,6 +30,8 @@ beforeEach(() => {
   prismaMock.booking.findMany.mockResolvedValue([]);
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001" });
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Grand Palace" });
+  prismaMock.assignment.count.mockResolvedValue(1);      // one guide on the departure
+  prismaMock.jobSheet.findMany.mockResolvedValue([]);    // no co-guide sheets
 });
 
 describe("submitGuideExpenses", () => {
@@ -104,6 +106,27 @@ describe("submitGuideExpenses", () => {
     await report();
     const { bookings } = prismaMock.jobSheet.create.mock.calls[0][0].data;
     expect(bookings.map((r: { actualPax: number; status: string }) => [r.actualPax, r.status])).toEqual([[2, "partial"], [2, ""]]);
+  });
+
+  it("on a two-guide departure, scaffolds only the guests tagged to this guide", async () => {
+    prismaMock.assignment.count.mockResolvedValue(2);
+    prismaMock.booking.findMany.mockResolvedValue([
+      { customerName: "Untagged", externalRef: "GYG-TEST-1", confirmationCode: null, pax: 2, assignedGuideId: null, noShow: false, noShowPax: 0, status: "OFFERED", tourId: "T-001" },
+      { customerName: "Mine", externalRef: "GYG-TEST-2", confirmationCode: null, pax: 2, assignedGuideId: "G-001", noShow: false, noShowPax: 0, status: "OFFERED", tourId: "T-001" },
+    ]);
+    await report();
+    expect(prismaMock.jobSheet.create.mock.calls[0][0].data.bookings.map((r: { name: string }) => r.name)).toEqual(["Mine"]);
+  });
+
+  it("never scaffolds a guest already on a co-guide's sheet, or another tour's booking", async () => {
+    prismaMock.jobSheet.findMany.mockResolvedValue([{ bookings: [{ bookingNo: "GYG-TEST-1" }] }]);
+    prismaMock.booking.findMany.mockResolvedValue([
+      { customerName: "On co-guide's sheet", externalRef: "GYG-TEST-1", confirmationCode: null, pax: 2, assignedGuideId: null, noShow: false, noShowPax: 0, status: "OFFERED", tourId: "T-001" },
+      { customerName: "Other tour", externalRef: "GYG-TEST-2", confirmationCode: null, pax: 2, assignedGuideId: null, noShow: false, noShowPax: 0, status: "OFFERED", tourId: "T-OTHER" },
+      { customerName: "Mine", externalRef: "GYG-TEST-3", confirmationCode: null, pax: 1, assignedGuideId: null, noShow: false, noShowPax: 0, status: "OFFERED", tourId: "T-001" },
+    ]);
+    await report();
+    expect(prismaMock.jobSheet.create.mock.calls[0][0].data.bookings.map((r: { name: string }) => r.name)).toEqual(["Mine"]);
   });
 
   it("uses the same guest rule as the job-sheet page: split slots and cancelled bookings", async () => {
