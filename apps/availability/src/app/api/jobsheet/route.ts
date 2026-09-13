@@ -370,14 +370,14 @@ export async function PUT(req: NextRequest) {
   // reported count — so the job keeps its record of who did not come.
   const [slotLive, guidesAtSlot, otherSheets] = await Promise.all([
     prisma.booking.findMany({
-      where: { date: d.date, slotIdx: d.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
+      where: { date: d.date, slotIdx: d.slotIdx, OR: [{ status: { in: [...SHEET_BOOKING_STATUSES] } }, { status: "CANCELLED", OR: [{ noShow: true }, { noShowPax: { gt: 0 } }] }] },
       select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true },
       orderBy: { createdAt: "asc" },
     }),
     prisma.assignment.count({ where: { date: d.date, slotIdx: d.slotIdx } }),
     prisma.jobSheet.findMany({ where: { date: d.date, slotIdx: d.slotIdx, NOT: { guideId: d.guideId } }, select: { bookings: true } }),
   ]);
-  const { rows: bookings, restored } = keepReportedNoShows(d.bookings, slotLive, d.guideId, {
+  const { rows: bookings, restored, reinstated } = keepReportedNoShows(d.bookings, slotLive, d.guideId, {
     guidesAtSlot, tourId: d.tourId || null, otherSheetRefs: sheetRefs(otherSheets),
   });
 
@@ -403,8 +403,9 @@ export async function PUT(req: NextRequest) {
     await prisma.assignment.updateMany({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, data: { pax: paxTotal } });
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}) } });
-  return NextResponse.json({ ok: true, sheet, restoredNoShows });
+  const reinstatedNoShows = reinstated.map((r) => r.bookingNo);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(reinstatedNoShows.length ? { reinstatedNoShows } : {}) } });
+  return NextResponse.json({ ok: true, sheet, restoredNoShows, reinstatedNoShows });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.

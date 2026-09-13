@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
   const parsed = z.object({
     guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     slotIdx: z.number().int().min(0), bookingNo: z.string().min(1), noShowPax: z.number().int().min(0).max(100),
+    reason: z.string().max(500).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   if (!ops(role) && myGuideId !== parsed.data.guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });

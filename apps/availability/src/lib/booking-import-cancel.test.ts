@@ -219,3 +219,61 @@ it("source cancellation never overwrites the guide's attendance fields", async (
     expect(call[0].data).not.toHaveProperty("noShowPax");
   }
 });
+
+describe("onBookingCancelled — owner rule: no cancellation message for a tour that already started", () => {
+  // Invented departure 2030-06-10 slot 2 = 13:30 Bangkok = 06:30 UTC, with a guide assigned.
+  const DATE = "2030-06-10";
+  const START = Date.parse(`${DATE}T06:30:00.000Z`);
+  const run = async (nowMs: number, dup: Record<string, unknown> = {}) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(nowMs);
+    try {
+      prismaMock.booking.findFirst.mockResolvedValue({ id: "late", status: "ASSIGNED", datePinned: false, confirmationCode: "GET-5550001", ...dup });
+      copies = [];
+      prismaMock.booking.findMany.mockImplementation(async (args) => (copiesQuery(args) ? [] : [{ pax: 2, assignedGuideId: null }]));
+      prismaMock.booking.update.mockImplementation(async ({ where }) => ({ id: where.id, confirmationCode: "GET-5550001", date: DATE, slotIdx: 2, customerName: "Test Guest" }));
+      prismaMock.assignment.findMany.mockResolvedValue([{ id: "a1", guideId: "G-TEST", pax: 4, googleEventId: null, opsGoogleEventId: null, date: DATE, slotIdx: 2 }]);
+      prismaMock.user.findFirst.mockResolvedValue({ id: "guide-user", lineUserId: null, email: null });
+      await importParsed(searchItem({ date: DATE, slotIdx: 2 }), { source: "GetYourGuide", cancelled: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+  const guideMessages = () => prismaMock.notification.create.mock.calls.filter(([a]) => a.data.kind === "job-change");
+  const lateAudit = () => prismaMock.auditLog.create.mock.calls.filter(([a]) => a.data.action === "booking.cancelled_after_start");
+
+  it("the day after the tour: status CANCELLED and the no-show kept, but no message and no change to the tour's records", async () => {
+    await run(START + 24 * 3600e3, { noShow: true, noShowPax: 2 });
+    expect(updatesTo("late")[0]).toMatchObject({ status: "CANCELLED" });
+    expect(updatesTo("late")[0]).not.toHaveProperty("noShow");
+    expect(guideMessages()).toHaveLength(0);
+    expect(prismaMock.notification.create).not.toHaveBeenCalled();
+    expect(prismaMock.assignment.update).not.toHaveBeenCalled();
+    expect(lateAudit()).toHaveLength(1);
+    expect(lateAudit()[0][0].data).toMatchObject({ entityId: "late", detail: expect.objectContaining({ date: DATE, slotIdx: 2, guides: ["G-TEST"], notified: "nobody" }) });
+  });
+
+  it("the same day, after the start: no message either", async () => {
+    await run(START + 60_000);
+    expect(guideMessages()).toHaveLength(0);
+    expect(lateAudit()).toHaveLength(1);
+  });
+
+  it("exactly at the start counts as started", async () => {
+    await run(START);
+    expect(guideMessages()).toHaveLength(0);
+  });
+
+  it("before the start the guide is still told, as before", async () => {
+    await run(START - 60_000);
+    expect(guideMessages()).toHaveLength(1);
+    expect(lateAudit()).toHaveLength(0);
+    expect(prismaMock.assignment.update).toHaveBeenCalledWith({ where: { id: "a1" }, data: { pax: 2 } });
+  });
+
+  it("days before the tour the guide is told, as before", async () => {
+    await run(START - 5 * 24 * 3600e3);
+    expect(guideMessages()).toHaveLength(1);
+  });
+});
+

@@ -329,3 +329,30 @@ describe("submitTourReport", () => {
     expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
   });
 });
+
+describe("recordNoShow — owner rule: lowering a reported no-show is deliberate", () => {
+  beforeEach(() => {
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 4, noShow: true, noShowPax: 3, externalRef: "GYG1", confirmationCode: null });
+  });
+
+  it("an operator lowering or withdrawing a reported count without a reason changes nothing", async () => {
+    expect(await noShow({ operator: true, noShowPax: 1 }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: false, status: 400, error: "reason-required" });
+    expect(await noShow({ operator: true, noShowPax: 0, reason: " " }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: false, status: 400, error: "reason-required" });
+    expect(prismaMock.booking.updateMany).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+  });
+
+  it("with a reason it is saved, and the audit keeps who, before, after and why", async () => {
+    expect(await noShow({ operator: true, noShowPax: 0, reason: "Guide confirmed the guest joined late", actorId: "op_1", actorRole: "OPERATOR", via: "guide-list" }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: true, noShowPax: 0 });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ actorId: "op_1", actorRole: "OPERATOR", action: "booking.noshow_cleared", detail: expect.objectContaining({ previousNoShowPax: 3, noShowPax: 0, reason: "Guide confirmed the guest joined late" }) }));
+  });
+
+  it("an operator raising a count needs no reason", async () => {
+    expect(await noShow({ operator: true, noShowPax: 4 }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: true, noShowPax: 4 });
+  });
+
+  it("the guide's own correction inside the reporting window is the report itself — no reason, still audited with the count before", async () => {
+    expect(await noShow({ noShowPax: 1 })).toEqual({ ok: true, noShowPax: 1 });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "booking.noshow", detail: expect.objectContaining({ previousNoShowPax: 3, noShowPax: 1 }) }));
+  });
+});

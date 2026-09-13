@@ -385,7 +385,10 @@ export default function JobSheetEditor() {
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setMsg(d.error === "offline" ? "No connection — your changes are still here. Try Save again." : d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
-    setSheet(d.sheet); setSaved(true); setMsg("Saved ✓"); return true;
+    const kept = [...(d.restoredNoShows ?? []), ...(d.reinstatedNoShows ?? [])];
+    setSheet(d.sheet); setSaved(true);
+    setMsg(kept.length ? `Saved ✓ — kept ${kept.length} reported no-show${kept.length === 1 ? "" : "s"} on the sheet (${kept.join(", ")}). To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason.` : "Saved ✓");
+    return true;
   }
   async function sendToGuide() {
     // Auto-save first so you never hit a "save first" dead-end.

@@ -135,3 +135,30 @@ describe("keepReportedNoShows — review regressions", () => {
     expect(out).toHaveLength(2);
   });
 });
+
+describe("keepReportedNoShows — owner rule: no-show evidence is never dropped quietly", () => {
+  const row = (over: Record<string, unknown> = {}) => ({ name: "Guest E", bookingNo: "GYG-TEST-7", bookedPax: 3, actualPax: 3, tickets: "", status: "", ...over });
+  it("keeps a reported no-show whose booking is now CANCELLED", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", status: "CANCELLED", noShow: true, noShowPax: 2, pax: 3 })];
+    expect(keepReportedNoShows([], all, "G-TEST").restored.map((r) => [r.bookingNo, r.noShowPax])).toEqual([["GYG-TEST-7", 2]]);
+  });
+  it("gives a listed row back the reported count when the save cleared or lowered it", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3 })];
+    const cleared = keepReportedNoShows([row()], all, "G-TEST");
+    expect(cleared.reinstated.map((r) => r.bookingNo)).toEqual(["GYG-TEST-7"]);
+    expect(cleared.rows).toEqual([{ ...row(), noShowPax: 2, actualPax: 1, status: "partial" }]);
+    const lowered = keepReportedNoShows([row({ noShowPax: 1, actualPax: 2, status: "partial" })], all, "G-TEST");
+    expect(lowered.rows[0]).toMatchObject({ noShowPax: 2, actualPax: 1 });
+  });
+  it("leaves a row that already carries the reported count (or more) exactly as sent", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3 })];
+    const sent = [row({ noShowPax: 3, actualPax: 0, status: "no-show", tickets: "included" })];
+    const res = keepReportedNoShows(sent, all, "G-TEST");
+    expect(res.reinstated).toEqual([]);
+    expect(res.rows).toEqual(sent);
+  });
+  it("never reinstates a co-guide's guest on a split departure", () => {
+    const all = [bk({ customerName: "Guest E", externalRef: "GYG-TEST-7", confirmationCode: "GET-TEST-7", noShow: true, noShowPax: 2, pax: 3, assignedGuideId: "G-OTHER" })];
+    expect(keepReportedNoShows([row()], all, "G-TEST", { guidesAtSlot: 2 }).reinstated).toEqual([]);
+  });
+});
