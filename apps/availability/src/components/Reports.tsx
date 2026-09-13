@@ -10,7 +10,12 @@ type Sum = {
   noShows: number; noShowRate: number; checkins: number; onTimePct: number | null;
   noShowsReported: number; noShowsCancelledBeforeTour: number; noShowsNeedReview: number;
 };
-type NoShowCheck = { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: "cancelled-before-tour" | "needs-review" };
+type NoShowCheck = { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: "cancelled-before-tour" | "needs-review"; reason: "cancelled-no-time" | "cancelled-before-tour" | "untagged-split" };
+const CHECK_TEXT: Record<NoShowCheck["reason"], string> = {
+  "cancelled-no-time": "Needs review: cancelled, but the channel gave no cancellation time",
+  "untagged-split": "Needs review: not tagged to a guide on a split departure",
+  "cancelled-before-tour": "Not counted: the channel cancelled or rebooked it before the tour",
+};
 type Data = {
   from: string; to: string; summary: Sum;
   punctuality: { onTime: number; late: number };
@@ -104,7 +109,7 @@ export default function Reports() {
 
             {d.noShowChecks.length > 0 && (
               <div className="grid-scroll" style={{ marginBottom: 16 }}>
-                <table className="rep-table">
+                <table className="rep-table" style={{ minWidth: 680 }}>
                   <thead><tr><th>Reported absent</th><th>Guide</th><th>Booking</th><th className="n">Guests</th><th>In the no-show count</th></tr></thead>
                   <tbody>
                     {d.noShowChecks.map((c, i) => (
@@ -114,7 +119,7 @@ export default function Reports() {
                         <td>{c.ref || "—"}</td>
                         <td className="n">{c.absentPax}</td>
                         <td style={c.outcome === "needs-review" ? { color: "var(--danger)", fontWeight: 700 } : { color: "var(--ink-soft)" }}>
-                          {c.outcome === "needs-review" ? "Needs review: cancelled, but the channel gave no cancellation time" : "Not counted: the channel cancelled or rebooked it before the tour"}
+                          {CHECK_TEXT[c.reason]}
                         </td>
                       </tr>
                     ))}
@@ -151,7 +156,7 @@ export default function Reports() {
 
             <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 12, lineHeight: 1.6 }}>
               <b>How these are counted:</b> a tour “ran” when it was assigned and the guide checked in or filed a report.
-              No-shows use the guide’s report where available, otherwise the guest-list flags. A guest reported absent is not counted when the channel cancelled or rebooked that booking before the tour started (by the channel’s own cancellation time); a cancelled booking with no time is listed for review instead. On-time = the first check-in within 5 min of the tour start. Revenue isn’t shown — booking prices aren’t stored.
+              No-shows use the guide’s report where available, otherwise the guest-list flags. A guest reported absent is not counted when the channel cancelled or rebooked that booking before the tour’s start time (Bangkok), by the channel’s own cancellation time; cancelled at or after the start, the guide’s report stands. A cancelled booking with no time, or an untagged guest on a split departure, is listed for review instead. On-time = the first check-in within 5 min of the tour start. Revenue isn’t shown — booking prices aren’t stored.
             </div>
           </div>
         )}

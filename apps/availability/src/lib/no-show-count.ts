@@ -4,8 +4,9 @@ import { SLOT_TIMES } from "@/lib/slots";
 // channel cancelled or rebooked that booking BEFORE the tour started, the guest was never
 // due to come; the guide was simply still shown the old booking. This is decided on the
 // channel's own cancellation time (Booking.cancelledAtSource), never on when FolkOPS heard
-// about it, and never on the current status alone: a booking cancelled after the tour
-// started still counts. Without a source time it cannot be decided, so it is flagged for
+// about it, and never on the current status alone. The line is the departure's start on
+// Bangkok time: cancelled strictly before it → not a no-show; cancelled AT the start or later
+// → the guide's attendance report stands and it counts. Without a source time it cannot be decided, so it is flagged for
 // review instead of guessed. The guide's report and the booking's no-show flags are never
 // changed; this only decides what the reports count.
 export type NoShowOutcome = "counts" | "cancelled-before-tour" | "needs-review";

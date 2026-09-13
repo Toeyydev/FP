@@ -13,6 +13,28 @@ describe("tourStartMs", () => {
   });
 });
 
+describe("the start line — Bangkok time, and exactly at the start", () => {
+  const MORNING = SLOT_TIMES.indexOf("08:30");
+  const start = tourStartMs("2030-04-10", MORNING); // 08:30 Bangkok = 01:30 UTC the same day
+  const at = (iso: string) => noShowOutcome({ status: "CANCELLED", cancelledAtSource: iso }, start);
+
+  it("08:30 Bangkok is 01:30 UTC", () => {
+    expect(new Date(start).toISOString()).toBe("2030-04-10T01:30:00.000Z");
+  });
+  it("a cancellation on the previous UTC day but the tour day in Bangkok is before the start", () => {
+    expect(at("2030-04-09T17:30:00Z")).toBe("cancelled-before-tour"); // 00:30 Bangkok on the tour day
+  });
+  it("one millisecond before the start is before; exactly at the start counts; later the same UTC day counts", () => {
+    expect(at("2030-04-10T01:29:59.999Z")).toBe("cancelled-before-tour");
+    expect(at("2030-04-10T01:30:00.000Z")).toBe("counts");
+    expect(at("2030-04-10T02:00:00Z")).toBe("counts"); // 09:00 Bangkok — the tour had started
+  });
+  it("reading the slot as UTC would have been wrong", () => {
+    // 05:00 UTC is after the 08:30 Bangkok start (01:30 UTC) though before 08:30 UTC.
+    expect(at("2030-04-10T05:00:00Z")).toBe("counts");
+  });
+});
+
 describe("noShowOutcome — does a reported absence count as a no-show?", () => {
   it("cancelled before the tour started: not a no-show", () => {
     expect(noShowOutcome({ status: "CANCELLED", cancelledAtSource: hoursBefore(24 * 30) }, START)).toBe("cancelled-before-tour");

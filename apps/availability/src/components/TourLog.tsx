@@ -125,6 +125,8 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
                       {r.report.noShow > 0 ? ` · ${r.report.noShow} no-show` : ""}
                       {r.report.leftEarly > 0 ? ` · ${r.report.leftEarly} left` : ""}
                       {r.report.comments ? <div style={{ color: "var(--danger)" }}>⚠ {r.report.comments}</div> : null}
+                    </>
+                  ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}
                       {r.noShows && r.noShows.length > 0 && (
                         <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
                           {r.noShows.map((n, i) => { const nsp = n.noShowPax ?? n.pax; const partial = n.pax > 0 && nsp < n.pax; const before = n.countsInReports === "cancelled-before-tour"; const review = n.countsInReports === "needs-review"; return (
@@ -133,9 +135,7 @@ export default function TourLog({ canEdit = true }: { canEdit?: boolean }) {
                             </span>
                           ); })}
                         </div>
-                      )}
-                    </>
-                  ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}</td>
+                      )}</td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${r.date}&slotIdx=${r.slotIdx}`} title="Open this tour's job sheet — full job details">📄 Job sheet</a>{" "}
                     {canEdit && <button className="btn sm danger" title="Remove this tour log entry" onClick={() => removeRow(r)}>🗑</button>}
