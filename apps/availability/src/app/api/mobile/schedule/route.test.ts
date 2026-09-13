@@ -3,7 +3,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({ user: { findUnique: vi.fn() } }));
 const guideSchedule = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
-vi.mock("@/lib/guide-schedule", () => ({ guideSchedule }));
+vi.mock("@/lib/guide-schedule", () => ({ guideSchedule, UNREPORTED_LOOKBACK_DAYS: 7 }));
 
 import { GET } from "./route";
 import { mintMobileAccessToken } from "@/lib/mobile-auth";
@@ -31,6 +31,7 @@ describe("GET /api/mobile/schedule", () => {
     const res = await get(token);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ items: [{ date: "2026-09-11", slotIdx: 0, tourName: "Grand Palace" }] });
-    expect(guideSchedule).toHaveBeenCalledWith("G-001");
+    // The app's list reaches back a week for tours still owing their report.
+    expect(guideSchedule).toHaveBeenCalledWith("G-001", expect.any(Number), { unreportedDays: 7 });
   });
 });
