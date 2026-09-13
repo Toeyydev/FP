@@ -134,6 +134,39 @@ describe("recordNoShow", () => {
     expect(prismaMock.booking.count).not.toHaveBeenCalled();
   });
 
+  // Owner rule (2026-09-13): a reported no-show guest stays on the job sheet.
+  it("adds a reported no-show guest to a saved sheet that does not list them, with the name", async () => {
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Guest B", externalRef: "GYG-TEST-2", confirmationCode: null, assignedGuideId: null });
+    prismaMock.jobSheet.findUnique.mockResolvedValue({
+      bookings: [{ name: "Guest A", bookingNo: "GYG-TEST-1", bookedPax: 2, actualPax: 2, tickets: "", status: "" }],
+      expenses: [],
+    });
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 2 });
+    const rows = prismaMock.jobSheet.update.mock.calls[0][0].data.bookings;
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({ name: "Guest B", bookingNo: "GYG-TEST-2", bookedPax: 2, noShowPax: 2, actualPax: 0, status: "no-show" });
+  });
+
+  it("does not add a row when the no-show is cleared, or for a co-guide's guest on a split departure", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [], expenses: [] });
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Guest B", externalRef: "GYG-TEST-2", confirmationCode: null, assignedGuideId: null });
+    await noShow({ bookingNo: "GYG-TEST-2", noShowPax: 0 });
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.bookings).toEqual([]);
+
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Co-guide's guest", externalRef: "GYG-TEST-3", confirmationCode: null, assignedGuideId: "G-OTHER" });
+    await noShow({ bookingNo: "GYG-TEST-3", noShowPax: 2, operator: true });
+    expect(prismaMock.jobSheet.update.mock.calls[1][0].data.bookings).toEqual([]);
+  });
+
+  it("matches a row saved under the booking's other reference instead of adding a duplicate", async () => {
+    prismaMock.booking.findFirst.mockResolvedValue({ pax: 2, customerName: "Guest A", externalRef: "GYG-TEST-1", confirmationCode: "GET-TEST-1", assignedGuideId: null });
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [{ name: "Guest A", bookingNo: "GET-TEST-1", bookedPax: 2, actualPax: 2, tickets: "", status: "" }], expenses: [] });
+    await noShow({ bookingNo: "GYG-TEST-1", noShowPax: 1 });
+    const rows = prismaMock.jobSheet.update.mock.calls[0][0].data.bookings;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ bookingNo: "GET-TEST-1", noShowPax: 1, actualPax: 1, status: "partial" });
+  });
+
   it("mirrors the count onto a saved job sheet, leaving the other bookings alone", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({
       bookings: [

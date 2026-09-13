@@ -13,7 +13,7 @@ import { canViewFinance } from "@/lib/roles";
 import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, peakSyncEligibility } from "@/lib/peak-sync";
 import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
-import { guideSlotBookings, SHEET_BOOKING_STATUSES, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
+import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
@@ -368,10 +368,20 @@ export async function PUT(req: NextRequest) {
   if (!ref) ref = await nextJobRef(d.date);
   const operatorNote = d.operatorNote.trim() || null;
 
+  // A guest the guide reported as a no-show stays on the sheet (owner rule, 2026-09-13).
+  // Removing that row and saving puts it back — with its name, booked pax, and the
+  // reported count — so the job keeps its record of who did not come.
+  const slotLive = await prisma.booking.findMany({
+    where: { date: d.date, slotIdx: d.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const { rows: bookings, restored } = keepReportedNoShows(d.bookings, slotLive, d.guideId);
+
   let sheet = await prisma.jobSheet.upsert({
     where: key,
-    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
-    update: { tourId: d.tourId, status: d.status, bookings: d.bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
+    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
+    update: { tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
   });
   // Certification timestamp — the FIRST successful save stamps the document (the
   // date printed under the authorized signature). Set-once at the DB level: the
@@ -383,12 +393,13 @@ export async function PUT(req: NextRequest) {
   }
   // Keep the assignment's pax in sync with the job sheet's booking total, so the
   // dispatch board ("On-going tours") and the LINE job sheet match the Job Details.
-  const paxTotal = d.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0);
+  const paxTotal = bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0);
   if (paxTotal > 0) {
     await prisma.assignment.updateMany({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, data: { pax: paxTotal } });
   }
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref } });
-  return NextResponse.json({ ok: true, sheet });
+  const restoredNoShows = restored.map((r) => r.bookingNo);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}) } });
+  return NextResponse.json({ ok: true, sheet, restoredNoShows });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.
