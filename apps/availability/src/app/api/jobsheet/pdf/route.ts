@@ -6,6 +6,7 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { jobSheetTotals } from "@/lib/peak-sync";
+import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -120,8 +121,10 @@ export async function GET(req: NextRequest) {
   if (editable) for (let k = 0; k < 4; k++) bookingRows += `<tr><td>${bookings.length + k + 1}</td><td contenteditable="true"></td><td contenteditable="true"></td><td class="n" contenteditable="true" data-bpax></td><td class="n" contenteditable="true" data-apax></td><td contenteditable="true"></td></tr>`;
 
   // Paid-by (แหล่งเงินที่ใช้ชำระ): compact read-only labels — Company / Advance /
-  // Guide are the sanctioned short forms; never truncated composites.
-  const paidByShort = (v?: string) => (v === "advance" ? "Advance" : v === "guide" ? "Guide" : "Company");
+  // Guide are the sanctioned short forms; never truncated composites. A row with no
+  // recognised payer prints "ยังไม่ระบุผู้จ่าย", never a guessed "Company"
+  // (lib/paid-by-label — the same rule as the Drive document).
+  const paidByShort = (v?: string) => paidByShortLabel(v);
   const expRow = (cat: string, desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
     ? `<tr data-exp><td>${cat}</td><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
     : `<tr><td>${cat}</td><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;

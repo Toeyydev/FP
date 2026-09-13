@@ -4,6 +4,7 @@ import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/
 import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
 import { jobSheetTotals } from "@/lib/peak-sync";
+import { paidByDocLabel } from "@/lib/paid-by-label";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { readFile } from "node:fs/promises";
@@ -49,10 +50,9 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
       const actual = ns ? `<span style="color:#c0392b;font-weight:700">NO-SHOW</span>` : `${b.actualPax ?? ""}`;
       return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`;
     }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
-    const SRC: Record<string, string> = { advance: "Guide Advance / ชำระจากเงินทดรองจ่าย", guide: "Guide Personal / มัคคุเทศก์สำรองจ่าย" };
     const nsStats = noShowStats(bookings);
     // An uncategorised row prints "—" — the document shows what is stored, never a guess.
-    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(SRC[e.paidBy ?? ""] ?? "Company Direct / บริษัทชำระโดยตรง")}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
+    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(paidByDocLabel(e.paidBy))}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
 
     // Advance / settlement ledger — the accountant's cash story (never in expense totals).
     const [advRows, retRows] = await Promise.all([
