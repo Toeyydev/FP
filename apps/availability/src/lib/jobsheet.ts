@@ -319,10 +319,14 @@ export function toggleApproval(current?: string | null): ApprovalStatus {
 // re-upload replaces only that row's receipt and never another's. The description is
 // sanitised (Drive/query-safe) and clipped; falls back to guideId-date when a sheet
 // has no ref yet.
-export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; index: number; description?: string | null; ext: string }): string {
+export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; index: number; description?: string | null; ext: string; from?: "operator" | "guide" }): string {
   const base = (opts.ref || `${opts.guideId}-${opts.date}`).trim();
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
-  return `${base}-E${opts.index + 1}${desc ? ` ${desc}` : ""} — receipt.${opts.ext}`;
+  // A guide's receipt is numbered by the line of THEIR report, which is not the
+  // operator's row of the same number — so it is named apart (G<n>, "guide
+  // receipt") and never reads as the operator's evidence for a different line.
+  const guide = opts.from === "guide";
+  return `${base}-${guide ? "G" : "E"}${opts.index + 1}${desc ? ` ${desc}` : ""} — ${guide ? "guide receipt" : "receipt"}.${opts.ext}`;
 }
 
 // Apply a guide's reported attendance to a job sheet: remove `absent` guests

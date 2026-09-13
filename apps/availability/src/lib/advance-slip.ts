@@ -22,16 +22,38 @@ export type SlipUpload = { url: string; fileId: string };
 export type SlipFailure = { error: string; status: number };
 
 export async function uploadSlip(userId: string | undefined, file: SlipFile, name: string, date: string): Promise<SlipUpload | SlipFailure> {
+  return uploadJobFile({ userId, file, date, folder: "Advances", name: (ext) => `${name}.${ext}` });
+}
+
+/** Where under a month's job-sheet folder a piece of evidence is filed. */
+export type JobFileFolder = "Advances" | "Receipts";
+
+/**
+ * One piece of evidence for a job, filed in the company Drive under
+ * Folkpaths Job Sheets / <month> / <folder>. The same checks and the same place
+ * whoever sends it — a slip from the advance screen, a receipt from a guide's
+ * report — so the accountant looks in one folder, not one per route.
+ *
+ * `name` is given the file's extension, since only the upload knows what arrived.
+ */
+export async function uploadJobFile(o: {
+  userId: string | undefined;
+  file: SlipFile;
+  date: string;
+  folder: JobFileFolder;
+  name: (ext: string) => string;
+}): Promise<SlipUpload | SlipFailure> {
+  const { file, date } = o;
   const mime = file.type || "image/jpeg";
   if (!OK_TYPES.test(mime)) return { error: "bad-type", status: 400 };
   if ((file.size ?? 0) > MAX_SLIP_BYTES) return { error: "too-large", status: 400 };
   if (!googleDriveEnabled) return { error: "not-configured", status: 400 };
-  const refreshToken = await folkpathsDriveToken(userId);
+  const refreshToken = await folkpathsDriveToken(o.userId);
   if (!refreshToken) return { error: "not-connected", status: 400 };
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
   try {
-    const up = await saveBufferToDrive({ refreshToken, name: `${name}.${extOf(mime)}`, base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", monthFolder, "Advances"] });
+    const up = await saveBufferToDrive({ refreshToken, name: o.name(extOf(mime)), base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", monthFolder, o.folder] });
     return { url: up.link, fileId: up.id };
   } catch (e) {
     return { error: `drive-failed: ${(e as Error).message.slice(0, 160)}`, status: 502 };
