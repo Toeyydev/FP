@@ -6,8 +6,9 @@ name: CI
 # these are the checks that caught the real regressions during development
 # (worker bundle crash + node-only typecheck drift), kept fast.
 on:
+  # Every pull request, whatever its base — a PR stacked on another branch gets the same
+  # gate as one targeting main.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
