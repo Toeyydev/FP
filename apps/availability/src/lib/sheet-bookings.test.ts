@@ -97,6 +97,18 @@ describe("attributableBookings — who an automatic write may give this guide", 
   });
 });
 
+describe("attributableBookings — unmapped bookings", () => {
+  it("takes an unmapped booking only while no other tour departs in the same slot", () => {
+    const unmapped = bk({ externalRef: "GYG-TEST-1", tourId: null });
+    const mine = bk({ externalRef: "GYG-TEST-2", tourId: "T-001" });
+    const otherTour = bk({ externalRef: "GYG-TEST-3", tourId: "T-OTHER" });
+    expect(attributableBookings([unmapped, mine], "G-TEST", { tourId: "T-001" }).map((b) => b.externalRef)).toEqual(["GYG-TEST-1", "GYG-TEST-2"]);
+    expect(attributableBookings([unmapped, mine, otherTour], "G-TEST", { tourId: "T-001" }).map((b) => b.externalRef)).toEqual(["GYG-TEST-2"]);
+    // A cancelled booking of another tour does not make the slot ambiguous.
+    expect(attributableBookings([unmapped, { ...otherTour, status: "CANCELLED" }], "G-TEST", { tourId: "T-001" })).toHaveLength(1);
+  });
+});
+
 describe("keepReportedNoShows — review regressions", () => {
   const no = (over: Record<string, unknown>) => bk({ noShow: true, noShowPax: 2, ...over });
 

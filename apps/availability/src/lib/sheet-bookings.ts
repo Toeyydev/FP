@@ -77,9 +77,12 @@ export function sheetRefs(sheets: { bookings?: unknown }[]): Set<string> {
  *    treated one as "everyone's" put another guide's guest on this sheet)
  */
 export function attributableBookings<T extends SlotBooking>(allAtSlot: T[], guideId: string, ctx: SlotContext = {}): T[] {
-  const candidates = allAtSlot.filter((b) =>
-    SHEET_BOOKING_STATUSES.includes(b.status ?? "")
-    && (!ctx.tourId || !b.tourId || b.tourId === ctx.tourId)
+  const live = allAtSlot.filter((b) => SHEET_BOOKING_STATUSES.includes(b.status ?? ""));
+  // A booking with no tour mapped is this sheet's only while no other tour departs in
+  // the same slot; beside another tour's bookings it could belong to either.
+  const otherTourHere = !!ctx.tourId && live.some((b) => b.tourId && b.tourId !== ctx.tourId);
+  const candidates = live.filter((b) =>
+    (!ctx.tourId || (b.tourId ? b.tourId === ctx.tourId : !otherTourHere))
     && !refsOf(b).some((r) => ctx.otherSheetRefs?.has(r)));
   if ((ctx.guidesAtSlot ?? 1) > 1) return candidates.filter((b) => b.assignedGuideId === guideId);
   return guideSlotBookings(candidates, guideId);
