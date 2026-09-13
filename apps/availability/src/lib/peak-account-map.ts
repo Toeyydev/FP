@@ -16,14 +16,16 @@ const SELECT = { folkopsCategory: true, peakAccountCode: true, peakAccountName: 
 //
 // The job sheet's short expenseType keys → the chart's category codes.
 //
-// OTHER_TOUR_COST is deliberately absent: it has no standing account, and its row
-// carries its own peakAccountCode chosen on the sheet (see lib/peak-sync).
-// GUIDE_FEE is absent too — it is not a tour-expense category; read it with
+// OTHER_TOUR_COST is included, but its default is optional: when none is saved the
+// key is simply absent, and each row must carry its own peakAccountCode chosen on
+// the sheet (see lib/peak-sync). A row's own account always wins over the default.
+// GUIDE_FEE is absent — it is not a tour-expense category; read it with
 // guideFeeAccount() below.
 const TOUR_EXPENSE_CATEGORIES = [
   ["entrance", "ENTRANCE_TICKET"],
   ["transport", "TRANSPORTATION"],
   ["meal", "MEAL_REFRESHMENT"],
+  ["other", "OTHER_TOUR_COST"],
 ] as const;
 
 const toAccount = (m: AccountMapping | undefined): PeakAccount | null =>

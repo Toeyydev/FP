@@ -70,10 +70,10 @@ export function expenseMappingStatus(e: Expense, accounts: PeakAccountMap = {}):
   const cat = expenseCategory(e);
   if (!cat) return "UNMAPPED";                       // no category chosen yet
   if (canonicalPaidBy(e) === "UNSPECIFIED") return "NEEDS_REVIEW"; // who paid is unknown
-  // OTHER_TOUR_COST is the catch-all: what belongs in it can only be decided per
-  // job, so it is never auto-approved. An operator clears it by recording the
-  // account they chose on the row itself.
-  if (cat === "other") return e.peakAccountCode ? "READY" : "NEEDS_REVIEW";
+  // OTHER_TOUR_COST is the catch-all. It is ready when the row names its own
+  // account, or when the owner has saved a default for the category; with neither,
+  // it waits for a choice on the row rather than being guessed.
+  if (cat === "other") return (e.peakAccountCode || accounts.other?.code) ? "READY" : "NEEDS_REVIEW";
   // Any other category still needs a real account behind it before it can book.
   const acct = e.peakAccountCode || accounts[cat]?.code;
   return acct ? "READY" : "UNMAPPED";
@@ -378,12 +378,14 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
   for (const e of needReview) {
     const cat = categoryForExpenseType(e.expenseType);
     if (!cat) { uncategorised++; continue; }
-    if (isPerJobCategory(cat)) { perJobUnresolved++; continue; }
+    // Paid By before the account: an Other Tour Cost that has an account but no
+    // Paid By must be told to set Paid By, not sent looking for an account.
     if (canonicalPaidBy(e) === "UNSPECIFIED") { uncategorised++; continue; }
+    if (isPerJobCategory(cat)) { perJobUnresolved++; continue; }
     unmappedCats.add(cat);
   }
   for (const cat of unmappedCats) reasons.push(`${categoryLabel(cat)} has no PEAK account mapping`);
-  if (perJobUnresolved) reasons.push(`${perJobUnresolved} ${categoryLabel("OTHER_TOUR_COST")} require${perJobUnresolved === 1 ? "s" : ""} account review`);
+  if (perJobUnresolved) reasons.push(`${perJobUnresolved} ${categoryLabel("OTHER_TOUR_COST")} ${perJobUnresolved === 1 ? "has" : "have"} no PEAK account — choose one on the row, or set a default under PEAK sync`);
   if (uncategorised) reasons.push(uncategorised === 1 ? "1 expense needs a category or Paid By" : `${uncategorised} expenses need a category or Paid By`);
 
   // A company-direct row claiming to be in PEAK already must say WHICH document,

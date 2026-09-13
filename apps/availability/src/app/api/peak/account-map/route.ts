@@ -9,7 +9,6 @@ import {
   ACCOUNTING_CATEGORIES,
   accountChartReady,
   categoryStatus,
-  canMapGlobally,
   isAccountingCategory,
   missingRequired,
   type AccountingCategory,
@@ -78,13 +77,9 @@ export async function POST(req: NextRequest) {
   const unknown = parsed.data.mappings.map((m) => m.folkopsCategory).filter((k) => !isAccountingCategory(k));
   if (unknown.length) return NextResponse.json({ error: "unknown-category", detail: unknown.join(", ") }, { status: 400 });
 
-  // A per-job category (OTHER_TOUR_COST) must never acquire a standing account.
-  // Enforced here as well as hidden in the UI: a default saved by some other
-  // client would silently misfile every one-off cost that category exists to hold.
-  const perJob = parsed.data.mappings
-    .filter((m) => !canMapGlobally(m.folkopsCategory) && (m.peakAccountCode ?? "").trim())
-    .map((m) => m.folkopsCategory);
-  if (perJob.length) return NextResponse.json({ error: "per-job-category", detail: perJob.join(", ") }, { status: 400 });
+  // Every category may carry a standing account. OTHER_TOUR_COST used to be
+  // refused one; the owner chose on 2026-09-13 to book it to ต้นทุนการให้บริการ
+  // like the rest. Its default stays optional — see lib/peak-accounts.
 
   const before = await loadMappings();
   const beforeByKey = new Map(before.map((r) => [r.folkopsCategory, r]));

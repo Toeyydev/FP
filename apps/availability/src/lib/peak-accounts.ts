@@ -20,11 +20,13 @@ export type AccountingCategory =
 //
 //  FIXED    — chosen once on the Account chart mapping page and reused by every
 //             future job sheet. The operator never picks it again.
-//  PER_JOB  — cannot have a standing account at all. OTHER_TOUR_COST is the
-//             catch-all: a temple offering, flowers, a one-off local fee and a
-//             miscellaneous guest item can each belong to a different account, so
-//             a single default would silently misfile most of them. The account is
-//             chosen on the expense row that actually uses it.
+//  PER_JOB  — no standing account is REQUIRED, so it never counts as missing.
+//             OTHER_TOUR_COST is the catch-all: a temple offering, flowers or a
+//             one-off local fee can each belong to a different account. A default
+//             MAY still be saved — the owner chose on 2026-09-13 to book every tour
+//             cost that is not the guide fee to ต้นทุนการให้บริการ, so the job-sheet
+//             document carries two accounts. An account chosen on the row itself
+//             always wins over the default.
 //
 // This is internal vocabulary — the UI never says "scope", "global" or "per-job"
 // mapping. It says "choose once here" or "choose on the Job Sheet".
@@ -45,7 +47,7 @@ export const ACCOUNTING_CATEGORIES: CategorySpec[] = [
   { key: "TRANSPORTATION", label: "Transportation", th: "ค่าพาหนะ", example: "Boat, Ferry, Taxi, Grab, BTS, MRT, Bus", scope: "FIXED" },
   { key: "MEAL_REFRESHMENT", label: "Meal / Refreshment", th: "ค่าอาหารและเครื่องดื่ม", example: "Drinking water, guest snack, food", scope: "FIXED" },
   { key: "OTHER_TOUR_COST", label: "Other Tour Cost", th: "ค่าใช้จ่ายอื่นในการนำเที่ยว", example: "Anything not covered above", scope: "PER_JOB",
-    note: "Select the PEAK account on the Job Sheet when this category is used." },
+    note: "Optional. Rows without their own account use this one; a different account can still be chosen on the Job Sheet." },
   // Consistently additional compensation to the guide, so it takes a standing
   // account like any other fixed category — asking per job created repetitive
   // accounting work for an answer that never changes.
@@ -53,16 +55,12 @@ export const ACCOUNTING_CATEGORIES: CategorySpec[] = [
 ];
 
 // The categories that gate accountChartReady: every FIXED one. OTHER_TOUR_COST is
-// excluded by definition — it is resolved per job, so it can never be "missing".
+// excluded by definition — its default is optional, so it can never be "missing".
 export const FIXED_CATEGORIES: AccountingCategory[] =
   ACCOUNTING_CATEGORIES.filter((c) => c.scope === "FIXED").map((c) => c.key);
 
 export const isPerJobCategory = (key: AccountingCategory): boolean =>
   ACCOUNTING_CATEGORIES.find((c) => c.key === key)?.scope === "PER_JOB";
-
-// Whether this category may be given a standing account on the settings page.
-export const canMapGlobally = (key: string): boolean =>
-  isAccountingCategory(key) && !isPerJobCategory(key);
 
 export const isAccountingCategory = (v: string): v is AccountingCategory =>
   ACCOUNTING_CATEGORIES.some((c) => c.key === v);
@@ -83,14 +81,15 @@ export function isMapped(m?: AccountMapping | null): boolean {
 export type CategoryStatus = "MAPPED" | "NOT_MAPPED" | "REVIEW_PER_JOB";
 
 export function categoryStatus(key: AccountingCategory, m?: AccountMapping | null): CategoryStatus {
-  // A per-job category is never "not mapped" — there is nothing to map here, and
-  // showing it as missing would read as a configuration error the operator can fix.
-  if (isPerJobCategory(key)) return "REVIEW_PER_JOB";
+  // A per-job category is never "not mapped" — leaving it empty is a valid choice,
+  // and showing it as missing would read as a configuration error. With a default
+  // saved it is simply mapped.
+  if (isPerJobCategory(key)) return isMapped(m) ? "MAPPED" : "REVIEW_PER_JOB";
   return isMapped(m) ? "MAPPED" : "NOT_MAPPED";
 }
 
 // The chart is configured when every FIXED category carries an account code.
-// OTHER_TOUR_COST never blocks it — it is resolved on the job sheet by design.
+// OTHER_TOUR_COST never blocks it — without a default it is resolved on the job sheet.
 export function accountChartReady(mappings: AccountMapping[]): boolean {
   return missingRequired(mappings).length === 0;
 }
