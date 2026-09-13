@@ -13,7 +13,7 @@ vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
 vi.mock("@/lib/audit", () => ({ audit: auditMock }));
 vi.mock("@/lib/crypto", () => ({ decrypt: (v: string) => v }));
-vi.mock("@/lib/jobref", () => ({ nextJobRef: vi.fn(async () => "FOLK-BKK-20300506-01") }));
+vi.mock("@/lib/jobref", () => ({ ensureJobRef: vi.fn(async () => "FOLK-BKK-20300506-01") }));
 vi.mock("@/lib/jobsheet-send", () => ({ sendJobSheetsForDate: vi.fn() }));
 vi.mock("@/lib/tour-calendar-sync", () => ({ removeTourEvents: vi.fn() }));
 vi.mock("@/lib/peak-account-map", () => ({ peakAccountMap: vi.fn(async () => ({})) }));

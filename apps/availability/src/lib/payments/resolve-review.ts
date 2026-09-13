@@ -14,6 +14,8 @@ export type ResolveReviewInput = {
   id: string; // PaymentTransaction id
   action: ReviewAction;
   jobNo?: string | null; // operator-supplied FOLK-BKK-… when the slip wasn't auto-matched
+  guideId?: string | null;
+  slotIdx?: number | null;
   note?: string | null;
   actorId?: string | null;
 };
@@ -72,7 +74,7 @@ export async function resolveReview(prisma: PrismaClient, input: ResolveReviewIn
       if (!sheet) return { ok: false as const, error: "job-not-found" as const };
     } else {
       const sheets = await tx.jobSheet.findMany({
-        where: { ref: manualJobNo! },
+        where: { ref: manualJobNo!, ...(input.guideId ? { guideId: input.guideId } : {}), ...(input.slotIdx != null ? { slotIdx: input.slotIdx } : {}) },
         select: { id: true, guideId: true, date: true, slotIdx: true, tourId: true, ref: true },
       });
       if (sheets.length === 0) return { ok: false as const, error: "job-not-found" as const };

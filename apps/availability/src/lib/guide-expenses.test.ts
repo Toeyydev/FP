@@ -9,7 +9,8 @@ const prismaMock = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/booking-import", () => ({ notifyOps: vi.fn() }));
-vi.mock("@/lib/jobref", () => ({ nextJobRef: vi.fn(async () => "FOLK-BKK-20260912-01") }));
+const jobrefMock = vi.hoisted(() => ({ ensureJobRef: vi.fn(async () => "FOLK-BKK-20260912-01") }));
+vi.mock("@/lib/jobref", () => jobrefMock);
 vi.mock("@/lib/jobsheet-drive", () => ({ saveJobSheetToDrive: vi.fn(async () => "https://drive.example.test/sheet") }));
 
 import { submitGuideExpenses } from "./guide-expenses";
@@ -32,6 +33,7 @@ beforeEach(() => {
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Grand Palace" });
   prismaMock.assignment.count.mockResolvedValue(1);      // one guide on the departure
   prismaMock.jobSheet.findMany.mockResolvedValue([]);    // no co-guide sheets
+  prismaMock.jobSheet.create.mockImplementation(async ({ data }) => ({ id: "js_new", ...data }));
 });
 
 describe("submitGuideExpenses", () => {
@@ -77,7 +79,8 @@ describe("submitGuideExpenses", () => {
     await report();
     expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
     const data = prismaMock.jobSheet.create.mock.calls[0][0].data;
-    expect(data).toMatchObject({ ref: "FOLK-BKK-20260912-01", guideId: "G-001", date: "2026-09-12", slotIdx: 0, tourId: "T-001", status: "Confirmed", createdById: "u_1" });
+    expect(data).toMatchObject({ ref: null, guideId: "G-001", date: "2026-09-12", slotIdx: 0, tourId: "T-001", status: "Confirmed", createdById: "u_1" });
+    expect(jobrefMock.ensureJobRef).toHaveBeenCalledWith("js_new", "2026-09-12"); // numbered through the one reservation path
     expect(data.guideExpenses).toHaveLength(1);
     expect(Array.isArray(data.expenses)).toBe(true); // the operator's default catalogue
   });

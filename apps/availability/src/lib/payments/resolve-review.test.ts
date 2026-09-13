@@ -104,3 +104,10 @@ describe("resolveReview — guards", () => {
     expect(tx.tourPayment.upsert).not.toHaveBeenCalled();
   });
 });
+
+it("scopes a manually linked shared number by guide and slot", async () => {
+  const { prisma, tx } = mkPrisma(review({ matchedJobSheetId: null, matchedJobNo: null }));
+  const res = await resolveReview(prisma, { id: "tr_1", action: "confirm", jobNo: SHEET.ref, guideId: SHEET.guideId, slotIdx: SHEET.slotIdx });
+  expect(res.ok).toBe(true);
+  expect(tx.jobSheet.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { ref: SHEET.ref, guideId: SHEET.guideId, slotIdx: SHEET.slotIdx } }));
+});

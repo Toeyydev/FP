@@ -45,6 +45,7 @@ export type MatchContext = {
   memoNormalized?: string | null; // this slip's normalized memo (for duplicate comparison)
 
   // Resolved by the caller from the DB. Provide the one matching the reference type.
+  jobReferenceAmbiguous?: boolean;
   jobSheet?: ResolvedRef | null; // for JOB_NO
   payout?: ResolvedRef | null; // for PAYOUT_ITEM_NO
   paymentBatchNo?: string | null; // for PAYMENT_BATCH_NO (batch itself never marks Paid)
@@ -119,7 +120,9 @@ export function decideMatch(ctx: MatchContext): MatchDecision {
       const js = ctx.jobSheet;
       if (!js) {
         d.memoValidationStatus = "NOT_MATCHED";
-        d.reason = `Job number ${ctx.referenceValue ?? "(none)"} did not match a job sheet.`;
+        d.reason = ctx.jobReferenceAmbiguous
+          ? `Job number ${ctx.referenceValue} matches multiple job sheets. Specify the guide and slot to link the correct job.`
+          : `Job number ${ctx.referenceValue ?? "(none)"} did not match a job sheet.`;
         return d;
       }
       d.matchedJobSheetId = js.id;

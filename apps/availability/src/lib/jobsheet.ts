@@ -315,12 +315,30 @@ export function toggleApproval(current?: string | null): ApprovalStatus {
   return isApproved(current) ? null : "APPROVED";
 }
 
-// Drive file name for an expense receipt. Unique per expense row (ref + E<n>) so a
-// re-upload replaces only that row's receipt and never another's. The description is
-// sanitised (Drive/query-safe) and clipped; falls back to guideId-date when a sheet
-// has no ref yet.
-export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; index: number; description?: string | null; ext: string }): string {
-  const base = (opts.ref || `${opts.guideId}-${opts.date}`).trim();
+// Drive file names for a job sheet's documents. Drive saves replace a file of the same name,
+// and a legacy ref can be shared by two sheets (or two guides can share a display name), so
+// the name carries the whole job key — guide id and slot as well as ref and date.
+export function jobSheetDriveName(o: { ref: string; guideName: string; date: string; guideId: string; slotIdx: number }, suffix = ""): string {
+  return `${o.ref} — ${o.guideName} — ${o.date} — ${o.guideId} — slot ${o.slotIdx}${suffix}`;
+}
+
+// A split-payment slip: one file per transfer (slot + a unique id), never replacing another.
+export function splitSlipDriveName(o: { guideId: string; guideName: string; date: string; slotIdx: number; seq: number; ext: string; uniqueId: string }): string {
+  return `${o.guideId} ${o.guideName} — ${o.date} — slot ${o.slotIdx} — e-slip ${o.seq} — ${o.uniqueId}.${o.ext}`;
+}
+
+// A slip paying several jobs at once: named by the exact set of jobs, so only a slip for the
+// same set replaces it.
+export function combinedSlipDriveName(o: { guideId: string; guideName: string; dateLabel: string; jobs: { date: string; slotIdx: number }[]; peakRef?: string | null; ext: string }, hash: (s: string) => string): string {
+  const jobKey = hash(JSON.stringify([o.guideId, o.jobs.map((j) => [j.date, j.slotIdx]).sort()]));
+  return `${o.guideId} ${o.guideName} — ${o.dateLabel} (${o.jobs.length} tour${o.jobs.length === 1 ? "" : "s"})${o.peakRef ? ` — ${o.peakRef}` : ""} — ${jobKey} — e-slip.${o.ext}`;
+}
+
+// Drive file name for an expense receipt. Unique per job and expense row, even when a legacy
+// ref is shared by two sheets or missing: the name carries guide, date and slot, so a re-upload
+// replaces only this job's receipt for this row, never another guide's or slot's.
+export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string }): string {
+  const base = `${(opts.ref || "Job").trim()} — ${opts.guideId} — ${opts.date} — slot ${opts.slotIdx}`;
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
   return `${base}-E${opts.index + 1}${desc ? ` ${desc}` : ""} — receipt.${opts.ext}`;
 }

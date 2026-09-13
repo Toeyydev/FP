@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -8,7 +9,7 @@ import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/li
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import { peakEnabled, sanitizePeakError } from "@/lib/peak-api";
 import { postGuidePayout, peakPayoutReady, peakPostOutcome, peakAlreadyBooked } from "@/lib/peak-payout";
-import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { combinedSlipDriveName, computeTotals, splitSlipDriveName, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { matchState, type Slip } from "@/lib/payments/slips";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
@@ -142,7 +143,7 @@ export async function POST(req: NextRequest) {
     const prior = (Array.isArray(existing?.slips) ? existing!.slips : []) as unknown as Slip[];
     const seq = prior.length + 1;
     const mf = `${j.date.slice(0, 7)} ${MONTHS[Number(j.date.slice(5, 7)) - 1] ?? ""}`.trim();
-    const slipName = `${guideId} ${guideName} — ${j.date} — e-slip ${seq}.${extOf(mime)}`;
+    const slipName = splitSlipDriveName({ guideId, guideName, date: j.date, slotIdx: j.slotIdx, seq, ext: extOf(mime), uniqueId: randomUUID() });
     let link: string | null = null;
     let driveError: string | undefined;
     try {
@@ -206,7 +207,7 @@ export async function POST(req: NextRequest) {
   const earliest = dates[0];
   const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
   const dateLabel = dates.length === 1 ? dates[0] : `${dates[0]}+${dates.length - 1}`;
-  const name = `${guideId} ${guideName} — ${dateLabel} (${jobs.length} tour${jobs.length === 1 ? "" : "s"})${peakRef ? ` — ${peakRef}` : ""} — e-slip.${extOf(mime)}`;
+  const name = combinedSlipDriveName({ guideId, guideName, dateLabel, jobs, peakRef, ext: extOf(mime) }, (s) => createHash("sha256").update(s).digest("hex"));
 
   let link: string;
   try {

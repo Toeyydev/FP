@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
+import { jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -160,14 +160,14 @@ describe("jobsheet — enriched expense fields don't change the payout math", ()
 
 describe("jobsheet — receiptDriveName", () => {
   it("is unique per expense row (ref + E<n>) even for identical descriptions", () => {
-    const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 0, description: "Grand Palace", ext: "jpg" });
-    const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 1, description: "Grand Palace", ext: "jpg" });
-    expect(a).toBe("FOLK-BKK-20260808-01-E1 Grand Palace — receipt.jpg");
+    const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" });
+    const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 1, description: "Grand Palace", ext: "jpg" });
+    expect(a).toBe("FOLK-BKK-20260808-01 — G-001 — 2026-08-08 — slot 0-E1 Grand Palace — receipt.jpg");
     expect(a).not.toBe(b); // same description, different row → a different Drive file
   });
   it("falls back to guideId-date without a ref and sanitises the description", () => {
-    const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
-    expect(n).toBe("G-002-2026-08-08-E3 Taxi airport run — receipt.pdf");
+    const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", slotIdx: 0, index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
+    expect(n).toBe("Job — G-002 — 2026-08-08 — slot 0-E3 Taxi airport run — receipt.pdf");
   });
 });
 
@@ -274,3 +274,37 @@ describe("job-sheet document totals add up", () => {
     expect(t.grandTotal).toBe(860 + (1500 - 45)); // expenses incl. reward + net fee
   });
 });
+
+describe("receipt identity for legacy refs", () => {
+  it.each([null, "FOLK-BKK-20300513-01"])("separates guides and slots for ref %s", (ref) => {
+    const opts = { ref, guideId: "G-001", date: "2030-05-13", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" };
+    const names = [opts, { ...opts, guideId: "G-002" }, { ...opts, slotIdx: 1 }].map(receiptDriveName);
+    expect(new Set(names).size).toBe(3);
+    expect(receiptDriveName(opts)).toBe(names[0]);
+  });
+});
+
+describe("Drive names never collide for different jobs", () => {
+  const job = { ref: "FOLK-BKK-20300101-01", guideName: "Guide Same", date: "2030-01-01", guideId: "G-TEST1", slotIdx: 0 };
+  it("two sheets sharing a legacy ref get different document names — same display name or same guide on another slot", () => {
+    const names = [job, { ...job, guideId: "G-TEST2" }, { ...job, slotIdx: 2 }].map((j) => jobSheetDriveName(j));
+    expect(new Set(names).size).toBe(3);
+    expect(jobSheetDriveName(job, ".pdf")).toBe("FOLK-BKK-20300101-01 — Guide Same — 2030-01-01 — G-TEST1 — slot 0.pdf");
+    expect(jobSheetDriveName(job)).toBe(jobSheetDriveName({ ...job })); // the same job still replaces its own document
+  });
+  it("split-payment slips are one file per transfer", () => {
+    const o = { guideId: "G-TEST1", guideName: "Guide Same", date: "2030-01-01", slotIdx: 0, seq: 1, ext: "jpg" };
+    expect(splitSlipDriveName({ ...o, uniqueId: "a" })).not.toBe(splitSlipDriveName({ ...o, uniqueId: "b" }));
+    expect(splitSlipDriveName({ ...o, uniqueId: "a" })).not.toBe(splitSlipDriveName({ ...o, slotIdx: 2, uniqueId: "a" }));
+  });
+  it("a combined slip is named by its exact set of jobs, in any order", () => {
+    const hash = (s: string) => s; // identity keeps the test readable
+    const base = { guideId: "G-TEST1", guideName: "Guide Same", dateLabel: "1 Jan 2030", ext: "jpg" };
+    const ab = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 0 }, { date: "2030-01-01", slotIdx: 2 }] }, hash);
+    const ba = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 2 }, { date: "2030-01-01", slotIdx: 0 }] }, hash);
+    const other = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 0 }, { date: "2030-01-01", slotIdx: 3 }] }, hash);
+    expect(ab).toBe(ba);
+    expect(ab).not.toBe(other);
+  });
+});
+
