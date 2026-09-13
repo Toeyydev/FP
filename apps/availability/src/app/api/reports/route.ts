@@ -2,16 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
+import { bookingRef } from "@/lib/booking-ref";
+import { noShowOutcome, reportedAbsentPax, tourNoShows, tourStartMs, type NoShowOutcome } from "@/lib/no-show-count";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const key = (g: string, d: string, s: number) => `${g}|${d}|${s}`;
-// Slot start in UTC ms (departures are Bangkok, UTC+7).
-const slotStartMs = (date: string, slotIdx: number) => {
-  const [h, m] = (SLOT_TIMES[slotIdx] || "00:00").split(":").map(Number);
-  return Date.parse(`${date}T00:00:00Z`) + (h * 60 + m) * 60_000 - 7 * 3600 * 1000;
-};
 const GRACE_MS = 5 * 60_000; // a check-in within 5 min of start still counts as on time
 
 // Operational reports over a date range — everything from live data.
@@ -28,7 +25,7 @@ export async function GET(req: NextRequest) {
   const from = rawFrom > to ? to : rawFrom;
 
   const [bookings, assigns, reports, checkins, tours, guides, trend] = await Promise.all([
-    prisma.booking.findMany({ where: { date: { gte: from, lte: to }, status: { not: "IGNORED" } }, select: { source: true, status: true, pax: true, tourId: true, date: true, slotIdx: true, noShow: true } }),
+    prisma.booking.findMany({ where: { date: { gte: from, lte: to }, status: { not: "IGNORED" } }, select: { source: true, status: true, pax: true, tourId: true, date: true, slotIdx: true, noShow: true, noShowPax: true, cancelledAtSource: true, assignedGuideId: true, externalRef: true, confirmationCode: true } }),
     prisma.assignment.findMany({ where: { date: { gte: from, lte: to } }, select: { guideId: true, date: true, slotIdx: true, pax: true } }),
     prisma.tourReport.findMany({ where: { date: { gte: from, lte: to } }, select: { guideId: true, date: true, slotIdx: true, noShow: true, completedPax: true } }),
     prisma.checkin.findMany({ where: { date: { gte: from, lte: to } }, select: { guideId: true, date: true, slotIdx: true, type: true, at: true } }),
@@ -50,21 +47,34 @@ export async function GET(req: NextRequest) {
   const ranKeys = new Set<string>();
   for (const c of checkins) ranKeys.add(key(c.guideId, c.date, c.slotIdx));
   for (const r of reports) ranKeys.add(key(r.guideId, r.date, r.slotIdx));
-  // No-show flags per slot (the guest-list flow), so tours without a report still count no-shows.
-  const noShowBySlot = new Map<string, number>();
-  for (const b of bookings) if (b.noShow && b.date && b.slotIdx != null) {
-    const k = `${b.date}|${b.slotIdx}`; noShowBySlot.set(k, (noShowBySlot.get(k) ?? 0) + 1);
+  // Bookings the guide flagged absent, per slot (whatever their status is now), so every
+  // reported absence can be checked against when the channel cancelled the booking.
+  const flaggedBySlot = new Map<string, typeof bookings>();
+  for (const b of bookings) if (reportedAbsentPax(b) > 0 && b.date && b.slotIdx != null) {
+    const k = `${b.date}|${b.slotIdx}`; flaggedBySlot.set(k, [...(flaggedBySlot.get(k) ?? []), b]);
   }
 
   // A tour "ran" = it was assigned AND has a check-in or a report.
   const ran = assigns.filter((a) => ranKeys.has(key(a.guideId, a.date, a.slotIdx)));
-  let guestsServed = 0, noShows = 0;
+  let guestsServed = 0;
+  // reported = what guides reported absent · noShows = what the reports count as no-shows.
+  const ns = { reported: 0, noShows: 0, cancelledBeforeTour: 0, needsReview: 0 };
+  const noShowChecks: { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: Exclude<NoShowOutcome, "counts"> }[] = [];
   for (const a of ran) {
     const rep = reportByKey.get(key(a.guideId, a.date, a.slotIdx));
     guestsServed += rep?.completedPax ?? a.pax ?? 0;
-    // Reconcile no-shows: prefer the guide's report; else the guest-list flags.
-    noShows += rep ? (rep.noShow ?? 0) : (noShowBySlot.get(`${a.date}|${a.slotIdx}`) ?? 0);
+    // The guide's report where there is one, else the guest-list flags (matched to this guide on a split slot).
+    const start = tourStartMs(a.date, a.slotIdx);
+    const flagged = (flaggedBySlot.get(`${a.date}|${a.slotIdx}`) ?? [])
+      .filter((b) => !b.assignedGuideId || b.assignedGuideId === a.guideId)
+      .map((b) => ({ b, absentPax: reportedAbsentPax(b), outcome: noShowOutcome(b, start) }));
+    const t = tourNoShows(rep ? (rep.noShow ?? 0) : null, flagged);
+    ns.reported += t.reported; ns.noShows += t.counted; ns.cancelledBeforeTour += t.cancelledBeforeTour; ns.needsReview += t.needsReview;
+    for (const f of flagged) if (f.outcome !== "counts") {
+      noShowChecks.push({ date: a.date, time: SLOT_TIMES[a.slotIdx] ?? "", guide: gName(a.guideId), ref: bookingRef(f.b.externalRef, f.b.confirmationCode), absentPax: f.absentPax, outcome: f.outcome });
+    }
   }
+  const noShows = ns.noShows;
   const expected = guestsServed + noShows;
 
   // Punctuality — first ARRIVE/START check-in per tour vs the slot start.
@@ -78,7 +88,7 @@ export async function GET(req: NextRequest) {
   const guidePunct: Record<string, { onTime: number; late: number }> = {};
   for (const [k, at] of arriveByKey) {
     const [g, d, s] = k.split("|");
-    const ok = at <= slotStartMs(d, Number(s)) + GRACE_MS;
+    const ok = at <= tourStartMs(d, Number(s)) + GRACE_MS;
     if (ok) onTime++; else late++;
     (guidePunct[g] ??= { onTime: 0, late: 0 })[ok ? "onTime" : "late"]++;
   }
@@ -126,10 +136,12 @@ export async function GET(req: NextRequest) {
       toursRan: ran.length,
       guestsServed,
       noShows, noShowRate: expected ? Math.round((noShows / expected) * 1000) / 10 : 0,
+      noShowsReported: ns.reported, noShowsCancelledBeforeTour: ns.cancelledBeforeTour, noShowsNeedReview: ns.needsReview,
       checkins: arriveByKey.size,
       onTimePct: (onTime + late) ? Math.round((onTime / (onTime + late)) * 100) : null,
     },
     punctuality: { onTime, late },
     byMonth, cancelByMonth, bySource, byTour, byGuide,
+    noShowChecks: noShowChecks.sort((x, y) => (x.outcome === y.outcome ? 0 : x.outcome === "needs-review" ? -1 : 1) || y.date.localeCompare(x.date)),
   });
 }
