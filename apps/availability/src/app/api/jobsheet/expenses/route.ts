@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { guideExpenseZ, submitGuideExpenses, MAX_EXPENSE_LINES } from "@/lib/guide-expenses";
+import { expenseReportAccess } from "@/lib/expense-report-access";
+import { isOps } from "@/lib/roles";
 
-const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
-
-// POST { guideId, date, slotIdx, expenses } — the assigned guide (or an operator)
-// reports the expenses they paid on tour. Stored SEPARATELY on the sheet as
-// `guideExpenses` so it never overwrites the operator's official set — the operator
-// cross-checks and accepts. Operators are notified on each guide submission.
+// POST { guideId, date, slotIdx, expenses } — the assigned guide (or an operator on
+// their behalf) reports the expenses they paid on tour. Who may do so, for which job,
+// is checked on the server before anything is written (lib/expense-report-access).
+// Stored SEPARATELY on the sheet as `guideExpenses` so it never overwrites the
+// operator's official set — the operator cross-checks and accepts. Operators are
+// notified on each guide submission.
 //
 // The rules live in lib/guide-expenses, so FolkOPS Mobile files the same report.
 export async function POST(req: NextRequest) {
@@ -22,7 +24,9 @@ export async function POST(req: NextRequest) {
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, date, slotIdx, expenses } = parsed.data;
-  if (!ops(role) && myGuideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const actor = isOps(role) ? { kind: "operator" as const } : myGuideId ? { kind: "guide" as const, guideId: myGuideId } : null;
+  const access = await expenseReportAccess(actor, { guideId, date, slotIdx });
+  if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
 
   return NextResponse.json(await submitGuideExpenses({
     guideId, date, slotIdx, expenses, note: parsed.data.note,
