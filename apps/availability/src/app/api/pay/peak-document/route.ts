@@ -1,79 +1,67 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
+import { prisma } from "@/lib/db";
 import { isOps } from "@/lib/roles";
-import { googleDriveEnabled, folkpathsDriveToken } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import { peakEnabled } from "@/lib/peak-api";
 import {
-  buildGuidePaymentDocument, payJobsTogether, PaymentDocumentNotPostable, type PayTogetherResult, type GuidePaymentDocument,
+  buildGuidePaymentDocument, createCombinedDocument, documentHoldsJobs, documentStatus, PaymentDocumentNotPostable,
+  type CreateDocumentResult, type GuidePaymentDocument,
 } from "@/lib/peak-payment-document";
 import {
-  loadPaymentContext, nextPaymentRef, PaymentClaimRefused, PaymentRefTaken, prismaPayTogetherDeps, resolvePaymentDocument,
+  bangkokToday, documentFigures, documentJobs, loadPaymentContext, nextPaymentRef, PaymentClaimRefused, PaymentRefTaken, prismaCreateDeps, resolvePaymentDocument,
 } from "@/lib/peak-payment-server";
 
 export const dynamic = "force-dynamic";
 
-const jobsZ = z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60);
+const bodyZ = z.object({
+  guideId: z.string().min(1),
+  jobs: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60),
+});
+const keyOf = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 
-// POST (multipart) { guideId, jobs, paymentDate, paymentMethodId, paymentMethodName?, file }
+// POST { guideId, jobs } — STAGE 1 of "Pay N jobs together · one ref".
 //
-// "Pay N jobs together · one ref": ONE PEAK expense document for one transfer — the
-// guide as the contact, one FOLK-PAY reference, one payment date, one Paid By account,
-// the slip attached, and a line per job and category. The jobs are marked paid only
-// after PEAK creates the document, and every one of them stores that document's number
-// and id. See lib/peak-payment-document for the order and why.
+// Creates ONE unpaid PEAK expense document for these jobs and returns its EXP number.
+// Nothing is paid: no payment date, no Paid By account, no slip, no guide notice. The
+// jobs are locked to the document (AWAITING_PAYMENT) so nothing else can pay or post
+// them; the payment is recorded against this same EXP later, by
+// POST /api/pay/peak-document/pay. See lib/peak-payment-document for the order and why.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };
   if (!peakEnabled) return NextResponse.json({ error: "peak-not-connected", reasons: ["PEAK is not connected"] }, { status: 503 });
-  if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", reasons: ["Connect Google Drive first — the slip is saved there"] }, { status: 400 });
 
-  const form = await req.formData().catch(() => null);
-  const guideId = String(form?.get("guideId") || "");
-  const paymentDate = String(form?.get("paymentDate") || "");
-  const paymentMethodId = String(form?.get("paymentMethodId") || "").trim();
-  const paymentMethodName = String(form?.get("paymentMethodName") || "").trim().slice(0, 120) || null;
-  let jobsRaw: unknown = null;
-  try { jobsRaw = JSON.parse(String(form?.get("jobs") || "[]")); } catch { /* reported below */ }
-  const jobs = jobsZ.safeParse(jobsRaw);
-  const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
-  if (!guideId || !jobs.success || !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  if (!file || typeof file.arrayBuffer !== "function" || !(file.size ?? 0)) return NextResponse.json({ error: "no-slip", reasons: ["Attach the payment slip"] }, { status: 400 });
-  if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", reasons: ["The slip is over 10 MB"] }, { status: 400 });
-  const mime = file.type || "image/jpeg";
-  if (!/^image\//.test(mime) && mime !== "application/pdf") return NextResponse.json({ error: "bad-file", reasons: ["The slip must be an image or a PDF"] }, { status: 400 });
+  const parsed = bodyZ.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { guideId, jobs } = parsed.data;
 
-  const refreshToken = await folkpathsDriveToken(actor.actorId ?? undefined);
-  if (!refreshToken) return NextResponse.json({ error: "not-connected", reasons: ["Connect the Folkpaths Google account first"] }, { status: 400 });
+  // Asked again for exactly the jobs a live document already holds (a double click, a
+  // retry after a dropped connection): answer with that document. Never a second one.
+  const existing = await existingDocumentFor(guideId, jobs);
+  if (existing) return existing;
 
-  const loaded = await loadPaymentContext(guideId, jobs.data);
+  const loaded = await loadPaymentContext(guideId, jobs);
   if (!loaded.ok) return NextResponse.json({ error: "not-payable", reasons: loaded.reasons }, { status: 409 });
   const { ctx } = loaded;
 
-  const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const deps = prismaPayTogetherDeps({
-    guideId, guideName: ctx.guideName, paymentDate, paymentMethodId, paymentMethodName,
-    file: { base64, mime }, refreshToken, actor,
-  });
-
   let doc: GuidePaymentDocument | null = null;
-  let result: PayTogetherResult | null = null;
-  // The FOLK-PAY number is a count + 1, so two payments in the same second can pick the
+  let result: CreateDocumentResult | null = null;
+  const deps = prismaCreateDeps({ guideId, actor });
+  // The FOLK-PAY number is a count + 1, so two documents in the same second can pick the
   // same one. The claim is the first write and fails atomically, so try the next number.
   for (let attempt = 0; attempt < 3 && !result; attempt++) {
-    const paymentRef = await nextPaymentRef(paymentDate);
+    const paymentRef = await nextPaymentRef(bangkokToday());
     try {
-      doc = buildGuidePaymentDocument({
-        guideId, peakContactId: ctx.peakContactId, paymentRef, paymentDate, paymentMethodId, jobs: ctx.jobs, accounts: ctx.accounts,
-      });
+      doc = buildGuidePaymentDocument({ guideId, peakContactId: ctx.peakContactId, paymentRef, jobs: ctx.jobs, accounts: ctx.accounts });
     } catch (e) {
       if (e instanceof PaymentDocumentNotPostable) return NextResponse.json({ error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories }, { status: 409 });
       throw e;
     }
     try {
-      result = await payJobsTogether(deps, doc);
+      result = await createCombinedDocument(deps, doc);
     } catch (e) {
       if (e instanceof PaymentRefTaken) continue;
       if (e instanceof PaymentClaimRefused) return NextResponse.json({ error: "not-payable", reasons: [e.message] }, { status: 409 });
@@ -83,43 +71,56 @@ export async function POST(req: NextRequest) {
   if (!result || !doc) return NextResponse.json({ error: "busy", reasons: ["Could not reserve a payment number — try again"] }, { status: 503 });
 
   if (result.status === "FAILED") {
-    return NextResponse.json({ error: result.stage === "slip" ? "slip-failed" : "peak-refused", paymentRef: result.paymentRef, reasons: [result.reason] }, { status: 502 });
+    return NextResponse.json({ error: "peak-refused", paymentRef: result.paymentRef, reasons: [result.reason] }, { status: 502 });
   }
   if (result.status === "UNCERTAIN") {
     return NextResponse.json({
       error: "peak-uncertain", paymentRef: result.paymentRef,
       reasons: [
-        `PEAK did not confirm payment ${result.paymentRef}: ${result.reason}`,
+        `PEAK did not confirm document ${result.paymentRef}: ${result.reason}`,
         `Look in PEAK for an expense with reference ${result.paymentRef} before doing anything else. The jobs stay locked until you record what you find on the Payments page.`,
       ],
     }, { status: 502 });
   }
-
-  // Tell the guide once the payment is real. Best-effort, as everywhere else.
-  try { await sendPaymentNotice(guideId, doc.jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, result.slipLink); } catch { /* best-effort */ }
-
   return NextResponse.json({
-    ok: true,
-    paymentRef: result.paymentRef,
-    documentNo: result.documentNo,
-    documentId: result.documentId,
-    documentLink: result.documentLink,
-    slipLink: result.slipLink,
-    total: result.total,
-    lines: doc.traces,
-    attachment: result.attachment,
-    recordError: result.recordError,
+    ok: true, status: "AWAITING_PAYMENT",
+    paymentRef: result.paymentRef, documentNo: result.documentNo, documentId: result.documentId, documentLink: result.documentLink,
+    gross: result.gross, wht: result.wht, total: result.total, lineCount: result.lines, issuedDate: doc.issuedDate,
+    jobs: doc.jobs, lines: doc.traces, recordError: result.recordError,
   });
+}
+
+/** The live document that already holds exactly these jobs, as a stage-1 answer. */
+async function existingDocumentFor(guideId: string, jobs: { date: string; slotIdx: number }[]) {
+  const pays = await prisma.tourPayment.findMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, select: { date: true, slotIdx: true, peakPaymentRef: true } });
+  const refs = [...new Set(pays.map((p) => p.peakPaymentRef).filter((r): r is string => !!r))];
+  if (refs.length !== 1 || pays.filter((p) => p.peakPaymentRef === refs[0]).length !== jobs.length) return null;
+  const doc = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef: refs[0] } });
+  if (!doc || doc.guideId !== guideId || !documentHoldsJobs(doc.status)) return null;
+  const held = documentJobs(doc);
+  const same = held.length === jobs.length && jobs.every((j) => held.some((h) => keyOf(h) === keyOf(j)));
+  if (!same) return null;
+  const f = documentFigures(doc);
+  const st = documentStatus(doc.status);
+  return NextResponse.json({
+    ok: st === "AWAITING_PAYMENT" || st === "PAID", existing: true, status: st,
+    paymentRef: doc.paymentRef, documentNo: doc.peakDocumentNo, documentId: doc.peakDocumentId, documentLink: doc.peakDocumentLink,
+    gross: f.gross, wht: f.wht, total: f.net, lineCount: f.lines, jobs: held,
+    reasons: st === "AWAITING_PAYMENT" || st === "PAID" ? [] : [`${doc.paymentRef} already holds these jobs and is ${String(st).toLowerCase().replace(/_/g, " ")} — settle it on the Payments page`],
+  }, { status: st === "AWAITING_PAYMENT" || st === "PAID" ? 200 : 409 });
 }
 
 const resolveZ = z.discriminatedUnion("resolution", [
   z.object({ paymentRef: z.string().min(1).max(40), resolution: z.literal("found"), documentNo: z.string().min(1).max(40) }),
   z.object({ paymentRef: z.string().min(1).max(40), resolution: z.literal("not-found") }),
+  z.object({ paymentRef: z.string().min(1).max(40), resolution: z.literal("payment-found") }),
+  z.object({ paymentRef: z.string().min(1).max(40), resolution: z.literal("payment-not-found") }),
   z.object({ paymentRef: z.string().min(1).max(40), resolution: z.literal("voided") }),
 ]);
 
-// PATCH { paymentRef, resolution: "found", documentNo } | { paymentRef, resolution: "not-found" | "voided" }
-// A person records what only PEAK can say. Operator/admin only, audited.
+// PATCH { paymentRef, resolution } — a person records what only PEAK can say, for a
+// document or payment PEAK did not confirm, or a document voided in PEAK.
+// Operator/admin only, audited. See resolvePaymentDocument.
 export async function PATCH(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -128,5 +129,7 @@ export async function PATCH(req: NextRequest) {
   const { paymentRef, ...resolution } = parsed.data;
   const r = await resolvePaymentDocument(paymentRef, resolution, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
+  // A payment confirmed by hand is still a payment the guide should hear about — once.
+  if (r.notify) { try { await sendPaymentNotice(r.notify.guideId, r.notify.jobs, undefined, r.notify.slipUrl ?? undefined); } catch { /* best-effort */ } }
   return NextResponse.json({ ok: true });
 }

@@ -18,6 +18,7 @@ import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
+import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -82,7 +83,7 @@ export async function GET(req: NextRequest) {
   // the report flow. Slip = per-tour e-slip, else the monthly batch slip.
   const period = date.slice(0, 7);
   const [tourPay, payroll] = await Promise.all([
-    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
+    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true, peakPaymentRef: true } }),
     prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true, eslipUrl: true, peakRef: true } }),
   ]);
   // A month-level payroll only settles jobs that had already happened when the
@@ -102,6 +103,15 @@ export async function GET(req: NextRequest) {
     // a mid-month tour reads as the payroll run it is, not as an error.
     source: cover.source,
   };
+  // The combined PEAK document this job is locked to ("Pay N jobs together"), if any —
+  // created and awaiting payment, paid, or waiting on someone to check PEAK. The job's
+  // own "Sync to PEAK" is refused while it holds the job (paymentDocumentLocks).
+  const combinedDoc = tourPay?.peakPaymentRef
+    ? await prisma.guidePaymentDocument.findUnique({ where: { paymentRef: tourPay.peakPaymentRef }, select: { paymentRef: true, status: true, peakDocumentNo: true, peakDocumentLink: true, total: true, jobs: true } })
+    : null;
+  const combinedPayment = combinedDoc && documentHoldsJobs(combinedDoc.status)
+    ? { paymentRef: combinedDoc.paymentRef, status: documentStatus(combinedDoc.status), documentNo: combinedDoc.peakDocumentNo, documentLink: combinedDoc.peakDocumentLink, total: combinedDoc.total, jobCount: Array.isArray(combinedDoc.jobs) ? combinedDoc.jobs.length : 0 }
+    : null;
 
   // Guide advance + returns for this job — cash movements, settled against the
   // sheet's paidBy="advance" expense rows (see lib/advance). Shown to the guide too.
@@ -265,7 +275,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -339,7 +349,7 @@ export async function GET(req: NextRequest) {
       .map(toSheetBooking);
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -348,7 +358,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, checkedIn, payment, advance, history, jobMeta, peak,
+    header, tour, saved: false, canEdit: isOps, checkedIn, payment, combinedPayment, advance, history, jobMeta, peak,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }

@@ -38,13 +38,13 @@ const prismaMock = vi.hoisted(() => {
     count: vi.fn(async ({ where }: { where?: Where } = {}) => rows().filter((r) => matches(r, where)).length),
     create: vi.fn(async ({ data }: { data: Row }) => {
       if (data.paymentRef && rows().some((r) => r.paymentRef === data.paymentRef)) throw Object.assign(new Error("unique"), { code: "P2002" });
-      const r = { id: `id_${rows().length}`, createdAt: new Date(), ...data }; rows().push(r); return { ...r };
+      const r = { id: `id_${rows().length}`, createdAt: new Date(), updatedAt: new Date(), ...data }; rows().push(r); return { ...r };
     }),
     update: vi.fn(async ({ where, data }: { where: Where; data: Row }) => {
-      const r = rows().find((x) => matches(x, where)); if (!r) throw new Error("not found"); Object.assign(r, data); return { ...r };
+      const r = rows().find((x) => matches(x, where)); if (!r) throw new Error("not found"); Object.assign(r, data, { updatedAt: new Date() }); return { ...r };
     }),
     updateMany: vi.fn(async ({ where, data }: { where: Where; data: Row }) => {
-      const hit = rows().filter((x) => matches(x, where)); hit.forEach((r) => Object.assign(r, data)); return { count: hit.length };
+      const hit = rows().filter((x) => matches(x, where)); hit.forEach((r) => Object.assign(r, data, { updatedAt: new Date() })); return { count: hit.length };
     }),
     upsert: vi.fn(async ({ where, create, update }: { where: Where; create: Row; update: Row }) => {
       const r = rows().find((x) => matches(x, where));
@@ -68,7 +68,7 @@ const prismaMock = vi.hoisted(() => {
 });
 
 const authMock = vi.hoisted(() => vi.fn());
-const peak = vi.hoisted(() => ({ create: vi.fn(), attach: vi.fn() }));
+const peak = vi.hoisted(() => ({ create: vi.fn(), attach: vi.fn(), get: vi.fn(), pay: vi.fn() }));
 const drive = vi.hoisted(() => ({ save: vi.fn() }));
 
 vi.mock("@prisma/client", () => ({ Prisma: { PrismaClientKnownRequestError: class extends Error { code = ""; } } }));
@@ -82,6 +82,8 @@ vi.mock("@/lib/peak-api", () => ({
   peakEnabled: true,
   createExpenseAllInOne: peak.create,
   insertExpenseFile: peak.attach,
+  getExpenseByCode: peak.get,
+  payExistingExpense: peak.pay,
   sanitizePeakError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 vi.mock("@/lib/peak-account-map", () => ({
@@ -91,6 +93,8 @@ vi.mock("@/lib/peak-account-map", () => ({
 }));
 
 import { POST, PATCH } from "./route";
+import { POST as PAY } from "./pay/route";
+import { POST as SYNC } from "../../jobsheet/peak-sync/route";
 import { POST as PREVIEW } from "./preview/route";
 import { GET as PAYMENTS } from "../../payments/route";
 import { NextRequest } from "next/server";
@@ -123,16 +127,22 @@ function seed() {
   db.audits = [];
 }
 
-const payForm = (jobs: { date: string; slotIdx: number }[], over: Record<string, string> = {}) => {
+// Stage 1: create the document. JSON — nothing about a payment is sent.
+const create = (jobs: { date: string; slotIdx: number }[]) =>
+  POST(new Request("https://ops.folkpaths.com/api/pay/peak-document", { method: "POST", body: JSON.stringify({ guideId: GUIDE, jobs }), headers: { "content-type": "application/json" } }) as unknown as Parameters<typeof POST>[0]);
+// Stage 2: record the payment against an existing document.
+const payDoc = (over: Record<string, string> = {}) => {
   const fd = new FormData();
-  fd.append("guideId", GUIDE);
-  fd.append("jobs", JSON.stringify(jobs));
+  fd.append("paymentRef", over.paymentRef ?? "FOLK-PAY-203005-01");
+  fd.append("documentNo", over.documentNo ?? "EXP-TEST-0042");
   fd.append("paymentDate", over.paymentDate ?? "2030-05-13");
   fd.append("paymentMethodId", over.paymentMethodId ?? "pm-test");
   fd.append("paymentMethodName", "Test bank account");
-  fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "slip.png");
-  return POST(new Request("https://ops.folkpaths.com/api/pay/peak-document", { method: "POST", body: fd }) as unknown as Parameters<typeof POST>[0]);
+  if (over.noFile !== "1") fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "slip.png");
+  return PAY(new Request("https://ops.folkpaths.com/api/pay/peak-document/pay", { method: "POST", body: fd }) as unknown as Parameters<typeof PAY>[0]);
 };
+// PEAK's read-back of the created document: approved, unpaid, owing the gross with the withholding apart.
+const peakExpense = (over: Row = {}) => ({ ok: true, expense: { id: "peak-doc-42", code: "EXP-TEST-0042", reference: "FOLK-PAY-203005-01", contactId: "contact-guide-a", status: "Approve", statusId: 3, isVoid: false, netAmount: 4295, whtAmount: 126, paymentAmount: 0, remainAmount: 4295, remainWhtAmount: 126, documentLink: "https://peak.example/42", payments: 0, ...over } });
 const resolve = (body: unknown) =>
   PATCH(new Request("https://ops.folkpaths.com/api/pay/peak-document", { method: "PATCH", body: JSON.stringify(body), headers: { "content-type": "application/json" } }) as unknown as Parameters<typeof PATCH>[0]);
 
@@ -141,24 +151,29 @@ const payOf = (j: { date: string; slotIdx: number }) => db.pays.find((p) => p.da
 beforeEach(() => {
   vi.clearAllMocks();
   seed();
+  // The tours ran in May 2030; this is the week after.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2030-05-20T03:00:00Z"));
   authMock.mockResolvedValue({ user: { id: "op_1", role: "OPERATOR" } });
   drive.save.mockResolvedValue({ id: "file-1", link: "https://drive.example/slip-1" });
   peak.create.mockResolvedValue({ ok: true, code: "EXP-TEST-0042", id: "peak-doc-42", link: "https://peak.example/42" });
   peak.attach.mockResolvedValue({ ok: true, desc: "Success" });
+  peak.get.mockResolvedValue(peakExpense());
+  peak.pay.mockResolvedValue({ ok: true, code: "200", remainPaymentAmount: 0, remainWhtAmount: 0 });
 });
+afterEach(() => { vi.useRealTimers(); });
 
-describe("POST /api/pay/peak-document — three jobs, one transfer", () => {
-  it("creates exactly one PEAK document and marks every selected job paid against it", async () => {
-    const res = await payForm([J1, J2, J3]);
+describe("stage 1 — POST /api/pay/peak-document creates ONE unpaid document", () => {
+  it("creates exactly one PEAK expense, with no payment in it, and returns its EXP", async () => {
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ ok: true, paymentRef: "FOLK-PAY-203005-01", documentNo: "EXP-TEST-0042", total: 4169 });
-
+    expect(body).toMatchObject({ ok: true, status: "AWAITING_PAYMENT", paymentRef: "FOLK-PAY-203005-01", documentNo: "EXP-TEST-0042", documentLink: "https://peak.example/42", gross: 4295, wht: 126, total: 4169, lineCount: 4 });
     expect(peak.create).toHaveBeenCalledTimes(1);
     const expense = peak.create.mock.calls[0][0];
+    expect(expense).not.toHaveProperty("paidPayments");
     expect(expense.reference).toBe("FOLK-PAY-203005-01");
     expect(expense.contact).toEqual({ id: "contact-guide-a" });
-    expect(expense.paidPayments).toEqual({ paymentDate: "20300513", payments: [{ paymentMethod: { id: "pm-test" }, amount: 4169 }] });
     expect(expense.products.map((p: Row) => [p.description, p.accountCode, p.price, p.withHoldingTaxAmount])).toEqual([
       ["Guide fee - FOLK-BKK-20300506-01", "510111", 1200, 36],
       ["Guide fee - FOLK-BKK-20300506-02", "510111", 1200, 36],
@@ -167,72 +182,217 @@ describe("POST /api/pay/peak-document — three jobs, one transfer", () => {
     ]);
   });
 
-  it("stores the same payment ref and PEAK document on every selected row, and touches no other", async () => {
-    await payForm([J1, J2, J3]);
-    for (const j of [J1, J2, J3]) {
-      expect(payOf(j)).toMatchObject({
-        status: "PAID", peakPaymentRef: "FOLK-PAY-203005-01", peakDocumentId: "peak-doc-42",
-        peakRef: "EXP-TEST-0042", eslipUrl: "https://drive.example/slip-1",
-      });
-    }
+  it("stores the document as AWAITING_PAYMENT and locks the jobs to it — none paid, no slip, no attachment, no notice", async () => {
+    await create([J1, J2, J3]);
+    expect(db.docs).toHaveLength(1);
+    expect(db.docs[0]).toMatchObject({ paymentRef: "FOLK-PAY-203005-01", status: "AWAITING_PAYMENT", peakDocumentNo: "EXP-TEST-0042", peakDocumentId: "peak-doc-42", total: 4169 });
+    expect(db.docs[0].paymentDate ?? null).toBeNull();
+    expect(db.docs[0].paymentMethodId ?? null).toBeNull();
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01", peakRef: null, eslipUrl: null });
     expect(payOf(OTHER)).toBeUndefined();
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.attach).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
+  });
+
+  it("asked twice for the same jobs, answers with the same document — never a second EXP", async () => {
+    expect((await create([J1, J2, J3])).status).toBe(200);
+    const again = await create([J1, J2, J3]);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ existing: true, documentNo: "EXP-TEST-0042", status: "AWAITING_PAYMENT" });
+    expect(peak.create).toHaveBeenCalledTimes(1);
     expect(db.docs).toHaveLength(1);
   });
 
-  it("records the payment date the operator selected, not the moment they pressed Pay", async () => {
-    await payForm([J1, J2, J3], { paymentDate: "2030-05-14" });
-    // The same date PEAK receives. Noon in Bangkok, so it reads as the 14th anywhere.
-    for (const j of [J1, J2, J3]) expect(payOf(j)!.paidAt.toISOString()).toBe("2030-05-14T05:00:00.000Z");
-    expect(peak.create.mock.calls[0][0].paidPayments.paymentDate).toBe("20300514");
-    expect(db.docs[0]).toMatchObject({ status: "POSTED", total: 4169, peakDocumentNo: "EXP-TEST-0042", attachmentStatus: "ATTACHED" });
+  it("a different selection that overlaps a live document is refused, not merged into a new EXP", async () => {
+    await create([J1, J2, J3]);
+    const res = await create([J3, OTHER]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Included in combined PEAK document EXP-TEST-0042");
+    expect(peak.create).toHaveBeenCalledTimes(1);
   });
 
-  it("attaches the one slip to the one document", async () => {
-    await payForm([J1, J2, J3]);
-    expect(drive.save).toHaveBeenCalledTimes(1);
-    expect(peak.attach).toHaveBeenCalledTimes(1);
-    expect(peak.attach.mock.calls[0][0]).toMatchObject({ transactionId: "peak-doc-42", transactionCode: "EXP-TEST-0042", fileType: "image" });
-  });
-});
-
-describe("POST /api/pay/peak-document — nothing is paid unless PEAK succeeds", () => {
-  it("releases the jobs, unpaid, when PEAK refuses", async () => {
+  it("releases the jobs when PEAK refuses — no document stands", async () => {
     peak.create.mockResolvedValue({ ok: false, desc: "Invalid accountCode" });
-    const res = await payForm([J1, J2, J3]);
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe("peak-refused");
-    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: null, peakDocumentId: null });
     expect(db.docs[0]).toMatchObject({ status: "FAILED", error: "Invalid accountCode" });
-    // Released means payable again.
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: null });
+    // Released means a new document can be created.
     peak.create.mockResolvedValue({ ok: true, code: "EXP-TEST-0043", id: "peak-doc-43" });
-    expect((await payForm([J1, J2, J3])).status).toBe(200);
+    expect((await create([J1, J2, J3])).status).toBe(200);
   });
 
-  it("keeps the jobs locked when PEAK may have created the document — a second press posts nothing", async () => {
+  it("keeps the jobs locked when PEAK may have created the document — no automatic retry, a second press creates nothing", async () => {
     peak.create.mockResolvedValue({ ok: false, uncertain: true, desc: "PEAK did not respond within 30s" });
-    const res = await payForm([J1, J2, J3]);
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe("peak-uncertain");
+    expect(db.docs[0].status).toBe("CREATE_UNCERTAIN");
     for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
-
-    const again = await payForm([J1, J2, J3]);
+    const again = await create([J1, J2, J3]);
     expect(again.status).toBe(409);
-    expect((await again.json()).reasons.join(" ")).toContain("has not confirmed");
     expect(peak.create).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a job whose sheet already posted its own PEAK document, before calling PEAK", async () => {
     db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.peakDocumentNo = "EXP-TEST-0001";
-    const res = await payForm([J1, J2, J3]);
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(409);
     expect((await res.json()).reasons.join(" ")).toContain("EXP-TEST-0001");
-    expect(drive.save).not.toHaveBeenCalled();
     expect(peak.create).not.toHaveBeenCalled();
     expect(db.docs).toHaveLength(0);
   });
+
+  it("the job-sheet Sync to PEAK is refused while the combined document holds the job", async () => {
+    await create([J1, J2, J3]);
+    const res = await SYNC(new Request("https://ops.folkpaths.com/api/jobsheet/peak-sync", { method: "POST", body: JSON.stringify({ guideId: GUIDE, ...J1 }), headers: { "content-type": "application/json" } }) as unknown as Parameters<typeof SYNC>[0]);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("paid-in-payment-document");
+    expect(body.reason).toContain("Included in combined PEAK document EXP-TEST-0042");
+    expect(body.reason).toContain("Awaiting payment");
+    expect(peak.create).toHaveBeenCalledTimes(1);
+  });
 });
 
-describe("a billed expense with no Paid By stops the payment before PEAK", () => {
+describe("stage 2 — POST /api/pay/peak-document/pay records the payment against the same EXP", () => {
+  it("pays the existing EXP — no second document — marks all jobs paid with the same EXP, attaches the slip and tells the guide once", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, status: "PAID", paymentRef: "FOLK-PAY-203005-01", documentNo: "EXP-TEST-0042", amount: 4169, paymentDate: "2030-05-13", notified: true });
+    expect(peak.create).toHaveBeenCalledTimes(1);
+    expect(peak.get).toHaveBeenCalledWith("EXP-TEST-0042");
+    expect(peak.pay).toHaveBeenCalledTimes(1);
+    expect(peak.pay.mock.calls[0][0]).toEqual({ documentNo: "EXP-TEST-0042", paymentDate: "20300513", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 });
+    for (const j of [J1, J2, J3]) {
+      expect(payOf(j)).toMatchObject({ status: "PAID", peakPaymentRef: "FOLK-PAY-203005-01", peakRef: "EXP-TEST-0042", peakDocumentId: "peak-doc-42", eslipUrl: "https://drive.example/slip-1" });
+      expect(payOf(j)!.paidAt.toISOString()).toBe("2030-05-13T05:00:00.000Z");
+    }
+    expect(payOf(OTHER)).toBeUndefined();
+    expect(db.docs).toHaveLength(1);
+    expect(db.docs[0]).toMatchObject({ status: "PAID", paymentDate: "2030-05-13", paymentMethodId: "pm-test", slipUrl: "https://drive.example/slip-1", attachmentStatus: "ATTACHED" });
+    expect(drive.save).toHaveBeenCalledTimes(1);
+    expect(peak.attach).toHaveBeenCalledTimes(1);
+    expect(peak.attach.mock.calls[0][0]).toMatchObject({ transactionId: "peak-doc-42", transactionCode: "EXP-TEST-0042" });
+    expect(sendPaymentNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to pay before a document exists", async () => {
+    const res = await payDoc();
+    expect(res.status).toBe(404);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("refuses a document whose PEAK creation is not confirmed", async () => {
+    peak.create.mockResolvedValue({ ok: false, uncertain: true, desc: "timeout" });
+    await create([J1, J2, J3]);
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("no PEAK document awaiting payment");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("refuses to pay an already-paid EXP again", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    const again = await payDoc();
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ error: "already-paid" });
+    expect(peak.pay).toHaveBeenCalledTimes(1);
+    expect(sendPaymentNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses the wrong EXP for the document", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ documentNo: "EXP-TEST-0099" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("is for EXP-TEST-0042, not EXP-TEST-0099");
+    expect(peak.get).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("reads the EXP back from PEAK and pays nothing — no slip upload — if PEAK shows it is a draft", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue(peakExpense({ status: "Draft" }));
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "peak-check-failed" });
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(db.docs[0]).toMatchObject({ status: "AWAITING_PAYMENT" });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("keeps the jobs unpaid when PEAK may have recorded the payment — no retry, no notice", async () => {
+    await create([J1, J2, J3]);
+    peak.pay.mockResolvedValue({ ok: false, uncertain: true, desc: "PEAK did not respond within 30s" });
+    const res = await payDoc();
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({ error: "peak-uncertain" });
+    expect(db.docs[0].status).toBe("PAYMENT_UNCERTAIN");
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
+    expect((await payDoc()).status).toBe(409);
+    expect(peak.pay).toHaveBeenCalledTimes(1);
+  });
+
+  it("when PEAK refuses the payment the document awaits payment again, and the jobs stay unpaid", async () => {
+    await create([J1, J2, J3]);
+    peak.pay.mockResolvedValue({ ok: false, code: "347", desc: "Transaction must be Waiting Payment Status." });
+    const res = await payDoc();
+    expect(res.status).toBe(502);
+    expect(db.docs[0]).toMatchObject({ status: "AWAITING_PAYMENT", error: "Transaction must be Waiting Payment Status.", paymentDate: null });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+    peak.pay.mockResolvedValue({ ok: true, code: "200", remainPaymentAmount: 0, remainWhtAmount: 0 });
+    expect((await payDoc()).status).toBe(200);
+    expect(peak.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("a job whose figures changed after the EXP was created stops the payment — no PEAK call, no new document", async () => {
+    await create([J1, J2, J3]);
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.expenses = [{ description: "Offering flowers", price: 120, pax: 1, expenseType: "other", paidBy: "guide" }];
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    const reasons = (await res.json()).reasons.join(" ");
+    expect(reasons).toContain("FOLK-BKK-20300512-01 now pays ฿1,866.00, but EXP-TEST-0042 was created for ฿1,841.00");
+    expect(reasons).toContain("Nothing was paid");
+    expect(peak.get).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(peak.create).toHaveBeenCalledTimes(1);
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+  });
+
+  it("a job that lost its approval between the stages stops the payment", async () => {
+    await create([J1, J2, J3]);
+    db.sheets.find((s) => s.date === J2.date && s.slotIdx === J2.slotIdx)!.approvalStatus = null;
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("FOLK-BKK-20300506-02 is no longer approved");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("needs a slip", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc({ noFile: "1" })).status).toBe(400);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("keeps the payment when only the slip attachment fails — the money is recorded", async () => {
+    await create([J1, J2, J3]);
+    peak.attach.mockResolvedValue({ ok: false, desc: "file too large" });
+    const res = await payDoc();
+    expect(res.status).toBe(200);
+    expect((await res.json()).attachment).toEqual({ ok: false, reason: "file too large" });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PAID");
+    expect(db.docs[0]).toMatchObject({ status: "PAID", attachmentStatus: "FAILED" });
+  });
+});
+
+describe("a billed expense with no Paid By stops the document before PEAK", () => {
   const unset = () => {
     const j3 = db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!;
     j3.expenses = [{ description: "Offering flowers", price: 95, pax: 1, expenseType: "other" }]; // Paid By missing
@@ -242,42 +402,78 @@ describe("a billed expense with no Paid By stops the payment before PEAK", () =>
     unset();
     const res = await PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs: [J1, J2, J3] }),
+      body: JSON.stringify({ guideId: GUIDE, jobs: [J1, J2, J3] }),
     }) as unknown as Parameters<typeof PREVIEW>[0]);
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.reasons.join(" ")).toContain('FOLK-BKK-20300512-01 row 1 "Offering flowers": Paid By is not set');
   });
 
-  it("the real POST refuses with 409 — no slip upload, no PEAK document, no payment record, nothing paid", async () => {
+  it("creating the document refuses with 409 — no PEAK document, no payment record, nothing paid", async () => {
     unset();
-    const res = await payForm([J1, J2, J3]);
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(409);
     expect((await res.json()).reasons.join(" ")).toContain('FOLK-BKK-20300512-01 row 1 "Offering flowers": Paid By is not set');
-    expect(drive.save).not.toHaveBeenCalled();
     expect(peak.create).not.toHaveBeenCalled();
-    expect(peak.attach).not.toHaveBeenCalled();
     expect(db.docs).toHaveLength(0);
     expect(db.pays.filter((p) => p.status === "PAID" || p.peakPaymentRef)).toHaveLength(0);
   });
 });
 
-describe("PATCH /api/pay/peak-document — settling an unconfirmed payment", () => {
-  it("records a document found in PEAK and marks all its jobs paid", async () => {
+describe("PATCH /api/pay/peak-document — settling what PEAK did not confirm", () => {
+  it("a document found in PEAK is recorded as awaiting payment — NOT paid", async () => {
     peak.create.mockResolvedValue({ ok: false, uncertain: true, desc: "timeout" });
-    await payForm([J1, J2, J3]);
-    db.docs[0].createdAt = new Date(Date.now() - 10 * 60_000); // past the in-flight window
-
+    await create([J1, J2, J3]);
+    db.docs[0].updatedAt = new Date(Date.now() - 10 * 60_000); // past the in-flight window
     const res = await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "found", documentNo: "EXP-TEST-0044" });
     expect(res.status).toBe(200);
-    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PAID", peakRef: "EXP-TEST-0044", peakPaymentRef: "FOLK-PAY-203005-01" });
-    expect(db.docs[0].status).toBe("POSTED");
+    expect(db.docs[0]).toMatchObject({ status: "AWAITING_PAYMENT", peakDocumentNo: "EXP-TEST-0044" });
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
   });
 
-  it("will not resolve a payment that may still be in flight", async () => {
+  it("a document not in PEAK releases the jobs", async () => {
+    peak.create.mockResolvedValue({ ok: false, uncertain: true, desc: "timeout" });
+    await create([J1, J2, J3]);
+    db.docs[0].updatedAt = new Date(Date.now() - 10 * 60_000);
+    expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "not-found" })).status).toBe(200);
+    expect(db.docs[0].status).toBe("FAILED");
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.peakPaymentRef).toBeNull();
+  });
+
+  it("a payment found in PEAK marks the jobs paid and tells the guide once", async () => {
+    await create([J1, J2, J3]);
+    peak.pay.mockResolvedValue({ ok: false, uncertain: true, desc: "timeout" });
+    await payDoc();
+    db.docs[0].updatedAt = new Date(Date.now() - 10 * 60_000);
+    expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "payment-found" })).status).toBe(200);
+    expect(db.docs[0].status).toBe("PAID");
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PAID", peakRef: "EXP-TEST-0042" });
+    expect(sendPaymentNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it("no payment in PEAK returns the document to awaiting payment", async () => {
+    await create([J1, J2, J3]);
+    peak.pay.mockResolvedValue({ ok: false, uncertain: true, desc: "timeout" });
+    await payDoc();
+    db.docs[0].updatedAt = new Date(Date.now() - 10 * 60_000);
+    expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "payment-not-found" })).status).toBe(200);
+    expect(db.docs[0]).toMatchObject({ status: "AWAITING_PAYMENT", paymentDate: null });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
+  });
+
+  it("a document voided in PEAK before payment releases its jobs; the EXP stays on the document record", async () => {
+    await create([J1, J2, J3]);
+    expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "voided" })).status).toBe(200);
+    expect(db.docs[0]).toMatchObject({ status: "VOIDED", peakDocumentNo: "EXP-TEST-0042" });
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: null });
+  });
+
+  it("will not resolve a document that may still be in flight", async () => {
     peak.create.mockImplementation(() => new Promise(() => {})); // never answers
-    void payForm([J1, J2, J3]);
-    await vi.waitFor(() => expect(db.docs[0]?.status).toBe("POSTING"));
+    void create([J1, J2, J3]);
+    await vi.waitFor(() => expect(db.docs[0]?.status).toBe("CREATING"));
     const res = await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "not-found" });
     expect(res.status).toBe(409);
   });
@@ -336,8 +532,8 @@ describe("already in PEAK from the job sheet — the Payments count and the serv
     expect(body.reasons[1]).toContain("EXP-TEST-0026");
   });
 
-  it("the post refuses the same set before any write — no slip, no PEAK call, no payment record", async () => {
-    const res = await payForm([J1, J2, J3, J4, OTHER], { paymentDate: "2030-05-28" });
+  it("creating refuses the same set before any write — no PEAK call, no payment record", async () => {
+    const res = await create([J1, J2, J3, J4, OTHER]);
     expect(res.status).toBe(409);
     expect(drive.save).not.toHaveBeenCalled();
     expect(peak.create).not.toHaveBeenCalled();
@@ -355,7 +551,7 @@ describe("already in PEAK from the job sheet — the Payments count and the serv
       return real(arg);
     });
     try {
-      const res = await payForm([J2, J4], { paymentDate: "2030-05-28" });
+      const res = await create([J2, J4]);
       expect(res.status).toBe(409);
       expect((await res.json()).reasons.join(" ")).toContain("EXP-TEST-0031");
       expect(drive.save).not.toHaveBeenCalled();
@@ -375,9 +571,9 @@ describe("a combined PEAK payment takes approved job sheets only", () => {
     body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
   }) as unknown as Parameters<typeof PREVIEW>[0]);
 
-  it("approved: the preview builds the document and the post pays it", async () => {
+  it("approved: the preview builds the document and it can be created", async () => {
     expect((await (await preview([J1, J2, J3])).json()).ok).toBe(true);
-    expect((await payForm([J1, J2, J3])).status).toBe(200);
+    expect((await create([J1, J2, J3])).status).toBe(200);
   });
 
   it("unapproved: the preview names exactly that job, and only that job", async () => {
@@ -389,7 +585,7 @@ describe("a combined PEAK payment takes approved job sheets only", () => {
 
   it("a mixed batch with one unapproved job is refused whole — no slip, no PEAK write, no payment rows, no notice, no audit", async () => {
     sheetOf(J3).approvalStatus = null;
-    const res = await payForm([J1, J2, J3]);
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(409);
     expect((await res.json()).reasons).toEqual([expect.stringContaining("FOLK-BKK-20300512-01 is not approved")]);
     expect(drive.save).not.toHaveBeenCalled();
@@ -409,7 +605,7 @@ describe("a combined PEAK payment takes approved job sheets only", () => {
       return real(arg);
     });
     try {
-      const res = await payForm([J1, J2, J3]);
+      const res = await create([J1, J2, J3]);
       expect(res.status).toBe(409);
       expect((await res.json()).reasons.join(" ")).toContain("FOLK-BKK-20300506-02 is no longer approved");
       expect(drive.save).not.toHaveBeenCalled();
@@ -465,9 +661,9 @@ describe("the preview lists every row with no expense category, including on a j
     ]);
   });
 
-  it("the post still refuses — listing the rows — and writes nothing, even once everything is approved", async () => {
+  it("creating still refuses — listing the rows — and writes nothing, even once everything is approved", async () => {
     sheetOf(J1).approvalStatus = "APPROVED";
-    const res = await payForm([J1, J2, J3]);
+    const res = await create([J1, J2, J3]);
     expect(res.status).toBe(409);
     expect((await res.json()).missingCategories).toHaveLength(9);
     expect(drive.save).not.toHaveBeenCalled();

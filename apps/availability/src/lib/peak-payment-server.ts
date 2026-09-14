@@ -1,17 +1,20 @@
 // Server half of "Pay N jobs together": reads the jobs, enforces every guard that needs
-// the database, and supplies the side effects lib/peak-payment-document orders.
+// the database, and supplies the side effects lib/peak-payment-document orders — for
+// stage 1 (create the PEAK expense document) and stage 2 (record its payment).
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { saveBufferToDrive } from "@/lib/google-drive";
-import { DEFAULT_GUIDE_FEE, isApproved, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
-import { createExpenseAllInOne, insertExpenseFile } from "@/lib/peak-api";
+import { createExpenseAllInOne, getExpenseByCode, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { combinedPaymentBlock, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
+import { guidePayoutTotal } from "@/lib/peak-sync";
+import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import {
-  attachmentFileType, paymentDocumentLock, paymentRefFor,
-  type GuidePaymentDocument, type PaymentAccounts, type PaymentJob, type PayTogetherDeps,
+  attachmentFileType, documentStatus, paymentDocumentLock, paymentRefFor, peakPaymentPlan,
+  type CreateDocumentDeps, type GuidePaymentDocument, type PayDocumentDeps, type PaymentAccounts, type PaymentJob, type PaymentLineTrace,
 } from "@/lib/peak-payment-document";
 
 export type JobKey = { date: string; slotIdx: number };
@@ -20,6 +23,18 @@ type Actor = { actorId: string | null; actorRole: string | null };
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const compact = (d: string) => d.replace(/-/g, "");
+/** Today's date in Bangkok, "YYYY-MM-DD". */
+export const bangkokToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
+/** The combined documents behind a set of payment refs, for lock messages. */
+async function documentsByRef(refs: (string | null | undefined)[]) {
+  const wanted = [...new Set(refs.filter((r): r is string => !!r))];
+  if (!wanted.length) return new Map<string, { status: string; peakDocumentNo: string | null }>();
+  const docs = await prisma.guidePaymentDocument.findMany({ where: { paymentRef: { in: wanted } }, select: { paymentRef: true, status: true, peakDocumentNo: true } });
+  return new Map(docs.map((d) => [d.paymentRef, { status: d.status, peakDocumentNo: d.peakDocumentNo }]));
+}
 
 // The same fallback the Payments page uses: an auto-created sheet can store guideFee as
 // {}, which must read as the standard fee — or the document and the page would disagree
@@ -72,6 +87,7 @@ export async function loadPaymentContext(
     guideFeeAccount(),
     reviewRewardAccount(),
   ]);
+  const docs = await documentsByRef(pays.map((p) => p.peakPaymentRef));
 
   const reasons: string[] = [];
   const at = (list: { date: string; slotIdx: number }[], k: JobKey) => list.find((x) => x.date === k.date && x.slotIdx === k.slotIdx);
@@ -93,7 +109,7 @@ export async function loadPaymentContext(
     // and this refusal can never disagree about which jobs may go together.
     const block = combinedPaymentBlock({
       sheet: sheet ?? null,
-      payment: pay ?? null,
+      payment: pay ? { ...pay, document: pay.peakPaymentRef ? docs.get(pay.peakPaymentRef) ?? null : null } : null,
       coveredByPayroll: !!sheet && coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt),
       period: k.date.slice(0, 7),
     });
@@ -162,10 +178,12 @@ export async function otherUnpaidJobsInMonth(guideId: string, job: JobKey, today
   return out;
 }
 
-export async function nextPaymentRef(paymentDate: string): Promise<string> {
-  const prefix = paymentRefFor(paymentDate, 0).slice(0, -2); // "FOLK-PAY-202609-"
+/** The next FOLK-PAY-YYYYMM-NN for the month of `date` — stage 1 numbers by the day
+ *  the document is created, since no payment date exists yet. */
+export async function nextPaymentRef(date: string): Promise<string> {
+  const prefix = paymentRefFor(date, 0).slice(0, -2); // "FOLK-PAY-202609-"
   const used = await prisma.guidePaymentDocument.count({ where: { paymentRef: { startsWith: prefix } } });
-  return paymentRefFor(paymentDate, used + 1);
+  return paymentRefFor(date, used + 1);
 }
 
 /**
@@ -177,9 +195,10 @@ export async function paymentDocumentLocks(jobs: { guideId: string; date: string
   if (!jobs.length) return [];
   const rows = await prisma.tourPayment.findMany({
     where: { OR: jobs.map((j) => ({ guideId: j.guideId, date: j.date, slotIdx: j.slotIdx })), peakPaymentRef: { not: null } },
-    select: { date: true, slotIdx: true, peakPaymentRef: true, peakRef: true },
+    select: { date: true, slotIdx: true, peakPaymentRef: true, peakRef: true, status: true },
   });
-  return rows.map((r) => `${r.date} slot ${r.slotIdx}: ${paymentDocumentLock(r)}`);
+  const docs = await documentsByRef(rows.map((r) => r.peakPaymentRef));
+  return rows.map((r) => `${r.date} slot ${r.slotIdx}: ${paymentDocumentLock(r, docs.get(r.peakPaymentRef ?? ""))}`);
 }
 
 /** The same, for a guide's whole month. `unresolvedOnly` skips documents PEAK already
@@ -190,24 +209,18 @@ export async function paymentDocumentLocksInMonth(guideId: string, period: strin
       guideId, date: { gte: `${period}-01`, lte: `${period}-31` }, peakPaymentRef: { not: null },
       ...(opts.unresolvedOnly ? { status: { not: "PAID" } } : {}),
     },
-    select: { date: true, slotIdx: true, peakPaymentRef: true, peakRef: true },
+    select: { date: true, slotIdx: true, peakPaymentRef: true, peakRef: true, status: true },
   });
-  return rows.map((r) => `${r.date} slot ${r.slotIdx}: ${paymentDocumentLock(r)}`);
+  const docs = await documentsByRef(rows.map((r) => r.peakPaymentRef));
+  return rows.map((r) => `${r.date} slot ${r.slotIdx}: ${paymentDocumentLock(r, docs.get(r.peakPaymentRef ?? ""))}`);
 }
 
-export function prismaPayTogetherDeps(opts: {
-  guideId: string;
-  guideName: string;
-  paymentDate: string;
-  paymentMethodId: string;
-  paymentMethodName: string | null;
-  file: { base64: string; mime: string };
-  refreshToken: string;
-  actor: Actor;
-}): PayTogetherDeps {
-  const { guideId, guideName, paymentDate, paymentMethodId, paymentMethodName, file, refreshToken, actor } = opts;
-  const ext = extOf(file.mime);
+const key = (guideId: string, j: JobKey) => ({ guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } });
 
+// ── Stage 1: create the PEAK expense document ────────────────────────────────
+
+export function prismaCreateDeps(opts: { guideId: string; actor: Actor }): CreateDocumentDeps {
+  const { guideId, actor } = opts;
   return {
     async claim(doc: GuidePaymentDocument) {
       try {
@@ -215,12 +228,9 @@ export function prismaPayTogetherDeps(opts: {
           // Re-read inside the transaction: a sheet synced to PEAK on its own, or one
           // whose approval was withdrawn, since the jobs were loaded must not go into this
           // document. Checked for every job before anything is written, so one refusal
-          // refuses the whole payment.
+          // refuses the whole document.
           for (const j of doc.jobs) {
-            const sheetNow = await tx.jobSheet.findUnique({
-              where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
-              select: { peakDocumentNo: true, peakDocumentId: true, approvalStatus: true },
-            });
+            const sheetNow = await tx.jobSheet.findUnique({ where: key(guideId, j), select: { peakDocumentNo: true, peakDocumentId: true, approvalStatus: true } });
             if (sheetInPeak(sheetNow)) {
               throw new PaymentClaimRefused(`${j.ref} was just posted to PEAK from its job sheet${sheetNow?.peakDocumentNo ? ` (${sheetNow.peakDocumentNo})` : ""} — leave it out of this payment`);
             }
@@ -230,18 +240,17 @@ export function prismaPayTogetherDeps(opts: {
           }
           await tx.guidePaymentDocument.create({
             data: {
-              paymentRef: doc.paymentRef, guideId, paymentDate, paymentMethodId, paymentMethodName,
+              paymentRef: doc.paymentRef, guideId,
               jobs: doc.jobs as unknown as Prisma.InputJsonValue,
               lines: doc.traces as unknown as Prisma.InputJsonValue,
-              total: doc.total, status: "POSTING", createdById: actor.actorId,
+              total: doc.total, status: "CREATING", createdById: actor.actorId,
             },
           });
           for (const j of doc.jobs) {
-            const key = { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } };
-            const a = await tx.assignment.findUnique({ where: key, select: { tourId: true } });
-            const s = a ? null : await tx.jobSheet.findUnique({ where: key, select: { tourId: true } });
+            const a = await tx.assignment.findUnique({ where: key(guideId, j), select: { tourId: true } });
+            const s = a ? null : await tx.jobSheet.findUnique({ where: key(guideId, j), select: { tourId: true } });
             await tx.tourPayment.upsert({
-              where: key,
+              where: key(guideId, j),
               create: { guideId, date: j.date, slotIdx: j.slotIdx, tourId: a?.tourId ?? s?.tourId ?? "", status: "PENDING" },
               update: {},
             });
@@ -260,33 +269,144 @@ export function prismaPayTogetherDeps(opts: {
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") throw new PaymentRefTaken(doc.paymentRef);
         throw e;
       }
-      await audit({ ...actor, action: "pay.peak_document_claimed", entityType: "GuidePaymentDocument", detail: { paymentRef: doc.paymentRef, guideId, jobs: doc.jobs, total: doc.total } });
+      await audit({ ...actor, action: "pay.peak_document_claimed", entityType: "GuidePaymentDocument", detail: { paymentRef: doc.paymentRef, guideId, jobs: doc.jobs, total: doc.total, gross: doc.gross, wht: doc.wht, lines: doc.lines.length } });
     },
 
-    async uploadSlip(doc) {
-      const earliest = [...doc.jobs.map((j) => j.date)].sort()[0];
+    // An UNPAID expense: the document the builder makes carries no paidPayments.
+    createExpense: (expense) => createExpenseAllInOne(expense),
+
+    async recordCreated(p) {
+      const moved = await prisma.guidePaymentDocument.updateMany({
+        where: { paymentRef: p.paymentRef, status: { in: ["CREATING", "CREATE_UNCERTAIN"] } },
+        data: { status: "AWAITING_PAYMENT", error: null, peakDocumentNo: p.documentNo, peakDocumentId: p.documentId, peakDocumentLink: p.documentLink },
+      });
+      if (moved.count !== 1) throw new Error(`${p.paymentRef} is no longer waiting for its PEAK document`);
+      await audit({ ...actor, action: "pay.peak_document_created", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, guideId, documentNo: p.documentNo, documentId: p.documentId } });
+    },
+
+    async recordCreateFailed({ paymentRef, reason, uncertain }) {
+      if (uncertain) {
+        await prisma.guidePaymentDocument.update({ where: { paymentRef }, data: { status: "CREATE_UNCERTAIN", error: reason } });
+        await audit({ ...actor, action: "pay.peak_document_create_uncertain", entityType: "GuidePaymentDocument", detail: { paymentRef, guideId, reason } });
+        return;
+      }
+      await releaseDocument(paymentRef, "FAILED", reason, null);
+      await audit({ ...actor, action: "pay.peak_document_create_failed", entityType: "GuidePaymentDocument", detail: { paymentRef, guideId, reason } });
+    },
+  };
+}
+
+// ── Stage 2: record the payment against that same document ───────────────────
+
+type DocRow = {
+  paymentRef: string; guideId: string; status: string; total: number; jobs: unknown; lines: unknown;
+  peakDocumentNo: string | null; peakDocumentId: string | null; peakDocumentLink: string | null;
+  paymentDate: string | null; slipUrl: string | null;
+};
+type DocJob = { date: string; slotIdx: number; ref: string; payout: number };
+export const documentJobs = (doc: { jobs: unknown }): DocJob[] => (Array.isArray(doc.jobs) ? (doc.jobs as DocJob[]) : []);
+/** Gross and withholding exactly as the document was created, from its stored line trace. */
+export const documentFigures = (doc: { lines: unknown; total: number }) => {
+  const traces = (Array.isArray(doc.lines) ? doc.lines : []) as PaymentLineTrace[];
+  const gross = round2(traces.reduce((s, t) => s + (Number(t.price) || 0), 0));
+  const wht = round2(traces.reduce((s, t) => s + (Number(t.wht) || 0), 0));
+  return { gross, wht, net: round2(doc.total), lines: traces.length };
+};
+
+/**
+ * Every reason the jobs in this document may not be paid now. The document was made
+ * for exact figures; if any job changed since — its payout, its approval, its lock —
+ * paying the EXP would settle a document that no longer matches the jobs. Stop instead:
+ * nothing here ever makes another EXP.
+ */
+async function paymentBlockers(tx: Prisma.TransactionClient, doc: DocRow): Promise<string[]> {
+  const reasons: string[] = [];
+  const docNo = doc.peakDocumentNo ?? doc.paymentRef;
+  const jobs = documentJobs(doc);
+  const held = await tx.tourPayment.findMany({ where: { peakPaymentRef: doc.paymentRef }, select: { guideId: true, date: true, slotIdx: true, status: true } });
+  if (held.length !== jobs.length) reasons.push(`${doc.paymentRef} holds ${held.length} of its ${jobs.length} jobs — a job was released or changed since ${docNo} was created`);
+  for (const j of jobs) {
+    const tp = held.find((h) => h.date === j.date && h.slotIdx === j.slotIdx && h.guideId === doc.guideId);
+    if (!tp) reasons.push(`${j.ref} is no longer part of ${doc.paymentRef}`);
+    else if (tp.status === "PAID") reasons.push(`${j.ref} is already marked paid`);
+    const sheet = await tx.jobSheet.findUnique({ where: key(doc.guideId, j), select: { approvalStatus: true, peakDocumentNo: true, peakDocumentId: true, expenses: true, guideFee: true } });
+    if (!sheet) { reasons.push(`${j.ref} no longer has a job sheet`); continue; }
+    if (!isApproved(sheet.approvalStatus)) reasons.push(`${j.ref} is no longer approved`);
+    if (sheetInPeak(sheet)) reasons.push(`${j.ref} was posted to PEAK from its own job sheet${sheet.peakDocumentNo ? ` (${sheet.peakDocumentNo})` : ""}`);
+    const payout = round2(guidePayoutTotal((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)).payout);
+    if (Math.abs(payout - Number(j.payout)) > 0.005) {
+      reasons.push(`${j.ref} now pays ${thb(payout)}, but ${docNo} was created for ${thb(Number(j.payout))} — its figures changed after the PEAK document was made`);
+    }
+  }
+  if (reasons.length) reasons.push(`Nothing was paid. Put the job back as it was, or void ${docNo} in PEAK and record that here, then create a new document`);
+  return reasons;
+}
+
+export function prismaPayDeps(opts: {
+  document: DocRow;
+  guideName: string;
+  peakContactId: string | null;
+  file: { base64: string; mime: string };
+  refreshToken: string;
+  actor: Actor;
+}): PayDocumentDeps {
+  const { document: doc, guideName, peakContactId, file, refreshToken, actor } = opts;
+  const ext = extOf(file.mime);
+  const docNo = doc.peakDocumentNo ?? "";
+  const jobs = documentJobs(doc);
+
+  return {
+    async claimPayment(p) {
+      await prisma.$transaction(async (tx) => {
+        const blockers = await paymentBlockers(tx, doc);
+        if (blockers.length) throw new PaymentClaimRefused(blockers.join("\n"));
+        const moved = await tx.guidePaymentDocument.updateMany({
+          where: { paymentRef: p.paymentRef, status: "AWAITING_PAYMENT", peakDocumentNo: docNo },
+          data: { status: "PAYING", error: null, paymentDate: p.paymentDate, paymentMethodId: p.paymentMethodId, paymentMethodName: p.paymentMethodName },
+        });
+        // A second press, or another operator paying the same document, matches nothing.
+        if (moved.count !== 1) throw new PaymentClaimRefused(`${p.paymentRef} is no longer awaiting payment — reload Payments`);
+      }, { timeout: 20_000 });
+      await audit({ ...actor, action: "pay.peak_payment_claimed", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, documentNo: docNo, paymentDate: p.paymentDate, paymentMethodName: p.paymentMethodName, amount: doc.total } });
+    },
+
+    async checkExpense() {
+      const r = await getExpenseByCode(docNo);
+      if (!r.ok) return { ok: false, reasons: [`Could not read ${docNo} from PEAK: ${r.desc ?? "no answer"} — nothing was paid`] };
+      if (r.notFound || !r.expense) return { ok: false, reasons: [`${docNo} was not found in PEAK — nothing was paid`] };
+      const f = documentFigures(doc);
+      return peakPaymentPlan({ expense: r.expense, documentNo: docNo, paymentRef: doc.paymentRef, peakContactId, gross: f.gross, wht: f.wht, net: f.net });
+    },
+
+    async uploadSlip() {
+      const earliest = [...jobs.map((j) => j.date)].sort()[0] ?? bangkokToday();
       const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
-      const name = `${guideId} ${guideName} — ${doc.paymentRef} (${doc.jobs.length} tour${doc.jobs.length === 1 ? "" : "s"}) — e-slip.${ext}`;
+      const name = `${doc.guideId} ${guideName} — ${docNo} ${doc.paymentRef} (${jobs.length} tour${jobs.length === 1 ? "" : "s"}) — e-slip.${ext}`;
       const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", monthFolder] });
       // Stored now, so a payment that later needs resolving by hand still has its slip.
       await prisma.guidePaymentDocument.update({ where: { paymentRef: doc.paymentRef }, data: { slipUrl: link } });
       return { link };
     },
 
-    createExpense: (expense) => createExpenseAllInOne(expense),
+    payExpense: (p) => payExistingExpense({ documentNo: p.documentNo, paymentDate: compact(p.paymentDate), paymentMethodId: p.paymentMethodId, amount: p.amount, withholdingTaxAmount: p.withholdingTaxAmount }),
 
-    async recordPosted(p) {
-      await markDocumentPaid({ ...p, paymentDate, actor });
+    async recordPaid({ paymentRef, slipLink }) {
+      const current = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef }, select: { paymentDate: true } });
+      await markDocumentPaid({ paymentRef, documentNo: docNo, documentId: doc.peakDocumentId, slipLink, paymentDate: current?.paymentDate ?? bangkokToday(), actor });
     },
 
-    async recordFailed({ paymentRef, reason, uncertain }) {
+    async recordPaymentFailed({ paymentRef, reason, uncertain }) {
       if (uncertain) {
-        await prisma.guidePaymentDocument.update({ where: { paymentRef }, data: { status: "UNCERTAIN", error: reason } });
-        await audit({ ...actor, action: "pay.peak_document_uncertain", entityType: "GuidePaymentDocument", detail: { paymentRef, guideId, reason } });
+        await prisma.guidePaymentDocument.updateMany({ where: { paymentRef, status: "PAYING" }, data: { status: "PAYMENT_UNCERTAIN", error: reason } });
+        await audit({ ...actor, action: "pay.peak_payment_uncertain", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: docNo, reason } });
         return;
       }
-      await releaseDocument(paymentRef, "FAILED", reason, null);
-      await audit({ ...actor, action: "pay.peak_document_failed", entityType: "GuidePaymentDocument", detail: { paymentRef, guideId, reason } });
+      // Nothing was recorded in PEAK: the document is awaiting payment again, exactly as before.
+      await prisma.guidePaymentDocument.updateMany({
+        where: { paymentRef, status: "PAYING" },
+        data: { status: "AWAITING_PAYMENT", error: reason, paymentDate: null, paymentMethodId: null, paymentMethodName: null, slipUrl: null },
+      });
+      await audit({ ...actor, action: "pay.peak_payment_failed", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: docNo, reason } });
     },
 
     async attachSlip({ documentId, documentNo }) {
@@ -298,11 +418,13 @@ export function prismaPayTogetherDeps(opts: {
     },
 
     async recordAttachment({ paymentRef, ok, reason }) {
-      await prisma.guidePaymentDocument.update({
-        where: { paymentRef },
-        data: { attachmentStatus: ok ? "ATTACHED" : "FAILED", attachmentError: ok ? null : reason },
-      });
+      await prisma.guidePaymentDocument.update({ where: { paymentRef }, data: { attachmentStatus: ok ? "ATTACHED" : "FAILED", attachmentError: ok ? null : reason } });
       if (!ok) await audit({ ...actor, action: "pay.peak_document_attach_failed", entityType: "GuidePaymentDocument", detail: { paymentRef, reason } });
+    },
+
+    async notifyGuide({ paymentRef, slipLink }) {
+      await sendPaymentNotice(doc.guideId, jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, slipLink);
+      await audit({ ...actor, action: "pay.peak_payment_notice_sent", entityType: "GuidePaymentDocument", detail: { paymentRef, guideId: doc.guideId, jobs: jobs.length } });
     },
   };
 }
@@ -313,7 +435,7 @@ export const paidAtFor = (paymentDate: string) => new Date(`${paymentDate}T12:00
 
 /** Every job locked to this document becomes PAID and points at the same PEAK document. */
 async function markDocumentPaid(p: {
-  paymentRef: string; documentNo: string; documentId: string | null; documentLink: string | null; slipLink: string | null;
+  paymentRef: string; documentNo: string; documentId: string | null; slipLink: string | null;
   paymentDate: string; actor: Actor; resolvedBy?: string | null;
 }) {
   const now = new Date();
@@ -323,34 +445,33 @@ async function markDocumentPaid(p: {
   await prisma.$transaction(async (tx) => {
     const doc = await tx.guidePaymentDocument.findUnique({ where: { paymentRef: p.paymentRef }, select: { jobs: true } });
     const expected = Array.isArray(doc?.jobs) ? doc!.jobs.length : -1;
+    const moved = await tx.guidePaymentDocument.updateMany({
+      where: { paymentRef: p.paymentRef, status: { in: ["PAYING", "PAYMENT_UNCERTAIN"] } },
+      data: {
+        status: "PAID", error: null, peakDocumentNo: p.documentNo, peakDocumentId: p.documentId,
+        ...(p.slipLink ? { slipUrl: p.slipLink } : {}),
+        ...(p.resolvedBy !== undefined ? { resolvedById: p.resolvedBy, resolvedAt: now } : {}),
+      },
+    });
+    if (moved.count !== 1) throw new Error(`${p.paymentRef} is not waiting on a payment`);
     const paid = await tx.tourPayment.updateMany({
-      where: { peakPaymentRef: p.paymentRef },
+      where: { peakPaymentRef: p.paymentRef, status: { not: "PAID" } },
       data: {
         status: "PAID", paidAt, approvedBy: p.actor.actorId, approvedAt: null,
         peakRef: p.documentNo, peakDocumentId: p.documentId, ...(p.slipLink ? { eslipUrl: p.slipLink } : {}),
       },
     });
     // A job that lost its lock in the meantime would be missing from the paid set while
-    // PEAK holds its line. Refuse to half-record it; the document stays open to resolve.
+    // PEAK holds its payment. Refuse to half-record it; the document stays open to resolve.
     if (paid.count !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${paid.count}`);
-    await tx.guidePaymentDocument.update({
-      where: { paymentRef: p.paymentRef },
-      data: {
-        status: "POSTED", error: null,
-        peakDocumentNo: p.documentNo, peakDocumentId: p.documentId, peakDocumentLink: p.documentLink,
-        ...(p.slipLink ? { slipUrl: p.slipLink } : {}),
-        ...(p.resolvedBy !== undefined ? { resolvedById: p.resolvedBy, resolvedAt: now } : {}),
-      },
-    });
   });
-  await audit({ ...p.actor, action: "pay.peak_document_posted", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, documentNo: p.documentNo, documentId: p.documentId } });
+  await audit({ ...p.actor, action: "pay.peak_payment_recorded", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, documentNo: p.documentNo, paymentDate: p.paymentDate } });
 }
 
 /**
- * Let the jobs go. FAILED: PEAK holds nothing. VOIDED: an operator voided the document
- * in PEAK, so the jobs are unpaid again and every trace of that document is cleared.
- * The lock is cleared whatever the row's status — a stale ref would otherwise block
- * the job forever.
+ * Let the jobs go. FAILED: PEAK holds no document. VOIDED: an operator voided the
+ * document in PEAK, so the jobs are unpaid again and every trace of that document is
+ * cleared from them — the document row itself, with its EXP, stays as the record.
  */
 async function releaseDocument(paymentRef: string, status: "FAILED" | "VOIDED", reason: string | null, resolvedBy: string | null) {
   const now = new Date();
@@ -368,57 +489,77 @@ async function releaseDocument(paymentRef: string, status: "FAILED" | "VOIDED", 
   ]);
 }
 
-// A POSTING document younger than this may still be in flight — its request can be
-// waiting on PEAK (30 s write timeout) or on Drive. Resolving it by hand then would
-// race the original request.
+// A CREATING or PAYING document younger than this may still be in flight — its request
+// can be waiting on PEAK (30 s write timeout) or on Drive. Resolving it by hand then
+// would race the original request.
 const IN_FLIGHT_MS = 5 * 60_000;
 
 export type Resolution =
   | { resolution: "found"; documentNo: string }
   | { resolution: "not-found" }
+  | { resolution: "payment-found" }
+  | { resolution: "payment-not-found" }
   | { resolution: "voided" };
 
 /**
- * A person settles what the system could not: whether PEAK has the document.
- *  found     — it exists in PEAK: record it and mark the jobs paid
- *  not-found — it does not: release the jobs so they can be paid again
- *  voided    — a posted document was voided in PEAK: the jobs are unpaid again
+ * A person settles what the system could not: what PEAK actually holds.
+ *  found              stage 1 — the document exists in PEAK: record its EXP; the jobs await payment (NOT paid)
+ *  not-found          stage 1 — it does not: release the jobs
+ *  payment-found      stage 2 — PEAK shows the payment on the EXP: mark the jobs paid, tell the guide
+ *  payment-not-found  stage 2 — it does not: the document awaits payment again
+ *  voided             the EXP was voided in PEAK (before or after payment): the jobs are unpaid and released
  */
 export async function resolvePaymentDocument(
   paymentRef: string,
   r: Resolution,
   actor: Actor,
-): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; notify?: { guideId: string; jobs: { date: string; slotIdx: number }[]; slipUrl: string | null } } | { ok: false; status: number; error: string }> {
   const doc = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef } });
   if (!doc) return { ok: false, status: 404, error: "No such payment" };
+  const st = documentStatus(doc.status);
+  const inFlight = (st === "CREATING" || st === "PAYING") && Date.now() - doc.updatedAt.getTime() < IN_FLIGHT_MS;
+  if (inFlight) return { ok: false, status: 409, error: "This may still be in progress — wait a few minutes, then check again" };
 
-  const open = doc.status === "UNCERTAIN" || doc.status === "POSTING";
-  if (doc.status === "POSTING" && Date.now() - doc.createdAt.getTime() < IN_FLIGHT_MS) {
-    return { ok: false, status: 409, error: "This payment may still be in progress — wait a few minutes, then check again" };
-  }
-
-  if (r.resolution === "found") {
-    if (!open) return { ok: false, status: 409, error: `This payment is ${doc.status.toLowerCase()}, not waiting on PEAK` };
+  if (r.resolution === "found" || r.resolution === "not-found") {
+    if (st !== "CREATE_UNCERTAIN" && st !== "CREATING") return { ok: false, status: 409, error: `This document is ${String(st ?? doc.status).toLowerCase()}, not waiting on PEAK to confirm it exists` };
+    if (r.resolution === "not-found") {
+      await releaseDocument(paymentRef, "FAILED", "Not found in PEAK (confirmed by an operator)", actor.actorId);
+      await audit({ ...actor, action: "pay.peak_document_resolved_not_found", entityType: "GuidePaymentDocument", detail: { paymentRef } });
+      return { ok: true };
+    }
     const documentNo = r.documentNo.trim();
     if (!documentNo) return { ok: false, status: 400, error: "Enter the PEAK document number" };
-    try {
-      await markDocumentPaid({ paymentRef, documentNo, documentId: null, documentLink: null, slipLink: doc.slipUrl, paymentDate: doc.paymentDate, actor, resolvedBy: actor.actorId });
-    } catch (e) {
-      return { ok: false, status: 409, error: errText(e) };
-    }
+    const moved = await prisma.guidePaymentDocument.updateMany({
+      where: { paymentRef, status: { in: ["CREATE_UNCERTAIN", "CREATING", "UNCERTAIN", "POSTING"] } },
+      data: { status: "AWAITING_PAYMENT", error: null, peakDocumentNo: documentNo, resolvedById: actor.actorId, resolvedAt: new Date() },
+    });
+    if (moved.count !== 1) return { ok: false, status: 409, error: "This document changed — reload Payments" };
     await audit({ ...actor, action: "pay.peak_document_resolved_found", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo } });
     return { ok: true };
   }
 
-  if (r.resolution === "not-found") {
-    if (!open) return { ok: false, status: 409, error: `This payment is ${doc.status.toLowerCase()}, not waiting on PEAK` };
-    await releaseDocument(paymentRef, "FAILED", "Not found in PEAK (confirmed by an operator)", actor.actorId);
-    await audit({ ...actor, action: "pay.peak_document_resolved_not_found", entityType: "GuidePaymentDocument", detail: { paymentRef } });
-    return { ok: true };
+  if (r.resolution === "payment-found" || r.resolution === "payment-not-found") {
+    if (st !== "PAYMENT_UNCERTAIN" && st !== "PAYING") return { ok: false, status: 409, error: `This document is ${String(st ?? doc.status).toLowerCase()}, not waiting on PEAK to confirm a payment` };
+    if (r.resolution === "payment-not-found") {
+      await prisma.guidePaymentDocument.updateMany({
+        where: { paymentRef, status: { in: ["PAYMENT_UNCERTAIN", "PAYING"] } },
+        data: { status: "AWAITING_PAYMENT", error: "Payment not found in PEAK (confirmed by an operator)", paymentDate: null, paymentMethodId: null, paymentMethodName: null, slipUrl: null, resolvedById: actor.actorId, resolvedAt: new Date() },
+      });
+      await audit({ ...actor, action: "pay.peak_payment_resolved_not_found", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: doc.peakDocumentNo } });
+      return { ok: true };
+    }
+    if (!doc.peakDocumentNo || !doc.paymentDate) return { ok: false, status: 409, error: "This payment has no PEAK document number or payment date on record" };
+    try {
+      await markDocumentPaid({ paymentRef, documentNo: doc.peakDocumentNo, documentId: doc.peakDocumentId, slipLink: doc.slipUrl, paymentDate: doc.paymentDate, actor, resolvedBy: actor.actorId });
+    } catch (e) {
+      return { ok: false, status: 409, error: errText(e) };
+    }
+    await audit({ ...actor, action: "pay.peak_payment_resolved_found", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: doc.peakDocumentNo } });
+    return { ok: true, notify: { guideId: doc.guideId, jobs: documentJobs(doc).map((j) => ({ date: j.date, slotIdx: j.slotIdx })), slipUrl: doc.slipUrl } };
   }
 
-  if (doc.status !== "POSTED") return { ok: false, status: 409, error: "Only a posted payment can be marked voided" };
+  if (st !== "AWAITING_PAYMENT" && st !== "PAID") return { ok: false, status: 409, error: "Only a document that exists in PEAK — awaiting payment or paid — can be marked voided" };
   await releaseDocument(paymentRef, "VOIDED", `Voided in PEAK (${doc.peakDocumentNo ?? "no number"}), confirmed by an operator`, actor.actorId);
-  await audit({ ...actor, action: "pay.peak_document_voided", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: doc.peakDocumentNo } });
+  await audit({ ...actor, action: "pay.peak_document_voided", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: doc.peakDocumentNo, wasPaid: st === "PAID" } });
   return { ok: true };
 }

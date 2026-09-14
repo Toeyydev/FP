@@ -10,6 +10,7 @@ import { type Slip } from "@/lib/payments/slips";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { paymentDocumentLocksInMonth } from "@/lib/peak-payment-server";
 import { combinedPaymentBlock, type CombinedBlock } from "@/lib/combined-payment";
+import { documentStatus } from "@/lib/peak-payment-document";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -47,12 +48,23 @@ export async function GET(req: NextRequest) {
   // The combined PEAK payment document a job was paid in (or is waiting on).
   const payRefOf = new Map(tourPays.map((p) => [`${p.guideId}|${p.date}|${p.slotIdx}`, p.peakPaymentRef]));
   const tourPayOf = new Map(tourPays.map((p) => [`${p.guideId}|${p.date}|${p.slotIdx}`, p]));
+  // Every combined PEAK document this month's jobs are locked to — created and awaiting
+  // payment, paid, or waiting on someone to check PEAK.
+  const docRefs = [...new Set(tourPays.map((p) => p.peakPaymentRef).filter((r): r is string => !!r))];
+  const paymentDocs = docRefs.length
+    ? await prisma.guidePaymentDocument.findMany({
+        where: { paymentRef: { in: docRefs } },
+        select: { paymentRef: true, guideId: true, status: true, error: true, total: true, jobs: true, lines: true, paymentDate: true, paymentMethodName: true, peakDocumentNo: true, peakDocumentLink: true, slipUrl: true, attachmentStatus: true, attachmentError: true, createdAt: true, updatedAt: true },
+      })
+    : [];
+  const docOf = new Map(paymentDocs.map((d) => [d.paymentRef, d]));
   // Whether the job can go into "Pay N jobs together · one ref" — the same rule the
   // preview and the post refuse with, so the count on this page is the count the
   // server will accept. A job whose sheet already posted its own PEAK document stays
   // listed, but is not offered.
   const combinedOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, date: string) => {
-    const combinedBlock: CombinedBlock | null = combinedPaymentBlock({ sheet: s ?? null, payment: tourPayOf.get(k) ?? null, coveredByPayroll: covered, period: date.slice(0, 7) });
+    const tp = tourPayOf.get(k);
+    const combinedBlock: CombinedBlock | null = combinedPaymentBlock({ sheet: s ?? null, payment: tp ? { ...tp, document: tp.peakPaymentRef ? docOf.get(tp.peakPaymentRef) ?? null : null } : null, coveredByPayroll: covered, period: date.slice(0, 7) });
     return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null };
   };
   const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -110,16 +122,15 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => a.guide.localeCompare(b.guide));
 
   const totals = rows.reduce((s, r) => ({ tours: s.tours + r.tours, netFee: s.netFee + r.netFee, expenses: s.expenses + r.expenses, payout: s.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
-  // Every payment document this month's jobs point at, so the page can show which ones
-  // PEAK has not confirmed and let an operator settle them.
-  const docRefs = [...new Set(tourPays.map((p) => p.peakPaymentRef).filter((r): r is string => !!r))];
-  const paymentDocs = docRefs.length
-    ? await prisma.guidePaymentDocument.findMany({
-        where: { paymentRef: { in: docRefs } },
-        select: { paymentRef: true, guideId: true, status: true, error: true, total: true, jobs: true, paymentDate: true, paymentMethodName: true, peakDocumentNo: true, peakDocumentLink: true, slipUrl: true, attachmentStatus: true, attachmentError: true, createdAt: true },
-      })
-    : [];
-  return NextResponse.json({ period, rows, totals, paymentDocs });
+  // The documents, with their state read the two-stage way and their figures as created
+  // (gross, withholding, line count) so the page can show what awaits payment.
+  const docsOut = paymentDocs.map(({ lines, ...d }) => {
+    const traces = (Array.isArray(lines) ? lines : []) as { price?: number; wht?: number }[];
+    const gross = Math.round(traces.reduce((a, t) => a + (Number(t.price) || 0), 0) * 100) / 100;
+    const wht = Math.round(traces.reduce((a, t) => a + (Number(t.wht) || 0), 0) * 100) / 100;
+    return { ...d, status: documentStatus(d.status) ?? d.status, gross, wht, lineCount: traces.length };
+  });
+  return NextResponse.json({ period, rows, totals, paymentDocs: docsOut });
 }
 
 // POST { period, guideId, status } — mark a guide's payroll paid / pending.

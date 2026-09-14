@@ -32,7 +32,11 @@ export type CombinedBlock = {
 
 export type CombinedJobState = {
   sheet: { origin?: string | null; peakDocumentNo?: string | null; peakDocumentId?: string | null; approvalStatus?: string | null } | null;
-  payment: { status?: string | null; peakPaymentRef?: string | null; peakRef?: string | null; eslipUrl?: string | null; slips?: unknown } | null;
+  payment: {
+    status?: string | null; peakPaymentRef?: string | null; peakRef?: string | null; eslipUrl?: string | null; slips?: unknown;
+    /** The combined PEAK document the job is locked to, when the caller has read it. */
+    document?: { status?: string | null; peakDocumentNo?: string | null } | null;
+  } | null;
   /** The guide's whole-month payroll already covers this job (lib/payment-coverage). */
   coveredByPayroll: boolean;
   /** "YYYY-MM" — only for the message. */
@@ -53,7 +57,7 @@ export function combinedPaymentBlock(job: CombinedJobState): CombinedBlock | nul
   const { sheet, payment } = job;
   if (!sheet) return { code: "no-job-sheet", message: "has no job sheet — open and save it before paying" };
 
-  const lock = paymentDocumentLock(payment);
+  const lock = paymentDocumentLock(payment, payment?.document);
   if (lock) return { code: "payment-document", message: lock };
   if (payment?.status === "PAID") return { code: "paid", message: "is already paid" };
   if ((payment?.eslipUrl ?? "") || (Array.isArray(payment?.slips) && payment!.slips.length > 0)) {
