@@ -16,7 +16,9 @@ export type PayTogetherJob = { date: string; slotIdx: number; tour: string; ref?
 
 type Method = { id: string; name: string; bankName?: string; accountNumber?: string };
 type Line = { description: string; jobRef: string; kind: string; category: string | null; accountCode: string; price: number; wht: number };
-type Preview = { ok: true; lines: Line[]; gross: number; wht: number; total: number } | { ok: false; reasons: string[] };
+// A billed row with no expense category (lib/peak-payment-document MissingCategoryRow).
+type MissingCategory = { jobRef: string; date: string; slotIdx: number; rowNo: number; description: string; amount: number };
+type Preview = { ok: true; lines: Line[]; gross: number; wht: number; total: number } | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
 type Outcome =
   | { kind: "posted"; paymentRef: string; documentNo: string; documentLink: string | null; total: number; attachment: { ok: boolean; reason: string | null }; recordError: string | null }
   | { kind: "uncertain"; paymentRef: string; reasons: string[] }
@@ -72,7 +74,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
         const d = await r.json().catch(() => ({}));
         if (mine !== seq.current) return;
         if (!r.ok) setPreview({ ok: false, reasons: [d.error === "forbidden" ? "Operator only" : `Could not build the preview (${r.status})`] });
-        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total } : { ok: false, reasons: d.reasons ?? ["Not payable"] });
+        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total } : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [] });
       })
       .catch(() => { if (mine === seq.current) setPreview({ ok: false, reasons: ["Could not reach the server"] }); });
     // selectedKeys stands in for `selected`, which is a new array every render.
@@ -186,10 +188,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
             {preview === null ? (
               <div className="skel-row" />
             ) : !preview.ok ? (
-              <Note tone="danger">
-                <b>These jobs cannot be paid together yet:</b>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{preview.reasons.map((x, i) => <li key={i}>{x}</li>)}</ul>
-              </Note>
+              <MissingCategoryNote guideId={guideId} reasons={preview.reasons} rows={preview.missingCategories ?? []} />
             ) : (
               <>
                 <div className="grid-scroll">
@@ -259,6 +258,42 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
         </div>
       </div>
     </div>
+  );
+}
+
+// Every refusal at once. Rows with no expense category get a table of their own — job,
+// row, description, amount — because nine one-line sentences are hard to work through,
+// and each one is a separate trip to a job sheet. Categories are never filled in here.
+function MissingCategoryNote({ guideId, reasons, rows }: { guideId: string; reasons: string[]; rows: MissingCategory[] }) {
+  const others = rows.length ? reasons.filter((x) => !x.includes("has no expense category")) : reasons;
+  return (
+    <Note tone="danger">
+      <b>These jobs cannot be paid together yet:</b>
+      {others.length > 0 && <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{others.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+      {rows.length > 0 && (
+        <div style={{ marginTop: 8, color: "var(--ink)" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            {rows.length} billed row{rows.length === 1 ? " has" : "s have"} no expense category — set {rows.length === 1 ? "it" : "each one"} on the job sheet
+          </div>
+          <div className="grid-scroll">
+            <table className="acct-table paydoc-table" aria-label="Rows with no expense category">
+              <thead><tr><th>Job No.</th><th style={{ width: 44 }}>Row</th><th>Description</th><th className="r" style={{ width: 96 }}>Amount</th><th>Missing</th></tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={`${r.date}|${r.slotIdx}|${r.rowNo}`}>
+                    <td className="num"><a href={`/job-sheet?guideId=${encodeURIComponent(guideId)}&date=${r.date}&slotIdx=${r.slotIdx}`} target="_blank" rel="noopener noreferrer">{r.jobRef}</a></td>
+                    <td className="num">{r.rowNo}</td>
+                    <td>{r.description}</td>
+                    <td className="r num">{thb(r.amount)}</td>
+                    <td>Expense category</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Note>
   );
 }
 

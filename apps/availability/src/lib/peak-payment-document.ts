@@ -10,7 +10,7 @@
 // This file is pure: no database, no network. The route supplies the jobs and the
 // saved account chart, and the side effects arrive through PayTogetherDeps — which is
 // what lets the order of operations below be tested without either.
-import { expenseAmount, expenseCategory, isReviewExpense, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import {
   canonicalPaidBy, guidePayoutTotal, resolveExpenseAccount, type PeakAccount, type PeakAccountMap,
@@ -79,11 +79,23 @@ export type GuidePaymentDocument = {
   issuedDate: string;
 };
 
+/** A row the transfer pays that the document cannot book: it has no expense category.
+ *  Listed row by row so the operator can go straight to each one — never filled in
+ *  automatically, because the category decides the account the cost books to. */
+export type MissingCategoryRow = {
+  jobRef: string;       // the job's number, or "date slot n" for a sheet without one
+  date: string;
+  slotIdx: number;
+  rowNo: number;        // the row's number as the job sheet shows it
+  description: string;
+  amount: number;
+};
+
 /** Thrown with EVERY reason at once — an operator fixing one problem per click, only to
  *  meet the next, is how a payment gets abandoned half-done. */
 export class PaymentDocumentNotPostable extends Error {
   readonly code = "payment-document-not-postable";
-  constructor(readonly reasons: string[]) {
+  constructor(readonly reasons: string[], readonly missingCategories: MissingCategoryRow[] = []) {
     super(reasons.join("; "));
     this.name = "PaymentDocumentNotPostable";
   }
@@ -137,6 +149,7 @@ export function buildGuidePaymentDocument(input: {
 
   const lines: PeakPaymentLine[] = [];
   const traces: PaymentLineTrace[] = [];
+  const missingCategories: MissingCategoryRow[] = [];
   const outJobs: GuidePaymentDocument["jobs"] = [];
   let expected = 0;
 
@@ -221,7 +234,11 @@ export function buildGuidePaymentDocument(input: {
         continue;
       }
       const key = expenseCategory(e);
-      if (!key) { reasons.add(`"${desc}" on ${where} has no expense category`); continue; }
+      if (!key) {
+        missingCategories.push({ jobRef: where, date: j.date, slotIdx: j.slotIdx, rowNo, description: desc, amount: round2(amt) });
+        reasons.add(`${where} row ${rowNo} "${desc}" (${thb(round2(amt))}) has no expense category — set it on the job sheet`);
+        continue;
+      }
       const category = categoryCode(key);
       // A row's own account first, then the saved category default — the same
       // resolution the job-sheet document uses, so a job books to one account either way.
@@ -247,7 +264,7 @@ export function buildGuidePaymentDocument(input: {
     // document would book a different amount from the transfer — refuse instead.
     reasons.add(`The document total ${total.toFixed(2)} does not match the jobs' payout ${expected.toFixed(2)}`);
   }
-  if (reasons.size) throw new PaymentDocumentNotPostable([...reasons]);
+  if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories);
 
   const issuedDate = compact(latest);
   return {

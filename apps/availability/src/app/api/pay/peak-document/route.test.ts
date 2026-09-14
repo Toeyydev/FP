@@ -432,3 +432,53 @@ describe("a combined PEAK payment takes approved job sheets only", () => {
     }
   });
 });
+
+describe("the preview lists every row with no expense category, including on a job waiting for approval", () => {
+  const sheetOf = (j: { date: string; slotIdx: number }) => db.sheets.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!;
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const noCategory = (): Row[] => [
+    { description: "Water (Inc. Guide)", price: 10, pax: 3, paidBy: "guide" },
+    { description: "Ferry (Inc. Guide)", price: 16, pax: 3, paidBy: "guide" },
+    { description: "Bus (Inc. Guide)", price: 15, pax: 3, paidBy: "guide" },
+  ];
+
+  beforeEach(() => {
+    for (const j of [J1, J2, J3]) sheetOf(j).expenses = noCategory();
+    sheetOf(J1).approvalStatus = null; // still under review
+  });
+
+  it("all nine rows, with job number, row, description and amount — and the approval refusal alongside", async () => {
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons).toContain("FOLK-BKK-20300506-01 is not approved — approve the job sheet before paying it in a PEAK document");
+    expect(body.missingCategories).toHaveLength(9);
+    expect(body.missingCategories.map((r: Row) => [r.jobRef, r.rowNo, r.description, r.amount])).toEqual([
+      ["FOLK-BKK-20300506-01", 1, "Water (Inc. Guide)", 30], ["FOLK-BKK-20300506-01", 2, "Ferry (Inc. Guide)", 48], ["FOLK-BKK-20300506-01", 3, "Bus (Inc. Guide)", 45],
+      ["FOLK-BKK-20300506-02", 1, "Water (Inc. Guide)", 30], ["FOLK-BKK-20300506-02", 2, "Ferry (Inc. Guide)", 48], ["FOLK-BKK-20300506-02", 3, "Bus (Inc. Guide)", 45],
+      ["FOLK-BKK-20300512-01", 1, "Water (Inc. Guide)", 30], ["FOLK-BKK-20300512-01", 2, "Ferry (Inc. Guide)", 48], ["FOLK-BKK-20300512-01", 3, "Bus (Inc. Guide)", 45],
+    ]);
+  });
+
+  it("the post still refuses — listing the rows — and writes nothing, even once everything is approved", async () => {
+    sheetOf(J1).approvalStatus = "APPROVED";
+    const res = await payForm([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).missingCategories).toHaveLength(9);
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays).toHaveLength(0);
+    expect(db.sheets.flatMap((x) => x.expenses).every((e: Row) => !e.expenseType || e.description === "Offering flowers")).toBe(true);
+  });
+
+  it("once the categories are set on the sheets, the same jobs preview as one document", async () => {
+    sheetOf(J1).approvalStatus = "APPROVED";
+    for (const j of [J1, J2, J3]) sheetOf(j).expenses = noCategory().map((e) => ({ ...e, expenseType: e.description.startsWith("Water") ? "meal" : "transport" }));
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body).toMatchObject({ ok: true });
+    expect(body.missingCategories).toBeUndefined();
+  });
+});
