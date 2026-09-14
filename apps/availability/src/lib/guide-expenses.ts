@@ -47,10 +47,13 @@ export const GUIDE_PAID_OWN_MONEY = "guide";
 const DEFAULT_TOUR_MINUTES = 180;
 
 /**
- * Owner rule (2026-09-14): expenses a guide reports after their tour were paid with the
- * guide's own money. Each billed line with no payer yet becomes "Guide paid own money".
- * A payer already on the line is kept (the operator may have recorded that the company
- * paid), and a ฿0 line or a review reward is left alone — neither is money the guide spent.
+ * Business default set by the owner (2026-09-14), NOT evidence of who paid: when a guide
+ * files their expense report after the tour, each billed line with no payer yet starts as
+ * "Guide paid own money". Filing after the tour does not prove the guide used personal
+ * money — the operator can still change the payer on the sheet, and the audit entry says
+ * the value came from this default. A payer already on the line is kept (the operator may
+ * have recorded that the company paid), and a ฿0 line or a review reward is left alone.
+ * Only new reports get the default; existing sheets are never changed by it.
  */
 export function markGuidePaid(rows: GuideExpenseInput[]): { rows: GuideExpenseInput[]; tagged: number } {
   let tagged = 0;
@@ -167,6 +170,6 @@ export async function submitGuideExpenses(o: {
   // via the shared folder) get the record with no operator action. Best-effort.
   const driveLink = await saveJobSheetToDrive(guideId, date, slotIdx);
 
-  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, paidBy: paidRule.apply ? { auto: GUIDE_PAID_OWN_MONEY, lines: marked.tagged } : { auto: null, reason: paidRule.reason } } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, paidBy: paidRule.apply ? { auto: GUIDE_PAID_OWN_MONEY, lines: marked.tagged, basis: "default-after-tour" } : { auto: null, reason: paidRule.reason } } });
   return { ok: true, driveLink };
 }

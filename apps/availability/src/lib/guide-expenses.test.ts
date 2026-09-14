@@ -167,7 +167,7 @@ describe("submitGuideExpenses", () => {
   });
 });
 
-// Owner rule: a guide's expense report filed after the tour is the guide's own money.
+// Business default (not proof of the payer): a guide's report filed after the tour starts as Guide paid own money.
 // A made-up departure: 6 Apr 2030, slot 0 (08:30 Bangkok), default 3-hour tour → ends 11:30.
 describe("Paid By on a report the guide files after the tour", () => {
   const DAY = "2030-04-06";
@@ -198,7 +198,7 @@ describe("Paid By on a report the guide files after the tour", () => {
       ["Ferry (Inc. Guide)", "company"],
       ["Review reward", undefined],
     ]);
-    expect(auditDetail().paidBy).toEqual({ auto: "guide", lines: 1 });
+    expect(auditDetail().paidBy).toEqual({ auto: "guide", lines: 1, basis: "default-after-tour" });
   });
 
   it("counts the tour as over as soon as the guide completed it", async () => {
