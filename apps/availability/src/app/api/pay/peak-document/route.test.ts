@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 // All data here is invented (fictional month and amounts) — this repo is public.
 //
@@ -11,7 +11,7 @@ type Row = Record<string, any>;
 type Where = Record<string, any>;
 
 const db = vi.hoisted(() => ({
-  users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[],
+  users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[], audits: [] as Row[],
 }));
 
 const prismaMock = vi.hoisted(() => {
@@ -60,6 +60,8 @@ const prismaMock = vi.hoisted(() => {
     tourPayment: table(() => db.pays),
     payrollStatus: table(() => db.payrolls),
     guidePaymentDocument: table(() => db.docs),
+    tour: table(() => db.tours),
+    auditLog: table(() => db.audits),
   };
   client.$transaction = vi.fn(async (arg: any) => (typeof arg === "function" ? arg(client) : Promise.all(arg)));
   return client;
@@ -73,7 +75,7 @@ vi.mock("@prisma/client", () => ({ Prisma: { PrismaClientKnownRequestError: clas
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => {}) }));
-vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
+vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN", canViewFinance: (r?: string) => ["OPERATOR", "ADMIN", "ACCOUNTANT"].includes(r ?? "") }));
 vi.mock("@/lib/jobsheet-send", () => ({ sendPaymentNotice: vi.fn(async () => {}) }));
 vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveBufferToDrive: drive.save }));
 vi.mock("@/lib/peak-api", () => ({
@@ -90,6 +92,11 @@ vi.mock("@/lib/peak-account-map", () => ({
 
 import { POST, PATCH } from "./route";
 import { POST as PREVIEW } from "./preview/route";
+import { GET as PAYMENTS } from "../../payments/route";
+import { NextRequest } from "next/server";
+import { POST as MARK_VOIDED } from "../../jobsheet/peak-voided/route";
+import { audit } from "@/lib/audit";
+import { sendPaymentNotice } from "@/lib/jobsheet-send";
 
 const GUIDE = "G-TEST";
 const FEE = (price: number) => ({ price, time: 1, whtPct: 3 });
@@ -101,7 +108,7 @@ const OTHER = { date: "2030-05-20", slotIdx: 0 }; // unpaid, not selected
 function seed() {
   db.users = [{ guideId: GUIDE, peakContactId: "contact-guide-a", fullName: "Guide A", displayName: "Guide A" }];
   const sheet = (j: typeof J1, ref: string, price: number, expenses: Row[] = []) =>
-    ({ guideId: GUIDE, ...j, tourId: "T-001", ref, expenses, guideFee: FEE(price), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null });
+    ({ guideId: GUIDE, ...j, tourId: "T-001", ref, expenses, guideFee: FEE(price), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED" });
   db.sheets = [
     sheet(J1, "FOLK-BKK-20300506-01", 1200),
     sheet(J2, "FOLK-BKK-20300506-02", 1200),
@@ -112,6 +119,8 @@ function seed() {
   db.pays = [];
   db.payrolls = [];
   db.docs = [];
+  db.tours = [{ id: "T-001", name: "Test Temple Tour" }];
+  db.audits = [];
 }
 
 const payForm = (jobs: { date: string; slotIdx: number }[], over: Record<string, string> = {}) => {
@@ -271,5 +280,251 @@ describe("PATCH /api/pay/peak-document — settling an unconfirmed payment", () 
     await vi.waitFor(() => expect(db.docs[0]?.status).toBe("POSTING"));
     const res = await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "not-found" });
     expect(res.status).toBe(409);
+  });
+});
+
+describe("already in PEAK from the job sheet — the Payments count and the server agree", () => {
+  const J4 = { date: "2030-05-21", slotIdx: 0 };
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-28", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const payments = async () => {
+    const res = await PAYMENTS(new NextRequest("https://ops.folkpaths.com/api/payments?period=2030-05"));
+    return (await res.json()).rows.find((r: Row) => r.guideId === GUIDE).jobs as Row[];
+  };
+
+  beforeEach(() => {
+    // Payments counts only tours that have already run; these ran in May 2030.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-06-02T03:00:00Z"));
+    db.sheets.push({ guideId: GUIDE, ...J4, tourId: "T-001", ref: "FOLK-BKK-20300521-01", expenses: [], guideFee: FEE(1200), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED" });
+    db.assigns.push({ guideId: GUIDE, ...J4, tourId: "T-001", createdAt: new Date("2030-05-01") });
+    // Two of the five were synced to PEAK one at a time from their own job sheets.
+    Object.assign(db.sheets.find((x) => x.date === J1.date && x.slotIdx === J1.slotIdx)!, { peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "peak-doc-27", peakSyncStatus: "SYNCED" });
+    Object.assign(db.sheets.find((x) => x.date === OTHER.date && x.slotIdx === OTHER.slotIdx)!, { peakDocumentNo: "EXP-TEST-0026", peakDocumentId: "peak-doc-26", peakSyncStatus: "SYNCED" });
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("GET /api/payments counts 3 payable together, keeps all 5 listed, and names each job's own document", async () => {
+    const jobs = await payments();
+    expect(jobs).toHaveLength(5);
+    expect(jobs.filter((j) => !j.paid && j.combinable).map((j) => j.ref)).toEqual(["FOLK-BKK-20300506-02", "FOLK-BKK-20300512-01", "FOLK-BKK-20300521-01"]);
+    const inPeak = jobs.filter((j) => j.combinedBlock?.code === "in-peak-from-sheet");
+    expect(inPeak.map((j) => [j.ref, j.sheetPeakDocumentNo, j.combinable])).toEqual([
+      ["FOLK-BKK-20300506-01", "EXP-TEST-0027", false],
+      ["FOLK-BKK-20300520-01", "EXP-TEST-0026", false],
+    ]);
+  });
+
+  it("the preview accepts exactly the jobs the page offers", async () => {
+    const offered = (await payments()).filter((j) => !j.paid && j.combinable).map((j) => ({ date: j.date, slotIdx: j.slotIdx }));
+    const body = await (await preview(offered)).json();
+    // 1,164 + (1,746 + 95) + 1,164 — each fee net of 3% withholding, plus the reimbursement.
+    expect(body).toMatchObject({ ok: true, total: 4169 });
+    expect(body.jobs.map((j: Row) => j.ref)).toEqual(["FOLK-BKK-20300506-02", "FOLK-BKK-20300512-01", "FOLK-BKK-20300521-01"]);
+  });
+
+  it("and refuses the ones it does not, naming both documents and nothing else", async () => {
+    const all = (await payments()).map((j) => ({ date: j.date, slotIdx: j.slotIdx }));
+    const body = await (await preview(all)).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons).toHaveLength(2);
+    expect(body.reasons[0]).toContain("FOLK-BKK-20300506-01");
+    expect(body.reasons[0]).toContain("EXP-TEST-0027");
+    expect(body.reasons[1]).toContain("FOLK-BKK-20300520-01");
+    expect(body.reasons[1]).toContain("EXP-TEST-0026");
+  });
+
+  it("the post refuses the same set before any write — no slip, no PEAK call, no payment record", async () => {
+    const res = await payForm([J1, J2, J3, J4, OTHER], { paymentDate: "2030-05-28" });
+    expect(res.status).toBe(409);
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays).toHaveLength(0);
+  });
+
+  it("a sheet posted between loading and claiming is still refused inside the claim", async () => {
+    const j4 = db.sheets.find((x) => x.date === J4.date && x.slotIdx === J4.slotIdx)!;
+    // The loader reads every sheet with findMany, clean. The claim re-reads each one
+    // inside its transaction — by then this one has been synced on its own.
+    const real = prismaMock.jobSheet.findUnique.getMockImplementation()!;
+    prismaMock.jobSheet.findUnique.mockImplementation(async (arg: any) => {
+      if (arg?.where?.guideId_date_slotIdx?.date === J4.date) j4.peakDocumentNo = "EXP-TEST-0031";
+      return real(arg);
+    });
+    try {
+      const res = await payForm([J2, J4], { paymentDate: "2030-05-28" });
+      expect(res.status).toBe(409);
+      expect((await res.json()).reasons.join(" ")).toContain("EXP-TEST-0031");
+      expect(drive.save).not.toHaveBeenCalled();
+      expect(peak.create).not.toHaveBeenCalled();
+      expect(db.docs).toHaveLength(0);
+      expect(db.pays).toHaveLength(0);
+    } finally {
+      prismaMock.jobSheet.findUnique.mockImplementation(real);
+    }
+  });
+});
+
+describe("a combined PEAK payment takes approved job sheets only", () => {
+  const sheetOf = (j: { date: string; slotIdx: number }) => db.sheets.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!;
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+
+  it("approved: the preview builds the document and the post pays it", async () => {
+    expect((await (await preview([J1, J2, J3])).json()).ok).toBe(true);
+    expect((await payForm([J1, J2, J3])).status).toBe(200);
+  });
+
+  it("unapproved: the preview names exactly that job, and only that job", async () => {
+    sheetOf(J2).approvalStatus = null; // e.g. still "Review: no-show", never signed off
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons).toEqual(["FOLK-BKK-20300506-02 is not approved — approve the job sheet before paying it in a PEAK document"]);
+  });
+
+  it("a mixed batch with one unapproved job is refused whole — no slip, no PEAK write, no payment rows, no notice, no audit", async () => {
+    sheetOf(J3).approvalStatus = null;
+    const res = await payForm([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons).toEqual([expect.stringContaining("FOLK-BKK-20300512-01 is not approved")]);
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(peak.attach).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays).toHaveLength(0);
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("approval withdrawn after the jobs were loaded is caught inside the claim, before anything is written", async () => {
+    const real = prismaMock.jobSheet.findUnique.getMockImplementation()!;
+    prismaMock.jobSheet.findUnique.mockImplementation(async (arg: any) => {
+      const k = arg?.where?.guideId_date_slotIdx;
+      if (k?.date === J2.date && k?.slotIdx === J2.slotIdx) sheetOf(J2).approvalStatus = null;
+      return real(arg);
+    });
+    try {
+      const res = await payForm([J1, J2, J3]);
+      expect(res.status).toBe(409);
+      expect((await res.json()).reasons.join(" ")).toContain("FOLK-BKK-20300506-02 is no longer approved");
+      expect(drive.save).not.toHaveBeenCalled();
+      expect(peak.create).not.toHaveBeenCalled();
+      expect(db.docs).toHaveLength(0);
+      expect(db.pays).toHaveLength(0);
+    } finally {
+      prismaMock.jobSheet.findUnique.mockImplementation(real);
+    }
+  });
+
+  it("Payments does not count an unapproved job as payable together", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-06-02T03:00:00Z"));
+    try {
+      sheetOf(J2).approvalStatus = null;
+      const res = await PAYMENTS(new NextRequest("https://ops.folkpaths.com/api/payments?period=2030-05"));
+      const jobs = (await res.json()).rows[0].jobs as Row[];
+      expect(jobs.find((j) => j.ref === "FOLK-BKK-20300506-02")).toMatchObject({ combinable: false, combinedBlock: { code: "not-approved" } });
+      expect(jobs.filter((j) => j.combinable).map((j) => j.ref)).toEqual(["FOLK-BKK-20300506-01", "FOLK-BKK-20300512-01", "FOLK-BKK-20300520-01"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the preview lists every row with no expense category, including on a job waiting for approval", () => {
+  const sheetOf = (j: { date: string; slotIdx: number }) => db.sheets.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!;
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const noCategory = (): Row[] => [
+    { description: "Water (Inc. Guide)", price: 10, pax: 3, paidBy: "guide" },
+    { description: "Ferry (Inc. Guide)", price: 16, pax: 3, paidBy: "guide" },
+    { description: "Bus (Inc. Guide)", price: 15, pax: 3, paidBy: "guide" },
+  ];
+
+  beforeEach(() => {
+    for (const j of [J1, J2, J3]) sheetOf(j).expenses = noCategory();
+    sheetOf(J1).approvalStatus = null; // still under review
+  });
+
+  it("all nine rows, with job number, row, description and amount — and the approval refusal alongside", async () => {
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons).toContain("FOLK-BKK-20300506-01 is not approved — approve the job sheet before paying it in a PEAK document");
+    expect(body.missingCategories).toHaveLength(9);
+    expect(body.missingCategories.map((r: Row) => [r.jobRef, r.rowNo, r.description, r.amount])).toEqual([
+      ["FOLK-BKK-20300506-01", 1, "Water (Inc. Guide)", 30], ["FOLK-BKK-20300506-01", 2, "Ferry (Inc. Guide)", 48], ["FOLK-BKK-20300506-01", 3, "Bus (Inc. Guide)", 45],
+      ["FOLK-BKK-20300506-02", 1, "Water (Inc. Guide)", 30], ["FOLK-BKK-20300506-02", 2, "Ferry (Inc. Guide)", 48], ["FOLK-BKK-20300506-02", 3, "Bus (Inc. Guide)", 45],
+      ["FOLK-BKK-20300512-01", 1, "Water (Inc. Guide)", 30], ["FOLK-BKK-20300512-01", 2, "Ferry (Inc. Guide)", 48], ["FOLK-BKK-20300512-01", 3, "Bus (Inc. Guide)", 45],
+    ]);
+  });
+
+  it("the post still refuses — listing the rows — and writes nothing, even once everything is approved", async () => {
+    sheetOf(J1).approvalStatus = "APPROVED";
+    const res = await payForm([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).missingCategories).toHaveLength(9);
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays).toHaveLength(0);
+    expect(db.sheets.flatMap((x) => x.expenses).every((e: Row) => !e.expenseType || e.description === "Offering flowers")).toBe(true);
+  });
+
+  it("once the categories are set on the sheets, the same jobs preview as one document", async () => {
+    sheetOf(J1).approvalStatus = "APPROVED";
+    for (const j of [J1, J2, J3]) sheetOf(j).expenses = noCategory().map((e) => ({ ...e, expenseType: e.description.startsWith("Water") ? "meal" : "transport" }));
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body).toMatchObject({ ok: true });
+    expect(body.missingCategories).toBeUndefined();
+  });
+});
+
+describe("Voided in PEAK: a job-sheet document voided in PEAK can be paid together again", () => {
+  const sheetOf = (j: { date: string; slotIdx: number }) => db.sheets.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!;
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const markVoided = (documentNo: string) => MARK_VOIDED(new Request("https://ops.folkpaths.com/api/jobsheet/peak-voided", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, ...J1, documentNo, confirmVoidedInPeak: true }),
+  }) as unknown as Parameters<typeof MARK_VOIDED>[0]);
+
+  beforeEach(() => {
+    Object.assign(sheetOf(J1), { id: "js_j1", peakSyncStatus: "SYNCED", peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "peak-doc-27", syncedAt: new Date("2030-05-07T04:00:00Z"), lastPayloadHash: "h27" });
+  });
+
+  it("refused before, one document after — and the old number is still in the job's history", async () => {
+    const before = await (await preview([J1, J2, J3])).json();
+    expect(before.ok).toBe(false);
+    expect(before.reasons.join(" ")).toContain("EXP-TEST-0027");
+
+    authMock.mockResolvedValue({ user: { id: "admin_1", role: "ADMIN" } });
+    expect((await markVoided("EXP-TEST-0027")).status).toBe(200);
+
+    const after = await (await preview([J1, J2, J3])).json();
+    expect(after).toMatchObject({ ok: true, total: 4169 });
+    expect(db.audits.filter((a) => a.action === "jobsheet.peak_voided")).toEqual([
+      expect.objectContaining({ entityId: "js_j1", actorId: "admin_1", detail: expect.objectContaining({ previousDocumentNo: "EXP-TEST-0027", previousDocumentId: "peak-doc-27" }) }),
+    ]);
+    // Voiding touched no payment record and called nothing.
+    expect(db.pays).toHaveLength(0);
+    expect(peak.create).not.toHaveBeenCalled();
+  });
+
+  it("a guide or an accountant cannot do it", async () => {
+    for (const role of ["GUIDE", "ACCOUNTANT"]) {
+      authMock.mockResolvedValue({ user: { id: "u_1", role } });
+      expect((await markVoided("EXP-TEST-0027")).status).toBe(403);
+    }
+    expect(sheetOf(J1).peakDocumentNo).toBe("EXP-TEST-0027");
+    expect(db.audits).toHaveLength(0);
   });
 });

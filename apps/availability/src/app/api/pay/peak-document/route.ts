@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
         guideId, peakContactId: ctx.peakContactId, paymentRef, paymentDate, paymentMethodId, jobs: ctx.jobs, accounts: ctx.accounts,
       });
     } catch (e) {
-      if (e instanceof PaymentDocumentNotPostable) return NextResponse.json({ error: "not-payable", reasons: e.reasons }, { status: 409 });
+      if (e instanceof PaymentDocumentNotPostable) return NextResponse.json({ error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories }, { status: 409 });
       throw e;
     }
     try {

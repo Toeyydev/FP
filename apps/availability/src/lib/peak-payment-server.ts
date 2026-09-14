@@ -4,11 +4,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { saveBufferToDrive } from "@/lib/google-drive";
-import { DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, isApproved, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
 import { createExpenseAllInOne, insertExpenseFile } from "@/lib/peak-api";
-import { peakAlreadyBooked } from "@/lib/peak-payout";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
+import { combinedPaymentBlock, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
 import {
   attachmentFileType, paymentDocumentLock, paymentRefFor,
   type GuidePaymentDocument, type PaymentAccounts, type PaymentJob, type PayTogetherDeps,
@@ -40,6 +40,9 @@ export type PaymentContext = {
   guideName: string;
   peakContactId: string | null;
   jobs: PaymentJob[];
+  /** Jobs refused only because their sheet is not approved yet. Never paid — the
+   *  preview reads their rows so every fix a payment needs is listed at once. */
+  awaitingApproval: PaymentJob[];
   accounts: PaymentAccounts;
 };
 
@@ -50,14 +53,14 @@ export type PaymentContext = {
 export async function loadPaymentContext(
   guideId: string,
   keys: JobKey[],
-): Promise<{ ok: true; ctx: PaymentContext } | { ok: false; reasons: string[] }> {
+): Promise<{ ok: true; ctx: PaymentContext } | { ok: false; reasons: string[]; ctx: PaymentContext }> {
   const or = keys.map((k) => ({ guideId, date: k.date, slotIdx: k.slotIdx }));
   const periods = [...new Set(keys.map((k) => k.date.slice(0, 7)))];
   const [user, sheets, assigns, pays, payrolls, categories, feeAccount, rewardAccount] = await Promise.all([
     prisma.user.findFirst({ where: { guideId }, select: { peakContactId: true, fullName: true, displayName: true } }),
     prisma.jobSheet.findMany({
       where: { OR: or },
-      select: { date: true, slotIdx: true, ref: true, expenses: true, guideFee: true, origin: true, createdAt: true, peakDocumentNo: true, peakDocumentId: true },
+      select: { date: true, slotIdx: true, ref: true, expenses: true, guideFee: true, origin: true, createdAt: true, peakDocumentNo: true, peakDocumentId: true, approvalStatus: true },
     }),
     prisma.assignment.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, createdAt: true } }),
     prisma.tourPayment.findMany({
@@ -73,49 +76,90 @@ export async function loadPaymentContext(
   const reasons: string[] = [];
   const at = (list: { date: string; slotIdx: number }[], k: JobKey) => list.find((x) => x.date === k.date && x.slotIdx === k.slotIdx);
   const jobs: PaymentJob[] = [];
+  const awaitingApproval: PaymentJob[] = [];
+  const toJob = (sheet: (typeof sheets)[number], k: JobKey): PaymentJob => ({
+    date: k.date, slotIdx: k.slotIdx, ref: sheet.ref ?? null, origin: sheet.origin,
+    expenses: (sheet.expenses as unknown as Expense[]) ?? [],
+    guideFee: guideFeeOf(sheet.guideFee),
+  });
 
   for (const k of keys) {
     const sheet = at(sheets, k) as (typeof sheets)[number] | undefined;
     const pay = at(pays, k) as (typeof pays)[number] | undefined;
     const label = sheet?.ref || `${k.date} slot ${k.slotIdx}`;
-    if (!sheet) { reasons.push(`${label} has no job sheet — open and save it before paying`); continue; }
-
-    const lock = paymentDocumentLock(pay);
-    if (lock) { reasons.push(`${label}: ${lock}`); continue; }
-    if (pay?.status === "PAID") { reasons.push(`${label} is already paid`); continue; }
-    if (pay?.eslipUrl || (Array.isArray(pay?.slips) && pay!.slips.length > 0)) {
-      reasons.push(`${label} already has a slip — finish that payment with its own slips`);
-      continue;
-    }
     const assignment = at(assigns, k) as (typeof assigns)[number] | undefined;
     const payroll = payrolls.find((p) => p.period === k.date.slice(0, 7));
-    if (coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt)) {
-      reasons.push(`${label} is already covered by the guide's ${k.date.slice(0, 7)} payroll`);
+    // The same rule the Payments page counts with (lib/combined-payment), so the page
+    // and this refusal can never disagree about which jobs may go together.
+    const block = combinedPaymentBlock({
+      sheet: sheet ?? null,
+      payment: pay ?? null,
+      coveredByPayroll: !!sheet && coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt),
+      period: k.date.slice(0, 7),
+    });
+    if (block) {
+      reasons.push(blockReason(label, block));
+      if (block.code === "not-approved" && sheet) awaitingApproval.push(toJob(sheet, k));
       continue;
     }
-    jobs.push({
-      date: k.date, slotIdx: k.slotIdx, ref: sheet.ref ?? null, origin: sheet.origin,
-      expenses: (sheet.expenses as unknown as Expense[]) ?? [],
-      guideFee: guideFeeOf(sheet.guideFee),
-    });
+    if (!sheet) continue; // unreachable: no sheet is a block — narrows the type
+    jobs.push(toJob(sheet, k));
   }
 
-  // A job posted from its own job sheet already has its cost in PEAK. Booking it again
-  // inside this document would leave two documents for one job.
-  const booked = peakAlreadyBooked(sheets.filter((s) => keys.some((k) => k.date === s.date && k.slotIdx === s.slotIdx)));
-  if (booked) reasons.push(`${booked.replace(" The transfer was not posted again.", "")} Leave those jobs out of this payment.`);
-
-  if (reasons.length) return { ok: false, reasons };
-  return {
-    ok: true,
-    ctx: {
-      guideId,
-      guideName: user?.fullName || user?.displayName || guideId,
-      peakContactId: user?.peakContactId ?? null,
-      jobs,
-      accounts: { guideFee: feeAccount, reviewReward: rewardAccount, categories },
-    },
+  const ctx: PaymentContext = {
+    guideId,
+    guideName: user?.fullName || user?.displayName || guideId,
+    peakContactId: user?.peakContactId ?? null,
+    jobs,
+    awaitingApproval,
+    accounts: { guideFee: feeAccount, reviewReward: rewardAccount, categories },
   };
+  if (reasons.length) return { ok: false, reasons, ctx };
+  return { ok: true, ctx };
+}
+
+/** One job's refusal, as the preview and the post both word it. */
+export function blockReason(label: string, block: CombinedBlock): string {
+  return block.code === "payment-document" ? `${label}: ${block.message}` : `${label} ${block.message}`;
+}
+
+/**
+ * The guide's other unpaid jobs this month that could still be paid together in one
+ * document — what "Sync to PEAK" on one sheet would split off from. The month's jobs
+ * that have already run (the ones Payments lists), minus any that can never join a
+ * combined payment anyway: paid, covered by payroll, given a slip, held by a payment
+ * document, historical, or already in PEAK from their own sheet. A job still waiting
+ * for approval, or for its sheet to be saved, does count: it is only not ready yet.
+ */
+export async function otherUnpaidJobsInMonth(guideId: string, job: JobKey, today: string): Promise<{ date: string; slotIdx: number; ref: string | null }[]> {
+  const period = job.date.slice(0, 7);
+  const monthEnd = `${period}-31`;
+  const where = { guideId, date: { gte: `${period}-01`, lte: today < monthEnd ? today : monthEnd } };
+  const [assigns, sheets, pays, payroll] = await Promise.all([
+    prisma.assignment.findMany({ where, select: { date: true, slotIdx: true, createdAt: true } }),
+    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true, ref: true, createdAt: true, origin: true, peakDocumentNo: true, peakDocumentId: true, approvalStatus: true } }),
+    prisma.tourPayment.findMany({ where, select: { date: true, slotIdx: true, status: true, peakPaymentRef: true, peakRef: true, eslipUrl: true, slips: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true } }),
+  ]);
+  const keyOf = (x: JobKey) => `${x.date}|${x.slotIdx}`;
+  const keys = new Map<string, JobKey>();
+  for (const x of [...assigns, ...sheets]) keys.set(keyOf(x), { date: x.date, slotIdx: x.slotIdx });
+  keys.delete(keyOf(job));
+
+  const out: { date: string; slotIdx: number; ref: string | null }[] = [];
+  for (const k of [...keys.values()].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx)) {
+    const sheet = sheets.find((s) => keyOf(s) === keyOf(k));
+    const assignment = assigns.find((a) => keyOf(a) === keyOf(k));
+    const created = assignment?.createdAt ?? sheet?.createdAt;
+    const block = combinedPaymentBlock({
+      sheet: sheet ?? null,
+      payment: pays.find((p) => keyOf(p) === keyOf(k)) ?? null,
+      coveredByPayroll: !!created && coveredByPayrollRun(payroll, k.date, created),
+      period,
+    });
+    if (!block || block.code === "not-approved" || block.code === "no-job-sheet") out.push({ ...k, ref: sheet?.ref ?? null });
+  }
+  return out;
 }
 
 export async function nextPaymentRef(paymentDate: string): Promise<string> {
@@ -168,6 +212,22 @@ export function prismaPayTogetherDeps(opts: {
     async claim(doc: GuidePaymentDocument) {
       try {
         await prisma.$transaction(async (tx) => {
+          // Re-read inside the transaction: a sheet synced to PEAK on its own, or one
+          // whose approval was withdrawn, since the jobs were loaded must not go into this
+          // document. Checked for every job before anything is written, so one refusal
+          // refuses the whole payment.
+          for (const j of doc.jobs) {
+            const sheetNow = await tx.jobSheet.findUnique({
+              where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
+              select: { peakDocumentNo: true, peakDocumentId: true, approvalStatus: true },
+            });
+            if (sheetInPeak(sheetNow)) {
+              throw new PaymentClaimRefused(`${j.ref} was just posted to PEAK from its job sheet${sheetNow?.peakDocumentNo ? ` (${sheetNow.peakDocumentNo})` : ""} — leave it out of this payment`);
+            }
+            if (!isApproved(sheetNow?.approvalStatus)) {
+              throw new PaymentClaimRefused(`${j.ref} is no longer approved — approve the job sheet again before paying it`);
+            }
+          }
           await tx.guidePaymentDocument.create({
             data: {
               paymentRef: doc.paymentRef, guideId, paymentDate, paymentMethodId, paymentMethodName,

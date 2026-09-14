@@ -3,7 +3,7 @@ import type { Expense, GuideFee } from "@/lib/jobsheet";
 import type { PeakAccountMap } from "@/lib/peak-sync";
 import {
   buildGuidePaymentDocument, classifyExpenseWrite, leftOutWarning, payJobsTogether, paymentDocumentLock, paymentRefFor,
-  PaymentDocumentNotPostable, separatePaymentWarning,
+  PaymentDocumentNotPostable, separatePaymentWarning, separateSyncWarning,
   type ExpenseWriteResult, type GuidePaymentDocument, type PaymentAccounts, type PaymentJob, type PayTogetherDeps,
 } from "./peak-payment-document";
 
@@ -418,3 +418,63 @@ it("numbers payments per month", () => {
 // Keep the type import honest: a document is what the orchestrator consumes.
 const _typecheck: (d: GuidePaymentDocument) => number = (d) => d.total;
 void _typecheck;
+
+describe("rows with no expense category are listed row by row", () => {
+  const notOf = (fn: () => unknown): PaymentDocumentNotPostable => {
+    try { fn(); } catch (e) { if (e instanceof PaymentDocumentNotPostable) return e; throw e; }
+    throw new Error("expected the document to be refused");
+  };
+  // Three jobs, three uncategorised billed rows each — nine in all.
+  const uncategorised = (n: number): Expense[] => [
+    { description: "Water (Inc. Guide)", price: 10, pax: n + 1, paidBy: "guide" },
+    { description: "Ferry (Inc. Guide)", price: 16, pax: n + 1, paidBy: "guide" },
+    { description: "Bus (Inc. Guide)", price: 15, pax: n + 1, paidBy: "guide" },
+  ];
+  const jobs: PaymentJob[] = JOBS.map((j, i) => ({ ...j, expenses: uncategorised(i + 2) }));
+
+  it("names the job, the row as the sheet numbers it, the description and the amount — for every row", () => {
+    const e = notOf(() => build({ jobs }));
+    expect(e.missingCategories).toHaveLength(9);
+    expect(e.missingCategories[0]).toEqual({ jobRef: "FOLK-BKK-20300506-01", date: "2030-05-06", slotIdx: 0, rowNo: 1, description: "Water (Inc. Guide)", amount: 30 });
+    expect(e.missingCategories.map((r) => `${r.jobRef} #${r.rowNo} ${r.description} ${r.amount}`)).toEqual([
+      "FOLK-BKK-20300506-01 #1 Water (Inc. Guide) 30", "FOLK-BKK-20300506-01 #2 Ferry (Inc. Guide) 48", "FOLK-BKK-20300506-01 #3 Bus (Inc. Guide) 45",
+      "FOLK-BKK-20300506-02 #1 Water (Inc. Guide) 40", "FOLK-BKK-20300506-02 #2 Ferry (Inc. Guide) 64", "FOLK-BKK-20300506-02 #3 Bus (Inc. Guide) 60",
+      "FOLK-BKK-20300512-01 #1 Water (Inc. Guide) 50", "FOLK-BKK-20300512-01 #2 Ferry (Inc. Guide) 80", "FOLK-BKK-20300512-01 #3 Bus (Inc. Guide) 75",
+    ]);
+    // One sentence per row too, for anything that reads only the reasons.
+    expect(e.reasons.filter((r) => r.includes("has no expense category"))).toHaveLength(9);
+    expect(e.reasons).toContain('FOLK-BKK-20300506-02 row 2 "Ferry (Inc. Guide)" (฿64.00) has no expense category — set it on the job sheet');
+  });
+
+  it("still blocks: no document is built and no category is guessed", () => {
+    const e = notOf(() => build({ jobs }));
+    expect(e).toBeInstanceOf(PaymentDocumentNotPostable);
+    expect(jobs.flatMap((j) => j.expenses).every((x) => !x.expenseType)).toBe(true); // inputs untouched
+  });
+
+  it("lists only rows the transfer would pay: not company or advance rows, not ฿0 rows, not review rewards", () => {
+    const rows: Expense[] = [
+      { description: "Temple ticket", price: 500, pax: null, paidBy: "guide" },          // row 1: no amount
+      { description: "Boat paid by company", price: 40, pax: 2, paidBy: "company" },    // row 2: not in the transfer
+      { description: "Snack from advance", price: 20, pax: 2, paidBy: "advance" },      // row 3: not in the transfer
+      { description: "Review reward", price: 100, pax: 2 },                            // not a numbered row
+      { description: "Water", price: 10, pax: 3, paidBy: "guide" },                     // row 4: the one
+    ];
+    const e = notOf(() => build({ jobs: [{ ...JOBS[0], expenses: rows }] }));
+    expect(e.missingCategories).toEqual([{ jobRef: "FOLK-BKK-20300506-01", date: "2030-05-06", slotIdx: 0, rowNo: 4, description: "Water", amount: 30 }]);
+  });
+
+  it("is empty when the refusal has nothing to do with categories", () => {
+    expect(notOf(() => build({ peakContactId: null })).missingCategories).toEqual([]);
+  });
+});
+
+describe("separateSyncWarning", () => {
+  it("is silent when the guide has no other unpaid job", () => {
+    expect(separateSyncWarning(0, "2030-05")).toBeNull();
+  });
+  it("names the count and the month", () => {
+    expect(separateSyncWarning(4, "2030-08")).toBe("This guide has 4 other unpaid jobs in August 2030. Syncing this job now will create a separate PEAK document and may prevent one-document payment later.");
+    expect(separateSyncWarning(1, "2030-05")).toContain("1 other unpaid job in May 2030.");
+  });
+});
