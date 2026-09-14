@@ -54,5 +54,5 @@ export function resolveDurationMin(
 export function tourDurationWarning(durationMin: number | null | undefined): string | null {
   if (isValidDurationMin(durationMin)) return null;
   if (durationMin == null) return `No duration set — FolkOPS assumes ${FALLBACK_DURATION_MIN} min (3 h) unless the job has its own`;
-  return `Invalid duration (${durationMin} min) — must be ${MIN_DURATION_MIN}–${MAX_DURATION_MIN}; FolkOPS ignores it and assumes ${FALLBACK_DURATION_MIN} min`;
+  return `Invalid duration (${durationMin} min) — must be ${MIN_DURATION_MIN}–${MAX_DURATION_MIN}; FolkOPS ignores it and assumes ${FALLBACK_DURATION_MIN} min unless the job has its own`;
 }
