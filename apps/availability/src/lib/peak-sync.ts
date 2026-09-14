@@ -319,6 +319,63 @@ export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): Guide
   return { payoutExpenses, payout: payoutExpenses + t.netGuideFee, excludedTagged, untaggedIncluded };
 }
 
+// What the GUIDE is shown they will receive, on their own job page.
+//
+// Three rules this exists to hold together:
+//   * Tour expenses come from whichever list is authoritative right now — the
+//     guide's own report while it is open, the operator's record once the operator
+//     has approved the sheet or the job is paid.
+//   * Only money owed back to the guide is counted, by the SAME payer rule as the
+//     transfer (guidePayoutTotal): a row the company paid directly, or paid from a
+//     company advance, is shown as not reimbursed — never added to "You'll receive".
+//     A row with no payer recorded yet counts, as it does in Payments, and is called
+//     out so the guide knows it is still to be confirmed.
+//   * The review reward ALWAYS comes from the operator's record and is added once.
+//     It is compensation the operator awards, not something a guide reports, so it
+//     must not disappear when the guide files a report with no review lines in it —
+//     and must not be counted twice when the report was seeded from the operator's
+//     rows, which already contained them.
+// Until the operator approves the sheet (or it is paid) the figure is an estimate.
+export type GuidePayoutView = {
+  tourExpenses: number; // reimbursed to the guide: their own money + rows with no payer yet
+  reviewReward: number;
+  total: number;
+  notReimbursed: { company: number; advance: number };
+  unspecified: number; // the part of tourExpenses with no payer recorded yet
+  basis: "reported" | "official";
+  status: "estimate" | "confirmed" | "final";
+};
+
+export function guidePayoutView(args: {
+  operatorExpenses: Expense[];
+  reportedExpenses: Expense[];
+  netGuideFee: number;
+  /** true while the guide's own report window is open (tour done, not yet paid) */
+  useReported: boolean;
+  approved?: boolean;
+  paid?: boolean;
+}): GuidePayoutView {
+  const basis = args.useReported && !args.approved && !args.paid ? "reported" : "official";
+  const rows = (basis === "reported" ? args.reportedExpenses : args.operatorExpenses) ?? [];
+  let tourExpenses = 0, company = 0, advance = 0, unspecified = 0;
+  for (const e of rows) {
+    if (isReviewExpense(e)) continue;
+    const amt = expenseAmount(e);
+    if (!amt) continue;
+    const paid = canonicalPaidBy(e);
+    if (paid === "COMPANY_DIRECT") { company += amt; continue; }
+    if (paid === "GUIDE_ADVANCE") { advance += amt; continue; }
+    if (paid === "UNSPECIFIED") unspecified += amt;
+    tourExpenses += amt;
+  }
+  const reviewReward = (args.operatorExpenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
+  return {
+    tourExpenses, reviewReward, total: args.netGuideFee + tourExpenses + reviewReward,
+    notReimbursed: { company, advance }, unspecified, basis,
+    status: args.paid ? "final" : args.approved ? "confirmed" : "estimate",
+  };
+}
+
 // ── Sync status ──────────────────────────────────────────────────────────────
 export type PeakSyncStatus = "NOT_READY" | "READY" | "SYNCING" | "SYNCED" | "FAILED" | "BLOCKED";
 
