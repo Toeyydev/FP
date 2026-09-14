@@ -10,10 +10,11 @@ const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
   tour: { findUnique: vi.fn() },
-  // Read by the report's payer rules once they land (PR #201); harmless before.
+  // Read by the report's payer rules once they land (PR #201, and the job-duration lookup after it); harmless before.
   tourReport: { findUnique: vi.fn() },
   checkin: { findFirst: vi.fn() },
   guideAdvance: { count: vi.fn() },
+  jobOffer: { findFirst: vi.fn() },
 }));
 const session = vi.hoisted(() => ({ current: null as null | { user: { id: string; role: string; guideId: string | null } } }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -55,6 +56,7 @@ beforeEach(() => {
   prismaMock.tourReport.findUnique.mockResolvedValue(null);
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.guideAdvance.count.mockResolvedValue(0);
+  prismaMock.jobOffer.findFirst.mockResolvedValue(null);
 });
 
 describe("POST /api/jobsheet/expenses — who may file", () => {
