@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -305,6 +305,40 @@ describe("Drive names never collide for different jobs", () => {
     const other = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 0 }, { date: "2030-01-01", slotIdx: 3 }] }, hash);
     expect(ab).toBe(ba);
     expect(ab).not.toBe(other);
+  });
+});
+
+describe("jobsheet — adopting a guide's reported expenses", () => {
+  const official: Expense[] = [
+    { description: "Water (Inc. Guide)", price: 10, pax: 8, paidBy: "company" },
+    { description: "Bus (Inc. Guide)", price: 15, pax: 8 },
+  ];
+  it("takes the guide's figures and payer for a line the operator left without one", () => {
+    expect(adoptReportedLine(official[1], { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide" }))
+      .toEqual({ description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide" });
+  });
+  it("keeps a payer the operator already recorded", () => {
+    expect(adoptReportedLine(official[0], { description: "Water (Inc. Guide)", price: 10, pax: 5, paidBy: "guide" }))
+      .toEqual({ description: "Water (Inc. Guide)", price: 10, pax: 5, paidBy: "company" });
+  });
+  it("copies a blank from the guide verbatim", () => {
+    expect(adoptReportedLine(official[1], { description: "Bus (Inc. Guide)", price: null, pax: null })).toMatchObject({ price: null, pax: null });
+    expect(adoptReportedLine(official[1], { description: "Bus (Inc. Guide)", price: 15, pax: 0 }).paidBy).toBeUndefined();
+  });
+  it("adopting the whole report keeps recorded payers and takes the guide's elsewhere", () => {
+    const out = adoptReportedExpenses(official, [
+      { description: " water (inc. guide) ", price: 10, pax: 5, paidBy: "guide" },
+      { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide" },
+      { description: "Taxi", price: 100, pax: 1, paidBy: "guide" },
+    ]);
+    expect(out.map((e) => [e.pax, e.paidBy])).toEqual([[5, "company"], [5, "guide"], [1, "guide"]]);
+  });
+  it("adoption carries where the payer came from, so a default stays marked unconfirmed", () => {
+    const reported: Expense = { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" };
+    expect(adoptReportedLine(official[1], reported)).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(adoptReportedExpenses(official, [reported])[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    // The operator's own payer wins and is labelled as the operator's.
+    expect(adoptReportedExpenses(official, [{ ...reported, description: "Water (Inc. Guide)" }])[0]).toMatchObject({ paidBy: "company", paidBySource: "operator" });
   });
 });
 
