@@ -10,7 +10,11 @@ import {
   buildJobSheetExpense, defaultAccountingDates, peakPayloadHash, peakSyncEligibility, JobSheetNotPostable,
 } from "@/lib/peak-sync";
 import { peakAccountMap, guideFeeAccount } from "@/lib/peak-account-map";
-import { paymentDocumentLocks } from "@/lib/peak-payment-server";
+import { otherUnpaidJobsInMonth, paymentDocumentLocks } from "@/lib/peak-payment-server";
+import { separateSyncWarning } from "@/lib/peak-payment-document";
+import { sheetInPeak } from "@/lib/combined-payment";
+
+const bangkokToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
 // POST { guideId, date, slotIdx } — operator/admin only.
 //
@@ -37,9 +41,12 @@ export async function POST(req: NextRequest) {
     // An explicit second act by the operator, for a sheet that changed after it was
     // already posted. Never defaulted to true.
     confirmRepost: z.boolean().optional(),
+    // The operator has seen that the guide has other unpaid jobs this month and still
+    // wants this job in a PEAK document of its own. Never defaulted to true.
+    confirmSeparateDocument: z.boolean().optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { guideId, date, slotIdx, confirmRepost } = parsed.data;
+  const { guideId, date, slotIdx, confirmRepost, confirmSeparateDocument } = parsed.data;
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
 
   if (!peakEnabled) return NextResponse.json({ error: "peak-not-connected" }, { status: 503 });
@@ -91,6 +98,23 @@ export async function POST(req: NextRequest) {
       documentNo: sheet.peakDocumentNo,
       reason: "Already posted to PEAK, and this sheet has changed since. Posting again adds a SECOND document for the same job — confirm to proceed.",
     }, { status: 409 });
+  }
+
+  // A job posted from its own sheet can no longer go into "Pay N jobs together". If the
+  // guide has other unpaid jobs this month, posting this one now splits the transfer
+  // that pays them across several PEAK documents. Ask first — and before anything is
+  // written, so answering no leaves the sheet exactly as it was.
+  let separateDocument: { confirmed: true; otherUnpaid: number; otherJobs: string[] } | null = null;
+  if (!sheetInPeak(sheet)) {
+    const others = await otherUnpaidJobsInMonth(guideId, { date, slotIdx }, bangkokToday());
+    const warning = separateSyncWarning(others.length, date.slice(0, 7));
+    if (warning && !confirmSeparateDocument) {
+      return NextResponse.json({
+        error: "separate-document-warning", reason: warning, otherUnpaid: others.length,
+        otherJobs: others.map((j) => ({ date: j.date, slotIdx: j.slotIdx, ref: j.ref })),
+      }, { status: 409 });
+    }
+    if (warning) separateDocument = { confirmed: true, otherUnpaid: others.length, otherJobs: others.map((j) => j.ref ?? `${j.date} slot ${j.slotIdx}`) };
   }
 
   let doc;
@@ -152,7 +176,9 @@ export async function POST(req: NextRequest) {
   });
   await audit({
     ...actor, action: "jobsheet.peak_synced", entityType: "JobSheet", entityId: sheet.id,
-    detail: { ref: sheet.ref, guideId, date, slotIdx, documentNo, lines: doc.lines.length, total: doc.total },
+    // separateDocument: the operator was told about the guide's other unpaid jobs and
+    // confirmed this job should still be a document of its own.
+    detail: { ref: sheet.ref, guideId, date, slotIdx, documentNo, lines: doc.lines.length, total: doc.total, ...(separateDocument ? { separateDocument } : {}) },
   });
   return NextResponse.json({ ok: true, documentNo, documentId: res.id ?? null, lines: doc.lines.length, total: doc.total });
 }

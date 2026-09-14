@@ -3,7 +3,7 @@ import type { Expense, GuideFee } from "@/lib/jobsheet";
 import type { PeakAccountMap } from "@/lib/peak-sync";
 import {
   buildGuidePaymentDocument, classifyExpenseWrite, leftOutWarning, payJobsTogether, paymentDocumentLock, paymentRefFor,
-  PaymentDocumentNotPostable, separatePaymentWarning,
+  PaymentDocumentNotPostable, separatePaymentWarning, separateSyncWarning,
   type ExpenseWriteResult, type GuidePaymentDocument, type PaymentAccounts, type PaymentJob, type PayTogetherDeps,
 } from "./peak-payment-document";
 
@@ -466,5 +466,15 @@ describe("rows with no expense category are listed row by row", () => {
 
   it("is empty when the refusal has nothing to do with categories", () => {
     expect(notOf(() => build({ peakContactId: null })).missingCategories).toEqual([]);
+  });
+});
+
+describe("separateSyncWarning", () => {
+  it("is silent when the guide has no other unpaid job", () => {
+    expect(separateSyncWarning(0, "2030-05")).toBeNull();
+  });
+  it("names the count and the month", () => {
+    expect(separateSyncWarning(4, "2030-08")).toBe("This guide has 4 other unpaid jobs in August 2030. Syncing this job now will create a separate PEAK document and may prevent one-document payment later.");
+    expect(separateSyncWarning(1, "2030-05")).toContain("1 other unpaid job in May 2030.");
   });
 });
