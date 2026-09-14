@@ -12,7 +12,10 @@ import SplitSlipDialog, { type SlipUpload } from "@/components/SplitSlipDialog";
 import PeakPaymentDialog from "@/components/PeakPaymentDialog";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 
-type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number };
+type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
+  // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
+  // together · one ref", and if not, why. The server refuses with the same rule.
+  combinable?: boolean; combinedBlock?: { code: string; message: string; documentNo?: string } | null; sheetPeakDocumentNo?: string | null };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -81,7 +84,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // and category. The dialog shows that document before anything is posted.
   // A single pending job keeps the direct path.
   async function payBatch(guideId: string, jobs: Job[]) {
-    const payable = jobs.filter((j) => !j.paid && !j.peakPaymentRef);
+    const payable = jobs.filter((j) => !j.paid && !j.peakPaymentRef && j.combinable);
     if (!payable.length) return;
     if (payable.length > 1) {
       setPayTogether({ guideId, guide: rows.find((x) => x.guideId === guideId)?.guide ?? guideId, jobs: payable });
@@ -94,13 +97,31 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     alert(d.detail || `Couldn't mark this job paid (${r.status}).`);
   }
   // Paying one job on its own while the guide has others unpaid costs a PEAK document
-  // per transfer. Ask first, and point at the one-document path.
-  const confirmSeparate = (guide: string, payableCount: number) => {
+  // per transfer. Ask first, and point at the one-document path — unless this job
+  // cannot go into that document anyway, when on its own is the only way to pay it.
+  const confirmSeparate = (guide: string, payableCount: number, job: Job) => {
+    if (!job.combinable) return true;
     const w = separatePaymentWarning(guide, payableCount);
     return !w || confirm(w);
   };
-  // Unpaid jobs per guide that could still go into one payment document.
-  const payableCountOf = (guideId: string) => (rows.find((x) => x.guideId === guideId)?.jobs ?? []).filter((j) => !j.paid && !j.peakPaymentRef).length;
+  // Unpaid jobs per guide that can go into one payment document — the server's count.
+  const combinableOf = (jobs: Job[]) => jobs.filter((j) => !j.paid && j.combinable);
+  const payableCountOf = (guideId: string) => combinableOf(rows.find((x) => x.guideId === guideId)?.jobs ?? []).length;
+  // Why unpaid, unlocked jobs were left out of "Pay N jobs together", in words.
+  const leftOutNote = (jobs: Job[]) => {
+    const out = jobs.filter((j) => !j.paid && !j.peakPaymentRef && !j.combinable);
+    if (!out.length) return null;
+    const inPeak = out.filter((j) => j.combinedBlock?.code === "in-peak-from-sheet").length;
+    const other = out.length - inPeak;
+    return [
+      inPeak ? `${inPeak} already in PEAK from ${inPeak === 1 ? "its job sheet" : "their job sheets"}` : "",
+      other ? `${other} not payable together yet — see the job${other === 1 ? "" : "s"} below` : "",
+    ].filter(Boolean).join(" · ");
+  };
+  // The job's own PEAK document, when its sheet was synced on its own.
+  const inPeakTag = (j: Job) => !j.paid && j.combinedBlock?.code === "in-peak-from-sheet"
+    ? <span className="pay-doc-tag" title={`Posted to PEAK from the job sheet as its own document. It cannot also go into a combined payment document. ${j.combinedBlock.message}`}>In PEAK from job sheet · {j.sheetPeakDocumentNo ?? j.combinedBlock.documentNo ?? "document"}</span>
+    : null;
   // Settle a payment document by what only PEAK can say.
   async function resolveDoc(doc: PaymentDoc, resolution: "found" | "not-found" | "voided") {
     const n = docJobCount(doc);
@@ -374,8 +395,12 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     // PEAK stays in the background on the main row: a compact recorded-vs-total
     // count; the actual EXP- refs live in the expanded job rows.
     const refd = jobs.filter((j) => j.peakRef).length;
-    // Jobs a payment document holds are paid through that document only.
-    const payable = jobs.filter((j) => !j.paid && !j.peakPaymentRef);
+    // Jobs a payment document holds are paid through that document only. `payable` is
+    // what "Pay N jobs together" may take — the server's own rule; `unlocked` is every
+    // unpaid job no payment document holds, which a per-tour or covering slip can pay.
+    const payable = combinableOf(jobs);
+    const unlocked = jobs.filter((j) => !j.paid && !j.peakPaymentRef);
+    const leftOut = mode === "unpaid" ? leftOutNote(jobs) : null;
     const openDocs = mode === "unpaid" ? paymentDocs.filter((d) => d.guideId === r.guideId && (d.status === "POSTING" || d.status === "UNCERTAIN")) : [];
     const unattached = mode === "paid" ? paymentDocs.filter((d) => d.guideId === r.guideId && d.status === "POSTED" && d.attachmentStatus === "FAILED" && jobs.some((j) => j.peakPaymentRef === d.paymentRef)) : [];
     return (
@@ -425,10 +450,13 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 <span>The slip did not attach to PEAK document <b>{d.peakDocumentNo}</b> ({d.paymentRef}){d.attachmentError ? ` — ${d.attachmentError}` : ""}. It is saved in Drive; attach it in PEAK by hand.</span>
               </div>
             ))}
-            {mode === "unpaid" && canEdit && payable.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
-              <button className="btn sm primary" title={payable.length > 1 ? "One transfer → ONE PEAK document: one slip, one reference, a line per job and category. Jobs are marked paid once PEAK confirms." : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Pay {payable.length} job{payable.length === 1 ? "" : "s"} together · one ref</button>
-              <span className="pay-doc-note" title="PEAK bills each document created, not each job">= 1 PEAK document</span>
-              <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {payable.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, payable, f); e.target.value = ""; }} /></label>
+            {mode === "unpaid" && canEdit && unlocked.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
+              {payable.length > 0 && <>
+                <button className="btn sm primary" title={payable.length > 1 ? "One transfer → ONE PEAK document: one slip, one reference, a line per job and category. Jobs are marked paid once PEAK confirms." : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Pay {payable.length} job{payable.length === 1 ? "" : "s"} together · one ref</button>
+                <span className="pay-doc-note" title="PEAK bills each document created, not each job">= 1 PEAK document</span>
+              </>}
+              {leftOut && <span className="pay-doc-note" title="These jobs stay listed below and can still be paid on their own">Not in it: {leftOut}</span>}
+              <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {unlocked.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, unlocked, f); e.target.value = ""; }} /></label>
               <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Per-tour Slip / Mark paid below = separate transfers — a separate PEAK document each</span>
             </div>}
             {jobs.map((j, i) => {
@@ -450,18 +478,19 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   </span>
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                   {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK payment this job belongs to — every job in it shares this reference and document">{j.peakPaymentRef}</span>}
+                  {inPeakTag(j)}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : j.peakPaymentRef ? "Waiting on PEAK" : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
                   <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                   {j.paid && j.eslipUrl && !hasSlips && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
-                  {canEdit && !j.paid && !hasSlips && !j.peakPaymentRef && <label className="btn sm" style={{ cursor: "pointer" }} title="Pay this tour in full with one slip (one transfer) — marks it paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f && confirmSeparate(r.guide, payable.length)) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
-                  {canEdit && !j.paid && !j.peakPaymentRef && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Add one or more split-payment slips. Enter each transfer amount; all slips must add up to the payout before it shows Paid">＋ Split slips<input type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => { const files = e.target.files; if (files?.length && confirmSeparate(r.guide, payable.length)) setSlipBatch({ guideId: r.guideId, job: j, files: Array.from(files) }); e.target.value = ""; }} /></label>}
+                  {canEdit && !j.paid && !hasSlips && !j.peakPaymentRef && <label className="btn sm" style={{ cursor: "pointer" }} title="Pay this tour in full with one slip (one transfer) — marks it paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f && confirmSeparate(r.guide, payable.length, j)) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
+                  {canEdit && !j.paid && !j.peakPaymentRef && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Add one or more split-payment slips. Enter each transfer amount; all slips must add up to the payout before it shows Paid">＋ Split slips<input type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => { const files = e.target.files; if (files?.length && confirmSeparate(r.guide, payable.length, j)) setSlipBatch({ guideId: r.guideId, job: j, files: Array.from(files) }); e.target.value = ""; }} /></label>}
                   {canEdit && (j.paid
                     ? (j.peakPaymentRef
                         // Paid inside a PEAK document with other jobs: undoing one job here
                         // would leave PEAK still paying it. Void the document there first.
                         ? <button className="btn sm ghost" title="Paid in one PEAK document with other jobs — void it in PEAK first, then record that here" onClick={() => { const d = paymentDocs.find((x) => x.paymentRef === j.peakPaymentRef); if (d) resolveDoc(d, "voided"); else alert(`Reload Payments to manage ${j.peakPaymentRef}.`); }}>Voided in PEAK…</button>
                         : <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>)
-                    : !j.peakPaymentRef && <button className="btn sm primary" title="Mark this one job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(r.guide, payable.length)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
+                    : !j.peakPaymentRef && <button className="btn sm primary" title="Mark this one job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(r.guide, payable.length, j)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
                   {canEdit && !j.peakPaymentRef && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
                 </div>
                 {hasSlips && (
@@ -574,7 +603,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(j.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                     {j.peakPaymentRef && <span className="pay-doc-tag" title="Waiting on PEAK to confirm this combined payment">⚠ {j.peakPaymentRef}</span>}
-                    {canEdit && !j.peakPaymentRef && <button className="btn sm primary" title="Mark this job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(j.guide, payableCountOf(j.guideId))) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, j.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>}
+                    {inPeakTag(j)}
+                    {canEdit && !j.peakPaymentRef && <button className="btn sm primary" title="Mark this job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(j.guide, payableCountOf(j.guideId), j)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, j.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>}
                   </td>
                 </tr>
               ))}
