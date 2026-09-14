@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
+import { tourDurationWarning } from "@/lib/tour-duration";
 
 type Tour = {
   id: string; name: string; time: string; durationMin: number | null;
@@ -99,6 +100,8 @@ export default function Tours() {
                 <input className="search" style={{ flex: 1, minWidth: 200, fontWeight: 700 }} value={field(t, "name") as string} onChange={(e) => set(t.id, "name", e.target.value)} />
                 <label style={{ fontSize: 12 }}>Time <input className="search" style={{ width: 80 }} value={field(t, "time") as string} onChange={(e) => set(t.id, "time", e.target.value)} /></label>
                 <label style={{ fontSize: 12 }}>Dur <input className="search" style={{ width: 80 }} type="number" value={(field(t, "durationMin") as string) ?? ""} onChange={(e) => set(t.id, "durationMin", e.target.value)} /></label>
+                {/* The saved value, not the unsaved edit: this is what the time-based rules use. */}
+                {tourDurationWarning(t.durationMin) && <span className="badge" style={{ background: "#fdf3e7", color: "#b45309", borderColor: "#f1c38a", whiteSpace: "normal" }} title="Valid durations are 15–720 minutes. Jobs with their own duration on the offer use that instead.">⚠ {tourDurationWarning(t.durationMin)}</span>}
                 <span className="badge" title="Bookings">{t.bookings} bk</span>
                 <span className="badge" title="Assignments">{t.assignments} job</span>
                 <button className="btn sm" onClick={() => setOpen((o) => ({ ...o, [t.id]: !o[t.id] }))}>{open[t.id] ? "Less" : "Details"}</button>

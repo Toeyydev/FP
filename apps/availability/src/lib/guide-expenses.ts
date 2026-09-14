@@ -5,6 +5,7 @@ import { notifyOps } from "@/lib/booking-import";
 import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isReviewExpense, type Expense, type PaidBySource } from "@/lib/jobsheet";
 import { canonicalPaidBy } from "@/lib/peak-sync";
 import { tourStartMs } from "@/lib/no-show-count";
+import { resolveDurationMin } from "@/lib/tour-duration";
 import { ensureJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 import { attributableBookings, sheetRefs, toSheetBooking } from "@/lib/sheet-bookings";
@@ -48,8 +49,6 @@ export const MAX_EXPENSE_LINES = 40;
 
 /** Paid By value for "Guide paid own money" — reimbursed to the guide in the payout. */
 export const GUIDE_PAID_OWN_MONEY = "guide";
-/** How long a tour runs when its Tour record has no duration (same fallback as the calendar). */
-const DEFAULT_TOUR_MINUTES = 180;
 
 /**
  * The payer on each reported line, and where it came from (Expense.paidBySource).
@@ -106,7 +105,8 @@ export type GuidePaidRule = { apply: true } | { apply: false; reason: "filed-by-
 /**
  * Whether the after-tour default applies to this report. Only the guide's own report counts: an
  * operator filing on their behalf chooses the payer. The tour is over once the guide has
- * completed it (COMPLETE check-in or tour report) or its scheduled length has passed.
+ * completed it (COMPLETE check-in or tour report) or its scheduled length has passed — the
+ * job's own duration, else the tour's, else 180 minutes (lib/tour-duration).
  * With a company advance on record for the job, the money may have come from that advance,
  * so the payer is left for the operator.
  */
@@ -117,10 +117,16 @@ export async function guidePaidRule(o: { guideId: string; date: string; slotIdx:
   const [report, complete, assignment, advances] = await Promise.all([
     prisma.tourReport.findUnique({ where: key, select: { id: true } }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx, type: "COMPLETE" }, select: { id: true } }),
-    prisma.assignment.findUnique({ where: key, select: { tour: { select: { durationMin: true } } } }),
+    prisma.assignment.findUnique({ where: key, select: { tourId: true, tour: { select: { id: true, durationMin: true } } } }),
     prisma.guideAdvance.count({ where: { guideId, date, slotIdx } }),
   ]);
-  const minutes = assignment?.tour?.durationMin && assignment.tour.durationMin > 0 ? assignment.tour.durationMin : DEFAULT_TOUR_MINUTES;
+  // The job's own duration is on the offer the guide accepted for this departure. Only an
+  // offer for the tour the job is now on counts: a job moved to another tour keeps its old
+  // offers, and their length belongs to that other tour.
+  const offer = assignment?.tourId
+    ? await prisma.jobOffer.findFirst({ where: { date, slotIdx, tourId: assignment.tourId, assignedGuideId: guideId, status: "ASSIGNED" }, orderBy: { createdAt: "desc" }, select: { id: true, durationMin: true } })
+    : null;
+  const { minutes } = resolveDurationMin(offer, assignment?.tour ?? null);
   const ended = !!report || !!complete || tourStartMs(date, slotIdx) + minutes * 60_000 <= o.now.getTime();
   if (!ended) return { apply: false, reason: "tour-not-ended" };
   if (advances > 0) return { apply: false, reason: "advance-on-record" };

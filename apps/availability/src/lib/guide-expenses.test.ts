@@ -8,6 +8,7 @@ const prismaMock = vi.hoisted(() => ({
   tourReport: { findUnique: vi.fn() },
   checkin: { findFirst: vi.fn() },
   guideAdvance: { count: vi.fn() },
+  jobOffer: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
@@ -40,6 +41,7 @@ beforeEach(() => {
   prismaMock.tourReport.findUnique.mockResolvedValue(null);
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.guideAdvance.count.mockResolvedValue(0);
+  prismaMock.jobOffer.findFirst.mockResolvedValue(null);
 });
 
 describe("submitGuideExpenses", () => {
@@ -232,6 +234,31 @@ describe("Paid By on a report the guide files after the tour", () => {
     prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { durationMin: 300 } }); // …of a 5-hour tour
     await file();
     expect(stored()[0].paidBy).toBeUndefined();
+  });
+
+  it("a valid job duration on the accepted offer overrides the tour's", async () => {
+    vi.setSystemTime(at("12:00"));                                   // 3½ h after the start…
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { id: "T-001", durationMin: 180 } });
+    prismaMock.jobOffer.findFirst.mockResolvedValue({ id: "o_1", durationMin: 300 }); // …of a job booked for 5 h
+    await file();
+    expect(stored()[0].paidBy).toBeUndefined();
+    expect(prismaMock.jobOffer.findFirst.mock.calls[0][0].where).toEqual({ date: DAY, slotIdx: 0, tourId: "T-001", assignedGuideId: "G-001", status: "ASSIGNED" });
+  });
+
+  it("an invalid job duration falls through to the tour's", async () => {
+    vi.setSystemTime(at("12:00"));
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { id: "T-001", durationMin: 300 } });
+    prismaMock.jobOffer.findFirst.mockResolvedValue({ id: "o_bad", durationMin: 721 });
+    await file();
+    expect(stored()[0].paidBy).toBeUndefined(); // 5 h tour still running at 12:00
+  });
+
+  it("invalid durations at both levels fall back to 180 minutes", async () => {
+    vi.setSystemTime(at("11:31"));                                   // 08:30 + 3 h + 1 min
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { id: "T-001", durationMin: 0 } });
+    prismaMock.jobOffer.findFirst.mockResolvedValue({ id: "o_neg", durationMin: -60 });
+    await file();
+    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
   });
 
   it("leaves the payer to the operator when a company advance is on record for the job", async () => {
