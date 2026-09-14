@@ -40,6 +40,9 @@ export type PaymentContext = {
   guideName: string;
   peakContactId: string | null;
   jobs: PaymentJob[];
+  /** Jobs refused only because their sheet is not approved yet. Never paid — the
+   *  preview reads their rows so every fix a payment needs is listed at once. */
+  awaitingApproval: PaymentJob[];
   accounts: PaymentAccounts;
 };
 
@@ -50,7 +53,7 @@ export type PaymentContext = {
 export async function loadPaymentContext(
   guideId: string,
   keys: JobKey[],
-): Promise<{ ok: true; ctx: PaymentContext } | { ok: false; reasons: string[] }> {
+): Promise<{ ok: true; ctx: PaymentContext } | { ok: false; reasons: string[]; ctx: PaymentContext }> {
   const or = keys.map((k) => ({ guideId, date: k.date, slotIdx: k.slotIdx }));
   const periods = [...new Set(keys.map((k) => k.date.slice(0, 7)))];
   const [user, sheets, assigns, pays, payrolls, categories, feeAccount, rewardAccount] = await Promise.all([
@@ -73,6 +76,12 @@ export async function loadPaymentContext(
   const reasons: string[] = [];
   const at = (list: { date: string; slotIdx: number }[], k: JobKey) => list.find((x) => x.date === k.date && x.slotIdx === k.slotIdx);
   const jobs: PaymentJob[] = [];
+  const awaitingApproval: PaymentJob[] = [];
+  const toJob = (sheet: (typeof sheets)[number], k: JobKey): PaymentJob => ({
+    date: k.date, slotIdx: k.slotIdx, ref: sheet.ref ?? null, origin: sheet.origin,
+    expenses: (sheet.expenses as unknown as Expense[]) ?? [],
+    guideFee: guideFeeOf(sheet.guideFee),
+  });
 
   for (const k of keys) {
     const sheet = at(sheets, k) as (typeof sheets)[number] | undefined;
@@ -88,26 +97,25 @@ export async function loadPaymentContext(
       coveredByPayroll: !!sheet && coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt),
       period: k.date.slice(0, 7),
     });
-    if (block) { reasons.push(blockReason(label, block)); continue; }
+    if (block) {
+      reasons.push(blockReason(label, block));
+      if (block.code === "not-approved" && sheet) awaitingApproval.push(toJob(sheet, k));
+      continue;
+    }
     if (!sheet) continue; // unreachable: no sheet is a block — narrows the type
-    jobs.push({
-      date: k.date, slotIdx: k.slotIdx, ref: sheet.ref ?? null, origin: sheet.origin,
-      expenses: (sheet.expenses as unknown as Expense[]) ?? [],
-      guideFee: guideFeeOf(sheet.guideFee),
-    });
+    jobs.push(toJob(sheet, k));
   }
 
-  if (reasons.length) return { ok: false, reasons };
-  return {
-    ok: true,
-    ctx: {
-      guideId,
-      guideName: user?.fullName || user?.displayName || guideId,
-      peakContactId: user?.peakContactId ?? null,
-      jobs,
-      accounts: { guideFee: feeAccount, reviewReward: rewardAccount, categories },
-    },
+  const ctx: PaymentContext = {
+    guideId,
+    guideName: user?.fullName || user?.displayName || guideId,
+    peakContactId: user?.peakContactId ?? null,
+    jobs,
+    awaitingApproval,
+    accounts: { guideFee: feeAccount, reviewReward: rewardAccount, categories },
   };
+  if (reasons.length) return { ok: false, reasons, ctx };
+  return { ok: true, ctx };
 }
 
 /** One job's refusal, as the preview and the post both word it. */

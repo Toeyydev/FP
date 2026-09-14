@@ -3,7 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { isOps } from "@/lib/roles";
 import { peakEnabled } from "@/lib/peak-api";
-import { buildGuidePaymentDocument, PaymentDocumentNotPostable } from "@/lib/peak-payment-document";
+import { buildGuidePaymentDocument, PaymentDocumentNotPostable, type MissingCategoryRow } from "@/lib/peak-payment-document";
 import { loadPaymentContext } from "@/lib/peak-payment-server";
 
 export const dynamic = "force-dynamic";
@@ -27,20 +27,29 @@ export async function POST(req: NextRequest) {
   const reasons: string[] = [];
   if (!peakEnabled) reasons.push("PEAK is not connected");
   const loaded = await loadPaymentContext(guideId, jobs);
-  if (!loaded.ok) return NextResponse.json({ ok: false, reasons: [...reasons, ...loaded.reasons] });
+  if (!loaded.ok) reasons.push(...loaded.reasons);
+  const { ctx } = loaded;
 
+  // Build even when a job was refused, over every job whose rows could still go into
+  // this document — the payable ones and any only waiting on approval — so every row to
+  // fix (a missing category above all) is listed at once, not one refusal per click.
+  // Pure: this builds a payload in memory and sends it nowhere.
+  const candidates = loaded.ok ? ctx.jobs : [...ctx.jobs, ...ctx.awaitingApproval];
+  let missingCategories: MissingCategoryRow[] = [];
   try {
+    if (!candidates.length) return NextResponse.json({ ok: false, reasons, missingCategories });
     const doc = buildGuidePaymentDocument({
-      guideId, peakContactId: loaded.ctx.peakContactId,
+      guideId, peakContactId: ctx.peakContactId,
       // Neither is known yet: the number is assigned when the payment is made, and the
       // Paid By account is chosen in the same dialog. Neither changes a line.
       paymentRef: "FOLK-PAY-(assigned when paid)", paymentMethodId: "preview",
-      paymentDate, jobs: loaded.ctx.jobs, accounts: loaded.ctx.accounts,
+      paymentDate, jobs: candidates, accounts: ctx.accounts,
     });
-    if (reasons.length) return NextResponse.json({ ok: false, reasons });
+    if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories });
     return NextResponse.json({ ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate });
   } catch (e) {
-    if (e instanceof PaymentDocumentNotPostable) return NextResponse.json({ ok: false, reasons: [...reasons, ...e.reasons] });
-    throw e;
+    if (!(e instanceof PaymentDocumentNotPostable)) throw e;
+    missingCategories = e.missingCategories;
+    return NextResponse.json({ ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories });
   }
 }
