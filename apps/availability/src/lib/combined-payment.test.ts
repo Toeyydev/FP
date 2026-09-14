@@ -4,7 +4,7 @@ import { combinedPaymentBlock, sheetInPeak, type CombinedJobState } from "@/lib/
 // All data here is invented (fictional refs and document numbers) — this repo is public.
 
 const job = (over: Partial<CombinedJobState> = {}): CombinedJobState => ({
-  sheet: { origin: "NORMAL", peakDocumentNo: null, peakDocumentId: null },
+  sheet: { origin: "NORMAL", peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED" },
   payment: null,
   coveredByPayroll: false,
   period: "2030-05",
@@ -40,14 +40,32 @@ describe("combinedPaymentBlock — which jobs may go into one payment document",
 
   it("a mixed set of five: two already in PEAK, three payable together", () => {
     const five = [
-      job({ sheet: { origin: "NORMAL", peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "d27" } }),
+      job({ sheet: { origin: "NORMAL", peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "d27", approvalStatus: "APPROVED" } }),
       job(),
       job(),
       job(),
-      job({ sheet: { origin: "NORMAL", peakDocumentNo: "EXP-TEST-0026", peakDocumentId: "d26" } }),
+      job({ sheet: { origin: "NORMAL", peakDocumentNo: "EXP-TEST-0026", peakDocumentId: "d26", approvalStatus: "APPROVED" } }),
     ];
     const blocks = five.map(combinedPaymentBlock);
     expect(blocks.filter((b) => !b)).toHaveLength(3);
     expect(blocks.filter(Boolean).map((b) => b!.documentNo)).toEqual(["EXP-TEST-0027", "EXP-TEST-0026"]);
+  });
+});
+
+describe("combinedPaymentBlock — approval", () => {
+  const sheet = (approvalStatus: string | null | undefined) => ({ origin: "NORMAL", peakDocumentNo: null, peakDocumentId: null, approvalStatus });
+
+  it("an approved job sheet is allowed", () => {
+    expect(combinedPaymentBlock(job({ sheet: sheet("APPROVED") }))).toBeNull();
+  });
+
+  it("anything short of approved is blocked — never approved, withdrawn, or an unknown status", () => {
+    for (const status of [null, undefined, "", "READY_FOR_REVIEW", "approved"]) {
+      expect(combinedPaymentBlock(job({ sheet: sheet(status) }))).toMatchObject({ code: "not-approved", message: expect.stringContaining("not approved") });
+    }
+  });
+
+  it("a sheet already in PEAK says so first, approved or not", () => {
+    expect(combinedPaymentBlock(job({ sheet: { peakDocumentNo: "EXP-TEST-0005", approvalStatus: null } }))?.code).toBe("in-peak-from-sheet");
   });
 });

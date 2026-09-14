@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   const cap = bkkToday() < monthEnd ? bkkToday() : monthEnd;
   const [assigns, sheets, statuses, guides, tours, tourPays] = await Promise.all([
     prisma.assignment.findMany({ where: { date: { gte: `${period}-01`, lte: cap } }, select: { guideId: true, date: true, slotIdx: true, tourId: true, createdAt: true } }),
-    prisma.jobSheet.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, tourId: true, ref: true, expenses: true, guideFee: true, createdAt: true, origin: true, peakDocumentNo: true, peakDocumentId: true } }),
+    prisma.jobSheet.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, tourId: true, ref: true, expenses: true, guideFee: true, createdAt: true, origin: true, peakDocumentNo: true, peakDocumentId: true, approvalStatus: true } }),
     prisma.payrollStatus.findMany({ where: { period } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
     prisma.tour.findMany({ select: { id: true, name: true } }),

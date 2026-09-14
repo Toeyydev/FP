@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { saveBufferToDrive } from "@/lib/google-drive";
-import { DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, isApproved, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
 import { createExpenseAllInOne, insertExpenseFile } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
@@ -57,7 +57,7 @@ export async function loadPaymentContext(
     prisma.user.findFirst({ where: { guideId }, select: { peakContactId: true, fullName: true, displayName: true } }),
     prisma.jobSheet.findMany({
       where: { OR: or },
-      select: { date: true, slotIdx: true, ref: true, expenses: true, guideFee: true, origin: true, createdAt: true, peakDocumentNo: true, peakDocumentId: true },
+      select: { date: true, slotIdx: true, ref: true, expenses: true, guideFee: true, origin: true, createdAt: true, peakDocumentNo: true, peakDocumentId: true, approvalStatus: true },
     }),
     prisma.assignment.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, createdAt: true } }),
     prisma.tourPayment.findMany({
@@ -165,16 +165,20 @@ export function prismaPayTogetherDeps(opts: {
     async claim(doc: GuidePaymentDocument) {
       try {
         await prisma.$transaction(async (tx) => {
-          // Re-read inside the transaction: a sheet synced to PEAK on its own since the
-          // jobs were loaded must not also go into this document, or PEAK would hold two
-          // documents for that job. Checked before anything is written.
+          // Re-read inside the transaction: a sheet synced to PEAK on its own, or one
+          // whose approval was withdrawn, since the jobs were loaded must not go into this
+          // document. Checked for every job before anything is written, so one refusal
+          // refuses the whole payment.
           for (const j of doc.jobs) {
             const sheetNow = await tx.jobSheet.findUnique({
               where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
-              select: { peakDocumentNo: true, peakDocumentId: true },
+              select: { peakDocumentNo: true, peakDocumentId: true, approvalStatus: true },
             });
             if (sheetInPeak(sheetNow)) {
               throw new PaymentClaimRefused(`${j.ref} was just posted to PEAK from its job sheet${sheetNow?.peakDocumentNo ? ` (${sheetNow.peakDocumentNo})` : ""} — leave it out of this payment`);
+            }
+            if (!isApproved(sheetNow?.approvalStatus)) {
+              throw new PaymentClaimRefused(`${j.ref} is no longer approved — approve the job sheet again before paying it`);
             }
           }
           await tx.guidePaymentDocument.create({
