@@ -333,5 +333,12 @@ describe("jobsheet — adopting a guide's reported expenses", () => {
     ]);
     expect(out.map((e) => [e.pax, e.paidBy])).toEqual([[5, "company"], [5, "guide"], [1, "guide"]]);
   });
+  it("adoption carries where the payer came from, so a default stays marked unconfirmed", () => {
+    const reported: Expense = { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" };
+    expect(adoptReportedLine(official[1], reported)).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(adoptReportedExpenses(official, [reported])[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    // The operator's own payer wins and is labelled as the operator's.
+    expect(adoptReportedExpenses(official, [{ ...reported, description: "Water (Inc. Guide)" }])[0]).toMatchObject({ paidBy: "company", paidBySource: "operator" });
+  });
 });
 

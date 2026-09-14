@@ -932,10 +932,17 @@ export default function JobSheetEditor() {
                   {/* An untagged row now shows "— not set —" rather than defaulting the display to
                       Company Direct. Who paid decides whether the guide is reimbursed, so
                       guessing it silently either overpays or underpays a real person. */}
-                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value, paidBySource: "operator" })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
                     {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
+                  {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
+                      older app sent without saying who chose it. Picking any payer above confirms it. */}
+                  {paid !== "UNSPECIFIED" && (e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
+                    <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }} title={e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : "Sent by the app without saying who chose it — not a confirmed payer"}>
+                      {e.paidBySource === "default-after-tour" ? "Default after tour · รอยืนยัน" : "Not confirmed · รอยืนยัน"}
+                    </div>
+                  )}
                 </td>
                 <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
                   {e.receiptUrl ? (
