@@ -117,6 +117,29 @@ export function expenseAmount(e: Expense): number {
 // A "Review reward" expense line — the guide's reward for reviews, entered as a
 // normal expense (rate × count, e.g. 2 × ฿50) but surfaced on its own line on the
 // job sheet and the guide's Pay so they can see what a review earned them.
+// Adopting what a guide reported. The guide's figures are copied verbatim (a blank or
+// zero from the guide is the point, e.g. "we never bought those tickets"), and so is the
+// guide's Paid By, unless the operator already recorded a payer on the official line.
+// That payer decides whether the guide is reimbursed, so it is never silently replaced.
+const sameLine = (a: { description?: string | null }, b: { description?: string | null }) =>
+  (a.description || "").trim().toLowerCase() === (b.description || "").trim().toLowerCase();
+const hasPayer = (e?: { paidBy?: string } | null) => !!(e?.paidBy ?? "").trim();
+export function adoptReportedLine(official: Expense, reported: Expense): Expense {
+  return {
+    ...official,
+    price: reported.price ?? null,
+    pax: reported.pax ?? null,
+    ...(reported.unit ? { unit: reported.unit } : {}),
+    ...(!hasPayer(official) && hasPayer(reported) ? { paidBy: reported.paidBy } : {}),
+  };
+}
+export function adoptReportedExpenses(official: Expense[], reported: Expense[]): Expense[] {
+  return (reported ?? []).map((g) => {
+    const o = (official ?? []).find((e) => sameLine(e, g));
+    return hasPayer(o) ? { ...g, paidBy: o!.paidBy } : { ...g };
+  });
+}
+
 export function isReviewExpense(e: { description?: string | null }): boolean {
   const d = (e.description || "").trim().toLowerCase();
   // Thai counts too. Operators work in both languages, and a row typed

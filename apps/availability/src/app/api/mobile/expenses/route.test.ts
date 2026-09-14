@@ -8,6 +8,9 @@ const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
   booking: { findMany: vi.fn() },
   tour: { findUnique: vi.fn() },
+  tourReport: { findUnique: vi.fn() },
+  checkin: { findFirst: vi.fn() },
+  guideAdvance: { count: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
@@ -33,6 +36,9 @@ beforeEach(async () => {
   prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
   prismaMock.booking.findMany.mockResolvedValue([]);
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Grand Palace" });
+  prismaMock.tourReport.findUnique.mockResolvedValue(null);
+  prismaMock.checkin.findFirst.mockResolvedValue(null);
+  prismaMock.guideAdvance.count.mockResolvedValue(0);
   ({ token } = await mintMobileAccessToken(guide));
 });
 

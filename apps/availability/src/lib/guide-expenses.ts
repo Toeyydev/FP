@@ -2,7 +2,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, type Expense } from "@/lib/jobsheet";
+import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isReviewExpense, type Expense } from "@/lib/jobsheet";
+import { tourStartMs } from "@/lib/no-show-count";
 import { ensureJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 import { attributableBookings, sheetRefs, toSheetBooking } from "@/lib/sheet-bookings";
@@ -40,6 +41,53 @@ export type GuideExpenseInput = z.infer<typeof guideExpenseZ>;
 /** At most this many lines in one report. */
 export const MAX_EXPENSE_LINES = 40;
 
+/** Paid By value for "Guide paid own money" — reimbursed to the guide in the payout. */
+export const GUIDE_PAID_OWN_MONEY = "guide";
+/** How long a tour runs when its Tour record has no duration (same fallback as the calendar). */
+const DEFAULT_TOUR_MINUTES = 180;
+
+/**
+ * Owner rule (2026-09-14): expenses a guide reports after their tour were paid with the
+ * guide's own money. Each billed line with no payer yet becomes "Guide paid own money".
+ * A payer already on the line is kept (the operator may have recorded that the company
+ * paid), and a ฿0 line or a review reward is left alone — neither is money the guide spent.
+ */
+export function markGuidePaid(rows: GuideExpenseInput[]): { rows: GuideExpenseInput[]; tagged: number } {
+  let tagged = 0;
+  const out = rows.map((e) => {
+    if ((e.paidBy ?? "").trim() || isReviewExpense(e) || expenseAmount(e as Expense) <= 0) return e;
+    tagged++;
+    return { ...e, paidBy: GUIDE_PAID_OWN_MONEY };
+  });
+  return { rows: out, tagged };
+}
+
+export type GuidePaidRule = { apply: true } | { apply: false; reason: "filed-by-operator" | "tour-not-ended" | "advance-on-record" };
+
+/**
+ * Whether markGuidePaid applies to this report. Only the guide's own report counts: an
+ * operator filing on their behalf chooses the payer. The tour is over once the guide has
+ * completed it (COMPLETE check-in or tour report) or its scheduled length has passed.
+ * With a company advance on record for the job, the money may have come from that advance,
+ * so the payer is left for the operator.
+ */
+export async function guidePaidRule(o: { guideId: string; date: string; slotIdx: number; actorRole: string; now: Date }): Promise<GuidePaidRule> {
+  if (o.actorRole !== "GUIDE") return { apply: false, reason: "filed-by-operator" };
+  const { guideId, date, slotIdx } = o;
+  const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
+  const [report, complete, assignment, advances] = await Promise.all([
+    prisma.tourReport.findUnique({ where: key, select: { id: true } }),
+    prisma.checkin.findFirst({ where: { guideId, date, slotIdx, type: "COMPLETE" }, select: { id: true } }),
+    prisma.assignment.findUnique({ where: key, select: { tour: { select: { durationMin: true } } } }),
+    prisma.guideAdvance.count({ where: { guideId, date, slotIdx } }),
+  ]);
+  const minutes = assignment?.tour?.durationMin && assignment.tour.durationMin > 0 ? assignment.tour.durationMin : DEFAULT_TOUR_MINUTES;
+  const ended = !!report || !!complete || tourStartMs(date, slotIdx) + minutes * 60_000 <= o.now.getTime();
+  if (!ended) return { apply: false, reason: "tour-not-ended" };
+  if (advances > 0) return { apply: false, reason: "advance-on-record" };
+  return { apply: true };
+}
+
 export async function submitGuideExpenses(o: {
   guideId: string;
   date: string;
@@ -49,10 +97,13 @@ export async function submitGuideExpenses(o: {
   actorId: string | null;
   actorRole: string;
 }): Promise<{ ok: true; driveLink: string | null }> {
-  const { guideId, date, slotIdx, expenses } = o;
+  const { guideId, date, slotIdx } = o;
   const note = o.note?.trim() || null;
   const now = new Date();
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
+  const paidRule = await guidePaidRule({ guideId, date, slotIdx, actorRole: o.actorRole, now });
+  const marked = paidRule.apply ? markGuidePaid(o.expenses) : { rows: o.expenses, tagged: 0 };
+  const expenses = marked.rows;
   const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true } });
 
   // Submitting the report is the moment Actual Pax becomes real: fill each booking
@@ -116,6 +167,6 @@ export async function submitGuideExpenses(o: {
   // via the shared folder) get the record with no operator action. Best-effort.
   const driveLink = await saveJobSheetToDrive(guideId, date, slotIdx);
 
-  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, paidBy: paidRule.apply ? { auto: GUIDE_PAID_OWN_MONEY, lines: marked.tagged } : { auto: null, reason: paidRule.reason } } });
   return { ok: true, driveLink };
 }

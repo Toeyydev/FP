@@ -1,10 +1,13 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
   assignment: { findUnique: vi.fn(), count: vi.fn() },
   tour: { findUnique: vi.fn() },
+  tourReport: { findUnique: vi.fn() },
+  checkin: { findFirst: vi.fn() },
+  guideAdvance: { count: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
@@ -13,7 +16,7 @@ const jobrefMock = vi.hoisted(() => ({ ensureJobRef: vi.fn(async () => "FOLK-BKK
 vi.mock("@/lib/jobref", () => jobrefMock);
 vi.mock("@/lib/jobsheet-drive", () => ({ saveJobSheetToDrive: vi.fn(async () => "https://drive.example.test/sheet") }));
 
-import { submitGuideExpenses } from "./guide-expenses";
+import { submitGuideExpenses, markGuidePaid } from "./guide-expenses";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
 
@@ -34,6 +37,9 @@ beforeEach(() => {
   prismaMock.assignment.count.mockResolvedValue(1);      // one guide on the departure
   prismaMock.jobSheet.findMany.mockResolvedValue([]);    // no co-guide sheets
   prismaMock.jobSheet.create.mockImplementation(async ({ data }) => ({ id: "js_new", ...data }));
+  prismaMock.tourReport.findUnique.mockResolvedValue(null);
+  prismaMock.checkin.findFirst.mockResolvedValue(null);
+  prismaMock.guideAdvance.count.mockResolvedValue(0);
 });
 
 describe("submitGuideExpenses", () => {
@@ -160,3 +166,97 @@ describe("submitGuideExpenses", () => {
     expect(prismaMock.jobSheet.update).toHaveBeenCalled();
   });
 });
+
+// Owner rule: a guide's expense report filed after the tour is the guide's own money.
+// A made-up departure: 6 Apr 2030, slot 0 (08:30 Bangkok), default 3-hour tour → ends 11:30.
+describe("Paid By on a report the guide files after the tour", () => {
+  const DAY = "2030-04-06";
+  const at = (hhmm: string) => new Date(`${DAY}T${hhmm}:00+07:00`);
+  const lines = () => [
+    { description: "Water (Inc. Guide)", price: 10, pax: 4 },                     // billed, no payer → the guide's money
+    { description: "Grand Palace", price: 500, pax: null },                        // ฿0 line → left blank
+    { description: "Ferry (Inc. Guide)", price: 5, pax: 4, paidBy: "company" },    // payer already recorded → kept
+    { description: "Review reward", price: 50, pax: 1 },                           // compensation, not spending → left alone
+  ];
+  const file = (over: Partial<Parameters<typeof submitGuideExpenses>[0]> = {}) =>
+    submitGuideExpenses({ guideId: "G-001", date: DAY, slotIdx: 0, expenses: lines(), actorId: "u_1", actorRole: "GUIDE", ...over });
+  const stored = () => prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses as { description: string; paidBy?: string }[];
+  const auditDetail = () => (audit as unknown as { mock: { calls: { detail: Record<string, unknown> }[][] } }).mock.calls[0][0].detail;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("marks each billed line with no payer as Guide paid own money once the tour's time is over", async () => {
+    vi.setSystemTime(at("12:00"));
+    await file();
+    expect(stored().map((e) => [e.description, e.paidBy])).toEqual([
+      ["Water (Inc. Guide)", "guide"],
+      ["Grand Palace", undefined],
+      ["Ferry (Inc. Guide)", "company"],
+      ["Review reward", undefined],
+    ]);
+    expect(auditDetail().paidBy).toEqual({ auto: "guide", lines: 1 });
+  });
+
+  it("counts the tour as over as soon as the guide completed it", async () => {
+    vi.setSystemTime(at("09:30"));
+    prismaMock.checkin.findFirst.mockResolvedValue({ id: "c_1" });
+    await file();
+    expect(stored()[0].paidBy).toBe("guide");
+  });
+
+  it("counts a filed tour report as the tour being over", async () => {
+    vi.setSystemTime(at("09:30"));
+    prismaMock.tourReport.findUnique.mockResolvedValue({ id: "r_1" });
+    await file();
+    expect(stored()[0].paidBy).toBe("guide");
+  });
+
+  it("leaves the payer blank on a report filed while the tour is still running", async () => {
+    vi.setSystemTime(at("09:30"));
+    await file();
+    expect(stored()[0].paidBy).toBeUndefined();
+    expect(auditDetail().paidBy).toEqual({ auto: null, reason: "tour-not-ended" });
+  });
+
+  it("uses the tour's own length when it has one", async () => {
+    vi.setSystemTime(at("12:00"));                                   // 3½ h after the start…
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { durationMin: 300 } }); // …of a 5-hour tour
+    await file();
+    expect(stored()[0].paidBy).toBeUndefined();
+  });
+
+  it("leaves the payer to the operator when a company advance is on record for the job", async () => {
+    vi.setSystemTime(at("12:00"));
+    prismaMock.guideAdvance.count.mockResolvedValue(1);
+    await file();
+    expect(stored()[0].paidBy).toBeUndefined();
+    expect(auditDetail().paidBy).toEqual({ auto: null, reason: "advance-on-record" });
+  });
+
+  it("does not decide the payer when an operator files the report for the guide", async () => {
+    vi.setSystemTime(at("12:00"));
+    await file({ actorRole: "OPERATOR" });
+    expect(stored()[0].paidBy).toBeUndefined();
+    expect(auditDetail().paidBy).toEqual({ auto: null, reason: "filed-by-operator" });
+  });
+
+  it("also marks the lines on a sheet the report scaffolds", async () => {
+    vi.setSystemTime(at("12:00"));
+    prismaMock.jobSheet.findUnique.mockResolvedValue(null);
+    await file();
+    const created = prismaMock.jobSheet.create.mock.calls[0][0].data;
+    expect(created.guideExpenses[0].paidBy).toBe("guide");
+    expect(created.expenses.every((e: { paidBy?: string }) => e.paidBy === undefined)).toBe(true); // the operator's set is untouched
+  });
+
+  it("markGuidePaid never overwrites a payer, even a different one", () => {
+    const { rows, tagged } = markGuidePaid([{ description: "Bus", price: 15, pax: 3, paidBy: "advance" }, { description: "Bus", price: 15, pax: 3, paidBy: "  " }]);
+    expect(rows.map((r) => r.paidBy)).toEqual(["advance", "guide"]);
+    expect(tagged).toBe(1);
+  });
+});
+
