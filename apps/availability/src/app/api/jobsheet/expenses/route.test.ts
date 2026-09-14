@@ -10,6 +10,10 @@ const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
   tour: { findUnique: vi.fn() },
+  // Read by the report's payer rules once they land (PR #201); harmless before.
+  tourReport: { findUnique: vi.fn() },
+  checkin: { findFirst: vi.fn() },
+  guideAdvance: { count: vi.fn() },
 }));
 const session = vi.hoisted(() => ({ current: null as null | { user: { id: string; role: string; guideId: string | null } } }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -48,6 +52,9 @@ beforeEach(() => {
   prismaMock.jobSheet.findMany.mockResolvedValue([]);
   prismaMock.booking.findMany.mockResolvedValue([]);
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Test tour" });
+  prismaMock.tourReport.findUnique.mockResolvedValue(null);
+  prismaMock.checkin.findFirst.mockResolvedValue(null);
+  prismaMock.guideAdvance.count.mockResolvedValue(0);
 });
 
 describe("POST /api/jobsheet/expenses — who may file", () => {
