@@ -5,6 +5,8 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   user: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },
+  tourPayment: { findUnique: vi.fn() },
+  payrollStatus: { findUnique: vi.fn() },
   jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
   booking: { findMany: vi.fn() },
   tour: { findUnique: vi.fn() },
@@ -36,6 +38,8 @@ beforeEach(async () => {
   prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
   prismaMock.booking.findMany.mockResolvedValue([]);
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Grand Palace" });
+  prismaMock.tourPayment.findUnique.mockResolvedValue(null);
+  prismaMock.payrollStatus.findUnique.mockResolvedValue(null);
   prismaMock.tourReport.findUnique.mockResolvedValue(null);
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.guideAdvance.count.mockResolvedValue(0);
@@ -72,6 +76,15 @@ describe("POST /api/mobile/expenses", () => {
     const res = await post(body, token);
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe("not-assigned");
+    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a departure that is already paid, and writes nothing", async () => {
+    prismaMock.tourPayment.findUnique.mockResolvedValue({ status: "PAID", paidAt: new Date("2026-09-14T03:00:00Z") });
+    const res = await post(body, token);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("already-paid");
     expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
     expect(prismaMock.jobSheet.create).not.toHaveBeenCalled();
   });

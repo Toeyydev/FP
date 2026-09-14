@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal, guidePayoutView } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
-import { canonicalPaidBy, figuresNeedRecheck, jobSheetTotals } from "@/lib/peak-sync";
+import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -307,7 +307,14 @@ export default function JobSheetEditor() {
     const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
     const r = await jfetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
-    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
+    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); return; }
+    // The server decides who may file for this job; say why it refused rather than
+    // inviting a retry that can never succeed.
+    const err = (await r.json().catch(() => null))?.error;
+    setMsg(err === "already-paid" ? "This job is already paid — its expense report is closed."
+      : err === "not-assigned" ? "You are not assigned to this job, so you can't report its expenses."
+      : err === "forbidden" ? "You can't report expenses for another guide's job."
+      : "Couldn't submit expenses — try again.");
   }
   // Operator: merge the guide's reported figures into the official expenses (then Save).
   // Make the official expenses EXACTLY the guide's reported figures — the guide ran the
@@ -640,9 +647,12 @@ export default function JobSheetEditor() {
         // vanished from "You'll receive". Take it from the operator's record and add
         // it once — that also stops it double-counting when the report was seeded
         // from those same rows.
+        // Same payer rule as the transfer: company-paid and advance-paid rows are not
+        // reimbursed, and until the operator approves (or pays) the figure is an estimate.
         const payoutView = guidePayoutView({
           operatorExpenses: sheet.expenses, reportedExpenses: guideExp,
           netGuideFee: t.netGuideFee, useReported: canReport,
+          approved: isApproved(sheet.approvalStatus), paid,
         });
         const reviewReward = payoutView.reviewReward;
         const expShown = payoutView.tourExpenses;
@@ -711,11 +721,14 @@ export default function JobSheetEditor() {
                   </>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
                 <div className="gs-payout">
-                  <div className="gs-payout-row"><span>Expenses{canReport ? " (your report)" : " (reimbursed)"}</span><b>{thb(expShown)}</b></div>
+                  <div className="gs-payout-row"><span>Expenses reimbursed to you{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย</small></span><b>{thb(expShown)}</b></div>
+                  {payoutView.notReimbursed.company > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid by Folkpaths directly — not reimbursed<br /><small className="gs-calc">บริษัทจ่ายเอง ไม่ใช่เงินคืนให้มัคคุเทศก์</small></span><span>{thb(payoutView.notReimbursed.company)}</span></div>}
+                  {payoutView.notReimbursed.advance > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid from a Folkpaths advance — settled with the advance<br /><small className="gs-calc">จ่ายจากเงินทดรอง เคลียร์กับเงินทดรอง</small></span><span>{thb(payoutView.notReimbursed.advance)}</span></div>}
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
                   {reviewReward > 0 && <div className="gs-payout-row"><span>Review reward<br /><small className="gs-calc">ค่าตอบแทนรีวิว</small></span><b>{thb(reviewReward)}</b></div>}
-                  <div className="gs-payout-row gs-grand"><span>You&apos;ll receive</span><b>{thb(grandShown)}</b></div>
+                  <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
+                {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — counted as reimbursed until the operator confirms. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย นับเป็นเงินคืนไว้ก่อนจนกว่า operator ยืนยัน</div>}
                 {hasAdvance && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: advSt === "SETTLED" ? "var(--ok-bg,#eef7f0)" : advSt === "OVER_RETURNED" ? "var(--danger-bg)" : "var(--grey-bg,#f7f7f7)", border: `1px solid ${advSt === "SETTLED" ? "var(--ok-line,#cfe6d6)" : advSt === "OVER_RETURNED" ? "var(--danger-line)" : "var(--line)"}`, borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700 }}>
@@ -737,7 +750,7 @@ export default function JobSheetEditor() {
                     <div style={{ color: "var(--ink-soft)", marginTop: 3 }}>These are the operator&apos;s final figures — they match your transfer.</div>
                   </div>
                 )}
-                {canReport && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below · confirmed by the operator.</div>}
+                {payoutView.basis === "reported" && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below — the operator confirms the final figure.</div>}
               </div>
             </div>
             {canReport && (
