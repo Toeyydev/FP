@@ -93,6 +93,8 @@ import { POST, PATCH } from "./route";
 import { POST as PREVIEW } from "./preview/route";
 import { GET as PAYMENTS } from "../../payments/route";
 import { NextRequest } from "next/server";
+import { audit } from "@/lib/audit";
+import { sendPaymentNotice } from "@/lib/jobsheet-send";
 
 const GUIDE = "G-TEST";
 const FEE = (price: number) => ({ price, time: 1, whtPct: 3 });
@@ -104,7 +106,7 @@ const OTHER = { date: "2030-05-20", slotIdx: 0 }; // unpaid, not selected
 function seed() {
   db.users = [{ guideId: GUIDE, peakContactId: "contact-guide-a", fullName: "Guide A", displayName: "Guide A" }];
   const sheet = (j: typeof J1, ref: string, price: number, expenses: Row[] = []) =>
-    ({ guideId: GUIDE, ...j, tourId: "T-001", ref, expenses, guideFee: FEE(price), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null });
+    ({ guideId: GUIDE, ...j, tourId: "T-001", ref, expenses, guideFee: FEE(price), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED" });
   db.sheets = [
     sheet(J1, "FOLK-BKK-20300506-01", 1200),
     sheet(J2, "FOLK-BKK-20300506-02", 1200),
@@ -293,7 +295,7 @@ describe("already in PEAK from the job sheet — the Payments count and the serv
     // Payments counts only tours that have already run; these ran in May 2030.
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2030-06-02T03:00:00Z"));
-    db.sheets.push({ guideId: GUIDE, ...J4, tourId: "T-001", ref: "FOLK-BKK-20300521-01", expenses: [], guideFee: FEE(1200), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null });
+    db.sheets.push({ guideId: GUIDE, ...J4, tourId: "T-001", ref: "FOLK-BKK-20300521-01", expenses: [], guideFee: FEE(1200), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED" });
     db.assigns.push({ guideId: GUIDE, ...J4, tourId: "T-001", createdAt: new Date("2030-05-01") });
     // Two of the five were synced to PEAK one at a time from their own job sheets.
     Object.assign(db.sheets.find((x) => x.date === J1.date && x.slotIdx === J1.slotIdx)!, { peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "peak-doc-27", peakSyncStatus: "SYNCED" });
@@ -359,6 +361,74 @@ describe("already in PEAK from the job sheet — the Payments count and the serv
       expect(db.pays).toHaveLength(0);
     } finally {
       prismaMock.jobSheet.findUnique.mockImplementation(real);
+    }
+  });
+});
+
+describe("a combined PEAK payment takes approved job sheets only", () => {
+  const sheetOf = (j: { date: string; slotIdx: number }) => db.sheets.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!;
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+
+  it("approved: the preview builds the document and the post pays it", async () => {
+    expect((await (await preview([J1, J2, J3])).json()).ok).toBe(true);
+    expect((await payForm([J1, J2, J3])).status).toBe(200);
+  });
+
+  it("unapproved: the preview names exactly that job, and only that job", async () => {
+    sheetOf(J2).approvalStatus = null; // e.g. still "Review: no-show", never signed off
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons).toEqual(["FOLK-BKK-20300506-02 is not approved — approve the job sheet before paying it in a PEAK document"]);
+  });
+
+  it("a mixed batch with one unapproved job is refused whole — no slip, no PEAK write, no payment rows, no notice, no audit", async () => {
+    sheetOf(J3).approvalStatus = null;
+    const res = await payForm([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons).toEqual([expect.stringContaining("FOLK-BKK-20300512-01 is not approved")]);
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(peak.attach).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays).toHaveLength(0);
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("approval withdrawn after the jobs were loaded is caught inside the claim, before anything is written", async () => {
+    const real = prismaMock.jobSheet.findUnique.getMockImplementation()!;
+    prismaMock.jobSheet.findUnique.mockImplementation(async (arg: any) => {
+      const k = arg?.where?.guideId_date_slotIdx;
+      if (k?.date === J2.date && k?.slotIdx === J2.slotIdx) sheetOf(J2).approvalStatus = null;
+      return real(arg);
+    });
+    try {
+      const res = await payForm([J1, J2, J3]);
+      expect(res.status).toBe(409);
+      expect((await res.json()).reasons.join(" ")).toContain("FOLK-BKK-20300506-02 is no longer approved");
+      expect(drive.save).not.toHaveBeenCalled();
+      expect(peak.create).not.toHaveBeenCalled();
+      expect(db.docs).toHaveLength(0);
+      expect(db.pays).toHaveLength(0);
+    } finally {
+      prismaMock.jobSheet.findUnique.mockImplementation(real);
+    }
+  });
+
+  it("Payments does not count an unapproved job as payable together", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-06-02T03:00:00Z"));
+    try {
+      sheetOf(J2).approvalStatus = null;
+      const res = await PAYMENTS(new NextRequest("https://ops.folkpaths.com/api/payments?period=2030-05"));
+      const jobs = (await res.json()).rows[0].jobs as Row[];
+      expect(jobs.find((j) => j.ref === "FOLK-BKK-20300506-02")).toMatchObject({ combinable: false, combinedBlock: { code: "not-approved" } });
+      expect(jobs.filter((j) => j.combinable).map((j) => j.ref)).toEqual(["FOLK-BKK-20300506-01", "FOLK-BKK-20300512-01", "FOLK-BKK-20300520-01"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -9,6 +9,7 @@
 // (lib/peak-payment-document), and the preview lists it.
 //
 // Pure: no database, no network.
+import { isApproved } from "@/lib/jobsheet";
 import { paymentDocumentLock } from "@/lib/peak-payment-document";
 
 export type CombinedBlockCode =
@@ -18,7 +19,8 @@ export type CombinedBlockCode =
   | "has-slip"
   | "payroll"
   | "historical"
-  | "in-peak-from-sheet";
+  | "in-peak-from-sheet"
+  | "not-approved";
 
 export type CombinedBlock = {
   code: CombinedBlockCode;
@@ -29,7 +31,7 @@ export type CombinedBlock = {
 };
 
 export type CombinedJobState = {
-  sheet: { origin?: string | null; peakDocumentNo?: string | null; peakDocumentId?: string | null } | null;
+  sheet: { origin?: string | null; peakDocumentNo?: string | null; peakDocumentId?: string | null; approvalStatus?: string | null } | null;
   payment: { status?: string | null; peakPaymentRef?: string | null; peakRef?: string | null; eslipUrl?: string | null; slips?: unknown } | null;
   /** The guide's whole-month payroll already covers this job (lib/payment-coverage). */
   coveredByPayroll: boolean;
@@ -70,6 +72,12 @@ export function combinedPaymentBlock(job: CombinedJobState): CombinedBlock | nul
       documentNo: documentNo || undefined,
       message: `is already in PEAK from its job sheet${documentNo ? ` (${documentNo})` : ""} — a second document would book this job twice. Leave it out of this payment.`,
     };
+  }
+  // A PEAK payment books the job's figures as final and marks it paid. Until someone
+  // has signed off the sheet's expenses those figures are not final — the job-sheet
+  // sync refuses an unapproved sheet for the same reason (peakSyncEligibility).
+  if (!isApproved(sheet.approvalStatus)) {
+    return { code: "not-approved", message: "is not approved — approve the job sheet before paying it in a PEAK document" };
   }
   return null;
 }

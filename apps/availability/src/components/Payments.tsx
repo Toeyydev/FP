@@ -112,16 +112,21 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const out = jobs.filter((j) => !j.paid && !j.peakPaymentRef && !j.combinable);
     if (!out.length) return null;
     const inPeak = out.filter((j) => j.combinedBlock?.code === "in-peak-from-sheet").length;
-    const other = out.length - inPeak;
+    const unapproved = out.filter((j) => j.combinedBlock?.code === "not-approved").length;
+    const other = out.length - inPeak - unapproved;
     return [
       inPeak ? `${inPeak} already in PEAK from ${inPeak === 1 ? "its job sheet" : "their job sheets"}` : "",
+      unapproved ? `${unapproved} not approved` : "",
       other ? `${other} not payable together yet — see the job${other === 1 ? "" : "s"} below` : "",
     ].filter(Boolean).join(" · ");
   };
-  // The job's own PEAK document, when its sheet was synced on its own.
+  // Why this unpaid job is not in "Pay N jobs together": its own PEAK document, or the
+  // sheet still waiting on approval.
   const inPeakTag = (j: Job) => !j.paid && j.combinedBlock?.code === "in-peak-from-sheet"
     ? <span className="pay-doc-tag" title={`Posted to PEAK from the job sheet as its own document. It cannot also go into a combined payment document. ${j.combinedBlock.message}`}>In PEAK from job sheet · {j.sheetPeakDocumentNo ?? j.combinedBlock.documentNo ?? "document"}</span>
-    : null;
+    : !j.paid && j.combinedBlock?.code === "not-approved"
+      ? <span className="pay-doc-tag" title="A combined PEAK payment takes approved job sheets only. Approve this job sheet first — it can still be paid on its own.">Not approved</span>
+      : null;
   // Settle a payment document by what only PEAK can say.
   async function resolveDoc(doc: PaymentDoc, resolution: "found" | "not-found" | "voided") {
     const n = docJobCount(doc);
