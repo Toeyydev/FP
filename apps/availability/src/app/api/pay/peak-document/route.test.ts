@@ -11,7 +11,7 @@ type Row = Record<string, any>;
 type Where = Record<string, any>;
 
 const db = vi.hoisted(() => ({
-  users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[],
+  users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[], audits: [] as Row[],
 }));
 
 const prismaMock = vi.hoisted(() => {
@@ -61,6 +61,7 @@ const prismaMock = vi.hoisted(() => {
     payrollStatus: table(() => db.payrolls),
     guidePaymentDocument: table(() => db.docs),
     tour: table(() => db.tours),
+    auditLog: table(() => db.audits),
   };
   client.$transaction = vi.fn(async (arg: any) => (typeof arg === "function" ? arg(client) : Promise.all(arg)));
   return client;
@@ -93,6 +94,7 @@ import { POST, PATCH } from "./route";
 import { POST as PREVIEW } from "./preview/route";
 import { GET as PAYMENTS } from "../../payments/route";
 import { NextRequest } from "next/server";
+import { POST as MARK_VOIDED } from "../../jobsheet/peak-voided/route";
 import { audit } from "@/lib/audit";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 
@@ -118,6 +120,7 @@ function seed() {
   db.payrolls = [];
   db.docs = [];
   db.tours = [{ id: "T-001", name: "Test Temple Tour" }];
+  db.audits = [];
 }
 
 const payForm = (jobs: { date: string; slotIdx: number }[], over: Record<string, string> = {}) => {
@@ -480,5 +483,48 @@ describe("the preview lists every row with no expense category, including on a j
     const body = await (await preview([J1, J2, J3])).json();
     expect(body).toMatchObject({ ok: true });
     expect(body.missingCategories).toBeUndefined();
+  });
+});
+
+describe("Voided in PEAK: a job-sheet document voided in PEAK can be paid together again", () => {
+  const sheetOf = (j: { date: string; slotIdx: number }) => db.sheets.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!;
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-13", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const markVoided = (documentNo: string) => MARK_VOIDED(new Request("https://ops.folkpaths.com/api/jobsheet/peak-voided", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, ...J1, documentNo, confirmVoidedInPeak: true }),
+  }) as unknown as Parameters<typeof MARK_VOIDED>[0]);
+
+  beforeEach(() => {
+    Object.assign(sheetOf(J1), { id: "js_j1", peakSyncStatus: "SYNCED", peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "peak-doc-27", syncedAt: new Date("2030-05-07T04:00:00Z"), lastPayloadHash: "h27" });
+  });
+
+  it("refused before, one document after — and the old number is still in the job's history", async () => {
+    const before = await (await preview([J1, J2, J3])).json();
+    expect(before.ok).toBe(false);
+    expect(before.reasons.join(" ")).toContain("EXP-TEST-0027");
+
+    authMock.mockResolvedValue({ user: { id: "admin_1", role: "ADMIN" } });
+    expect((await markVoided("EXP-TEST-0027")).status).toBe(200);
+
+    const after = await (await preview([J1, J2, J3])).json();
+    expect(after).toMatchObject({ ok: true, total: 4169 });
+    expect(db.audits.filter((a) => a.action === "jobsheet.peak_voided")).toEqual([
+      expect.objectContaining({ entityId: "js_j1", actorId: "admin_1", detail: expect.objectContaining({ previousDocumentNo: "EXP-TEST-0027", previousDocumentId: "peak-doc-27" }) }),
+    ]);
+    // Voiding touched no payment record and called nothing.
+    expect(db.pays).toHaveLength(0);
+    expect(peak.create).not.toHaveBeenCalled();
+  });
+
+  it("a guide or an accountant cannot do it", async () => {
+    for (const role of ["GUIDE", "ACCOUNTANT"]) {
+      authMock.mockResolvedValue({ user: { id: "u_1", role } });
+      expect((await markVoided("EXP-TEST-0027")).status).toBe(403);
+    }
+    expect(sheetOf(J1).peakDocumentNo).toBe("EXP-TEST-0027");
+    expect(db.audits).toHaveLength(0);
   });
 });

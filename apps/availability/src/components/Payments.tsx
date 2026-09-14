@@ -123,7 +123,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // Why this unpaid job is not in "Pay N jobs together": its own PEAK document, or the
   // sheet still waiting on approval.
   const inPeakTag = (j: Job) => !j.paid && j.combinedBlock?.code === "in-peak-from-sheet"
-    ? <span className="pay-doc-tag" title={`Posted to PEAK from the job sheet as its own document. It cannot also go into a combined payment document. ${j.combinedBlock.message}`}>In PEAK from job sheet · {j.sheetPeakDocumentNo ?? j.combinedBlock.documentNo ?? "document"}</span>
+    ? <span className="pay-doc-tag" title={`Posted to PEAK from the job sheet as its own document, so it cannot also go into a combined payment document. It can still be paid on its own. If that document was voided in PEAK, record it with "Voided in PEAK…" on the job sheet.`}>In PEAK from job sheet · {j.sheetPeakDocumentNo ?? j.combinedBlock.documentNo ?? "document"}</span>
     : !j.paid && j.combinedBlock?.code === "not-approved"
       ? <span className="pay-doc-tag" title="A combined PEAK payment takes approved job sheets only. Approve this job sheet first — it can still be paid on its own.">Not approved</span>
       : null;

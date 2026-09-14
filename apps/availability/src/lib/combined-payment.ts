@@ -70,7 +70,7 @@ export function combinedPaymentBlock(job: CombinedJobState): CombinedBlock | nul
     return {
       code: "in-peak-from-sheet",
       documentNo: documentNo || undefined,
-      message: `is already in PEAK from its job sheet${documentNo ? ` (${documentNo})` : ""} — a second document would book this job twice. Leave it out of this payment.`,
+      message: `is already in PEAK from its job sheet${documentNo ? ` (${documentNo})` : ""} — a second document would book this job twice. Leave it out of this payment, or, if that document has been voided in PEAK, record it with "Voided in PEAK…" on the job sheet first.`,
     };
   }
   // A PEAK payment books the job's figures as final and marks it paid. Until someone
