@@ -162,11 +162,11 @@ export async function GET(req: NextRequest) {
   // really there, so an empty timeline means nothing happened, not "not implemented".
   // Operator-only: the guide's view renders neither the timeline nor the header
   // meta, so a guide's page load must not pay for these queries at all.
-  type AuditRow = { action: string; actorId: string | null; createdAt: Date };
+  type AuditRow = { action: string; actorId: string | null; createdAt: Date; detail?: unknown };
   const [report, auditRows, operatorUser] = isOps
     ? await Promise.all([
       prisma.tourReport.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { submittedAt: true, noShow: true, leftEarly: true } }),
-      existing ? prisma.auditLog.findMany({ where: { entityType: "JobSheet", entityId: existing.id }, select: { action: true, actorId: true, createdAt: true }, orderBy: { createdAt: "asc" }, take: 60 }) : Promise.resolve([] as AuditRow[]),
+      existing ? prisma.auditLog.findMany({ where: { entityType: "JobSheet", entityId: existing.id }, select: { action: true, actorId: true, createdAt: true, detail: true }, orderBy: { createdAt: "asc" }, take: 60 }) : Promise.resolve([] as AuditRow[]),
       existing?.createdById ? prisma.user.findUnique({ where: { id: existing.createdById }, select: { displayName: true } }) : Promise.resolve(null),
     ])
     : [null, [] as AuditRow[], null];
@@ -195,7 +195,14 @@ export async function GET(req: NextRequest) {
   push(existing?.guideExpensesAt, "Guide expense report received");
   push(existing?.approvedAt, "Expenses approved");
   push(payment.paidAt, "Payment recorded");
-  for (const r of auditRows) { const l = AUDIT_LABELS[r.action]; if (l) push(r.createdAt, l, actorName(r.actorId)); }
+  // A PEAK document's number stays on the timeline after it leaves the sheet: posted,
+  // and — if it was voided in PEAK — recorded as voided.
+  const detailOf = (r: AuditRow) => (r.detail && typeof r.detail === "object" ? r.detail as Record<string, unknown> : {});
+  const auditLabel = (r: AuditRow): string | undefined =>
+    r.action === "jobsheet.peak_synced" ? `Synced to PEAK · ${String(detailOf(r).documentNo ?? "")}`.replace(/ · $/, "")
+      : r.action === "jobsheet.peak_voided" ? `PEAK document ${String(detailOf(r).previousDocumentNo ?? "")} recorded as voided in PEAK`
+      : AUDIT_LABELS[r.action];
+  for (const r of auditRows) { const l = auditLabel(r); if (l) push(r.createdAt, l, actorName(r.actorId)); }
   const history = isOps ? ev.sort((a, b) => a.at.localeCompare(b.at)) : [];
 
   // Header facts that live outside the sheet JSON. `ota` is the booking channel

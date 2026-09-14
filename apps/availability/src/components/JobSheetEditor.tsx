@@ -491,6 +491,36 @@ export default function JobSheetEditor() {
     await load();
   }
 
+  // The sheet's own PEAK document was voided or cancelled in PEAK itself. Record that, so
+  // the job can be synced again or paid together with the guide's other jobs. FolkOPS
+  // does not contact PEAK: the operator confirms by typing the document number back, and
+  // the server keeps the old number in the job's audit history.
+  async function markVoidedInPeak() {
+    if (!sheet || !peak?.peakDocumentNo) return;
+    const docNo = peak.peakDocumentNo;
+    const typed = window.prompt(
+      `Only use this after ${docNo} has been voided or cancelled in PEAK itself.\n\n` +
+      `FolkOPS does not contact PEAK. This removes ${docNo} from this job sheet so the job can be synced again or paid together with the guide's other jobs. ${docNo} stays in this job's history.\n\n` +
+      `Type the document number to confirm:`,
+      "",
+    );
+    if (typed === null) return;
+    if (typed.trim() !== docNo) { setMsg(`Not changed — "${typed.trim()}" does not match ${docNo}.`); return; }
+    setBusy(true); setMsg("Recording the voided document…");
+    const r = await jfetch("/api/jobsheet/peak-voided", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, documentNo: docNo, confirmVoidedInPeak: true }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    setMsg(r.ok
+      ? `${docNo} recorded as voided in PEAK — this job can be synced or paid together again.`
+      : d.error === "offline" ? "No connection — nothing was changed."
+      : d.error === "forbidden" ? "Operator only."
+      : d.reason ?? "Couldn't record it — nothing was changed.");
+    await load();
+  }
+
   // Operator: record (or clear) the guide's PEAK Contact id. This is the mapping
   // whose absence blocks every sync, so it is editable right where that block is
   // reported rather than on a separate admin screen. Writes to the guide's profile,
@@ -1595,6 +1625,10 @@ export default function JobSheetEditor() {
                   <div style={{ marginTop: 2, fontFamily: "monospace", fontSize: 12.5, fontWeight: 700 }}>{docNo}</div>
                   {peak?.syncedAt && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)" }}>Synced {new Date(peak.syncedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</div>}
                   {!peak?.syncedAt && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)" }}>Recorded manually on Payments.</div>}
+                  {peak?.peakDocumentNo && (
+                    <button className="btn sm ghost" style={{ marginTop: 6 }} disabled={busy} onClick={markVoidedInPeak}
+                      title="Only after this document was voided or cancelled in PEAK itself. FolkOPS does not contact PEAK; the number stays in this job's history.">Voided in PEAK…</button>
+                  )}
                   {el?.changedSinceSync && (
                     <div className="js-sync-warn">
                       <b>Accounting data changed after PEAK sync</b>
