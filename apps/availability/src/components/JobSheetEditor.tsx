@@ -307,7 +307,14 @@ export default function JobSheetEditor() {
     const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
     const r = await jfetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
-    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
+    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); return; }
+    // The server decides who may file for this job; say why it refused rather than
+    // inviting a retry that can never succeed.
+    const err = (await r.json().catch(() => null))?.error;
+    setMsg(err === "already-paid" ? "This job is already paid — its expense report is closed."
+      : err === "not-assigned" ? "You are not assigned to this job, so you can't report its expenses."
+      : err === "forbidden" ? "You can't report expenses for another guide's job."
+      : "Couldn't submit expenses — try again.");
   }
   // Operator: merge the guide's reported figures into the official expenses (then Save).
   // Make the official expenses EXACTLY the guide's reported figures — the guide ran the
