@@ -31,6 +31,13 @@ export type Expense = {
   unit?: string;
   expenseType?: ExpenseType | string; // operational category (mapped to a PEAK account in the backend, not here)
   paidBy?: string; // "guide" | "operator" | "company"
+  // Where the payer on this line came from — NOT a payment fact, a provenance label:
+  //   "operator"           recorded by an operator on the sheet
+  //   "guide"              the guide picked it (FolkOPS Mobile sends paidByChoice)
+  //   "default-after-tour" FolkOPS filled "guide" by the owner's default; nobody confirmed it
+  //   "unconfirmed"        a payer arrived without anyone saying who chose it (older app builds
+  //                        pre-selected "guide" on every line), and it is not the operator's
+  paidBySource?: PaidBySource;
   reimbursementRequired?: boolean;
   estimatedAmount?: number | null;
   actualAmount?: number | null;
@@ -68,6 +75,8 @@ export type Expense = {
   relatedBookingNo?: string;
   relatedJobRef?: string; // legacy job-ref form, still honoured when present
 };
+export const PAID_BY_SOURCES = ["operator", "guide", "default-after-tour", "unconfirmed"] as const;
+export type PaidBySource = (typeof PAID_BY_SOURCES)[number];
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
 // The standard items that appear on every new sheet (prices editable per job).
@@ -117,6 +126,29 @@ export function expenseAmount(e: Expense): number {
 // A "Review reward" expense line — the guide's reward for reviews, entered as a
 // normal expense (rate × count, e.g. 2 × ฿50) but surfaced on its own line on the
 // job sheet and the guide's Pay so they can see what a review earned them.
+// Adopting what a guide reported. The guide's figures are copied verbatim (a blank or
+// zero from the guide is the point, e.g. "we never bought those tickets"), and so is the
+// guide's Paid By, unless the operator already recorded a payer on the official line.
+// That payer decides whether the guide is reimbursed, so it is never silently replaced.
+const sameLine = (a: { description?: string | null }, b: { description?: string | null }) =>
+  (a.description || "").trim().toLowerCase() === (b.description || "").trim().toLowerCase();
+const hasPayer = (e?: { paidBy?: string } | null) => !!(e?.paidBy ?? "").trim();
+export function adoptReportedLine(official: Expense, reported: Expense): Expense {
+  return {
+    ...official,
+    price: reported.price ?? null,
+    pax: reported.pax ?? null,
+    ...(reported.unit ? { unit: reported.unit } : {}),
+    ...(!hasPayer(official) && hasPayer(reported) ? { paidBy: reported.paidBy, ...(reported.paidBySource ? { paidBySource: reported.paidBySource } : {}) } : {}),
+  };
+}
+export function adoptReportedExpenses(official: Expense[], reported: Expense[]): Expense[] {
+  return (reported ?? []).map((g) => {
+    const o = (official ?? []).find((e) => sameLine(e, g));
+    return hasPayer(o) ? { ...g, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g };
+  });
+}
+
 export function isReviewExpense(e: { description?: string | null }): boolean {
   const d = (e.description || "").trim().toLowerCase();
   // Thai counts too. Operators work in both languages, and a row typed
@@ -126,32 +158,6 @@ export function isReviewExpense(e: { description?: string | null }): boolean {
   // outcome for choosing the wrong keyboard.
   return d.startsWith("review") || d.includes("รีวิว");
 }
-// What the GUIDE is shown they will receive.
-//
-// Two rules this exists to hold together:
-//   * Tour expenses come from whichever list is authoritative right now — the
-//     guide's own report while it is open, the operator's record once it is not.
-//   * The review reward ALWAYS comes from the operator's record and is added
-//     once. It is compensation the operator awards, not something a guide reports,
-//     so it must not disappear when the guide files a report that has no review
-//     lines in it — and must not be counted twice when their report was seeded
-//     from the operator's rows, which already contained them.
-export type GuidePayoutView = { tourExpenses: number; reviewReward: number; total: number };
-
-export function guidePayoutView(args: {
-  operatorExpenses: Expense[];
-  reportedExpenses: Expense[];
-  netGuideFee: number;
-  /** true while the guide's own report is the live figure (tour done, not yet paid) */
-  useReported: boolean;
-}): GuidePayoutView {
-  const tourOnly = (rows: Expense[]) =>
-    (rows ?? []).filter((e) => !isReviewExpense(e)).reduce((sum, e) => sum + expenseAmount(e), 0);
-  const tourExpenses = tourOnly(args.useReported ? args.reportedExpenses : args.operatorExpenses);
-  const reviewReward = reviewRewardTotal(args.operatorExpenses);
-  return { tourExpenses, reviewReward, total: args.netGuideFee + tourExpenses + reviewReward };
-}
-
 export function reviewRewardTotal(expenses: Expense[]): number {
   return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
 }

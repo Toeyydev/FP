@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PAID_BY_SOURCES } from "@/lib/jobsheet";
 
 // Request schemas for a job-sheet save, kept out of the route so they can be unit
 // tested. This matters more than it looks: zod's z.object() STRIPS unknown keys
@@ -18,6 +19,7 @@ const expenseZ = z.object({
   unit: z.string().max(24).optional(),
   expenseType: z.string().max(40).optional(),
   paidBy: z.string().max(24).optional(),
+  paidBySource: z.enum(PAID_BY_SOURCES).optional(),
   reimbursementRequired: z.boolean().optional(),
   estimatedAmount: numOpt,
   actualAmount: numOpt,

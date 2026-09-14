@@ -2,7 +2,10 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, type Expense } from "@/lib/jobsheet";
+import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isReviewExpense, type Expense, type PaidBySource } from "@/lib/jobsheet";
+import { canonicalPaidBy } from "@/lib/peak-sync";
+import { tourStartMs } from "@/lib/no-show-count";
+import { resolveDurationMin } from "@/lib/tour-duration";
 import { ensureJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 import { attributableBookings, sheetRefs, toSheetBooking } from "@/lib/sheet-bookings";
@@ -25,6 +28,10 @@ export const guideExpenseZ = z.object({
   unit: z.string().max(24).optional(),
   expenseType: z.string().max(40).optional(),
   paidBy: z.string().max(24).optional(),
+  // Who decided this line's payer on the client: "guide" = the guide picked it,
+  // "operator" = it is shown as the operator recorded it. Absent from the web form and
+  // from older app builds. Never stored as sent — see classifyPayers.
+  paidByChoice: z.enum(["guide", "operator"]).optional(),
   reimbursementRequired: z.boolean().optional(),
   estimatedAmount: z.number().nullable().optional(),
   actualAmount: z.number().nullable().optional(),
@@ -40,6 +47,92 @@ export type GuideExpenseInput = z.infer<typeof guideExpenseZ>;
 /** At most this many lines in one report. */
 export const MAX_EXPENSE_LINES = 40;
 
+/** Paid By value for "Guide paid own money" — reimbursed to the guide in the payout. */
+export const GUIDE_PAID_OWN_MONEY = "guide";
+
+/**
+ * The payer on each reported line, and where it came from (Expense.paidBySource).
+ *
+ * Business default set by the owner (2026-09-14), NOT evidence of who paid: when a guide
+ * files their report after the tour, a billed line with no payer yet starts as "Guide
+ * paid own money" and is labelled "default-after-tour" — nobody confirmed it, and the
+ * operator can still change it. A ฿0 line or a review reward gets no default.
+ *
+ * A line sent without a payer keeps the payer the operator recorded on that line ("operator").
+ *
+ * A payer that arrives with the line is labelled, never trusted as a confirmation:
+ *   - the same payer the operator recorded on that line of the sheet → "operator";
+ *   - otherwise, the app says the guide picked it (paidByChoice "guide") → "guide";
+ *   - otherwise, the line is unchanged from the guide's previous report → its earlier label
+ *     (the web form re-sends what it was given, so a default stays a default);
+ *   - otherwise → "unconfirmed" — e.g. an older app build that pre-selected "guide".
+ * Only new reports are labelled; existing sheets are never changed by this.
+ */
+export type PayerCounts = Record<PaidBySource, number>;
+export function classifyPayers(
+  rows: GuideExpenseInput[],
+  ctx: { official?: Expense[] | null; previous?: Expense[] | null; defaultApplies: boolean },
+): { rows: Expense[]; counts: PayerCounts } {
+  const counts: PayerCounts = { operator: 0, guide: 0, "default-after-tour": 0, unconfirmed: 0 };
+  const same = (a?: string | null, b?: string | null) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+  const out = rows.map(({ paidByChoice, ...line }) => {
+    const e = line as Expense;
+    delete (e as { paidBySource?: unknown }).paidBySource; // a label is decided here, never taken from the client
+    const payer = (e.paidBy ?? "").trim();
+    const official = (ctx.official ?? []).find((o) => same(o.description, e.description));
+    const previous = (ctx.previous ?? []).find((o) => same(o.description, e.description));
+    if (!payer) {
+      // A line sent without a payer keeps the one the operator already recorded on the sheet
+      // (the app leaves an unchosen line out rather than guess); only then does the default apply.
+      if (official && (official.paidBy ?? "").trim()) { counts.operator++; return { ...e, paidBy: official.paidBy, paidBySource: "operator" as const }; }
+      if (!ctx.defaultApplies || isReviewExpense(e) || expenseAmount(e) <= 0) return e;
+      counts["default-after-tour"]++;
+      return { ...e, paidBy: GUIDE_PAID_OWN_MONEY, paidBySource: "default-after-tour" as const };
+    }
+    const source: PaidBySource =
+      official && (official.paidBy ?? "").trim() && canonicalPaidBy(official) === canonicalPaidBy(e) ? "operator"
+      : paidByChoice === "guide" ? "guide"
+      : previous?.paidBySource && canonicalPaidBy(previous) === canonicalPaidBy(e) ? previous.paidBySource
+      : "unconfirmed";
+    counts[source]++;
+    return { ...e, paidBySource: source };
+  });
+  return { rows: out, counts };
+}
+
+export type GuidePaidRule = { apply: true } | { apply: false; reason: "filed-by-operator" | "tour-not-ended" | "advance-on-record" };
+
+/**
+ * Whether the after-tour default applies to this report. Only the guide's own report counts: an
+ * operator filing on their behalf chooses the payer. The tour is over once the guide has
+ * completed it (COMPLETE check-in or tour report) or its scheduled length has passed — the
+ * job's own duration, else the tour's, else 180 minutes (lib/tour-duration).
+ * With a company advance on record for the job, the money may have come from that advance,
+ * so the payer is left for the operator.
+ */
+export async function guidePaidRule(o: { guideId: string; date: string; slotIdx: number; actorRole: string; now: Date }): Promise<GuidePaidRule> {
+  if (o.actorRole !== "GUIDE") return { apply: false, reason: "filed-by-operator" };
+  const { guideId, date, slotIdx } = o;
+  const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
+  const [report, complete, assignment, advances] = await Promise.all([
+    prisma.tourReport.findUnique({ where: key, select: { id: true } }),
+    prisma.checkin.findFirst({ where: { guideId, date, slotIdx, type: "COMPLETE" }, select: { id: true } }),
+    prisma.assignment.findUnique({ where: key, select: { tourId: true, tour: { select: { id: true, durationMin: true } } } }),
+    prisma.guideAdvance.count({ where: { guideId, date, slotIdx } }),
+  ]);
+  // The job's own duration is on the offer the guide accepted for this departure. Only an
+  // offer for the tour the job is now on counts: a job moved to another tour keeps its old
+  // offers, and their length belongs to that other tour.
+  const offer = assignment?.tourId
+    ? await prisma.jobOffer.findFirst({ where: { date, slotIdx, tourId: assignment.tourId, assignedGuideId: guideId, status: "ASSIGNED" }, orderBy: { createdAt: "desc" }, select: { id: true, durationMin: true } })
+    : null;
+  const { minutes } = resolveDurationMin(offer, assignment?.tour ?? null);
+  const ended = !!report || !!complete || tourStartMs(date, slotIdx) + minutes * 60_000 <= o.now.getTime();
+  if (!ended) return { apply: false, reason: "tour-not-ended" };
+  if (advances > 0) return { apply: false, reason: "advance-on-record" };
+  return { apply: true };
+}
+
 export async function submitGuideExpenses(o: {
   guideId: string;
   date: string;
@@ -49,11 +142,14 @@ export async function submitGuideExpenses(o: {
   actorId: string | null;
   actorRole: string;
 }): Promise<{ ok: true; driveLink: string | null }> {
-  const { guideId, date, slotIdx, expenses } = o;
+  const { guideId, date, slotIdx } = o;
   const note = o.note?.trim() || null;
   const now = new Date();
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
-  const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true } });
+  const paidRule = await guidePaidRule({ guideId, date, slotIdx, actorRole: o.actorRole, now });
+  const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true, expenses: true, guideExpenses: true } });
+  const payers = classifyPayers(o.expenses, { official: existing?.expenses as Expense[] | undefined, previous: existing?.guideExpenses as Expense[] | undefined, defaultApplies: paidRule.apply });
+  const expenses = payers.rows;
 
   // Submitting the report is the moment Actual Pax becomes real: fill each booking
   // row = Booked Pax minus no-shows (a no-show guest -> 0). Blank before this, so a
@@ -116,6 +212,6 @@ export async function submitGuideExpenses(o: {
   // via the shared folder) get the record with no operator action. Best-effort.
   const driveLink = await saveJobSheetToDrive(guideId, date, slotIdx);
 
-  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, paidBy: { defaultAfterTour: paidRule.apply ? "applied" : paidRule.reason, sources: payers.counts } } });
   return { ok: true, driveLink };
 }

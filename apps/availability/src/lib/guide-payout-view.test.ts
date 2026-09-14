@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { guidePayoutView, type Expense } from "@/lib/jobsheet";
+import { type Expense } from "@/lib/jobsheet";
+import { guidePayoutView, guidePayoutTotal } from "@/lib/peak-sync";
 
 const water: Expense = { description: "Water", price: 10, pax: 4 };        // 40
 const ferry: Expense = { description: "Ferry", price: 11, pax: 4 };        // 44
 const review: Expense = { description: "Review reward", price: 50, pax: 1 }; // 50
 const NET_FEE = 970;
+const FEE = { price: 1000, time: 1, whtPct: 3 }; // → 970 net
 
 describe("guidePayoutView — what the guide is told they will receive", () => {
   it("THE BUG: the review reward survives the guide filing their own report", () => {
@@ -49,11 +51,12 @@ describe("guidePayoutView — what the guide is told they will receive", () => {
     });
     expect(v.tourExpenses).toBe(84);
     expect(v.total).toBe(1104);
+    expect(v.basis).toBe("official");
   });
 
   it("is just the fee when there is nothing else", () => {
     expect(guidePayoutView({ operatorExpenses: [], reportedExpenses: [], netGuideFee: NET_FEE, useReported: true }))
-      .toEqual({ tourExpenses: 0, reviewReward: 0, total: NET_FEE });
+      .toEqual({ tourExpenses: 0, reviewReward: 0, total: NET_FEE, notReimbursed: { company: 0, advance: 0 }, unspecified: 0, basis: "reported", status: "estimate" });
   });
 
   it("counts several review lines", () => {
@@ -79,5 +82,53 @@ describe("guidePayoutView — what the guide is told they will receive", () => {
       reportedExpenses: [], netGuideFee: 0, useReported: false,
     });
     expect(v.tourExpenses).toBe(0);
+  });
+});
+
+describe("guidePayoutView — follows the payer rule of the actual transfer", () => {
+  // The owner's case: the operator recorded that Folkpaths paid the ferry directly.
+  const waterGuide: Expense = { ...water, paidBy: "guide" };
+  const ferryCompany: Expense = { ...ferry, paidBy: "company" };
+  const busAdvance: Expense = { description: "Bus", price: 15, pax: 4, paidBy: "advance" }; // 60
+  const lotusBlank: Expense = { description: "Lotus", price: 10, pax: 3 };                   // 30, no payer yet
+
+  it("BEFORE the operator accepts: a company-paid line is not added to the guide's estimate", () => {
+    const v = guidePayoutView({
+      operatorExpenses: [{ ...water, pax: null }, { ...ferryCompany, pax: null }],
+      reportedExpenses: [waterGuide, ferryCompany],
+      netGuideFee: NET_FEE, useReported: true,
+    });
+    expect(v.tourExpenses).toBe(40);
+    expect(v.notReimbursed).toEqual({ company: 44, advance: 0 });
+    expect(v.total).toBe(1010);
+    expect(v).toMatchObject({ basis: "reported", status: "estimate" });
+  });
+
+  it("AFTER the operator accepts and approves: equals what Payments transfers", () => {
+    const official = [waterGuide, ferryCompany, busAdvance, lotusBlank, review];
+    const v = guidePayoutView({ operatorExpenses: official, reportedExpenses: official, netGuideFee: NET_FEE, useReported: true, approved: true });
+    expect(v.total).toBe(guidePayoutTotal(official, FEE).payout); // 970 + 40 + 30 + 50 = 1090
+    expect(v.total).toBe(1090);
+    expect(v.notReimbursed).toEqual({ company: 44, advance: 60 });
+    expect(v).toMatchObject({ basis: "official", status: "confirmed" });
+  });
+
+  it("a row with no payer counts as Payments counts it, and is reported as unconfirmed", () => {
+    const v = guidePayoutView({ operatorExpenses: [lotusBlank], reportedExpenses: [lotusBlank], netGuideFee: NET_FEE, useReported: true });
+    expect(v.tourExpenses).toBe(30);
+    expect(v.unspecified).toBe(30);
+    expect(v.total).toBe(guidePayoutTotal([lotusBlank], FEE).payout);
+  });
+
+  it("once approved, the operator's figures are shown even while the report window is still open", () => {
+    const v = guidePayoutView({ operatorExpenses: [waterGuide], reportedExpenses: [waterGuide, { ...ferry, paidBy: "guide" }], netGuideFee: NET_FEE, useReported: true, approved: true });
+    expect(v.tourExpenses).toBe(40);
+    expect(v.basis).toBe("official");
+  });
+
+  it("once paid, the figure is final and matches the transfer", () => {
+    const official = [waterGuide, ferryCompany];
+    const v = guidePayoutView({ operatorExpenses: official, reportedExpenses: [], netGuideFee: NET_FEE, useReported: false, paid: true });
+    expect(v).toMatchObject({ status: "final", basis: "official", total: guidePayoutTotal(official, FEE).payout });
   });
 });

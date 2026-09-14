@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal, guidePayoutView } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
-import { canonicalPaidBy, figuresNeedRecheck, jobSheetTotals } from "@/lib/peak-sync";
+import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -307,7 +307,14 @@ export default function JobSheetEditor() {
     const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
     const r = await jfetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
-    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); } else setMsg("Couldn't submit expenses — try again.");
+    if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); return; }
+    // The server decides who may file for this job; say why it refused rather than
+    // inviting a retry that can never succeed.
+    const err = (await r.json().catch(() => null))?.error;
+    setMsg(err === "already-paid" ? "This job is already paid — its expense report is closed."
+      : err === "not-assigned" ? "You are not assigned to this job, so you can't report its expenses."
+      : err === "forbidden" ? "You can't report expenses for another guide's job."
+      : "Couldn't submit expenses — try again.");
   }
   // Operator: merge the guide's reported figures into the official expenses (then Save).
   // Make the official expenses EXACTLY the guide's reported figures — the guide ran the
@@ -319,7 +326,7 @@ export default function JobSheetEditor() {
     if (!sheet?.guideExpenses) return;
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const gd = sheet.guideExpenses;
-    const adopted = gd.map((e) => ({ ...e }));
+    const adopted = adoptReportedExpenses(sheet.expenses ?? [], gd);
     const gdKeys = new Set(gd.map((e) => norm(e.description)));
     const droppedReal = (sheet.expenses ?? []).filter((e) => !gdKeys.has(norm(e.description)) && expenseAmount(e) > 0);
     const gdTot = gd.reduce((s, e) => s + expenseAmount(e), 0);
@@ -355,7 +362,7 @@ export default function JobSheetEditor() {
       // Copy the guide's figures VERBATIM — a blank/zero from the guide is the whole
       // point of adopting (e.g. "we never bought those tickets"). Falling back to the
       // operator's old numbers here made Use a silent no-op on blank guide rows.
-      up({ expenses: sheet.expenses.map((e) => (norm2(e.description) === row.key ? { ...e, price: row.g!.price ?? null, pax: row.g!.pax ?? null, ...(row.g!.unit ? { unit: row.g!.unit } : {}) } : e)) });
+      up({ expenses: sheet.expenses.map((e) => (norm2(e.description) === row.key ? adoptReportedLine(e, row.g!) : e)) });
     }
     setMsg(`Adopted “${(row.g!.description || row.key).trim()}” from the guide’s report — adjust if needed, then Save.`);
   }
@@ -640,9 +647,12 @@ export default function JobSheetEditor() {
         // vanished from "You'll receive". Take it from the operator's record and add
         // it once — that also stops it double-counting when the report was seeded
         // from those same rows.
+        // Same payer rule as the transfer: company-paid and advance-paid rows are not
+        // reimbursed, and until the operator approves (or pays) the figure is an estimate.
         const payoutView = guidePayoutView({
           operatorExpenses: sheet.expenses, reportedExpenses: guideExp,
           netGuideFee: t.netGuideFee, useReported: canReport,
+          approved: isApproved(sheet.approvalStatus), paid,
         });
         const reviewReward = payoutView.reviewReward;
         const expShown = payoutView.tourExpenses;
@@ -711,11 +721,14 @@ export default function JobSheetEditor() {
                   </>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
                 <div className="gs-payout">
-                  <div className="gs-payout-row"><span>Expenses{canReport ? " (your report)" : " (reimbursed)"}</span><b>{thb(expShown)}</b></div>
+                  <div className="gs-payout-row"><span>Expenses reimbursed to you{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย</small></span><b>{thb(expShown)}</b></div>
+                  {payoutView.notReimbursed.company > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid by Folkpaths directly — not reimbursed<br /><small className="gs-calc">บริษัทจ่ายเอง ไม่ใช่เงินคืนให้มัคคุเทศก์</small></span><span>{thb(payoutView.notReimbursed.company)}</span></div>}
+                  {payoutView.notReimbursed.advance > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid from a Folkpaths advance — settled with the advance<br /><small className="gs-calc">จ่ายจากเงินทดรอง เคลียร์กับเงินทดรอง</small></span><span>{thb(payoutView.notReimbursed.advance)}</span></div>}
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
                   {reviewReward > 0 && <div className="gs-payout-row"><span>Review reward<br /><small className="gs-calc">ค่าตอบแทนรีวิว</small></span><b>{thb(reviewReward)}</b></div>}
-                  <div className="gs-payout-row gs-grand"><span>You&apos;ll receive</span><b>{thb(grandShown)}</b></div>
+                  <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
+                {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — counted as reimbursed until the operator confirms. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย นับเป็นเงินคืนไว้ก่อนจนกว่า operator ยืนยัน</div>}
                 {hasAdvance && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: advSt === "SETTLED" ? "var(--ok-bg,#eef7f0)" : advSt === "OVER_RETURNED" ? "var(--danger-bg)" : "var(--grey-bg,#f7f7f7)", border: `1px solid ${advSt === "SETTLED" ? "var(--ok-line,#cfe6d6)" : advSt === "OVER_RETURNED" ? "var(--danger-line)" : "var(--line)"}`, borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700 }}>
@@ -737,7 +750,7 @@ export default function JobSheetEditor() {
                     <div style={{ color: "var(--ink-soft)", marginTop: 3 }}>These are the operator&apos;s final figures — they match your transfer.</div>
                   </div>
                 )}
-                {canReport && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below · confirmed by the operator.</div>}
+                {payoutView.basis === "reported" && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below — the operator confirms the final figure.</div>}
               </div>
             </div>
             {canReport && (
@@ -932,10 +945,17 @@ export default function JobSheetEditor() {
                   {/* An untagged row now shows "— not set —" rather than defaulting the display to
                       Company Direct. Who paid decides whether the guide is reimbursed, so
                       guessing it silently either overpays or underpays a real person. */}
-                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value, paidBySource: "operator" })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
                     {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
+                  {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
+                      older app sent without saying who chose it. Picking any payer above confirms it. */}
+                  {paid !== "UNSPECIFIED" && (e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
+                    <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }} title={e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : "Sent by the app without saying who chose it — not a confirmed payer"}>
+                      {e.paidBySource === "default-after-tour" ? "Default after tour · รอยืนยัน" : "Not confirmed · รอยืนยัน"}
+                    </div>
+                  )}
                 </td>
                 <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
                   {e.receiptUrl ? (
