@@ -452,19 +452,27 @@ export default function JobSheetEditor() {
   // renders — so the button re-implements none of the rules and simply shows what
   // came back. On failure the server has already recorded FAILED + the reason, so
   // reloading makes the panel agree with the message rather than contradict it.
-  async function syncToPeak(confirmRepost = false) {
+  async function syncToPeak(confirmRepost = false, confirmSeparateDocument = false) {
     if (!sheet) return;
     if (!saved) { const ok = await save(); if (!ok) return; }
-    if (confirmRepost && !window.confirm(
+    if (confirmRepost && !confirmSeparateDocument && !window.confirm(
       "This sheet was already posted to PEAK and has changed since.\n\nPEAK cannot amend the first document, so posting again leaves TWO documents for this job. Continue?",
     )) return;
     setBusy(true); setMsg(confirmRepost ? "Posting a correction…" : "Posting to PEAK…");
     const r = await jfetch("/api/jobsheet/peak-sync", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ...(confirmRepost ? { confirmRepost: true } : {}) }),
+      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ...(confirmRepost ? { confirmRepost: true } : {}), ...(confirmSeparateDocument ? { confirmSeparateDocument: true } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
+    // The guide has other unpaid jobs this month. The server wrote nothing; ask, and only
+    // an explicit yes posts this job as a document of its own.
+    if (r.status === 409 && d.error === "separate-document-warning") {
+      const others = Array.isArray(d.otherJobs) ? d.otherJobs.map((j: { ref?: string | null; date: string; slotIdx: number }) => `• ${j.ref ?? `${j.date} slot ${j.slotIdx}`}`).join("\n") : "";
+      const yes = window.confirm(`${d.reason}${others ? `\n\n${others}` : ""}\n\nTo pay these jobs with one PEAK document, cancel and use "Pay N jobs together" on Payments instead.\n\nSync this job on its own anyway?`);
+      if (!yes) { setMsg("Not synced — nothing was posted to PEAK."); return; }
+      return syncToPeak(confirmRepost, true);
+    }
     if (!r.ok) {
       setMsg(
         d.error === "offline" ? "No connection — nothing was posted. Try again."

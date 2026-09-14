@@ -123,6 +123,45 @@ export function blockReason(label: string, block: CombinedBlock): string {
   return block.code === "payment-document" ? `${label}: ${block.message}` : `${label} ${block.message}`;
 }
 
+/**
+ * The guide's other unpaid jobs this month that could still be paid together in one
+ * document — what "Sync to PEAK" on one sheet would split off from. The month's jobs
+ * that have already run (the ones Payments lists), minus any that can never join a
+ * combined payment anyway: paid, covered by payroll, given a slip, held by a payment
+ * document, historical, or already in PEAK from their own sheet. A job still waiting
+ * for approval, or for its sheet to be saved, does count: it is only not ready yet.
+ */
+export async function otherUnpaidJobsInMonth(guideId: string, job: JobKey, today: string): Promise<{ date: string; slotIdx: number; ref: string | null }[]> {
+  const period = job.date.slice(0, 7);
+  const monthEnd = `${period}-31`;
+  const where = { guideId, date: { gte: `${period}-01`, lte: today < monthEnd ? today : monthEnd } };
+  const [assigns, sheets, pays, payroll] = await Promise.all([
+    prisma.assignment.findMany({ where, select: { date: true, slotIdx: true, createdAt: true } }),
+    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true, ref: true, createdAt: true, origin: true, peakDocumentNo: true, peakDocumentId: true, approvalStatus: true } }),
+    prisma.tourPayment.findMany({ where, select: { date: true, slotIdx: true, status: true, peakPaymentRef: true, peakRef: true, eslipUrl: true, slips: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true } }),
+  ]);
+  const keyOf = (x: JobKey) => `${x.date}|${x.slotIdx}`;
+  const keys = new Map<string, JobKey>();
+  for (const x of [...assigns, ...sheets]) keys.set(keyOf(x), { date: x.date, slotIdx: x.slotIdx });
+  keys.delete(keyOf(job));
+
+  const out: { date: string; slotIdx: number; ref: string | null }[] = [];
+  for (const k of [...keys.values()].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx)) {
+    const sheet = sheets.find((s) => keyOf(s) === keyOf(k));
+    const assignment = assigns.find((a) => keyOf(a) === keyOf(k));
+    const created = assignment?.createdAt ?? sheet?.createdAt;
+    const block = combinedPaymentBlock({
+      sheet: sheet ?? null,
+      payment: pays.find((p) => keyOf(p) === keyOf(k)) ?? null,
+      coveredByPayroll: !!created && coveredByPayrollRun(payroll, k.date, created),
+      period,
+    });
+    if (!block || block.code === "not-approved" || block.code === "no-job-sheet") out.push({ ...k, ref: sheet?.ref ?? null });
+  }
+  return out;
+}
+
 export async function nextPaymentRef(paymentDate: string): Promise<string> {
   const prefix = paymentRefFor(paymentDate, 0).slice(0, -2); // "FOLK-PAY-202609-"
   const used = await prisma.guidePaymentDocument.count({ where: { paymentRef: { startsWith: prefix } } });

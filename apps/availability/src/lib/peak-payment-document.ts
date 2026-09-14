@@ -459,6 +459,23 @@ export function separatePaymentWarning(guide: string, payableCount: number): str
   ].join("\n");
 }
 
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/**
+ * The warning to show before "Sync to PEAK" posts one job sheet as a document of its own
+ * while the guide has other unpaid jobs that month — or null when there are none.
+ *
+ * A job posted from its sheet can no longer go into "Pay N jobs together", so the
+ * transfer that pays the month would need more than one document. It is a question,
+ * not a block: syncing one job on its own is sometimes exactly what the operator means.
+ */
+export function separateSyncWarning(otherUnpaid: number, period: string): string | null {
+  if (otherUnpaid <= 0) return null;
+  const month = MONTH_NAMES[Number(period.slice(5, 7)) - 1];
+  const when = month ? `${month} ${period.slice(0, 4)}` : period;
+  return `This guide has ${otherUnpaid} other unpaid job${otherUnpaid === 1 ? "" : "s"} in ${when}. Syncing this job now will create a separate PEAK document and may prevent one-document payment later.`;
+}
+
 /** What the dialog says about the jobs the operator unticked. Null when none. */
 export function leftOutWarning(leftOut: number): string | null {
   if (leftOut <= 0) return null;
