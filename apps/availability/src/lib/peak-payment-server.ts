@@ -7,8 +7,8 @@ import { saveBufferToDrive } from "@/lib/google-drive";
 import { DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
 import { createExpenseAllInOne, insertExpenseFile } from "@/lib/peak-api";
-import { peakAlreadyBooked } from "@/lib/peak-payout";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
+import { combinedPaymentBlock, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
 import {
   attachmentFileType, paymentDocumentLock, paymentRefFor,
   type GuidePaymentDocument, type PaymentAccounts, type PaymentJob, type PayTogetherDeps,
@@ -78,32 +78,24 @@ export async function loadPaymentContext(
     const sheet = at(sheets, k) as (typeof sheets)[number] | undefined;
     const pay = at(pays, k) as (typeof pays)[number] | undefined;
     const label = sheet?.ref || `${k.date} slot ${k.slotIdx}`;
-    if (!sheet) { reasons.push(`${label} has no job sheet — open and save it before paying`); continue; }
-
-    const lock = paymentDocumentLock(pay);
-    if (lock) { reasons.push(`${label}: ${lock}`); continue; }
-    if (pay?.status === "PAID") { reasons.push(`${label} is already paid`); continue; }
-    if (pay?.eslipUrl || (Array.isArray(pay?.slips) && pay!.slips.length > 0)) {
-      reasons.push(`${label} already has a slip — finish that payment with its own slips`);
-      continue;
-    }
     const assignment = at(assigns, k) as (typeof assigns)[number] | undefined;
     const payroll = payrolls.find((p) => p.period === k.date.slice(0, 7));
-    if (coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt)) {
-      reasons.push(`${label} is already covered by the guide's ${k.date.slice(0, 7)} payroll`);
-      continue;
-    }
+    // The same rule the Payments page counts with (lib/combined-payment), so the page
+    // and this refusal can never disagree about which jobs may go together.
+    const block = combinedPaymentBlock({
+      sheet: sheet ?? null,
+      payment: pay ?? null,
+      coveredByPayroll: !!sheet && coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt),
+      period: k.date.slice(0, 7),
+    });
+    if (block) { reasons.push(blockReason(label, block)); continue; }
+    if (!sheet) continue; // unreachable: no sheet is a block — narrows the type
     jobs.push({
       date: k.date, slotIdx: k.slotIdx, ref: sheet.ref ?? null, origin: sheet.origin,
       expenses: (sheet.expenses as unknown as Expense[]) ?? [],
       guideFee: guideFeeOf(sheet.guideFee),
     });
   }
-
-  // A job posted from its own job sheet already has its cost in PEAK. Booking it again
-  // inside this document would leave two documents for one job.
-  const booked = peakAlreadyBooked(sheets.filter((s) => keys.some((k) => k.date === s.date && k.slotIdx === s.slotIdx)));
-  if (booked) reasons.push(`${booked.replace(" The transfer was not posted again.", "")} Leave those jobs out of this payment.`);
 
   if (reasons.length) return { ok: false, reasons };
   return {
@@ -116,6 +108,11 @@ export async function loadPaymentContext(
       accounts: { guideFee: feeAccount, reviewReward: rewardAccount, categories },
     },
   };
+}
+
+/** One job's refusal, as the preview and the post both word it. */
+export function blockReason(label: string, block: CombinedBlock): string {
+  return block.code === "payment-document" ? `${label}: ${block.message}` : `${label} ${block.message}`;
 }
 
 export async function nextPaymentRef(paymentDate: string): Promise<string> {
@@ -168,6 +165,18 @@ export function prismaPayTogetherDeps(opts: {
     async claim(doc: GuidePaymentDocument) {
       try {
         await prisma.$transaction(async (tx) => {
+          // Re-read inside the transaction: a sheet synced to PEAK on its own since the
+          // jobs were loaded must not also go into this document, or PEAK would hold two
+          // documents for that job. Checked before anything is written.
+          for (const j of doc.jobs) {
+            const sheetNow = await tx.jobSheet.findUnique({
+              where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
+              select: { peakDocumentNo: true, peakDocumentId: true },
+            });
+            if (sheetInPeak(sheetNow)) {
+              throw new PaymentClaimRefused(`${j.ref} was just posted to PEAK from its job sheet${sheetNow?.peakDocumentNo ? ` (${sheetNow.peakDocumentNo})` : ""} — leave it out of this payment`);
+            }
+          }
           await tx.guidePaymentDocument.create({
             data: {
               paymentRef: doc.paymentRef, guideId, paymentDate, paymentMethodId, paymentMethodName,

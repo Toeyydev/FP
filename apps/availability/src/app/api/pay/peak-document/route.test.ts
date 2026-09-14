@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 // All data here is invented (fictional month and amounts) — this repo is public.
 //
@@ -11,7 +11,7 @@ type Row = Record<string, any>;
 type Where = Record<string, any>;
 
 const db = vi.hoisted(() => ({
-  users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[],
+  users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[],
 }));
 
 const prismaMock = vi.hoisted(() => {
@@ -60,6 +60,7 @@ const prismaMock = vi.hoisted(() => {
     tourPayment: table(() => db.pays),
     payrollStatus: table(() => db.payrolls),
     guidePaymentDocument: table(() => db.docs),
+    tour: table(() => db.tours),
   };
   client.$transaction = vi.fn(async (arg: any) => (typeof arg === "function" ? arg(client) : Promise.all(arg)));
   return client;
@@ -73,7 +74,7 @@ vi.mock("@prisma/client", () => ({ Prisma: { PrismaClientKnownRequestError: clas
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => {}) }));
-vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
+vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN", canViewFinance: (r?: string) => ["OPERATOR", "ADMIN", "ACCOUNTANT"].includes(r ?? "") }));
 vi.mock("@/lib/jobsheet-send", () => ({ sendPaymentNotice: vi.fn(async () => {}) }));
 vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveBufferToDrive: drive.save }));
 vi.mock("@/lib/peak-api", () => ({
@@ -90,6 +91,8 @@ vi.mock("@/lib/peak-account-map", () => ({
 
 import { POST, PATCH } from "./route";
 import { POST as PREVIEW } from "./preview/route";
+import { GET as PAYMENTS } from "../../payments/route";
+import { NextRequest } from "next/server";
 
 const GUIDE = "G-TEST";
 const FEE = (price: number) => ({ price, time: 1, whtPct: 3 });
@@ -112,6 +115,7 @@ function seed() {
   db.pays = [];
   db.payrolls = [];
   db.docs = [];
+  db.tours = [{ id: "T-001", name: "Test Temple Tour" }];
 }
 
 const payForm = (jobs: { date: string; slotIdx: number }[], over: Record<string, string> = {}) => {
@@ -271,5 +275,90 @@ describe("PATCH /api/pay/peak-document — settling an unconfirmed payment", () 
     await vi.waitFor(() => expect(db.docs[0]?.status).toBe("POSTING"));
     const res = await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "not-found" });
     expect(res.status).toBe(409);
+  });
+});
+
+describe("already in PEAK from the job sheet — the Payments count and the server agree", () => {
+  const J4 = { date: "2030-05-21", slotIdx: 0 };
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ guideId: GUIDE, paymentDate: "2030-05-28", jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const payments = async () => {
+    const res = await PAYMENTS(new NextRequest("https://ops.folkpaths.com/api/payments?period=2030-05"));
+    return (await res.json()).rows.find((r: Row) => r.guideId === GUIDE).jobs as Row[];
+  };
+
+  beforeEach(() => {
+    // Payments counts only tours that have already run; these ran in May 2030.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-06-02T03:00:00Z"));
+    db.sheets.push({ guideId: GUIDE, ...J4, tourId: "T-001", ref: "FOLK-BKK-20300521-01", expenses: [], guideFee: FEE(1200), origin: "NORMAL", createdAt: new Date("2030-05-01"), peakDocumentNo: null, peakDocumentId: null });
+    db.assigns.push({ guideId: GUIDE, ...J4, tourId: "T-001", createdAt: new Date("2030-05-01") });
+    // Two of the five were synced to PEAK one at a time from their own job sheets.
+    Object.assign(db.sheets.find((x) => x.date === J1.date && x.slotIdx === J1.slotIdx)!, { peakDocumentNo: "EXP-TEST-0027", peakDocumentId: "peak-doc-27", peakSyncStatus: "SYNCED" });
+    Object.assign(db.sheets.find((x) => x.date === OTHER.date && x.slotIdx === OTHER.slotIdx)!, { peakDocumentNo: "EXP-TEST-0026", peakDocumentId: "peak-doc-26", peakSyncStatus: "SYNCED" });
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("GET /api/payments counts 3 payable together, keeps all 5 listed, and names each job's own document", async () => {
+    const jobs = await payments();
+    expect(jobs).toHaveLength(5);
+    expect(jobs.filter((j) => !j.paid && j.combinable).map((j) => j.ref)).toEqual(["FOLK-BKK-20300506-02", "FOLK-BKK-20300512-01", "FOLK-BKK-20300521-01"]);
+    const inPeak = jobs.filter((j) => j.combinedBlock?.code === "in-peak-from-sheet");
+    expect(inPeak.map((j) => [j.ref, j.sheetPeakDocumentNo, j.combinable])).toEqual([
+      ["FOLK-BKK-20300506-01", "EXP-TEST-0027", false],
+      ["FOLK-BKK-20300520-01", "EXP-TEST-0026", false],
+    ]);
+  });
+
+  it("the preview accepts exactly the jobs the page offers", async () => {
+    const offered = (await payments()).filter((j) => !j.paid && j.combinable).map((j) => ({ date: j.date, slotIdx: j.slotIdx }));
+    const body = await (await preview(offered)).json();
+    // 1,164 + (1,746 + 95) + 1,164 — each fee net of 3% withholding, plus the reimbursement.
+    expect(body).toMatchObject({ ok: true, total: 4169 });
+    expect(body.jobs.map((j: Row) => j.ref)).toEqual(["FOLK-BKK-20300506-02", "FOLK-BKK-20300512-01", "FOLK-BKK-20300521-01"]);
+  });
+
+  it("and refuses the ones it does not, naming both documents and nothing else", async () => {
+    const all = (await payments()).map((j) => ({ date: j.date, slotIdx: j.slotIdx }));
+    const body = await (await preview(all)).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons).toHaveLength(2);
+    expect(body.reasons[0]).toContain("FOLK-BKK-20300506-01");
+    expect(body.reasons[0]).toContain("EXP-TEST-0027");
+    expect(body.reasons[1]).toContain("FOLK-BKK-20300520-01");
+    expect(body.reasons[1]).toContain("EXP-TEST-0026");
+  });
+
+  it("the post refuses the same set before any write — no slip, no PEAK call, no payment record", async () => {
+    const res = await payForm([J1, J2, J3, J4, OTHER], { paymentDate: "2030-05-28" });
+    expect(res.status).toBe(409);
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays).toHaveLength(0);
+  });
+
+  it("a sheet posted between loading and claiming is still refused inside the claim", async () => {
+    const j4 = db.sheets.find((x) => x.date === J4.date && x.slotIdx === J4.slotIdx)!;
+    // The loader reads every sheet with findMany, clean. The claim re-reads each one
+    // inside its transaction — by then this one has been synced on its own.
+    const real = prismaMock.jobSheet.findUnique.getMockImplementation()!;
+    prismaMock.jobSheet.findUnique.mockImplementation(async (arg: any) => {
+      if (arg?.where?.guideId_date_slotIdx?.date === J4.date) j4.peakDocumentNo = "EXP-TEST-0031";
+      return real(arg);
+    });
+    try {
+      const res = await payForm([J2, J4], { paymentDate: "2030-05-28" });
+      expect(res.status).toBe(409);
+      expect((await res.json()).reasons.join(" ")).toContain("EXP-TEST-0031");
+      expect(drive.save).not.toHaveBeenCalled();
+      expect(peak.create).not.toHaveBeenCalled();
+      expect(db.docs).toHaveLength(0);
+      expect(db.pays).toHaveLength(0);
+    } finally {
+      prismaMock.jobSheet.findUnique.mockImplementation(real);
+    }
   });
 });
