@@ -471,6 +471,7 @@ export function buildPaymentInput(input: {
 
 /** What PEAK holds on the expense right now (lib/peak-api PeakExpenseState). */
 export type PeakExpenseView = {
+  id?: string | null;
   code: string;
   reference: string | null;
   contactId: string | null;
@@ -503,6 +504,8 @@ const near = (a: number | null, b: number) => a != null && Math.abs(a - b) < 0.0
 export function peakPaymentPlan(input: {
   expense: PeakExpenseView;
   documentNo: string;
+  /** PEAK's id for the document FolkOPS created. An EXP number can be reused; the id cannot. */
+  documentId?: string | null;
   paymentRef: string;
   peakContactId: string | null;
   gross: number;
@@ -512,6 +515,7 @@ export function peakPaymentPlan(input: {
   const { expense: e, documentNo, gross, wht, net } = input;
   const reasons: string[] = [];
   if ((e.code ?? "").trim() !== documentNo) reasons.push(`PEAK returned ${e.code || "no document"} for ${documentNo}`);
+  if (input.documentId && (e.id ?? "") !== input.documentId) reasons.push(`PEAK returned a different document than the ${documentNo} FolkOPS created (PEAK can reuse a voided document's number) — nothing was paid`);
   if (e.isVoid) reasons.push(`${documentNo} is voided in PEAK — it cannot be paid`);
   if (/draft/i.test(e.status ?? "")) reasons.push(`${documentNo} is still a draft in PEAK — approve it in PEAK first, then record the payment`);
   if (e.reference && e.reference.trim() !== input.paymentRef) reasons.push(`${documentNo} in PEAK carries reference ${e.reference}, not ${input.paymentRef}`);
@@ -560,7 +564,7 @@ export type PayDocumentDeps = {
   /** Save the slip. Throws on failure. */
   uploadSlip(): Promise<{ link: string }>;
   /** Record the payment against the EXISTING PEAK document. Never creates a document. */
-  payExpense(p: { documentNo: string; paymentDate: string; paymentMethodId: string } & PaymentPlan): Promise<PaymentWriteResult>;
+  payExpense(p: { documentNo: string; documentId: string | null; paymentDate: string; paymentMethodId: string } & PaymentPlan): Promise<PaymentWriteResult>;
   /** PEAK recorded it: every job locked to this document becomes PAID, atomically. */
   recordPaid(p: { paymentRef: string; slipLink: string }): Promise<void>;
   /** FAILED returns the document to AWAITING_PAYMENT; UNCERTAIN (PAYMENT_UNCERTAIN) keeps it. */
@@ -626,7 +630,7 @@ export async function payCombinedDocument(
 
   let outcome: PaymentOutcome;
   try {
-    outcome = classifyPaymentWrite(await deps.payExpense({ documentNo, paymentDate, paymentMethodId, ...plan }));
+    outcome = classifyPaymentWrite(await deps.payExpense({ documentNo, documentId, paymentDate, paymentMethodId, ...plan }));
   } catch (e) {
     outcome = { status: "UNCERTAIN", reason: msg(e) };
   }

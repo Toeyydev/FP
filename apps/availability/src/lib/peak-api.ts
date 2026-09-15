@@ -437,7 +437,13 @@ const num = (v: unknown): number | null => {
 };
 const str = (v: unknown): string | null => (v == null || v === "" ? null : String(v));
 
-/** One expense out of a Get Expense reply. PEAK answers "not found" with an empty list. */
+/**
+ * One expense out of a Get Expense reply. PEAK answers "not found" with an empty list.
+ *
+ * An EXP number is NOT unique in PEAK: after a document is voided its number can be
+ * given to the next document (seen in production, 2026-09-15: two documents, two ids,
+ * one number). So a reply holding more than one expense is an error, never "the first".
+ */
 export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExpenseState } | { notFound: true } | { error: string } {
   const wrap = peakWrap<{ expenses?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakExpenses");
   if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakExpenses wrapper" };
@@ -446,6 +452,7 @@ export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExp
   const okCode = code === "" || code === "200" || /^0+$/.test(code);
   if (!list) return { error: wrap.resDesc ? sanitizePeakError(wrap.resDesc) : "PEAK returned no expense list" };
   if (!list.length) return okCode ? { notFound: true } : { error: wrap.resDesc ? sanitizePeakError(wrap.resDesc) : `PEAK error ${code}` };
+  if (list.length > 1) return { error: `PEAK returned ${list.length} documents for one lookup (${[...new Set(list.map((x) => String(x.code ?? "?")))].join(", ")}) — it cannot tell which one is meant` };
   const e = list[0];
   return {
     expense: {
@@ -458,10 +465,15 @@ export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExp
   };
 }
 
-/** Read one expense by its EXP code. Read-only; safe to repeat. */
-export async function getExpenseByCode(code: string): Promise<Res<{ expense?: PeakExpenseState; notFound?: boolean }>> {
+/**
+ * Read one expense. By PEAK's id when FolkOPS has it — the id is unique, the EXP number is
+ * not (see parsePeakExpense) — and by EXP number only when there is no id.
+ * Read-only; safe to repeat.
+ */
+export async function getExpense(ref: { id?: string | null; code: string }): Promise<Res<{ expense?: PeakExpenseState; notFound?: boolean }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const qs = new URLSearchParams({ code });
+  const id = (ref.id ?? "").trim();
+  const qs = new URLSearchParams(id ? { id } : { code: ref.code });
   const call = await authedCall(`${API}/Expenses?${qs.toString()}`, { method: "GET" }, "peakExpenses");
   if ("error" in call) return { ok: false, desc: call.error };
   if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
@@ -507,18 +519,17 @@ export function readPaidPaymentReply(httpStatus: number, j: Record<string, unkno
  * document. A write: fresh token, never replayed — a retried payment could record the
  * same transfer twice.
  */
-export async function payExistingExpense(input: {
-  documentNo: string;
-  paymentDate: string; // yyyyMMdd
-  paymentMethodId: string;
-  amount: number;
-  withholdingTaxAmount?: number | null;
-}): Promise<PaidPaymentResult> {
-  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+/**
+ * The body of Expenses/paidpaymentallinone. Names the document by PEAK's id when known
+ * (transactionId) and by EXP number only otherwise — never both, so PEAK cannot resolve
+ * a reused number to a different document than the id FolkOPS read back.
+ */
+export function paidPaymentBody(input: { documentNo: string; documentId?: string | null; paymentDate: string; paymentMethodId: string; amount: number; withholdingTaxAmount?: number | null }) {
   const wht = input.withholdingTaxAmount && input.withholdingTaxAmount > 0 ? input.withholdingTaxAmount : null;
-  const body = {
+  const id = (input.documentId ?? "").trim();
+  return {
     peakPaidPayments: {
-      transactionCode: input.documentNo,
+      ...(id ? { transactionId: id } : { transactionCode: input.documentNo }),
       paidPayments: {
         paymentDate: input.paymentDate,
         ...(wht ? { withHoldingTaxAmount: wht.toFixed(2) } : {}),
@@ -526,6 +537,18 @@ export async function payExistingExpense(input: {
       },
     },
   };
+}
+
+export async function payExistingExpense(input: {
+  documentNo: string;
+  documentId?: string | null;
+  paymentDate: string; // yyyyMMdd
+  paymentMethodId: string;
+  amount: number;
+  withholdingTaxAmount?: number | null;
+}): Promise<PaidPaymentResult> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const body = paidPaymentBody(input);
   const call = await authedCall(
     `${API}/Expenses/paidpaymentallinone`,
     { method: "POST", body: JSON.stringify(body) },

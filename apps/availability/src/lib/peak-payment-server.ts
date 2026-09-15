@@ -7,7 +7,7 @@ import { audit } from "@/lib/audit";
 import { saveBufferToDrive } from "@/lib/google-drive";
 import { DEFAULT_GUIDE_FEE, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
-import { createExpenseAllInOne, getExpenseByCode, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
+import { createExpenseAllInOne, getExpense, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { combinedPaymentBlock, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
 import { guidePayoutTotal } from "@/lib/peak-sync";
@@ -371,11 +371,11 @@ export function prismaPayDeps(opts: {
     },
 
     async checkExpense() {
-      const r = await getExpenseByCode(docNo);
+      const r = await getExpense({ id: doc.peakDocumentId, code: docNo });
       if (!r.ok) return { ok: false, reasons: [`Could not read ${docNo} from PEAK: ${r.desc ?? "no answer"} — nothing was paid`] };
       if (r.notFound || !r.expense) return { ok: false, reasons: [`${docNo} was not found in PEAK — nothing was paid`] };
       const f = documentFigures(doc);
-      return peakPaymentPlan({ expense: r.expense, documentNo: docNo, paymentRef: doc.paymentRef, peakContactId, gross: f.gross, wht: f.wht, net: f.net });
+      return peakPaymentPlan({ expense: r.expense, documentNo: docNo, documentId: doc.peakDocumentId, paymentRef: doc.paymentRef, peakContactId, gross: f.gross, wht: f.wht, net: f.net });
     },
 
     async uploadSlip() {
@@ -388,7 +388,7 @@ export function prismaPayDeps(opts: {
       return { link };
     },
 
-    payExpense: (p) => payExistingExpense({ documentNo: p.documentNo, paymentDate: compact(p.paymentDate), paymentMethodId: p.paymentMethodId, amount: p.amount, withholdingTaxAmount: p.withholdingTaxAmount }),
+    payExpense: (p) => payExistingExpense({ documentNo: p.documentNo, documentId: p.documentId, paymentDate: compact(p.paymentDate), paymentMethodId: p.paymentMethodId, amount: p.amount, withholdingTaxAmount: p.withholdingTaxAmount }),
 
     async recordPaid({ paymentRef, slipLink }) {
       const current = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef }, select: { paymentDate: true } });

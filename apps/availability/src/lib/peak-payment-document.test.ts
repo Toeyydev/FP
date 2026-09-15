@@ -190,7 +190,7 @@ describe("stage 2 pays that same document", () => {
     const res = await payCombinedDocument(pay, payInput());
     expect(res).toMatchObject({ status: "PAID", documentNo: "EXP-TEST-0042", amount: 4169, notified: true });
     expect(calls.createExpense).toHaveLength(1);
-    expect(calls.pay).toEqual([{ documentNo: "EXP-TEST-0042", paymentDate: "2030-05-13", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 }]);
+    expect(calls.pay).toEqual([{ documentNo: "EXP-TEST-0042", documentId: "peak-doc-42", paymentDate: "2030-05-13", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 }]);
     const selected = JOBS.map((j) => rows.get(`${j.date}|${j.slotIdx}`)!);
     expect(new Set(selected.map((r) => r.peakRef))).toEqual(new Set(["EXP-TEST-0042"]));
     expect(new Set(selected.map((r) => r.peakPaymentRef))).toEqual(new Set(["FOLK-PAY-203005-01"]));
@@ -506,6 +506,14 @@ describe("peakPaymentPlan — pay only what PEAK and FolkOPS agree on", () => {
 
   it("PEAK owes the gross and holds the withholding apart → pay the net, name the withholding", () => {
     expect(plan()).toEqual({ ok: true, plan: { amount: 4169, withholdingTaxAmount: 126 } });
+  });
+  it("a reused EXP number: PEAK's document must be the id FolkOPS created, not just the same number", () => {
+    const withId = (id: string | null) => peakPaymentPlan({ expense: exp({ id }), documentNo: "EXP-TEST-0042", documentId: "peak-doc-42", paymentRef: "FOLK-PAY-203005-01", peakContactId: "contact-guide-a", gross: 4295, wht: 126, net: 4169 });
+    expect(withId("peak-doc-42")).toEqual({ ok: true, plan: { amount: 4169, withholdingTaxAmount: 126 } });
+    const other = withId("peak-doc-voided-7");
+    expect(other.ok).toBe(false);
+    expect((other as { reasons: string[] }).reasons.join(" ")).toContain("different document than the EXP-TEST-0042 FolkOPS created");
+    expect(withId(null).ok).toBe(false);
   });
   it("PEAK holds no withholding and owes the net → pay the net", () => {
     expect(plan({ remainAmount: 4169, remainWhtAmount: 0 })).toEqual({ ok: true, plan: { amount: 4169, withholdingTaxAmount: null } });

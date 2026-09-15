@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePeakExpense, readPaidPaymentReply } from "./peak-api";
+import { paidPaymentBody, parsePeakExpense, readPaidPaymentReply } from "./peak-api";
 
 // Shapes follow PEAK API Core v1's documented examples for Get Expense and
 // Create Expense Payment All In One. All values are invented.
@@ -17,6 +17,11 @@ describe("parsePeakExpense (GET /api/v1/Expenses?code=…)", () => {
       id: "doc-1", code: "EXP-TEST-0042", reference: "FOLK-PAY-203005-01", contactId: "contact-a", status: "Approve", statusId: 3, isVoid: false,
       netAmount: 4295, whtAmount: 126, paymentAmount: 0, remainAmount: 4295, remainWhtAmount: 126, documentLink: "https://docs.example/?e=1", payments: 0,
     } });
+  });
+
+  it("two documents behind one lookup is an error, never 'the first one' — PEAK can reuse a voided document's number", () => {
+    const r = parsePeakExpense(reply([{ id: "doc-voided", code: "EXP-TEST-0042", isVoid: 1 }, { id: "doc-new", code: "EXP-TEST-0042", isVoid: 0 }]));
+    expect(r).toEqual({ error: expect.stringContaining("PEAK returned 2 documents for one lookup (EXP-TEST-0042)") });
   });
 
   it("reads PEAK's empty list as not found, not as an error", () => {
@@ -48,5 +53,21 @@ describe("readPaidPaymentReply (POST /api/v1/Expenses/paidpaymentallinone)", () 
 
   it("treats a reply with no PEAK code from something in front of PEAK as uncertain", () => {
     expect(readPaidPaymentReply(502, {})).toMatchObject({ ok: false, uncertain: true });
+  });
+});
+
+describe("paidPaymentBody (POST /api/v1/Expenses/paidpaymentallinone)", () => {
+  const base = { documentNo: "EXP-TEST-0042", paymentDate: "20300513", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 };
+
+  it("names the document by PEAK's id when FolkOPS has it — and not by number as well", () => {
+    expect(paidPaymentBody({ ...base, documentId: "doc-42" })).toEqual({
+      peakPaidPayments: { transactionId: "doc-42", paidPayments: { paymentDate: "20300513", withHoldingTaxAmount: "126.00", payments: [{ amount: 4169, paymentMethod: { id: "pm-test" } }] } },
+    });
+  });
+
+  it("falls back to the EXP number only without an id, and leaves out a zero withholding", () => {
+    expect(paidPaymentBody({ ...base, documentId: null, withholdingTaxAmount: 0 })).toEqual({
+      peakPaidPayments: { transactionCode: "EXP-TEST-0042", paidPayments: { paymentDate: "20300513", payments: [{ amount: 4169, paymentMethod: { id: "pm-test" } }] } },
+    });
   });
 });
