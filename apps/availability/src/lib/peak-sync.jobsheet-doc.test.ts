@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildJobSheetExpense, JobSheetNotPostable, type PeakAccountMap } from "./peak-sync";
+import { buildJobSheetExpense, JobSheetNotPostable, whtNote, type PeakAccountMap } from "./peak-sync";
 import type { Expense, GuideFee } from "./jobsheet";
 
 // The payout path collapses a whole transfer into two lump lines on two env
@@ -98,5 +98,17 @@ describe("buildJobSheetExpense", () => {
   it("totals only the lines it actually posts", () => {
     const doc = build({ expenses: [row({ price: 500, pax: 2 })] });
     expect(doc.total).toBe(1200 + 1000);
+  });
+});
+
+describe("whtNote — the withholding written into a guide-fee line (PEAK's printed form has no WHT column)", () => {
+  it("names the rate and the amount withheld", () => {
+    expect(whtNote(3, 36)).toBe(" · WHT 3% ฿36.00");
+    expect(whtNote(1.5, 1234.5)).toBe(" · WHT 1.5% ฿1,234.50");
+  });
+  it("says nothing when nothing is withheld, and leaves out an unknown rate", () => {
+    expect(whtNote(3, 0)).toBe("");
+    expect(whtNote(0, 0)).toBe("");
+    expect(whtNote(null, 36)).toBe(" · WHT ฿36.00");
   });
 });

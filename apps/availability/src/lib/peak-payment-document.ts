@@ -18,7 +18,7 @@
 import { expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import {
-  canonicalPaidBy, guidePayoutTotal, resolveExpenseAccount, type PeakAccount, type PeakAccountMap,
+  canonicalPaidBy, guidePayoutTotal, resolveExpenseAccount, whtNote, type PeakAccount, type PeakAccountMap,
 } from "@/lib/peak-sync";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -187,7 +187,7 @@ export function buildGuidePaymentDocument(input: {
     if (gross > 0) {
       const code = (accounts.guideFee?.code ?? "").trim();
       if (!code) reasons.add(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
-      push("GUIDE_FEE", "GUIDE_FEE", code, gross, wht, `Guide fee - ${ref}`);
+      push("GUIDE_FEE", "GUIDE_FEE", code, gross, wht, `Guide fee - ${ref}${whtNote(j.guideFee?.whtPct, wht)}`);
     }
 
     // Everything else still owed to the guide, grouped per job + category + account.
@@ -287,7 +287,7 @@ export function buildGuidePaymentDocument(input: {
       contact: { id: peakContactId },
       products: lines,
       reference: paymentRef,
-      remark: `Folkpaths guide payment ${paymentRef} · ${guideId} · ${jobs.length} job${jobs.length === 1 ? "" : "s"}`,
+      remark: `Folkpaths guide payment ${paymentRef} · ${guideId} · ${jobs.length} job${jobs.length === 1 ? "" : "s"}${wht > 0 ? ` · WHT ${thb(wht)} · transfer ${thb(total)}` : ""}`,
       // Deliberately no paidPayments: this creates an UNPAID expense. The payment is
       // recorded against this same document in stage 2 (payCombinedDocument).
     },

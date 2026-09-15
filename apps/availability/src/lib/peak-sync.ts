@@ -18,6 +18,7 @@ import {
   expenseCategory,
   isReviewExpense,
   computeTotals,
+  thb,
   jobCostBreakdown,
   type Expense,
   type ExpenseCategoryKey,
@@ -518,6 +519,19 @@ export class JobSheetNotPostable extends Error {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const compact = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
 
+/**
+ * " · WHT 3% ฿45.00" — the tax withheld from a guide-fee line, written into the line's
+ * own description. PEAK stores the withholding on the line, but its printed expense
+ * form has no withholding column: the amount appears only as a total at the foot of
+ * the last page. Owner decision 2026-09-15: every guide-fee line shows its WHT.
+ * Empty when nothing is withheld. Text only — PEAK's withHoldingTaxAmount is unchanged.
+ */
+export function whtNote(whtPct: number | null | undefined, wht: number): string {
+  if (!(wht > 0)) return "";
+  const pct = Number(whtPct) || 0;
+  return ` · WHT ${pct > 0 ? `${Math.round(pct * 100) / 100}% ` : ""}${thb(wht)}`;
+}
+
 export function buildJobSheetExpense(input: {
   guideId: string;
   peakContactId: string;
@@ -544,7 +558,7 @@ export function buildJobSheetExpense(input: {
     const code = (guideFeeAccount?.code ?? "").trim();
     if (!code) throw new JobSheetNotPostable(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
     lines.push({
-      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}`,
+      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.wht))}`,
       quantity: 1,
       price: round2(totals.guideFeeGross),
       accountCode: code,
@@ -587,7 +601,7 @@ export function buildJobSheetExpense(input: {
       contact: { id: peakContactId },
       products: lines,
       reference: jobRef ?? "",
-      remark: `Folkpaths job sheet · ${guideId} · ${accountingDate}`,
+      remark: `Folkpaths job sheet · ${guideId} · ${accountingDate}${totals.wht > 0 ? ` · WHT ${thb(round2(totals.wht))}` : ""}`,
     },
   };
 }

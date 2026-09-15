@@ -137,7 +137,7 @@ describe("one PEAK document for several jobs — stage 1 creates it, unpaid", ()
     expect(calls.createExpense).toHaveLength(1);
     // …and that one document carries every job, not just the first.
     const refs = (calls.createExpense[0].products as { description: string }[]).map((p) => p.description);
-    for (const j of JOBS) expect(refs.some((d) => d.endsWith(j.ref!))).toBe(true);
+    for (const j of JOBS) expect(refs.some((d) => d.includes(j.ref!))).toBe(true);
   });
 
   it("makes the document total equal the sum of the selected jobs — and records no payment in it", () => {
@@ -152,9 +152,9 @@ describe("one PEAK document for several jobs — stage 1 creates it, unpaid", ()
   it("sends a separate line per job and category, each naming its job", () => {
     const doc = build();
     expect(doc.lines.map((l) => [l.description, l.accountCode, l.price, l.withHoldingTaxAmount])).toEqual([
-      ["Guide fee - FOLK-BKK-20300506-01", "510111", 1200, 36],
-      ["Guide fee - FOLK-BKK-20300506-02", "510111", 1200, 36],
-      ["Guide fee - FOLK-BKK-20300512-01", "510111", 1800, 54],
+      ["Guide fee - FOLK-BKK-20300506-01 · WHT 3% ฿36.00", "510111", 1200, 36],
+      ["Guide fee - FOLK-BKK-20300506-02 · WHT 3% ฿36.00", "510111", 1200, 36],
+      ["Guide fee - FOLK-BKK-20300512-01 · WHT 3% ฿54.00", "510111", 1800, 54],
       ["Reimbursement / Other Tour Cost - FOLK-BKK-20300512-01", "510104", 95, 0],
     ]);
     // Guide fees go gross with their withholding, so PEAK keeps the WHT record and the
@@ -249,7 +249,7 @@ describe("account resolution", () => {
     ];
     const doc = build({ jobs: [{ ...JOBS[0], expenses: rows }] });
     expect(doc.lines.map((l) => [l.description, l.accountCode, l.price])).toEqual([
-      ["Guide fee - FOLK-BKK-20300506-01", "510111", 1200],
+      ["Guide fee - FOLK-BKK-20300506-01 · WHT 3% ฿36.00", "510111", 1200],
       ["Reimbursement / Meal / Refreshment - FOLK-BKK-20300506-01", "510104", 80],
       ["Reimbursement / Transportation - FOLK-BKK-20300506-01", "510104", 120],
       ["Reimbursement / Other Tour Cost - FOLK-BKK-20300506-01", "530201", 40],
@@ -268,7 +268,7 @@ describe("what belongs in a payment document", () => {
       { description: "Water", price: 20, pax: 1, expenseType: "meal", paidBy: "guide" },
     ];
     const doc = build({ jobs: [{ ...JOBS[0], expenses: rows }] });
-    expect(doc.lines.map((l) => l.description)).toEqual(["Guide fee - FOLK-BKK-20300506-01", "Reimbursement / Meal / Refreshment - FOLK-BKK-20300506-01"]);
+    expect(doc.lines.map((l) => l.description)).toEqual(["Guide fee - FOLK-BKK-20300506-01 · WHT 3% ฿36.00", "Reimbursement / Meal / Refreshment - FOLK-BKK-20300506-01"]);
     expect(doc.total).toBe(1184);
   });
 
