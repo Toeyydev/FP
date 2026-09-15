@@ -37,4 +37,17 @@ describe("canonicalHostFor", () => {
     expect(canonicalHostFor("notguide.folkpaths.com", CANON)).toBeNull();
     expect(canonicalHostFor("guide.folkpaths.com.", CANON)).toBeNull();
   });
+
+  it("never redirects callbacks from other servers — LINE, Bokun and the cron do not follow redirects", () => {
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/api/line/webhook")).toBeNull();
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/api/line/webhook/")).toBeNull();
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/api/bokun/webhook")).toBeNull();
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/api/offers/sweep")).toBeNull();
+  });
+
+  it("still redirects people and every other path on the retired host", () => {
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/")).toBe(CANON);
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/api/line/webhooks")).toBe(CANON);
+    expect(canonicalHostFor("guide.folkpaths.com", CANON, "/api/offers/respond")).toBe(CANON);
+  });
 });
