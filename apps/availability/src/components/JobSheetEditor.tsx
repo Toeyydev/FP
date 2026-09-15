@@ -11,6 +11,8 @@ import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import HandoverDialog from "@/components/HandoverDialog";
+import PeakPaymentDialog, { type CreatedDocument } from "@/components/PeakPaymentDialog";
+import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover";
 import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 
@@ -88,6 +90,11 @@ export default function JobSheetEditor() {
   const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  // The guide's unpaid jobs this month (api/pay/peak-document/candidates): one transfer
+  // is one PEAK document, so they are offered together before this job alone.
+  const [monthJobs, setMonthJobs] = useState<{ date: string; slotIdx: number; ref: string | null; tour: string; amount: number; ready: boolean; waiting: string | null }[] | null>(null);
+  const [payTogetherOpen, setPayTogetherOpen] = useState(false);
+  const [recordPay, setRecordPay] = useState<CreatedDocument | null>(null);
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
   const [secTab, setSecTab] = useState<"all" | "details" | "expenses" | "fee">("all"); // operator section tabs — "all" keeps the classic single-scroll sheet
   const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
@@ -201,6 +208,17 @@ export default function JobSheetEditor() {
     if (!handover) setHandoverOpen(true);
   }, [handoverAsked, sheet, canEdit, sp, handover]);
 
+  const loadMonthJobs = useCallback(async () => {
+    if (!sheet || !canEdit) { setMonthJobs(null); return; }
+    try {
+      const r = await fetch(`/api/pay/peak-document/candidates?guideId=${encodeURIComponent(sheet.guideId)}&date=${sheet.date}`, { cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      setMonthJobs(r.ok && Array.isArray(d.jobs) ? d.jobs : null);
+    } catch { setMonthJobs(null); }
+  }, [sheet?.guideId, sheet?.date, canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadMonthJobs(); }, [loadMonthJobs, peak?.peakDocumentNo, payment?.paid]);
+  // The OTHER unpaid jobs this month (this one excluded). Any at all → combine first.
+  const monthOthers = (monthJobs ?? []).filter((j) => !(sheet && j.date === sheet.date && j.slotIdx === sheet.slotIdx));
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);
@@ -471,6 +489,7 @@ export default function JobSheetEditor() {
   // renders — so the button re-implements none of the rules and simply shows what
   // came back. On failure the server has already recorded FAILED + the reason, so
   // reloading makes the panel agree with the message rather than contradict it.
+
   async function syncToPeak(confirmRepost = false, confirmSeparateDocument = false) {
     if (!sheet) return;
     if (!saved) { const ok = await save(); if (!ok) return; }
@@ -1719,6 +1738,27 @@ export default function JobSheetEditor() {
                 Payments says so instead, because a timestamp we cannot source would
                 be a fabrication. */}
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>PEAK Expense</div>
+            {monthOthers.length > 0 && !combinedPayment && !(peak?.peakDocumentNo || payment?.peakRef) && (() => {
+              const all = monthJobs ?? [];
+              const ready = all.filter((j) => j.ready);
+              const monthLabel = new Date(`${sheet.date.slice(0, 7)}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+              return (
+                <div className="js-pay-together" role="region" aria-label="Unpaid jobs this month" style={{ marginTop: 6, padding: 8, border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg, #f6f5f3)" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{header?.name || sheet.guideId} has {all.length} unpaid jobs in {monthLabel}</div>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11.5, lineHeight: 1.5 }}>
+                    {all.map((j) => (
+                      <li key={`${j.date}|${j.slotIdx}`} style={{ color: j.ready ? "var(--ink)" : "var(--ink-soft)" }}>
+                        {j.date.slice(8)} · {SLOT_TIMES[j.slotIdx] ?? ""} · {j.ref ?? "no job sheet"} · {thb(j.amount)}{j.date === sheet.date && j.slotIdx === sheet.slotIdx ? " (this job)" : ""}{j.ready ? "" : ` — not ready: ${(j.waiting ?? "").replace(/^\S+\s/, "")}`}
+                      </li>
+                    ))}
+                  </ul>
+                  <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy || ready.length === 0} onClick={() => setPayTogetherOpen(true)}>
+                    Put {ready.length} job{ready.length === 1 ? "" : "s"} in one PEAK document…
+                  </button>
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>One transfer is one PEAK document. Syncing each job on its own makes a document — and uses a PEAK credit — per job.</div>
+                </div>
+              );
+            })()}
             {(() => {
               const el = peak?.eligibility;
               // In a combined PEAK document: that document is this job's accounting. It must
@@ -1769,7 +1809,9 @@ export default function JobSheetEditor() {
               if (el?.status === "READY") return (
                 <>
                   <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--green)" }}>Ready to sync</div>
-                  <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Sync to PEAK</button>
+                  {monthOthers.length > 0
+                    ? <button className="btn sm ghost" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()} title="Makes a PEAK document for this job alone — the guide's other unpaid jobs this month would each need their own">Sync this job alone…</button>
+                    : <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Sync to PEAK</button>}
                   <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Creates an unpaid expense in PEAK, one line per row. The transfer is recorded separately.</div>
                 </>
               );
@@ -1904,6 +1946,20 @@ export default function JobSheetEditor() {
         </aside>
       )}
       </div>
+      )}
+      {payTogetherOpen && sheet && (
+        <PeakPaymentDialog
+          guideId={sheet.guideId}
+          guide={header?.name || sheet.guideId}
+          jobs={(monthJobs ?? []).filter((j) => j.ready).map((j) => ({ date: j.date, slotIdx: j.slotIdx, tour: j.tour, ref: j.ref, amount: j.amount }))}
+          onClose={() => setPayTogetherOpen(false)}
+          onDone={() => { setPayTogetherOpen(false); load(); loadMonthJobs(); }}
+          onRecordPayment={(doc) => { setPayTogetherOpen(false); load(); loadMonthJobs(); setRecordPay(doc); }}
+        />
+      )}
+      {recordPay && sheet && (
+        <RecordPaymentDialog guideId={sheet.guideId} guide={header?.name || sheet.guideId} doc={recordPay}
+          onClose={() => setRecordPay(null)} onDone={() => { setRecordPay(null); load(); loadMonthJobs(); }} />
       )}
       {handoverOpen && (
         <HandoverDialog
