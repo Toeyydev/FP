@@ -426,9 +426,25 @@ export type PeakExpenseState = {
   paymentAmount: number | null;
   remainAmount: number | null;
   remainWhtAmount: number | null;
+  /** Σ products[].withHoldingTaxAmount — the withholding set on the lines. Null when a line's value is not a plain amount. */
+  lineWhtAmount: number | null;
   documentLink: string | null;
   payments: number;        // how many payment groups PEAK already holds on it
 };
+
+/** Sum of the withholding PEAK holds on the lines. PEAK types it as a string ("45.00"); anything not a plain amount (e.g. "3%") makes the sum unknown. */
+function lineWht(products: unknown): number | null {
+  if (!Array.isArray(products) || !products.length) return null;
+  let sum = 0;
+  for (const p of products as Record<string, unknown>[]) {
+    const raw = p?.withHoldingTaxAmount;
+    if (raw == null || raw === "") continue;
+    const n = Number(String(raw).replace(/,/g, "").trim());
+    if (!Number.isFinite(n)) return null;
+    sum += n;
+  }
+  return Math.round(sum * 100) / 100;
+}
 
 const num = (v: unknown): number | null => {
   if (v == null || v === "") return null;
@@ -459,7 +475,7 @@ export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExp
       id: str(e.id), code: String(e.code ?? ""), reference: str(e.reference), contactId: str(e.contactId),
       status: str(e.status), statusId: num(e.statusId), isVoid: Number(e.isVoid ?? 0) === 1,
       netAmount: num(e.netAmount), whtAmount: num(e.whtAmount), paymentAmount: num(e.paymentAmount),
-      remainAmount: num(e.remainAmount), remainWhtAmount: num(e.remainWhtAmount),
+      remainAmount: num(e.remainAmount), remainWhtAmount: num(e.remainWhtAmount), lineWhtAmount: lineWht(e.products),
       documentLink: str(e.documentLink), payments: Array.isArray(e.paidPayments) ? e.paidPayments.length : 0,
     },
   };
