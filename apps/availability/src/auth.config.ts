@@ -22,10 +22,11 @@ export const authConfig = {
     authorized({ auth, request }) {
       // A retired domain lands on the live one before anything else is decided —
       // public pages included, or a guide could sign in on the old host and end up
-      // with a session tied to the very origin we are emptying out. Temporary
+      // with a session tied to the very origin we are emptying out. Webhooks from
+      // LINE/Bokun and the cron are the exception (lib/retired-hosts). Temporary
       // (307) on purpose: a permanent redirect sticks in browser caches long after
       // we might want the old host back for something.
-      const moved = canonicalHostFor(request.headers.get("x-forwarded-host") || request.headers.get("host"), PUBLIC_HOST);
+      const moved = canonicalHostFor(request.headers.get("x-forwarded-host") || request.headers.get("host"), PUBLIC_HOST, request.nextUrl.pathname);
       if (moved) {
         const movedTo = new URL(request.url);
         movedTo.protocol = "https:";
