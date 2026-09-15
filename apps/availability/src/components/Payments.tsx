@@ -13,6 +13,7 @@ import PeakPaymentDialog, { CreatedState, type CreatedDocument } from "@/compone
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import RecordExpDialog from "@/components/RecordExpDialog";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
+import { sumWhtBreakdowns } from "@/lib/peak-sync";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
@@ -20,6 +21,8 @@ type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; a
   combinable?: boolean; combinedBlock?: { code: string; message: string; documentNo?: string } | null; sheetPeakDocumentNo?: string | null;
   // Paid per tour with no PEAK document number yet: "Record EXP…" can take one (api/pay PATCH).
   canRecordExp?: boolean;
+  // Gross − WHT = Net per expense type, from /api/payments (lib/peak-sync whtBreakdown).
+  gross?: number; wht?: number; lines?: { kind: string; label: string; gross: number; wht: number | null; net: number }[];
   // Paid on its own record, approved, with no PEAK document: "Put paid jobs in PEAK" can take it.
   canPutInPeak?: boolean;
   // From /api/payments (lib/peak-job-status): whether FolkOPS holds a PEAK document for the job.
@@ -511,6 +514,17 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         </tr>
         {isOpen && (
           <tr className="pay-jobs-row"><td colSpan={9} style={{ background: "var(--grey-bg)", padding: "6px 12px" }}>
+            {(() => {
+              // The three totals an operator cross-checks: Gross − WHT = what is (or was) transferred.
+              const t = sumWhtBreakdowns(jobs.map((j) => ({ gross: j.gross ?? j.amount, wht: j.wht ?? 0, net: j.amount })));
+              return (
+                <div className="pay-wht-sum" role="group" aria-label="Payment summary">
+                  <span>Gross expense <b>{thb(t.gross)}</b></span>
+                  <span>WHT <b>{t.wht > 0 ? thb(t.wht) : "–"}</b></span>
+                  <span>{mode === "paid" ? "Amount paid" : "Net payable"} <b>{thb(t.net)}</b></span>
+                </div>
+              );
+            })()}
             {awaitingDocs.map((d) => (
               <div key={d.paymentRef} className="pay-doc-bar pay-doc-awaiting" role="status" style={{ display: "grid", gap: 6 }}>
                 <span style={{ fontWeight: 700 }}>{d.alreadyPaid ? `PEAK document created for jobs paid ${d.paidDate ? dShort(d.paidDate) : "earlier"} · record that payment` : "PEAK document created · awaiting payment"}</span>
@@ -585,7 +599,16 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                       {thb(j.amount)}
                       <span className="pay-copy-tag">{copied === `${r.guideId}|${j.date}|${j.slotIdx}` ? "copied" : "copy"}</span>
                     </button>
-                    {(j.expenses ?? 0) > 0 && <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Guide fee (after WHT) + expense reimbursement">fee {thb(j.fee)} + reimb. {thb(j.expenses)}</span>}
+                    {!!j.lines?.length && (
+                      <table className="pay-wht-mini" aria-label={`Gross, WHT and net for ${j.ref ?? "this job"}`}>
+                        <thead><tr><th scope="col" aria-label="Expense type" /><th scope="col">Gross</th><th scope="col">WHT</th><th scope="col">Net</th></tr></thead>
+                        <tbody>
+                          {j.lines.map((l) => (
+                            <tr key={l.kind}><th scope="row">{l.label}</th><td>{thb(l.gross)}</td><td>{l.wht ? thb(l.wht) : "–"}</td><td>{thb(l.net)}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </span>
                   <span className="pay-job-status">
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}

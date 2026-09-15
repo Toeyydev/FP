@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
-import { guidePayoutTotal } from "@/lib/peak-sync";
+import { guidePayoutTotal, whtBreakdown, type WhtBreakdownLine } from "@/lib/peak-sync";
 import { canViewFinance } from "@/lib/roles";
 import { type Slip } from "@/lib/payments/slips";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
@@ -95,7 +95,9 @@ export async function GET(req: NextRequest) {
   const coveredByMonth = (gid: string, tourDate: string, recordCreatedAt: Date) =>
     coveredByPayrollRun(statusOf(gid), tourDate, recordCreatedAt);
 
-  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; canPutInPeak: boolean; peakStatus: ReturnType<typeof peakJobStatus> };
+  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean;
+    // Gross − WHT = Net for display (lib/peak-sync whtBreakdown); `amount` stays the transfer.
+    gross: number; wht: number; lines: WhtBreakdownLine[]; canPutInPeak: boolean; peakStatus: ReturnType<typeof peakJobStatus> };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
   const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};
@@ -110,11 +112,12 @@ export async function GET(req: NextRequest) {
     const p = s
       ? guidePayoutTotal((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee))
       : guidePayoutTotal([], DEFAULT_GUIDE_FEE);
+    const b = s ? whtBreakdown((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee)) : whtBreakdown([], DEFAULT_GUIDE_FEE);
     const g = (byGuide[a.guideId] ??= { guideId: a.guideId, guide: gName(a.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += p.payoutExpenses; g.payout += p.payout;
     const covered = coveredByMonth(a.guideId, a.date, a.createdAt);
     const ps = payStatusOf.get(k) ?? "PENDING";
-    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), ref: s?.ref ?? null, amount: r2(p.payout), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(a.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, peakPaymentRef: payRefOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(p.payoutExpenses), ...combinedOf(k, s, covered, a.date), peakStatus: peakStatusOf(k, s, covered, a.guideId, r2(p.payout)) });
+    g.jobs.push({ date: a.date, slotIdx: a.slotIdx, tour: tName(a.tourId), ref: s?.ref ?? null, amount: r2(p.payout), gross: b.gross, wht: b.wht, lines: b.lines, paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(a.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, peakPaymentRef: payRefOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(p.payoutExpenses), ...combinedOf(k, s, covered, a.date), peakStatus: peakStatusOf(k, s, covered, a.guideId, r2(p.payout)) });
   }
 
   // Imported / orphan job sheets — a sheet exists but no assignment row (e.g. a
@@ -127,11 +130,12 @@ export async function GET(req: NextRequest) {
     if (s.date > cap) continue;            // future tour, not yet earned
     const t = computeTotals((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
     const p = guidePayoutTotal((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
+    const b = whtBreakdown((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee));
     const g = (byGuide[s.guideId] ??= { guideId: s.guideId, guide: gName(s.guideId), tours: 0, netFee: 0, expenses: 0, payout: 0, jobs: [] });
     g.tours += 1; g.netFee += t.netGuideFee; g.expenses += p.payoutExpenses; g.payout += p.payout;
     const covered = coveredByMonth(s.guideId, s.date, s.createdAt);
     const ps = payStatusOf.get(k) ?? "PENDING";
-    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), ref: s.ref ?? null, amount: r2(p.payout), paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(s.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, peakPaymentRef: payRefOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(p.payoutExpenses), ...combinedOf(k, s, covered, s.date), peakStatus: peakStatusOf(k, s, covered, s.guideId, r2(p.payout)) });
+    g.jobs.push({ date: s.date, slotIdx: s.slotIdx, tour: tName(s.tourId), ref: s.ref ?? null, amount: r2(p.payout), gross: b.gross, wht: b.wht, lines: b.lines, paid: covered || ps === "PAID", payStatus: covered ? "PAID" : ps, peakRef: peakRefOf.get(k) ?? null, paidAt: paidAtOf.get(k) ?? null, eslipUrl: eslipUrlOf.get(k) ?? (covered ? statusOf(s.guideId)?.eslipUrl ?? null : null), slips: slipsOf.get(k) ?? null, peakPaymentRef: payRefOf.get(k) ?? null, fee: r2(t.netGuideFee), expenses: r2(p.payoutExpenses), ...combinedOf(k, s, covered, s.date), peakStatus: peakStatusOf(k, s, covered, s.guideId, r2(p.payout)) });
   }
 
   const rows = Object.values(byGuide)

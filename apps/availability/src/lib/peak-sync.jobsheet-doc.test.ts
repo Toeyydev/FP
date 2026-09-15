@@ -103,12 +103,12 @@ describe("buildJobSheetExpense", () => {
 
 describe("whtNote — the withholding written into a guide-fee line (PEAK's printed form has no WHT column)", () => {
   it("names the rate and the amount withheld", () => {
-    expect(whtNote(3, 36)).toBe(" · WHT 3% ฿36.00");
-    expect(whtNote(1.5, 1234.5)).toBe(" · WHT 1.5% ฿1,234.50");
+    expect(whtNote(3, 36)).toBe(" · WHT 3% = ฿36.00");
+    expect(whtNote(1.5, 1234.5)).toBe(" · WHT 1.5% = ฿1,234.50");
   });
   it("says nothing when nothing is withheld, and leaves out an unknown rate", () => {
     expect(whtNote(3, 0)).toBe("");
     expect(whtNote(0, 0)).toBe("");
-    expect(whtNote(null, 36)).toBe(" · WHT ฿36.00");
+    expect(whtNote(null, 36)).toBe(" · WHT = ฿36.00");
   });
 });

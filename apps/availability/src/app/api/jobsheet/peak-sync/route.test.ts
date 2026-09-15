@@ -173,7 +173,7 @@ describe("POST /api/jobsheet/peak-sync — posting", () => {
     await post(JOB);
     const sent = createExpenseMock.mock.calls[0][0] as { products: { description: string; accountCode: string; price: number; withHoldingTaxAmount: number }[] };
     expect(sent.products.map((p) => [p.description, p.accountCode, p.price])).toEqual([
-      ["Guide Fee — FOLK-BKK-20260912-01 · WHT 3% ฿36.00", "510111", 1200],
+      ["Guide Fee — FOLK-BKK-20260912-01 · WHT 3% = ฿36.00", "510111", 1200],
       ["Grand Palace", "510104", 1000],
       ["Ferry (Inc. Guide)", "510104", 90],
     ]);
