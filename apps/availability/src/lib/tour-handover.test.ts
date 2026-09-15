@@ -92,3 +92,28 @@ describe("undoBlockers", () => {
     expect(undoBlockers({ ...base, to: { ...base.to, sheet: { ...clean.sheet, expenses: [{ description: "Water (Inc. Guide)", price: 10, pax: null }] } } })).toEqual([]);
   });
 });
+
+describe("the handover written onto both sheets", () => {
+  it("each sheet gets its own line, in the operator's language", async () => {
+    const { handoverNoteLines } = await import("@/lib/tour-handover");
+    expect(handoverNoteLines({ fromGuideId: "G-900", fromName: "Guide Nine", toGuideId: "G-042", toName: "One Off", time: "13:41", reason: "SICK" })).toEqual({
+      from: "Handover 13:41 (ป่วย): G-042 One Off นำทัวร์ต่อ",
+      to: "Handover 13:41 (ป่วย): รับช่วงต่อจาก G-900 Guide Nine",
+    });
+  });
+  it("a note line is added once and can be taken back out, leaving the rest", async () => {
+    const { appendNoteLine, removeNoteLine } = await import("@/lib/tour-handover");
+    const line = "Handover 13:41 (ป่วย): G-042 One Off นำทัวร์ต่อ";
+    expect(appendNoteLine(null, line)).toBe(line);
+    expect(appendNoteLine("Bring umbrellas", line)).toBe(`Bring umbrellas\n${line}`);
+    expect(appendNoteLine(`Bring umbrellas\n${line}`, line)).toBe(`Bring umbrellas\n${line}`);
+    expect(removeNoteLine(`Bring umbrellas\n${line}`, line)).toBe("Bring umbrellas");
+    expect(removeNoteLine(line, line)).toBeNull();
+  });
+  it("copies each guest once — by booking number, or by name for a row without one", async () => {
+    const { mergeGuestRows } = await import("@/lib/tour-handover");
+    const a = { name: "Guest A", bookingNo: "GYGTEST0001" }, b = { name: "Guest B", bookingNo: "GYGTEST0002" }, walkIn = { name: "Walk In", bookingNo: "" };
+    expect(mergeGuestRows([], [a, b, walkIn])).toEqual([a, b, walkIn]);
+    expect(mergeGuestRows([a], [{ ...a, name: "A, Guest" }, b, walkIn, walkIn])).toEqual([a, b, walkIn]);
+  });
+});

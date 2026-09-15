@@ -80,7 +80,7 @@ export default function JobSheetEditor() {
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
   // Another guide finished this tour, or this guide finished it for someone (api/tour-handover).
-  const [handover, setHandover] = useState<{ id: string; role: "from" | "to"; otherGuideId: string; otherName: string | null; otherExternal: boolean; time: string; reason: string; note: string | null } | null>(null);
+  const [handover, setHandover] = useState<{ id: string; role: "from" | "to"; otherGuideId: string; otherName: string | null; otherExternal: boolean; time: string; reason: string; note: string | null; needsRecording?: boolean } | null>(null);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [handoverAsked, setHandoverAsked] = useState(false);
   const [peakPrefix, setPeakPrefix] = useState(2);
@@ -664,6 +664,17 @@ export default function JobSheetEditor() {
     alert((Array.isArray(d.reasons) && d.reasons.length ? d.reasons : [`Not added to PEAK (${r.status})`]).join("\n"));
   }
 
+  async function recordHandoverOnSheets() {
+    if (!handover) return;
+    setBusy(true);
+    const r = await fetch("/api/tour-handover", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: handover.id }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { alert((Array.isArray(d.reasons) && d.reasons.length ? d.reasons : [`Not recorded (${r.status})`]).join("\n")); return; }
+    setMsg(`Handover noted on both sheets${d.guestsCopied ? ` · ${d.guestsCopied} guest row${d.guestsCopied === 1 ? "" : "s"} copied` : ""}`);
+    await load();
+  }
+
   async function undoHandover() {
     if (!handover) return;
     const replacement = handover.role === "from" ? handover.otherGuideId : guideId;
@@ -721,13 +732,14 @@ export default function JobSheetEditor() {
           </b>
           <span style={{ color: "var(--ink-soft)" }}>
             {handover.role === "from"
-              ? "The guide fee moved to the replacement. The guests, no-shows and tour report stay on this sheet, and the expenses this guide paid are still reimbursed."
-              : `The guests, no-shows and tour report stay on ${handover.otherGuideId}'s sheet. This sheet carries this guide's fee and their own expenses.`}
+              ? "The guide fee moved to the replacement. Everything else on this sheet stays as it was, and the expenses this guide paid are still reimbursed."
+              : `The guest list was copied from ${handover.otherGuideId}'s sheet. This sheet carries this guide's fee and their own expenses.`}
           </span>
           {canEdit && handover.note && <span>Note: {handover.note}</span>}
           {canEdit && (
             <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(handover.otherGuideId)}&date=${date}&slotIdx=${slotIdx}`}>Open {handover.otherGuideId}&apos;s job sheet</a>
+              {handover.needsRecording && <button className="btn sm primary" disabled={busy} onClick={recordHandoverOnSheets} title="Add the handover note to both sheets and copy the guest list to the replacement">Copy guests &amp; note</button>}
               <button className="btn sm ghost" disabled={busy} onClick={undoHandover}>Undo handover</button>
             </span>
           )}

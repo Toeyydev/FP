@@ -12,6 +12,7 @@ import { DEFAULT_GUIDE_FEE, type GuideFee } from "@/lib/jobsheet";
 import { paymentCoverage } from "@/lib/payment-coverage";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { guideSlotBookings, SHEET_BOOKING_STATUSES, toSheetBooking } from "@/lib/sheet-bookings";
+import { recordHandoverOnSheets, removeHandoverNote } from "@/lib/tour-handover-server";
 import {
   externalGuideEmail, handoverBlockers, handoverFees, nextGuideId, undoBlockers, HANDOVER_REASONS, HANDOVER_TIME,
 } from "@/lib/tour-handover";
@@ -155,13 +156,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // The guests stay with the original guide. On a slot that was never split the
-        // bookings carry no guide, and a sheet shows every untagged guest — so the
-        // replacement's sheet would list them all. Tag them to the original guide.
-        const tagged = await tx.booking.count({ where: { date, slotIdx, assignedGuideId: { not: null }, status: { in: [...SHEET_BOOKING_STATUSES] } } });
-        if (!tagged) await tx.booking.updateMany({ where: { date, slotIdx, assignedGuideId: null, status: { in: [...SHEET_BOOKING_STATUSES] } }, data: { assignedGuideId: fromGuideId } });
-
-        // Original guide: no fee from here on. Their expenses stay and are still reimbursed.
+        // Original guide: no fee from here on. Their guests and expenses stay as they were.
         let fromSheetId: string;
         if (from.sheet) {
           await tx.jobSheet.update({ where: { id: from.sheet.id }, data: { guideFee: json(fees.from) } });
@@ -180,7 +175,7 @@ export async function POST(req: NextRequest) {
           fromSheetId = created.id;
         }
 
-        // Replacement: their own assignment and sheet, the full fee, no guests.
+        // Replacement: their own assignment and sheet, the full fee.
         await tx.assignment.create({ data: { guideId: toGuideId, date, slotIdx, tourId, pax: null, note: `Replacement for ${fromGuideId} from ${b.time}` } });
         const toSheet = await tx.jobSheet.create({
           data: { guideId: toGuideId, date, slotIdx, tourId, bookings: json([]), expenses: json([]), guideFee: json(fees.to), createdById: actor.actorId },
@@ -194,6 +189,8 @@ export async function POST(req: NextRequest) {
           },
           select: { id: true },
         });
+        // Both sheets say what happened; the replacement's gets a copy of the guest list.
+        await recordHandoverOnSheets(tx, { date, slotIdx, fromGuideId, toGuideId, handedOverAt: b.time, reason: b.reason });
         return { handoverId: h.id, toGuideId, fromSheetId, toSheetId: toSheet.id, externalUserId };
       }, { timeout: 20_000 });
     } catch (e) {
@@ -247,6 +244,7 @@ export async function DELETE(req: NextRequest) {
     if (undone.count !== 1) throw new Error("handover already undone");
     await tx.jobSheet.deleteMany({ where });
     await tx.assignment.deleteMany({ where });
+    await removeHandoverNote(tx, h);
     // The original guide's fee as it was before the handover (the standard fee if they
     // had no sheet then — which is what Payments paid for the job without one).
     if (from.sheet) await tx.jobSheet.update({ where: { id: from.sheet.id }, data: { guideFee: json((h.fromFee as GuideFee | null) ?? DEFAULT_GUIDE_FEE) } });
@@ -256,4 +254,20 @@ export async function DELETE(req: NextRequest) {
   await audit({ ...actor, action: "tour.handover_undone", entityType: "TourHandover", entityId: h.id, detail });
   if (from.sheet) await audit({ ...actor, action: "jobsheet.handover_undone", entityType: "JobSheet", entityId: from.sheet.id, detail });
   return NextResponse.json({ ok: true });
+}
+
+// PATCH { id } — write a handover onto both sheets again: the note on each, and the guest
+// list copied to the replacement. For a handover recorded before sheets carried these;
+// running it twice changes nothing.
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };
+  const parsed = z.object({ id: z.string().min(1) }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const h = await prisma.tourHandover.findUnique({ where: { id: parsed.data.id } });
+  if (!h || h.revokedAt) return NextResponse.json({ error: "not-found", reasons: ["There is no active handover here"] }, { status: 404 });
+  const r = await prisma.$transaction((tx) => recordHandoverOnSheets(tx, h), { timeout: 20_000 });
+  await audit({ ...actor, action: "tour.handover_recorded_on_sheets", entityType: "TourHandover", entityId: h.id, detail: { date: h.date, slotIdx: h.slotIdx, fromGuideId: h.fromGuideId, toGuideId: h.toGuideId, guestsCopied: r.guestsCopied } });
+  return NextResponse.json({ ok: true, ...r });
 }

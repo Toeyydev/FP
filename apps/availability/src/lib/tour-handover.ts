@@ -5,8 +5,9 @@
 // Owner decisions (2026-09-15):
 //   - the replacement is paid the FULL guide fee; the original guide gets NO fee, but
 //     is still reimbursed the expenses they actually paid;
-//   - the guests, no-shows and end-of-tour report stay on the ORIGINAL guide's sheet;
-//     the replacement's sheet carries only their fee and their own expenses;
+//   - the ORIGINAL guide's sheet keeps everything it had (guests, expenses) and gets a
+//     note saying who took over, when and why; the replacement's sheet gets a COPY of
+//     the guest list and a note saying whom they took over from (revised 2026-09-15);
 //   - a one-off guide has no login and is never offered work again;
 //   - nobody is notified automatically.
 //
@@ -18,6 +19,40 @@ import { sheetInPeak } from "@/lib/combined-payment";
 export const HANDOVER_REASONS = ["SICK", "INJURY", "OTHER"] as const;
 export type HandoverReason = (typeof HANDOVER_REASONS)[number];
 export const HANDOVER_REASON_LABEL: Record<HandoverReason, string> = { SICK: "Sick", INJURY: "Injured", OTHER: "Other" };
+const HANDOVER_REASON_TH: Record<HandoverReason, string> = { SICK: "ป่วย", INJURY: "บาดเจ็บ", OTHER: "อื่นๆ" };
+
+/** The line each sheet's note carries — the original guide's, and the replacement's. */
+export function handoverNoteLines(h: { fromGuideId: string; fromName?: string | null; toGuideId: string; toName?: string | null; time: string; reason: string }) {
+  const why = HANDOVER_REASON_TH[h.reason as HandoverReason] ?? h.reason;
+  const who = (gid: string, name?: string | null) => `${gid}${name ? ` ${name}` : ""}`;
+  return {
+    from: `Handover ${h.time} (${why}): ${who(h.toGuideId, h.toName)} นำทัวร์ต่อ`,
+    to: `Handover ${h.time} (${why}): รับช่วงต่อจาก ${who(h.fromGuideId, h.fromName)}`,
+  };
+}
+
+/** Add a line to a sheet note once (the note is capped at 2,000 characters). */
+export function appendNoteLine(note: string | null | undefined, line: string): string {
+  const cur = (note ?? "").trim();
+  if (cur.split("\n").some((l) => l.trim() === line)) return cur;
+  return (cur ? `${cur}\n${line}` : line).slice(0, 2000);
+}
+
+/** Take that line back out (undo). */
+export function removeNoteLine(note: string | null | undefined, line: string): string | null {
+  const out = (note ?? "").split("\n").filter((l) => l.trim() !== line).join("\n").trim();
+  return out || null;
+}
+
+type GuestRow = { name?: string; bookingNo?: string } & Record<string, unknown>;
+/** The replacement's guest list plus the original guide's, each booking once. */
+export function mergeGuestRows<T extends GuestRow>(target: T[], source: T[]): T[] {
+  const key = (r: T) => ((r.bookingNo ?? "").trim() ? `ref:${(r.bookingNo ?? "").trim().toLowerCase()}` : (r.name ?? "").trim() ? `nm:${(r.name ?? "").trim().toLowerCase()}` : "");
+  const seen = new Set(target.map(key).filter(Boolean));
+  const out = [...target];
+  for (const r of source) { const k = key(r); if (k && seen.has(k)) continue; if (k) seen.add(k); out.push(r); }
+  return out;
+}
 
 /** "HH:MM", 00:00–23:59. */
 export const HANDOVER_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;

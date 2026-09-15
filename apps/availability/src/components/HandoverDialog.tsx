@@ -194,7 +194,7 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{mode === "existing" ? (toGuideId || "Replacement") : (ext.fullName.trim() || "Replacement")} — guide fee{toT.wht > 0 ? ` (${thb(toGross)} − ${thb(toT.wht)} WHT)` : ""}</span><b className="num">{thb(toT.netGuideFee)}</b></div>
           </div>
           <Note tone="warn">
-            {guideId} keeps the guests, no-shows and the end-of-tour report, and is still reimbursed the expenses they paid. The replacement gets their own job sheet for their fee and their own expenses. Nobody is notified.
+            {guideId}&apos;s sheet stays as it is, with a handover note, and they are still reimbursed the expenses they paid. The replacement gets their own job sheet with the fee, a copy of the guest list and a note. Nobody is notified.
           </Note>
           {reasons.length > 0 && <Note tone="danger"><b>Not recorded.</b>{reasons.map((x, i) => <div key={i} style={{ marginTop: 4 }}>{x}</div>)}</Note>}
         </div>
