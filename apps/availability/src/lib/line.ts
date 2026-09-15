@@ -22,17 +22,26 @@ export function verifyLineSignature(rawBody: string, signature: string | null): 
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function lineApi(path: string, body: unknown): Promise<void> {
-  if (!TOKEN) { console.log(`[line:stub] ${path}`, JSON.stringify(body)); return; }
+/** What LINE said to a send. `ok` false carries LINE's status and message, for the record. */
+export type LineSendResult = { ok: boolean; status?: number; detail?: string };
+
+async function lineApi(path: string, body: unknown): Promise<LineSendResult> {
+  if (!TOKEN) { console.log(`[line:stub] ${path}`, JSON.stringify(body)); return { ok: false, detail: "LINE token not configured" }; }
   try {
     const r = await fetch(`https://api.line.me/v2/bot/${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify(body),
     });
-    if (!r.ok) console.error("[line:error]", r.status, await r.text().catch(() => ""));
+    if (!r.ok) {
+      const detail = (await r.text().catch(() => "")).slice(0, 300);
+      console.error("[line:error]", r.status, detail);
+      return { ok: false, status: r.status, detail };
+    }
+    return { ok: true, status: r.status };
   } catch (e) {
     console.error("[line:error]", (e as Error).message);
+    return { ok: false, detail: (e as Error).message.slice(0, 300) };
   }
 }
 
