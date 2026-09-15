@@ -31,6 +31,7 @@ async function guideHeader(guideId: string) {
   if (!u) return null;
   return {
     guideId: u.guideId, name: u.fullName || u.displayName, email: u.email,
+    userId: u.id, external: u.external, // a one-off guide (lib/tour-handover): no login, PEAK contact made from FolkOPS
     tel: u.phone || "", taxId: decrypt(u.taxId), address: decrypt(u.currentAddress) || decrypt(u.idCardAddress),
     licenseNo: u.licenseNo || "", // tour-guide licence — recorded via /api/jobsheet/license
     // Stable supplier mapping. Its ABSENCE is what blocks sync — never fall back to

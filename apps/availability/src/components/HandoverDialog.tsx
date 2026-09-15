@@ -4,6 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import { computeTotals, thb, type GuideFee } from "@/lib/jobsheet";
 import { Note } from "@/components/PeakPaymentDialog";
 import { handoverFees, HANDOVER_REASONS, HANDOVER_REASON_LABEL, HANDOVER_TIME, type HandoverReason } from "@/lib/tour-handover";
+import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
+import { shrinkImage, shrunkName } from "@/lib/shrink-image";
+
+export type HandoverPeakContact =
+  | { status: "linked" | "created" | "already"; contactId: string; code: string | null; name: string | null }
+  | { status: "refused" | "failed" | "uncertain" | "not-connected"; reasons: string[] };
 
 // "Hand over (guide sick)…" — record that another guide finished this tour.
 //
@@ -22,12 +28,22 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
   tourName: string;
   fee: GuideFee | null;
   onClose: () => void;
-  onDone: (r: { toGuideId: string; toRef: string | null }) => void;
+  onDone: (r: { toGuideId: string; toRef: string | null; peakContact: HandoverPeakContact | null }) => void;
 }) {
   const [mode, setMode] = useState<"external" | "existing">("external");
   const [guides, setGuides] = useState<GuideOption[] | null>(null);
   const [toGuideId, setToGuideId] = useState("");
-  const [ext, setExt] = useState({ fullName: "", phone: "", taxId: "", bankName: "", bankAccountNo: "", bankAccountName: "" });
+  const [ext, setExt] = useState({ fullName: "", phone: "", taxId: "", address: "", licenseNo: "", bankName: "", bankAccountNo: "", bankAccountName: "" });
+  const [prefix, setPrefix] = useState<number>(2);
+  const [card, setCard] = useState<File | null>(null);
+  const [cardUrl, setCardUrl] = useState<string | null>(null);
+  const [toPeak, setToPeak] = useState(true);
+  useEffect(() => {
+    if (!card || !card.type.startsWith("image/")) { setCardUrl(null); return; }
+    const url = URL.createObjectURL(card);
+    setCardUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [card]);
   const [time, setTime] = useState("");
   const [reason, setReason] = useState<HandoverReason>("SICK");
   const [note, setNote] = useState("");
@@ -54,19 +70,29 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
   const toT = computeTotals([], fees.to);
   const toGross = (Number(fees.to.price) || 0) * (Number(fees.to.time) || 0);
   const taxDigits = ext.taxId.replace(/\D/g, "");
-  const ready = HANDOVER_TIME.test(time) && (mode === "existing" ? !!toGuideId : ext.fullName.trim().length >= 2);
+  // Into PEAK needs the 13 digits: they are how FolkOPS finds the supplier if it exists.
+  const peakBlocked = mode === "external" && toPeak && taxDigits.length !== 13;
+  const ready = HANDOVER_TIME.test(time) && (mode === "existing" ? !!toGuideId : ext.fullName.trim().length >= 2) && !peakBlocked;
 
   async function submit() {
     if (!ready) return;
     setBusy(true); setReasons([]);
     const body = {
       date, slotIdx, fromGuideId: guideId, time, reason, note: note.trim() || undefined,
-      ...(mode === "existing" ? { toGuideId } : { external: Object.fromEntries(Object.entries(ext).map(([k, v]) => [k, v.trim() || undefined])) }),
+      ...(mode === "existing"
+        ? { toGuideId }
+        : { external: { ...Object.fromEntries(Object.entries(ext).map(([k, v]) => [k, v.trim() || undefined])), prefix, createPeakContact: toPeak } }),
     };
+    const fd = new FormData();
+    fd.append("data", JSON.stringify(body));
+    if (mode === "external" && card) {
+      const blob = await shrinkImage(card);
+      fd.append("licenseCard", blob, shrunkName(card.name, blob));
+    }
     let r: Response;
     let d: Record<string, unknown> = {};
     try {
-      r = await fetch("/api/tour-handover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      r = await fetch("/api/tour-handover", { method: "POST", body: fd });
       d = await r.json().catch(() => ({}));
     } catch {
       setBusy(false);
@@ -74,7 +100,7 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
       return;
     }
     setBusy(false);
-    if (r.ok && d.ok) { onDone({ toGuideId: String(d.toGuideId), toRef: (d.toRef as string) ?? null }); return; }
+    if (r.ok && d.ok) { onDone({ toGuideId: String(d.toGuideId), toRef: (d.toRef as string) ?? null, peakContact: (d.peakContact as HandoverPeakContact) ?? null }); return; }
     setReasons(Array.isArray(d.reasons) && d.reasons.length ? (d.reasons as string[]) : [`The handover was not recorded (${r.status})`]);
   }
 
@@ -106,12 +132,33 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
 
           {mode === "external" ? (
             <fieldset disabled={busy} className="paydoc-fields">
-              {field("fullName", "Full name *", { autoComplete: "off", placeholder: "As on their ID card" })}
+              <label>
+                <span className="paydoc-label">Prefix</span>
+                <select value={prefix} onChange={(e) => setPrefix(Number(e.target.value))}>
+                  {NAME_PREFIXES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </label>
+              {field("fullName", "Full name * (no prefix)", { autoComplete: "off", placeholder: "As on their ID card" })}
               {field("phone", "Phone", { inputMode: "tel", autoComplete: "off" })}
               {field("taxId", "Tax ID (13 digits)", { inputMode: "numeric", autoComplete: "off" })}
+              {field("licenseNo", "Guide licence no.", { autoComplete: "off" })}
+              <label style={{ gridColumn: "1 / -1" }}>
+                <span className="paydoc-label">Address (as on ID card — for the withholding certificate)</span>
+                <textarea rows={2} value={ext.address} onChange={(e) => setExt((x) => ({ ...x, address: e.target.value }))} style={{ width: "100%", boxSizing: "border-box" }} />
+              </label>
               {field("bankName", "Bank", { autoComplete: "off" })}
               {field("bankAccountNo", "Account no.", { inputMode: "numeric", autoComplete: "off" })}
               {field("bankAccountName", "Account name", { autoComplete: "off" })}
+              <label style={{ gridColumn: "1 / -1" }}>
+                <span className="paydoc-label">Guide licence card (หน้าบัตรไกด์)</span>
+                <input type="file" accept="image/jpeg,image/png,application/pdf" onChange={(e) => setCard(e.target.files?.[0] ?? null)} />
+              </label>
+              {cardUrl && <img src={cardUrl} alt="Guide licence card" style={{ gridColumn: "1 / -1", maxHeight: 180, maxWidth: "100%", objectFit: "contain", borderRadius: 8, border: "1px solid var(--line)" }} />}
+              {card && !cardUrl && <span style={{ gridColumn: "1 / -1", fontSize: 12.5, color: "var(--ink-soft)" }}>📎 {card.name}</span>}
+              <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                <input type="checkbox" checked={toPeak} onChange={(e) => setToPeak(e.target.checked)} style={{ width: "auto", flex: "none", margin: "3px 0 0" }} />
+                <span>Add them to PEAK as a supplier now <span style={{ color: "var(--ink-soft)", fontSize: 12 }}>— links the existing PEAK contact with this tax ID, or creates one (บุคคลธรรมดา)</span></span>
+              </label>
             </fieldset>
           ) : (
             <label>
@@ -123,7 +170,7 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
             </label>
           )}
           {mode === "external" && taxDigits.length > 0 && taxDigits.length !== 13 && <Note tone="warn">A Thai tax ID has 13 digits — this one has {taxDigits.length}.</Note>}
-          {mode === "external" && !taxDigits && <Note tone="warn">Without a tax ID the withholding certificate cannot be issued. You can add it later on the Guides page.</Note>}
+          {mode === "external" && !taxDigits && <Note tone="warn">Without a tax ID the withholding certificate cannot be issued{toPeak ? ", and they cannot be added to PEAK" : ""}.</Note>}
 
           <fieldset disabled={busy} className="paydoc-fields">
             <label>
@@ -153,7 +200,7 @@ export default function HandoverDialog({ guideId, guideName, date, slotIdx, tour
         </div>
 
         <div className="mfoot">
-          {!busy && !ready && <span style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>{!HANDOVER_TIME.test(time) ? "Enter the handover time" : mode === "existing" ? "Choose the guide" : "Enter the guide's full name"} to continue</span>}
+          {!busy && !ready && <span style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>{!HANDOVER_TIME.test(time) ? "Enter the handover time" : mode === "existing" ? "Choose the guide" : ext.fullName.trim().length < 2 ? "Enter the guide's full name" : "Enter the 13-digit tax ID (or untick PEAK)"} to continue</span>}
           <button className="btn ghost" onClick={close} disabled={busy}>Cancel</button>
           <button className="btn primary" onClick={submit} disabled={!ready || busy}>{busy ? "Recording…" : "Record handover"}</button>
         </div>
