@@ -16,7 +16,9 @@ import { separatePaymentWarning } from "@/lib/peak-payment-document";
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
   // together · one ref", and if not, why. The server refuses with the same rule.
-  combinable?: boolean; combinedBlock?: { code: string; message: string; documentNo?: string } | null; sheetPeakDocumentNo?: string | null };
+  combinable?: boolean; combinedBlock?: { code: string; message: string; documentNo?: string } | null; sheetPeakDocumentNo?: string | null;
+  // From /api/payments (lib/peak-job-status): whether FolkOPS holds a PEAK document for the job.
+  peakStatus?: { state: "IN_PEAK" | "NOT_IN_PEAK" | "NOTHING_TO_POST"; documentNo: string | null; source: string | null } };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
 type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
@@ -51,7 +53,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [hideSec, setHideSec] = useState<Set<string>>(new Set());
   const toggleSec = (s: string) => setHideSec((p) => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; });
-  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "paid">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "paid" | "notpeak">("all");
   const [q, setQ] = useState(""); // filter by guide id / name
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
   // date/slotIdx are set only when the bonus is tied to a rewarded tour (via "Reward a
@@ -140,6 +142,14 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     ? <span className="pay-doc-tag" title={`Posted to PEAK from the job sheet as its own document, so it cannot also go into a combined payment document. It can still be paid on its own. If that document was voided in PEAK, record it with "Voided in PEAK…" on the job sheet.`}>In PEAK from job sheet · {j.sheetPeakDocumentNo ?? j.combinedBlock.documentNo ?? "document"}</span>
     : !j.paid && j.combinedBlock?.code === "not-approved"
       ? <span className="pay-doc-tag" title="A combined PEAK payment takes approved job sheets only. Approve this job sheet first — it can still be paid on its own.">Not approved</span>
+      : null;
+  // No PEAK document for this job in FolkOPS (lib/peak-job-status). Once paid, that is a
+  // gap in the books; before payment it is the normal state — so the paid one stands out.
+  const notInPeak = (j: Job) => j.peakStatus?.state === "NOT_IN_PEAK";
+  const peakBadge = (j: Job) => notInPeak(j)
+    ? <span className={`pay-peak-missing${j.paid ? " paid" : ""}`} title={j.paid ? "Paid, but FolkOPS has no PEAK document for this job — record its EXP ref, or post it to PEAK" : "No PEAK document for this job yet"}>Not in PEAK</span>
+    : j.peakStatus?.state === "NOTHING_TO_POST"
+      ? <span className="pay-peak-none" title="This job pays nothing, so there is nothing to book in PEAK">No PEAK doc · ฿0</span>
       : null;
   // A locked job's combined document, in words: its EXP once PEAK created it.
   const docFor = (j: Job) => paymentDocs.find((d) => d.paymentRef === j.peakPaymentRef);
@@ -406,12 +416,14 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const ql = q.trim().toLowerCase();
   // Guides with unpaid jobs float to the top so the operator sees who's still owed.
   const visible = rows
-    .filter((r) => (statusFilter === "all" || r.status === statusFilter) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)))
+    .filter((r) => (statusFilter === "all" || (statusFilter === "notpeak" ? r.jobs.some(notInPeak) : r.status === statusFilter)) && (!ql || `${r.guideId} ${r.guide}`.toLowerCase().includes(ql)))
     .sort((a, b) => a.guide.localeCompare(b.guide));
   // Split BY TOUR: a guide appears under Unpaid for their unpaid tours and under Paid
   // for their paid tours — so a single tour moves to Paid the moment it's paid.
-  const unpaidGuides = visible.filter((r) => r.jobs.some((j) => !j.paid));
-  const paidGuides = visible.filter((r) => r.jobs.some((j) => j.paid));
+  // "Not in PEAK" narrows each guide to the jobs FolkOPS has no PEAK document for.
+  const jobsShown = (r: Row) => (statusFilter === "notpeak" ? r.jobs.filter(notInPeak) : r.jobs);
+  const unpaidGuides = visible.filter((r) => jobsShown(r).some((j) => !j.paid));
+  const paidGuides = visible.filter((r) => jobsShown(r).some((j) => j.paid));
   // Flat, date-sorted list of every unpaid job across all guides — the "Pending only"
   // view, so pending payments read in tour-date order (earliest first) rather than by guide.
   const pendingFlat: (Job & { guideId: string; guide: string })[] = rows
@@ -425,7 +437,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const isOpen = open.has(okey);
     // PEAK stays in the background on the main row: a compact recorded-vs-total
     // count; the actual EXP- refs live in the expanded job rows.
-    const refd = jobs.filter((j) => j.peakRef).length;
+    const refd = jobs.filter((j) => !notInPeak(j)).length;
+    const missing = jobs.length - refd;
     // Jobs a payment document holds are paid through that document only. `payable` is
     // what "Pay N jobs together" may take — the server's own rule; `unlocked` is every
     // unpaid job no payment document holds, which a per-tour or covering slip can pay.
@@ -454,14 +467,14 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           <td className="r"><b>{thb(sumBy(jobs, "amount"))}</b></td>
           <td>
             {mode === "paid"
-              ? (refd === jobs.length
-                  ? <span className="ob ok" title="Every job in this payout has its PEAK expense ref recorded">✓ PEAK {refd}/{jobs.length}</span>
-                  : <span className="ob warn" title="Some paid jobs have no PEAK expense ref yet — open the row to record them">⚠ {refd}/{jobs.length} ref&rsquo;d</span>)
+              ? (!missing
+                  ? <span className="ob ok" title="FolkOPS has a PEAK document for every job in this payout">✓ PEAK {refd}/{jobs.length}</span>
+                  : <span className="ob warn" title="Paid jobs with no PEAK document in FolkOPS — open the row to see which">⚠ {missing} not in PEAK</span>)
               : openDocs.length
                 ? <span className="ob warn" title="PEAK has not confirmed a document or payment for this guide — open the row to settle it">⚠ PEAK unconfirmed</span>
                 : awaitingDocs.length
                   ? <span className="ob warn" title="A combined PEAK document exists and is waiting for its payment to be recorded">{awaitingDocs[0].peakDocumentNo} · awaiting payment</span>
-                  : <span className="ob mut">—</span>}
+                  : missing ? <span className="ob mut" title="No PEAK document for these jobs yet">{missing} not in PEAK</span> : <span className="ob mut">—</span>}
           </td>
           <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>
           <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
@@ -519,11 +532,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               const ms = matchState(j.slips ?? [], j.amount);
               const hasSlips = (j.slips?.length ?? 0) > 0;
               return (
-              <div key={i} style={{ padding: "5px 0", borderTop: i ? "1px solid var(--line)" : "none" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
-                  <span style={{ minWidth: 150 }}>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
-                  <span style={{ flex: 1 }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
-                  <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 80, textAlign: "right" }}>
+              <div key={i}>
+                <div className={`pay-job-row${i ? "" : " first"}`}>
+                  <span>{dShort(j.date)} · {SLOTS[j.slotIdx]?.start}</span>
+                  <span style={{ display: "block" }}>{j.tour}{j.ref ? <span style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{j.ref}</span> : null}</span>
+                  <span className="pay-job-amt" style={{ fontVariantNumeric: "tabular-nums" }}>
                     <button type="button" className="pay-copy"
                       title={`Copy ${thb(j.amount)} to paste into your banking app · คัดลอกยอดไปวางในแอปธนาคาร`}
                       onClick={() => copyAmount(`${r.guideId}|${j.date}|${j.slotIdx}`, j.amount)}>
@@ -532,10 +545,14 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                     </button>
                     {(j.expenses ?? 0) > 0 && <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Guide fee (after WHT) + expense reimbursement">fee {thb(j.fee)} + reimb. {thb(j.expenses)}</span>}
                   </span>
+                  <span className="pay-job-status">
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                   {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to — every job in it shares this reference and document">{docTag(j)}</span>}
                   {inPeakTag(j)}
+                  {peakBadge(j)}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : j.peakPaymentRef ? docBadge(j) : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
+                  </span>
+                  <span className="pay-job-actions">
                   <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                   {j.paid && j.eslipUrl && !hasSlips && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
                   {canEdit && !j.paid && !hasSlips && !j.peakPaymentRef && <label className="btn sm" style={{ cursor: "pointer" }} title="Pay this tour in full with one slip (one transfer) — marks it paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f && confirmSeparate(r.guide, payable.length, j)) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
@@ -548,6 +565,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                         : <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>)
                     : !j.peakPaymentRef && <button className="btn sm primary" title="Mark this one job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(r.guide, payable.length, j)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
                   {canEdit && !j.peakPaymentRef && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
+                  </span>
                 </div>
                 {hasSlips && (
                   <div style={{ margin: "5px 0 2px 160px", fontSize: 12, background: "var(--card,#fff)", border: "1px solid var(--line)", borderRadius: 8, padding: "6px 10px" }}>
@@ -574,7 +592,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       </Fragment>
     );
   }
-  const vTotals = visible.reduce((a, r) => ({ tours: a.tours + r.tours, netFee: a.netFee + r.netFee, expenses: a.expenses + r.expenses, payout: a.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
+  // Under "Not in PEAK" the footer adds up only the jobs shown, not the guides' whole month.
+  const vTotals = statusFilter === "notpeak"
+    ? visible.flatMap(jobsShown).reduce((a, j) => ({ tours: a.tours + 1, netFee: a.netFee + (j.fee ?? 0), expenses: a.expenses + (j.expenses ?? 0), payout: a.payout + (j.amount ?? 0) }), { tours: 0, netFee: 0, expenses: 0, payout: 0 })
+    : visible.reduce((a, r) => ({ tours: a.tours + r.tours, netFee: a.netFee + r.netFee, expenses: a.expenses + r.expenses, payout: a.payout + r.payout }), { tours: 0, netFee: 0, expenses: 0, payout: 0 });
   // Month-overview figures for the dashboard band (whole month, not the filtered view).
   const allJobs = rows.flatMap((r) => r.jobs);
   const paidAmt = allJobs.filter((j) => j.paid).reduce((sum, j) => sum + (j.amount || 0), 0);
@@ -613,10 +634,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         <div className="op-toolbar" style={{ gap: 10 }}>
           <label style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-soft)" }}>Month</label>
           <input className="search" style={{ flex: "none", width: 160 }} type="month" value={period} onChange={(e) => { setPeriod(e.target.value); load(e.target.value); }} />
-          <select className="search" style={{ flex: "none", width: 150 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "pending" | "paid")} title="Filter by approval status">
+          <select className="search" style={{ flex: "none", width: 150 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "pending" | "paid" | "notpeak")} title="Filter by payment or PEAK status">
             <option value="all">All statuses</option>
             <option value="pending">Pending only</option>
             <option value="paid">Paid only</option>
+            <option value="notpeak">Not in PEAK</option>
           </select>
           <input className="search" style={{ flex: "none", width: 180 }} placeholder="Search guide…" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn sm" onClick={exportCsv}>Export payroll CSV</button>
@@ -660,6 +682,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(j.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                     {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to">{docTag(j)} · {docBadge(j)}</span>}
                     {inPeakTag(j)}
+                    {peakBadge(j)}
                     {canEdit && !j.peakPaymentRef && <button className="btn sm primary" title="Mark this job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(j.guide, payableCountOf(j.guideId), j)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, j.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>}
                   </td>
                 </tr>
@@ -680,10 +703,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               {visible.length === 0 ? (
                 <tr><td colSpan={9} className="op-empty">{rows.length === 0 ? "No tours assigned this month yet." : "No guides match this filter."}</td></tr>
               ) : (<>
-                {unpaidGuides.length > 0 && <tr><td colSpan={9} onClick={() => toggleSec("unpaid")} style={{ cursor: "pointer", padding: "8px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--assign)" }}>{hideSec.has("unpaid") ? "▸" : "▾"} Unpaid — needs payment ({unpaidGuides.length}) · {thb(unpaidGuides.reduce((s, r) => s + r.jobs.filter((j) => !j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
-                {!hideSec.has("unpaid") && unpaidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => !j.paid), "unpaid"))}
-                {paidGuides.length > 0 && <tr><td colSpan={9} onClick={() => toggleSec("paid")} style={{ cursor: "pointer", padding: "12px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>{hideSec.has("paid") ? "▸" : "▾"} Paid ({paidGuides.length}) · {thb(paidGuides.reduce((s, r) => s + r.jobs.filter((j) => j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
-                {!hideSec.has("paid") && paidGuides.map((r) => renderGuideRow(r, r.jobs.filter((j) => j.paid), "paid"))}
+                {unpaidGuides.length > 0 && <tr><td colSpan={9} onClick={() => toggleSec("unpaid")} style={{ cursor: "pointer", padding: "8px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--assign)" }}>{hideSec.has("unpaid") ? "▸" : "▾"} Unpaid — needs payment ({unpaidGuides.length}) · {thb(unpaidGuides.reduce((s, r) => s + jobsShown(r).filter((j) => !j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
+                {!hideSec.has("unpaid") && unpaidGuides.map((r) => renderGuideRow(r, jobsShown(r).filter((j) => !j.paid), "unpaid"))}
+                {paidGuides.length > 0 && <tr><td colSpan={9} onClick={() => toggleSec("paid")} style={{ cursor: "pointer", padding: "12px 12px 5px", fontWeight: 800, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--green)" }}>{hideSec.has("paid") ? "▸" : "▾"} Paid ({paidGuides.length}) · {thb(paidGuides.reduce((s, r) => s + jobsShown(r).filter((j) => j.paid).reduce((a, j) => a + j.amount, 0), 0))}</td></tr>}
+                {!hideSec.has("paid") && paidGuides.map((r) => renderGuideRow(r, jobsShown(r).filter((j) => j.paid), "paid"))}
               </>)}
             </tbody>
             {visible.length > 0 && (
