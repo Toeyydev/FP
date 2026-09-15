@@ -505,6 +505,22 @@ export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExp
 }
 
 /**
+ * An expense exactly as PEAK returns it — every field of the document and its lines —
+ * for comparing a document made in PEAK by hand with one FolkOPS created (what makes
+ * PEAK show a column the other lacks). Read-only; a GET is not billed. A reused EXP
+ * number can return several documents: all of them are returned.
+ */
+export async function getExpenseRaw(code: string): Promise<{ ok: true; expenses: Record<string, unknown>[] } | { ok: false; desc: string }> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(`${API}/Expenses?${new URLSearchParams({ code }).toString()}`, { method: "GET" }, "peakExpenses");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const wrap = peakWrap<{ expenses?: unknown; resDesc?: unknown }>(call.j ?? {}, "peakExpenses");
+  if (!wrap || !Array.isArray(wrap.expenses)) return { ok: false, desc: wrap?.resDesc ? sanitizePeakError(wrap.resDesc) : "PEAK returned no expense list" };
+  return { ok: true, expenses: wrap.expenses as Record<string, unknown>[] };
+}
+
+/**
  * Read one expense. By PEAK's id when FolkOPS has it — the id is unique, the EXP number is
  * not (see parsePeakExpense) — and by EXP number only when there is no id.
  * Read-only; safe to repeat.
