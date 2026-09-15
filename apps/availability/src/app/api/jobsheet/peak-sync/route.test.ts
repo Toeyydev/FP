@@ -171,13 +171,16 @@ describe("POST /api/jobsheet/peak-sync — posting", () => {
     await post(JOB);
     const sent = createExpenseMock.mock.calls[0][0] as { products: { description: string; accountCode: string; price: number; withHoldingTaxAmount: number }[] };
     expect(sent.products.map((p) => [p.description, p.accountCode, p.price])).toEqual([
-      ["Guide Fee — FOLK-BKK-20260912-01", "510111", 1200],
+      ["Guide Fee — FOLK-BKK-20260912-01 · WHT 3% ฿36.00", "510111", 1200],
       ["Grand Palace", "510104", 1000],
       ["Ferry (Inc. Guide)", "510104", 90],
     ]);
     // Withholding tax belongs to the fee line alone.
     expect(sent.products[0].withHoldingTaxAmount).toBe(36);
     expect(sent.products.slice(1).every((p) => p.withHoldingTaxAmount === 0)).toBe(true);
+    // …and is written into that line's text and the remark, because PEAK's printed form has no WHT column.
+    expect(sent.products.slice(1).some((p) => p.description.includes("WHT"))).toBe(false);
+    expect((sent as unknown as { remark: string }).remark).toContain("· WHT ฿36.00");
   });
 
   it("never tells PEAK the expense was paid — the transfer has not happened yet", async () => {

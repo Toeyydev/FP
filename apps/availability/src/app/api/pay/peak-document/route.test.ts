@@ -173,11 +173,13 @@ describe("stage 1 — POST /api/pay/peak-document creates ONE unpaid document", 
     const expense = peak.create.mock.calls[0][0];
     expect(expense).not.toHaveProperty("paidPayments");
     expect(expense.reference).toBe("FOLK-PAY-203005-01");
+    // PEAK's printed form has no withholding column, so the WHT is written into the text too.
+    expect(expense.remark).toBe("Folkpaths guide payment FOLK-PAY-203005-01 · G-TEST · 3 jobs · WHT ฿126.00 · transfer ฿4,169.00");
     expect(expense.contact).toEqual({ id: "contact-guide-a" });
     expect(expense.products.map((p: Row) => [p.description, p.accountCode, p.price, p.withHoldingTaxAmount])).toEqual([
-      ["Guide fee - FOLK-BKK-20300506-01", "510111", 1200, 36],
-      ["Guide fee - FOLK-BKK-20300506-02", "510111", 1200, 36],
-      ["Guide fee - FOLK-BKK-20300512-01", "510111", 1800, 54],
+      ["Guide fee - FOLK-BKK-20300506-01 · WHT 3% ฿36.00", "510111", 1200, 36],
+      ["Guide fee - FOLK-BKK-20300506-02 · WHT 3% ฿36.00", "510111", 1200, 36],
+      ["Guide fee - FOLK-BKK-20300512-01 · WHT 3% ฿54.00", "510111", 1800, 54],
       ["Reimbursement / Other Tour Cost - FOLK-BKK-20300512-01", "510104", 95, 0],
     ]);
   });
