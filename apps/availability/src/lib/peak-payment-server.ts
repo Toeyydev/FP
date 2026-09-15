@@ -467,7 +467,7 @@ export function prismaPayDeps(opts: {
       }
       const r = await insertExpenseFile({
         transactionId: documentId, transactionCode: documentNo,
-        fileName: `${documentNo}-slip.${extOf(slip.mime)}`, base64: slip.base64, fileType: attachmentFileType(slip.mime),
+        fileName: `${documentNo}-slip.${extOf(slip.mime)}`, base64: slip.base64, fileType: attachmentFileType(slip.mime), mime: slip.mime,
       });
       return { ok: r.ok, reason: r.ok ? undefined : r.desc };
     },
