@@ -119,9 +119,9 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
         <div className="mbody" style={{ display: "grid", gap: 14 }}>
           <div className="paydoc-sum">
             {doc.jobs.map((j) => <Row key={`${j.date}|${j.slotIdx}`} label={`${dShort(j.date)} · ${j.ref}`} value={thb(j.payout)} />)}
-            <Row label={`${doc.lineCount} lines · gross`} value={thb(doc.gross)} />
-            {doc.wht > 0 && <Row label="WHT" value={`−${thb(doc.wht)}`} />}
-            <Row label={already ? `Paid on ${doc.paidDate ? dShort(doc.paidDate) : "an earlier day"}` : "Amount to pay — the transfer must be exactly this"} value={thb(doc.total)} strong />
+            <Row label={`Gross expense · ${doc.lineCount} line${doc.lineCount === 1 ? "" : "s"}`} value={thb(doc.gross)} />
+            <Row label="WHT" value={doc.wht > 0 ? thb(doc.wht) : "–"} />
+            <Row label={already ? `Amount paid · ${doc.paidDate ? dShort(doc.paidDate) : "an earlier day"}` : "Net payable — the transfer must be exactly this"} value={thb(doc.total)} strong />
           </div>
           {doc.documentLink && <a className="btn sm" style={{ justifySelf: "start" }} href={doc.documentLink} target="_blank" rel="noopener noreferrer">View PEAK document</a>}
 

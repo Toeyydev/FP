@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { thb } from "@/lib/jobsheet";
+import { EXPENSE_CATEGORIES, thb } from "@/lib/jobsheet";
 import { leftOutWarning } from "@/lib/peak-payment-document";
 
 // "Pay N jobs together · one ref", stage 1: create ONE PEAK expense document.
@@ -36,7 +36,10 @@ export type CreatedDocument = {
   hasSavedSlip?: boolean;
 };
 
-type Line = { description: string; jobRef: string; kind: string; category: string | null; accountCode: string; price: number; wht: number };
+type Line = { description: string; jobRef: string; kind: string; category: string | null; accountCode: string; price: number; wht: number; net?: number };
+
+/** The line's expense type in words: Guide fee, Review reward, or the reimbursed category. */
+const lineType = (l: Line) => l.kind === "GUIDE_FEE" ? "Guide fee" : l.kind === "REVIEW_REWARD" ? "Review reward" : `Reimbursement${l.category ? ` · ${EXPENSE_CATEGORIES.find((c) => c.code === l.category)?.label ?? l.category}` : ""}`;
 // A billed row with no expense category (lib/peak-payment-document MissingCategoryRow).
 type MissingCategory = { jobRef: string; date: string; slotIdx: number; rowNo: number; description: string; amount: number };
 type Preview = { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean } | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
@@ -186,25 +189,27 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
                 ) : (
                   <>
                     <div className="grid-scroll">
-                      <table className="acct-table paydoc-table">
-                        <thead><tr><th style={{ width: 28 }}>#</th><th>Line</th><th style={{ width: 90 }}>Account</th><th className="r" style={{ width: 110 }}>Amount</th><th className="r" style={{ width: 90 }}>WHT</th></tr></thead>
+                      {/* Gross, WHT and Net each in their own column, so the withholding is
+                          checked against the amounts rather than read out of a description. */}
+                      <table className="acct-table paydoc-table paydoc-wht">
+                        <thead><tr><th>Job No.</th><th>Expense type</th><th className="r" style={{ width: 110 }}>Gross</th><th className="r" style={{ width: 90 }}>WHT</th><th className="r" style={{ width: 110 }}>Net</th></tr></thead>
                         <tbody>
                           {preview.lines.map((l, i) => (
                             <tr key={i}>
-                              <td className="num">{i + 1}</td>
-                              <td>{l.description}</td>
-                              <td className="num">{l.accountCode}</td>
-                              <td className="r num">{thb(l.price)}</td>
-                              <td className="r num">{l.wht ? `−${thb(l.wht)}` : "—"}</td>
+                              <td className="num" data-label="Job No.">{l.jobRef}</td>
+                              <td data-label="Expense type">{lineType(l)}<span className="paydoc-acct">{l.accountCode}</span></td>
+                              <td className="r num" data-label="Gross">{thb(l.price)}</td>
+                              <td className="r num" data-label="WHT">{l.wht > 0 ? thb(l.wht) : "–"}</td>
+                              <td className="r num" data-label="Net">{thb(l.net ?? l.price - l.wht)}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
                     <div className="paydoc-sum">
-                      <Row label={`${preview.lines.length} lines, before withholding`} value={thb(preview.gross)} />
-                      {preview.wht > 0 && <Row label="Withholding tax on guide fees" value={`−${thb(preview.wht)}`} />}
-                      <Row label={alreadyPaid ? `Paid to the guide on ${dShort(alreadyPaid.paidDate)} — recorded against this document next` : "Amount to pay the guide — recorded later, against this document"} value={thb(preview.total)} strong />
+                      <Row label={`Gross expense · ${preview.lines.length} line${preview.lines.length === 1 ? "" : "s"}`} value={thb(preview.gross)} />
+                      <Row label="WHT" value={preview.wht > 0 ? thb(preview.wht) : "–"} />
+                      <Row label={alreadyPaid ? `Amount paid · ${dShort(alreadyPaid.paidDate)} — recorded against this document next` : "Net payable — recorded later, against this document"} value={thb(preview.total)} strong />
                     </div>
                     <div className="paydoc-credit" title="PEAK bills each document created, not each line">
                       Creates <b>1 PEAK document</b> with {preview.lines.length} line{preview.lines.length === 1 ? "" : "s"} for {selected.length} job{selected.length === 1 ? "" : "s"}, <b>unpaid</b> — 1 PEAK API credit.
@@ -256,9 +261,9 @@ export function CreatedState({ doc, onRecordPayment, compact }: { doc: CreatedDo
         <span style={{ fontSize: 12, color: "var(--ink-soft)", fontFamily: "monospace" }}>{doc.paymentRef}</span>
       </div>
       <div className="paydoc-sum">
-        <Row label={`${doc.jobs.length} job${doc.jobs.length === 1 ? "" : "s"} · ${doc.lineCount} line${doc.lineCount === 1 ? "" : "s"} · gross`} value={thb(doc.gross)} />
-        {doc.wht > 0 && <Row label="WHT" value={`−${thb(doc.wht)}`} />}
-        <Row label={doc.alreadyPaid ? "Amount paid" : "Amount to pay"} value={thb(doc.total)} strong />
+        <Row label={`Gross expense · ${doc.jobs.length} job${doc.jobs.length === 1 ? "" : "s"} · ${doc.lineCount} line${doc.lineCount === 1 ? "" : "s"}`} value={thb(doc.gross)} />
+        <Row label="WHT" value={doc.wht > 0 ? thb(doc.wht) : "–"} />
+        <Row label={doc.alreadyPaid ? "Amount paid" : "Net payable"} value={thb(doc.total)} strong />
       </div>
       {doc.recordError && <Note tone="danger">{doc.recordError}. The jobs stay locked so nothing creates a second document — resolve it on the Payments page.</Note>}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

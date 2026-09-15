@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     });
     if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories });
     return NextResponse.json({
-      ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
+      ok: true, lines: doc.traces.map((t) => ({ ...t, net: Math.round((t.price - t.wht) * 100) / 100 })), gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
       ...(alreadyPaid ? { alreadyPaid, paidDate: ctx.paidDate, hasSlip: !!ctx.slipLink } : {}),
     });
   } catch (e) {

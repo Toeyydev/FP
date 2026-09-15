@@ -320,6 +320,41 @@ export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): Guide
   return { payoutExpenses, payout: payoutExpenses + t.netGuideFee, excludedTagged, untaggedIncluded };
 }
 
+export type WhtBreakdownLine = { kind: "GUIDE_FEE" | "REIMBURSEMENT"; label: string; gross: number; wht: number | null; net: number };
+export type WhtBreakdown = { lines: WhtBreakdownLine[]; gross: number; wht: number; net: number };
+
+/**
+ * A job's payout as Gross − WHT = Net, one line per expense type — so the withholding
+ * can be shown as its own figure instead of only inside a description.
+ *
+ * Presentation only: every figure comes from computeTotals (gross fee, net fee) and
+ * guidePayoutTotal (what is transferred). No rate, taxable base or payer rule is
+ * decided here, and nothing is recalculated. The rounded figures are reconciled so
+ * each line and the total add up to the satang: `net` is exactly round2(payout), the
+ * WHT is the rounded gross fee minus the rounded net fee, and the reimbursement line is
+ * what the transfer adds on top of the net fee (review rewards included, as in payout).
+ * A reimbursement carries no withholding: its `wht` is null, not 0.
+ */
+export function whtBreakdown(expenses: Expense[], guideFee: GuideFee): WhtBreakdown {
+  const t = computeTotals(expenses, guideFee);
+  const net = round2(guidePayoutTotal(expenses, guideFee).payout);
+  const feeGross = round2(t.gross);
+  const feeNet = round2(t.netGuideFee);
+  const wht = round2(feeGross - feeNet);
+  const reimbursement = round2(net - feeNet);
+  const lines: WhtBreakdownLine[] = [];
+  if (feeGross > 0) lines.push({ kind: "GUIDE_FEE", label: "Guide fee", gross: feeGross, wht: wht > 0 ? wht : null, net: feeNet });
+  if (reimbursement > 0) lines.push({ kind: "REIMBURSEMENT", label: "Reimbursement", gross: reimbursement, wht: null, net: reimbursement });
+  return { lines, gross: round2(feeGross + reimbursement), wht, net };
+}
+
+/** Totals over several breakdowns (a guide's jobs, a batch), still Gross − WHT = Net. */
+export function sumWhtBreakdowns(list: { gross: number; wht: number; net: number }[]): { gross: number; wht: number; net: number } {
+  const net = round2(list.reduce((s, b) => s + b.net, 0));
+  const wht = round2(list.reduce((s, b) => s + b.wht, 0));
+  return { gross: round2(net + wht), wht, net };
+}
+
 // What the GUIDE is shown they will receive, on their own job page.
 //
 // Three rules this exists to hold together:
@@ -520,7 +555,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const compact = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
 
 /**
- * " · WHT 3% ฿45.00" — the tax withheld from a guide-fee line, written into the line's
+ * " · WHT 3% = ฿45.00" — the tax withheld from a guide-fee line, written into the line's
  * own description. PEAK stores the withholding on the line, but its printed expense
  * form has no withholding column: the amount appears only as a total at the foot of
  * the last page. Owner decision 2026-09-15: every guide-fee line shows its WHT.
@@ -529,7 +564,8 @@ const compact = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
 export function whtNote(whtPct: number | null | undefined, wht: number): string {
   if (!(wht > 0)) return "";
   const pct = Number(whtPct) || 0;
-  return ` · WHT ${pct > 0 ? `${Math.round(pct * 100) / 100}% ` : ""}${thb(wht)}`;
+  // "WHT 3% = ฿45.00": the "=" reads as the calculation (owner request, 2026-09-15).
+  return ` · WHT ${pct > 0 ? `${Math.round(pct * 100) / 100}% ` : ""}= ${thb(wht)}`;
 }
 
 export function buildJobSheetExpense(input: {
