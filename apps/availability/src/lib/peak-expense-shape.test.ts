@@ -24,3 +24,13 @@ describe("compareShapes", () => {
     expect(d.some((x) => x.includes("price") || x.includes("description"))).toBe(false);
   });
 });
+
+describe("payments", () => {
+  it("spells out each payment's fields and names a withholding type set on one side only", () => {
+    const a = expenseShape({ ...handMade, paidPayments: [{ paymentDate: "20300110", withHoldingTaxAmount: "45.00", withHoldingTaxType: "40(8)", payments: [{ amount: 1455, paymentMethod: { id: "m1" } }] }] });
+    const b = expenseShape({ ...viaApi, paidPayments: [{ paymentDate: "20300111", withHoldingTaxAmount: "45.00", payments: [{ amount: 1455, paymentMethod: { id: "m1" } }] }] });
+    expect(a.payments[0].fields).toMatchObject({ withHoldingTaxType: "40(8)", "payments[0].amount": 1455 });
+    expect(compareShapes(a, b, ["hand-made", "FolkOPS"])).toContain('payment 1: "withHoldingTaxType" only in hand-made ("40(8)")');
+  });
+});
+

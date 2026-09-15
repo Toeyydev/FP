@@ -20,16 +20,33 @@ export type ExpenseShape = {
   header: Record<string, unknown>;
   headerKeys: string[];
   lines: { n: number; fields: Record<string, unknown> }[];
+  /** Payments recorded on the document — where PEAK usually records the withholding
+   *  that feeds its ภ.ง.ด. report and certificate. */
+  payments: { n: number; fields: Record<string, unknown> }[];
 };
 
 export function expenseShape(raw: Raw): ExpenseShape {
   const header = Object.fromEntries(HEADER_FIELDS.filter((k) => k in raw).map((k) => [k, show(raw[k])]));
   const products = Array.isArray(raw.products) ? (raw.products as Raw[]) : [];
+  const paid = Array.isArray(raw.paidPayments) ? (raw.paidPayments as Raw[]) : [];
   return {
     header,
     headerKeys: Object.keys(raw).sort(),
     lines: products.map((p, i) => ({ n: i + 1, fields: Object.fromEntries(Object.keys(p).sort().map((k) => [k, show(p[k])])) })),
+    payments: paid.map((p, i) => ({ n: i + 1, fields: flat(p) })),
   };
+}
+
+/** One level of nesting spelled out ("paymentMethod.id", "payments[0].amount"). */
+function flat(o: Raw, prefix = ""): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(o).sort()) {
+    const v = o[k];
+    if (v && typeof v === "object" && !Array.isArray(v) && !prefix) Object.assign(out, flat(v as Raw, `${k}.`));
+    else if (Array.isArray(v) && !prefix && v.length && typeof v[0] === "object") v.slice(0, 3).forEach((x, i) => Object.assign(out, flat(x as Raw, `${k}[${i}].`)));
+    else out[`${prefix}${k}`] = show(v);
+  }
+  return out;
 }
 
 const isBlank = (v: unknown) => v == null || v === "" || (typeof v === "number" && v === 0) || v === "0" || v === "0.00";
@@ -56,6 +73,15 @@ export function compareShapes(a: ExpenseShape, b: ExpenseShape, labels: [string,
       else if (!(k in fa)) out.push(`line ${i + 1}: "${k}" only in ${lb} (${JSON.stringify(vb)})`);
       else if (isBlank(va) !== isBlank(vb)) out.push(`line ${i + 1}: "${k}" is ${JSON.stringify(va)} in ${la} but ${JSON.stringify(vb)} in ${lb}`);
       else if (!isBlank(va) && kind(va) !== kind(vb)) out.push(`line ${i + 1}: "${k}" is a ${kind(va)} in ${la} (${JSON.stringify(va)}) but a ${kind(vb)} in ${lb} (${JSON.stringify(vb)})`);
+    }
+  }
+  if (a.payments.length !== b.payments.length) out.push(`${la} has ${a.payments.length} payment(s), ${lb} has ${b.payments.length}`);
+  for (let i = 0; i < Math.min(a.payments.length, b.payments.length); i++) {
+    const fa = a.payments[i].fields, fb = b.payments[i].fields;
+    for (const k of [...new Set([...Object.keys(fa), ...Object.keys(fb)])].sort()) {
+      if (!(k in fb)) out.push(`payment ${i + 1}: "${k}" only in ${la} (${JSON.stringify(fa[k])})`);
+      else if (!(k in fa)) out.push(`payment ${i + 1}: "${k}" only in ${lb} (${JSON.stringify(fb[k])})`);
+      else if (!/amount|total|date|(^|\.)id$|Id$|code$/i.test(k) && isBlank(fa[k]) !== isBlank(fb[k])) out.push(`payment ${i + 1}: "${k}" is ${JSON.stringify(fa[k])} in ${la} but ${JSON.stringify(fb[k])} in ${lb}`);
     }
   }
   return out;

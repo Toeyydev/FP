@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
     if (!s) return;
     lines.push("", `DOCUMENT ${codes[i]}`, `header: ${JSON.stringify(s.header)}`, `header fields: ${s.headerKeys.join(", ")}`);
     for (const l of s.lines) lines.push(`line ${l.n}: ${JSON.stringify(l.fields)}`);
+    for (const p of s.payments) lines.push(`payment ${p.n}: ${JSON.stringify(p.fields)}`);
   });
   return new NextResponse(lines.join("\n") + "\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
 }
