@@ -13,6 +13,8 @@ const bodyZ = z.object({
   jobs: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60),
   // Accepted for older callers and ignored: the document is created before any payment exists.
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Jobs already paid, put into one PEAK document afterwards (lib/combined-payment paidJobPeakBlock).
+  alreadyPaid: z.boolean().optional(),
 });
 
 // POST { guideId, jobs } — the unpaid PEAK expense document "Create PEAK document" would
@@ -24,10 +26,11 @@ export async function POST(req: NextRequest) {
   const parsed = bodyZ.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, jobs } = parsed.data;
+  const alreadyPaid = !!parsed.data.alreadyPaid;
 
   const reasons: string[] = [];
   if (!peakEnabled) reasons.push("PEAK is not connected");
-  const loaded = await loadPaymentContext(guideId, jobs);
+  const loaded = await loadPaymentContext(guideId, jobs, { alreadyPaid });
   if (!loaded.ok) reasons.push(...loaded.reasons);
   const { ctx } = loaded;
 
@@ -46,7 +49,10 @@ export async function POST(req: NextRequest) {
       jobs: candidates, accounts: ctx.accounts,
     });
     if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories });
-    return NextResponse.json({ ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate });
+    return NextResponse.json({
+      ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
+      ...(alreadyPaid ? { alreadyPaid, paidDate: ctx.paidDate, hasSlip: !!ctx.slipLink } : {}),
+    });
   } catch (e) {
     if (!(e instanceof PaymentDocumentNotPostable)) throw e;
     missingCategories = e.missingCategories;

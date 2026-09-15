@@ -18,6 +18,9 @@ export const dynamic = "force-dynamic";
 const bodyZ = z.object({
   guideId: z.string().min(1),
   jobs: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60),
+  // The jobs were already paid (a transfer made before any PEAK document existed). The
+  // document is created the same way; recording its payment later only adds the EXP.
+  alreadyPaid: z.boolean().optional(),
 });
 const keyOf = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 
@@ -37,19 +40,20 @@ export async function POST(req: NextRequest) {
   const parsed = bodyZ.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, jobs } = parsed.data;
+  const alreadyPaid = !!parsed.data.alreadyPaid;
 
   // Asked again for exactly the jobs a live document already holds (a double click, a
   // retry after a dropped connection): answer with that document. Never a second one.
   const existing = await existingDocumentFor(guideId, jobs);
   if (existing) return existing;
 
-  const loaded = await loadPaymentContext(guideId, jobs);
+  const loaded = await loadPaymentContext(guideId, jobs, { alreadyPaid });
   if (!loaded.ok) return NextResponse.json({ error: "not-payable", reasons: loaded.reasons }, { status: 409 });
   const { ctx } = loaded;
 
   let doc: GuidePaymentDocument | null = null;
   let result: CreateDocumentResult | null = null;
-  const deps = prismaCreateDeps({ guideId, actor });
+  const deps = prismaCreateDeps({ guideId, actor, alreadyPaid });
   // The FOLK-PAY number is a count + 1, so two documents in the same second can pick the
   // same one. The claim is the first write and fails atomically, so try the next number.
   for (let attempt = 0; attempt < 3 && !result; attempt++) {
@@ -87,6 +91,7 @@ export async function POST(req: NextRequest) {
     paymentRef: result.paymentRef, documentNo: result.documentNo, documentId: result.documentId, documentLink: result.documentLink,
     gross: result.gross, wht: result.wht, total: result.total, lineCount: result.lines, issuedDate: doc.issuedDate,
     jobs: doc.jobs, lines: doc.traces, recordError: result.recordError,
+    alreadyPaid, paidDate: ctx.paidDate,
   });
 }
 
@@ -105,7 +110,7 @@ async function existingDocumentFor(guideId: string, jobs: { date: string; slotId
   return NextResponse.json({
     ok: st === "AWAITING_PAYMENT" || st === "PAID", existing: true, status: st,
     paymentRef: doc.paymentRef, documentNo: doc.peakDocumentNo, documentId: doc.peakDocumentId, documentLink: doc.peakDocumentLink,
-    gross: f.gross, wht: f.wht, total: f.net, lineCount: f.lines, jobs: held,
+    gross: f.gross, wht: f.wht, total: f.net, lineCount: f.lines, jobs: held, alreadyPaid: doc.alreadyPaid,
     reasons: st === "AWAITING_PAYMENT" || st === "PAID" ? [] : [`${doc.paymentRef} already holds these jobs and is ${String(st).toLowerCase().replace(/_/g, " ")} — settle it on the Payments page`],
   }, { status: st === "AWAITING_PAYMENT" || st === "PAID" ? 200 : 409 });
 }

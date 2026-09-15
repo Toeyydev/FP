@@ -10,7 +10,7 @@ import { type Slip } from "@/lib/payments/slips";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { peakJobStatus } from "@/lib/peak-job-status";
 import { paymentDocumentLocksInMonth } from "@/lib/peak-payment-server";
-import { combinedPaymentBlock, type CombinedBlock } from "@/lib/combined-payment";
+import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, type CombinedBlock } from "@/lib/combined-payment";
 import { recordExpBlockers } from "@/lib/record-exp";
 import { documentStatus } from "@/lib/peak-payment-document";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
   const paymentDocs = docRefs.length
     ? await prisma.guidePaymentDocument.findMany({
         where: { paymentRef: { in: docRefs } },
-        select: { paymentRef: true, guideId: true, status: true, error: true, total: true, jobs: true, lines: true, paymentDate: true, paymentMethodName: true, peakDocumentNo: true, peakDocumentLink: true, slipUrl: true, attachmentStatus: true, attachmentError: true, createdAt: true, updatedAt: true },
+        select: { paymentRef: true, guideId: true, status: true, alreadyPaid: true, error: true, total: true, jobs: true, lines: true, paymentDate: true, paymentMethodName: true, peakDocumentNo: true, peakDocumentLink: true, slipUrl: true, attachmentStatus: true, attachmentError: true, createdAt: true, updatedAt: true },
       })
     : [];
   const docOf = new Map(paymentDocs.map((d) => [d.paymentRef, d]));
@@ -66,10 +66,14 @@ export async function GET(req: NextRequest) {
   // listed, but is not offered.
   const combinedOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, date: string) => {
     const tp = tourPayOf.get(k);
-    const combinedBlock: CombinedBlock | null = combinedPaymentBlock({ sheet: s ?? null, payment: tp ? { ...tp, document: tp.peakPaymentRef ? docOf.get(tp.peakPaymentRef) ?? null : null } : null, coveredByPayroll: covered, period: date.slice(0, 7) });
+    const state = { sheet: s ?? null, payment: tp ? { ...tp, document: tp.peakPaymentRef ? docOf.get(tp.peakPaymentRef) ?? null : null } : null, coveredByPayroll: covered, period: date.slice(0, 7) };
+    const combinedBlock: CombinedBlock | null = combinedPaymentBlock(state);
+    // "Put paid jobs in PEAK": paid on their own record, with no PEAK document yet — the
+    // rule the preview and the create refuse with (lib/combined-payment paidJobPeakBlock).
+    const canPutInPeak = !paidJobPeakBlock(state);
     // "Record EXP…": paid per tour with no EXP number yet — the rule api/pay PATCH applies.
     const canRecordExp = !!tp && !(tp.peakRef ?? "").trim() && recordExpBlockers([{ ref: "", payment: tp, sheet: s ?? null }], "").length === 0;
-    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp };
+    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp, canPutInPeak };
   };
   // Whether FolkOPS holds a PEAK document for the job (lib/peak-job-status).
   const peakStatusOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, gid: string, amount: number) => {
@@ -91,7 +95,7 @@ export async function GET(req: NextRequest) {
   const coveredByMonth = (gid: string, tourDate: string, recordCreatedAt: Date) =>
     coveredByPayrollRun(statusOf(gid), tourDate, recordCreatedAt);
 
-  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; peakStatus: ReturnType<typeof peakJobStatus> };
+  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; canPutInPeak: boolean; peakStatus: ReturnType<typeof peakJobStatus> };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
   const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};
@@ -141,7 +145,10 @@ export async function GET(req: NextRequest) {
     const traces = (Array.isArray(lines) ? lines : []) as { price?: number; wht?: number }[];
     const gross = Math.round(traces.reduce((a, t) => a + (Number(t.price) || 0), 0) * 100) / 100;
     const wht = Math.round(traces.reduce((a, t) => a + (Number(t.wht) || 0), 0) * 100) / 100;
-    return { ...d, status: documentStatus(d.status) ?? d.status, gross, wht, lineCount: traces.length };
+    // Already paid: the transfer the payment will be recorded as — its date, and whether
+    // a slip was saved for it.
+    const transfer = d.alreadyPaid ? paidTransferOf(tourPays.filter((p) => p.peakPaymentRef === d.paymentRef).map((p) => ({ ref: p.date, paidAt: p.status === "PAID" ? p.paidAt : null, eslipUrl: p.eslipUrl, slips: p.slips }))) : null;
+    return { ...d, status: documentStatus(d.status) ?? d.status, gross, wht, lineCount: traces.length, ...(transfer ? { paidDate: transfer.paidDate, hasSavedSlip: !!transfer.slipLink } : {}) };
   });
   return NextResponse.json({ period, rows, totals, paymentDocs: docsOut });
 }

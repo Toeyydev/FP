@@ -20,7 +20,9 @@ export type CombinedBlockCode =
   | "payroll"
   | "historical"
   | "in-peak-from-sheet"
-  | "not-approved";
+  | "not-approved"
+  | "not-paid"
+  | "has-peak-ref";
 
 export type CombinedBlock = {
   code: CombinedBlockCode;
@@ -84,4 +86,57 @@ export function combinedPaymentBlock(job: CombinedJobState): CombinedBlock | nul
     return { code: "not-approved", message: "is not approved — approve the job sheet before paying it in a PEAK document" };
   }
   return null;
+}
+
+/**
+ * The first reason an ALREADY-PAID job cannot go into one PEAK document with the other
+ * jobs its transfer paid — or null when it can. The same checks as combinedPaymentBlock,
+ * turned round for jobs whose money has already moved: the job must be paid on its own
+ * record (a whole-month payroll run is its own PEAK matter), and must have no PEAK
+ * document yet — not a typed EXP ref, not a synced sheet, not a combined document.
+ */
+export function paidJobPeakBlock(job: CombinedJobState): CombinedBlock | null {
+  const { sheet, payment } = job;
+  if (!sheet) return { code: "no-job-sheet", message: "has no job sheet — open and save it first" };
+  const lock = paymentDocumentLock(payment, payment?.document);
+  if (lock) return { code: "payment-document", message: lock };
+  if (payment?.status !== "PAID") {
+    return job.coveredByPayroll
+      ? { code: "payroll", message: `was paid by the guide's ${job.period} payroll — record that payroll's EXP ref on Payments` }
+      : { code: "not-paid", message: "is not paid yet — create its PEAK document with \"Pay N jobs together\" instead" };
+  }
+  if ((payment.peakRef ?? "").trim()) return { code: "has-peak-ref", message: `already has a PEAK document (${payment.peakRef})` };
+  if (sheet.origin === "HISTORICAL_BACKFILL") return { code: "historical", message: "was reconstructed from historical records and cannot be posted to PEAK" };
+  if (sheetInPeak(sheet)) {
+    const documentNo = (sheet.peakDocumentNo ?? "").trim();
+    return { code: "in-peak-from-sheet", documentNo: documentNo || undefined, message: `is already in PEAK from its job sheet${documentNo ? ` (${documentNo})` : ""}` };
+  }
+  if (!isApproved(sheet.approvalStatus)) return { code: "not-approved", message: "is not approved — approve the job sheet before putting it in a PEAK document" };
+  return null;
+}
+
+/** The calendar date in Bangkok of an instant, "YYYY-MM-DD". */
+export const bangkokDateOf = (at: Date | string) => new Date(new Date(at).getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
+export type PaidTransferJob = { ref: string; paidAt: Date | string | null; eslipUrl?: string | null; slips?: unknown };
+
+/**
+ * The one transfer that already paid these jobs — its date and its slip — or every reason
+ * they were not one transfer. One transfer is one PEAK document (owner rule), so jobs paid
+ * on different days, or with different slips, go into separate documents. A job with no
+ * slip of its own may share a transfer with one that has it (one slip uploaded for the lot).
+ */
+export function paidTransferOf(jobs: PaidTransferJob[]): { paidDate: string | null; slipLink: string | null; reasons: string[] } {
+  const reasons: string[] = [];
+  const dates = new Set<string>();
+  const links = new Set<string>();
+  for (const j of jobs) {
+    if (!j.paidAt) reasons.push(`${j.ref} has no paid date on record`);
+    else dates.add(bangkokDateOf(j.paidAt));
+    if ((j.eslipUrl ?? "").trim()) links.add(j.eslipUrl!.trim());
+    for (const s of Array.isArray(j.slips) ? (j.slips as { url?: string | null }[]) : []) if ((s?.url ?? "").trim()) links.add(s.url!.trim());
+  }
+  if (dates.size > 1) reasons.push(`These jobs were paid on different days (${[...dates].sort().join(", ")}) — one transfer is one PEAK document, so put each day's jobs in separately`);
+  if (links.size > 1) reasons.push(`These jobs were paid with ${links.size} different slips — one transfer is one PEAK document, so put each transfer's jobs in separately`);
+  return { paidDate: dates.size === 1 ? [...dates][0] : null, slipLink: links.size === 1 ? [...links][0] : null, reasons };
 }

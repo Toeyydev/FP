@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { combinedPaymentBlock, sheetInPeak, type CombinedJobState } from "@/lib/combined-payment";
+import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, type CombinedJobState } from "@/lib/combined-payment";
 
 // All data here is invented (fictional refs and document numbers) — this repo is public.
 
@@ -67,5 +67,43 @@ describe("combinedPaymentBlock — approval", () => {
 
   it("a sheet already in PEAK says so first, approved or not", () => {
     expect(combinedPaymentBlock(job({ sheet: { peakDocumentNo: "EXP-TEST-0005", approvalStatus: null } }))?.code).toBe("in-peak-from-sheet");
+  });
+});
+
+describe("paidJobPeakBlock — already-paid jobs that go into one PEAK document afterwards", () => {
+  const paid = (over: Partial<CombinedJobState> = {}): CombinedJobState => job({ payment: { status: "PAID", peakRef: null, peakPaymentRef: null, eslipUrl: "https://drive.example/s" }, ...over });
+
+  it("lets a paid, approved job with no PEAK document through — a slip on file is fine", () => {
+    expect(paidJobPeakBlock(paid())).toBeNull();
+  });
+
+  it("refuses what is unpaid, paid by payroll, already in PEAK, locked, unapproved or historical", () => {
+    expect(paidJobPeakBlock(job())?.code).toBe("not-paid");
+    expect(paidJobPeakBlock(job({ coveredByPayroll: true }))?.code).toBe("payroll");
+    expect(paidJobPeakBlock(paid({ payment: { status: "PAID", peakRef: "EXP-TEST-0009" } }))).toMatchObject({ code: "has-peak-ref", message: expect.stringContaining("EXP-TEST-0009") });
+    expect(paidJobPeakBlock(paid({ sheet: { origin: "NORMAL", peakDocumentNo: "EXP-TEST-0010", approvalStatus: "APPROVED" } }))?.code).toBe("in-peak-from-sheet");
+    expect(paidJobPeakBlock(paid({ payment: { status: "PAID", peakPaymentRef: "FOLK-PAY-203005-01" } }))?.code).toBe("payment-document");
+    expect(paidJobPeakBlock(paid({ sheet: { origin: "NORMAL", approvalStatus: null } }))?.code).toBe("not-approved");
+    expect(paidJobPeakBlock(paid({ sheet: { origin: "HISTORICAL_BACKFILL", approvalStatus: "APPROVED" } }))?.code).toBe("historical");
+    expect(paidJobPeakBlock(paid({ sheet: null }))?.code).toBe("no-job-sheet");
+  });
+});
+
+describe("paidTransferOf — the one transfer that already paid these jobs", () => {
+  // Invented refs, dates and links — this repo is public.
+  const a = { ref: "FOLK-BKK-20300301-01", paidAt: "2030-03-09T16:57:00Z", eslipUrl: "https://drive.google.com/file/d/slipAAAAAAAAAA/view", slips: null };
+  const b = { ref: "FOLK-BKK-20300305-01", paidAt: "2030-03-09T16:57:00Z", eslipUrl: null, slips: null };
+  it("same Bangkok day, one slip between them: one transfer, dated in Bangkok", () => {
+    expect(paidTransferOf([a, b])).toEqual({ paidDate: "2030-03-09", slipLink: a.eslipUrl, reasons: [] });
+    // 17:30 UTC is already the next day in Bangkok.
+    expect(paidTransferOf([{ ...b, paidAt: "2030-03-09T17:30:00Z" }]).paidDate).toBe("2030-03-10");
+  });
+  it("no slip at all is still one transfer, with nothing to attach", () => {
+    expect(paidTransferOf([b])).toEqual({ paidDate: "2030-03-09", slipLink: null, reasons: [] });
+  });
+  it("different days, different slips, or no paid date are refused", () => {
+    expect(paidTransferOf([a, { ...b, paidAt: "2030-03-11T05:00:00Z" }]).reasons.join(" ")).toContain("paid on different days (2030-03-09, 2030-03-11)");
+    expect(paidTransferOf([a, { ...b, slips: [{ amount: 1, url: "https://drive.google.com/file/d/slipBBBBBBBBBB/view", at: "x" }] }]).reasons.join(" ")).toContain("2 different slips");
+    expect(paidTransferOf([{ ...b, paidAt: null }]).reasons).toEqual(["FOLK-BKK-20300305-01 has no paid date on record"]);
   });
 });

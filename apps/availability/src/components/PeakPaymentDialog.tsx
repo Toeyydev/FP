@@ -13,6 +13,10 @@ import { leftOutWarning } from "@/lib/peak-payment-document";
 //
 // The operator sees the exact document PEAK will receive, line by line, before it is
 // created; the preview only reads.
+//
+// `alreadyPaid`: the same two steps for jobs whose money moved before any PEAK document
+// existed ("Put paid jobs in PEAK"). The payment recorded next is that transfer — its
+// date and its saved slip — and the jobs stay paid as they were.
 
 export type PayTogetherJob = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number };
 
@@ -26,12 +30,16 @@ export type CreatedDocument = {
   total: number;
   lineCount: number;
   jobs: { date: string; slotIdx: number; ref: string; payout: number }[];
+  /** Jobs paid before the document existed: the payment to record is the transfer made on paidDate. */
+  alreadyPaid?: boolean;
+  paidDate?: string | null;
+  hasSavedSlip?: boolean;
 };
 
 type Line = { description: string; jobRef: string; kind: string; category: string | null; accountCode: string; price: number; wht: number };
 // A billed row with no expense category (lib/peak-payment-document MissingCategoryRow).
 type MissingCategory = { jobRef: string; date: string; slotIdx: number; rowNo: number; description: string; amount: number };
-type Preview = { ok: true; lines: Line[]; gross: number; wht: number; total: number } | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
+type Preview = { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean } | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
 type Outcome =
   | ({ kind: "created"; recordError: string | null; existing: boolean } & CreatedDocument)
   | { kind: "uncertain"; paymentRef: string; reasons: string[] }
@@ -40,10 +48,12 @@ type Outcome =
 const keyOf = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
-export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDone, onRecordPayment }: {
+export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, onClose, onDone, onRecordPayment }: {
   guideId: string;
   guide: string;
   jobs: PayTogetherJob[];
+  /** Jobs already paid on this day, put into PEAK afterwards. */
+  alreadyPaid?: { paidDate: string };
   onClose: () => void;   // nothing changed
   onDone: () => void;    // something may have changed — the caller reloads Payments
   /** Open the payment dialog for the document just created. */
@@ -67,18 +77,18 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
     setPreview(null);
     fetch("/api/pay/peak-document/preview", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId, jobs: selected.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }),
+      body: JSON.stringify({ guideId, jobs: selected.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), ...(alreadyPaid ? { alreadyPaid: true } : {}) }),
     })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
         if (mine !== seq.current) return;
         if (!r.ok) setPreview({ ok: false, reasons: [d.error === "forbidden" ? "Operator only" : `Could not build the preview (${r.status})`] });
-        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total } : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [] });
+        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip } : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [] });
       })
       .catch(() => { if (mine === seq.current) setPreview({ ok: false, reasons: ["Could not reach the server"] }); });
     // selectedKeys stands in for `selected`, which is a new array every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guideId, selectedKeys]);
+  }, [guideId, selectedKeys, !!alreadyPaid]);
 
   const close = useCallback(() => {
     if (busy) return; // never abandon a document mid-flight
@@ -105,7 +115,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
     try {
       r = await fetch("/api/pay/peak-document", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ guideId, jobs: selected.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }),
+        body: JSON.stringify({ guideId, jobs: selected.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), ...(alreadyPaid ? { alreadyPaid: true } : {}) }),
       });
       d = await r.json().catch(() => ({}));
     } catch {
@@ -123,6 +133,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
         paymentRef: String(d.paymentRef), documentNo: String(d.documentNo), documentLink: (d.documentLink as string) ?? null,
         gross: Number(d.gross), wht: Number(d.wht), total: Number(d.total), lineCount: Number(d.lineCount),
         jobs: (d.jobs as CreatedDocument["jobs"]) ?? [], recordError: (d.recordError as string) ?? null,
+        ...(d.alreadyPaid ? { alreadyPaid: true, paidDate: (d.paidDate as string) ?? alreadyPaid?.paidDate ?? null, hasSavedSlip: preview?.ok ? !!preview.hasSlip : undefined } : {}),
       });
     } else if (d.error === "peak-uncertain") {
       setOutcome({ kind: "uncertain", paymentRef: String(d.paymentRef ?? ""), reasons });
@@ -134,14 +145,19 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
   return (
     <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="paydoc-h" style={{ width: "min(720px, 100%)" }}>
-        <h3 id="paydoc-h">{created ? "PEAK document created" : `Create one PEAK document · ${selected.length} job${selected.length === 1 ? "" : "s"}`}</h3>
-        <div className="mctx">{guideId} · {guide} · step 1 of 2: the document. The payment is recorded against it afterwards.</div>
+        <h3 id="paydoc-h">{created ? "PEAK document created" : alreadyPaid ? `Put ${selected.length} paid job${selected.length === 1 ? "" : "s"} in one PEAK document` : `Create one PEAK document · ${selected.length} job${selected.length === 1 ? "" : "s"}`}</h3>
+        <div className="mctx">{guideId} · {guide} · {alreadyPaid ? `paid ${dShort(alreadyPaid.paidDate)} · step 1 of 2: the document. That payment is recorded against it next.` : "step 1 of 2: the document. The payment is recorded against it afterwards."}</div>
 
         <div className="mbody" style={{ display: "grid", gap: 14 }}>
           {outcome?.kind === "created" ? (
             <CreatedState doc={outcome} onRecordPayment={() => onRecordPayment(outcome)} />
           ) : (
             <>
+              {alreadyPaid && (
+                <Note tone="warn">
+                  <b>Check PEAK first.</b> These jobs were paid on {dShort(alreadyPaid.paidDate)} with no PEAK document in FolkOPS. If someone already made one for this transfer by hand in PEAK, close this and use <b>Record EXP…</b> instead — creating another makes two documents for one payment.
+                </Note>
+              )}
               <fieldset disabled={locked} style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 4 }}>
                 <legend className="paydoc-label">Jobs in this document</legend>
                 {jobs.map((j) => {
@@ -159,7 +175,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
                   );
                 })}
               </fieldset>
-              {leftOutWarning(jobs.length - selected.length) && <Note tone="warn">{leftOutWarning(jobs.length - selected.length)}</Note>}
+              {!alreadyPaid && leftOutWarning(jobs.length - selected.length) && <Note tone="warn">{leftOutWarning(jobs.length - selected.length)}</Note>}
 
               <section aria-live="polite" style={{ display: "grid", gap: 8 }}>
                 <div className="paydoc-label">What PEAK receives</div>
@@ -188,14 +204,16 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, onClose, onDon
                     <div className="paydoc-sum">
                       <Row label={`${preview.lines.length} lines, before withholding`} value={thb(preview.gross)} />
                       {preview.wht > 0 && <Row label="Withholding tax on guide fees" value={`−${thb(preview.wht)}`} />}
-                      <Row label="Amount to pay the guide — recorded later, against this document" value={thb(preview.total)} strong />
+                      <Row label={alreadyPaid ? `Paid to the guide on ${dShort(alreadyPaid.paidDate)} — recorded against this document next` : "Amount to pay the guide — recorded later, against this document"} value={thb(preview.total)} strong />
                     </div>
                     <div className="paydoc-credit" title="PEAK bills each document created, not each line">
                       Creates <b>1 PEAK document</b> with {preview.lines.length} line{preview.lines.length === 1 ? "" : "s"} for {selected.length} job{selected.length === 1 ? "" : "s"}, <b>unpaid</b> — 1 PEAK API credit.
                       {selected.length > 1 && <> Posted one at a time, the same jobs would take {selected.length} documents.</>}
                     </div>
                     <div className="paydoc-hint">
-                      Nothing is paid and the guide is not told yet. After you have checked the document in PEAK and made the transfer, record the payment against it — the jobs are marked paid only then.
+                      {alreadyPaid
+                        ? <>Nothing changes on the jobs yet. After checking the document in PEAK, record the payment against it: it is dated {dShort(alreadyPaid.paidDate)}, {preview.hasSlip ? "attaches the slip saved then" : "has no saved slip to attach (you can add one)"}, and the guide is not told again.</>
+                        : <>Nothing is paid and the guide is not told yet. After you have checked the document in PEAK and made the transfer, record the payment against it — the jobs are marked paid only then.</>}
                     </div>
                     {mismatch && <Note tone="danger">The document total {thb(preview.total)} does not match these jobs&rsquo; payout {thb(selectedTotal)}. Reload Payments before creating it.</Note>}
                   </>
@@ -234,20 +252,20 @@ export function CreatedState({ doc, onRecordPayment, compact }: { doc: CreatedDo
       {doc.existing && <Note tone="warn">These jobs were already in this document — no second document was created.</Note>}
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <b className="num" style={{ fontSize: compact ? 15 : 20, letterSpacing: "0.01em" }}>{doc.documentNo}</b>
-        <span className="badge invited" style={{ whiteSpace: "nowrap" }}>Awaiting payment</span>
+        <span className="badge invited" style={{ whiteSpace: "nowrap" }}>{doc.alreadyPaid ? `Paid ${doc.paidDate ? dShort(doc.paidDate) : "earlier"} · payment not recorded in PEAK` : "Awaiting payment"}</span>
         <span style={{ fontSize: 12, color: "var(--ink-soft)", fontFamily: "monospace" }}>{doc.paymentRef}</span>
       </div>
       <div className="paydoc-sum">
         <Row label={`${doc.jobs.length} job${doc.jobs.length === 1 ? "" : "s"} · ${doc.lineCount} line${doc.lineCount === 1 ? "" : "s"} · gross`} value={thb(doc.gross)} />
         {doc.wht > 0 && <Row label="WHT" value={`−${thb(doc.wht)}`} />}
-        <Row label="Amount to pay" value={thb(doc.total)} strong />
+        <Row label={doc.alreadyPaid ? "Amount paid" : "Amount to pay"} value={thb(doc.total)} strong />
       </div>
       {doc.recordError && <Note tone="danger">{doc.recordError}. The jobs stay locked so nothing creates a second document — resolve it on the Payments page.</Note>}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {doc.documentLink
           ? <a className="btn sm" href={doc.documentLink} target="_blank" rel="noopener noreferrer" title="Opens the link PEAK returned for this document">View PEAK document</a>
           : <span className="btn sm ghost" aria-disabled="true" title={`PEAK returned no link. In PEAK, search expenses for ${doc.documentNo} or reference ${doc.paymentRef}.`}>View PEAK document — search {doc.documentNo} in PEAK</span>}
-        {onRecordPayment && <button className="btn sm primary" onClick={onRecordPayment}>Record payment</button>}
+        {onRecordPayment && <button className="btn sm primary" onClick={onRecordPayment}>{doc.alreadyPaid && doc.paidDate ? `Record the ${dShort(doc.paidDate)} payment` : "Record payment"}</button>}
       </div>
     </div>
   );
