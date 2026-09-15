@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByDate, pastDaySlots } from "@/lib/past-unstaffed";
+import { groupByDate, pastDaySlots, suggestTourFor, tourStartTime } from "@/lib/past-unstaffed";
 
 // Invented refs, guides and dates — this repo is public.
 const bk = (id: string, slotIdx: number, ref: string, pax = 2, tourId = "T-TEST") => ({ id, slotIdx, tourId, pax, ref, source: "GetYourGuide", status: "PENDING" });
@@ -49,5 +49,19 @@ describe("groupByDate", () => {
     const g = groupByDate([{ date: "2030-01-02", slotIdx: 3 }, { date: "2030-01-05", slotIdx: 0 }, { date: "2030-01-02", slotIdx: 2 }]);
     expect(g.map((d) => [d.date, d.items.map((i) => i.slotIdx)])).toEqual([["2030-01-05", [0]], ["2030-01-02", [2, 3]]]);
     expect(groupByDate([{ date: "2030-01-02", slotIdx: 0 }, { date: "2030-01-05", slotIdx: 0 }], "asc").map((d) => d.date)).toEqual(["2030-01-02", "2030-01-05"]);
+  });
+});
+
+describe("bookings with no tour connected", () => {
+  it("are listed on their slot and flagged, with no tour id", () => {
+    const [slot] = pastDaySlots({ bookings: [bk("b1", 7, "GYGTESTFOOD1", 2, "")], assignments: [], sheets: [] });
+    expect([slot.slotIdx, slot.tourIds, slot.unmappedIds, slot.pax]).toEqual([7, [], ["b1"], 2]);
+  });
+  it("reads catalogue time labels and suggests only an unambiguous tour", () => {
+    expect([tourStartTime("18.30 PM"), tourStartTime("01.30 PM"), tourStartTime("08.30 AM"), tourStartTime("14:00"), tourStartTime("12.00 AM"), tourStartTime("soon")]).toEqual(["18:30", "13:30", "08:30", "14:00", "00:00", null]);
+    const tours = [{ id: "T-A", time: "18.30 PM" }, { id: "T-B", time: "01.30 PM" }, { id: "T-C", time: "13:30" }];
+    expect(suggestTourFor("18:30", tours)).toBe("T-A");
+    expect(suggestTourFor("13:30", tours)).toBeNull(); // two tours start then
+    expect(suggestTourFor("10:00", tours)).toBeNull();
   });
 });

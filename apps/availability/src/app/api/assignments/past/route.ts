@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { bookingRef } from "@/lib/booking-ref";
-import { pastDaySlots } from "@/lib/past-unstaffed";
+import { pastDaySlots, suggestTourFor } from "@/lib/past-unstaffed";
 
 export const dynamic = "force-dynamic";
 
@@ -28,18 +28,20 @@ export async function GET(req: NextRequest) {
 
   const [bookings, assignments, sheets, tours, guides] = await Promise.all([
     prisma.booking.findMany({
-      where: { date, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+      // Bookings with no tour connected are included: a channel that sent no product
+      // name leaves tourId empty, and those tours must not vanish from the record.
+      where: { date, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
       select: { id: true, slotIdx: true, tourId: true, pax: true, externalRef: true, confirmationCode: true, customerName: true, source: true, status: true },
       orderBy: [{ slotIdx: "asc" }, { createdAt: "asc" }],
     }),
     prisma.assignment.findMany({ where: { date }, select: { guideId: true, slotIdx: true, tourId: true } }),
     prisma.jobSheet.findMany({ where: { date }, select: { guideId: true, slotIdx: true, ref: true, bookings: true } }),
-    prisma.tour.findMany({ select: { id: true, name: true } }),
+    prisma.tour.findMany({ select: { id: true, name: true, time: true }, orderBy: { id: "asc" } }),
     prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { guideId: true, displayName: true, external: true }, orderBy: { guideId: "asc" } }),
   ]);
   const names = new Map((await prisma.user.findMany({ where: { guideId: { in: [...new Set([...assignments, ...sheets].map((x) => x.guideId))] } }, select: { guideId: true, displayName: true } })).map((u) => [u.guideId!, u.displayName]));
   const slots = pastDaySlots({
-    bookings: bookings.map((b) => ({ id: b.id, slotIdx: b.slotIdx!, tourId: b.tourId!, pax: b.pax, ref: bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—", keys: [b.externalRef, b.confirmationCode].filter((x): x is string => !!x), source: b.source, status: b.status })),
+    bookings: bookings.map((b) => ({ id: b.id, slotIdx: b.slotIdx!, tourId: b.tourId ?? "", pax: b.pax, ref: bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—", keys: [b.externalRef, b.confirmationCode].filter((x): x is string => !!x), source: b.source, status: b.status })),
     assignments,
     sheets: sheets.map((s) => ({ guideId: s.guideId, slotIdx: s.slotIdx, ref: s.ref, bookingNos: Array.isArray(s.bookings) ? (s.bookings as { bookingNo?: string }[]).map((r) => String(r?.bookingNo ?? "")) : [] })),
   });
@@ -52,7 +54,9 @@ export async function GET(req: NextRequest) {
       tours: s.tourIds.map((id) => ({ id, name: tourName.get(id) ?? id })),
       staffedBy: s.staffedBy.map((g) => ({ guideId: g, name: names.get(g) ?? g })),
       onSheets: s.onSheets.map((o) => ({ ...o, name: names.get(o.guideId) ?? o.guideId, time: SLOT_TIMES[o.slotIdx] ?? "" })),
+      suggestTourId: s.unmappedIds.length ? suggestTourFor(SLOT_TIMES[s.slotIdx] ?? "", tours) : null,
     })),
+    tours: tours.map((t) => ({ id: t.id, name: t.name, time: t.time })),
     guides: guides.map((g) => ({ guideId: g.guideId!, name: g.displayName, external: g.external })),
   });
 }

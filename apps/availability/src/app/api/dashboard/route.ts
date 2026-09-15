@@ -118,7 +118,9 @@ async function buildDashboard() {
     const pastBookings = await prisma.booking.findMany({
       where: {
         date: { gte: pastFrom, lt: today },
-        tourId: { not: null }, slotIdx: { not: null },
+        // Including bookings with no tour connected (a channel sent no product name):
+        // they are real tours too, and would otherwise vanish from every screen.
+        slotIdx: { not: null },
         status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
       },
       select: { tourId: true, date: true, slotIdx: true, pax: true },
@@ -133,15 +135,15 @@ async function buildDashboard() {
       for (const b of pastBookings) {
         const k = `${b.date}|${b.slotIdx}`;
         if (staffed.has(k)) continue;                     // somebody is on it
-        (agg[`${k}|${b.tourId}`] ??= { date: b.date!, slotIdx: b.slotIdx!, tourId: b.tourId!, pax: 0, count: 0 });
-        agg[`${k}|${b.tourId}`].pax += b.pax ?? 0;
-        agg[`${k}|${b.tourId}`].count += 1;
+        (agg[`${k}|${b.tourId ?? ""}`] ??= { date: b.date!, slotIdx: b.slotIdx!, tourId: b.tourId ?? "", pax: 0, count: 0 });
+        agg[`${k}|${b.tourId ?? ""}`].pax += b.pax ?? 0;
+        agg[`${k}|${b.tourId ?? ""}`].count += 1;
       }
       const dayMs = 86400000;
       for (const i of Object.values(agg)) {
         pastUnstaffed.push({
           date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "",
-          tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax, count: i.count,
+          tour: i.tourId ? tourName.get(i.tourId) ?? i.tourId : "Tour not connected", pax: i.pax, count: i.count,
           daysAgo: Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${i.date}T00:00:00Z`)) / dayMs)),
         });
       }
