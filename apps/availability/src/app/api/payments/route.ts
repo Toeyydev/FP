@@ -11,6 +11,7 @@ import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { peakJobStatus } from "@/lib/peak-job-status";
 import { paymentDocumentLocksInMonth } from "@/lib/peak-payment-server";
 import { combinedPaymentBlock, type CombinedBlock } from "@/lib/combined-payment";
+import { recordExpBlockers } from "@/lib/record-exp";
 import { documentStatus } from "@/lib/peak-payment-document";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
@@ -66,7 +67,9 @@ export async function GET(req: NextRequest) {
   const combinedOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, date: string) => {
     const tp = tourPayOf.get(k);
     const combinedBlock: CombinedBlock | null = combinedPaymentBlock({ sheet: s ?? null, payment: tp ? { ...tp, document: tp.peakPaymentRef ? docOf.get(tp.peakPaymentRef) ?? null : null } : null, coveredByPayroll: covered, period: date.slice(0, 7) });
-    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null };
+    // "Record EXP…": paid per tour with no EXP number yet — the rule api/pay PATCH applies.
+    const canRecordExp = !!tp && !(tp.peakRef ?? "").trim() && recordExpBlockers([{ ref: "", payment: tp, sheet: s ?? null }], "").length === 0;
+    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp };
   };
   // Whether FolkOPS holds a PEAK document for the job (lib/peak-job-status).
   const peakStatusOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, gid: string, amount: number) => {
@@ -88,7 +91,7 @@ export async function GET(req: NextRequest) {
   const coveredByMonth = (gid: string, tourDate: string, recordCreatedAt: Date) =>
     coveredByPayrollRun(statusOf(gid), tourDate, recordCreatedAt);
 
-  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; peakStatus: ReturnType<typeof peakJobStatus> };
+  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; peakStatus: ReturnType<typeof peakJobStatus> };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
   const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};
