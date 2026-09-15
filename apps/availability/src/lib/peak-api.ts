@@ -402,6 +402,145 @@ export async function insertExpenseFile(input: {
   return insertFileSucceeded(call.r.status, call.j);
 }
 
+// ── An expense that already exists: read it, pay it ───────────────────────────
+//
+// The combined guide payment is two stages (lib/peak-payment-document): the expense
+// document is created unpaid, and the payment is recorded against that same document
+// later. PEAK API Core v1 documents both halves of stage 2:
+//   GET  /api/v1/Expenses?code=EXP-…              wrapper PeakExpenses → expenses[]
+//   POST /api/v1/Expenses/paidpaymentallinone     wrapper PeakPaidPayments
+// https://developers.peakaccount.com/reference/get_api-v1-expenses
+// https://developers.peakaccount.com/reference/post_api-v1-expenses-paidpaymentallinone
+// Neither is a billed transaction (PEAK API transaction counting: only Create calls count).
+
+export type PeakExpenseState = {
+  id: string | null;
+  code: string;
+  reference: string | null;
+  contactId: string | null;
+  status: string | null;   // e.g. "Draft", "Approve"
+  statusId: number | null;
+  isVoid: boolean;
+  netAmount: number | null;
+  whtAmount: number | null;
+  paymentAmount: number | null;
+  remainAmount: number | null;
+  remainWhtAmount: number | null;
+  documentLink: string | null;
+  payments: number;        // how many payment groups PEAK already holds on it
+};
+
+const num = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const str = (v: unknown): string | null => (v == null || v === "" ? null : String(v));
+
+/** One expense out of a Get Expense reply. PEAK answers "not found" with an empty list. */
+export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExpenseState } | { notFound: true } | { error: string } {
+  const wrap = peakWrap<{ expenses?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakExpenses");
+  if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakExpenses wrapper" };
+  const list = Array.isArray(wrap.expenses) ? (wrap.expenses as Record<string, unknown>[]) : null;
+  const code = wrap.resCode == null ? "" : String(wrap.resCode).trim();
+  const okCode = code === "" || code === "200" || /^0+$/.test(code);
+  if (!list) return { error: wrap.resDesc ? sanitizePeakError(wrap.resDesc) : "PEAK returned no expense list" };
+  if (!list.length) return okCode ? { notFound: true } : { error: wrap.resDesc ? sanitizePeakError(wrap.resDesc) : `PEAK error ${code}` };
+  const e = list[0];
+  return {
+    expense: {
+      id: str(e.id), code: String(e.code ?? ""), reference: str(e.reference), contactId: str(e.contactId),
+      status: str(e.status), statusId: num(e.statusId), isVoid: Number(e.isVoid ?? 0) === 1,
+      netAmount: num(e.netAmount), whtAmount: num(e.whtAmount), paymentAmount: num(e.paymentAmount),
+      remainAmount: num(e.remainAmount), remainWhtAmount: num(e.remainWhtAmount),
+      documentLink: str(e.documentLink), payments: Array.isArray(e.paidPayments) ? e.paidPayments.length : 0,
+    },
+  };
+}
+
+/** Read one expense by its EXP code. Read-only; safe to repeat. */
+export async function getExpenseByCode(code: string): Promise<Res<{ expense?: PeakExpenseState; notFound?: boolean }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const qs = new URLSearchParams({ code });
+  const call = await authedCall(`${API}/Expenses?${qs.toString()}`, { method: "GET" }, "peakExpenses");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const parsed = parsePeakExpense(call.j);
+  if ("error" in parsed) return { ok: false, desc: parsed.error };
+  if ("notFound" in parsed) return { ok: true, notFound: true };
+  return { ok: true, expense: parsed.expense };
+}
+
+export type PaidPaymentResult = {
+  ok: boolean;
+  code?: string;
+  desc?: string;
+  /** The request may have reached PEAK and the answer was lost: the payment may exist. */
+  uncertain?: boolean;
+  paymentTotal?: number | null;
+  remainPaymentAmount?: number | null;
+  remainWhtAmount?: number | null;
+};
+
+/**
+ * What PEAK said to Expenses/paidpaymentallinone. Its success is resCode "200"
+ * ("PeakPaidPayments have Completed") — the opposite of the list endpoints, where a
+ * non-zero code is an error (peakCodeIsError) — so it is decided here on its own.
+ * Any other PEAK code (e.g. 347 "Transaction must be Waiting Payment Status.") is a
+ * definite refusal: nothing was recorded.
+ */
+export function readPaidPaymentReply(httpStatus: number, j: Record<string, unknown>): PaidPaymentResult {
+  const wrap = peakWrap<Record<string, unknown>>(j ?? {}, "peakPaidPayments");
+  const pick = (k: string) => (wrap ? (wrap[k] ?? wrap[k.charAt(0).toUpperCase() + k.slice(1)]) : undefined);
+  const code = pick("resCode") == null ? "" : String(pick("resCode")).trim();
+  const desc = pick("resDesc") == null ? undefined : sanitizePeakError(pick("resDesc"));
+  const paid = (pick("paidPayments") ?? {}) as Record<string, unknown>;
+  const figures = { paymentTotal: num(paid.paymentTotal ?? paid.PaymentTotal), remainPaymentAmount: num(pick("remainPaymentAmount")), remainWhtAmount: num(pick("remainWhtAmount")) };
+  if (code === "200") return { ok: true, code, desc, ...figures };
+  if (code) return { ok: false, code, desc: desc ?? `PEAK refused the payment (code ${code})`, ...figures };
+  // No PEAK code at all: a 5xx came from something in front of PEAK and proves nothing.
+  return { ok: false, uncertain: httpStatus >= 500 || !wrap, desc: desc ?? `HTTP ${httpStatus}` };
+}
+
+/**
+ * Record ONE payment against an EXISTING expense, by its EXP code. Never creates a
+ * document. A write: fresh token, never replayed — a retried payment could record the
+ * same transfer twice.
+ */
+export async function payExistingExpense(input: {
+  documentNo: string;
+  paymentDate: string; // yyyyMMdd
+  paymentMethodId: string;
+  amount: number;
+  withholdingTaxAmount?: number | null;
+}): Promise<PaidPaymentResult> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const wht = input.withholdingTaxAmount && input.withholdingTaxAmount > 0 ? input.withholdingTaxAmount : null;
+  const body = {
+    peakPaidPayments: {
+      transactionCode: input.documentNo,
+      paidPayments: {
+        paymentDate: input.paymentDate,
+        ...(wht ? { withHoldingTaxAmount: wht.toFixed(2) } : {}),
+        payments: [{ amount: input.amount, paymentMethod: { id: input.paymentMethodId } }],
+      },
+    },
+  };
+  const call = await authedCall(
+    `${API}/Expenses/paidpaymentallinone`,
+    { method: "POST", body: JSON.stringify(body) },
+    "peakPaidPayments",
+    { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  if ("error" in call) {
+    const uncertain = !!call.sent;
+    return { ok: false, uncertain, desc: uncertain
+      ? `${call.error}. The payment may or may not have been recorded — look at ${input.documentNo} in PEAK before doing anything else.`
+      : call.error };
+  }
+  return readPaidPaymentReply(call.r.status, call.j);
+}
+
 // Identity of the connected PEAK account (read-only).
 // GET /api/v1/User/detail, wrapper PeakUser. This is the only way to answer "whose
 // books are we actually looking at" — the merchant name and tax number say whether

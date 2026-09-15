@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import type { Expense, GuideFee } from "@/lib/jobsheet";
 import type { PeakAccountMap } from "@/lib/peak-sync";
 import {
-  buildGuidePaymentDocument, classifyExpenseWrite, leftOutWarning, payJobsTogether, paymentDocumentLock, paymentRefFor,
-  PaymentDocumentNotPostable, separatePaymentWarning, separateSyncWarning,
-  type ExpenseWriteResult, type GuidePaymentDocument, type PaymentAccounts, type PaymentJob, type PayTogetherDeps,
+  buildGuidePaymentDocument, buildPaymentInput, classifyExpenseWrite, classifyPaymentWrite, createCombinedDocument, documentStatus,
+  leftOutWarning, payCombinedDocument, paymentDocumentLock, paymentRefFor, PaymentDocumentNotPostable, PaymentNotRecordable,
+  peakPaymentPlan, separatePaymentWarning, separateSyncWarning,
+  type CreateDocumentDeps, type ExpenseWriteResult, type GuidePaymentDocument, type PayDocumentDeps, type PaymentAccounts,
+  type PaymentJob, type PaymentPlan, type PaymentWriteResult, type PeakExpenseView,
 } from "./peak-payment-document";
 
 // The worked example: Guide A is paid for three jobs in ONE transfer.
@@ -39,7 +41,7 @@ const ACCOUNTS: PaymentAccounts = {
 const build = (over: Partial<Parameters<typeof buildGuidePaymentDocument>[0]> = {}) =>
   buildGuidePaymentDocument({
     guideId: "G-TEST", peakContactId: "contact-guide-a", paymentRef: "FOLK-PAY-203005-01",
-    paymentDate: "2030-05-13", paymentMethodId: "pm-test", jobs: JOBS, accounts: ACCOUNTS, ...over,
+    jobs: JOBS, accounts: ACCOUNTS, ...over,
   });
 
 const reasonsOf = (fn: () => unknown): string[] => {
@@ -47,72 +49,104 @@ const reasonsOf = (fn: () => unknown): string[] => {
   return [];
 };
 
-// ── An in-memory stand-in for the database rows the Prisma deps write ─────────
+// ── An in-memory stand-in for the rows the Prisma deps write ─────────────────
 type RowState = { status: string; peakPaymentRef: string | null; peakDocumentId: string | null; peakRef: string | null; eslipUrl: string | null };
 
-function fakeStore(opts: { peak?: ExpenseWriteResult | (() => never); slipFails?: boolean; attach?: { ok: boolean; reason?: string }; extraRows?: string[] } = {}) {
+function fakeStore(opts: {
+  peak?: ExpenseWriteResult | (() => never);
+  check?: { ok: true; plan: PaymentPlan } | { ok: false; reasons: string[] };
+  pay?: PaymentWriteResult | (() => never);
+  slipFails?: boolean;
+  attach?: { ok: boolean; reason?: string };
+  recordPaidFails?: boolean;
+  extraRows?: string[];
+} = {}) {
   const rows = new Map<string, RowState>();
   for (const k of [...JOBS.map((j) => `${j.date}|${j.slotIdx}`), ...(opts.extraRows ?? [])]) {
     rows.set(k, { status: "PENDING", peakPaymentRef: null, peakDocumentId: null, peakRef: null, eslipUrl: null });
   }
-  const calls = { claim: 0, upload: 0, createExpense: [] as Record<string, unknown>[], posted: 0, failed: [] as { uncertain: boolean }[], attach: 0 };
-  const deps: PayTogetherDeps = {
-    async claim(doc) {
+  const doc = { status: "NONE", documentNo: null as string | null, documentId: null as string | null };
+  const calls = {
+    claim: 0, createExpense: [] as Record<string, unknown>[], created: 0, createFailed: [] as { uncertain: boolean }[],
+    claimPayment: 0, check: 0, upload: 0, pay: [] as Record<string, unknown>[], paid: 0, payFailed: [] as { uncertain: boolean }[], attach: 0, notify: 0,
+  };
+  const create: CreateDocumentDeps = {
+    async claim(d) {
       calls.claim++;
-      for (const j of doc.jobs) {
+      for (const j of d.jobs) {
         const r = rows.get(`${j.date}|${j.slotIdx}`)!;
         if (r.peakPaymentRef || r.status === "PAID") throw new Error(`${j.ref} is locked`);
       }
-      for (const j of doc.jobs) rows.get(`${j.date}|${j.slotIdx}`)!.peakPaymentRef = doc.paymentRef;
-    },
-    async uploadSlip() {
-      calls.upload++;
-      if (opts.slipFails) throw new Error("Drive is down");
-      return { link: "https://drive.example/slip-1" };
+      for (const j of d.jobs) rows.get(`${j.date}|${j.slotIdx}`)!.peakPaymentRef = d.paymentRef;
+      doc.status = "CREATING";
     },
     async createExpense(expense) {
       calls.createExpense.push(expense);
       if (typeof opts.peak === "function") opts.peak();
       return (opts.peak as ExpenseWriteResult) ?? { ok: true, code: "EXP-TEST-0042", id: "peak-doc-42", link: "https://peak.example/42" };
     },
-    async recordPosted(p) {
-      calls.posted++;
+    async recordCreated(p) { calls.created++; Object.assign(doc, { status: "AWAITING_PAYMENT", documentNo: p.documentNo, documentId: p.documentId }); },
+    async recordCreateFailed(p) {
+      calls.createFailed.push({ uncertain: p.uncertain });
+      if (p.uncertain) { doc.status = "CREATE_UNCERTAIN"; return; }
+      doc.status = "FAILED";
+      for (const r of rows.values()) if (r.peakPaymentRef === p.paymentRef) r.peakPaymentRef = null;
+    },
+  };
+  const pay: PayDocumentDeps = {
+    async claimPayment() {
+      calls.claimPayment++;
+      if (doc.status !== "AWAITING_PAYMENT") throw new Error(`not awaiting payment (${doc.status})`);
+      doc.status = "PAYING";
+    },
+    async checkExpense() { calls.check++; return opts.check ?? { ok: true, plan: { amount: 4169, withholdingTaxAmount: 126 } }; },
+    async uploadSlip() {
+      calls.upload++;
+      if (opts.slipFails) throw new Error("Drive is down");
+      return { link: "https://drive.example/slip-1" };
+    },
+    async payExpense(p) {
+      calls.pay.push(p);
+      if (typeof opts.pay === "function") opts.pay();
+      return (opts.pay as PaymentWriteResult) ?? { ok: true, remainPaymentAmount: 0, remainWhtAmount: 0 };
+    },
+    async recordPaid(p) {
+      if (opts.recordPaidFails) throw new Error("database unavailable");
+      calls.paid++;
+      doc.status = "PAID";
       for (const r of rows.values()) {
-        if (r.peakPaymentRef === p.paymentRef) Object.assign(r, { status: "PAID", peakRef: p.documentNo, peakDocumentId: p.documentId, eslipUrl: p.slipLink });
+        if (r.peakPaymentRef === p.paymentRef) Object.assign(r, { status: "PAID", peakRef: doc.documentNo, peakDocumentId: doc.documentId, eslipUrl: p.slipLink });
       }
     },
-    async recordFailed(p) {
-      calls.failed.push({ uncertain: p.uncertain });
-      if (!p.uncertain) for (const r of rows.values()) if (r.peakPaymentRef === p.paymentRef) r.peakPaymentRef = null;
-    },
+    async recordPaymentFailed(p) { calls.payFailed.push({ uncertain: p.uncertain }); doc.status = p.uncertain ? "PAYMENT_UNCERTAIN" : "AWAITING_PAYMENT"; },
     async attachSlip() { calls.attach++; return opts.attach ?? { ok: true }; },
     async recordAttachment() {},
+    async notifyGuide() { calls.notify++; },
   };
-  return { rows, calls, deps };
+  const payInput = () => ({ paymentRef: "FOLK-PAY-203005-01", documentNo: doc.documentNo ?? "EXP-TEST-0042", documentId: doc.documentId, paymentMethodName: "Test bank", paymentDate: "2030-05-13", paymentMethodId: "pm-test", amount: 4169 });
+  return { rows, doc, calls, create, pay, payInput };
 }
 
 // ── Required: one document, the right total, the right lines ─────────────────
 
-describe("paying several jobs together", () => {
+describe("one PEAK document for several jobs — stage 1 creates it, unpaid", () => {
   it("creates exactly ONE PEAK document for all the selected jobs", async () => {
-    const { calls, deps } = fakeStore();
-    const res = await payJobsTogether(deps, build());
-    expect(res.status).toBe("POSTED");
+    const { calls, create } = fakeStore();
+    const res = await createCombinedDocument(create, build());
+    expect(res.status).toBe("AWAITING_PAYMENT");
     expect(calls.createExpense).toHaveLength(1);
     // …and that one document carries every job, not just the first.
     const refs = (calls.createExpense[0].products as { description: string }[]).map((p) => p.description);
     for (const j of JOBS) expect(refs.some((d) => d.endsWith(j.ref!))).toBe(true);
   });
 
-  it("makes the document total equal the sum of the selected jobs", () => {
+  it("makes the document total equal the sum of the selected jobs — and records no payment in it", () => {
     const doc = build();
     expect(doc.total).toBe(4169);
     expect(doc.jobs.map((j) => j.payout)).toEqual([1164, 1164, 1841]);
     expect(doc.total).toBe(doc.jobs.reduce((s, j) => s + j.payout, 0));
-    // The one payment PEAK records is that same amount.
-    const paid = doc.expense.paidPayments as { payments: { amount: number }[] };
-    expect(paid.payments).toHaveLength(1);
-    expect(paid.payments[0].amount).toBe(4169);
+    // Creating the expense is not paying it: nothing about a payment goes to PEAK here.
+    expect(doc.expense).not.toHaveProperty("paidPayments");
   });
 
   it("sends a separate line per job and category, each naming its job", () => {
@@ -129,34 +163,49 @@ describe("paying several jobs together", () => {
     expect(doc.wht).toBe(126);
   });
 
-  it("is one document: one contact, one reference, one payment date, one Paid By account", () => {
+  it("is one document: one contact, one reference, dated by the last tour — no payment date, no Paid By account", () => {
     const e = build().expense as Record<string, any>;
     expect(e.contact).toEqual({ id: "contact-guide-a" });
     expect(e.reference).toBe("FOLK-PAY-203005-01");
-    expect(e.paidPayments.paymentDate).toBe("20300513");
-    expect(e.paidPayments.payments).toEqual([{ paymentMethod: { id: "pm-test" }, amount: 4169 }]);
-    // Dated when the last tour ran, so the cost books into the month it was delivered.
     expect(e.issuedDate).toBe("20300512");
+    expect(JSON.stringify(e)).not.toContain("pm-test");
+    expect(JSON.stringify(e)).not.toContain("paymentDate");
   });
 
-  it("points every selected row at the same payment ref and PEAK document id", async () => {
-    const { rows, deps } = fakeStore({ extraRows: ["2030-05-20|0"] });
-    const res = await payJobsTogether(deps, build());
-    expect(res.status).toBe("POSTED");
+  it("locks the jobs to the document without paying them, uploading a slip, or telling the guide", async () => {
+    const { rows, doc, calls, create } = fakeStore({ extraRows: ["2030-05-20|0"] });
+    const res = await createCombinedDocument(create, build());
+    expect(res).toMatchObject({ status: "AWAITING_PAYMENT", documentNo: "EXP-TEST-0042", total: 4169, gross: 4295, wht: 126, lines: 4 });
+    expect(doc.status).toBe("AWAITING_PAYMENT");
+    for (const j of JOBS) expect(rows.get(`${j.date}|${j.slotIdx}`)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01", peakRef: null });
+    expect(rows.get("2030-05-20|0")).toEqual({ status: "PENDING", peakPaymentRef: null, peakDocumentId: null, peakRef: null, eslipUrl: null });
+    expect(calls.upload + calls.pay.length + calls.attach + calls.notify).toBe(0);
+  });
+});
+
+describe("stage 2 pays that same document", () => {
+  it("records the payment against the EXISTING EXP — no second document — and marks every job paid against it", async () => {
+    const { rows, calls, create, pay, payInput } = fakeStore({ extraRows: ["2030-05-20|0"] });
+    await createCombinedDocument(create, build());
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res).toMatchObject({ status: "PAID", documentNo: "EXP-TEST-0042", amount: 4169, notified: true });
+    expect(calls.createExpense).toHaveLength(1);
+    expect(calls.pay).toEqual([{ documentNo: "EXP-TEST-0042", paymentDate: "2030-05-13", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 }]);
     const selected = JOBS.map((j) => rows.get(`${j.date}|${j.slotIdx}`)!);
-    expect(new Set(selected.map((r) => r.peakPaymentRef))).toEqual(new Set(["FOLK-PAY-203005-01"]));
-    expect(new Set(selected.map((r) => r.peakDocumentId))).toEqual(new Set(["peak-doc-42"]));
     expect(new Set(selected.map((r) => r.peakRef))).toEqual(new Set(["EXP-TEST-0042"]));
+    expect(new Set(selected.map((r) => r.peakPaymentRef))).toEqual(new Set(["FOLK-PAY-203005-01"]));
     expect(selected.every((r) => r.status === "PAID" && r.eslipUrl === "https://drive.example/slip-1")).toBe(true);
     // A job that was not selected is left exactly as it was.
     expect(rows.get("2030-05-20|0")).toEqual({ status: "PENDING", peakPaymentRef: null, peakDocumentId: null, peakRef: null, eslipUrl: null });
   });
 
-  it("attaches the one slip to the one document", async () => {
-    const { calls, deps } = fakeStore();
-    await payJobsTogether(deps, build());
+  it("attaches the one slip to the one document and tells the guide once", async () => {
+    const { calls, create, pay, payInput } = fakeStore();
+    await createCombinedDocument(create, build());
+    await payCombinedDocument(pay, payInput());
     expect(calls.upload).toBe(1);
     expect(calls.attach).toBe(1);
+    expect(calls.notify).toBe(1);
   });
 });
 
@@ -276,21 +325,22 @@ describe("Paid By must be known before a row is paid through PEAK", () => {
   });
 
   it("never reaches PEAK: the document is refused before anything is claimed", async () => {
-    const { calls, deps } = fakeStore();
-    await expect(async () => payJobsTogether(deps, build({ jobs: [job([{ description: "Water", price: 10, pax: 2, expenseType: "meal" }])] })))
+    const { calls, create } = fakeStore();
+    await expect(async () => createCombinedDocument(create, build({ jobs: [job([{ description: "Water", price: 10, pax: 2, expenseType: "meal" }])] })))
       .rejects.toBeInstanceOf(PaymentDocumentNotPostable);
-    expect(calls.claim + calls.upload + calls.createExpense.length + calls.posted).toBe(0);
+    expect(calls.claim + calls.upload + calls.createExpense.length + calls.paid).toBe(0);
   });
 });
 
 describe("refusals, all reported at once", () => {
   it("names every problem in one go", () => {
-    const reasons = reasonsOf(() => build({ peakContactId: null, paymentMethodId: "", jobs: [{ ...JOBS[0], ref: null }] }));
+    const reasons = reasonsOf(() => build({ peakContactId: null, jobs: [{ ...JOBS[0], ref: null }] }));
     expect(reasons).toEqual(expect.arrayContaining([
       expect.stringContaining("not mapped to a PEAK Contact"),
-      expect.stringContaining("Paid By"),
       expect.stringContaining("no job sheet number"),
     ]));
+    // Nothing is being paid yet, so nothing about a payment is asked for.
+    expect(reasons.join(" ")).not.toMatch(/Paid By|payment date/i);
   });
 
   it("will not put two months into one document", () => {
@@ -298,9 +348,6 @@ describe("refusals, all reported at once", () => {
     expect(reasonsOf(() => build({ jobs: [aug, JOBS[2]] })).join(" ")).toContain("pay each month separately");
   });
 
-  it("will not settle a tour with a payment dated before it ran", () => {
-    expect(reasonsOf(() => build({ paymentDate: "2030-05-10" })).join(" ")).toContain("before the tour on 2030-05-12");
-  });
 
   it("refuses a reconstructed historical sheet and a job selected twice", () => {
     const reasons = reasonsOf(() => build({ jobs: [JOBS[0], JOBS[0], { ...JOBS[1], origin: "HISTORICAL_BACKFILL" }] }));
@@ -309,58 +356,200 @@ describe("refusals, all reported at once", () => {
   });
 });
 
-// ── Jobs are marked paid only after PEAK succeeds ───────────────────────────
+// ── Stage 1: nothing is left pretending to exist ─────────────────────────────
 
-describe("order of operations", () => {
-  it("marks nothing paid and releases the jobs when PEAK refuses", async () => {
-    const { rows, calls, deps } = fakeStore({ peak: { ok: false, desc: "Invalid accountCode" } });
-    const res = await payJobsTogether(deps, build());
-    expect(res).toMatchObject({ status: "FAILED", stage: "peak", reason: "Invalid accountCode" });
-    expect(calls.posted).toBe(0);
-    expect(calls.attach).toBe(0);
+describe("order of operations — stage 1, creating the document", () => {
+  it("releases the jobs when PEAK refuses — no document stands", async () => {
+    const { rows, doc, calls, create } = fakeStore({ peak: { ok: false, desc: "Invalid accountCode" } });
+    const res = await createCombinedDocument(create, build());
+    expect(res).toMatchObject({ status: "FAILED", reason: "Invalid accountCode" });
+    expect(doc.status).toBe("FAILED");
+    expect(calls.created).toBe(0);
     for (const r of rows.values()) expect(r).toMatchObject({ status: "PENDING", peakPaymentRef: null });
   });
 
-  it("keeps the jobs locked, unpaid, when PEAK may have created the document", async () => {
-    const { rows, calls, deps } = fakeStore({ peak: { ok: false, uncertain: true, desc: "PEAK did not respond within 30s" } });
-    const res = await payJobsTogether(deps, build());
+  it("keeps the jobs locked when PEAK may have created the document — and never retries", async () => {
+    const { rows, doc, calls, create } = fakeStore({ peak: { ok: false, uncertain: true, desc: "PEAK did not respond within 30s" } });
+    const res = await createCombinedDocument(create, build());
     expect(res.status).toBe("UNCERTAIN");
-    expect(calls.posted).toBe(0);
-    for (const k of JOBS.map((j) => `${j.date}|${j.slotIdx}`)) {
-      expect(rows.get(k)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
-    }
-    // Locked means a second press cannot post a second document.
-    await expect(payJobsTogether(deps, build())).rejects.toThrow("locked");
+    expect(doc.status).toBe("CREATE_UNCERTAIN");
+    for (const k of JOBS.map((j) => `${j.date}|${j.slotIdx}`)) expect(rows.get(k)).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
+    // Locked means a second press cannot create a second document.
+    await expect(createCombinedDocument(create, build())).rejects.toThrow("locked");
     expect(calls.createExpense).toHaveLength(1);
   });
 
   it("treats an exception from the PEAK call as uncertain, not as nothing sent", async () => {
-    const { deps } = fakeStore({ peak: () => { throw new Error("socket hang up"); } });
-    expect((await payJobsTogether(deps, build())).status).toBe("UNCERTAIN");
-  });
-
-  it("never calls PEAK when the slip could not be saved", async () => {
-    const { rows, calls, deps } = fakeStore({ slipFails: true });
-    const res = await payJobsTogether(deps, build());
-    expect(res).toMatchObject({ status: "FAILED", stage: "slip" });
-    expect(calls.createExpense).toHaveLength(0);
-    for (const r of rows.values()) expect(r.peakPaymentRef).toBeNull();
+    const { create } = fakeStore({ peak: () => { throw new Error("socket hang up"); } });
+    expect((await createCombinedDocument(create, build())).status).toBe("UNCERTAIN");
   });
 
   it("never calls PEAK when a job is already locked", async () => {
-    const { rows, calls, deps } = fakeStore();
+    const { rows, calls, create } = fakeStore();
     rows.get("2030-05-12|0")!.peakPaymentRef = "FOLK-PAY-203005-07";
-    await expect(payJobsTogether(deps, build())).rejects.toThrow();
-    expect(calls.upload).toBe(0);
+    await expect(createCombinedDocument(create, build())).rejects.toThrow();
     expect(calls.createExpense).toHaveLength(0);
   });
+});
 
-  it("keeps the payment when only the slip attachment fails — the money is booked", async () => {
-    const { rows, deps } = fakeStore({ attach: { ok: false, reason: "file too large" } });
-    const res = await payJobsTogether(deps, build());
-    expect(res.status).toBe("POSTED");
-    if (res.status === "POSTED") expect(res.attachment).toEqual({ ok: false, reason: "file too large" });
+// ── Stage 2: jobs are marked paid only after PEAK records the payment ─────────
+
+describe("order of operations — stage 2, paying the document", () => {
+  const ready = async (o: Parameters<typeof fakeStore>[0] = {}) => {
+    const store = fakeStore(o);
+    await createCombinedDocument(store.create, build());
+    return store;
+  };
+
+  it("refuses to pay before the document exists", async () => {
+    const { calls, pay, payInput } = fakeStore();
+    await expect(payCombinedDocument(pay, payInput())).rejects.toThrow("not awaiting payment");
+    expect(calls.pay).toHaveLength(0);
+  });
+
+  it("reads the EXP back first, and pays nothing — no slip upload — when PEAK shows it is not payable", async () => {
+    const { doc, rows, calls, pay, payInput } = await ready({ check: { ok: false, reasons: ["EXP-TEST-0042 is still a draft in PEAK — approve it in PEAK first, then record the payment"] } });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res).toMatchObject({ status: "FAILED", stage: "check" });
+    expect(calls.upload + calls.pay.length + calls.paid + calls.notify).toBe(0);
+    expect(doc.status).toBe("AWAITING_PAYMENT");
+    for (const r of rows.values()) expect(r.status).toBe("PENDING");
+  });
+
+  it("never calls PEAK when the slip could not be saved — the document still awaits payment", async () => {
+    const { doc, calls, pay, payInput } = await ready({ slipFails: true });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res).toMatchObject({ status: "FAILED", stage: "slip" });
+    expect(calls.pay).toHaveLength(0);
+    expect(doc.status).toBe("AWAITING_PAYMENT");
+  });
+
+  it("marks nothing paid when PEAK refuses the payment, and the same EXP can be paid again later", async () => {
+    const { doc, rows, calls, pay, payInput } = await ready({ pay: { ok: false, desc: "Transaction must be Waiting Payment Status." } });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res).toMatchObject({ status: "FAILED", stage: "peak", reason: "Transaction must be Waiting Payment Status." });
+    expect(doc.status).toBe("AWAITING_PAYMENT");
+    expect(calls.paid + calls.notify).toBe(0);
+    for (const r of rows.values()) expect(r).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
+  });
+
+  it("keeps the jobs unpaid and locked when PEAK may have recorded the payment — no retry, no notice", async () => {
+    const { doc, rows, calls, pay, payInput } = await ready({ pay: { ok: false, uncertain: true, desc: "timeout" } });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res.status).toBe("UNCERTAIN");
+    expect(doc.status).toBe("PAYMENT_UNCERTAIN");
+    for (const r of rows.values()) expect(r).toMatchObject({ status: "PENDING", peakPaymentRef: "FOLK-PAY-203005-01" });
+    expect(calls.paid + calls.notify).toBe(0);
+    await expect(payCombinedDocument(pay, payInput())).rejects.toThrow("not awaiting payment");
+    expect(calls.pay).toHaveLength(1);
+  });
+
+  it("does not mark the jobs paid when PEAK accepted a payment but still shows money outstanding", async () => {
+    const { doc, rows, calls, pay, payInput } = await ready({ pay: { ok: true, remainPaymentAmount: 126, remainWhtAmount: 0 } });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res.status).toBe("UNCERTAIN");
+    expect(doc.status).toBe("PAYMENT_UNCERTAIN");
+    for (const r of rows.values()) expect(r.status).toBe("PENDING");
+    expect(calls.notify).toBe(0);
+  });
+
+  it("treats an exception from the payment call as uncertain", async () => {
+    const { pay, payInput } = await ready({ pay: () => { throw new Error("socket hang up"); } });
+    expect((await payCombinedDocument(pay, payInput())).status).toBe("UNCERTAIN");
+  });
+
+  it("keeps the payment when only the slip attachment fails — the money is recorded", async () => {
+    const { rows, calls, pay, payInput } = await ready({ attach: { ok: false, reason: "file too large" } });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res.status).toBe("PAID");
+    if (res.status === "PAID") expect(res.attachment).toEqual({ ok: false, reason: "file too large" });
     for (const r of rows.values()) expect(r.status).toBe("PAID");
+    expect(calls.notify).toBe(1);
+  });
+
+  it("does not tell the guide when FolkOPS could not record the payment PEAK accepted", async () => {
+    const { calls, pay, payInput } = await ready({ recordPaidFails: true });
+    const res = await payCombinedDocument(pay, payInput());
+    expect(res).toMatchObject({ status: "PAID", notified: false });
+    if (res.status === "PAID") expect(res.recordError).toContain("could not mark the jobs paid");
+    expect(calls.notify).toBe(0);
+  });
+});
+
+describe("buildPaymentInput — what may be recorded against a document", () => {
+  const document = (over: Record<string, unknown> = {}) => ({ status: "AWAITING_PAYMENT", peakDocumentNo: "EXP-TEST-0042", total: 4169, jobs: [{ date: "2030-05-06" }, { date: "2030-05-12" }], ...over });
+  const input = (over: Record<string, unknown> = {}) => ({ document: document(), expectedDocumentNo: "EXP-TEST-0042", paymentDate: "2030-05-13", paymentMethodId: "pm-test", today: "2030-05-20", ...over });
+  const reasons = (fn: () => unknown) => { try { fn(); } catch (e) { if (e instanceof PaymentNotRecordable) return e.reasons.join(" "); throw e; } return ""; };
+
+  it("takes the document's own total as the amount — never a typed one", () => {
+    expect(buildPaymentInput(input())).toEqual({ paymentDate: "2030-05-13", paymentMethodId: "pm-test", amount: 4169 });
+  });
+  it("refuses a document that is not awaiting payment, or already paid", () => {
+    expect(reasons(() => buildPaymentInput(input({ document: document({ status: "CREATING" }) })))).toContain("no PEAK document awaiting payment");
+    expect(reasons(() => buildPaymentInput(input({ document: document({ status: "PAID" }) })))).toContain("already recorded");
+    expect(reasons(() => buildPaymentInput(input({ document: document({ status: "POSTED" }) })))).toContain("already recorded"); // the one-step flow's paid
+  });
+  it("refuses the wrong EXP", () => {
+    expect(reasons(() => buildPaymentInput(input({ expectedDocumentNo: "EXP-TEST-0099" })))).toContain("is for EXP-TEST-0042, not EXP-TEST-0099");
+  });
+  it("needs the Paid By account and a real date: not before the last tour, not in the future", () => {
+    expect(reasons(() => buildPaymentInput(input({ paymentMethodId: "" })))).toContain("Paid By");
+    expect(reasons(() => buildPaymentInput(input({ paymentDate: "13/05/2030" })))).toContain("payment date");
+    expect(reasons(() => buildPaymentInput(input({ paymentDate: "2030-05-10" })))).toContain("before the tour on 2030-05-12");
+    expect(reasons(() => buildPaymentInput(input({ paymentDate: "2030-05-21" })))).toContain("in the future");
+  });
+});
+
+describe("peakPaymentPlan — pay only what PEAK and FolkOPS agree on", () => {
+  const exp = (over: Partial<PeakExpenseView> = {}): PeakExpenseView => ({ code: "EXP-TEST-0042", reference: "FOLK-PAY-203005-01", contactId: "contact-guide-a", status: "Approve", isVoid: false, paymentAmount: 0, remainAmount: 4295, remainWhtAmount: 126, payments: 0, ...over });
+  const plan = (over: Partial<PeakExpenseView> = {}) => peakPaymentPlan({ expense: exp(over), documentNo: "EXP-TEST-0042", paymentRef: "FOLK-PAY-203005-01", peakContactId: "contact-guide-a", gross: 4295, wht: 126, net: 4169 });
+
+  it("PEAK owes the gross and holds the withholding apart → pay the net, name the withholding", () => {
+    expect(plan()).toEqual({ ok: true, plan: { amount: 4169, withholdingTaxAmount: 126 } });
+  });
+  it("PEAK holds no withholding and owes the net → pay the net", () => {
+    expect(plan({ remainAmount: 4169, remainWhtAmount: 0 })).toEqual({ ok: true, plan: { amount: 4169, withholdingTaxAmount: null } });
+  });
+  it("refuses a draft, a voided document, a paid one, and the wrong document", () => {
+    const why = (o: Partial<PeakExpenseView>) => { const r = plan(o); return r.ok ? "" : r.reasons.join(" "); };
+    expect(why({ status: "Draft" })).toContain("still a draft in PEAK");
+    expect(why({ isVoid: true })).toContain("voided in PEAK");
+    expect(why({ payments: 1, paymentAmount: 4169 })).toContain("already shows a payment");
+    expect(why({ code: "EXP-TEST-0099" })).toContain("returned EXP-TEST-0099");
+    expect(why({ reference: "FOLK-PAY-203005-02" })).toContain("carries reference FOLK-PAY-203005-02");
+    expect(why({ contactId: "someone-else" })).toContain("different contact");
+  });
+  it("refuses any outstanding amount that does not reconcile exactly, naming both figures", () => {
+    const r = plan({ remainAmount: 4200, remainWhtAmount: 126 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join(" ")).toContain("PEAK shows ฿4,200.00 outstanding with ฿126.00 withholding");
+    const missing = plan({ remainAmount: null });
+    expect(missing.ok).toBe(false);
+  });
+});
+
+describe("classifyPaymentWrite", () => {
+  it("is PAID only when PEAK accepted it and nothing remains", () => {
+    expect(classifyPaymentWrite({ ok: true, remainPaymentAmount: 0, remainWhtAmount: 0 })).toEqual({ status: "PAID" });
+  });
+  it("waits for a person when money remains, or PEAK did not say what remains", () => {
+    expect(classifyPaymentWrite({ ok: true, remainPaymentAmount: 10 }).status).toBe("UNCERTAIN");
+    expect(classifyPaymentWrite({ ok: true, remainPaymentAmount: 0, remainWhtAmount: 126 }).status).toBe("UNCERTAIN");
+    expect(classifyPaymentWrite({ ok: true }).status).toBe("UNCERTAIN");
+  });
+  it("keeps a refusal apart from a lost answer", () => {
+    expect(classifyPaymentWrite({ ok: false, desc: "Transaction must be Waiting Payment Status." })).toEqual({ status: "FAILED", reason: "Transaction must be Waiting Payment Status." });
+    expect(classifyPaymentWrite({ ok: false, uncertain: true, desc: "timeout" })).toEqual({ status: "UNCERTAIN", reason: "timeout" });
+  });
+});
+
+describe("documentStatus", () => {
+  it("reads the one-step flow's statuses the two-stage way", () => {
+    expect(documentStatus("POSTING")).toBe("CREATING");
+    expect(documentStatus("UNCERTAIN")).toBe("CREATE_UNCERTAIN");
+    expect(documentStatus("POSTED")).toBe("PAID");
+    expect(documentStatus("AWAITING_PAYMENT")).toBe("AWAITING_PAYMENT");
+    expect(documentStatus("nonsense")).toBeNull();
   });
 });
 
@@ -386,6 +575,14 @@ describe("paymentDocumentLock", () => {
   });
   it("names the posted document", () => {
     expect(paymentDocumentLock({ peakPaymentRef: "FOLK-PAY-203005-01", peakRef: "EXP-42" })).toContain("EXP-42");
+  });
+  it("says a created document is awaiting payment, by its EXP", () => {
+    const m = paymentDocumentLock({ peakPaymentRef: "FOLK-PAY-203005-01", status: "PENDING" }, { status: "AWAITING_PAYMENT", peakDocumentNo: "EXP-42" })!;
+    expect(m).toContain("Included in combined PEAK document EXP-42 (FOLK-PAY-203005-01) · Awaiting payment");
+    expect(m).not.toContain("was paid");
+  });
+  it("says a payment is unconfirmed when PEAK has not answered it", () => {
+    expect(paymentDocumentLock({ peakPaymentRef: "FOLK-PAY-203005-01" }, { status: "PAYMENT_UNCERTAIN", peakDocumentNo: "EXP-42" })).toContain("has not confirmed its payment");
   });
   it("says a payment is unconfirmed when PEAK has not answered", () => {
     expect(paymentDocumentLock({ peakPaymentRef: "FOLK-PAY-203005-01" })).toContain("has not confirmed");

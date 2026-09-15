@@ -214,6 +214,9 @@ table.grid tbody tr:hover td.gname{background:var(--grey-bg)}
 .pay-doc-note{font-size:11px;font-weight:700;color:var(--ink-soft);white-space:nowrap}
 .pay-doc-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;padding:8px 10px;border-radius:10px;font-size:12.5px;background:#fff8c4;border:1px solid #ecd9bf;color:var(--ink)}
 .pay-doc-bar.danger{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}
+/* The bar sits in a table row as wide as the table. On a phone the table scrolls sideways,
+   so keep the bar pinned to the visible width — the amount to pay must never be off-screen. */
+@media (max-width:720px){.pay-doc-bar{position:sticky;left:0;max-width:calc(100vw - 56px);box-sizing:border-box}}
 .pay-doc-tag{font-size:11px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-soft);white-space:nowrap}
 .dayedit{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .dayedit .pill{min-width:0;padding:9px 6px;font-size:12px}

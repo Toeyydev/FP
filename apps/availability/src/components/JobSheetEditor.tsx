@@ -74,7 +74,9 @@ export default function JobSheetEditor() {
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
   const [checkedIn, setCheckedIn] = useState(false);
-  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null); // paid state + slip (from the operator)
+  const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
+  // The combined PEAK document ("Pay N jobs together") holding this job, if any.
+  const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
@@ -109,7 +111,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null);
     setAdvance(d.advance ?? { advances: [], returns: [] });
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -1618,6 +1620,23 @@ export default function JobSheetEditor() {
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>PEAK Expense</div>
             {(() => {
               const el = peak?.eligibility;
+              // In a combined PEAK document: that document is this job's accounting. It must
+              // not also be synced on its own (the server refuses it too), so no Sync here.
+              if (combinedPayment) {
+                const st = combinedPayment.status;
+                const label = st === "AWAITING_PAYMENT" ? "Awaiting payment" : st === "PAID" ? "Paid" : st === "PAYING" || st === "PAYMENT_UNCERTAIN" ? "Payment not confirmed by PEAK" : "Not confirmed by PEAK yet";
+                return (
+                  <div className="js-combined-doc" role="status">
+                    <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)" }}>Included in combined PEAK document</div>
+                    <div style={{ marginTop: 2, fontFamily: "monospace", fontSize: 12.5, fontWeight: 700 }}>{combinedPayment.documentNo ?? combinedPayment.paymentRef} · {label}</div>
+                    <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)" }}>{combinedPayment.paymentRef} · {combinedPayment.jobCount} job{combinedPayment.jobCount === 1 ? "" : "s"} · {thb(combinedPayment.total)}</div>
+                    <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {combinedPayment.documentLink && <a className="btn sm" href={combinedPayment.documentLink} target="_blank" rel="noopener noreferrer">View PEAK document</a>}
+                      <a className="btn sm" href="/payments">{st === "AWAITING_PAYMENT" ? "Record payment on Payments" : "Open Payments"}</a>
+                    </div>
+                  </div>
+                );
+              }
               const docNo = peak?.peakDocumentNo || payment?.peakRef;
               // Synced: show the real document number and when. Never a generated one.
               if (docNo) return (

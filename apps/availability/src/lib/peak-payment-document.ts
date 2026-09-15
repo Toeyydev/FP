@@ -1,15 +1,20 @@
-// "Pay N jobs together · one ref" → ONE PEAK document.
+// "Pay N jobs together · one ref" → ONE PEAK document, in two stages.
 //
 // A guide is often paid for several tours in a single bank transfer. PEAK must hold
-// that as ONE payable-and-payment document — one contact, one payment reference, one
-// payment date, one Paid By account, one slip — with a line per job and category, so
-// the ledger shows the money that actually moved while every line still names the job
-// it belongs to. Posting one document per job would split one transfer across N
-// payments that no bank statement line matches.
+// that as ONE expense document — one contact, one reference, a line per job and
+// category — so the ledger shows one payable that one bank statement line settles,
+// while every line still names the job it belongs to.
 //
-// This file is pure: no database, no network. The route supplies the jobs and the
-// saved account chart, and the side effects arrive through PayTogetherDeps — which is
-// what lets the order of operations below be tested without either.
+// Creating the expense document is not the same thing as paying it:
+//   stage 1  createCombinedDocument — ONE unpaid expense in PEAK → its EXP number.
+//            Nothing is paid, no slip, no guide notice. The jobs are locked to it.
+//   stage 2  payCombinedDocument — after the operator has reviewed that EXP in PEAK
+//            and made the transfer, the payment is recorded against the SAME EXP.
+//            Only then are the jobs PAID and the guide told.
+//
+// This file is pure: no database, no network. The routes supply the jobs and the
+// saved account chart, and the side effects arrive through CreateDocumentDeps and
+// PayDocumentDeps — which is what lets the order of operations be tested without either.
 import { expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import {
@@ -107,22 +112,22 @@ export function paymentRefFor(paymentDate: string, seq: number): string {
 
 // ── The builder ──────────────────────────────────────────────────────────────
 
+/**
+ * Stage 1: the unpaid expense document for these jobs. No payment date, no Paid By
+ * account and no slip belong here — nothing is being paid yet.
+ */
 export function buildGuidePaymentDocument(input: {
   guideId: string;
   peakContactId: string | null | undefined;
   paymentRef: string;
-  paymentDate: string;
-  paymentMethodId: string;
   jobs: PaymentJob[];
   accounts: PaymentAccounts;
   vatType?: string;
 }): GuidePaymentDocument {
-  const { guideId, peakContactId, paymentRef, paymentDate, paymentMethodId, accounts, vatType } = input;
+  const { guideId, peakContactId, paymentRef, accounts, vatType } = input;
   const reasons = new Set<string>();
 
   if (!peakContactId) reasons.add("Guide is not mapped to a PEAK Contact — map them on one of their job sheets first");
-  if (!(paymentMethodId ?? "").trim()) reasons.add("Choose the account the money was paid from (Paid By)");
-  if (!DATE.test(paymentDate ?? "")) reasons.add("Choose a payment date");
   if (!input.jobs?.length) reasons.add("Select at least one job");
 
   // Stable order: the document reads job by job, in the order the tours ran.
@@ -141,11 +146,6 @@ export function buildGuidePaymentDocument(input: {
   if (months.length > 1) reasons.add(`These jobs span ${months.join(" and ")} — pay each month separately so each document books into its own period`);
 
   const latest = jobs.length ? jobs[jobs.length - 1].date : "";
-  // The paid-before-tour bug, in accounting form: a transfer cannot settle a tour that
-  // had not happened yet.
-  if (DATE.test(paymentDate ?? "") && latest && paymentDate < latest) {
-    reasons.add(`Payment date ${paymentDate} is before the tour on ${latest}`);
-  }
 
   const lines: PeakPaymentLine[] = [];
   const traces: PaymentLineTrace[] = [];
@@ -278,8 +278,8 @@ export function buildGuidePaymentDocument(input: {
     issuedDate,
     expense: {
       // Dated when the last tour ran, so the cost books into the month the service was
-      // delivered; the payment carries its own date. dueDate = issuedDate is what the
-      // job-sheet document already posts successfully.
+      // delivered; the payment, recorded later, carries its own date. dueDate =
+      // issuedDate is what the job-sheet document already posts successfully.
       issuedDate,
       dueDate: issuedDate,
       // Contact id only, never a name — see buildJobSheetExpense for why a name forks
@@ -288,10 +288,8 @@ export function buildGuidePaymentDocument(input: {
       products: lines,
       reference: paymentRef,
       remark: `Folkpaths guide payment ${paymentRef} · ${guideId} · ${jobs.length} job${jobs.length === 1 ? "" : "s"}`,
-      paidPayments: {
-        paymentDate: compact(paymentDate),
-        payments: [{ paymentMethod: { id: paymentMethodId }, amount: total }],
-      },
+      // Deliberately no paidPayments: this creates an UNPAID expense. The payment is
+      // recorded against this same document in stage 2 (payCombinedDocument).
     },
   };
 }
@@ -331,56 +329,70 @@ export function attachmentFileType(mime: string): "image" | "document" {
   return /^image\//i.test(mime ?? "") ? "image" : "document";
 }
 
-// ── The order of operations ──────────────────────────────────────────────────
+// ── Where a combined document is ─────────────────────────────────────────────
 
-export type PayTogetherDeps = {
-  /** Record the document as POSTING and lock every job to its paymentRef, atomically.
-   *  Throws when any job is already paid or locked — before anything else happens. */
-  claim(doc: GuidePaymentDocument): Promise<void>;
-  /** Save the slip. Throws on failure. */
-  uploadSlip(doc: GuidePaymentDocument): Promise<{ link: string }>;
-  createExpense(expense: Record<string, unknown>): Promise<ExpenseWriteResult>;
-  /** Mark every job locked to paymentRef PAID, pointing at the one document. */
-  recordPosted(p: { paymentRef: string; documentNo: string; documentId: string | null; documentLink: string | null; slipLink: string }): Promise<void>;
-  /** FAILED releases the jobs; UNCERTAIN leaves them locked. */
-  recordFailed(p: { paymentRef: string; reason: string; uncertain: boolean }): Promise<void>;
-  attachSlip(p: { documentId: string | null; documentNo: string }): Promise<{ ok: boolean; reason?: string }>;
-  recordAttachment(p: { paymentRef: string; ok: boolean; reason: string | null }): Promise<void>;
+export type PaymentDocumentStatus =
+  | "CREATING" | "CREATE_UNCERTAIN" | "FAILED" | "AWAITING_PAYMENT"
+  | "PAYING" | "PAYMENT_UNCERTAIN" | "PAID" | "VOIDED";
+
+/** A stored status as the two-stage flow reads it. The one-step flow this replaced
+ *  wrote POSTING / POSTED / UNCERTAIN, and a row it left behind must still read right. */
+export function documentStatus(raw: string | null | undefined): PaymentDocumentStatus | null {
+  switch (raw) {
+    case "POSTING": return "CREATING";
+    case "UNCERTAIN": return "CREATE_UNCERTAIN";
+    case "POSTED": return "PAID";
+    case "CREATING": case "CREATE_UNCERTAIN": case "FAILED": case "AWAITING_PAYMENT":
+    case "PAYING": case "PAYMENT_UNCERTAIN": case "PAID": case "VOIDED":
+      return raw;
+    default: return null;
+  }
+}
+
+/** Whether a document still holds its jobs. FAILED and VOIDED let them go. */
+export const documentHoldsJobs = (raw: string | null | undefined) => {
+  const st = documentStatus(raw);
+  return st !== null && st !== "FAILED" && st !== "VOIDED";
 };
 
-export type PayTogetherResult =
+// ── Stage 1: create the expense document ─────────────────────────────────────
+
+export type CreateDocumentDeps = {
+  /** Record the document as CREATING and lock every job to its paymentRef, atomically.
+   *  Throws when any job is already paid, locked or otherwise not payable — before
+   *  anything is sent to PEAK. */
+  claim(doc: GuidePaymentDocument): Promise<void>;
+  /** POST the unpaid expense. */
+  createExpense(expense: Record<string, unknown>): Promise<ExpenseWriteResult>;
+  /** PEAK created it: store the EXP and move to AWAITING_PAYMENT. The jobs stay unpaid. */
+  recordCreated(p: { paymentRef: string; documentNo: string; documentId: string | null; documentLink: string | null }): Promise<void>;
+  /** FAILED releases the jobs; UNCERTAIN (CREATE_UNCERTAIN) keeps them locked. */
+  recordCreateFailed(p: { paymentRef: string; reason: string; uncertain: boolean }): Promise<void>;
+};
+
+export type CreateDocumentResult =
   | {
-      status: "POSTED"; paymentRef: string; documentNo: string; documentId: string | null; documentLink: string | null;
-      slipLink: string; total: number; attachment: { ok: boolean; reason: string | null };
+      status: "AWAITING_PAYMENT"; paymentRef: string; documentNo: string; documentId: string | null; documentLink: string | null;
+      gross: number; wht: number; total: number; lines: number;
       /** PEAK has the document but FolkOPS could not record it. The jobs stay locked, so
-       *  nothing can post twice; resolve it on the Payments page. */
+       *  nothing can create a second one; resolve it on the Payments page. */
       recordError: string | null;
     }
-  | { status: "FAILED"; paymentRef: string; stage: "slip" | "peak"; reason: string }
+  | { status: "FAILED"; paymentRef: string; reason: string }
   | { status: "UNCERTAIN"; paymentRef: string; reason: string };
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
 
 /**
- * Claim → slip → ONE PEAK document → mark paid → attach the slip.
+ * Claim → ONE unpaid PEAK expense → AWAITING_PAYMENT.
  *
- * The jobs are marked paid only after PEAK has created the document, and every one of
- * them is pointed at that same document. The slip attaches last and can fail on its
- * own: by then the money is booked in PEAK as paid, so reporting the whole payment as
- * failed would invite a second post of a transfer that already happened.
+ * Never retried here. When PEAK may have created the document and the answer was lost,
+ * the jobs stay locked (CREATE_UNCERTAIN) until a person looks in PEAK — pressing again
+ * could otherwise leave two documents for one transfer.
  */
-export async function payJobsTogether(deps: PayTogetherDeps, doc: GuidePaymentDocument): Promise<PayTogetherResult> {
+export async function createCombinedDocument(deps: CreateDocumentDeps, doc: GuidePaymentDocument): Promise<CreateDocumentResult> {
   const { paymentRef } = doc;
   await deps.claim(doc); // refusal propagates: nothing has happened yet
-
-  let slipLink: string;
-  try {
-    ({ link: slipLink } = await deps.uploadSlip(doc));
-  } catch (e) {
-    const reason = `The slip could not be saved: ${msg(e)}`;
-    await deps.recordFailed({ paymentRef, reason, uncertain: false }).catch(() => {});
-    return { status: "FAILED", paymentRef, stage: "slip", reason };
-  }
 
   let outcome: WriteOutcome;
   try {
@@ -393,18 +405,242 @@ export async function payJobsTogether(deps: PayTogetherDeps, doc: GuidePaymentDo
   if (outcome.status !== "POSTED") {
     const uncertain = outcome.status === "UNCERTAIN";
     // A failure to write this down leaves the jobs locked — the safe direction.
-    await deps.recordFailed({ paymentRef, reason: outcome.reason, uncertain }).catch(() => {});
-    return uncertain
-      ? { status: "UNCERTAIN", paymentRef, reason: outcome.reason }
-      : { status: "FAILED", paymentRef, stage: "peak", reason: outcome.reason };
+    await deps.recordCreateFailed({ paymentRef, reason: outcome.reason, uncertain }).catch(() => {});
+    return uncertain ? { status: "UNCERTAIN", paymentRef, reason: outcome.reason } : { status: "FAILED", paymentRef, reason: outcome.reason };
   }
 
   const { documentNo, documentId, documentLink } = outcome;
   let recordError: string | null = null;
   try {
-    await deps.recordPosted({ paymentRef, documentNo, documentId, documentLink, slipLink });
+    await deps.recordCreated({ paymentRef, documentNo, documentId, documentLink });
   } catch (e) {
     recordError = `PEAK created ${documentNo}, but FolkOPS could not record it: ${msg(e)}`;
+  }
+  return { status: "AWAITING_PAYMENT", paymentRef, documentNo, documentId, documentLink, gross: doc.gross, wht: doc.wht, total: doc.total, lines: doc.lines.length, recordError };
+}
+
+// ── Stage 2: record the payment against that same document ───────────────────
+
+/** Thrown with every reason a payment cannot be recorded yet. Nothing has happened. */
+export class PaymentNotRecordable extends Error {
+  readonly code = "payment-not-recordable";
+  constructor(readonly reasons: string[]) {
+    super(reasons.join("; "));
+    this.name = "PaymentNotRecordable";
+  }
+}
+
+export type PaymentInput = {
+  paymentDate: string;
+  paymentMethodId: string;
+  amount: number;
+};
+
+/**
+ * The payment to record against an AWAITING_PAYMENT document, or every reason it
+ * cannot be. The amount is the document's own net total — never typed, so the payment
+ * can only ever settle the document exactly.
+ */
+export function buildPaymentInput(input: {
+  document: { status: string | null | undefined; peakDocumentNo: string | null | undefined; total: number; jobs: { date: string }[] };
+  /** The EXP the operator was looking at. Must be the document's, or nothing is paid. */
+  expectedDocumentNo: string;
+  paymentDate: string;
+  paymentMethodId: string;
+  today: string;
+}): PaymentInput {
+  const { document, paymentDate, paymentMethodId, today } = input;
+  const reasons: string[] = [];
+  const status = documentStatus(document.status);
+  const docNo = (document.peakDocumentNo ?? "").trim();
+  if (status === "PAID") reasons.push(`This payment is already recorded against ${docNo || "its PEAK document"}`);
+  else if (status !== "AWAITING_PAYMENT") reasons.push(`There is no PEAK document awaiting payment here (status ${status ?? "unknown"})`);
+  if (!docNo) reasons.push("The PEAK document number is missing — this document cannot be paid");
+  else if (input.expectedDocumentNo.trim() !== docNo) reasons.push(`This payment is for ${docNo}, not ${input.expectedDocumentNo.trim() || "an unnamed document"} — reload Payments`);
+  if (!(paymentMethodId ?? "").trim()) reasons.push("Choose the account the money was paid from (Paid By)");
+  if (!DATE.test(paymentDate ?? "")) reasons.push("Choose the payment date");
+  const latest = [...document.jobs.map((j) => j.date)].sort().pop() ?? "";
+  // The paid-before-tour bug, in accounting form: a transfer cannot settle a tour that
+  // had not happened yet — nor can it be dated in the future.
+  if (DATE.test(paymentDate ?? "") && latest && paymentDate < latest) reasons.push(`Payment date ${paymentDate} is before the tour on ${latest}`);
+  if (DATE.test(paymentDate ?? "") && paymentDate > today) reasons.push(`Payment date ${paymentDate} is in the future`);
+  if (!(document.total > 0)) reasons.push("Nothing to pay on this document");
+  if (reasons.length) throw new PaymentNotRecordable(reasons);
+  return { paymentDate, paymentMethodId: paymentMethodId.trim(), amount: round2(document.total) };
+}
+
+/** What PEAK holds on the expense right now (lib/peak-api PeakExpenseState). */
+export type PeakExpenseView = {
+  code: string;
+  reference: string | null;
+  contactId: string | null;
+  status: string | null;
+  isVoid: boolean;
+  paymentAmount: number | null;
+  remainAmount: number | null;
+  remainWhtAmount: number | null;
+  payments: number;
+};
+
+export type PaymentPlan = { amount: number; withholdingTaxAmount: number | null };
+
+const near = (a: number | null, b: number) => a != null && Math.abs(a - b) < 0.005;
+
+/**
+ * Whether the EXP in PEAK is exactly the document FolkOPS created and still owes
+ * exactly what FolkOPS will pay — and so what to send. Every doubt is a refusal before
+ * any payment is sent, naming what PEAK showed, so a person can look.
+ *
+ * PEAK's documentation does not say how withholding tax is carried when an expense with
+ * withholding on its lines is paid. So this accepts only the two readings that
+ * reconcile exactly with the document and are unambiguous:
+ *   - PEAK still owes the gross and holds the withholding apart → pay the net and name
+ *     that withholding;
+ *   - PEAK holds no withholding and owes the net → pay the net.
+ * Anything else is refused. After the payment, the document is PAID only if PEAK then
+ * reports nothing outstanding (classifyPaymentWrite).
+ */
+export function peakPaymentPlan(input: {
+  expense: PeakExpenseView;
+  documentNo: string;
+  paymentRef: string;
+  peakContactId: string | null;
+  gross: number;
+  wht: number;
+  net: number;
+}): { ok: true; plan: PaymentPlan } | { ok: false; reasons: string[] } {
+  const { expense: e, documentNo, gross, wht, net } = input;
+  const reasons: string[] = [];
+  if ((e.code ?? "").trim() !== documentNo) reasons.push(`PEAK returned ${e.code || "no document"} for ${documentNo}`);
+  if (e.isVoid) reasons.push(`${documentNo} is voided in PEAK — it cannot be paid`);
+  if (/draft/i.test(e.status ?? "")) reasons.push(`${documentNo} is still a draft in PEAK — approve it in PEAK first, then record the payment`);
+  if (e.reference && e.reference.trim() !== input.paymentRef) reasons.push(`${documentNo} in PEAK carries reference ${e.reference}, not ${input.paymentRef}`);
+  if (e.contactId && input.peakContactId && e.contactId !== input.peakContactId) reasons.push(`${documentNo} in PEAK is for a different contact than this guide`);
+  if (e.payments > 0 || (e.paymentAmount ?? 0) > 0.005) reasons.push(`PEAK already shows a payment on ${documentNo} — look at it in PEAK before recording anything`);
+  let plan: PaymentPlan | null = null;
+  if (e.remainAmount == null) reasons.push(`PEAK did not say how much is outstanding on ${documentNo}`);
+  else if (wht > 0 && near(e.remainWhtAmount, wht) && near(e.remainAmount, gross)) plan = { amount: round2(net), withholdingTaxAmount: round2(wht) };
+  else if ((e.remainWhtAmount ?? 0) <= 0.005 && near(e.remainAmount, net)) plan = { amount: round2(net), withholdingTaxAmount: null };
+  else reasons.push(`PEAK shows ${thb(e.remainAmount)} outstanding${e.remainWhtAmount ? ` with ${thb(e.remainWhtAmount)} withholding` : ""} on ${documentNo}; FolkOPS expects ${thb(net)} to pay${wht > 0 ? ` after ${thb(wht)} withholding (gross ${thb(gross)})` : ""} — check the document in PEAK`);
+  if (reasons.length || !plan) return { ok: false, reasons };
+  return { ok: true, plan };
+}
+
+export type PaymentWriteResult = { ok: boolean; desc?: string; uncertain?: boolean; remainPaymentAmount?: number | null; remainWhtAmount?: number | null };
+
+export type PaymentOutcome =
+  | { status: "PAID" }
+  | { status: "FAILED"; reason: string }
+  | { status: "UNCERTAIN"; reason: string };
+
+/**
+ * Refused, recorded, or unknown. "Recorded" also needs PEAK to report the document
+ * fully settled: a payment PEAK accepted that still leaves money outstanding is not a
+ * paid document, and paying again could record the transfer twice — so it waits for a
+ * person, exactly like a lost answer.
+ */
+export function classifyPaymentWrite(r: PaymentWriteResult): PaymentOutcome {
+  if (r.ok) {
+    if (r.remainPaymentAmount == null) return { status: "UNCERTAIN", reason: "PEAK accepted the payment but did not report what remains outstanding — look at the document in PEAK" };
+    if (r.remainPaymentAmount > 0.005 || (r.remainWhtAmount ?? 0) > 0.005) {
+      return { status: "UNCERTAIN", reason: `PEAK recorded a payment but still shows ${thb(r.remainPaymentAmount)} outstanding${(r.remainWhtAmount ?? 0) > 0.005 ? ` and ${thb(r.remainWhtAmount!)} withholding` : ""} — look at the document in PEAK` };
+    }
+    return { status: "PAID" };
+  }
+  const reason = (r.desc ?? "").trim() || "PEAK did not confirm the payment and gave no reason";
+  return r.uncertain ? { status: "UNCERTAIN", reason } : { status: "FAILED", reason };
+}
+
+export type PayDocumentDeps = {
+  /** AWAITING_PAYMENT → PAYING for exactly this document, atomically, after checking
+   *  every job is still locked to it, unpaid and unchanged. Throws PaymentClaimRefused. */
+  claimPayment(p: { paymentRef: string; paymentDate: string; paymentMethodId: string; paymentMethodName: string | null }): Promise<void>;
+  /** Read the EXP back from PEAK and decide what to send (peakPaymentPlan). Read-only. */
+  checkExpense(): Promise<{ ok: true; plan: PaymentPlan } | { ok: false; reasons: string[] }>;
+  /** Save the slip. Throws on failure. */
+  uploadSlip(): Promise<{ link: string }>;
+  /** Record the payment against the EXISTING PEAK document. Never creates a document. */
+  payExpense(p: { documentNo: string; paymentDate: string; paymentMethodId: string } & PaymentPlan): Promise<PaymentWriteResult>;
+  /** PEAK recorded it: every job locked to this document becomes PAID, atomically. */
+  recordPaid(p: { paymentRef: string; slipLink: string }): Promise<void>;
+  /** FAILED returns the document to AWAITING_PAYMENT; UNCERTAIN (PAYMENT_UNCERTAIN) keeps it. */
+  recordPaymentFailed(p: { paymentRef: string; reason: string; uncertain: boolean }): Promise<void>;
+  attachSlip(p: { documentId: string | null; documentNo: string }): Promise<{ ok: boolean; reason?: string }>;
+  recordAttachment(p: { paymentRef: string; ok: boolean; reason: string | null }): Promise<void>;
+  /** Tell the guide — once, and only after the jobs are recorded as paid. */
+  notifyGuide(p: { paymentRef: string; slipLink: string }): Promise<void>;
+};
+
+export type PayDocumentResult =
+  | {
+      status: "PAID"; paymentRef: string; documentNo: string; slipLink: string; amount: number;
+      attachment: { ok: boolean; reason: string | null };
+      /** PEAK recorded the payment but FolkOPS could not mark the jobs. They stay locked
+       *  and unpaid; resolve it on the Payments page — never pay again. */
+      recordError: string | null;
+      notified: boolean;
+    }
+  | { status: "FAILED"; paymentRef: string; stage: "check" | "slip" | "peak"; reason: string; reasons?: string[] }
+  | { status: "UNCERTAIN"; paymentRef: string; reason: string };
+
+/**
+ * Claim → read the EXP back → slip → pay the SAME EXP → mark paid → attach the slip →
+ * tell the guide.
+ *
+ * The jobs are marked paid only after PEAK has recorded the payment, and never when its
+ * answer is lost: then the document waits (PAYMENT_UNCERTAIN) for a person to look at
+ * the EXP in PEAK. No step here can create an expense document.
+ */
+export async function payCombinedDocument(
+  deps: PayDocumentDeps,
+  input: { paymentRef: string; documentNo: string; documentId: string | null; paymentMethodName: string | null } & PaymentInput,
+): Promise<PayDocumentResult> {
+  const { paymentRef, documentNo, documentId, paymentDate, paymentMethodId, amount } = input;
+  await deps.claimPayment({ paymentRef, paymentDate, paymentMethodId, paymentMethodName: input.paymentMethodName }); // refusal propagates
+
+  // The document in PEAK must still be exactly the one FolkOPS created, unpaid, owing
+  // exactly this. Nothing is uploaded or paid until it is.
+  let plan: PaymentPlan;
+  try {
+    const check = await deps.checkExpense();
+    if (!check.ok) {
+      const reason = check.reasons.join("; ");
+      await deps.recordPaymentFailed({ paymentRef, reason, uncertain: false }).catch(() => {});
+      return { status: "FAILED", paymentRef, stage: "check", reason, reasons: check.reasons };
+    }
+    plan = check.plan;
+  } catch (e) {
+    const reason = `Could not read ${documentNo} from PEAK: ${msg(e)} — nothing was paid`;
+    await deps.recordPaymentFailed({ paymentRef, reason, uncertain: false }).catch(() => {});
+    return { status: "FAILED", paymentRef, stage: "check", reason };
+  }
+
+  let slipLink: string;
+  try {
+    ({ link: slipLink } = await deps.uploadSlip());
+  } catch (e) {
+    const reason = `The slip could not be saved: ${msg(e)}`;
+    await deps.recordPaymentFailed({ paymentRef, reason, uncertain: false }).catch(() => {});
+    return { status: "FAILED", paymentRef, stage: "slip", reason };
+  }
+
+  let outcome: PaymentOutcome;
+  try {
+    outcome = classifyPaymentWrite(await deps.payExpense({ documentNo, paymentDate, paymentMethodId, ...plan }));
+  } catch (e) {
+    outcome = { status: "UNCERTAIN", reason: msg(e) };
+  }
+  if (outcome.status !== "PAID") {
+    const uncertain = outcome.status === "UNCERTAIN";
+    await deps.recordPaymentFailed({ paymentRef, reason: outcome.reason, uncertain }).catch(() => {});
+    return uncertain ? { status: "UNCERTAIN", paymentRef, reason: outcome.reason } : { status: "FAILED", paymentRef, stage: "peak", reason: outcome.reason };
+  }
+
+  let recordError: string | null = null;
+  try {
+    await deps.recordPaid({ paymentRef, slipLink });
+  } catch (e) {
+    recordError = `PEAK recorded the payment on ${documentNo}, but FolkOPS could not mark the jobs paid: ${msg(e)}`;
   }
 
   let attachment: { ok: boolean; reason: string | null };
@@ -416,7 +652,12 @@ export async function payJobsTogether(deps: PayTogetherDeps, doc: GuidePaymentDo
   }
   await deps.recordAttachment({ paymentRef, ok: attachment.ok, reason: attachment.reason }).catch(() => {});
 
-  return { status: "POSTED", paymentRef, documentNo, documentId, documentLink, slipLink, total: doc.total, attachment, recordError };
+  // The guide hears about a payment only once FolkOPS itself shows it paid.
+  let notified = false;
+  if (!recordError) {
+    try { await deps.notifyGuide({ paymentRef, slipLink }); notified = true; } catch { /* best-effort, as everywhere else */ }
+  }
+  return { status: "PAID", paymentRef, documentNo, slipLink, amount, attachment, recordError, notified };
 }
 
 // ── Locks held by a payment document ─────────────────────────────────────────
@@ -424,16 +665,30 @@ export async function payJobsTogether(deps: PayTogetherDeps, doc: GuidePaymentDo
 /**
  * Whether a job is tied up in a combined PEAK payment document, and so must not be
  * paid, un-paid or posted by any other route. Returns the message to show, or null.
+ * `document` is the combined document the job is locked to, when the caller has it.
  */
 export function paymentDocumentLock(
-  tp: { peakPaymentRef?: string | null; peakRef?: string | null } | null | undefined,
+  tp: { peakPaymentRef?: string | null; peakRef?: string | null; status?: string | null } | null | undefined,
+  document?: { status?: string | null; peakDocumentNo?: string | null } | null,
 ): string | null {
   const ref = (tp?.peakPaymentRef ?? "").trim();
   if (!ref) return null;
-  const doc = (tp?.peakRef ?? "").trim();
-  return doc
-    ? `This job was paid in PEAK document ${doc} (${ref}) together with the guide's other jobs. Change it in PEAK, then mark that payment voided on the Payments page.`
-    : `This job is in PEAK payment ${ref}, which PEAK has not confirmed yet. Resolve it on the Payments page first.`;
+  const st = documentStatus(document?.status);
+  const docNo = (document?.peakDocumentNo ?? tp?.peakRef ?? "").trim();
+  if (st === "AWAITING_PAYMENT" || st === "PAYING") {
+    return `Included in combined PEAK document ${docNo || ref} (${ref}) · Awaiting payment. Record the payment on the Payments page — do not pay or post this job on its own.`;
+  }
+  if (st === "PAYMENT_UNCERTAIN") {
+    return `Included in combined PEAK document ${docNo || ref} (${ref}). PEAK has not confirmed its payment — look at ${docNo || "the document"} in PEAK, then record what you find on the Payments page.`;
+  }
+  if (st === "PAID" || (!st && docNo && tp?.status === "PAID")) {
+    return `This job was paid in PEAK document ${docNo} (${ref}) together with the guide's other jobs. Change it in PEAK, then mark that payment voided on the Payments page.`;
+  }
+  if (!st && docNo) {
+    // Called without the document: a job carrying a document number was paid through it.
+    return `This job was paid in PEAK document ${docNo} (${ref}) together with the guide's other jobs. Change it in PEAK, then mark that payment voided on the Payments page.`;
+  }
+  return `This job is in PEAK payment ${ref}, which PEAK has not confirmed yet. Resolve it on the Payments page first.`;
 }
 
 // ── PEAK credits ─────────────────────────────────────────────────────────────

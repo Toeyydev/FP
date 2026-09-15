@@ -6,6 +6,7 @@ const prismaMock = vi.hoisted(() => ({
   tourPayment: { findMany: vi.fn() },
   assignment: { findMany: vi.fn() },
   payrollStatus: { findUnique: vi.fn() },
+  guidePaymentDocument: { findMany: vi.fn(async () => []) },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 const createExpenseMock = vi.hoisted(() => vi.fn());

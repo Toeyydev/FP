@@ -654,18 +654,25 @@ model GuidePaymentDocument {
   id                String    @id @default(cuid())
   paymentRef        String    @unique // FOLK-PAY-YYYYMM-NN — sent to PEAK as the document reference
   guideId           String
-  paymentDate       String // "YYYY-MM-DD"
-  paymentMethodId   String // PEAK payment method (the Paid By account)
+  paymentDate       String? // "YYYY-MM-DD" — set when the payment is recorded (stage 2)
+  paymentMethodId   String? // PEAK payment method (the Paid By account) — set at stage 2
   paymentMethodName String? // display only
   jobs              Json // [{ date, slotIdx, ref, payout }] exactly as claimed
   lines             Json // the line trace exactly as posted (job, kind, category, account, amount, wht)
-  total             Float // net paid — the transfer amount
-  // POSTING  claimed, PEAK not yet answered
-  // POSTED   PEAK created the document; every job is PAID
-  // FAILED   PEAK definitely refused (or the slip never uploaded); jobs released
-  // UNCERTAIN PEAK did not answer — the document may exist; jobs stay locked until a person checks PEAK
-  // VOIDED   an operator confirmed the document was voided in PEAK; jobs released
-  status            String    @default("POSTING")
+  total             Float // net due — the amount the transfer must be
+  // Stage 1 — the expense document (lib/peak-payment-document):
+  //   CREATING          claimed, PEAK not yet answered
+  //   CREATE_UNCERTAIN  PEAK did not answer — the document may exist; jobs stay locked until a person checks PEAK
+  //   FAILED            PEAK definitely refused the document; jobs released
+  //   AWAITING_PAYMENT  the EXP exists in PEAK, unpaid; jobs locked to it, not paid
+  // Stage 2 — the payment against that same EXP:
+  //   PAYING            payment claimed, PEAK not yet answered
+  //   PAYMENT_UNCERTAIN PEAK did not answer the payment — jobs stay unpaid and locked until a person checks PEAK
+  //   PAID              PEAK recorded the payment; every job is PAID
+  // Either stage:
+  //   VOIDED            an operator confirmed the document was voided in PEAK; jobs released (and unpaid)
+  // Legacy one-step values (POSTING / POSTED / UNCERTAIN) are read as CREATING / PAID / CREATE_UNCERTAIN.
+  status            String    @default("CREATING")
   error             String?
   slipUrl           String?
   peakDocumentId    String?
