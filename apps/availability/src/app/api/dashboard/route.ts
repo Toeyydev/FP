@@ -5,7 +5,7 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { guidesNeeded } from "@/lib/capacity";
 import { reconcileAssignedBookings, autoSyncBokun } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
-import { cached, withTimeout } from "@/lib/api-cache";
+import { cached, DASHBOARD_CACHE_KEY, withTimeout } from "@/lib/api-cache";
 import { paxIndex } from "@/lib/assigned-pax";
 import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { money2 } from "@/lib/payment-batch";
@@ -16,7 +16,7 @@ const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDa
 // The dashboard shows the SAME operational board to every operator/admin (it is not
 // per-user), so one shared cache entry is safe — no per-user data is mixed. Guides
 // never reach this route (403 below), so nothing sensitive is cross-served.
-const DASH_KEY = "dashboard:v1";
+const DASH_KEY = DASHBOARD_CACHE_KEY;
 const DASH_TTL_MS = 60_000; // serve a cached board for up to 60s
 const FRESHEN_TIMEOUT_MS = 5_000; // cap how long we wait on best-effort reconcile/sweep
 

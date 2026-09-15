@@ -12,6 +12,7 @@ import { linePush, lineEnabled } from "@/lib/line";
 import { audit } from "@/lib/audit";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { handoverLock } from "@/lib/tour-handover-server";
+import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -95,17 +96,30 @@ export async function POST(req: NextRequest) {
   // its own action — it is a record of fact, not a dispatch decision.
   const todayBkk = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   if (date < todayBkk) {
+    const [pastGuide, pastTour] = await Promise.all([
+      prisma.user.findUnique({ where: { guideId }, select: { role: true } }),
+      prisma.tour.findUnique({ where: { id: tourId }, select: { id: true } }),
+    ]);
+    if (!pastGuide || pastGuide.role !== "GUIDE") return NextResponse.json({ error: "unknown guide" }, { status: 400 });
+    if (!pastTour) return NextResponse.json({ error: "unknown tour" }, { status: 400 });
     const a = await prisma.assignment.upsert({
       where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
       create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
       update: { tourId, pax: pax ?? null, note: note ?? null },
     });
+    // The only guide on the slot guided all of its guests: their bookings are no longer
+    // waiting for anyone. With two guides on it the operator places guests with Split.
+    const onSlot = await prisma.assignment.count({ where: { date, slotIdx } });
+    const settled = onSlot === 1
+      ? await prisma.booking.updateMany({ where: { date, slotIdx, status: { in: ["PENDING", "OFFERED"] }, assignedGuideId: null }, data: { status: "ASSIGNED" } })
+      : { count: 0 };
     await audit({
       actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
       action: "assign.recorded_past", entityType: "Assignment", entityId: a.id,
-      detail: { guideId, date, slotIdx, tourId, reason: "tour already ran — recorded by operator" },
+      detail: { guideId, date, slotIdx, tourId, bookingsAssigned: settled.count, reason: "tour already ran — recorded by operator" },
     });
-    return NextResponse.json({ ok: true, recorded: true, past: true });
+    forgetCached(DASHBOARD_CACHE_KEY);
+    return NextResponse.json({ ok: true, recorded: true, past: true, bookingsAssigned: settled.count });
   }
 
   if (await prisma.blockedDate.findUnique({ where: { date } })) {

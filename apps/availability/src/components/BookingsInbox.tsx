@@ -7,6 +7,7 @@ import { SLOTS } from "@/lib/slots";
 import { isOnline } from "@/lib/presence";
 import { DOW, MON, parseYMD } from "@/lib/dates";
 import BookingsTable from "@/components/BookingsTable";
+import RecordPastTourDialog from "@/components/RecordPastTourDialog";
 import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 
@@ -44,6 +45,9 @@ export default function BookingsInbox() {
   const [availMap, setAvailMap] = useState<Record<string, string[]>>({}); // "date|slot" -> available guideIds
   const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
   const [deepMonth, setDeepMonth] = useState("");
+  // "Record who guided" for a past day chosen in the All bookings table.
+  const [recordDay, setRecordDay] = useState<string | null>(null);
+  const [tableRefresh, setTableRefresh] = useState(0);
   useEffect(() => {
     const d = new URLSearchParams(window.location.search).get("date") || "";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
@@ -284,7 +288,8 @@ export default function BookingsInbox() {
         <button className={`subtab ${tab === "all" ? "active" : ""}`} onClick={() => setTab("all")}>All bookings</button>
       </div></div>
 
-      {tab === "all" && <BookingsTable onOpen={openDetail} initialMonth={deepMonth} />}
+      {tab === "all" && <BookingsTable onOpen={openDetail} initialMonth={deepMonth} onRecordPast={setRecordDay} refreshKey={tableRefresh} />}
+      {recordDay && <RecordPastTourDialog date={recordDay} onClose={() => setRecordDay(null)} onChanged={() => setTableRefresh((n) => n + 1)} />}
 
       {tab === "inbox" && (
       <section className="panel">

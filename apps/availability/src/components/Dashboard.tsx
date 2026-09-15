@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
+import RecordPastTourDialog from "@/components/RecordPastTourDialog";
+import { groupByDate } from "@/lib/past-unstaffed";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
 type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null; ref?: string | null; expenseReported?: boolean; payStatus?: string | null };
@@ -83,6 +85,8 @@ function DriveCard() {
 
 export default function Dashboard() {
   const [d, setD] = useState<Data | null>(null);
+  // "Record who guided" for one day that already happened (past unstaffed tours).
+  const [recordDay, setRecordDay] = useState<string | null>(null);
   const acRef = useRef<AbortController | null>(null);
   // One dashboard fetch. Aborts any request still in flight before starting a new one,
   // so a manual refresh or the next poll can never overlap the previous call.
@@ -303,16 +307,24 @@ export default function Dashboard() {
                     and never ageing out: each one is either a guide owed money for
                     work already done, or a booking nobody honoured. Both need an
                     answer, and until now both silently vanished the day after. */}
-                {past.map((u, i) => (
-                  <a key={`p${i}`} className="att-row att-past" href={`/bookings?date=${u.date}`}
-                     title="This tour ran with no guide on the system — record who guided it, or close the bookings">
-                    <span className="dr-main">
-                      <b>{dShort(u.date)} · {u.time}</b> — ran with no guide
-                      <div className="dr-sub">{u.tour} · {u.pax} pax · {u.daysAgo} day{u.daysAgo === 1 ? "" : "s"} ago</div>
-                    </span>
-                    <span className="att-go">Record →</span>
-                  </a>
-                ))}
+                {/* One row per DAY: tours on the same day belong together, and the
+                    guide who ran one of them often ran the others. Record opens that
+                    day's tours in a dialog with a guide picker for each. */}
+                {groupByDate(past).map((g) => {
+                  const pax = g.items.reduce((t, u) => t + u.pax, 0);
+                  return (
+                    <button key={`p${g.date}`} type="button" className="att-row att-past" onClick={() => setRecordDay(g.date)}
+                       style={{ width: "100%", textAlign: "left", font: "inherit", cursor: "pointer", border: 0 }}
+                       title="These tours ran with no guide on the system — record who guided them, or close the bookings">
+                      <span className="dr-main">
+                        <b>{dShort(g.date)}</b> — {g.items.length === 1 ? "ran with no guide" : `${g.items.length} tours ran with no guide`}
+                        {g.items.map((u, i) => <div key={i} className="dr-sub">{u.time} · {u.tour} · {u.pax} pax</div>)}
+                        <div className="dr-sub">{g.items.length > 1 ? `${pax} pax · ` : ""}{g.items[0].daysAgo} day{g.items[0].daysAgo === 1 ? "" : "s"} ago</div>
+                      </span>
+                      <span className="att-go">Record →</span>
+                    </button>
+                  );
+                })}
                 {d.leaveRequests.map((l) => (
                   <div key={l.id} className="dash-row">
                     <span className="dr-main"><b>{l.guide}</b> · leave {dShort(l.fromDate)}{l.toDate !== l.fromDate ? `–${dShort(l.toDate)}` : ""}<div className="dr-sub">{l.reason || "leave request"}</div></span>
@@ -336,10 +348,12 @@ export default function Dashboard() {
                     <span className="att-go">Fix →</span>
                   </a>
                 ))}
-                {d.unassigned.map((u, i) => (
-                  <a key={`u${i}`} className="att-row" href={`/bookings?date=${u.date}`} title="Open Bookings to dispatch this tour">
+                {groupByDate(d.unassigned, "asc").map((g) => (
+                  <a key={`u${g.date}`} className="att-row" href={`/bookings?date=${g.date}`} title="Open Bookings to dispatch this day's tours">
                     <span className="att-dot" style={{ background: "var(--assign)" }} />
-                    <span><b>{u.tour}</b><div className="dr-sub">{dShort(u.date)} {u.time} · {u.pax} pax · needs {u.need}</div></span>
+                    <span><b>{dShort(g.date)}</b>{g.items.length > 1 ? ` · ${g.items.length} tours need a guide` : ""}
+                      {g.items.map((u, i) => <div key={i} className="dr-sub">{u.time} · {u.tour} · {u.pax} pax · needs {u.need}</div>)}
+                    </span>
                     <span className="att-go">Assign →</span>
                   </a>
                 ))}
@@ -408,6 +422,7 @@ export default function Dashboard() {
       })())}
         </div>
       </div>
+      {recordDay && <RecordPastTourDialog date={recordDay} onClose={() => setRecordDay(null)} onChanged={() => load()} />}
     </div>
   );
 }
