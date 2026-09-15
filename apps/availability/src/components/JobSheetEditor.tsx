@@ -556,7 +556,7 @@ export default function JobSheetEditor() {
 
   // `intent` is required to clear, because an empty id is destructive at the API.
   // Mapping refuses a blank outright instead of quietly clearing the mapping.
-  async function savePeakContact(value: string, intent: "map" | "unlink" = "map") {
+  async function savePeakContact(value: string, intent: "map" | "unlink" = "map", resolveConflict = false) {
     if (!sheet) return;
     const decision = contactSaveDecision(value, header?.peakContactId);
     if (intent === "map" && decision.action !== "save") { setMsg(contactSaveHint(decision) ?? ""); return; }
@@ -571,16 +571,27 @@ export default function JobSheetEditor() {
         // rather than showing an opaque id.
         peakContactName: peakContacts?.find((c) => c.id === nextId)?.name,
         peakContactCode: peakContacts?.find((c) => c.id === nextId)?.code ?? undefined,
+        ...(resolveConflict ? { resolveConflict: true } : {}),
       }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
+    // One person with two guide records (the same tax ID) has one supplier in PEAK. An
+    // admin may link both records to it; the server checks the tax IDs match.
+    if (!r.ok && d.error === "contact-already-linked" && !resolveConflict) {
+      const other = `${d.conflict?.guideId ?? "another guide"}${d.conflict?.displayName ? ` (${d.conflict.displayName})` : ""}`;
+      if (confirm(`This PEAK contact is already linked to ${other}.\n\nOnly if ${sheet.guideId} and ${other} are the SAME PERSON: link ${sheet.guideId} to it as well?\n\nAdmins only. Both guides must have the same tax ID.`)) {
+        return savePeakContact(value, intent, true);
+      }
+    }
     if (!r.ok) {
       setMsg(
         d.error === "contact-already-linked"
           // Naming the other guide matters: the usual cause is the wrong pick,
           // not a genuinely shared supplier.
           ? `That PEAK contact is already linked to ${d.conflict?.guideId ?? "another guide"}${d.conflict?.displayName ? ` (${d.conflict.displayName})` : ""}. Pick the right contact, or ask an admin if it really is the same person.`
+          : d.error === "admin-only" ? "Only an admin can link a PEAK contact that another guide already uses."
+          : d.error === "not-same-person" ? (d.reason ?? "Those guides are not the same person.")
           : d.error === "no-guide" ? "Guide not found."
           : d.error === "forbidden" ? "Operator only."
           : "Couldn't save the mapping.",

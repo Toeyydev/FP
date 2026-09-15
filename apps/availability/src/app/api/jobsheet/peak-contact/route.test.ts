@@ -7,6 +7,8 @@ const authMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
+// Tax IDs are stored encrypted; these tests hold them in plain text.
+vi.mock("@/lib/crypto", () => ({ decrypt: (v?: string | null) => v ?? "" }));
 vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
 
 import { POST } from "./route";
@@ -71,7 +73,8 @@ describe("guide → PEAK contact mapping", () => {
 
   it("lets an ADMIN override deliberately, and records what it collided with", async () => {
     authMock.mockResolvedValue({ user: { id: "ad_1", role: "ADMIN" } });
-    prismaMock.user.findFirst.mockResolvedValue({ guideId: "G-015", displayName: "Fai" });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "u_1", peakContactId: null, taxId: "1-2345-67890-12-3" });
+    prismaMock.user.findFirst.mockResolvedValue({ guideId: "G-015", displayName: "Fai", taxId: "1234567890123" });
     const res = await post({ guideId: "G-016", peakContactId: "ct-778", resolveConflict: true });
     expect(res.status).toBe(200);
     expect(prismaMock.user.updateMany).toHaveBeenCalled();
@@ -91,5 +94,26 @@ describe("guide → PEAK contact mapping", () => {
   it("is refused to a guide", async () => {
     authMock.mockResolvedValue({ user: { id: "g_1", role: "GUIDE" } });
     expect((await post({ guideId: "G-016", peakContactId: "ct-778" })).status).toBe(403);
+  });
+
+  describe("the same person under two guide records", () => {
+    it("an admin's override is refused when the two tax IDs differ, or either is missing", async () => {
+      authMock.mockResolvedValue({ user: { id: "ad_1", role: "ADMIN" } });
+      prismaMock.user.findUnique.mockResolvedValue({ id: "u_1", peakContactId: null, taxId: "1234567890123" });
+      prismaMock.user.findFirst.mockResolvedValue({ guideId: "G-015", displayName: "Fai", taxId: "9999999999999" });
+      let res = await post({ guideId: "G-016", peakContactId: "ct-778", resolveConflict: true });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: "not-same-person", reason: expect.stringContaining("different tax IDs") });
+      prismaMock.user.findFirst.mockResolvedValue({ guideId: "G-015", displayName: "Fai", taxId: null });
+      res = await post({ guideId: "G-016", peakContactId: "ct-778", resolveConflict: true });
+      expect(await res.json()).toMatchObject({ error: "not-same-person", reason: expect.stringContaining("13-digit tax ID") });
+      expect(prismaMock.user.updateMany).not.toHaveBeenCalled();
+    });
+    it("an operator asking to override is told only an admin can", async () => {
+      prismaMock.user.findFirst.mockResolvedValue({ guideId: "G-015", displayName: "Fai", taxId: "1234567890123" });
+      const res = await post({ guideId: "G-016", peakContactId: "ct-778", resolveConflict: true });
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe("admin-only");
+    });
   });
 });
