@@ -123,6 +123,8 @@ export function buildGuidePaymentDocument(input: {
   jobs: PaymentJob[];
   accounts: PaymentAccounts;
   vatType?: string;
+  /** "YYYY-MM-DD" (Bangkok) the document is created — its due date. Omitted: due on the issued date. */
+  createdOn?: string;
 }): GuidePaymentDocument {
   const { guideId, peakContactId, paymentRef, accounts, vatType } = input;
   const reasons = new Set<string>();
@@ -267,6 +269,11 @@ export function buildGuidePaymentDocument(input: {
   if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories);
 
   const issuedDate = compact(latest);
+  // Due the day it is created, never before it is issued. Due on the tour date, a
+  // document created weeks after the tour showed "เกินเวลาชำระ" (overdue) in PEAK the
+  // moment it existed (owner decision 2026-09-15). PEAK requires dueDate ≥ issuedDate.
+  const created = DATE.test(input.createdOn ?? "") ? compact(input.createdOn!) : "";
+  const dueDate = created > issuedDate ? created : issuedDate;
   return {
     paymentRef,
     lines,
@@ -278,10 +285,9 @@ export function buildGuidePaymentDocument(input: {
     issuedDate,
     expense: {
       // Dated when the last tour ran, so the cost books into the month the service was
-      // delivered; the payment, recorded later, carries its own date. dueDate =
-      // issuedDate is what the job-sheet document already posts successfully.
+      // delivered; the payment, recorded later, carries its own date.
       issuedDate,
-      dueDate: issuedDate,
+      dueDate,
       // Contact id only, never a name — see buildJobSheetExpense for why a name forks
       // the guide into a duplicate supplier.
       contact: { id: peakContactId },

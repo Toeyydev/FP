@@ -168,8 +168,18 @@ describe("one PEAK document for several jobs — stage 1 creates it, unpaid", ()
     expect(e.contact).toEqual({ id: "contact-guide-a" });
     expect(e.reference).toBe("FOLK-PAY-203005-01");
     expect(e.issuedDate).toBe("20300512");
+    expect(e.dueDate).toBe("20300512"); // no creation date given: due when issued
     expect(JSON.stringify(e)).not.toContain("pm-test");
     expect(JSON.stringify(e)).not.toContain("paymentDate");
+  });
+
+  it("is due the day it is created, so PEAK does not show it overdue the moment it exists — never due before it is issued", () => {
+    const due = (createdOn?: string) => (build({ createdOn }).expense as Record<string, string>).dueDate;
+    expect(due("2030-06-03")).toBe("20300603");
+    expect(due("2030-05-12")).toBe("20300512");
+    expect(due("2030-05-01")).toBe("20300512"); // a clock behind the tour date cannot make it due before issue
+    expect(due("not-a-date")).toBe("20300512");
+    expect((build({ createdOn: "2030-06-03" }).expense as Record<string, string>).issuedDate).toBe("20300512");
   });
 
   it("locks the jobs to the document without paying them, uploading a slip, or telling the guide", async () => {

@@ -172,6 +172,9 @@ describe("stage 1 — POST /api/pay/peak-document creates ONE unpaid document", 
     expect(peak.create).toHaveBeenCalledTimes(1);
     const expense = peak.create.mock.calls[0][0];
     expect(expense).not.toHaveProperty("paidPayments");
+    // Dated when the last tour ran, due the day it is created — so PEAK does not show it overdue at once.
+    expect(expense.issuedDate).toBe("20300512");
+    expect(expense.dueDate).toBe("20300520");
     expect(expense.reference).toBe("FOLK-PAY-203005-01");
     // PEAK's printed form has no withholding column, so the WHT is written into the text too.
     expect(expense.remark).toBe("Folkpaths guide payment FOLK-PAY-203005-01 · G-TEST · 3 jobs · WHT ฿126.00 · transfer ฿4,169.00");
