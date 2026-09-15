@@ -47,6 +47,25 @@ export async function POST(req: NextRequest) {
   const existing = await existingDocumentFor(guideId, jobs);
   if (existing) return existing;
 
+  // One transfer, one document. While this guide already has a document for the same
+  // month that is not paid yet (or not confirmed by PEAK), a second one would split the
+  // month's transfer across two documents. Pay that one, or void it and make one with
+  // every job. Jobs already paid are grouped by their transfer day instead.
+  if (!alreadyPaid) {
+    const months = [...new Set(jobs.map((j) => j.date.slice(0, 7)))];
+    const open = await prisma.guidePaymentDocument.findMany({
+      where: { guideId, alreadyPaid: false, status: { in: ["CREATING", "CREATE_UNCERTAIN", "AWAITING_PAYMENT", "PAYING", "PAYMENT_UNCERTAIN", "UNCERTAIN", "POSTING"] } },
+      select: { paymentRef: true, peakDocumentNo: true, status: true, jobs: true },
+    });
+    const sameMonth = open.filter((d) => documentJobs(d).some((j) => months.includes(String(j.date).slice(0, 7))));
+    if (sameMonth.length) {
+      return NextResponse.json({
+        error: "open-document-this-month",
+        reasons: sameMonth.map((d) => `${guideId} already has ${d.peakDocumentNo ?? d.paymentRef} (${d.paymentRef}) for ${months.join(", ")}, not paid yet — record its payment first, or void it in PEAK and mark it voided on Payments, then create ONE document with every job`),
+      }, { status: 409 });
+    }
+  }
+
   const loaded = await loadPaymentContext(guideId, jobs, { alreadyPaid });
   if (!loaded.ok) return NextResponse.json({ error: "not-payable", reasons: loaded.reasons }, { status: 409 });
   const { ctx } = loaded;

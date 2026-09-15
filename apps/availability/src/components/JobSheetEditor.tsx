@@ -217,8 +217,11 @@ export default function JobSheetEditor() {
     } catch { setMonthJobs(null); }
   }, [sheet?.guideId, sheet?.date, canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadMonthJobs(); }, [loadMonthJobs, peak?.peakDocumentNo, payment?.paid]);
-  // The OTHER unpaid jobs this month (this one excluded). Any at all → combine first.
-  const monthOthers = (monthJobs ?? []).filter((j) => !(sheet && j.date === sheet.date && j.slotIdx === sheet.slotIdx));
+  // This job is unpaid and goes into PEAK only through a combined document (one per
+  // transfer — lib/combined-payment perSheetSyncRefusal); the candidates include it.
+  const thisInMonthJobs = !!sheet && (monthJobs ?? []).some((j) => j.date === sheet.date && j.slotIdx === sheet.slotIdx);
+  // Paid on its own record but not in PEAK: it goes in with its transfer, from Payments.
+  const paidNotInPeak = !!payment?.paid && payment.source !== "payroll";
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
   const t = computeTotals(sheet.expenses, sheet.guideFee);
@@ -517,6 +520,7 @@ export default function JobSheetEditor() {
           : d.error === "changed-since-sync" ? `Already posted as ${d.documentNo ?? "a document"} and changed since — use Post a correction.`
           : d.error === "not-eligible" ? (d.reasons?.[0] ?? "This sheet is not ready to post.")
           : d.error === "not-postable" ? (d.reason ?? "This sheet cannot be posted.")
+          : d.error === "use-combined-document" || d.error === "paid-use-transfer-document" ? (d.reason ?? "Use the combined PEAK document — one per transfer.")
           : d.error === "peak-not-connected" ? "PEAK is not connected on the server."
           : d.error === "no-sheet" ? "Save the sheet first."
           : d.error === "forbidden" ? "Operator only."
@@ -1738,13 +1742,13 @@ export default function JobSheetEditor() {
                 Payments says so instead, because a timestamp we cannot source would
                 be a fabrication. */}
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>PEAK Expense</div>
-            {monthOthers.length > 0 && !combinedPayment && !(peak?.peakDocumentNo || payment?.peakRef) && (() => {
+            {thisInMonthJobs && !combinedPayment && !(peak?.peakDocumentNo || payment?.peakRef) && (() => {
               const all = monthJobs ?? [];
               const ready = all.filter((j) => j.ready);
               const monthLabel = new Date(`${sheet.date.slice(0, 7)}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
               return (
                 <div className="js-pay-together" role="region" aria-label="Unpaid jobs this month" style={{ marginTop: 6, padding: 8, border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg, #f6f5f3)" }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{header?.name || sheet.guideId} has {all.length} unpaid jobs in {monthLabel}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{header?.name || sheet.guideId} has {all.length} unpaid job{all.length === 1 ? "" : "s"} in {monthLabel}</div>
                   <ul style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11.5, lineHeight: 1.5 }}>
                     {all.map((j) => (
                       <li key={`${j.date}|${j.slotIdx}`} style={{ color: j.ready ? "var(--ink)" : "var(--ink-soft)" }}>
@@ -1755,7 +1759,7 @@ export default function JobSheetEditor() {
                   <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy || ready.length === 0} onClick={() => setPayTogetherOpen(true)}>
                     Put {ready.length} job{ready.length === 1 ? "" : "s"} in one PEAK document…
                   </button>
-                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>One transfer is one PEAK document. Syncing each job on its own makes a document — and uses a PEAK credit — per job.</div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>One transfer is one PEAK document: create it when you are about to pay, with every job that transfer pays. Jobs are not posted to PEAK one sheet at a time.</div>
                 </div>
               );
             })()}
@@ -1802,16 +1806,18 @@ export default function JobSheetEditor() {
                 <>
                   <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>Sync failed</div>
                   {peak?.syncError && <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>{peak.syncError}</div>}
-                  <button className="btn sm" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Try again</button>
+                  {!thisInMonthJobs && !paidNotInPeak && <button className="btn sm" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Try again</button>}
                 </>
               );
               if (el?.status === "SYNCING") return <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700 }}>Syncing…</div>;
               if (el?.status === "READY") return (
                 <>
                   <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--green)" }}>Ready to sync</div>
-                  {monthOthers.length > 0
-                    ? <button className="btn sm ghost" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()} title="Makes a PEAK document for this job alone — the guide's other unpaid jobs this month would each need their own">Sync this job alone…</button>
-                    : <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Sync to PEAK</button>}
+                  {thisInMonthJobs
+                    ? <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Goes into PEAK through the document above — one per transfer.</div>
+                    : paidNotInPeak
+                      ? <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Already paid — it goes into PEAK with the other jobs its transfer paid: Payments → Paid → &ldquo;Put N jobs paid … in PEAK&rdquo;. <a href="/payments">Open Payments</a></div>
+                      : <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy} onClick={() => syncToPeak()}>Sync to PEAK</button>}
                   <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>Creates an unpaid expense in PEAK, one line per row. The transfer is recorded separately.</div>
                 </>
               );

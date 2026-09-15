@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, type CombinedJobState } from "@/lib/combined-payment";
+import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, perSheetSyncRefusal, sheetInPeak, type CombinedJobState } from "@/lib/combined-payment";
 
 // All data here is invented (fictional refs and document numbers) — this repo is public.
 
@@ -107,3 +107,12 @@ describe("paidTransferOf — the one transfer that already paid these jobs", () 
     expect(paidTransferOf([{ ...b, paidAt: null }]).reasons).toEqual(["FOLK-BKK-20300305-01 has no paid date on record"]);
   });
 });
+
+describe("perSheetSyncRefusal — one transfer, one PEAK document", () => {
+  it("unpaid → the combined document; paid → its transfer's document; payroll → allowed", () => {
+    expect(perSheetSyncRefusal({ coveredByPayroll: false, paidPerTour: false })?.code).toBe("use-combined-document");
+    expect(perSheetSyncRefusal({ coveredByPayroll: false, paidPerTour: true, paidAt: "2030-03-09T16:57:00Z" })).toMatchObject({ code: "paid-use-transfer-document", reason: expect.stringContaining("(2030-03-09)") });
+    expect(perSheetSyncRefusal({ coveredByPayroll: true, paidPerTour: false })).toBeNull();
+  });
+});
+

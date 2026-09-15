@@ -10,11 +10,9 @@ import {
   buildJobSheetExpense, defaultAccountingDates, peakPayloadHash, peakSyncEligibility, JobSheetNotPostable,
 } from "@/lib/peak-sync";
 import { peakAccountMap, guideFeeAccount } from "@/lib/peak-account-map";
-import { otherUnpaidJobsInMonth, paymentDocumentLocks } from "@/lib/peak-payment-server";
-import { separateSyncWarning } from "@/lib/peak-payment-document";
-import { sheetInPeak } from "@/lib/combined-payment";
-
-const bangkokToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+import { paymentDocumentLocks } from "@/lib/peak-payment-server";
+import { perSheetSyncRefusal, sheetInPeak } from "@/lib/combined-payment";
+import { coveredByPayrollRun } from "@/lib/payment-coverage";
 
 // POST { guideId, date, slotIdx } — operator/admin only.
 //
@@ -41,12 +39,12 @@ export async function POST(req: NextRequest) {
     // An explicit second act by the operator, for a sheet that changed after it was
     // already posted. Never defaulted to true.
     confirmRepost: z.boolean().optional(),
-    // The operator has seen that the guide has other unpaid jobs this month and still
-    // wants this job in a PEAK document of its own. Never defaulted to true.
+    // Accepted from older screens and ignored: a separate document is no longer something
+    // an operator can confirm their way into (see perSheetSyncRefusal).
     confirmSeparateDocument: z.boolean().optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { guideId, date, slotIdx, confirmRepost, confirmSeparateDocument } = parsed.data;
+  const { guideId, date, slotIdx, confirmRepost } = parsed.data;
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
 
   if (!peakEnabled) return NextResponse.json({ error: "peak-not-connected" }, { status: 503 });
@@ -100,21 +98,22 @@ export async function POST(req: NextRequest) {
     }, { status: 409 });
   }
 
-  // A job posted from its own sheet can no longer go into "Pay N jobs together". If the
-  // guide has other unpaid jobs this month, posting this one now splits the transfer
-  // that pays them across several PEAK documents. Ask first — and before anything is
-  // written, so answering no leaves the sheet exactly as it was.
-  let separateDocument: { confirmed: true; otherUnpaid: number; otherJobs: string[] } | null = null;
+  // ONE TRANSFER, ONE PEAK DOCUMENT — enforced, not asked (lib/combined-payment
+  // perSheetSyncRefusal). A first post from this sheet is refused unless the job is
+  // covered by the guide's month payroll; nothing is written before the refusal.
   if (!sheetInPeak(sheet)) {
-    const others = await otherUnpaidJobsInMonth(guideId, { date, slotIdx }, bangkokToday());
-    const warning = separateSyncWarning(others.length, date.slice(0, 7));
-    if (warning && !confirmSeparateDocument) {
-      return NextResponse.json({
-        error: "separate-document-warning", reason: warning, otherUnpaid: others.length,
-        otherJobs: others.map((j) => ({ date: j.date, slotIdx: j.slotIdx, ref: j.ref })),
-      }, { status: 409 });
-    }
-    if (warning) separateDocument = { confirmed: true, otherUnpaid: others.length, otherJobs: others.map((j) => j.ref ?? `${j.date} slot ${j.slotIdx}`) };
+    const [pays, payroll, assigns] = await Promise.all([
+      prisma.tourPayment.findMany({ where: { guideId, date, slotIdx }, select: { status: true, paidAt: true } }),
+      prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period: date.slice(0, 7) } }, select: { status: true, paidAt: true } }),
+      prisma.assignment.findMany({ where: { guideId, date, slotIdx }, select: { createdAt: true } }),
+    ]);
+    const recordCreated = assigns[0]?.createdAt ?? (sheet as { createdAt?: Date }).createdAt ?? new Date(NaN);
+    const refusal = perSheetSyncRefusal({
+      coveredByPayroll: coveredByPayrollRun(payroll, date, recordCreated),
+      paidPerTour: pays[0]?.status === "PAID",
+      paidAt: pays[0]?.paidAt ?? null,
+    });
+    if (refusal) return NextResponse.json({ error: refusal.code, reason: refusal.reason }, { status: 409 });
   }
 
   let doc;
@@ -176,9 +175,7 @@ export async function POST(req: NextRequest) {
   });
   await audit({
     ...actor, action: "jobsheet.peak_synced", entityType: "JobSheet", entityId: sheet.id,
-    // separateDocument: the operator was told about the guide's other unpaid jobs and
-    // confirmed this job should still be a document of its own.
-    detail: { ref: sheet.ref, guideId, date, slotIdx, documentNo, lines: doc.lines.length, total: doc.total, ...(separateDocument ? { separateDocument } : {}) },
+    detail: { ref: sheet.ref, guideId, date, slotIdx, documentNo, lines: doc.lines.length, total: doc.total },
   });
   return NextResponse.json({ ok: true, documentNo, documentId: res.id ?? null, lines: doc.lines.length, total: doc.total });
 }

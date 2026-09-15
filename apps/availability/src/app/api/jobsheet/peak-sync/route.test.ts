@@ -67,7 +67,9 @@ beforeEach(() => {
   // The guide has no other jobs this month unless a test says so.
   prismaMock.assignment.findMany.mockResolvedValue([]);
   prismaMock.jobSheet.findMany.mockResolvedValue([]);
-  prismaMock.payrollStatus.findUnique.mockResolvedValue(null);
+  // Posting from a sheet is only allowed for a job its guide's month payroll covers
+  // (perSheetSyncRefusal) — the posting tests below exercise that path.
+  prismaMock.payrollStatus.findUnique.mockResolvedValue({ status: "paid", paidAt: null });
 });
 
 describe("POST /api/jobsheet/peak-sync — refusals", () => {
@@ -246,107 +248,53 @@ describe("POST /api/jobsheet/peak-sync — failures are never silent", () => {
   });
 });
 
-describe("POST /api/jobsheet/peak-sync — the guide has other unpaid jobs this month", () => {
-  // All fictional. The job being synced is 12 Sep; "today" is 20 Sep.
-  const created = new Date("2026-09-01T00:00:00Z");
-  const other = (slotDate: string, slotIdx: number, over: Record<string, unknown> = {}) => ({
-    guideId: "G-007", date: slotDate, slotIdx, createdAt: created, ref: `FOLK-BKK-${slotDate.replace(/-/g, "")}-0${slotIdx + 1}`,
-    origin: "NORMAL", peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED", ...over,
-  });
-  const withOthers = (sheets: Record<string, unknown>[], assigns = sheets, pays: Record<string, unknown>[] = []) => {
-    const self = { guideId: JOB.guideId, date: JOB.date, slotIdx: JOB.slotIdx, createdAt: created, ref: "FOLK-BKK-20260912-01", origin: "NORMAL", approvalStatus: "APPROVED" };
-    prismaMock.jobSheet.findMany.mockResolvedValue([self, ...sheets]);
-    prismaMock.assignment.findMany.mockResolvedValue([self, ...assigns]);
-    // paymentDocumentLocks asks for locked rows only; the month query asks for everything.
-    prismaMock.tourPayment.findMany.mockImplementation(async (a: { where?: { peakPaymentRef?: unknown } }) => (a?.where?.peakPaymentRef ? [] : pays));
-  };
+describe("POST /api/jobsheet/peak-sync — one transfer, one PEAK document (enforced, not asked)", () => {
+  // All fictional.
+  beforeEach(() => { prismaMock.payrollStatus.findUnique.mockResolvedValue(null); });
 
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-09-20T05:00:00Z"));
-  });
-  afterEach(() => { vi.useRealTimers(); });
-
-  it("no other unpaid jobs → no warning, the sync goes ahead as before", async () => {
-    withOthers([]);
-    const res = await post(JOB);
-    expect(res.status).toBe(200);
-    expect(createExpenseMock).toHaveBeenCalledTimes(1);
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "jobsheet.peak_synced", detail: expect.not.objectContaining({ separateDocument: expect.anything() }) }));
-  });
-
-  it("other unpaid jobs → a warning naming them, and nothing written or posted", async () => {
-    withOthers([other("2026-09-03", 0), other("2026-09-07", 2, { approvalStatus: null }), other("2026-09-15", 2)]);
+  it("an unpaid job is refused — even with no other jobs — and nothing is written, posted or audited", async () => {
     const res = await post(JOB);
     expect(res.status).toBe(409);
     const body = await res.json();
-    expect(body).toMatchObject({ error: "separate-document-warning", otherUnpaid: 3 });
-    expect(body.reason).toBe("This guide has 3 other unpaid jobs in September 2026. Syncing this job now will create a separate PEAK document and may prevent one-document payment later.");
-    expect(body.otherJobs.map((j: { ref: string }) => j.ref)).toEqual(["FOLK-BKK-20260903-01", "FOLK-BKK-20260907-03", "FOLK-BKK-20260915-03"]);
+    expect(body.error).toBe("use-combined-document");
+    expect(body.reason).toContain("One transfer is one PEAK document");
     expect(createExpenseMock).not.toHaveBeenCalled();
     expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it("cancel is simply not confirming: asking again still posts nothing", async () => {
-    withOthers([other("2026-09-03", 0)]);
-    expect((await post(JOB)).status).toBe(409);
-    expect((await post({ ...JOB, confirmSeparateDocument: false })).status).toBe(409);
-    expect(createExpenseMock).not.toHaveBeenCalled();
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
-  });
-
-  it("confirm → the existing sync runs unchanged, and the audit records the confirmation", async () => {
-    withOthers([other("2026-09-03", 0), other("2026-09-15", 2)]);
+  it("no confirmation gets past it", async () => {
     const res = await post({ ...JOB, confirmSeparateDocument: true });
-    expect(res.status).toBe(200);
-    expect(createExpenseMock).toHaveBeenCalledTimes(1);
-    expect(updateWith("SYNCED")!.peakDocumentNo).toBe("EXP-20260900007");
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
-      action: "jobsheet.peak_synced",
-      detail: expect.objectContaining({ separateDocument: { confirmed: true, otherUnpaid: 2, otherJobs: ["FOLK-BKK-20260903-01", "FOLK-BKK-20260915-03"] } }),
-    }));
+    expect(res.status).toBe(409);
+    expect(createExpenseMock).not.toHaveBeenCalled();
   });
 
-  it("does not count jobs that could never join a combined payment, or tours that have not run yet", async () => {
-    withOthers(
-      [
-        other("2026-09-03", 0, { peakDocumentNo: "EXP-TEST-0003", peakDocumentId: "d3" }), // already in PEAK from its sheet
-        other("2026-09-04", 0),                                                          // paid
-        other("2026-09-05", 0),                                                          // in a payment document
-        other("2026-09-06", 0),                                                          // has a slip
-        other("2026-09-08", 0, { origin: "HISTORICAL_BACKFILL" }),                       // historical
-      ],
-      undefined,
-      [
-        { date: "2026-09-04", slotIdx: 0, status: "PAID" },
-        { date: "2026-09-05", slotIdx: 0, status: "PENDING", peakPaymentRef: "FOLK-PAY-202609-01" },
-        { date: "2026-09-06", slotIdx: 0, status: "PENDING", slips: [{ amount: 500 }] },
-      ],
-    );
-    // The month query is capped at today, so a tour on the 25th never reaches it.
-    expect((await post(JOB)).status).toBe(200);
-    expect(prismaMock.jobSheet.findMany.mock.calls[0][0].where.date).toEqual({ gte: "2026-09-01", lte: "2026-09-20" });
-  });
-
-  it("counts a job whose sheet is not saved yet — it can still be paid together once it is", async () => {
-    const self = { guideId: JOB.guideId, date: JOB.date, slotIdx: JOB.slotIdx, createdAt: created };
-    prismaMock.jobSheet.findMany.mockResolvedValue([{ ...self, ref: "FOLK-BKK-20260912-01" }]);
-    prismaMock.assignment.findMany.mockResolvedValue([self, { guideId: "G-007", date: "2026-09-10", slotIdx: 0, createdAt: created }]);
+  it("a job already paid is sent to its transfer's document, naming the paid day", async () => {
+    prismaMock.tourPayment.findMany.mockImplementation(async (a: { where?: { peakPaymentRef?: unknown } }) => (a?.where?.peakPaymentRef ? [] : [{ status: "PAID", paidAt: new Date("2026-09-14T05:00:00Z") }]));
     const res = await post(JOB);
     expect(res.status).toBe(409);
-    expect((await res.json()).otherUnpaid).toBe(1);
+    const body = await res.json();
+    expect(body.error).toBe("paid-use-transfer-document");
+    expect(body.reason).toContain("already paid (2026-09-14)");
+    expect(createExpenseMock).not.toHaveBeenCalled();
   });
 
-  it("a payroll that already covers the other jobs means there is nothing to split", async () => {
-    withOthers([other("2026-09-03", 0)]);
-    prismaMock.payrollStatus.findUnique.mockResolvedValue({ status: "paid", paidAt: new Date("2026-09-19T05:00:00Z") });
+  it("a job the guide's month payroll covers still posts from its sheet", async () => {
+    prismaMock.payrollStatus.findUnique.mockResolvedValue({ status: "paid", paidAt: new Date("2026-09-30T05:00:00Z") });
+    prismaMock.assignment.findMany.mockResolvedValue([{ createdAt: new Date("2026-09-01T00:00:00Z") }]);
     expect((await post(JOB)).status).toBe(200);
+    expect(createExpenseMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a correction to a sheet already in PEAK is not asked again — its own confirmation covers it", async () => {
-    withOthers([other("2026-09-03", 0)]);
+  it("a correction to a sheet already in PEAK is not this rule's business", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue(sheet({ peakDocumentId: "peak-doc-1", peakDocumentNo: "EXP-1", peakSyncStatus: "SYNCED", lastPayloadHash: "a-hash-from-before-the-edit" }));
     expect((await post({ ...JOB, confirmRepost: true })).status).toBe(200);
+  });
+
+  it("a sheet whose document was voided is posted like a new one — so it is refused too", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet({ peakDocumentId: "peak-doc-1", peakDocumentNo: "EXP-1", peakSyncStatus: "VOIDED" }));
+    const res = await post(JOB);
+    expect([409]).toContain(res.status);
+    expect(createExpenseMock).not.toHaveBeenCalled();
   });
 });
