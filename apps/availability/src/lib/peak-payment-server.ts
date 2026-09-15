@@ -204,6 +204,49 @@ export async function otherUnpaidJobsInMonth(guideId: string, job: JobKey, today
   return out;
 }
 
+export type PendingJob = { date: string; slotIdx: number; ref: string | null; tourId: string; payout: number; block: CombinedBlock | null };
+
+/**
+ * The guide's unpaid jobs in the month of `date` (tours that already ran), with what
+ * each would pay and why it cannot go into a combined PEAK document yet, if it cannot.
+ * What the job sheet offers under "Put these jobs in one PEAK document": one month,
+ * because a document books into one period (lib/peak-payment-document). Paid, payroll,
+ * slipped, locked, historical and already-in-PEAK jobs are left out entirely; a job
+ * only waiting for approval or for its sheet is listed as not ready.
+ */
+export async function pendingJobsInMonth(guideId: string, date: string, today: string): Promise<PendingJob[]> {
+  const period = date.slice(0, 7);
+  const monthEnd = `${period}-31`;
+  const where = { guideId, date: { gte: `${period}-01`, lte: today < monthEnd ? today : monthEnd } };
+  const [assigns, sheets, pays, payroll] = await Promise.all([
+    prisma.assignment.findMany({ where, select: { date: true, slotIdx: true, createdAt: true, tourId: true } }),
+    prisma.jobSheet.findMany({ where, select: { date: true, slotIdx: true, ref: true, tourId: true, createdAt: true, origin: true, peakDocumentNo: true, peakDocumentId: true, approvalStatus: true, expenses: true, guideFee: true } }),
+    prisma.tourPayment.findMany({ where, select: { date: true, slotIdx: true, status: true, peakPaymentRef: true, peakRef: true, eslipUrl: true, slips: true } }),
+    prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true } }),
+  ]);
+  const docs = await documentsByRef(pays.map((p) => p.peakPaymentRef));
+  const keyOf = (x: JobKey) => `${x.date}|${x.slotIdx}`;
+  const keys = new Map<string, JobKey>();
+  for (const x of [...assigns, ...sheets]) keys.set(keyOf(x), { date: x.date, slotIdx: x.slotIdx });
+  const out: PendingJob[] = [];
+  for (const k of [...keys.values()].sort((a, b) => a.date.localeCompare(b.date) || a.slotIdx - b.slotIdx)) {
+    const sheet = sheets.find((s) => keyOf(s) === keyOf(k));
+    const assignment = assigns.find((a) => keyOf(a) === keyOf(k));
+    const pay = pays.find((p) => keyOf(p) === keyOf(k));
+    const created = assignment?.createdAt ?? sheet?.createdAt;
+    const block = combinedPaymentBlock({
+      sheet: sheet ?? null,
+      payment: pay ? { ...pay, document: pay.peakPaymentRef ? docs.get(pay.peakPaymentRef) ?? null : null } : null,
+      coveredByPayroll: !!created && coveredByPayrollRun(payroll, k.date, created),
+      period,
+    });
+    if (block && block.code !== "not-approved" && block.code !== "no-job-sheet") continue;
+    const payout = sheet ? round2(guidePayoutTotal((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)).payout) : round2(guidePayoutTotal([], DEFAULT_GUIDE_FEE).payout);
+    out.push({ ...k, ref: sheet?.ref ?? null, tourId: sheet?.tourId ?? assignment?.tourId ?? "", payout, block });
+  }
+  return out;
+}
+
 /** The next FOLK-PAY-YYYYMM-NN for the month of `date` — stage 1 numbers by the day
  *  the document is created, since no payment date exists yet. */
 export async function nextPaymentRef(date: string): Promise<string> {
