@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
+import { normalizeExpRef, recordExpBlockers } from "@/lib/record-exp";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -98,6 +99,48 @@ export async function POST(req: NextRequest) {
   }
   await audit({ actorId: uid, actorRole: session!.user!.role ?? null, action: `pay.${status.toLowerCase()}`, entityType: "Assignment", detail: { guideId, count: list.length, peakRef: ref } });
   return NextResponse.json({ ok: true, count: list.length });
+}
+
+// PATCH { guideId, jobs[], peakRef, confirmShared? } — record the EXP number of a PEAK
+// document someone made by hand on jobs that are ALREADY PAID (lib/record-exp). Only the
+// ref changes: paid state, paid date and slip stay as they are, nobody is notified, and
+// nothing is sent to PEAK. A number already recorded for another guide is confirmed first.
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const job = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) });
+  const parsed = z.object({ guideId: z.string().min(1), jobs: z.array(job).min(1).max(60), peakRef: z.string().max(60), confirmShared: z.boolean().optional() })
+    .safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  const { guideId, jobs } = parsed.data;
+  const peakRef = normalizeExpRef(parsed.data.peakRef);
+  if (!peakRef) return NextResponse.json({ error: "bad-ref", reasons: ["Enter the PEAK document number, as it appears in PEAK (EXP- and the number)"] }, { status: 400 });
+
+  const or = jobs.map((j) => ({ guideId, date: j.date, slotIdx: j.slotIdx }));
+  const [pays, sheets] = await Promise.all([
+    prisma.tourPayment.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, status: true, peakRef: true, peakPaymentRef: true } }),
+    prisma.jobSheet.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, ref: true, peakDocumentNo: true, peakSyncStatus: true } }),
+  ]);
+  const at = <T extends { date: string; slotIdx: number }>(list: T[], j: { date: string; slotIdx: number }) => list.find((x) => x.date === j.date && x.slotIdx === j.slotIdx) ?? null;
+  const reasons = recordExpBlockers(jobs.map((j) => ({ ref: at(sheets, j)?.ref || `${j.date} slot ${j.slotIdx}`, payment: at(pays, j), sheet: at(sheets, j) })), peakRef);
+  if (reasons.length) return NextResponse.json({ error: "not-allowed", reasons }, { status: 409 });
+
+  // The same number on another guide's jobs is usually a typo — or one person under two
+  // guide codes. Say who, and let the operator confirm.
+  if (!parsed.data.confirmShared) {
+    const [otherPays, otherSheets] = await Promise.all([
+      prisma.tourPayment.findMany({ where: { peakRef: { equals: peakRef, mode: "insensitive" }, guideId: { not: guideId } }, select: { guideId: true, date: true } }),
+      prisma.jobSheet.findMany({ where: { peakDocumentNo: { equals: peakRef, mode: "insensitive" }, guideId: { not: guideId } }, select: { guideId: true, date: true } }),
+    ]);
+    const others = [...new Set([...otherPays, ...otherSheets].map((x) => x.guideId))];
+    if (others.length) return NextResponse.json({ error: "ref-used-elsewhere", guides: others, reasons: [`${peakRef} is already recorded for ${others.join(", ")}`] }, { status: 409 });
+  }
+
+  // Only the ref changes: paid date, slips and status stay, nobody is notified. The
+  // conditions repeat the checks above so a change in between is not overwritten.
+  const updated = await prisma.tourPayment.updateMany({ where: { AND: [{ OR: or }, { OR: [{ peakRef: null }, { peakRef: "" }, { peakRef: { equals: peakRef, mode: "insensitive" } }] }], status: "PAID", peakPaymentRef: null }, data: { peakRef } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "pay.peak_ref_recorded", entityType: "TourPayment", detail: { guideId, jobs, peakRef, count: updated.count, confirmShared: !!parsed.data.confirmShared } });
+  return NextResponse.json({ ok: true, count: updated.count, peakRef });
 }
 
 // DELETE { guideId, date, slotIdx } — remove a payment entry entirely: deletes the

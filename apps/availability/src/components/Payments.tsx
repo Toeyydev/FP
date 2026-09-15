@@ -11,12 +11,15 @@ import { matchState, type Slip } from "@/lib/payments/slips";
 import SplitSlipDialog, { type SlipUpload } from "@/components/SplitSlipDialog";
 import PeakPaymentDialog, { CreatedState, type CreatedDocument } from "@/components/PeakPaymentDialog";
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
+import RecordExpDialog from "@/components/RecordExpDialog";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
   // together · one ref", and if not, why. The server refuses with the same rule.
   combinable?: boolean; combinedBlock?: { code: string; message: string; documentNo?: string } | null; sheetPeakDocumentNo?: string | null;
+  // Paid per tour with no PEAK document number yet: "Record EXP…" can take one (api/pay PATCH).
+  canRecordExp?: boolean;
   // From /api/payments (lib/peak-job-status): whether FolkOPS holds a PEAK document for the job.
   peakStatus?: { state: "IN_PEAK" | "NOT_IN_PEAK" | "NOTHING_TO_POST"; documentNo: string | null; source: string | null } };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
@@ -46,6 +49,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [payTogether, setPayTogether] = useState<{ guideId: string; guide: string; jobs: Job[] } | null>(null);
   // Stage 2: record the payment against a document already created in PEAK.
   const [recordPayment, setRecordPayment] = useState<{ guideId: string; guide: string; doc: CreatedDocument } | null>(null);
+  // "Record EXP…": the number of a PEAK document made by hand, on already-paid jobs.
+  const [recordExp, setRecordExp] = useState<{ guideId: string; guide: string; jobs: Job[]; preselect: string[] } | null>(null);
   const [paymentDocs, setPaymentDocs] = useState<PaymentDoc[]>([]);
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
@@ -146,6 +151,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // No PEAK document for this job in FolkOPS (lib/peak-job-status). Once paid, that is a
   // gap in the books; before payment it is the normal state — so the paid one stands out.
   const notInPeak = (j: Job) => j.peakStatus?.state === "NOT_IN_PEAK";
+  const expCandidate = (j: Job) => !!j.canRecordExp && notInPeak(j);
   const peakBadge = (j: Job) => notInPeak(j)
     ? <span className={`pay-peak-missing${j.paid ? " paid" : ""}`} title={j.paid ? "Paid, but FolkOPS has no PEAK document for this job — record its EXP ref, or post it to PEAK" : "No PEAK document for this job yet"}>Not in PEAK</span>
     : j.peakStatus?.state === "NOTHING_TO_POST"
@@ -519,6 +525,15 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 <span>The slip did not attach to PEAK document <b>{d.peakDocumentNo}</b> ({d.paymentRef}){d.attachmentError ? ` — ${d.attachmentError}` : ""}. It is saved in Drive; attach it in PEAK by hand.</span>
               </div>
             ))}
+            {mode === "paid" && canEdit && (() => {
+              const cands = jobs.filter(expCandidate);
+              return cands.length > 0 && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
+                  <button className="btn sm" title="These jobs were paid, but FolkOPS has no PEAK document for them. If one was made by hand in PEAK, record its number here." onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: cands, preselect: cands.length === 1 ? [`${cands[0].date}|${cands[0].slotIdx}`] : [] })}>Record EXP…</button>
+                  <span className="pay-doc-note">{cands.length} paid job{cands.length === 1 ? "" : "s"} not in PEAK — record the number of a document made by hand in PEAK</span>
+                </div>
+              );
+            })()}
             {mode === "unpaid" && canEdit && unlocked.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
               {payable.length > 0 && <>
                 <button className="btn sm primary" title={payable.length > 1 ? "Step 1: create ONE unpaid PEAK document for these jobs. Step 2, after reviewing it in PEAK and transferring: record the payment against it." : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Pay {payable.length} job{payable.length === 1 ? "" : "s"} together · one ref</button>
@@ -550,6 +565,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to — every job in it shares this reference and document">{docTag(j)}</span>}
                   {inPeakTag(j)}
                   {peakBadge(j)}
+                  {canEdit && expCandidate(j) && <button type="button" className="btn sm ghost" style={{ padding: "1px 8px" }} title="Record the number of the PEAK document made by hand for this payment" onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter(expCandidate), preselect: [`${j.date}|${j.slotIdx}`] })}>+ EXP</button>}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : j.peakPaymentRef ? docBadge(j) : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
                   </span>
                   <span className="pay-job-actions">
@@ -809,6 +825,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           onDone={() => { const gid = payTogether.guideId; setPayTogether(null); setPayRef((p) => { const n = { ...p }; delete n[gid]; return n; }); load(period); }}
           onRecordPayment={(doc) => { const { guideId, guide } = payTogether; setPayTogether(null); load(period); setRecordPayment({ guideId, guide, doc }); }}
         />
+      )}
+      {recordExp && (
+        <RecordExpDialog guideId={recordExp.guideId} guide={recordExp.guide} jobs={recordExp.jobs} preselect={recordExp.preselect}
+          onClose={() => setRecordExp(null)}
+          onDone={(msg) => { setRecordExp(null); load(period); alert(msg); }} />
       )}
       {recordPayment && (
         <RecordPaymentDialog
