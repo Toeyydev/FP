@@ -82,7 +82,7 @@ vi.mock("@/lib/peak-api", () => ({
   peakEnabled: true,
   createExpenseAllInOne: peak.create,
   insertExpenseFile: peak.attach,
-  getExpenseByCode: peak.get,
+  getExpense: peak.get,
   payExistingExpense: peak.pay,
   sanitizePeakError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
@@ -265,9 +265,9 @@ describe("stage 2 — POST /api/pay/peak-document/pay records the payment agains
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, status: "PAID", paymentRef: "FOLK-PAY-203005-01", documentNo: "EXP-TEST-0042", amount: 4169, paymentDate: "2030-05-13", notified: true });
     expect(peak.create).toHaveBeenCalledTimes(1);
-    expect(peak.get).toHaveBeenCalledWith("EXP-TEST-0042");
+    expect(peak.get).toHaveBeenCalledWith({ id: "peak-doc-42", code: "EXP-TEST-0042" });
     expect(peak.pay).toHaveBeenCalledTimes(1);
-    expect(peak.pay.mock.calls[0][0]).toEqual({ documentNo: "EXP-TEST-0042", paymentDate: "20300513", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 });
+    expect(peak.pay.mock.calls[0][0]).toEqual({ documentNo: "EXP-TEST-0042", documentId: "peak-doc-42", paymentDate: "20300513", paymentMethodId: "pm-test", amount: 4169, withholdingTaxAmount: 126 });
     for (const j of [J1, J2, J3]) {
       expect(payOf(j)).toMatchObject({ status: "PAID", peakPaymentRef: "FOLK-PAY-203005-01", peakRef: "EXP-TEST-0042", peakDocumentId: "peak-doc-42", eslipUrl: "https://drive.example/slip-1" });
       expect(payOf(j)!.paidAt.toISOString()).toBe("2030-05-13T05:00:00.000Z");
