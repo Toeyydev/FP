@@ -367,39 +367,62 @@ export function insertFileSucceeded(httpStatus: number, j: Record<string, unknow
 // Attach a file to an existing expense document. POST /api/v1/Expenses/insertfile,
 // body { peakExpenses: { transactionId | transactionCode, file: { fileName, rawString, fileType } } }.
 //
-// PEAK's reference does not say how rawString is encoded. A JSON string cannot carry
-// raw image bytes, so it is sent as plain base64 with no data: prefix — verify that on
-// the first real attachment.
+// PEAK's reference does not say how rawString is encoded. The first real attachment
+// (2026-09-15) sent plain base64 and PEAK answered "Invalid Base64 string." — nothing
+// attached. A data URI ("data:image/jpeg;base64,…") is the other common reading, so
+// that is sent first; only if PEAK again rejects the ENCODING is plain base64 tried.
+// A rejected encoding means nothing was attached, so the second attempt cannot attach
+// the slip twice. Any other answer (success, or a different error) is final.
 //
 // It reuses the client token the document's create call minted moments earlier rather
 // than minting another, and retries only on a token rejection — which means nothing
 // was attached, so the retry cannot attach the slip twice.
-export async function insertExpenseFile(input: {
+export type InsertFileInput = {
   transactionId?: string | null;
   transactionCode?: string | null;
   fileName: string;
   base64: string;
   fileType: "image" | "document";
-}): Promise<{ ok: boolean; desc: string }> {
+  /** The file's MIME type, e.g. "image/jpeg". Without it only plain base64 can be sent. */
+  mime?: string | null;
+};
+
+/** The insertfile body, with rawString as a data URI or as plain base64. */
+export function insertFileBody(input: InsertFileInput, encoding: "data-uri" | "plain") {
+  const raw = input.base64.replace(/^data:[^,]*,/, "");
+  const mime = (input.mime ?? "").trim();
+  return {
+    peakExpenses: {
+      ...(input.transactionId ? { transactionId: input.transactionId } : {}),
+      ...(input.transactionCode ? { transactionCode: input.transactionCode } : {}),
+      file: { fileName: input.fileName, rawString: encoding === "data-uri" && mime ? `data:${mime};base64,${raw}` : raw, fileType: input.fileType },
+    },
+  };
+}
+
+/** Whether PEAK refused the file's encoding (so nothing was attached and the other encoding may be tried). */
+export function insertFileEncodingRejected(desc: string | null | undefined): boolean {
+  return /base\s*-?\s*64/i.test(desc ?? "");
+}
+
+export async function insertExpenseFile(input: InsertFileInput): Promise<{ ok: boolean; desc: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
   if (!input.transactionId && !input.transactionCode) return { ok: false, desc: "No PEAK document to attach the slip to" };
-  const call = await authedCall(
-    `${API}/Expenses/insertfile`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        peakExpenses: {
-          ...(input.transactionId ? { transactionId: input.transactionId } : {}),
-          ...(input.transactionCode ? { transactionCode: input.transactionCode } : {}),
-          file: { fileName: input.fileName, rawString: input.base64, fileType: input.fileType },
-        },
-      }),
-    },
-    "peakExpenses",
-    { fresh: false, retry: true, timeoutMs: WRITE_TIMEOUT_MS },
-  );
-  if ("error" in call) return { ok: false, desc: call.error };
-  return insertFileSucceeded(call.r.status, call.j);
+  const send = async (encoding: "data-uri" | "plain") => {
+    const call = await authedCall(
+      `${API}/Expenses/insertfile`,
+      { method: "POST", body: JSON.stringify(insertFileBody(input, encoding)) },
+      "peakExpenses",
+      { fresh: false, retry: true, timeoutMs: WRITE_TIMEOUT_MS },
+    );
+    if ("error" in call) return { ok: false, desc: call.error };
+    return insertFileSucceeded(call.r.status, call.j);
+  };
+  if (!(input.mime ?? "").trim()) return send("plain");
+  const first = await send("data-uri");
+  if (first.ok || !insertFileEncodingRejected(first.desc)) return first;
+  const second = await send("plain");
+  return second.ok ? second : { ok: false, desc: `${first.desc} (data URI); ${second.desc} (plain base64)` };
 }
 
 // ── An expense that already exists: read it, pay it ───────────────────────────
