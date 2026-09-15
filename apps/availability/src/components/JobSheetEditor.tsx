@@ -84,6 +84,7 @@ export default function JobSheetEditor() {
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [handoverAsked, setHandoverAsked] = useState(false);
   const [peakPrefix, setPeakPrefix] = useState(2);
+  const [peakStatus, setPeakStatus] = useState<{ state: "IN_PEAK" | "NOT_IN_PEAK" | "NOTHING_TO_POST"; documentNo: string | null; source: string | null } | null>(null);
   const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -119,7 +120,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? { advances: [], returns: [] });
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -1692,6 +1693,15 @@ export default function JobSheetEditor() {
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
+            {peakStatus && (
+              <div role="status" style={{ marginTop: 4 }}>
+                {peakStatus.state === "IN_PEAK"
+                  ? <span className="ob ok" title="FolkOPS holds a PEAK document for this job">✓ In PEAK · {peakStatus.documentNo}</span>
+                  : peakStatus.state === "NOTHING_TO_POST"
+                    ? <span className="ob mut" title="This job pays nothing, so there is nothing to book in PEAK">No PEAK document needed · ฿0</span>
+                    : <span className={`pay-peak-missing${payment?.paid ? " paid" : ""}`} title={payment?.paid ? "Paid, but FolkOPS has no PEAK document for this job" : "No PEAK document for this job yet"}>Not in PEAK{payment?.paid ? " · paid" : " yet"}</span>}
+              </div>
+            )}
             {/* Read-only mirror of the ref recorded on Payments. This screen never
                 creates a PEAK expense and never invents a number: no ref means no
                 ref. A synced sheet shows syncedAt; one whose number was typed in on
