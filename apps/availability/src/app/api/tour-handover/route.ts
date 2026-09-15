@@ -5,7 +5,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isOps } from "@/lib/roles";
 import { audit } from "@/lib/audit";
-import { encrypt } from "@/lib/crypto";
+import { encrypt, encryptBuffer } from "@/lib/crypto";
+import { ensureGuidePeakContact, type GuidePeakContactResult } from "@/lib/peak-guide-contact-server";
 import { ensureJobRef } from "@/lib/jobref";
 import { DEFAULT_GUIDE_FEE, type GuideFee } from "@/lib/jobsheet";
 import { paymentCoverage } from "@/lib/payment-coverage";
@@ -41,6 +42,12 @@ const postSchema = z.object({
     bankName: z.string().trim().max(80).optional(),
     bankAccountNo: z.string().trim().max(40).optional(),
     bankAccountName: z.string().trim().max(160).optional(),
+    /** PEAK PrefixNameType: 0 ไม่มี · 1 คุณ · 2 นาย · 3 นาง · 4 นางสาว. */
+    prefix: z.number().int().min(0).max(4).optional(),
+    address: z.string().trim().max(300).optional(),
+    licenseNo: z.string().trim().max(40).optional(),
+    /** Put them into PEAK as a supplier in the same step (link by tax number, or create). */
+    createPeakContact: z.boolean().optional(),
   }).optional(),
 }).refine((b) => !!b.toGuideId !== !!b.external, { message: "Choose an existing guide or enter a one-off guide — one of the two" });
 
@@ -61,11 +68,31 @@ async function jobFacts(guideId: string, date: string, slotIdx: number) {
   };
 }
 
+// The guide-licence card photo that may come with a one-off guide (multipart only).
+const CARD_MAX = 12 * 1024 * 1024;
+const CARD_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
+
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };
-  const parsed = postSchema.safeParse(await req.json().catch(() => null));
+  // JSON, or multipart with the same JSON in "data" plus an optional "licenseCard" file.
+  let raw: unknown = null;
+  let card: { name: string; mime: string; bytes: Buffer } | null = null;
+  if ((req.headers.get("content-type") ?? "").includes("multipart/form-data")) {
+    const form = await req.formData().catch(() => null);
+    try { raw = JSON.parse(String(form?.get("data") ?? "")); } catch { raw = null; }
+    const f = form?.get("licenseCard") as unknown as { name?: string; type?: string; size?: number; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+    if (f && typeof f.arrayBuffer === "function" && (f.size ?? 0) > 0) {
+      const mime = (f.type || "").toLowerCase();
+      if (!CARD_TYPES.includes(mime)) return NextResponse.json({ error: "bad-file", reasons: ["The guide card must be a JPG, PNG or PDF"] }, { status: 400 });
+      if ((f.size ?? 0) > CARD_MAX) return NextResponse.json({ error: "too-large", reasons: ["The guide card file is over 12 MB"] }, { status: 400 });
+      card = { name: f.name || "guide-card", mime, bytes: Buffer.from(await f.arrayBuffer()) };
+    }
+  } else {
+    raw = await req.json().catch(() => null);
+  }
+  const parsed = postSchema.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => i.message) }, { status: 400 });
   const b = parsed.data;
   const { date, slotIdx, fromGuideId } = b;
@@ -116,10 +143,16 @@ export async function POST(req: NextRequest) {
               bankName: e.bankName ? encrypt(e.bankName) : null,
               bankAccountNo: e.bankAccountNo ? encrypt(e.bankAccountNo) : null,
               bankAccountName: e.bankAccountName ? encrypt(e.bankAccountName) : null,
+              idCardAddress: e.address ? encrypt(e.address) : null,
+              licenseNo: e.licenseNo || null,
             },
             select: { id: true },
           });
           externalUserId = u.id;
+          // The guide-licence card, stored AES-encrypted like any guide document.
+          if (card) {
+            await tx.guideDocument.create({ data: { userId: u.id, kind: "GUIDE_LICENSE", filename: card.name, mimeType: card.mime, size: card.bytes.length, data: new Uint8Array(encryptBuffer(card.bytes)) } });
+          }
         }
 
         // The guests stay with the original guide. On a slot that was never split the
@@ -178,9 +211,21 @@ export async function POST(req: NextRequest) {
   await audit({ ...actor, action: "tour.handover", entityType: "TourHandover", entityId: result.handoverId, detail });
   await audit({ ...actor, action: "jobsheet.handed_over", entityType: "JobSheet", entityId: result.fromSheetId, detail });
   await audit({ ...actor, action: "jobsheet.handed_over", entityType: "JobSheet", entityId: result.toSheetId, detail });
-  if (result.externalUserId) await audit({ ...actor, action: "guide.external_created", entityType: "User", entityId: result.externalUserId, detail: { guideId: result.toGuideId, date, slotIdx } });
+  if (result.externalUserId) await audit({ ...actor, action: "guide.external_created", entityType: "User", entityId: result.externalUserId, detail: { guideId: result.toGuideId, date, slotIdx, licenseCard: !!card } });
 
-  return NextResponse.json({ ok: true, id: result.handoverId, toGuideId: result.toGuideId, fromRef, toRef });
+  // Into PEAK in the same step, so the replacement can be paid without anyone making
+  // the supplier by hand. The handover stands whatever PEAK says: a failure is shown
+  // with a retry on the job sheet (which finds a contact PEAK did create by its tax ID).
+  let peakContact: GuidePeakContactResult | null = null;
+  if (result.externalUserId && b.external?.createPeakContact) {
+    try {
+      peakContact = await ensureGuidePeakContact({ guideId: result.toGuideId, prefix: b.external.prefix ?? 0, actor });
+    } catch (e) {
+      peakContact = { status: "failed", reasons: [String((e as Error)?.message ?? e).slice(0, 200)] };
+    }
+  }
+
+  return NextResponse.json({ ok: true, id: result.handoverId, toGuideId: result.toGuideId, fromRef, toRef, peakContact });
 }
 
 export async function DELETE(req: NextRequest) {

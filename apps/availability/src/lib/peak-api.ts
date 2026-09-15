@@ -809,6 +809,66 @@ export async function getContacts(opts: { searchText?: string; limit?: number; p
   return { ok: true, contacts: parsed.contacts, code: envelope.resCode ?? undefined, desc: envelope.resDesc ?? undefined, envelope };
 }
 
+// ── Create a contact (supplier) ───────────────────────────────────────────────
+// POST /api/v1/Contacts, wrapper PeakContacts → contacts[] (PEAK API Core v1).
+// https://developers.peakaccount.com/reference/post_api-v1-contacts
+// Not a billed transaction (PEAK API transaction counting: only document creates count).
+//
+// Used for ONE thing: a one-off guide recorded in FolkOPS (lib/tour-handover) who is not
+// yet a supplier in PEAK. The caller looks for an existing contact with the same tax
+// number first (lib/peak-guide-contact) — PEAK has no idempotency key, so a create is
+// a write that is never replayed.
+
+/** PEAK ContactType 5 = บุคคลธรรมดา; PrefixNameType 0 ไม่มี · 1 คุณ · 2 นาย · 3 นาง · 4 นางสาว. */
+export const PEAK_CONTACT_TYPE_INDIVIDUAL = 5;
+
+export type NewPeakContact = { name: string; prefixNameType: number; taxNumber: string; address?: string | null; phone?: string | null };
+
+export function createContactBody(c: NewPeakContact) {
+  return {
+    peakContacts: {
+      contacts: [{
+        name: c.name,
+        type: PEAK_CONTACT_TYPE_INDIVIDUAL,
+        prefixNameType: c.prefixNameType,
+        taxNumber: c.taxNumber,
+        branchCode: "00000", // an individual has no branch: head office
+        ...(c.address ? { address: c.address } : {}),
+        ...(c.phone ? { contactPhoneNumber: c.phone } : {}),
+      }],
+    },
+  };
+}
+
+export type CreatedContact = { ok: boolean; id?: string; code?: string; name?: string; desc?: string; uncertain?: boolean };
+
+/** PEAK's answer to Create Contact: the new id is the only proof it exists. */
+export function readCreatedContact(httpStatus: number, j: Record<string, unknown>): CreatedContact {
+  const wrap = peakWrap<{ contacts?: Array<Record<string, unknown>>; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakContacts");
+  const c = Array.isArray(wrap?.contacts) ? wrap!.contacts[0] : undefined;
+  const id = c?.id ? String(c.id).trim() : "";
+  if (id) return { ok: true, id, code: c?.code ? String(c.code) : undefined, name: c?.name ? String(c.name) : undefined };
+  const desc = sanitizePeakError(String(c?.resDesc ?? wrap?.resDesc ?? "").trim()) || `HTTP ${httpStatus}`;
+  // A refusal PEAK spelled out is definite; a 5xx or an empty reply proves nothing.
+  const said = !!(c?.resDesc || wrap?.resDesc);
+  return { ok: false, desc, uncertain: !said && (httpStatus >= 500 || !wrap) };
+}
+
+export async function createContact(c: NewPeakContact): Promise<CreatedContact> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(
+    `${API}/Contacts`,
+    { method: "POST", body: JSON.stringify(createContactBody(c)) },
+    "peakContacts",
+    { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  if ("error" in call) {
+    const uncertain = !!call.sent;
+    return { ok: false, uncertain, desc: uncertain ? `${call.error}. The contact may or may not have been created — FolkOPS looks for it by tax number before trying again.` : call.error };
+  }
+  return readCreatedContact(call.r.status, call.j);
+}
+
 /**
  * Every contact PEAK will give us, read one 100-row page at a time.
  *

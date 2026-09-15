@@ -12,10 +12,11 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import HandoverDialog from "@/components/HandoverDialog";
 import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover";
+import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
-type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string; licenseNo?: string; peakContactId?: string | null; peakContactCode?: string | null; peakContactName?: string | null } | null;
+type Header = { guideId: string; name: string; email: string; tel: string; taxId: string; address: string; licenseNo?: string; peakContactId?: string | null; peakContactCode?: string | null; peakContactName?: string | null; userId?: string; external?: boolean } | null;
 type Tour = { id: string; name: string; time: string; durationMin?: number | null; meetingPoint?: string | null } | null;
 // Read-only job facts assembled server-side from records that already exist.
 type JobMeta = { operator: string | null; ota: string | null; lead: string | null; leadRef: string | null; meetingPoint: string | null } | null;
@@ -82,6 +83,7 @@ export default function JobSheetEditor() {
   const [handover, setHandover] = useState<{ id: string; role: "from" | "to"; otherGuideId: string; otherName: string | null; otherExternal: boolean; time: string; reason: string; note: string | null } | null>(null);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [handoverAsked, setHandoverAsked] = useState(false);
+  const [peakPrefix, setPeakPrefix] = useState(2);
   const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -648,6 +650,18 @@ export default function JobSheetEditor() {
     setBusy(false);
     if (!r.ok) { setMsg(d.error === "tour-in-progress" ? "This tour has already started — delete it from Payments / Tour Log instead." : d.error === "forbidden" ? "Operator only." : "Delete failed."); return; }
     router.back();
+  }
+
+  // A one-off guide is put into PEAK from FolkOPS (api/guides/peak-contact): link the
+  // contact with their tax ID, or create one. Recording the handover already tried.
+  async function addGuideToPeak() {
+    if (!header?.guideId) return;
+    setBusy(true);
+    const r = await fetch("/api/guides/peak-contact", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: header.guideId, prefix: peakPrefix }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (r.ok && d.ok) { setMsg(`${header.guideId} ${d.status === "created" ? "created in" : "linked to"} PEAK${d.code ? ` (${d.code})` : ""}`); await load(); return; }
+    alert((Array.isArray(d.reasons) && d.reasons.length ? d.reasons : [`Not added to PEAK (${r.status})`]).join("\n"));
   }
 
   async function undoHandover() {
@@ -1741,6 +1755,19 @@ export default function JobSheetEditor() {
             )}
             {/* The blocking reason is actionable right here. Shown whenever the
                 mapping is missing, and reachable via "Change" once it is set. */}
+            {canEdit && header?.external && (
+              <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 12 }}>
+                <span style={{ color: "var(--ink-soft)" }}>One-off guide · <a href={`/profile?userId=${header.userId}`}>guide card &amp; profile</a></span>
+                {!header.peakContactId && (
+                  <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <select value={peakPrefix} onChange={(e) => setPeakPrefix(Number(e.target.value))} disabled={busy} style={{ width: "auto" }}>
+                      {NAME_PREFIXES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                    <button className="btn sm primary" disabled={busy} onClick={addGuideToPeak} title="Links the PEAK contact with this guide's tax ID, or creates one (บุคคลธรรมดา)">Add to PEAK</button>
+                  </span>
+                )}
+              </div>
+            )}
             {peak && contactBoxOpen(contactEdit, peak.contactMapped) ? (
               <div className="js-contact-map">
                 <label htmlFor="peakContact">PEAK Contact</label>
@@ -1850,7 +1877,16 @@ export default function JobSheetEditor() {
           guideId={guideId} guideName={header?.name ?? ""} date={date} slotIdx={slotIdx} tourName={tour?.name ?? sheet.tourId}
           fee={sheet.guideFee}
           onClose={() => setHandoverOpen(false)}
-          onDone={async (r) => { setHandoverOpen(false); setMsg(`Handed over to ${r.toGuideId}${r.toRef ? ` · ${r.toRef}` : ""}`); await load(); }}
+          onDone={async (r) => {
+            setHandoverOpen(false);
+            const pc = r.peakContact;
+            const peakNote = !pc ? "" : "contactId" in pc
+              ? ` · PEAK contact ${pc.status === "created" ? "created" : "linked"}${pc.code ? ` (${pc.code})` : ""}`
+              : ` · NOT added to PEAK: ${pc.reasons.join("; ")}`;
+            setMsg(`Handed over to ${r.toGuideId}${r.toRef ? ` · ${r.toRef}` : ""}${peakNote}`);
+            if (pc && !("contactId" in pc)) alert(`The handover is recorded, but ${r.toGuideId} was not added to PEAK:\n\n${pc.reasons.join("\n")}\n\nOpen ${r.toGuideId}'s job sheet and press "Add to PEAK" to try again.`);
+            await load();
+          }}
         />
       )}
     </div>
