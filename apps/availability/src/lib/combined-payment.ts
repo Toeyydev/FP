@@ -140,3 +140,33 @@ export function paidTransferOf(jobs: PaidTransferJob[]): { paidDate: string | nu
   if (links.size > 1) reasons.push(`These jobs were paid with ${links.size} different slips — one transfer is one PEAK document, so put each transfer's jobs in separately`);
   return { paidDate: dates.size === 1 ? [...dates][0] : null, slipLink: links.size === 1 ? [...links][0] : null, reasons };
 }
+
+export type PerSheetSyncRefusal = { code: "use-combined-document" | "paid-use-transfer-document"; reason: string };
+
+/**
+ * Why a job sheet may NOT be posted to PEAK as a document of its own — or null when it
+ * may. One transfer is one PEAK document (owner rule), and posting sheet by sheet broke
+ * it: one guide's September became four documents although one transfer paid them,
+ * because a confirm box was accepted, and because jobs recorded later could not be
+ * warned about at all. So this is enforced, never asked:
+ *  - an unpaid job goes into PEAK through the combined document (one job or several),
+ *    created for the transfer that will pay it;
+ *  - a job already paid goes in with the other jobs its transfer paid;
+ *  - only a job covered by the guide's month payroll (its own legacy transfer) still
+ *    posts from its sheet.
+ * A sheet already in PEAK is not this rule's business (corrections are confirmed apart).
+ */
+export function perSheetSyncRefusal(input: { coveredByPayroll: boolean; paidPerTour: boolean; paidAt?: Date | string | null }): PerSheetSyncRefusal | null {
+  if (input.coveredByPayroll) return null;
+  if (input.paidPerTour) {
+    return {
+      code: "paid-use-transfer-document",
+      reason: `This job is already paid${input.paidAt ? ` (${bangkokDateOf(input.paidAt)})` : ""}. A paid job goes into PEAK with the other jobs that transfer paid — Payments → Paid → "Put N jobs paid … in PEAK · 1 document".`,
+    };
+  }
+  return {
+    code: "use-combined-document",
+    reason: 'One transfer is one PEAK document. Put this job in PEAK with "Put N jobs in one PEAK document" on this job sheet (or "Pay N jobs together" on Payments) — for a single job too — when you are about to pay.',
+  };
+}
+

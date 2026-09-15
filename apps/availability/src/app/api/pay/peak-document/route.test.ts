@@ -214,7 +214,17 @@ describe("stage 1 — POST /api/pay/peak-document creates ONE unpaid document", 
     await create([J1, J2, J3]);
     const res = await create([J3, OTHER]);
     expect(res.status).toBe(409);
-    expect((await res.json()).reasons.join(" ")).toContain("Included in combined PEAK document EXP-TEST-0042");
+    expect((await res.json()).reasons.join(" ")).toContain("EXP-TEST-0042");
+    expect(peak.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("one transfer, one document: a second document for the same month is refused while the first is unpaid", async () => {
+    await create([J1, J2, J3]);
+    const res = await create([OTHER]); // not in the first document, same month
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("open-document-this-month");
+    expect(body.reasons.join(" ")).toContain("already has EXP-TEST-0042");
     expect(peak.create).toHaveBeenCalledTimes(1);
   });
 
