@@ -11,6 +11,7 @@ import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { audit } from "@/lib/audit";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
+import { handoverLock } from "@/lib/tour-handover-server";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -161,6 +162,8 @@ export async function DELETE(req: NextRequest) {
   // started/completed tour, remove it from the Tour Log instead.
   const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
   if (started > 0) return NextResponse.json({ error: "tour-in-progress" }, { status: 409 });
+  const handover = await handoverLock(date, slotIdx, guideId);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
 
   // Clean up the Google Calendar events first (guide + operator master) so a
   // removed/re-offered tour doesn't linger as a ghost event. Never blocks delete.

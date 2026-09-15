@@ -5,6 +5,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { canViewFinance } from "@/lib/roles";
 import { noShowOutcome, type NoShowOutcome } from "@/lib/no-show-count";
+import { handoverLock } from "@/lib/tour-handover-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -106,6 +107,8 @@ export async function DELETE(req: NextRequest) {
   const slotIdx = Number(body?.slotIdx);
   if (!guideId || !DATE.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const where = { guideId, date, slotIdx };
+  const handover = await handoverLock(date, slotIdx, guideId);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),
