@@ -136,7 +136,7 @@ export async function availableGuides(date: string, slotIdx: number) {
 
   const [guides, avail, assigned, leaves] = await Promise.all([
     prisma.user.findMany({
-      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null }, offerBlocked: false },
+      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null }, offerBlocked: false, external: false },
       select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true },
     }),
     prisma.availability.findMany({ where: { date }, select: { guideId: true, slots: true } }),

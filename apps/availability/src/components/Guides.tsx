@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
-type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; email: string; fullName: string; phone: string; taxId: string; address: string; lineLinked: boolean; hasPush: boolean; hasEmail: boolean };
+type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; external?: boolean; email: string; fullName: string; phone: string; taxId: string; address: string; lineLinked: boolean; hasPush: boolean; hasEmail: boolean };
 
 // Which channels a job offer can reach this guide on. LINE / push are "fast" (a
 // phone ping); email is the slow fallback. No fast channel → flag it, because a
@@ -73,9 +73,9 @@ export default function Guides() {
               {rows.length === 0 ? <tr><td colSpan={8} className="op-empty">No guides.</td></tr> : rows.map((g) => (
                 <Fragment key={g.guideId}>
                 <tr>
-                  <td style={{ whiteSpace: "nowrap" }}><span className="gid">{g.guideId}</span> {g.name}</td>
+                  <td style={{ whiteSpace: "nowrap" }}><span className="gid">{g.guideId}</span> {g.name}{g.external && <span className="leave-badge" title="Recorded after stepping in for another guide (ไกด์ขาจร). No login; never offered work." style={{ marginLeft: 6 }}>One-off</span>}</td>
                   <td style={{ whiteSpace: "nowrap" }}><span className={`presence-dot ${isOnline(g.lastSeenAt) ? "on" : "off"}`} />{isOnline(g.lastSeenAt) ? <b style={{ fontSize: 12, color: "var(--green)" }}>Online</b> : <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{lastSeenLabel(g.lastSeenAt)}</span>}</td>
-                  <td style={{ whiteSpace: "nowrap" }}><Reach g={g} /></td>
+                  <td style={{ whiteSpace: "nowrap" }}>{g.external ? <span style={{ color: "var(--ink-soft)", fontSize: 12 }} title="A one-off guide is not contacted through FolkOPS">—</span> : <Reach g={g} />}</td>
                   <td style={{ color: "var(--ink-soft)" }}>{g.languages || "—"}</td>
                   <td className="r" style={{ fontVariantNumeric: "tabular-nums" }}>{g.tours}</td>
                   <td>{g.offerBlocked
@@ -85,7 +85,9 @@ export default function Guides() {
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                       <button className="btn sm" onClick={() => (editId === g.id ? setEditId(null) : startEdit(g))}>{editId === g.id ? "Close" : "✏️ Edit"}</button>
-                      <button className={`btn sm ${g.offerBlocked ? "primary" : "danger"}`} onClick={() => toggleBlock(g)}>{g.offerBlocked ? "Unblock" : "Block offers"}</button>
+                      {g.external
+                        ? <span className="btn sm ghost" aria-disabled="true" title="A one-off guide is never offered work again">Not rebooked</span>
+                        : <button className={`btn sm ${g.offerBlocked ? "primary" : "danger"}`} onClick={() => toggleBlock(g)}>{g.offerBlocked ? "Unblock" : "Block offers"}</button>}
                     </div>
                   </td>
                 </tr>

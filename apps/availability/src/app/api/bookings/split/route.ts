@@ -11,6 +11,7 @@ import { linePush, lineEnabled } from "@/lib/line";
 import { pushTourToCalendars, removeTourEvents } from "@/lib/tour-calendar-sync";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
+import { handoverLock } from "@/lib/tour-handover-server";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const CAP = PAX_PER_GUIDE;
@@ -53,6 +54,10 @@ export async function POST(req: NextRequest) {
 
   // Guides already holding this slot before the split — any not in the new split are
   // being dropped from the tour and get cleaned up + notified below.
+  // A split re-cuts every guide on the slot and drops anyone left without guests —
+  // which would delete one half of a handover record.
+  const handover = await handoverLock(date, slotIdx);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
   const priorAssignments = await prisma.assignment.findMany({ where: { date, slotIdx } });
   const newGuideIds = new Set(groups.map((g) => g.guideId));
 

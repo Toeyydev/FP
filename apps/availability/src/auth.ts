@@ -25,6 +25,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const user = await prisma.user.findUnique({ where: { email } });
         if (!user || !user.passwordHash) { recordLoginFail(email); return null; } // unclaimed accounts have no password
         if (user.state !== "ACTIVE") return null; // invited / pending / suspended cannot log in
+        if (user.external) return null; // a one-off guide recorded by an operator never logs in
         if (!bcrypt.compareSync(parsed.data.password, user.passwordHash)) { recordLoginFail(email); return null; }
         recordLoginSuccess(email);
         return {

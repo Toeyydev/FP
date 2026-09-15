@@ -10,6 +10,8 @@ import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate 
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
+import HandoverDialog from "@/components/HandoverDialog";
+import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -76,6 +78,10 @@ export default function JobSheetEditor() {
   const [checkedIn, setCheckedIn] = useState(false);
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
+  // Another guide finished this tour, or this guide finished it for someone (api/tour-handover).
+  const [handover, setHandover] = useState<{ id: string; role: "from" | "to"; otherGuideId: string; otherName: string | null; otherExternal: boolean; time: string; reason: string; note: string | null } | null>(null);
+  const [handoverOpen, setHandoverOpen] = useState(false);
+  const [handoverAsked, setHandoverAsked] = useState(false);
   const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -111,7 +117,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null);
     setAdvance(d.advance ?? { advances: [], returns: [] });
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -183,6 +189,14 @@ export default function JobSheetEditor() {
       })
       .catch(() => { setPeakContacts([]); setContactsError("Could not reach the server to load PEAK contacts."); });
   }, [contactEdit, peakContacts, sheet?.guideId, peak]);
+
+  // Dispatch's "Hand over…" opens this page with ?handover=1: open the dialog once the
+  // sheet has loaded. Above the early return, like every hook here.
+  useEffect(() => {
+    if (handoverAsked || !sheet || !canEdit || sp.get("handover") !== "1") return;
+    setHandoverAsked(true);
+    if (!handover) setHandoverOpen(true);
+  }, [handoverAsked, sheet, canEdit, sp, handover]);
 
   if (!sheet) return <div className="wrap"><section className="panel"><div className="op-empty">{msg || "…"}</div></section></div>;
 
@@ -636,6 +650,22 @@ export default function JobSheetEditor() {
     router.back();
   }
 
+  async function undoHandover() {
+    if (!handover) return;
+    const replacement = handover.role === "from" ? handover.otherGuideId : guideId;
+    const original = handover.role === "from" ? guideId : handover.otherGuideId;
+    if (!confirm(`Undo the handover?\n\n${replacement}'s assignment and job sheet on this tour are deleted, and ${original} gets the guide fee back. A one-off guide stays on file.`)) return;
+    setBusy(true);
+    const r = await fetch("/api/tour-handover", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: handover.id }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { alert((Array.isArray(d.reasons) && d.reasons.length ? d.reasons : [`The handover was not undone (${r.status})`]).join("\n")); return; }
+    // This sheet was the replacement's — it no longer exists. Go to the original guide's.
+    if (handover.role === "to") { window.location.href = `/job-sheet?guideId=${encodeURIComponent(original)}&date=${date}&slotIdx=${slotIdx}`; return; }
+    setMsg("Handover undone");
+    await load();
+  }
+
   const L = { width: "100%", boxSizing: "border-box" as const, padding: "5px 7px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit" };
 
   return (
@@ -643,8 +673,9 @@ export default function JobSheetEditor() {
       <div className="js-bar no-print">
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button className="btn ghost" onClick={() => router.back()}>← Back</button>
-          {canEdit && <button className="btn" disabled={busy || checkedIn} title={checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>}
-          {canEdit && <button className="btn danger" disabled={busy || checkedIn} title={checkedIn ? "The guide has checked in — delete it from Payments / Tour Log instead" : "Delete this job sheet and its tour records"} onClick={deleteJobSheet}>Delete job sheet</button>}
+          {canEdit && <button className="btn" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>}
+          {canEdit && <button className="btn danger" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — delete it from Payments / Tour Log instead" : "Delete this job sheet and its tour records"} onClick={deleteJobSheet}>Delete job sheet</button>}
+          {canEdit && !handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {ro && <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>}
@@ -665,6 +696,29 @@ export default function JobSheetEditor() {
           {canEdit && <button className="btn primary" disabled={busy} onClick={() => save()}>{busy ? "…" : "Save"}</button>}
         </div>
       </div>
+
+      {handover && (
+        <div className="no-print" role="status" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "#fff8c4", border: "1px solid #ecd9bf", fontSize: 13.5, display: "grid", gap: 6 }}>
+          <b>
+            🤒 {handover.role === "from"
+              ? `Handed over to ${handover.otherGuideId} ${handover.otherName ?? ""}${handover.otherExternal ? " (one-off guide)" : ""} at ${handover.time}`
+              : `Replacement for ${handover.otherGuideId} ${handover.otherName ?? ""} from ${handover.time}`}
+            {" · "}{HANDOVER_REASON_LABEL[handover.reason as HandoverReason] ?? handover.reason}
+          </b>
+          <span style={{ color: "var(--ink-soft)" }}>
+            {handover.role === "from"
+              ? "The guide fee moved to the replacement. The guests, no-shows and tour report stay on this sheet, and the expenses this guide paid are still reimbursed."
+              : `The guests, no-shows and tour report stay on ${handover.otherGuideId}'s sheet. This sheet carries this guide's fee and their own expenses.`}
+          </span>
+          {canEdit && handover.note && <span>Note: {handover.note}</span>}
+          {canEdit && (
+            <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(handover.otherGuideId)}&date=${date}&slotIdx=${slotIdx}`}>Open {handover.otherGuideId}&apos;s job sheet</a>
+              <button className="btn sm ghost" disabled={busy} onClick={undoHandover}>Undo handover</button>
+            </span>
+          )}
+        </div>
+      )}
 
       {sheet.status === "Review: no-show" && (
         <div className="no-print" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 13.5 }}>
@@ -1790,6 +1844,14 @@ export default function JobSheetEditor() {
         </aside>
       )}
       </div>
+      )}
+      {handoverOpen && (
+        <HandoverDialog
+          guideId={guideId} guideName={header?.name ?? ""} date={date} slotIdx={slotIdx} tourName={tour?.name ?? sheet.tourId}
+          fee={sheet.guideFee}
+          onClose={() => setHandoverOpen(false)}
+          onDone={async (r) => { setHandoverOpen(false); setMsg(`Handed over to ${r.toGuideId}${r.toRef ? ` · ${r.toRef}` : ""}`); await load(); }}
+        />
       )}
     </div>
   );

@@ -19,6 +19,7 @@ import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
+import { handoverLock } from "@/lib/tour-handover-server";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -113,6 +114,19 @@ export async function GET(req: NextRequest) {
     ? { paymentRef: combinedDoc.paymentRef, status: documentStatus(combinedDoc.status), documentNo: combinedDoc.peakDocumentNo, documentLink: combinedDoc.peakDocumentLink, total: combinedDoc.total, jobCount: Array.isArray(combinedDoc.jobs) ? combinedDoc.jobs.length : 0 }
     : null;
 
+  // A handover on this tour (lib/tour-handover): this guide handed it over part-way, or
+  // took it over. The internal note is for operators only.
+  const handoverRow = await prisma.tourHandover.findFirst({
+    where: { date, slotIdx, revokedAt: null, OR: [{ fromGuideId: guideId }, { toGuideId: guideId }] },
+    orderBy: { createdAt: "desc" },
+  });
+  const handover = handoverRow ? await (async () => {
+    const role = handoverRow.fromGuideId === guideId ? "from" : "to";
+    const otherGuideId = role === "from" ? handoverRow.toGuideId : handoverRow.fromGuideId;
+    const other = await prisma.user.findUnique({ where: { guideId: otherGuideId }, select: { displayName: true, external: true } });
+    return { id: handoverRow.id, role, otherGuideId, otherName: other?.displayName ?? null, otherExternal: !!other?.external, time: handoverRow.handedOverAt, reason: handoverRow.reason, note: isOps ? handoverRow.note : null };
+  })() : null;
+
   // Guide advance + returns for this job — cash movements, settled against the
   // sheet's paidBy="advance" expense rows (see lib/advance). Shown to the guide too.
   const [advances, advanceReturns] = await Promise.all([
@@ -194,6 +208,8 @@ export async function GET(req: NextRequest) {
     "jobsheet.drive_saved": "Saved to Drive",
     "jobsheet.drive_saved_pdf": "PDF saved to Drive",
     "jobsheet.attendance_synced": "Attendance synced",
+    "jobsheet.handed_over": "Tour handed over to another guide",
+    "jobsheet.handover_undone": "Handover undone",
   };
   const CHECKIN_LABELS: Record<string, string> = { ARRIVE: "Guide arrived at meeting point", START: "Tour started", COMPLETE: "Tour completed" };
   const ev: { at: string; label: string; by?: string | null }[] = [];
@@ -275,7 +291,7 @@ export async function GET(req: NextRequest) {
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     if (date < todayBKK) {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, handover, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -349,7 +365,7 @@ export async function GET(req: NextRequest) {
       .map(toSheetBooking);
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, handover, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -358,7 +374,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, checkedIn, payment, combinedPayment, advance, history, jobMeta, peak,
+    header, tour, saved: false, canEdit: isOps, checkedIn, payment, combinedPayment, handover, advance, history, jobMeta, peak,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
@@ -474,6 +490,8 @@ export async function DELETE(req: NextRequest) {
   const where = { guideId, date, slotIdx };
   const locks = await paymentDocumentLocks([where]);
   if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
+  const handover = await handoverLock(date, slotIdx, guideId);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reasons: [handover], detail: handover }, { status: 409 });
 
   // Before-start-only delete (from the Job Sheet page): once the guide has checked in the
   // tour is live or done — refuse it, so a running/finished tour isn't wiped by accident.

@@ -38,6 +38,10 @@ model User {
   languages      String[]     @default([])
   qualifications String[]     @default([]) // tour ids the guide can run
   offerBlocked   Boolean      @default(false) // operator blocked this guide from receiving job offers
+  // A one-off guide an operator recorded after they stepped in for someone (a
+  // "ขาจร" guide, e.g. replacing a guide who fell sick mid-tour). No login, never
+  // offered work: kept only so the job, its payment and PEAK carry a real person.
+  external       Boolean      @default(false)
   consentAt      DateTime? // acknowledged handling customer booking data
   claimedAt      DateTime?
   createdAt      DateTime     @default(now())
@@ -594,6 +598,33 @@ model Checkin {
 
   @@index([guideId, date, slotIdx])
   @@index([date])
+}
+
+// A tour handed from one guide to another part-way through (the first guide fell
+// sick, was injured…). Both guides keep their own assignment and job sheet: the
+// guests, no-shows and end-of-tour report stay with the original guide's sheet,
+// the guide fee moves to the replacement (owner decision 2026-09-15). The row is
+// the record of who handed over to whom, when and why; it is never deleted — an
+// undo stamps revokedAt.
+model TourHandover {
+  id           String    @id @default(cuid())
+  date         String // "YYYY-MM-DD"
+  slotIdx      Int
+  tourId       String
+  fromGuideId  String
+  toGuideId    String
+  handedOverAt String // "HH:MM" Bangkok, as the operator recorded it
+  reason       String // SICK | INJURY | OTHER
+  note         String? // internal — operators only, never shown to a guide
+  fromFee      Json? // the original guide's fee before the handover, restored on undo
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  revokedAt    DateTime?
+  revokedById  String?
+
+  @@index([date, slotIdx])
+  @@index([fromGuideId])
+  @@index([toGuideId])
 }
 
 // End-of-tour report: what actually happened. Attendance (booked/arrived/left
