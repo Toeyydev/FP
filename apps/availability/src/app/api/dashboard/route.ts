@@ -112,7 +112,9 @@ async function buildDashboard() {
   //
   // These do not age out. A past tour with guests and no guide is either someone
   // owed money or a booking nobody honoured, and both need answering.
-  const pastFrom = bkk(-45);
+  // 120 days: long enough that a tour recorded late (an evening food tour whose booking
+  // came with no tour connected) is still here; older history is imported backfill.
+  const pastFrom = bkk(-120);
   const pastUnstaffed: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; daysAgo: number }[] = [];
   {
     const pastBookings = await prisma.booking.findMany({
