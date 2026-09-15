@@ -9,10 +9,9 @@ type Row = {
   productName: string | null; tourId: string | null; date: string | null; startTime: string | null;
   slotIdx: number | null; pax: number | null; customerName: string | null; status: string; guide?: string | null;
 };
-type Tour = { id: string; name: string };
+type Tour = { id: string; name: string; time?: string | null };
 
 const STATUS_LIST = ["PENDING", "OFFERED", "ASSIGNED", "CANCELLED", "IGNORED"];
-const SOURCE_LIST = ["bokun", "viator", "gyg", "klook", "manual", "direct", "agent", "referral"];
 
 function statusBadge(s: string) {
   const cls: Record<string, string> = { PENDING: "pending", OFFERED: "invited", ASSIGNED: "active", CANCELLED: "suspended", IGNORED: "muted" };
@@ -34,6 +33,11 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [source, setSource] = useState("");
+  const [tour, setTour] = useState(""); // tour id, or "none" = no tour connected
+  const [sources, setSources] = useState<string[]>([]);
+  // Filters on columns the server does not filter: applied to the loaded rows.
+  const [guest, setGuest] = useState("");
+  const [guideF, setGuideF] = useState(""); // "" all · "none" no guide · a guide name
   // Pre-set when arrived at from a deep link — the dashboard's "Record" on a past
   // unstaffed tour lands here, and the operator must not have to work out which
   // month to pick before they can see the tour they just clicked.
@@ -45,17 +49,24 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
     const p = new URLSearchParams({ view: "all" });
     if (status) p.set("status", status);
     if (source) p.set("source", source);
+    if (tour) p.set("tour", tour);
     if (month) p.set("month", month);
     if (q.trim()) p.set("q", q.trim());
     const r = await fetch(`/api/bookings?${p.toString()}`, { cache: "no-store" });
-    if (r.ok) { const d = await r.json(); setRows(d.bookings ?? []); setTours(d.tours ?? []); }
+    if (r.ok) { const d = await r.json(); setRows(d.bookings ?? []); setTours(d.tours ?? []); if (Array.isArray(d.sources)) setSources(d.sources); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, status, source, month, refreshKey]);
+  }, [q, status, source, tour, month, refreshKey]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); }, [load]);
 
   const tourName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? (id ?? "—");
+  const shown = rows.filter((r) =>
+    (!guest.trim() || (r.customerName ?? "").toLowerCase().includes(guest.trim().toLowerCase())) &&
+    (!guideF || (guideF === "none" ? !r.guide : r.guide === guideF)));
+  const guideNames = [...new Set(rows.map((r) => r.guide).filter((g): g is string => !!g))].sort();
+  const filtering = !!(status || source || tour || month || guest.trim() || guideF);
+  const clearFilters = () => { setStatus(""); setSource(""); setTour(""); setMonth(""); setGuest(""); setGuideF(""); };
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const toggleAll = () => setSel((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
+  const toggleAll = () => setSel((s) => (s.size === shown.length && shown.length > 0 ? new Set() : new Set(shown.map((r) => r.id))));
 
   // Bulk offer: group selected (mapped) bookings by tour+date+slot → one offer each.
   async function offerSelected() {
@@ -96,7 +107,7 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const head = ["Booking #", "Date", "Time", "Tour", "Guest", "Pax", "Source", "Status", "Guide"];
-    const lines = [head.join(",")].concat(rows.map((b) => [bookingRef(b.externalRef, b.confirmationCode), b.date || "", b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start ?? "" : ""), b.tourId ? tourName(b.tourId) : (b.productName || ""), b.customerName || "", b.pax ?? "", b.source, b.status, b.guide || ""].map(cell).join(",")));
+    const lines = [head.join(",")].concat(shown.map((b) => [bookingRef(b.externalRef, b.confirmationCode), b.date || "", b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start ?? "" : ""), b.tourId ? tourName(b.tourId) : (b.productName || ""), b.customerName || "", b.pax ?? "", b.source, b.status, b.guide || ""].map(cell).join(",")));
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "folkpaths-bookings.csv"; a.click();
@@ -107,18 +118,9 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
     <section className="panel">
       <div className="op-toolbar" style={{ gap: 8 }}>
         <input className="search" placeholder="Search guest, booking #, product…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select className="search" style={{ flex: "none", width: 150 }} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          {STATUS_LIST.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="search" style={{ flex: "none", width: 140 }} value={source} onChange={(e) => setSource(e.target.value)}>
-          <option value="">All sources</option>
-          {SOURCE_LIST.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <input className="search" style={{ flex: "none", width: 150 }} type="month" value={month} onChange={(e) => setMonth(e.target.value)} title="Show one month" />
-        {month && <button className="btn sm ghost" onClick={() => setMonth("")} title="Clear month filter">✕ month</button>}
+        {filtering && <button className="btn sm ghost" onClick={clearFilters} title="Clear every column filter">✕ Clear filters</button>}
         <button className="btn sm" onClick={exportCsv}>↓ Export CSV</button>
-        <span style={{ fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{rows.length} bookings</span>
+        <span style={{ fontSize: 12.5, color: "var(--ink-soft)", fontWeight: 600 }}>{shown.length} booking{shown.length === 1 ? "" : "s"}</span>
       </div>
       {(sel.size > 0 || msg) && (
         <div className="bulkbar">
@@ -143,18 +145,52 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
         <table className="acct-table">
           <thead>
             <tr>
-              <th style={{ width: 30 }}><input type="checkbox" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
+              <th style={{ width: 30 }}><input type="checkbox" checked={shown.length > 0 && sel.size === shown.length} onChange={toggleAll} /></th>
               <th>Booking&nbsp;#</th><th>Date</th><th>Tour</th><th>Guest</th><th>Pax</th><th>Source</th><th>Status</th><th>Guide</th></tr>
+            {/* A filter under each column (the operator asked to filter right here). */}
+            <tr className="bk-filter-row">
+              <th />
+              <th />
+              <th><input className="search bk-filter" style={{ minWidth: 140 }} type="month" value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Filter by month" title="Show one month" /></th>
+              <th>
+                <select className="search bk-filter" value={tour} onChange={(e) => setTour(e.target.value)} aria-label="Filter by tour" title="Filter by tour">
+                  <option value="">All tours</option>
+                  <option value="none">⚠ No tour connected</option>
+                  {tours.map((t) => <option key={t.id} value={t.id}>{t.id} · {t.name}{t.time ? ` · ${t.time}` : ""}</option>)}
+                </select>
+              </th>
+              <th><input className="search bk-filter" value={guest} onChange={(e) => setGuest(e.target.value)} placeholder="Guest…" aria-label="Filter by guest" /></th>
+              <th />
+              <th>
+                <select className="search bk-filter" value={source} onChange={(e) => setSource(e.target.value)} aria-label="Filter by source">
+                  <option value="">All</option>
+                  {sources.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </th>
+              <th>
+                <select className="search bk-filter" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status">
+                  <option value="">All</option>
+                  {STATUS_LIST.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </th>
+              <th>
+                <select className="search bk-filter" value={guideF} onChange={(e) => setGuideF(e.target.value)} aria-label="Filter by guide">
+                  <option value="">All</option>
+                  <option value="none">No guide</option>
+                  {guideNames.map((g) => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </th>
+            </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {shown.length === 0 ? (
               <tr><td colSpan={9} className="op-empty">No bookings match.</td></tr>
-            ) : rows.map((b) => (
+            ) : shown.map((b) => (
               <tr key={b.id} onClick={() => onOpen?.(b.id)} style={{ cursor: onOpen ? "pointer" : "default" }} className={sel.has(b.id) ? "sel" : ""}>
                 <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}><input type="checkbox" checked={sel.has(b.id)} onChange={() => toggle(b.id)} /></td>
                 <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{b.date ?? "—"}{(b.startTime || (b.slotIdx != null ? SLOTS[b.slotIdx]?.start : "")) ? <span style={{ color: "var(--ink-soft)" }}> · {b.startTime || SLOTS[b.slotIdx!]?.start}</span> : ""}</td>
-                <td>{b.tourId ? tourName(b.tourId) : <span style={{ color: "var(--ink-soft)" }}>{b.productName ?? "unmapped"}</span>}</td>
+                <td>{b.tourId ? tourName(b.tourId) : <span style={{ color: "var(--danger)" }} title="No tour connected — open the booking to choose its tour">⚠ No tour{b.productName ? ` (${b.productName})` : ""}</span>}</td>
                 <td>{b.customerName ?? "—"}</td>
                 <td>{b.pax ?? "—"}</td>
                 <td><span className="badge muted">{b.source}</span></td>

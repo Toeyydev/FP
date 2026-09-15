@@ -1396,3 +1396,7 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .hb-row .fl{min-width:150px;font-size:12px;color:var(--ink-soft)}
 .hb-warn{font-size:12px;font-weight:700;color:var(--danger);background:var(--danger-bg);
   border-radius:6px;padding:6px 10px}
+/* All bookings: a compact filter under each column header. */
+.acct-table .bk-filter-row th{padding:4px 6px 8px;text-transform:none;letter-spacing:0;font-weight:400}
+.acct-table .bk-filter{width:100%;min-width:90px;height:30px;padding:3px 8px;font-size:12.5px;box-sizing:border-box}
+

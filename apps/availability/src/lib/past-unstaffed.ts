@@ -7,7 +7,9 @@
 //
 // Pure: the route (api/assignments/past) loads the rows.
 
-export type DayBooking = { id: string; slotIdx: number; tourId: string; pax: number | null; ref: string; source: string; status: string;
+export type DayBooking = { id: string; slotIdx: number;
+  /** Empty when no tour is connected yet (a channel sent no product name). */
+  tourId: string; pax: number | null; ref: string; source: string; status: string;
   /** Every number the booking is known by (a Viator booking has two); defaults to ref. */
   keys?: string[] };
 export type DayAssignment = { guideId: string; slotIdx: number; tourId?: string | null };
@@ -18,6 +20,8 @@ export type PastSlot = {
   tourIds: string[];
   pax: number;
   bookings: { id: string; ref: string; pax: number | null; source: string; status: string }[];
+  /** Bookings on this slot with no tour connected — the tour must be chosen before recording. */
+  unmappedIds: string[];
   /** Guides already recorded on this slot. Empty = ran with no guide. */
   staffedBy: string[];
   /** These guests already appear on another guide's job sheet that day — usually the
@@ -49,12 +53,35 @@ export function pastDaySlots(input: { bookings: DayBooking[]; assignments: DayAs
       return {
         slotIdx,
         tourIds: [...new Set([...bks.map((b) => b.tourId), ...(bks.length ? [] : input.assignments.filter((a) => a.slotIdx === slotIdx).map((a) => a.tourId ?? ""))].filter(Boolean))],
+        unmappedIds: bks.filter((b) => !b.tourId).map((b) => b.id),
         pax: bks.reduce((t, b) => t + (b.pax ?? 0), 0),
         bookings: bks.map(({ id, ref, pax, source, status }) => ({ id, ref, pax, source, status })),
         staffedBy,
         onSheets,
       };
     });
+}
+
+/**
+ * A tour's start as "HH:MM" from the catalogue's time label ("18.30 PM", "01.30 PM",
+ * "08.30 AM", "14:00"), or null. Used only to SUGGEST the tour for a booking that came
+ * with no product name — the operator still chooses.
+ */
+export function tourStartTime(label: string | null | undefined): string | null {
+  const m = (label ?? "").trim().match(/^(\d{1,2})[.:](\d{2})\s*(AM|PM)?$/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const ap = (m[3] ?? "").toUpperCase();
+  if (ap === "PM" && h < 12) h += 12;
+  if (ap === "AM" && h === 12) h = 0;
+  if (h > 23 || Number(m[2]) > 59) return null;
+  return `${String(h).padStart(2, "0")}:${m[2]}`;
+}
+
+/** The one tour that starts at this time, or null when none or several do. */
+export function suggestTourFor(slotTime: string, tours: { id: string; time: string | null }[]): string | null {
+  const hits = tours.filter((t) => tourStartTime(t.time) === slotTime);
+  return hits.length === 1 ? hits[0].id : null;
 }
 
 /** Past unstaffed tours grouped by day, newest day first — one row per day on the dashboard. */
