@@ -8,6 +8,7 @@ import { productKey, isChannelProductName } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
 import { withTimeout } from "@/lib/api-cache";
+import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -224,6 +225,22 @@ export async function POST(req: NextRequest) {
     await prisma.booking.deleteMany({ where: { id: { in: ids } } });
     await audit({ actorId, actorRole, action: "booking.deleted", entityType: "Booking", detail: { count: ids.length } });
     return NextResponse.json({ ok: true });
+  }
+
+  // A tour that already ran with nobody on it and did not really happen (nobody came,
+  // or the guests were taken elsewhere): close its bookings so it stops asking for a
+  // guide. Past dates only, never a booking a guide is tagged to. Kept, not deleted.
+  if (action === "closePast") {
+    const parsed = z.object({ ids: z.array(z.string().min(1)).min(1).max(50) }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const today = ymd(todayD());
+    const r = await prisma.booking.updateMany({
+      where: { id: { in: parsed.data.ids }, date: { lt: today }, status: { in: ["PENDING", "OFFERED"] }, assignedGuideId: null },
+      data: { status: "IGNORED" },
+    });
+    await audit({ actorId, actorRole, action: "booking.closed_unstaffed", entityType: "Booking", detail: { ids: parsed.data.ids, closed: r.count } });
+    forgetCached(DASHBOARD_CACHE_KEY);
+    return NextResponse.json({ ok: true, closed: r.count });
   }
 
   // Mark a set of bookings as offered (after the operator sent the job offer).

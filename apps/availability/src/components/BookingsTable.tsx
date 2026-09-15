@@ -22,7 +22,13 @@ function statusBadge(s: string) {
 
 // Full Bookings table — the operational source of truth (all sources, all
 // statuses, searchable + filterable). Read-only list for now (slice 1).
-export default function BookingsTable({ onOpen, initialMonth = "" }: { onOpen?: (id: string) => void; initialMonth?: string }) {
+export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast, refreshKey = 0 }: {
+  onOpen?: (id: string) => void; initialMonth?: string;
+  /** "Record who guided…" for the day of the selected past bookings. */
+  onRecordPast?: (date: string) => void;
+  /** Bump to reload after something outside the table changed the bookings. */
+  refreshKey?: number;
+}) {
   const [rows, setRows] = useState<Row[]>([]);
   const [tours, setTours] = useState<Tour[]>([]);
   const [q, setQ] = useState("");
@@ -43,7 +49,8 @@ export default function BookingsTable({ onOpen, initialMonth = "" }: { onOpen?: 
     if (q.trim()) p.set("q", q.trim());
     const r = await fetch(`/api/bookings?${p.toString()}`, { cache: "no-store" });
     if (r.ok) { const d = await r.json(); setRows(d.bookings ?? []); setTours(d.tours ?? []); }
-  }, [q, status, source, month]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, status, source, month, refreshKey]);
   useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); }, [load]);
 
   const tourName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? (id ?? "—");
@@ -71,7 +78,7 @@ export default function BookingsTable({ onOpen, initialMonth = "" }: { onOpen?: 
     }
     setSel(new Set());
     setMsg(past.length
-      ? `${past.join(", ")} already happened — no offer sent. Record the guide on the board instead.`
+      ? `${past.join(", ")} already happened — no offer sent. Select that day\u2019s bookings on their own and use Record who guided.`
       : `Created ${made} offer(s) from ${chosen.length} booking(s).`);
     await load();
   }
@@ -116,7 +123,17 @@ export default function BookingsTable({ onOpen, initialMonth = "" }: { onOpen?: 
       {(sel.size > 0 || msg) && (
         <div className="bulkbar">
           {sel.size > 0 ? <><b>{sel.size} selected</b>
-            <button className="btn sm primary" onClick={offerSelected}>Offer selected</button>
+            {(() => {
+              // Tours that already ran cannot be offered; record who guided them instead.
+              const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+              const chosen = rows.filter((r) => sel.has(r.id));
+              const days = [...new Set(chosen.map((r) => r.date ?? ""))];
+              const allPast = chosen.length > 0 && chosen.every((r) => r.date && r.date < today);
+              if (!onRecordPast || !allPast) return <button className="btn sm primary" onClick={offerSelected}>Offer selected</button>;
+              return days.length === 1
+                ? <button className="btn sm primary" onClick={() => onRecordPast(days[0])} title="These tours already ran — record which guide ran them">Record who guided…</button>
+                : <button className="btn sm primary" disabled title="Select bookings from one day">Record who guided… (one day at a time)</button>;
+            })()}
             <button className="btn sm danger" onClick={deleteSelected}>🗑 Delete</button>
             <button className="btn sm ghost" onClick={() => setSel(new Set())}>Clear</button></> : null}
           {msg && <span style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--green)", fontWeight: 600 }}>{msg}</span>}
