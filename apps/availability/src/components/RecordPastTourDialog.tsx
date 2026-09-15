@@ -57,10 +57,10 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
     setBusy(s.slotIdx); setFailed((f) => ({ ...f, [s.slotIdx]: "" }));
     const note = `Recorded after the tour: ${s.bookings.map((b) => b.ref).join(", ")}`.slice(0, 280);
     try {
-      const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx: s.slotIdx, tourId: s.tours[0]?.id, pax: s.pax > 0 && s.pax <= 50 ? s.pax : undefined, note }) });
+      const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx: s.slotIdx, tourId: s.tours[0]?.id, pax: s.pax > 0 && s.pax <= 50 ? s.pax : undefined, note, direct: true }) });
       const d = await r.json().catch(() => ({}));
-      if (r.ok && d.recorded) setDone((x) => ({ ...x, [s.slotIdx]: { kind: "recorded", guideId, name: guides.find((g) => g.guideId === guideId)?.name ?? guideId } }));
-      else setFailed((f) => ({ ...f, [s.slotIdx]: d.error === "operators only" ? "Operator only" : `Not recorded (${d.error ?? r.status})` }));
+      if (r.ok && (d.recorded || d.assigned)) setDone((x) => ({ ...x, [s.slotIdx]: { kind: "recorded", guideId, name: guides.find((g) => g.guideId === guideId)?.name ?? guideId } }));
+      else setFailed((f) => ({ ...f, [s.slotIdx]: d.error === "operators only" ? "Operator only" : Array.isArray(d.reasons) && d.reasons.length ? d.reasons.join(" · ") : `Not recorded (${d.error ?? r.status})` }));
     } catch { setFailed((f) => ({ ...f, [s.slotIdx]: "The connection dropped — reopen this day to see whether it was recorded" })); }
     setBusy(null);
   }

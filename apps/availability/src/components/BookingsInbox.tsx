@@ -40,7 +40,7 @@ export default function BookingsInbox() {
   // the dashboard's "Record" on an unstaffed past tour is — landed on a list that
   // could never contain it. It looked like the button did nothing.
   const [monthFilter, setMonthFilter] = useState(""); // YYYY-MM filter for the inbox
-  const [guides, setGuides] = useState<{ guideId: string; displayName: string; online: boolean; languages: string }[]>([]);
+  const [guides, setGuides] = useState<{ guideId: string; displayName: string; online: boolean; languages: string; external: boolean }[]>([]);
   const [grpGuide, setGrpGuide] = useState<Record<string, string>>({});
   const [availMap, setAvailMap] = useState<Record<string, string[]>>({}); // "date|slot" -> available guideIds
   const [openDates, setOpenDates] = useState<Record<string, boolean>>({});
@@ -69,8 +69,8 @@ export default function BookingsInbox() {
   // then more tours (the API already returns guides ordered by tour count).
   useEffect(() => {
     fetch("/api/guides", { cache: "no-store" }).then((r) => r.json()).then((d) => {
-      const rows = (d.rows ?? []) as { guideId: string; name: string; lastSeenAt: string | null; languages: string | string[] }[];
-      const list = rows.map((g) => ({ guideId: g.guideId, displayName: g.name, online: isOnline(g.lastSeenAt), languages: Array.isArray(g.languages) ? g.languages.join(", ") : (g.languages ?? "") }));
+      const rows = (d.rows ?? []) as { guideId: string; name: string; lastSeenAt: string | null; languages: string | string[]; external?: boolean }[];
+      const list = rows.map((g) => ({ guideId: g.guideId, displayName: g.name, online: isOnline(g.lastSeenAt), languages: Array.isArray(g.languages) ? g.languages.join(", ") : (g.languages ?? ""), external: !!g.external }));
       list.sort((a, b) => Number(b.online) - Number(a.online));
       setGuides(list);
     }).catch(() => {});
@@ -153,18 +153,20 @@ export default function BookingsInbox() {
     else setMsg("Delete failed.");
   }
 
-  // Send a group to a chosen guide as a 2-hour job offer. They must accept; if
-  // they don't, it returns to the operator to reassign (no instant booking).
+  // Put the chosen guide on this tour DIRECTLY — no offer to accept. For a job agreed
+  // by phone, or when the guide's Accept on LINE is not reaching FolkOPS. The server
+  // still refuses a clash, leave, a blocked day or a slot someone already has.
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
-    if ((pax ?? 0) > CAP && !confirm(`${pax} pax is over the ${CAP}-pax cap.\nAssign all of them to ${guideId} anyway?`)) return;
+    const g = guides.find((x) => x.guideId === guideId);
+    if (!confirm(`Assign ${guideId}${g ? ` ${g.displayName}` : ""} to ${SLOTS[slotIdx]?.start ?? ""} on ${date} directly?\n\nNo offer is sent to accept — use this when the guide has already agreed. They get the tour in their schedule.${(pax ?? 0) > CAP ? `\n\n${pax} pax is over the ${CAP}-pax cap.` : ""}`)) return;
     const note = `${items.length} booking(s): ${items.map((b) => bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—").join(", ")}`.slice(0, 280);
-    const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note }) });
+    const r = await fetch("/api/assignments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date, slotIdx, tourId, pax: pax && pax <= 50 ? pax : undefined, note, direct: true }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { setMsg(d.error === "date-blocked" ? "That day is blocked." : d.error === "guide-unavailable" ? "That guide can't take this slot." : "Assign failed."); return; }
-    await post({ action: "markOffered", ids: items.map((b) => b.id) });
-    setMsg(`📨 Sent to ${guideId} — awaiting acceptance (2h).`);
+    if (!r.ok) { setMsg(Array.isArray(d.reasons) && d.reasons.length ? `Not assigned: ${d.reasons.join(" · ")}` : "Assign failed."); return; }
+    setMsg(`✓ Assigned ${guideId}${g ? ` · ${g.displayName}` : ""} — ${SLOTS[slotIdx]?.start ?? ""} ${date}.`);
+    setGrpGuide((x) => { const n = { ...x }; delete n[key]; return n; });
     await load();
   }
 
@@ -455,12 +457,18 @@ export default function BookingsInbox() {
                                 <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
                                 <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
                                   <option value="">Offer to all available</option>
-                                  {guides.filter((g) => !availMap[key] || availMap[key].includes(g.guideId)).map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}</option>)}
+                                  {/* Every guide can be named: free ones first, the rest marked, so a
+                                      guide agreed by phone is never missing from the list. */}
+                                  {(() => {
+                                    const free = (g: { guideId: string }) => !availMap[key] || availMap[key].includes(g.guideId);
+                                    const list = guides.filter((g) => !g.external);
+                                    return [...list.filter(free), ...list.filter((g) => !free(g))].map((g) => <option key={g.guideId} value={g.guideId}>{g.online ? "🟢" : "⚪"} {g.guideId} · {g.displayName}{free(g) ? "" : " — not marked free"}</option>);
+                                  })()}
                                 </select>
                                 {grpGuide[key]
                                   ? <>
                                       <button className="btn sm primary" onClick={() => offerGroup(key, items, grpGuide[key])}>📨 Offer to guide</button>
-                                      <button className="btn sm" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > CAP ? "Assign all (over cap)" : "Assign now"}</button>
+                                      <button className="btn sm" title="Put this guide on the tour now, without an offer to accept — for a job already agreed by phone or LINE" onClick={() => assignGroup(key, items, grpGuide[key])}>{pax > CAP ? "Assign directly (over cap)" : "Assign directly"}</button>
                                     </>
                                   : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
                                 {pax > CAP && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}

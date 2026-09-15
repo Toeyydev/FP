@@ -19,7 +19,12 @@ export async function GET(req: NextRequest) {
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const date = req.nextUrl.searchParams.get("date") ?? "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return NextResponse.json({ error: "bad-date" }, { status: 400 });
-  if (date >= bkkToday()) return NextResponse.json({ error: "not-past", hint: "This tour has not run yet — offer it from the Bookings inbox" }, { status: 400 });
+  const today = bkkToday();
+  if (date > today) return NextResponse.json({ error: "not-past", hint: "This tour has not run yet — offer it from the Bookings inbox" }, { status: 400 });
+  // Today: only tours whose start time has passed. The Inbox stops listing those, so
+  // this is the one place their guide can still be named.
+  const nowMin = (() => { const d = new Date(Date.now() + 7 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes(); })();
+  const started = (slotIdx: number) => { const [h, m] = (SLOT_TIMES[slotIdx] ?? "00:00").split(":").map(Number); return date < today || h * 60 + m <= nowMin; };
 
   const [bookings, assignments, sheets, tours, guides] = await Promise.all([
     prisma.booking.findMany({
@@ -41,7 +46,7 @@ export async function GET(req: NextRequest) {
   const tourName = new Map(tours.map((t) => [t.id, t.name]));
   return NextResponse.json({
     date,
-    slots: slots.map((s) => ({
+    slots: slots.filter((s) => started(s.slotIdx)).map((s) => ({
       ...s,
       time: SLOT_TIMES[s.slotIdx] ?? "",
       tours: s.tourIds.map((id) => ({ id, name: tourName.get(id) ?? id })),

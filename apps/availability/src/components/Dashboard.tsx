@@ -348,15 +348,24 @@ export default function Dashboard() {
                     <span className="att-go">Fix →</span>
                   </a>
                 ))}
-                {groupByDate(d.unassigned, "asc").map((g) => (
-                  <a key={`u${g.date}`} className="att-row" href={`/bookings?date=${g.date}`} title="Open Bookings to dispatch this day's tours">
-                    <span className="att-dot" style={{ background: "var(--assign)" }} />
-                    <span><b>{dShort(g.date)}</b>{g.items.length > 1 ? ` · ${g.items.length} tours need a guide` : ""}
-                      {g.items.map((u, i) => <div key={i} className="dr-sub">{u.time} · {u.tour} · {u.pax} pax · needs {u.need}</div>)}
-                    </span>
-                    <span className="att-go">Assign →</span>
-                  </a>
-                ))}
+                {groupByDate(d.unassigned, "asc").map((g) => {
+                  // Today's tours whose start time has passed drop out of the Inbox: name
+                  // their guide here instead (the same dialog as a past day).
+                  const nowMin = (() => { const x = new Date(Date.now() + 7 * 3600 * 1000); return x.getUTCHours() * 60 + x.getUTCMinutes(); })();
+                  const startedToday = g.date === d.today && g.items.some((u) => { const [h, m] = u.time.split(":").map(Number); return h * 60 + m <= nowMin; });
+                  const body = (
+                    <>
+                      <span className="att-dot" style={{ background: "var(--assign)" }} />
+                      <span><b>{dShort(g.date)}</b>{g.items.length > 1 ? ` · ${g.items.length} tours need a guide` : ""}
+                        {g.items.map((u, i) => <div key={i} className="dr-sub">{u.time} · {u.tour} · {u.pax} pax · needs {u.need}</div>)}
+                      </span>
+                      <span className="att-go">{startedToday ? "Record →" : "Assign →"}</span>
+                    </>
+                  );
+                  return startedToday
+                    ? <button key={`u${g.date}`} type="button" className="att-row" onClick={() => setRecordDay(g.date)} style={{ width: "100%", textAlign: "left", font: "inherit", cursor: "pointer", border: 0, background: "none" }} title="These tours have started with no guide — name who is guiding them">{body}</button>
+                    : <a key={`u${g.date}`} className="att-row" href={`/bookings?date=${g.date}`} title="Open Bookings to dispatch this day's tours">{body}</a>;
+                })}
               </div>
             </section>
 
