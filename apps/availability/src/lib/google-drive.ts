@@ -150,3 +150,27 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
   return { id: j.id as string, link: (j.webViewLink as string) ?? `https://drive.google.com/file/d/${j.id}/view` };
 }
+
+/** The Drive file id inside a link this app stored ("…/file/d/<id>/view", "…?id=<id>"). */
+export function driveFileIdOf(link: string | null | undefined): string | null {
+  const m = (link ?? "").match(/\/(?:file\/)?d\/([A-Za-z0-9_-]{10,})/) ?? (link ?? "").match(/[?&]id=([A-Za-z0-9_-]{10,})/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Read back a file this app saved to Drive (drive.file scope sees only those), as base64.
+ * Null when the link is not a Drive file, the token cannot be refreshed, or Drive refuses.
+ */
+export async function downloadDriveFile(refreshToken: string, link: string): Promise<{ base64: string; mime: string; name: string } | null> {
+  const id = driveFileIdOf(link);
+  if (!id) return null;
+  const token = await googleAccessToken(refreshToken);
+  if (!token) return null;
+  const meta = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=mimeType,name`, { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+  if (!meta?.ok) return null;
+  const m = (await meta.json().catch(() => ({}))) as { mimeType?: string; name?: string };
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+  if (!r?.ok) return null;
+  const buf = Buffer.from(await r.arrayBuffer());
+  return { base64: buf.toString("base64"), mime: m.mimeType || "application/octet-stream", name: m.name || id };
+}

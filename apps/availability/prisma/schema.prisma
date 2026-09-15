@@ -691,6 +691,10 @@ model GuidePaymentDocument {
   jobs              Json // [{ date, slotIdx, ref, payout }] exactly as claimed
   lines             Json // the line trace exactly as posted (job, kind, category, account, amount, wht)
   total             Float // net due — the amount the transfer must be
+  // Jobs that were ALREADY PAID (a transfer made before any PEAK document existed) put
+  // into one PEAK document afterwards. Recording the payment then only adds the EXP to
+  // the jobs; voiding releases the EXP and never makes a paid job unpaid again.
+  alreadyPaid       Boolean   @default(false)
   // Stage 1 — the expense document (lib/peak-payment-document):
   //   CREATING          claimed, PEAK not yet answered
   //   CREATE_UNCERTAIN  PEAK did not answer — the document may exist; jobs stay locked until a person checks PEAK
