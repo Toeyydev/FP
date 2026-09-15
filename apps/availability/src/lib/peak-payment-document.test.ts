@@ -515,6 +515,17 @@ describe("peakPaymentPlan — pay only what PEAK and FolkOPS agree on", () => {
     expect((other as { reasons: string[] }).reasons.join(" ")).toContain("different document than the EXP-TEST-0042 FolkOPS created");
     expect(withId(null).ok).toBe(false);
   });
+  it("PEAK owes the gross with no withholding open yet, but the document carries exactly the withholding → pay the net, name the withholding", () => {
+    const paysNetWithWht = { ok: true, plan: { amount: 4169, withholdingTaxAmount: 126 } };
+    expect(plan({ remainWhtAmount: 0, whtAmount: 126 })).toEqual(paysNetWithWht);
+    expect(plan({ remainWhtAmount: null, whtAmount: null, lineWhtAmount: 126 })).toEqual(paysNetWithWht);
+  });
+  it("…but not when the document's withholding differs from FolkOPS's, or PEAK does not say what it is", () => {
+    expect(plan({ remainWhtAmount: 0, whtAmount: 90, lineWhtAmount: 90 }).ok).toBe(false);
+    const r = plan({ remainWhtAmount: 0, whtAmount: null, lineWhtAmount: null });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join(" ")).toContain("PEAK shows ฿4,295.00 outstanding on EXP-TEST-0042 (withholding on the document not given, on its lines not given, still open ฿0.00)");
+  });
   it("PEAK holds no withholding and owes the net → pay the net", () => {
     expect(plan({ remainAmount: 4169, remainWhtAmount: 0 })).toEqual({ ok: true, plan: { amount: 4169, withholdingTaxAmount: null } });
   });
@@ -530,7 +541,7 @@ describe("peakPaymentPlan — pay only what PEAK and FolkOPS agree on", () => {
   it("refuses any outstanding amount that does not reconcile exactly, naming both figures", () => {
     const r = plan({ remainAmount: 4200, remainWhtAmount: 126 });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reasons.join(" ")).toContain("PEAK shows ฿4,200.00 outstanding with ฿126.00 withholding");
+    if (!r.ok) expect(r.reasons.join(" ")).toContain("PEAK shows ฿4,200.00 outstanding on EXP-TEST-0042 (withholding on the document not given, on its lines not given, still open ฿126.00)");
     const missing = plan({ remainAmount: null });
     expect(missing.ok).toBe(false);
   });

@@ -480,6 +480,9 @@ export type PeakExpenseView = {
   paymentAmount: number | null;
   remainAmount: number | null;
   remainWhtAmount: number | null;
+  /** The withholding on the document, and summed from its lines (lib/peak-api). */
+  whtAmount?: number | null;
+  lineWhtAmount?: number | null;
   payments: number;
 };
 
@@ -493,10 +496,15 @@ const near = (a: number | null, b: number) => a != null && Math.abs(a - b) < 0.0
  * any payment is sent, naming what PEAK showed, so a person can look.
  *
  * PEAK's documentation does not say how withholding tax is carried when an expense with
- * withholding on its lines is paid. So this accepts only the two readings that
- * reconcile exactly with the document and are unambiguous:
+ * withholding on its lines is paid. So this accepts only the readings that reconcile
+ * exactly with the document and are unambiguous:
  *   - PEAK still owes the gross and holds the withholding apart → pay the net and name
  *     that withholding;
+ *   - PEAK owes the gross, reports no withholding still open, but the document itself
+ *     carries exactly this withholding (on the document or summed from its lines) →
+ *     pay the net and name that withholding. This is what PEAK returned for an unpaid
+ *     combined document in production (2026-09-15): the withholding is only "open"
+ *     once a payment names it;
  *   - PEAK holds no withholding and owes the net → pay the net.
  * Anything else is refused. After the payment, the document is PAID only if PEAK then
  * reports nothing outstanding (classifyPaymentWrite).
@@ -524,8 +532,12 @@ export function peakPaymentPlan(input: {
   let plan: PaymentPlan | null = null;
   if (e.remainAmount == null) reasons.push(`PEAK did not say how much is outstanding on ${documentNo}`);
   else if (wht > 0 && near(e.remainWhtAmount, wht) && near(e.remainAmount, gross)) plan = { amount: round2(net), withholdingTaxAmount: round2(wht) };
+  else if (wht > 0 && (e.remainWhtAmount ?? 0) <= 0.005 && near(e.remainAmount, gross) && (near(e.whtAmount ?? null, wht) || near(e.lineWhtAmount ?? null, wht))) plan = { amount: round2(net), withholdingTaxAmount: round2(wht) };
   else if ((e.remainWhtAmount ?? 0) <= 0.005 && near(e.remainAmount, net)) plan = { amount: round2(net), withholdingTaxAmount: null };
-  else reasons.push(`PEAK shows ${thb(e.remainAmount)} outstanding${e.remainWhtAmount ? ` with ${thb(e.remainWhtAmount)} withholding` : ""} on ${documentNo}; FolkOPS expects ${thb(net)} to pay${wht > 0 ? ` after ${thb(wht)} withholding (gross ${thb(gross)})` : ""} — check the document in PEAK`);
+  else {
+    const fig = (v: number | null | undefined) => (v == null ? "not given" : thb(v));
+    reasons.push(`PEAK shows ${thb(e.remainAmount)} outstanding on ${documentNo} (withholding on the document ${fig(e.whtAmount)}, on its lines ${fig(e.lineWhtAmount)}, still open ${fig(e.remainWhtAmount)}); FolkOPS expects ${thb(net)} to pay${wht > 0 ? ` after ${thb(wht)} withholding (gross ${thb(gross)})` : ""} — check the document in PEAK`);
+  }
   if (reasons.length || !plan) return { ok: false, reasons };
   return { ok: true, plan };
 }

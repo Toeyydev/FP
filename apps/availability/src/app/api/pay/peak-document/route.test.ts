@@ -283,6 +283,16 @@ describe("stage 2 — POST /api/pay/peak-document/pay records the payment agains
     expect(sendPaymentNotice).toHaveBeenCalledTimes(1);
   });
 
+  it("pays when PEAK owes the gross with no withholding open yet but the document carries it — the layout PEAK returned in production", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue(peakExpense({ remainAmount: 4295, remainWhtAmount: 0, whtAmount: 126, lineWhtAmount: 126 }));
+    const res = await payDoc();
+    expect(res.status).toBe(200);
+    expect(peak.pay.mock.calls[0][0]).toMatchObject({ documentId: "peak-doc-42", amount: 4169, withholdingTaxAmount: 126 });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PAID");
+    expect(peak.create).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses to pay before a document exists", async () => {
     const res = await payDoc();
     expect(res.status).toBe(404);

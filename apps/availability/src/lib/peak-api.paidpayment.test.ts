@@ -15,8 +15,15 @@ describe("parsePeakExpense (GET /api/v1/Expenses?code=…)", () => {
     }]));
     expect(r).toEqual({ expense: {
       id: "doc-1", code: "EXP-TEST-0042", reference: "FOLK-PAY-203005-01", contactId: "contact-a", status: "Approve", statusId: 3, isVoid: false,
-      netAmount: 4295, whtAmount: 126, paymentAmount: 0, remainAmount: 4295, remainWhtAmount: 126, documentLink: "https://docs.example/?e=1", payments: 0,
+      netAmount: 4295, whtAmount: 126, paymentAmount: 0, remainAmount: 4295, remainWhtAmount: 126, lineWhtAmount: null, documentLink: "https://docs.example/?e=1", payments: 0,
     } });
+  });
+
+  it("sums the withholding PEAK holds on the lines (strings), and gives up on anything that is not an amount", () => {
+    const withLines = (products: unknown[]) => parsePeakExpense(reply([{ code: "EXP-TEST-0042", products }]));
+    expect(withLines([{ withHoldingTaxAmount: "36.00" }, { withHoldingTaxAmount: "" }, { withHoldingTaxAmount: "54" }, {}])).toMatchObject({ expense: { lineWhtAmount: 90 } });
+    expect(withLines([{ withHoldingTaxAmount: "1,234.50" }])).toMatchObject({ expense: { lineWhtAmount: 1234.5 } });
+    expect(withLines([{ withHoldingTaxAmount: "3%" }])).toMatchObject({ expense: { lineWhtAmount: null } });
   });
 
   it("two documents behind one lookup is an error, never 'the first one' — PEAK can reuse a voided document's number", () => {
