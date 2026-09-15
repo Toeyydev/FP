@@ -95,3 +95,94 @@ describe("GET /api/payments — a job's EXP is its own, never a neighbour's", ()
     expect(jobPeakDocumentNo(jobB.peakStatus)).toBe(EXP_B);
   });
 });
+
+// A month after two false "paid" marks were undone: one job is back to pending with no EXP
+// while its neighbour keeps its own; another was left out of the combined document made
+// while it looked paid, and one job in that document now has an intentional ฿0 fee.
+describe("GET /api/payments — after undoing false paid marks", () => {
+  const P = "2020-04";
+  const fee = (price: number) => ({ price, time: 1, whtPct: price ? 3 : 0 });
+  const job = (date: string, slotIdx: number, ref: string, expenses: object[], guideFee: object) => ({
+    guideId: GUIDE, date, slotIdx, tourId: "T-TEST", ref, createdAt: new Date(`${date}T20:00:00Z`), origin: "NORMAL",
+    expenses, guideFee, peakDocumentNo: null, peakDocumentId: null, peakSyncStatus: null, approvalStatus: "APPROVED",
+  });
+  const guide = (d: string) => ({ description: d, price: 10, pax: 4, paidBy: "guide" });
+  const sheetsApr = [
+    job(`${P}-01`, 2, "FOLK-TEST-A", [guide("Water"), { description: "Bus", price: 15, pax: 4, paidBy: "guide" }], fee(1200)),
+    job(`${P}-01`, 7, "FOLK-TEST-B", [{ description: "Food", price: 600, pax: 1, paidBy: "advance" }, { description: "Review reward", price: 40, pax: 1 }], fee(1100)),
+    job(`${P}-03`, 7, "FOLK-TEST-C", [{ description: "Food", price: 500, pax: 1, paidBy: "guide" }], fee(1000)),
+    job(`${P}-05`, 0, "FOLK-TEST-E", [{ description: "Water", price: 10, pax: 3, paidBy: "guide" }, { description: "Bus", price: 20, pax: 3, paidBy: "guide" }], fee(1200)),
+    job(`${P}-05`, 3, "FOLK-TEST-D", [{ description: "Water", price: 10, pax: 1, paidBy: "guide" }, { description: "Review reward", price: 30, pax: 2 }], fee(0)),
+  ];
+  const DOC = "FOLK-PAY-TEST-01";
+  const pending = (date: string, slotIdx: number, peakPaymentRef: string | null) => ({ guideId: GUIDE, date, slotIdx, status: "PENDING", paidAt: null, peakRef: null, eslipUrl: null, slips: null, peakPaymentRef });
+  const doc = {
+    paymentRef: DOC, guideId: GUIDE, status: "AWAITING_PAYMENT", alreadyPaid: false, error: null, total: 4471,
+    jobs: [
+      { ref: "FOLK-TEST-A", date: `${P}-01`, slotIdx: 2, payout: 1264 }, { ref: "FOLK-TEST-B", date: `${P}-01`, slotIdx: 7, payout: 1107 },
+      { ref: "FOLK-TEST-E", date: `${P}-05`, slotIdx: 0, payout: 1254 }, { ref: "FOLK-TEST-D", date: `${P}-05`, slotIdx: 3, payout: 846 },
+    ],
+    lines: [
+      { jobRef: "FOLK-TEST-A", date: `${P}-01`, slotIdx: 2, price: 1200, wht: 36 }, { jobRef: "FOLK-TEST-A", date: `${P}-01`, slotIdx: 2, price: 100, wht: 0 },
+      { jobRef: "FOLK-TEST-B", date: `${P}-01`, slotIdx: 7, price: 1100, wht: 33 }, { jobRef: "FOLK-TEST-B", date: `${P}-01`, slotIdx: 7, price: 40, wht: 0 },
+      { jobRef: "FOLK-TEST-E", date: `${P}-05`, slotIdx: 0, price: 1200, wht: 36 }, { jobRef: "FOLK-TEST-E", date: `${P}-05`, slotIdx: 0, price: 90, wht: 0 },
+      // Job D as the document was made: its old ฿800 fee.
+      { jobRef: "FOLK-TEST-D", date: `${P}-05`, slotIdx: 3, price: 800, wht: 24 }, { jobRef: "FOLK-TEST-D", date: `${P}-05`, slotIdx: 3, price: 10, wht: 0 }, { jobRef: "FOLK-TEST-D", date: `${P}-05`, slotIdx: 3, price: 60, wht: 0 },
+    ],
+    paymentDate: null, paymentMethodName: null, peakDocumentNo: "EXP-TEST-0004", peakDocumentLink: null, slipUrl: null, attachmentStatus: null, attachmentError: null, createdAt: new Date(), updatedAt: new Date(),
+  };
+  async function april() {
+    const res = await GET(new NextRequest(`https://ops.folkpaths.com/api/payments?period=${P}`));
+    expect(res.status).toBe(200);
+    return res.json() as Promise<{ rows: { jobs: (Job & { amount: number; fee: number; expenses: number; combinable: boolean })[] }[]; paymentDocs: { paymentRef: string; total: number; gross: number; wht: number; drift: { stored: object; current: object; delta: object; changed: { ref: string }[]; leftOut: { ref: string }[]; inSync: boolean } | null }[] }>;
+  }
+  beforeEach(() => {
+    prismaMock.assignment.findMany.mockResolvedValue(sheetsApr.map((s) => ({ guideId: GUIDE, date: s.date, slotIdx: s.slotIdx, tourId: "T-TEST", createdAt: s.createdAt })));
+    prismaMock.jobSheet.findMany.mockResolvedValue(sheetsApr);
+    prismaMock.tourPayment.findMany.mockResolvedValue([
+      pending(`${P}-01`, 2, DOC), pending(`${P}-01`, 7, DOC), pending(`${P}-05`, 0, DOC), pending(`${P}-05`, 3, DOC),
+      pending(`${P}-03`, 7, null), // was marked paid by mistake, now undone
+    ]);
+    prismaMock.guidePaymentDocument.findMany.mockResolvedValue([doc]);
+  });
+
+  it("the undone job is pending again, counts in the unpaid total, and has no PEAK document", async () => {
+    const { rows } = await april();
+    const c = rows[0].jobs.find((j) => j.ref === "FOLK-TEST-C")!;
+    expect(c).toMatchObject({ paid: false, payStatus: "PENDING", peakRef: null, amount: 1470, combinable: true });
+    expect(c.peakStatus.state).toBe("NOT_IN_PEAK");
+    expect(rows[0].jobs.filter((j) => !j.paid).reduce((s, j) => s + j.amount, 0)).toBe(5165);
+  });
+
+  it("a ฿0 fee stays ฿0: the job pays only its reimbursement and review reward", async () => {
+    const { rows } = await april();
+    expect(rows[0].jobs.find((j) => j.ref === "FOLK-TEST-D")).toMatchObject({ amount: 70, fee: 0, expenses: 70 });
+  });
+
+  it("the stored document keeps its figures, and is reported out of sync with the current payout", async () => {
+    const { paymentDocs } = await april();
+    const d = paymentDocs[0];
+    expect(d).toMatchObject({ total: 4471, gross: 4600, wht: 129 });
+    expect(d.drift).toMatchObject({
+      stored: { jobs: 4, gross: 4600, wht: 129, net: 4471 },
+      current: { jobs: 5, gross: 5300, wht: 135, net: 5165 },
+      delta: { gross: 700, wht: 6, net: 694 },
+      inSync: false,
+    });
+    expect(d.drift!.changed.map((c) => c.ref)).toEqual(["FOLK-TEST-D"]);
+    expect(d.drift!.leftOut.map((j) => j.ref)).toEqual(["FOLK-TEST-C"]);
+  });
+
+  it("an undone job next to a job with its own EXP shows no EXP of its own", async () => {
+    prismaMock.guidePaymentDocument.findMany.mockResolvedValue([]);
+    prismaMock.tourPayment.findMany.mockResolvedValue([
+      { ...pending(`${P}-01`, 2, null), status: "PAID", paidAt: new Date(`${P}-02T10:00:00Z`), peakRef: EXP_B, eslipUrl: "https://drive.test/slip" },
+      pending(`${P}-03`, 7, null),
+    ]);
+    const body = await april();
+    const c = body.rows[0].jobs.find((j) => j.ref === "FOLK-TEST-C")!;
+    expect(c).toMatchObject({ paid: false, peakRef: null });
+    expect(jobPeakDocumentNo(c.peakStatus)).toBeNull();
+    expect(pathsOf(body, EXP_B)).toEqual(["response.rows[0].jobs[0].peakRef", "response.rows[0].jobs[0].peakStatus.documentNo"]);
+  });
+});

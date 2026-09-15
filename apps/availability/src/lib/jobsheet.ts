@@ -93,6 +93,19 @@ export const DEFAULT_EXPENSES: Expense[] = [
 ];
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
 
+// The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
+// together with another (piggybacked) pays no fee of its own, and 0 × anything or ฿0 is
+// that decision, not a blank. Only a sheet with no fee entered at all — {} or no price
+// and no explicit zero count — takes the standard fee, so an auto-created sheet does not
+// show the guide ฿0 owed.
+export function guideFeeOrStandard(gf: unknown): GuideFee {
+  if (!gf || typeof gf !== "object") return DEFAULT_GUIDE_FEE;
+  const g = gf as GuideFee;
+  if (g.price != null) return g;
+  if (g.time != null && Number(g.time) === 0) return g;
+  return DEFAULT_GUIDE_FEE;
+}
+
 // The lotus offering (dok bua) is only bought on tours that visit Wat Pho & Wat Arun.
 // Grand-Palace-only, Wat Pho evening, and food tours never carry a lotus fee.
 export function tourHasLotus(tourName?: string | null): boolean {

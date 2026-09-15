@@ -781,6 +781,10 @@ a.dash-row:hover{background:var(--grey-bg)}
 .pay-job-row>.pay-job-amt span{white-space:normal!important}
 .pay-peak-missing{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--line-strong);color:var(--ink-soft);white-space:nowrap}
 .pay-peak-missing.paid{background:#fff8c4;border-color:#ecd9bf;color:#8a5a00}
+.pay-drift{display:grid;gap:6px;padding:8px 10px;border:1px solid #ecd9bf;border-left:4px solid var(--danger,#c0392b);border-radius:8px;background:#fff8f0;color:var(--ink);font-size:12.5px}
+.pay-drift-table{min-width:520px;font-size:12.5px}
+.pay-drift-table .pay-drift-delta td{font-weight:600;border-top:1px solid var(--line)}
+.pay-drift-badge{border-color:var(--danger,#c0392b)}
 .pay-peak-none{font-size:11px;color:var(--ink-soft);white-space:nowrap}
 
 /* ---- Reports ---- */

@@ -3,7 +3,8 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, DEFAULT_GUIDE_FEE, guideFeeOrStandard, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { currentJobFigures, documentDrift } from "@/lib/payment-document-drift";
 import { guidePayoutTotal } from "@/lib/peak-sync";
 import { canViewFinance } from "@/lib/roles";
 import { type Slip } from "@/lib/payments/slips";
@@ -87,7 +88,7 @@ export async function GET(req: NextRequest) {
   const r2 = (n: number) => Math.round(n * 100) / 100;
   // An auto-created sheet can have an empty guideFee ({}); ?? won't catch that, so a
   // missing price must fall back to the standard fee or the guide shows ฿0 unpaid.
-  const gfOf = (gf: unknown): GuideFee => (gf && typeof gf === "object" && (gf as GuideFee).price != null ? (gf as GuideFee) : DEFAULT_GUIDE_FEE);
+  const gfOf = (gf: unknown): GuideFee => guideFeeOrStandard(gf);
   // A whole-month "paid" covers a tour only if BOTH: the tour had already happened by
   // the payment date (a payment can't cover a tour that runs later — the paid-before-
   // tour bug), AND its record existed when the payment was made (a tour re-imported
@@ -148,7 +149,18 @@ export async function GET(req: NextRequest) {
     // Already paid: the transfer the payment will be recorded as — its date, and whether
     // a slip was saved for it.
     const transfer = d.alreadyPaid ? paidTransferOf(tourPays.filter((p) => p.peakPaymentRef === d.paymentRef).map((p) => ({ ref: p.date, paidAt: p.status === "PAID" ? p.paidAt : null, eslipUrl: p.eslipUrl, slips: p.slips }))) : null;
-    return { ...d, status: documentStatus(d.status) ?? d.status, gross, wht, lineCount: traces.length, ...(transfer ? { paidDate: transfer.paidDate, hasSavedSlip: !!transfer.slipLink } : {}) };
+    // Awaiting payment: is it still the payout the approved job sheets say? The stored
+    // document is never changed to match — it is what PEAK holds (lib/payment-document-drift).
+    const status = documentStatus(d.status) ?? d.status;
+    const drift = status === "AWAITING_PAYMENT" ? documentDrift({
+      document: { jobs: d.jobs, lines, total: d.total },
+      currentOf: (j) => { const s = sheetOf.get(`${d.guideId}|${j.date}|${j.slotIdx}`); return s ? currentJobFigures((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee)) : null; },
+      // Not for jobs paid before the document existed: that transfer already happened.
+      leftOut: d.alreadyPaid ? [] : (rows.find((r) => r.guideId === d.guideId)?.jobs ?? [])
+        .filter((j) => !j.paid && j.combinable)
+        .flatMap((j) => { const s = sheetOf.get(`${d.guideId}|${j.date}|${j.slotIdx}`); return s ? [{ date: j.date, slotIdx: j.slotIdx, ref: j.ref, ...currentJobFigures((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee)) }] : []; }),
+    }) : null;
+    return { ...d, status, gross, wht, lineCount: traces.length, drift, ...(transfer ? { paidDate: transfer.paidDate, hasSavedSlip: !!transfer.slipLink } : {}) };
   });
   return NextResponse.json({ period, rows, totals, paymentDocs: docsOut });
 }

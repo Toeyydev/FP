@@ -5,7 +5,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { downloadDriveFile, saveBufferToDrive } from "@/lib/google-drive";
-import { DEFAULT_GUIDE_FEE, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, guideFeeOrStandard, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { currentJobFigures, documentChangeReasons, documentDrift, type Figures } from "@/lib/payment-document-drift";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
 import { createExpenseAllInOne, getExpense, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
@@ -39,8 +40,7 @@ async function documentsByRef(refs: (string | null | undefined)[]) {
 // The same fallback the Payments page uses: an auto-created sheet can store guideFee as
 // {}, which must read as the standard fee — or the document and the page would disagree
 // about what the guide is owed.
-const guideFeeOf = (gf: unknown): GuideFee =>
-  gf && typeof gf === "object" && (gf as GuideFee).price != null ? (gf as GuideFee) : DEFAULT_GUIDE_FEE;
+const guideFeeOf = (gf: unknown): GuideFee => guideFeeOrStandard(gf);
 
 export class PaymentClaimRefused extends Error {
   constructor(message: string) { super(message); this.name = "PaymentClaimRefused"; }
@@ -402,6 +402,7 @@ async function paymentBlockers(tx: Prisma.TransactionClient, doc: DocRow): Promi
   const reasons: string[] = [];
   const docNo = doc.peakDocumentNo ?? doc.paymentRef;
   const jobs = documentJobs(doc);
+  const current = new Map<string, Figures>();
   const held = await tx.tourPayment.findMany({ where: { peakPaymentRef: doc.paymentRef }, select: { guideId: true, date: true, slotIdx: true, status: true } });
   if (held.length !== jobs.length) reasons.push(`${doc.paymentRef} holds ${held.length} of its ${jobs.length} jobs — a job was released or changed since ${docNo} was created`);
   for (const j of jobs) {
@@ -409,14 +410,16 @@ async function paymentBlockers(tx: Prisma.TransactionClient, doc: DocRow): Promi
     if (!tp) reasons.push(`${j.ref} is no longer part of ${doc.paymentRef}`);
     else if (doc.alreadyPaid ? tp.status !== "PAID" : tp.status === "PAID") reasons.push(doc.alreadyPaid ? `${j.ref} is no longer marked paid` : `${j.ref} is already marked paid`);
     const sheet = await tx.jobSheet.findUnique({ where: key(doc.guideId, j), select: { approvalStatus: true, peakDocumentNo: true, peakDocumentId: true, expenses: true, guideFee: true } });
-    if (!sheet) { reasons.push(`${j.ref} no longer has a job sheet`); continue; }
+    if (!sheet) continue; // reported below, with the figures the document was created for
     if (!isApproved(sheet.approvalStatus)) reasons.push(`${j.ref} is no longer approved`);
     if (sheetInPeak(sheet)) reasons.push(`${j.ref} was posted to PEAK from its own job sheet${sheet.peakDocumentNo ? ` (${sheet.peakDocumentNo})` : ""}`);
-    const payout = round2(guidePayoutTotal((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)).payout);
-    if (Math.abs(payout - Number(j.payout)) > 0.005) {
-      reasons.push(`${j.ref} now pays ${thb(payout)}, but ${docNo} was created for ${thb(Number(j.payout))} — its figures changed after the PEAK document was made`);
-    }
+    current.set(`${j.date}|${j.slotIdx}`, currentJobFigures((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)));
   }
+  // Every job's gross, WHT and payout against what the document was created with
+  // (lib/payment-document-drift) — a fee set to ฿0 after the EXP was made changes gross and
+  // WHT, not only the payout, and PEAK would be paid for figures no job sheet holds.
+  const drift = documentDrift({ document: doc, currentOf: (j) => current.get(`${j.date}|${j.slotIdx}`) ?? null, leftOut: [] });
+  reasons.push(...documentChangeReasons(drift, docNo));
   if (reasons.length) reasons.push(`Nothing was paid. Put the job back as it was, or void ${docNo} in PEAK and record that here, then create a new document`);
   return reasons;
 }

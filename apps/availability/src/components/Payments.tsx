@@ -14,6 +14,7 @@ import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import RecordExpDialog from "@/components/RecordExpDialog";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
+import { type DocumentDrift } from "@/lib/payment-document-drift";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
@@ -40,6 +41,8 @@ type PaymentDoc = {
   // Jobs paid before the document existed: its payment is the transfer already made
   // (paidDate, and whether a slip was saved then). Shown under Paid, not Unpaid.
   alreadyPaid?: boolean; paidDate?: string | null; hasSavedSlip?: boolean;
+  // Awaiting payment: the document against the current approved job sheets (lib/payment-document-drift).
+  drift?: DocumentDrift | null;
 };
 const docJobCount = (d: PaymentDoc) => (Array.isArray(d.jobs) ? d.jobs.length : 0);
 const asCreated = (d: PaymentDoc): CreatedDocument => ({
@@ -170,6 +173,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       : null;
   // A locked job's combined document, in words: its EXP once PEAK created it.
   const docFor = (j: Job) => paymentDocs.find((d) => d.paymentRef === j.peakPaymentRef);
+  // Out of sync: the document is not the payout the approved job sheets say. Blocked: a job IN
+  // it changed since it was made — the server refuses the payment, so it is not offered.
+  const outOfSync = (d: PaymentDoc) => !!d.drift && !d.drift.inSync;
+  const paymentBlocked = (d: PaymentDoc) => !!d.drift && d.drift.changed.length > 0;
   const docTag = (j: Job) => { const d = docFor(j); return d?.peakDocumentNo ? `Combined PEAK document ${d.peakDocumentNo}` : j.peakPaymentRef ?? ""; };
   const docBadge = (j: Job) => {
     const st = docFor(j)?.status;
@@ -491,7 +498,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             {mode === "paid" && (openDocs.length || awaitingDocs.length)
               ? (openDocs.length
                   ? <span className="ob warn" title="PEAK has not confirmed a document or payment for these paid jobs — open the row to settle it">⚠ PEAK unconfirmed</span>
-                  : <span className="ob warn" title="A PEAK document was created for these paid jobs — record their payment against it">{awaitingDocs[0].peakDocumentNo} · record payment</span>)
+                  : outOfSync(awaitingDocs[0])
+                    ? <span className="ob warn pay-drift-badge" title="The PEAK document no longer matches the current job sheets — align it in PEAK before recording the payment">{awaitingDocs[0].peakDocumentNo} · out of sync</span>
+                    : <span className="ob warn" title="A PEAK document was created for these paid jobs — record their payment against it">{awaitingDocs[0].peakDocumentNo} · record payment</span>)
               : mode === "paid"
               ? (!missing
                   ? <span className="ob ok" title="FolkOPS has a PEAK document for every job in this payout">✓ PEAK {refd}/{jobs.length}</span>
@@ -499,7 +508,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
               : openDocs.length
                 ? <span className="ob warn" title="PEAK has not confirmed a document or payment for this guide — open the row to settle it">⚠ PEAK unconfirmed</span>
                 : awaitingDocs.length
-                  ? <span className="ob warn" title="A combined PEAK document exists and is waiting for its payment to be recorded">{awaitingDocs[0].peakDocumentNo} · awaiting payment</span>
+                  ? (outOfSync(awaitingDocs[0])
+                      ? <span className="ob warn pay-drift-badge" title="The PEAK document no longer matches the current job sheets — align it in PEAK before recording the payment">{awaitingDocs[0].peakDocumentNo} · out of sync</span>
+                      : <span className="ob warn" title="A combined PEAK document exists and is waiting for its payment to be recorded">{awaitingDocs[0].peakDocumentNo} · awaiting payment</span>)
                   : missing ? <span className="ob mut" title="No PEAK document for these jobs yet">{missing} not in PEAK</span> : <span className="ob mut">—</span>}
           </td>
           <td><span className={`badge ${mode === "paid" ? "active" : "invited"}`}>{mode === "paid" ? "Paid" : "Pending"}</span></td>
@@ -516,7 +527,10 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             {awaitingDocs.map((d) => (
               <div key={d.paymentRef} className="pay-doc-bar pay-doc-awaiting" role="status" style={{ display: "grid", gap: 6 }}>
                 <span style={{ fontWeight: 700 }}>{d.alreadyPaid ? `PEAK document created for jobs paid ${d.paidDate ? dShort(d.paidDate) : "earlier"} · record that payment` : "PEAK document created · awaiting payment"}</span>
-                <CreatedState compact doc={asCreated(d)} onRecordPayment={canEdit ? () => setRecordPayment({ guideId: r.guideId, guide: r.guide, doc: asCreated(d) }) : undefined} />
+                {outOfSync(d) && <DriftPanel doc={d} />}
+                {/* A job in the document changed: the payment is not offered — PEAK must match the job sheets first (the server refuses it too). */}
+                <CreatedState compact doc={asCreated(d)} onRecordPayment={canEdit && !paymentBlocked(d) ? () => setRecordPayment({ guideId: r.guideId, guide: r.guide, doc: asCreated(d) }) : undefined} />
+                {canEdit && paymentBlocked(d) && <button type="button" className="btn sm" disabled aria-disabled="true" title={`Align ${d.peakDocumentNo ?? d.paymentRef} in PEAK with the current job sheets first`} style={{ justifySelf: "start" }}>Record payment — blocked until PEAK matches</button>}
                 {d.error && <span style={{ fontSize: 12, color: "var(--danger)" }}>Last attempt: {d.error}</span>}
                 {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Voided this document in PEAK instead? <button className="btn sm ghost" onClick={() => resolveDoc(d, "voided")}>Voided in PEAK…</button></span>}
               </div>
@@ -891,6 +905,49 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           onFinished={() => { setSlipBatch(null); load(period); }}
         />
       )}
+    </div>
+  );
+}
+
+// A combined PEAK document that no longer matches the approved job sheets: what the guide
+// is owed now, what PEAK holds, and every job that differs. Nothing here changes PEAK or
+// the stored document — PEAK is aligned by hand (or the document voided there) first.
+const signedThb = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${thb(Math.abs(v))}`;
+function DriftPanel({ doc }: { doc: PaymentDoc }) {
+  const x = doc.drift!;
+  const no = doc.peakDocumentNo ?? doc.paymentRef;
+  const label = (j: { ref: string | null; date: string; slotIdx: number }) => j.ref || `${j.date} slot ${j.slotIdx}`;
+  return (
+    <div className="pay-drift" role="alert">
+      <b>⚠ {no} is out of sync with the current job sheets. {x.changed.length ? "Align it in PEAK before recording the payment." : `Recording its payment pays only the ${x.stored.jobs} job${x.stored.jobs === 1 ? "" : "s"} in it.`}</b>
+      <div className="grid-scroll">
+        <table className="acct-table pay-drift-table" aria-label={`Current payout compared with ${no}`}>
+          <thead><tr><th /><th className="r">Jobs</th><th className="r">Gross</th><th className="r">WHT</th><th className="r">Net payable</th></tr></thead>
+          <tbody>
+            <tr><td>Current payout · approved job sheets</td><td className="r num">{x.current.jobs}</td><td className="r num">{thb(x.current.gross)}</td><td className="r num">{thb(x.current.wht)}</td><td className="r num"><b>{thb(x.current.net)}</b></td></tr>
+            <tr><td>PEAK document {no} · as created</td><td className="r num">{x.stored.jobs}</td><td className="r num">{thb(x.stored.gross)}</td><td className="r num">{thb(x.stored.wht)}</td><td className="r num">{thb(x.stored.net)}</td></tr>
+            <tr className="pay-drift-delta"><td>Difference</td><td className="r num">{x.current.jobs - x.stored.jobs > 0 ? `+${x.current.jobs - x.stored.jobs}` : x.current.jobs - x.stored.jobs}</td><td className="r num">{signedThb(x.delta.gross)}</td><td className="r num">{signedThb(x.delta.wht)}</td><td className="r num"><b>{signedThb(x.delta.net)}</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        {x.changed.map((c) => (
+          <li key={`c|${c.date}|${c.slotIdx}`}>
+            <span className="num">{label(c)}</span>{c.current
+              ? <> now gross {thb(c.current.gross)} · WHT {thb(c.current.wht)} · pays {thb(c.current.net)} — {no} has gross {thb(c.stored.gross)} · WHT {thb(c.stored.wht)} · {thb(c.stored.net)}</>
+              : <> has no job sheet any more — {no} has {thb(c.stored.net)}</>}
+          </li>
+        ))}
+        {x.leftOut.map((j) => (
+          <li key={`l|${j.date}|${j.slotIdx}`}><span className="num">{label(j)}</span> is approved and unpaid (gross {thb(j.gross)} · WHT {thb(j.wht)} · pays {thb(j.net)}) but is not in {no}</li>
+        ))}
+      </ul>
+      <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+        {x.changed.length
+          ? <>Record payment is blocked: PEAK would be paid for figures no job sheet holds. </>
+          : <>The job{x.leftOut.length === 1 ? "" : "s"} left out would need a separate transfer and PEAK document after this one. </>}
+        FolkOPS keeps {no} exactly as it was created and does not change PEAK. Edit {no} in PEAK to match, or void it there and record that with “Voided in PEAK…”.
+      </span>
     </div>
   );
 }
