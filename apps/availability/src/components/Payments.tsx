@@ -13,6 +13,7 @@ import PeakPaymentDialog, { CreatedState, type CreatedDocument } from "@/compone
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import RecordExpDialog from "@/components/RecordExpDialog";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
+import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
@@ -364,10 +365,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
 
   function exportCsv() {
     const cell = (v: unknown) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    // Per-JOB rows so each tour reconciles to the PEAK ref of the transfer that paid it.
+    // Per-JOB rows so each tour reconciles to the PEAK ref of the transfer that paid it —
+    // the job's own document only, never the guide's monthly ref on a job it did not pay.
     const head = ["Guide ID", "Guide", "Date", "Job sheet no.", "Tour", "Amount", "Paid", "PEAK ref"];
     const lines = [head.join(",")].concat(
-      rows.flatMap((r) => r.jobs.map((j) => [r.guideId, r.guide, j.date, j.ref ?? "", j.tour, j.amount, j.paid ? "PAID" : "PENDING", j.peakRef ?? r.peakRef ?? ""].map(cell).join(",")))
+      rows.flatMap((r) => r.jobs.map((j) => [r.guideId, r.guide, j.date, j.ref ?? "", j.tour, j.amount, j.paid ? "PAID" : "PENDING", jobPeakDocumentNo(j.peakStatus) ?? ""].map(cell).join(",")))
     );
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);

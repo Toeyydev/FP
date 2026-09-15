@@ -37,3 +37,11 @@ export function peakJobStatus(input: {
   if (!(input.amount > 0)) return { state: "NOTHING_TO_POST", documentNo: null, source: null };
   return { state: "NOT_IN_PEAK", documentNo: null, source: null };
 }
+
+// The EXP number to print against ONE job: the document FolkOPS recorded for that job
+// (peakJobStatus). Never borrowed from another job of the same guide, month, batch,
+// transfer or paid date, nor from the guide's monthly payroll row unless that payroll
+// paid this job — two rows side by side do not share a PEAK document.
+export function jobPeakDocumentNo(status: Pick<PeakJobStatus, "documentNo"> & { state: string } | null | undefined): string | null {
+  return status?.state === "IN_PEAK" ? (status.documentNo ?? "").trim() || null : null;
+}
