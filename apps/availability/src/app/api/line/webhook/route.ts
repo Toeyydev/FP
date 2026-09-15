@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { verifyLineSignature, lineReply } from "@/lib/line";
+import { verifyLineSignature, lineReply, type LineSendResult } from "@/lib/line";
 import { audit } from "@/lib/audit";
 import { acceptOffer, denyOffer, slotLabel } from "@/lib/offers";
 import { captureLineContact, markContactLinked } from "@/lib/line-contacts";
@@ -9,6 +9,9 @@ import { captureLineContact, markContactLinked } from "@/lib/line-contacts";
 export async function POST(req: NextRequest) {
   const raw = await req.text();
   if (!verifyLineSignature(raw, req.headers.get("x-line-signature"))) {
+    // Visible in the deploy logs: a real LINE call refused here means the channel
+    // secret no longer matches, and every tap is being dropped.
+    if (req.headers.get("x-line-signature")) console.warn("[line:webhook] signature did not match — event dropped");
     return NextResponse.json({ error: "bad-signature" }, { status: 401 });
   }
   let body: { events?: LineEvent[] };
@@ -19,31 +22,46 @@ export async function POST(req: NextRequest) {
     if (!userId) continue;
 
     if (ev.type === "postback" && ev.postback?.data?.startsWith("offer:")) {
-      // Accept / Deny tapped on a job-offer button.
+      // Accept / Deny tapped on a job-offer button. Every tap is recorded with what
+      // came of it and whether LINE took our reply: a guide who "taps and nothing
+      // happens" must be answerable from the audit log, not guessed at.
       const [, action, offerId] = ev.postback.data.split(":");
       const guide = await prisma.user.findFirst({ where: { lineUserId: userId } });
+      let outcome = "";
+      let reply: LineSendResult | null = null;
       if (!guide?.guideId) {
-        if (ev.replyToken) await lineReply(ev.replyToken, "Please link your guide account first: app → My details → Connect LINE.");
-        continue;
-      }
-      if (action === "accept") {
+        outcome = "not-linked";
+        if (ev.replyToken) reply = await lineReply(ev.replyToken, "Please link your guide account first: app → My details → Connect LINE.");
+      } else if (action === "accept") {
         const res = await acceptOffer(offerId, guide.guideId);
         if (res.ok) {
-          await audit({ actorId: guide.id, action: "offer.accepted", entityType: "JobOffer", entityId: offerId });
-          if (ev.replyToken) await lineReply(ev.replyToken, `✅ You got it, ${guide.displayName}! ${slotLabel(res.offer.slotIdx)} on ${res.offer.date}. It's now in your job sheet.`);
+          outcome = "accepted";
+          await audit({ actorId: guide.id, action: "offer.accepted", entityType: "JobOffer", entityId: offerId, detail: { via: "line" } });
+          if (ev.replyToken) reply = await lineReply(ev.replyToken, `✅ You got it, ${guide.displayName}! ${slotLabel(res.offer.slotIdx)} on ${res.offer.date}. It's now in your job sheet.`);
           // The operator team is notified inside acceptOffer (covers app + LINE).
-        } else if (ev.replyToken) {
-          const msg = res.reason === "taken" ? "Sorry — another guide already took this one. 🙏"
-            : res.reason === "clash" ? `You already have a tour at ${slotLabel(res.clashSlotIdx ?? 0)} that day — this one is too close to it. We'll offer it to someone else. 🙏`
-            : res.reason === "expired" ? "This offer has expired."
-            : "This offer is no longer open.";
-          await lineReply(ev.replyToken, msg);
+        } else {
+          outcome = `refused:${res.reason ?? "closed"}`;
+          if (ev.replyToken) {
+            const msg = res.reason === "taken" ? "Sorry — another guide already took this one. 🙏"
+              : res.reason === "clash" ? `You already have a tour at ${slotLabel(res.clashSlotIdx ?? 0)} that day — this one is too close to it. We'll offer it to someone else. 🙏`
+              : res.reason === "expired" ? "This offer has expired."
+              : res.reason === "already-yours" ? "This job is already yours. ✅"
+              : "This offer is no longer open.";
+            reply = await lineReply(ev.replyToken, msg);
+          }
         }
       } else if (action === "deny") {
+        outcome = "denied";
         await denyOffer(offerId, guide.guideId);
-        await audit({ actorId: guide.id, action: "offer.denied", entityType: "JobOffer", entityId: offerId });
-        if (ev.replyToken) await lineReply(ev.replyToken, "No problem — thanks for letting us know. 🙏");
+        await audit({ actorId: guide.id, action: "offer.denied", entityType: "JobOffer", entityId: offerId, detail: { via: "line" } });
+        if (ev.replyToken) reply = await lineReply(ev.replyToken, "No problem — thanks for letting us know. 🙏");
+      } else {
+        outcome = "unknown-action";
       }
+      await audit({
+        actorId: guide?.id ?? null, action: "line.offer_tap", entityType: "JobOffer", entityId: offerId || undefined,
+        detail: { guideId: guide?.guideId ?? null, tap: action, outcome, replied: reply ? reply.ok : null, replyStatus: reply?.status ?? null, replyError: reply && !reply.ok ? reply.detail ?? null : null },
+      }).catch(() => {});
       continue;
     }
 
