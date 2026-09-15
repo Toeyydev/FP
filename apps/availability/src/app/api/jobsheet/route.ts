@@ -19,7 +19,7 @@ import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
-import { handoverLock } from "@/lib/tour-handover-server";
+import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -125,7 +125,9 @@ export async function GET(req: NextRequest) {
     const role = handoverRow.fromGuideId === guideId ? "from" : "to";
     const otherGuideId = role === "from" ? handoverRow.toGuideId : handoverRow.fromGuideId;
     const other = await prisma.user.findUnique({ where: { guideId: otherGuideId }, select: { displayName: true, external: true } });
-    return { id: handoverRow.id, role, otherGuideId, otherName: other?.displayName ?? null, otherExternal: !!other?.external, time: handoverRow.handedOverAt, reason: handoverRow.reason, note: isOps ? handoverRow.note : null };
+    // A handover recorded before sheets carried its note and copied guest list.
+    const needsRecording = isOps && !!existing && await handoverNeedsRecording(handoverRow, role, existing.operatorNote);
+    return { id: handoverRow.id, role, otherGuideId, otherName: other?.displayName ?? null, otherExternal: !!other?.external, time: handoverRow.handedOverAt, reason: handoverRow.reason, note: isOps ? handoverRow.note : null, needsRecording };
   })() : null;
 
   // Guide advance + returns for this job — cash movements, settled against the
@@ -291,7 +293,10 @@ export async function GET(req: NextRequest) {
     // operator's curated sheet stays exactly as saved. Only upcoming/today sheets get
     // reconciled against live bookings (to surface late adds / re-slots).
     const todayBKK = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-    if (date < todayBKK) {
+    // A replacement's guest list is a copy of the original guide's (lib/tour-handover):
+    // those bookings belong to the original guide at this slot, and reconciling would
+    // take every one of them off again. Kept exactly as saved, like a past tour.
+    if (date < todayBKK || handover?.role === "to") {
       return NextResponse.json({ header, tour, saved: true, canEdit: isOps, checkedIn, payment, combinedPayment, handover, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
