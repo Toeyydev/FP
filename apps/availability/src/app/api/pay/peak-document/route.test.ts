@@ -512,6 +512,37 @@ describe("PATCH /api/pay/peak-document — settling what PEAK did not confirm", 
     for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: null });
   });
 
+  // Payments v2, the invariant the whole model rests on: a PEAK document is bookkeeping,
+  // a GuidePayment is a real bank transfer. Voiding the first must never undo the second.
+  it("a document voided in PEAK AFTER its payment leaves the real payment standing — the jobs stay paid, only the EXP goes", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    const payment = { ...db.payments[0] };
+    const paidAtBefore = [J1, J2, J3].map((j) => payOf(j)!.paidAt.toISOString());
+    expect(payment).toMatchObject({ status: "RECORDED", source: "PEAK_DOCUMENT", peakPaymentRef: "FOLK-PAY-203005-01" });
+
+    expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "voided" })).status).toBe(200);
+
+    // The document is voided and keeps its number as the record of what PEAK held.
+    expect(db.docs[0]).toMatchObject({ status: "VOIDED", peakDocumentNo: "EXP-TEST-0042" });
+    // The payment itself is untouched: no reversal, no second payment, no history removed.
+    expect(db.payments).toHaveLength(1);
+    expect(db.payments[0]).toMatchObject({ id: payment.id, paymentNo: payment.paymentNo, status: "RECORDED", amountTransferred: payment.amountTransferred, paymentDate: "2030-05-13" });
+    expect(db.payments[0].reversedAt ?? null).toBeNull();
+    expect(db.paymentJobs).toHaveLength(3);
+    expect(db.paymentJobs.every((j) => j.paymentId === payment.id && j.active === true)).toBe(true);
+    // Each job stays paid by that transfer, with its date and its slip; only the PEAK
+    // linkage is cleared, because that document no longer exists in PEAK.
+    [J1, J2, J3].forEach((j, i) => {
+      expect(payOf(j)).toMatchObject({ status: "PAID", guidePaymentId: payment.id, eslipUrl: "https://drive.example/slip-1", peakRef: null, peakDocumentId: null, peakPaymentRef: null });
+      expect(payOf(j)!.paidAt.toISOString()).toBe(paidAtBefore[i]);
+    });
+    // Nothing was reversed and no legacy undo ran.
+    const actions = vi.mocked(audit).mock.calls.map((c) => c[0].action);
+    expect(actions).toContain("pay.peak_document_voided");
+    expect(actions.filter((a) => /revers|pay\.pending/.test(a))).toEqual([]);
+  });
+
   it("will not resolve a document that may still be in flight", async () => {
     peak.create.mockImplementation(() => new Promise(() => {})); // never answers
     void create([J1, J2, J3]);
