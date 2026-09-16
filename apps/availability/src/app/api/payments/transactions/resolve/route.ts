@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
 
   const res = await resolveReview(prisma, { id, action, jobNo, guideId, slotIdx, note, actorId: session!.user!.id ?? null });
   if (!res.ok) {
-    return NextResponse.json({ error: res.error }, { status: res.error === "not-found" ? 404 : 400 });
+    const reasons = res.error === "payment-refused" ? res.reasons : undefined;
+    return NextResponse.json({ error: res.error, ...(reasons ? { reasons, detail: reasons.join("\n") } : {}) }, { status: res.error === "not-found" ? 404 : res.error === "payment-refused" ? 409 : 400 });
   }
 
   await audit({
@@ -34,8 +35,8 @@ export async function POST(req: NextRequest) {
     action: `payment.review_${action}`,
     entityType: "PaymentTransaction",
     entityId: id,
-    detail: { action, jobNo, guideId, slotIdx, note, markedPaid: res.markedPaid, status: res.status },
+    detail: { action, jobNo, guideId, slotIdx, note, markedPaid: res.markedPaid, status: res.status, paymentNo: res.paymentNo ?? null },
   });
 
-  return NextResponse.json({ ok: true, status: res.status, markedPaid: res.markedPaid });
+  return NextResponse.json({ ok: true, status: res.status, markedPaid: res.markedPaid, paymentNo: res.paymentNo ?? null });
 }

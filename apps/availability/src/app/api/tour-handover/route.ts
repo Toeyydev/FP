@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isOps } from "@/lib/roles";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { encrypt, encryptBuffer } from "@/lib/crypto";
 import { ensureGuidePeakContact, type GuidePeakContactResult } from "@/lib/peak-guide-contact-server";
 import { ensureJobRef } from "@/lib/jobref";
@@ -239,6 +240,8 @@ export async function DELETE(req: NextRequest) {
   if (reasons.length) return NextResponse.json({ error: "not-allowed", reasons }, { status: 409 });
 
   const where = { guideId: h.toGuideId, date: h.date, slotIdx: h.slotIdx };
+  const history = await financialHistoryBlockers(prisma, [where]);
+  if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
   await prisma.$transaction(async (tx) => {
     const undone = await tx.tourHandover.updateMany({ where: { id: h.id, revokedAt: null }, data: { revokedAt: new Date(), revokedById: actor.actorId } });
     if (undone.count !== 1) throw new Error("handover already undone");

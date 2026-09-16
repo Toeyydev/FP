@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
 import { sendTourCalendarInvite } from "@/lib/calendar";
 import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
@@ -26,6 +27,8 @@ async function cleanupPreppedSheet(guideId: string, date: string, slotIdx: numbe
     // evidence is not a guarantee. Nothing else here changes, so no offer status
     // and no payment state moves because the delete was declined.
     if (await hasHistoricalJobSheet({ guideId, date, slotIdx })) return;
+    // Nor anything with payment, slip, PEAK or advance history.
+    if ((await financialHistoryBlockers(prisma, [{ guideId, date, slotIdx }])).length) return;
     await prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } });
   } catch { /* best-effort cleanup */ }
 }

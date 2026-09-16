@@ -669,18 +669,117 @@ model TourPayment {
   // the same ref and document id. Cleared only when PEAK definitely refused the post.
   peakPaymentRef String? // FOLK-PAY-YYYYMM-NN → GuidePaymentDocument.paymentRef
   peakDocumentId String? // PEAK's internal id for that document (peakRef holds its EXP-… number)
+  // CACHE / BACK-POINTER ONLY — never the authority.
+  //
+  // GuidePaymentJob (with active = true) owns the fact "this job is paid by this payment";
+  // the database enforces one active payment per job there. This column only lets a reader
+  // that already holds the TourPayment row tell a v2 payment from a legacy one without a
+  // join, and it is written and cleared in the same transaction as that row.
+  //
+  // It must NEVER decide on its own whether a job is actively paid: ask GuidePaymentJob.
+  // If the two disagree, GuidePaymentJob wins. Null on unpaid jobs and on rows paid before
+  // Payments v2 (legacy), which read as "paid · no payment record".
+  guidePaymentId String?
   updatedAt      DateTime  @updatedAt
 
   @@unique([guideId, date, slotIdx])
   @@index([guideId])
   @@index([status])
   @@index([peakPaymentRef])
+  @@index([guidePaymentId])
 }
 
 // One PEAK expense document that pays several of a guide's tours in one transfer:
 // one contact, one payment reference, one payment date, one Paid By account, one slip,
 // and a line per job and category. The row is written BEFORE the PEAK call and is the
 // lock and the audit trail — see lib/peak-payment-document.
+// ── Payments v2 ─────────────────────────────────────────────────────────────────
+// An actual guide payment: one bank transfer (FOLK-PMT-YYYYMM-NNN). It is the ONLY thing
+// that makes a job PAID. It never replaces the Job No. (FOLK-BKK-…) as the job's reference
+// nor the PEAK document (EXP-…) as its accounting record: it links jobs, the transfer and
+// its evidence. Written only by lib/payments-v2 (recordPayment / reversePayment). Never
+// deleted — a mistaken payment is REVERSED, with a reason, and stays on record.
+model GuidePayment {
+  id                   String    @id @default(cuid())
+  paymentNo            String    @unique // FOLK-PMT-YYYYMM-NNN — month of the payment date
+  guideId              String
+  accountingPeriod     String // "YYYY-MM" the jobs book into (their tour month)
+  paymentDate          String // "YYYY-MM-DD" (Bangkok) the money actually left the bank — the WHT date
+  jobTotal             Decimal   @db.Decimal(12, 2) // Σ job payable at payment time
+  adjustmentTotal      Decimal   @db.Decimal(12, 2) // Σ signed adjustments
+  amountTransferred    Decimal   @db.Decimal(12, 2) // what the bank sent
+  status               String    @default("RECORDED") // RECORDED | REVERSED
+  source               String    @default("MANUAL") // MANUAL | BANK_SLIP_MATCH | SLIP_REVIEW | PEAK_DOCUMENT
+  bankRef              String? // bank transaction / reference number, when known
+  evidenceId           String? // PaymentEvidence holding the slip
+  slipUrl              String? // Drive link to the slip
+  slipUploadedAt       DateTime?
+  slipUploadedById     String?
+  noSlipReason         String? // required when there is no slip
+  mismatchReason       String? // required when jobs + adjustments ≠ amount transferred
+  periodOverrideReason String? // required when the jobs span more than one accounting month
+  peakPaymentRef       String? // FOLK-PAY-… when paid through a combined PEAK document
+  note                 String?
+  createdById          String?
+  createdAt            DateTime  @default(now())
+  reversedAt           DateTime?
+  reversedById         String?
+  reversalReason       String?
+
+  jobs        GuidePaymentJob[]
+  adjustments GuidePaymentAdjustment[]
+
+  @@index([guideId, accountingPeriod])
+  @@index([paymentDate])
+  @@index([status])
+  @@index([bankRef])
+}
+
+// One job in a payment, with the figures it was paid on. The Job No. is copied in full.
+// `active` turns false when the payment is reversed; a partial unique index (migration
+// SQL) allows only ONE active payment per job — the database refuses a double payment.
+model GuidePaymentJob {
+  id             String       @id @default(cuid())
+  payment        GuidePayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentId      String
+  guideId        String
+  date           String // "YYYY-MM-DD" tour date
+  slotIdx        Int
+  jobNo          String // full FOLK-BKK-YYYYMMDD-NN at payment time
+  accountingDate String // "YYYY-MM-DD" the job books into
+  feeGross       Decimal      @db.Decimal(12, 2)
+  wht            Decimal      @db.Decimal(12, 2)
+  reimbursement  Decimal      @db.Decimal(12, 2)
+  reviewReward   Decimal      @db.Decimal(12, 2)
+  payable        Decimal      @db.Decimal(12, 2)
+  peakDocumentNo String? // the PEAK document the job explicitly belonged to when paid — never inferred
+  peakDocumentId String?
+  peakSource     String? // sheet | combined | payment | payroll
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  @@index([guideId, date, slotIdx])
+  @@index([paymentId])
+  @@index([jobNo])
+}
+
+// A signed line that reconciles job payable to the transfer: −70 settles an advance
+// balance the guide still holds. It is NOT an expense and never changes a job's figures.
+model GuidePaymentAdjustment {
+  id              String       @id @default(cuid())
+  payment         GuidePayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentId       String
+  type            String // ADVANCE_SETTLEMENT | PREVIOUS_OVERPAYMENT | PREVIOUS_UNDERPAYMENT | MANUAL_CORRECTION | OTHER
+  amount          Decimal      @db.Decimal(12, 2) // signed
+  description     String
+  jobNo           String? // the job it relates to, when it relates to one
+  advanceReturnId String? // Phase 3: the GuideAdvanceReturn this settlement clears
+  createdById     String?
+  createdAt       DateTime     @default(now())
+
+  @@index([paymentId])
+}
+
 model GuidePaymentDocument {
   id                String    @id @default(cuid())
   paymentRef        String    @unique // FOLK-PAY-YYYYMM-NN — sent to PEAK as the document reference

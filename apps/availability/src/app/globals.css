@@ -781,6 +781,33 @@ a.dash-row:hover{background:var(--grey-bg)}
 .pay-job-row>.pay-job-amt span{white-space:normal!important}
 .pay-peak-missing{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--line-strong);color:var(--ink-soft);white-space:nowrap}
 .pay-peak-missing.paid{background:#fff8c4;border-color:#ecd9bf;color:#8a5a00}
+.pay-drift{display:grid;gap:6px;padding:8px 10px;border:1px solid #ecd9bf;border-left:4px solid var(--danger,#c0392b);border-radius:8px;background:#fff8f0;color:var(--ink);font-size:12.5px}
+.pay-drift-table{min-width:520px;font-size:12.5px}
+.pay-drift-table .pay-drift-delta td{font-weight:600;border-top:1px solid var(--line)}
+.pay-drift-badge{border-color:var(--danger,#c0392b)}
+.pay-adj-row{display:grid;grid-template-columns:170px 1fr 120px auto;gap:6px;align-items:center}
+.pay-adj-row input,.pay-adj-row select{border:1px solid var(--line-strong);border-radius:8px;padding:7px 9px;font:inherit;font-size:13px;background:var(--card);color:var(--ink);min-width:0}
+.pay-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pay-form-grid input{width:100%;border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;font:inherit;font-size:13.5px;background:var(--card);color:var(--ink)}
+.pay-recon{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--assign-line);background:var(--assign-bg);border-radius:9px}
+.pay-recon.ok{border-color:var(--green-line);background:var(--green-bg)}
+.pay-recon b{font-size:15px;font-variant-numeric:tabular-nums}
+.pay-pmt{font-size:11px;font-weight:700;color:var(--green);background:var(--green-bg);border:1px solid var(--green-line);border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pay-pmt.legacy{color:var(--assign);background:var(--assign-bg);border-color:var(--assign-line)}
+@media (max-width:560px){.pay-adj-row{grid-template-columns:1fr 1fr}.pay-form-grid{grid-template-columns:1fr}}
+.pay-cand tbody tr.pay-cand-blocked{color:var(--ink-soft);background:var(--grey-bg)}
+.chip-readiness{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--green-line);background:var(--green-bg);color:var(--green);white-space:nowrap}
+.chip-readiness.not-approved,.chip-readiness\.no-sheet{border-color:var(--assign-line);background:var(--assign-bg);color:var(--assign)}
+.chip-readiness.no-sheet{border-color:var(--line-strong);background:var(--grey-bg);color:var(--ink-soft)}
+.chip-pay{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--line-strong);white-space:nowrap}
+.chip-pay.unpaid{border-color:var(--assign-line);background:var(--assign-bg);color:var(--assign)}
+.chip-pay.blocked{border-color:var(--line-strong);background:var(--grey-bg);color:var(--ink-soft)}
+.chip-pay.recorded{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+.chip-pay.reversed{border-color:var(--danger-line);background:var(--danger-bg);color:var(--danger)}
+.pay-review{min-width:520px;font-size:13px}
+.pay-review tfoot td{font-weight:600;border-top:1px solid var(--line-strong)}
+.pay-review-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.pay-review-facts b{display:block;font-size:13.5px}
 .pay-peak-none{font-size:11px;color:var(--ink-soft);white-space:nowrap}
 
 /* ---- Reports ---- */

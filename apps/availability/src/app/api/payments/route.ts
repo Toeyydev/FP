@@ -3,7 +3,9 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
+import { computeTotals, DEFAULT_GUIDE_FEE, guideFeeOrStandard, isApproved, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { currentJobFigures, documentDrift } from "@/lib/payment-document-drift";
 import { guidePayoutTotal } from "@/lib/peak-sync";
 import { canViewFinance } from "@/lib/roles";
 import { type Slip } from "@/lib/payments/slips";
@@ -38,6 +40,14 @@ export async function GET(req: NextRequest) {
     prisma.tourPayment.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` } }, select: { guideId: true, date: true, slotIdx: true, status: true, peakRef: true, paidAt: true, eslipUrl: true, slips: true, peakPaymentRef: true } }),
   ]);
 
+  // Payments v2: which recorded payment (FOLK-PMT-…) pays each job, and its evidence.
+  const paidJobs = await prisma.guidePaymentJob.findMany({ where: { date: { gte: `${period}-01`, lte: `${period}-31` }, active: true }, select: { guideId: true, date: true, slotIdx: true, paymentId: true } });
+  const paymentsById = new Map((paidJobs.length ? await prisma.guidePayment.findMany({ where: { id: { in: [...new Set(paidJobs.map((j) => j.paymentId))] } }, select: { id: true, paymentNo: true, paymentDate: true, amountTransferred: true, slipUrl: true, status: true, noSlipReason: true } }) : []).map((p) => [p.id, p]));
+  const paymentOf = (k: string) => {
+    const j = paidJobs.find((x) => `${x.guideId}|${x.date}|${x.slotIdx}` === k);
+    const p = j ? paymentsById.get(j.paymentId) : null;
+    return p ? { id: p.id, paymentNo: p.paymentNo, paymentDate: p.paymentDate, amountTransferred: Number(p.amountTransferred), slipUrl: p.slipUrl, noSlipReason: p.noSlipReason } : null;
+  };
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
   const tName = (id: string) => tours.find((t) => t.id === id)?.name ?? id;
   const statusOf = (gid: string) => statuses.find((s) => s.guideId === gid);
@@ -73,7 +83,19 @@ export async function GET(req: NextRequest) {
     const canPutInPeak = !paidJobPeakBlock(state);
     // "Record EXP…": paid per tour with no EXP number yet — the rule api/pay PATCH applies.
     const canRecordExp = !!tp && !(tp.peakRef ?? "").trim() && recordExpBlockers([{ ref: "", payment: tp, sheet: s ?? null }], "").length === 0;
-    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp, canPutInPeak };
+    // Why this job cannot go into a payment being recorded now (lib/payments-v2 refuses
+    // the same cases server-side). Null means it can.
+    const payment = paymentOf(k);
+    const amount = r2(guidePayoutTotal((s?.expenses as unknown as Expense[]) ?? [], gfOf(s?.guideFee)).payout);
+    const payBlock = payment ? `Paid by ${payment.paymentNo}`
+      : covered ? "Paid by the guide's monthly payroll"
+      : tp?.status === "PAID" ? "Already marked paid, before payments were recorded"
+      : (tp?.peakPaymentRef ?? "") ? `In combined PEAK document ${docOf.get(tp!.peakPaymentRef!)?.peakDocumentNo ?? tp!.peakPaymentRef} — record its payment there`
+      : !s ? "No job sheet"
+      : !isApproved(s.approvalStatus) ? "Job sheet not approved"
+      : !(amount > 0) ? "Nothing to pay"
+      : null;
+    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp, canPutInPeak, payment, payBlock };
   };
   // Whether FolkOPS holds a PEAK document for the job (lib/peak-job-status).
   const peakStatusOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, gid: string, amount: number) => {
@@ -87,7 +109,7 @@ export async function GET(req: NextRequest) {
   const r2 = (n: number) => Math.round(n * 100) / 100;
   // An auto-created sheet can have an empty guideFee ({}); ?? won't catch that, so a
   // missing price must fall back to the standard fee or the guide shows ฿0 unpaid.
-  const gfOf = (gf: unknown): GuideFee => (gf && typeof gf === "object" && (gf as GuideFee).price != null ? (gf as GuideFee) : DEFAULT_GUIDE_FEE);
+  const gfOf = (gf: unknown): GuideFee => guideFeeOrStandard(gf);
   // A whole-month "paid" covers a tour only if BOTH: the tour had already happened by
   // the payment date (a payment can't cover a tour that runs later — the paid-before-
   // tour bug), AND its record existed when the payment was made (a tour re-imported
@@ -95,7 +117,8 @@ export async function GET(req: NextRequest) {
   const coveredByMonth = (gid: string, tourDate: string, recordCreatedAt: Date) =>
     coveredByPayrollRun(statusOf(gid), tourDate, recordCreatedAt);
 
-  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; canPutInPeak: boolean; peakStatus: ReturnType<typeof peakJobStatus> };
+  type PaymentRef = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; slipUrl: string | null; noSlipReason: string | null };
+  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; canPutInPeak: boolean; payment: PaymentRef | null; payBlock: string | null; peakStatus: ReturnType<typeof peakJobStatus> };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
   const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};
@@ -148,7 +171,18 @@ export async function GET(req: NextRequest) {
     // Already paid: the transfer the payment will be recorded as — its date, and whether
     // a slip was saved for it.
     const transfer = d.alreadyPaid ? paidTransferOf(tourPays.filter((p) => p.peakPaymentRef === d.paymentRef).map((p) => ({ ref: p.date, paidAt: p.status === "PAID" ? p.paidAt : null, eslipUrl: p.eslipUrl, slips: p.slips }))) : null;
-    return { ...d, status: documentStatus(d.status) ?? d.status, gross, wht, lineCount: traces.length, ...(transfer ? { paidDate: transfer.paidDate, hasSavedSlip: !!transfer.slipLink } : {}) };
+    // Awaiting payment: is it still the payout the approved job sheets say? The stored
+    // document is never changed to match — it is what PEAK holds (lib/payment-document-drift).
+    const status = documentStatus(d.status) ?? d.status;
+    const drift = status === "AWAITING_PAYMENT" ? documentDrift({
+      document: { jobs: d.jobs, lines, total: d.total },
+      currentOf: (j) => { const s = sheetOf.get(`${d.guideId}|${j.date}|${j.slotIdx}`); return s ? currentJobFigures((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee)) : null; },
+      // Not for jobs paid before the document existed: that transfer already happened.
+      leftOut: d.alreadyPaid ? [] : (rows.find((r) => r.guideId === d.guideId)?.jobs ?? [])
+        .filter((j) => !j.paid && j.combinable)
+        .flatMap((j) => { const s = sheetOf.get(`${d.guideId}|${j.date}|${j.slotIdx}`); return s ? [{ date: j.date, slotIdx: j.slotIdx, ref: j.ref, ...currentJobFigures((s.expenses as unknown as Expense[]) ?? [], gfOf(s.guideFee)) }] : []; }),
+    }) : null;
+    return { ...d, status, gross, wht, lineCount: traces.length, drift, ...(transfer ? { paidDate: transfer.paidDate, hasSavedSlip: !!transfer.slipLink } : {}) };
   });
   return NextResponse.json({ period, rows, totals, paymentDocs: docsOut });
 }
@@ -160,10 +194,17 @@ export async function POST(req: NextRequest) {
   const parsed = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/), guideId: z.string().min(1), status: z.enum(["pending", "paid"]) }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { period, guideId, status } = parsed.data;
+  // Payments v2: a whole month is never flipped to paid — each transfer is recorded.
+  if (status === "paid") {
+    const reason = "A month is not marked paid: record each transfer on Payments → Record payment, with its date, amount and slip.";
+    return NextResponse.json({ error: "use-record-payment", reasons: [reason], detail: reason }, { status: 409 });
+  }
   await prisma.payrollStatus.upsert({
     where: { guideId_period: { guideId, period } },
-    create: { guideId, period, status, paidAt: status === "paid" ? new Date() : null },
-    update: { status, paidAt: status === "paid" ? new Date() : null },
+    // "paid" is refused above: only recorded payments pay jobs. This clears a legacy
+    // month back to pending.
+    create: { guideId, period, status, paidAt: null },
+    update: { status, paidAt: null },
   });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.marked", entityType: "PayrollStatus", detail: { period, guideId, status } });
   return NextResponse.json({ ok: true });
@@ -228,6 +269,10 @@ export async function DELETE(req: NextRequest) {
     const c = historicalDeleteConflict();
     return NextResponse.json(c.body, { status: c.status });
   }
+  // Financial history is never deleted with a job: a payment, slip, batch, PEAK document
+  // or advance on it means this is reversed or voided, not erased (lib/payments-v2/history).
+  const history = await financialHistoryBlockers(prisma, slots.map((s) => ({ guideId, ...s })));
+  if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
   await prisma.$transaction([
     prisma.jobSheet.deleteMany({ where }),
     prisma.tourPayment.deleteMany({ where }),

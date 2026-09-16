@@ -12,6 +12,7 @@ type Where = Record<string, any>;
 
 const db = vi.hoisted(() => ({
   users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[], audits: [] as Row[],
+  payments: [] as Row[], paymentJobs: [] as Row[], paymentAdjustments: [] as Row[],
 }));
 
 const prismaMock = vi.hoisted(() => {
@@ -60,6 +61,21 @@ const prismaMock = vi.hoisted(() => {
     tourPayment: table(() => db.pays),
     payrollStatus: table(() => db.payrolls),
     guidePaymentDocument: table(() => db.docs),
+    // Payments v2: a settled document records a real payment (FOLK-PMT-…) through the
+    // canonical service, so these tables take part in stage 2.
+    guidePayment: {
+      ...table(() => db.payments),
+      create: vi.fn(async ({ data }: { data: Row }) => {
+        const { jobs, adjustments, ...rest } = data;
+        const row = { id: `gp_${db.payments.length}`, createdAt: new Date(), ...rest };
+        db.payments.push(row);
+        for (const j of jobs?.create ?? []) db.paymentJobs.push({ id: `gpj_${db.paymentJobs.length}`, paymentId: row.id, active: true, ...j });
+        for (const a of adjustments?.create ?? []) db.paymentAdjustments.push({ id: `gpa_${db.paymentAdjustments.length}`, paymentId: row.id, ...a });
+        return { ...row };
+      }),
+    },
+    guidePaymentJob: table(() => db.paymentJobs),
+    guidePaymentAdjustment: table(() => db.paymentAdjustments),
     tour: table(() => db.tours),
     auditLog: table(() => db.audits),
   };
@@ -123,6 +139,7 @@ function seed() {
   db.pays = [];
   db.payrolls = [];
   db.docs = [];
+  db.payments = []; db.paymentJobs = []; db.paymentAdjustments = [];
   db.tours = [{ id: "T-001", name: "Test Temple Tour" }];
   db.audits = [];
 }
@@ -493,6 +510,37 @@ describe("PATCH /api/pay/peak-document — settling what PEAK did not confirm", 
     expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "voided" })).status).toBe(200);
     expect(db.docs[0]).toMatchObject({ status: "VOIDED", peakDocumentNo: "EXP-TEST-0042" });
     for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PENDING", peakPaymentRef: null });
+  });
+
+  // Payments v2, the invariant the whole model rests on: a PEAK document is bookkeeping,
+  // a GuidePayment is a real bank transfer. Voiding the first must never undo the second.
+  it("a document voided in PEAK AFTER its payment leaves the real payment standing — the jobs stay paid, only the EXP goes", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    const payment = { ...db.payments[0] };
+    const paidAtBefore = [J1, J2, J3].map((j) => payOf(j)!.paidAt.toISOString());
+    expect(payment).toMatchObject({ status: "RECORDED", source: "PEAK_DOCUMENT", peakPaymentRef: "FOLK-PAY-203005-01" });
+
+    expect((await resolve({ paymentRef: "FOLK-PAY-203005-01", resolution: "voided" })).status).toBe(200);
+
+    // The document is voided and keeps its number as the record of what PEAK held.
+    expect(db.docs[0]).toMatchObject({ status: "VOIDED", peakDocumentNo: "EXP-TEST-0042" });
+    // The payment itself is untouched: no reversal, no second payment, no history removed.
+    expect(db.payments).toHaveLength(1);
+    expect(db.payments[0]).toMatchObject({ id: payment.id, paymentNo: payment.paymentNo, status: "RECORDED", amountTransferred: payment.amountTransferred, paymentDate: "2030-05-13" });
+    expect(db.payments[0].reversedAt ?? null).toBeNull();
+    expect(db.paymentJobs).toHaveLength(3);
+    expect(db.paymentJobs.every((j) => j.paymentId === payment.id && j.active === true)).toBe(true);
+    // Each job stays paid by that transfer, with its date and its slip; only the PEAK
+    // linkage is cleared, because that document no longer exists in PEAK.
+    [J1, J2, J3].forEach((j, i) => {
+      expect(payOf(j)).toMatchObject({ status: "PAID", guidePaymentId: payment.id, eslipUrl: "https://drive.example/slip-1", peakRef: null, peakDocumentId: null, peakPaymentRef: null });
+      expect(payOf(j)!.paidAt.toISOString()).toBe(paidAtBefore[i]);
+    });
+    // Nothing was reversed and no legacy undo ran.
+    const actions = vi.mocked(audit).mock.calls.map((c) => c[0].action);
+    expect(actions).toContain("pay.peak_document_voided");
+    expect(actions.filter((a) => /revers|pay\.pending/.test(a))).toEqual([]);
   });
 
   it("will not resolve a document that may still be in flight", async () => {

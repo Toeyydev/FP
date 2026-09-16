@@ -4,6 +4,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { SLOT_TIMES } from "@/lib/slots";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendPushToUser } from "@/lib/push";
@@ -101,6 +102,8 @@ export async function POST(req: NextRequest) {
       const c = historicalDeleteConflict();
       return NextResponse.json(c.body, { status: c.status });
     }
+    const history = await financialHistoryBlockers(prisma, [{ guideId: a.guideId, date, slotIdx }]);
+    if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),

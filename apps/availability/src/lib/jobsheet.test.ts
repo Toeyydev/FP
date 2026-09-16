@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -342,3 +342,21 @@ describe("jobsheet — adopting a guide's reported expenses", () => {
   });
 });
 
+describe("guideFeeOrStandard — an entered zero fee is a fee of zero", () => {
+  it("keeps ฿0 — a job run together with another pays no fee of its own", () => {
+    const zero = { price: 0, time: 1, whtPct: 0 };
+    expect(guideFeeOrStandard(zero)).toBe(zero);
+    expect(computeTotals([], guideFeeOrStandard(zero))).toMatchObject({ gross: 0, wht: 0, netGuideFee: 0 });
+  });
+  it("keeps 0 × no price as zero, not the standard fee", () => {
+    const none = { price: null, time: 0, whtPct: null };
+    expect(computeTotals([], guideFeeOrStandard(none)).gross).toBe(0);
+  });
+  it("gives the standard fee only when no fee was entered at all", () => {
+    expect(guideFeeOrStandard({})).toBe(DEFAULT_GUIDE_FEE);
+    expect(guideFeeOrStandard(null)).toBe(DEFAULT_GUIDE_FEE);
+    expect(guideFeeOrStandard({ price: null, time: 1, whtPct: 3 })).toBe(DEFAULT_GUIDE_FEE);
+    const entered = { price: 1300, time: 1, whtPct: 3 };
+    expect(guideFeeOrStandard(entered)).toBe(entered);
+  });
+});
