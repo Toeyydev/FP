@@ -22,6 +22,10 @@ const sheet = {
   expenses: [{ description: "Water", price: 10, pax: 7, paidBy: "guide" }, { description: "Bus", price: 13, pax: 7, paidBy: "guide" }],
   guideFee: { price: 1500, time: 1, whtPct: 3 }, createdAt: new Date("2026-07-01T00:00:00Z"), peakDocumentNo: null, peakDocumentId: null, peakSyncStatus: null,
 };
+const JOB2 = { jobNo: "FOLK-BKK-20260705-03", date: "2026-07-05", slotIdx: 3 };
+const AUG = { jobNo: "FOLK-BKK-20260803-01", date: "2026-08-03", slotIdx: 0 };
+const sheetFor = (j: { jobNo: string; date: string; slotIdx: number }, price: number) => ({ ...sheet, date: j.date, slotIdx: j.slotIdx, ref: j.jobNo, guideFee: { price, time: 1, whtPct: 3 } });
+
 const body = (over: object = {}) => ({ guideId: G, jobs: [JOB], paymentDate: "2026-07-20", amountTransferred: 1616, noSlipReason: "Cash paid in person, slip to follow", ...over });
 const post = (payload: object, file?: Blob) => {
   const fd = new FormData();
@@ -74,6 +78,62 @@ describe("POST /api/guide-payments", () => {
     expect(res.status).toBe(200);
     expect(mem.current!.tables.guidePayment[0]).toMatchObject({ jobTotal: 1616, adjustmentTotal: -70, amountTransferred: 1546 });
     expect(mem.current!.tables.guidePaymentAdjustment[0]).toMatchObject({ type: "ADVANCE_SETTLEMENT", amount: -70 });
+  });
+});
+
+describe("POST /api/guide-payments — canonical validation the client cannot bypass", () => {
+  it("2 · an unapproved job submitted straight to the API is refused", async () => {
+    mem.current!.tables.jobSheet[0].approvalStatus = null;
+    const res = await post(body());
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("is not approved");
+    expect(mem.current!.tables.guidePayment).toHaveLength(0);
+  });
+
+  it("3 · several eligible jobs for one guide become ONE payment with one number", async () => {
+    mem.current!.tables.jobSheet.push(sheetFor(JOB2, 1000));
+    const res = await post(body({ jobs: [JOB, JOB2], amountTransferred: 1616 + 1131 }));
+    expect(res.status).toBe(200);
+    const d = await res.json();
+    expect(mem.current!.tables.guidePayment).toHaveLength(1);
+    expect(d.payment.jobs.map((j: { jobNo: string }) => j.jobNo)).toEqual([JOB.jobNo, JOB2.jobNo]);
+    expect(mem.current!.tables.guidePaymentJob).toHaveLength(2);
+    expect(mem.current!.tables.tourPayment.filter((t) => t.status === "PAID")).toHaveLength(2);
+  });
+
+  it("4 · jobs from two accounting months need the written reason, then record as one transfer", async () => {
+    mem.current!.tables.jobSheet.push(sheetFor(AUG, 1000));
+    const jobs = [JOB, AUG];
+    const refused = await (await post(body({ jobs, paymentDate: "2026-08-20", amountTransferred: 1616 + 1131 }))).json();
+    expect(refused.reasons.join(" ")).toContain("book into 2026-07 and 2026-08");
+    expect(mem.current!.tables.guidePayment).toHaveLength(0);
+
+    const ok = await post(body({ jobs, paymentDate: "2026-08-20", amountTransferred: 1616 + 1131, periodOverrideReason: "One transfer settled both months at the guide's request" }));
+    expect(ok.status).toBe(200);
+    expect(mem.current!.tables.guidePayment[0]).toMatchObject({ periodOverrideReason: "One transfer settled both months at the guide's request" });
+  });
+
+  it("6 · a transfer date in the future is refused", async () => {
+    const res = await post(body({ paymentDate: "2999-01-01" }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("is in the future");
+    expect(mem.current!.tables.guidePayment).toHaveLength(0);
+  });
+
+  it("7 · a job an active payment already owns is refused a second payment", async () => {
+    expect((await post(body())).status).toBe(200);
+    const again = await post(body({ noSlipReason: "Second attempt" }));
+    expect(again.status).toBe(409);
+    expect((await again.json()).reasons.join(" ")).toContain("is already paid by FOLK-PMT-202607-001");
+    expect(mem.current!.tables.guidePayment).toHaveLength(1);
+  });
+
+  it("8 · after recording, the server reads the job back as paid — not an optimistic guess", async () => {
+    await post(body());
+    const res = await GET(new NextRequest(`https://ops.folkpaths.com/api/guide-payments?guideId=${G}&period=2026-07`));
+    const d = await res.json();
+    expect(d.payments[0].jobs.map((j: { jobNo: string }) => j.jobNo)).toEqual([JOB.jobNo]);
+    expect(mem.current!.tables.tourPayment[0]).toMatchObject({ status: "PAID", guidePaymentId: mem.current!.tables.guidePayment[0].id });
   });
 });
 

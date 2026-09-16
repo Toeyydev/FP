@@ -31,7 +31,7 @@ const unique = (target: string[]) => new Prisma.PrismaClientKnownRequestError("U
 
 export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   const t: Record<string, Row[]> = {};
-  const names = ["user", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "paymentTransaction", "paymentEvidence", "auditLog"];
+  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "paymentTransaction", "paymentEvidence", "auditLog"];
   for (const n of names) t[n] = (seed[n] ?? []).map((r, i) => ({ id: r.id ?? `${n}_${i}`, ...clone(r) }));
   let seq = 1000;
   const relations: Record<string, Record<string, (row: Row) => any>> = {

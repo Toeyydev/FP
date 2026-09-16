@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
 import { previewPayment } from "@/lib/payments-v2/service";
-import { paymentBody } from "../route";
+import { paymentBody } from "@/lib/payments-v2/request-schema";
 
 export const dynamic = "force-dynamic";
 

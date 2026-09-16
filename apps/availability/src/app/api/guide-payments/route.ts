@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isOps, canViewFinance } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
-import { ADJUSTMENT_TYPES, bangkokToday } from "@/lib/payments-v2/rules";
+import { bangkokToday } from "@/lib/payments-v2/rules";
+import { paymentBody } from "@/lib/payments-v2/request-schema";
 import { previewPayment, recordPayment, type RecordPaymentInput } from "@/lib/payments-v2/service";
 
 export const dynamic = "force-dynamic";
@@ -14,18 +14,7 @@ export const dynamic = "force-dynamic";
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 
-export const paymentBody = z.object({
-  guideId: z.string().min(1),
-  jobs: z.array(z.object({ jobNo: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60),
-  paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  amountTransferred: z.number(),
-  adjustments: z.array(z.object({ type: z.enum(ADJUSTMENT_TYPES), amount: z.number(), description: z.string().min(1).max(300), jobNo: z.string().max(64).nullish() })).max(20).optional(),
-  bankRef: z.string().max(120).nullish(),
-  noSlipReason: z.string().max(500).nullish(),
-  mismatchReason: z.string().max(500).nullish(),
-  periodOverrideReason: z.string().max(500).nullish(),
-  note: z.string().max(500).nullish(),
-});
+// Request shape: lib/payments-v2/request-schema (a Next.js route may only export handlers).
 
 // GET ?guideId=&period=YYYY-MM — what a payment for this guide could hold: the jobs waiting
 // for money with their current figures, and the payments already recorded for that month.
@@ -34,17 +23,20 @@ export async function GET(req: NextRequest) {
   if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const guideId = req.nextUrl.searchParams.get("guideId") ?? "";
   const period = req.nextUrl.searchParams.get("period") ?? "";
-  if (!guideId || !/^\d{4}-\d{2}$/.test(period)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
+  if (!/^\d{4}-\d{2}$/.test(period)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
 
+  // One guide, or the whole month's payments when no guide is named (the history view).
   const payments = await prisma.guidePayment.findMany({
-    where: { guideId, OR: [{ accountingPeriod: period }, { paymentDate: { startsWith: period } }] },
+    where: { ...(guideId ? { guideId } : {}), OR: [{ accountingPeriod: period }, { paymentDate: { startsWith: period } }] },
     orderBy: { createdAt: "desc" },
     include: { jobs: true, adjustments: true },
   });
+  const guides = await prisma.user.findMany({ where: { guideId: { in: [...new Set(payments.map((p) => p.guideId))] } }, select: { guideId: true, displayName: true } });
   return NextResponse.json({
     guideId, period, today: bangkokToday(),
     payments: payments.map((p) => ({
       id: p.id, paymentNo: p.paymentNo, status: p.status, source: p.source, paymentDate: p.paymentDate, accountingPeriod: p.accountingPeriod,
+      guideId: p.guideId, guide: guides.find((g) => g.guideId === p.guideId)?.displayName ?? p.guideId, createdAt: p.createdAt,
       jobTotal: Number(p.jobTotal), adjustmentTotal: Number(p.adjustmentTotal), amountTransferred: Number(p.amountTransferred),
       bankRef: p.bankRef, slipUrl: p.slipUrl, noSlipReason: p.noSlipReason, mismatchReason: p.mismatchReason, note: p.note,
       reversedAt: p.reversedAt, reversalReason: p.reversalReason,

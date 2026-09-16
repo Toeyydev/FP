@@ -9,7 +9,8 @@ import { ADJUSTMENT_LABEL, ADJUSTMENT_TYPES, reconciliationLine, toSatang, type 
 // left, the amount, any adjustment that makes those agree, and the slip. The jobs become
 // paid only because this payment exists — see lib/payments-v2.
 
-export type PayableJob = { date: string; slotIdx: number; ref?: string | null; tour?: string; amount: number; payBlock?: string | null };
+export type PayableJob = { date: string; slotIdx: number; ref?: string | null; tour?: string; amount: number; payBlock?: string | null; accountingMonth?: string | null };
+export type RecordedPaymentResult = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[] };
 
 const key = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 const dShort = (d: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
@@ -37,6 +38,9 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
   const [mismatchReason, setMismatchReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [reasons, setReasons] = useState<string[]>([]);
+  const [periodReason, setPeriodReason] = useState("");
+  const [step, setStep] = useState<"compose" | "review">("compose");
+  const [done, setDone] = useState<RecordedPaymentResult | null>(null);
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
@@ -61,6 +65,9 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
 
   const setAdj = (i: number, patch: Partial<Adjustment>) => setAdjustments((a) => a.map((x, n) => (n === i ? { ...x, ...patch } : x)));
 
+  const months = [...new Set(chosen.map((j) => (j.accountingMonth ?? j.date).slice(0, 7)))].sort();
+  const crossMonth = months.length > 1;
+
   async function submit() {
     setBusy(true); setReasons([]);
     const payload = {
@@ -70,6 +77,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
       bankRef: bankRef.trim() || null, note: note.trim() || null,
       noSlipReason: file ? null : noSlipReason.trim() || null,
       mismatchReason: recon.balanced ? null : mismatchReason.trim() || null,
+      periodOverrideReason: crossMonth ? periodReason.trim() || null : null,
     };
     const fd = new FormData();
     fd.append("payload", JSON.stringify(payload));
@@ -77,11 +85,95 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
     const r = await fetch("/api/guide-payments", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (r.ok && d.ok) { onDone(`${d.payment.paymentNo} recorded · ${thb(d.payment.amountTransferred)} · ${d.payment.jobs.length} job${d.payment.jobs.length === 1 ? "" : "s"} paid`); return; }
+    if (r.ok && d.ok) { setDone(d.payment as RecordedPaymentResult); return; }
+    setStep("compose");
     setReasons(Array.isArray(d.reasons) && d.reasons.length ? d.reasons : [`Not recorded (${r.status})`]);
   }
 
   const ready = chosen.length > 0 && amount.trim() !== "" && paymentDate !== "";
+
+  // Recorded: what exists now, from the server's own reply — never assumed.
+  if (done) return (
+    <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) onDone(`${done.paymentNo} recorded`); }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="recpay-done-h" style={{ width: "min(560px, 100%)" }}>
+        <h3 id="recpay-done-h">Payment recorded</h3>
+        <div className="mctx">{guideId} · {guide}</div>
+        <div className="mbody" style={{ display: "grid", gap: 12 }}>
+          <div className="pay-recon ok" role="status" style={{ display: "grid", gap: 4 }}>
+            <b className="num" style={{ fontSize: 18 }}>{done.paymentNo}</b>
+            <span>Transfer date {done.paymentDate} · amount transferred <b className="num">{thb(done.amountTransferred)}</b></span>
+            <span>{done.jobs.length} job{done.jobs.length === 1 ? "" : "s"} paid · accounting month {done.accountingPeriod} · status RECORDED</span>
+          </div>
+          <div>
+            <span className="paydoc-label">Job Nos. paid</span>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {done.jobs.map((j) => <li key={`${j.date}|${j.slotIdx}`}><span className="mono">{j.jobNo}</span> · {thb(j.payable)}</li>)}
+            </ul>
+          </div>
+        </div>
+        <div className="mfoot">
+          <button className="btn primary" onClick={() => onDone(`${done.paymentNo} recorded · ${thb(done.amountTransferred)} · ${done.jobs.length} job${done.jobs.length === 1 ? "" : "s"} paid`)}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Review: the whole payment before it is committed.
+  if (step === "review") return (
+    <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="recpay-review-h" style={{ width: "min(680px, 100%)" }}>
+        <h3 id="recpay-review-h">Review payment</h3>
+        <div className="mctx">{guideId} · {guide} · accounting month {months.join(" + ") || "—"}</div>
+        <div className="mbody" style={{ display: "grid", gap: 12 }}>
+          <div className="grid-scroll">
+            <table className="acct-table pay-review" aria-label="Jobs in this payment">
+              <thead><tr><th>Job No.</th><th>Tour date</th><th className="r">Payable</th><th className="r">Amount paid</th></tr></thead>
+              <tbody>
+                {chosen.map((j) => (
+                  <tr key={key(j)}><td className="num">{j.ref ?? "—"}</td><td>{dShort(j.date)}</td><td className="r num">{thb(j.amount)}</td><td className="r num">{thb(j.amount)}</td></tr>
+                ))}
+                {adjustments.filter((a) => a.description.trim() && a.amount.trim()).map((a, i) => (
+                  <tr key={`adj${i}`}><td>{ADJUSTMENT_LABEL[a.type]}</td><td>{a.description}</td><td className="r">—</td><td className="r num">{thb(Number(a.amount) || 0)}</td></tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr><td colSpan={2}>Total jobs</td><td className="r num">{thb(recon.jobTotal)}</td><td className="r num">{thb(recon.jobTotal)}</td></tr>
+                <tr><td colSpan={2}>Total adjustments</td><td className="r">—</td><td className="r num">{thb(recon.adjustmentTotal)}</td></tr>
+                <tr><td colSpan={2}><b>Amount transferred</b></td><td className="r">—</td><td className="r num"><b>{thb(recon.amountTransferred)}</b></td></tr>
+              </tfoot>
+            </table>
+          </div>
+          <div className={`pay-recon${recon.balanced ? " ok" : ""}`} role="status">
+            <span className="paydoc-label">Reconciliation</span>
+            <b className="num">{reconciliationLine(recon)}</b>
+            {!recon.balanced && <span>Difference {thb(recon.difference)}</span>}
+          </div>
+          <div className="pay-review-facts">
+            <div><span className="paydoc-label">Transfer date</span><b>{paymentDate}</b></div>
+            <div><span className="paydoc-label">Bank reference</span><b>{bankRef.trim() || "—"}</b></div>
+            <div><span className="paydoc-label">Evidence</span><b>{file ? `Slip: ${file.name}` : noSlipReason.trim() ? `No slip — ${noSlipReason.trim()}` : "No slip, no reason given"}</b></div>
+            <div><span className="paydoc-label">Accounting month</span><b>{months.join(" + ") || "—"}</b></div>
+          </div>
+          {crossMonth && (
+            <label><span className="paydoc-label">These jobs book into {months.join(" and ")} — why are they in one transfer?</span>
+              <input value={periodReason} onChange={(e) => setPeriodReason(e.target.value)} placeholder="Reason recorded on the payment" disabled={busy} />
+            </label>
+          )}
+          {!recon.balanced && (
+            <label><span className="paydoc-label">Why the transfer differs</span>
+              <input value={mismatchReason} onChange={(e) => setMismatchReason(e.target.value)} placeholder="Add an adjustment, or say why" disabled={busy} />
+            </label>
+          )}
+          {reasons.length > 0 && <Note tone="danger"><b>Cannot record this payment.</b>{reasons.map((x, i) => <div key={i} style={{ marginTop: 4 }}>{x}</div>)}</Note>}
+        </div>
+        <div className="mfoot">
+          <button className="btn ghost" onClick={() => setStep("compose")} disabled={busy}>Back</button>
+          <button className="btn primary" onClick={submit} disabled={busy}>{busy ? "Recording…" : `Record payment · ${thb(recon.amountTransferred)}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="recpay-h" style={{ width: "min(680px, 100%)" }}>
@@ -128,6 +220,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
             <span className="paydoc-label">Reconciliation</span>
             <b className="num">{reconciliationLine(recon)}</b>
           </div>
+          {crossMonth && <Note tone="warn">These jobs book into {months.join(" and ")}. One transfer may cover them, but the reason is recorded on the payment — you are asked for it in the review.</Note>}
           {!recon.balanced && amount.trim() !== "" && (
             <label><span className="paydoc-label">Why the transfer differs</span>
               <input value={mismatchReason} onChange={(e) => setMismatchReason(e.target.value)} placeholder="Add an adjustment, or say why" disabled={busy} />
@@ -162,7 +255,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
         <div className="mfoot">
           {!busy && !ready && <span style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>{!chosen.length ? "Tick the jobs this transfer paid" : "Enter the amount and date"}</span>}
           <button className="btn ghost" onClick={close} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={submit} disabled={!ready || busy}>{busy ? "Recording…" : `Record ${thb(recon.amountTransferred)} · ${chosen.length} job${chosen.length === 1 ? "" : "s"}`}</button>
+          <button className="btn primary" onClick={() => { setReasons([]); setStep("review"); }} disabled={!ready || busy}>Review · {thb(recon.amountTransferred)} · {chosen.length} job{chosen.length === 1 ? "" : "s"}</button>
         </div>
       </div>
     </div>

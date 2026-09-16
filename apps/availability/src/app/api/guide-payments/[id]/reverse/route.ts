@@ -16,5 +16,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const reason = String(body?.reason ?? "").slice(0, 500);
   const result = await reversePayment(prisma, { paymentId: id, reason, actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null } });
   if (!result.ok) return NextResponse.json({ error: "not-reversed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
-  return NextResponse.json({ ok: true, paymentNo: result.paymentNo, jobs: result.jobs });
+  // A job another ACTIVE payment owns stays paid — the operator is told which, rather than
+  // being left to assume every job on the payment is unpaid again.
+  const stillPaid = await prisma.guidePaymentJob.findMany({
+    where: { jobNo: { in: result.jobs }, active: true },
+    select: { jobNo: true, paymentId: true },
+  });
+  const others = stillPaid.length
+    ? await prisma.guidePayment.findMany({ where: { id: { in: [...new Set(stillPaid.map((s) => s.paymentId))] } }, select: { id: true, paymentNo: true } })
+    : [];
+  return NextResponse.json({
+    ok: true, paymentNo: result.paymentNo, jobs: result.jobs,
+    unpaidJobs: result.jobs.filter((j) => !stillPaid.some((s) => s.jobNo === j)),
+    stillPaid: stillPaid.map((s) => ({ jobNo: s.jobNo, paymentNo: others.find((o) => o.id === s.paymentId)?.paymentNo ?? "another payment" })),
+  });
 }

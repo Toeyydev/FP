@@ -12,6 +12,7 @@ import PeakPaymentDialog, { CreatedState, type CreatedDocument } from "@/compone
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import RecordExpDialog from "@/components/RecordExpDialog";
 import RecordGuidePaymentDialog, { type PayableJob } from "@/components/RecordGuidePaymentDialog";
+import GuidePaymentsWorkflow from "@/components/GuidePaymentsWorkflow";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 import { type DocumentDrift } from "@/lib/payment-document-drift";
@@ -69,6 +70,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   const [putInPeak, setPutInPeak] = useState<{ guideId: string; guide: string; jobs: Job[]; paidDate: string } | null>(null);
   const [paymentDocs, setPaymentDocs] = useState<PaymentDoc[]>([]);
   const [recordPay, setRecordPay] = useState<{ guideId: string; guide: string; jobs: PayableJob[]; preselect: string[] } | null>(null);
+  // Two views of the same money: the month board (legacy history included) and the
+  // canonical Guide Payments workflow (one bank transfer at a time).
+  const [view, setView] = useState<"board" | "guide-payments">("board");
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
@@ -630,9 +634,14 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       <div className="op-layout">
         <OperatorNav active="payments" />
         <div className="op-main">
-      <div id="appBar"><div className="subtabs"><span className="subtab active">Payments</span></div>
+      <div id="appBar">
+        <div className="subtabs">
+          <button type="button" className={`subtab${view === "board" ? " active" : ""}`} onClick={() => setView("board")}>Payments</button>
+          <button type="button" className={`subtab${view === "guide-payments" ? " active" : ""}`} onClick={() => setView("guide-payments")}>Guide Payments</button>
+        </div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
+      {view === "guide-payments" ? <GuidePaymentsWorkflow canEdit={canEdit} /> : (<>
 
       {/* Payment execution at a glance: who needs paying, how much, done or not.
           Pending payment carries the emphasis; paid-to-date is a footnote. */}
@@ -819,6 +828,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           )}
         </div>
       </section>
+      </>)}
         </div>
       </div>
 
