@@ -87,11 +87,18 @@ export async function POST(req: NextRequest) {
   if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
   // A job paid by a recorded payment goes back to unpaid by reversing that payment — with
   // a reason, keeping the record. Only jobs marked paid before Payments v2 are undone here.
-  const recorded = await prisma.tourPayment.findMany({ where: { OR: list.map((j) => ({ guideId, date: j.date, slotIdx: j.slotIdx })), guidePaymentId: { not: null } }, select: { date: true, slotIdx: true, guidePaymentId: true } });
-  if (recorded.length) {
-    const nos = await prisma.guidePayment.findMany({ where: { id: { in: recorded.map((r) => r.guidePaymentId!) } }, select: { paymentNo: true } });
-    const reasons = [`This job is paid by ${[...new Set(nos.map((n) => n.paymentNo))].join(", ")} — reverse that payment (with a reason) instead; the record stays.`];
-    return NextResponse.json({ error: "reverse-the-payment", reasons, detail: reasons[0] }, { status: 409 });
+  //
+  // Asked of GuidePaymentJob, which owns "this job is paid by this payment" — never of
+  // TourPayment.guidePaymentId, which is only a cache of it and could be missing or stale.
+  const held = await prisma.guidePaymentJob.findMany({
+    where: { OR: list.map((j) => ({ guideId, date: j.date, slotIdx: j.slotIdx })), active: true },
+    select: { date: true, slotIdx: true, jobNo: true, paymentId: true },
+  });
+  if (held.length) {
+    const payments = await prisma.guidePayment.findMany({ where: { id: { in: [...new Set(held.map((h) => h.paymentId))] } }, select: { id: true, paymentNo: true } });
+    const nameOf = (id: string) => payments.find((p) => p.id === id)?.paymentNo ?? "a recorded payment";
+    const reasons = held.map((h) => `${h.jobNo || `${h.date} slot ${h.slotIdx}`} is paid by ${nameOf(h.paymentId)} — reverse that payment (with a reason) instead; the record stays.`);
+    return NextResponse.json({ error: "reverse-the-payment", reasons, detail: reasons.join("\n") }, { status: 409 });
   }
   const ref = peakRef?.trim() || null;
   const now = new Date();

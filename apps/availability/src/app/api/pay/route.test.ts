@@ -5,6 +5,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   assignment: { findUnique: vi.fn() },
   tourPayment: { upsert: vi.fn(), findMany: vi.fn() },
+  guidePaymentJob: { findMany: vi.fn() },
   guidePayment: { findMany: vi.fn() },
 }));
 const locksMock = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ beforeEach(() => {
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-TEST" });
   prismaMock.tourPayment.upsert.mockResolvedValue({});
   prismaMock.tourPayment.findMany.mockResolvedValue([]);
+  prismaMock.guidePaymentJob.findMany.mockResolvedValue([]);
   prismaMock.guidePayment.findMany.mockResolvedValue([]);
   locksMock.mockResolvedValue([]);
 });
@@ -51,14 +53,29 @@ describe("POST /api/pay PENDING — undoing a false paid", () => {
   });
 
   it("refuses to undo a job paid by a recorded payment — that payment is reversed instead", async () => {
-    prismaMock.tourPayment.findMany.mockResolvedValue([{ date: JOB.date, slotIdx: JOB.slotIdx, guidePaymentId: "gp_1" }]);
-    prismaMock.guidePayment.findMany.mockResolvedValue([{ paymentNo: "FOLK-PMT-209904-001" }]);
+    prismaMock.guidePaymentJob.findMany.mockResolvedValue([{ date: JOB.date, slotIdx: JOB.slotIdx, jobNo: "FOLK-BKK-20990403-07", paymentId: "gp_1" }]);
+    prismaMock.guidePayment.findMany.mockResolvedValue([{ id: "gp_1", paymentNo: "FOLK-PMT-209904-001" }]);
     const res = await undo({ ...JOB, status: "PENDING" });
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toBe("reverse-the-payment");
     expect(body.detail).toContain("FOLK-PMT-209904-001");
     expect(prismaMock.tourPayment.upsert).not.toHaveBeenCalled();
+  });
+
+  // Scenario A: the cache pointer is missing, the payment is real. GuidePaymentJob decides.
+  it("refuses the undo from GuidePaymentJob alone, even when TourPayment.guidePaymentId is null", async () => {
+    prismaMock.tourPayment.findMany.mockResolvedValue([{ date: JOB.date, slotIdx: JOB.slotIdx, guidePaymentId: null }]);
+    prismaMock.guidePaymentJob.findMany.mockResolvedValue([{ date: JOB.date, slotIdx: JOB.slotIdx, jobNo: "FOLK-BKK-20990403-07", paymentId: "gp_1" }]);
+    prismaMock.guidePayment.findMany.mockResolvedValue([{ id: "gp_1", paymentNo: "FOLK-PMT-209904-001" }]);
+    const res = await undo({ ...JOB, status: "PENDING" });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("reverse-the-payment");
+    expect(body.detail).toContain("FOLK-PMT-209904-001");
+    expect(prismaMock.tourPayment.upsert).not.toHaveBeenCalled();
+    // The authoritative question was asked of GuidePaymentJob, with active: true.
+    expect(prismaMock.guidePaymentJob.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ active: true }) }));
   });
 
   it("refuses a job held by a combined PEAK document — that changes only through the document", async () => {

@@ -130,3 +130,68 @@ describe("financialHistoryBlockers — F · evidence is never deleted with the j
     expect(line).toContain("advance records");
   });
 });
+
+// Cache drift. TourPayment.guidePaymentId (and even TourPayment.status) are a cache of what
+// GuidePaymentJob owns. When they disagree — a manual edit, a partial restore, future code
+// that forgets to write one — the canonical table must still decide.
+describe("cache drift — GuidePaymentJob stays authoritative", () => {
+  const pay = async () => {
+    const r = await recordPayment(mem.db, input());
+    expect(r.ok).toBe(true);
+    return mem.tables.guidePayment[0];
+  };
+
+  it("B · a job whose TourPayment looks PENDING with no pointer is still refused a second payment", async () => {
+    const payment = await pay();
+    // Drift: the cache forgets the payment entirely.
+    Object.assign(mem.tables.tourPayment[0], { status: "PENDING", paidAt: null, guidePaymentId: null });
+    const second = await recordPayment(mem.db, input({ bankRef: "BANK-TX-9", slip: { url: "https://drive.test/slip-9" } }));
+    expect(second).toMatchObject({ ok: false, code: "invalid" });
+    expect(!second.ok && second.reasons).toContain(`${A.jobNo} is already paid by ${payment.paymentNo} — reverse that payment before paying it again`);
+    expect(mem.tables.guidePayment).toHaveLength(1);
+  });
+
+  it("C · reversal follows GuidePaymentJob, not the pointer: a wrong pointer still frees the right job", async () => {
+    const payment = await pay();
+    // Drift: the cache points at a payment that never held this job.
+    Object.assign(mem.tables.tourPayment[0], { guidePaymentId: "gp_someone_else" });
+    const rev = await reversePayment(mem.db, { paymentId: payment.id, reason: "Sent to the wrong account", actor });
+    expect(rev.ok).toBe(true);
+    expect(mem.tables.guidePayment[0]).toMatchObject({ status: "REVERSED", reversalReason: "Sent to the wrong account" });
+    expect(mem.tables.guidePaymentJob[0].active).toBe(false);
+    // The job itself — found by its identity, not by the pointer — is unpaid again.
+    expect(mem.tables.tourPayment[0]).toMatchObject({ guideId: G, date: A.date, slotIdx: A.slotIdx, status: "PENDING", paidAt: null, guidePaymentId: null, eslipUrl: null });
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: "payment.reversed", detail: expect.objectContaining({ after: expect.objectContaining({ jobsUnpaid: [A.jobNo] }) }) }));
+  });
+
+  it("C · a missing pointer does not leave the job paid after reversal", async () => {
+    const payment = await pay();
+    Object.assign(mem.tables.tourPayment[0], { guidePaymentId: null });
+    expect((await reversePayment(mem.db, { paymentId: payment.id, reason: "Duplicate transfer", actor })).ok).toBe(true);
+    expect(mem.tables.tourPayment[0]).toMatchObject({ status: "PENDING", paidAt: null });
+  });
+
+  it("D · after a reversal the job takes a later payment, and the reversed one stays as history", async () => {
+    const first = await pay();
+    await reversePayment(mem.db, { paymentId: first.id, reason: "Wrong amount sent", actor });
+    const second = await recordPayment(mem.db, input({ amountTransferred: 1616, bankRef: "BANK-TX-2", slip: { url: "https://drive.test/slip-2" } }));
+    expect(second.ok && second.payment.paymentNo).toBe("FOLK-PMT-209909-002");
+    expect(mem.tables.guidePayment.map((p) => [p.paymentNo, p.status])).toEqual([["FOLK-PMT-209909-001", "REVERSED"], ["FOLK-PMT-209909-002", "RECORDED"]]);
+    const jobs = mem.tables.guidePaymentJob.map((j) => [j.jobNo, j.active]);
+    expect(jobs).toEqual([[A.jobNo, false], [A.jobNo, true]]);
+    expect(mem.tables.guidePayment[0].reversalReason).toBe("Wrong amount sent"); // history intact
+  });
+
+  it("a job another payment legitimately holds is not freed by this reversal", async () => {
+    const first = await pay();
+    // Job A is released and paid by a second payment; reversing the FIRST must not unpay it.
+    await reversePayment(mem.db, { paymentId: first.id, reason: "Recorded twice", actor });
+    const second = await recordPayment(mem.db, input({ bankRef: "BANK-TX-3", slip: { url: "https://drive.test/slip-3" } }));
+    expect(second.ok).toBe(true);
+    // Drift: the first payment's rows are made active again behind the service's back.
+    mem.tables.guidePaymentJob[0].active = true;
+    const again = await reversePayment(mem.db, { paymentId: first.id, reason: "Trying again", actor });
+    expect(again).toMatchObject({ ok: false, status: 409 }); // already reversed — nothing touched
+    expect(mem.tables.tourPayment[0]).toMatchObject({ status: "PAID" });
+  });
+});

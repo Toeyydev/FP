@@ -669,9 +669,16 @@ model TourPayment {
   // the same ref and document id. Cleared only when PEAK definitely refused the post.
   peakPaymentRef String? // FOLK-PAY-YYYYMM-NN → GuidePaymentDocument.paymentRef
   peakDocumentId String? // PEAK's internal id for that document (peakRef holds its EXP-… number)
-  // The recorded guide payment (FOLK-PMT-…) that paid this job. Payments v2: a job is
-  // PAID because a valid GuidePayment holds it — status/paidAt here are its cache. Null
-  // on rows paid before v2 (legacy) and on unpaid jobs.
+  // CACHE / BACK-POINTER ONLY — never the authority.
+  //
+  // GuidePaymentJob (with active = true) owns the fact "this job is paid by this payment";
+  // the database enforces one active payment per job there. This column only lets a reader
+  // that already holds the TourPayment row tell a v2 payment from a legacy one without a
+  // join, and it is written and cleared in the same transaction as that row.
+  //
+  // It must NEVER decide on its own whether a job is actively paid: ask GuidePaymentJob.
+  // If the two disagree, GuidePaymentJob wins. Null on unpaid jobs and on rows paid before
+  // Payments v2 (legacy), which read as "paid · no payment record".
   guidePaymentId String?
   updatedAt      DateTime  @updatedAt
 

@@ -239,19 +239,37 @@ export async function reversePayment(prisma: PrismaClient, input: { paymentId: s
     if (doc && doc.status === "PAID") return { ok: false, status: 409, reasons: [`PEAK holds this payment on ${doc.peakDocumentNo ?? p.peakPaymentRef}. Void that document in PEAK and record it with "Voided in PEAK…" before reversing the payment here`] };
   }
   const now = new Date();
+  // The jobs to unpay come from this payment's OWN GuidePaymentJob rows — the authoritative
+  // membership. TourPayment.guidePaymentId is a cache and is never asked; a missing or wrong
+  // pointer must not leave a job paid after its payment is reversed.
+  const held = p.jobs.map((j) => ({ guideId: j.guideId, date: j.date, slotIdx: j.slotIdx, jobNo: j.jobNo }));
+  let stillHeld: string[] = [];
   await prisma.$transaction(async (tx) => {
     const moved = await tx.guidePayment.updateMany({ where: { id: p.id, status: "RECORDED" }, data: { status: "REVERSED", reversedAt: now, reversedById: input.actor.actorId, reversalReason: reason } });
     if (moved.count !== 1) throw new PaymentConflict(`${p.paymentNo} changed while it was being reversed`);
     await tx.guidePaymentJob.updateMany({ where: { paymentId: p.id }, data: { active: false } });
-    if (p.slipUrl) await tx.tourPayment.updateMany({ where: { guidePaymentId: p.id, eslipUrl: p.slipUrl }, data: { eslipUrl: null } });
-    await tx.tourPayment.updateMany({ where: { guidePaymentId: p.id }, data: { status: "PENDING", paidAt: null, approvedBy: null, guidePaymentId: null } });
+    if (!held.length) return;
+    // A job another payment still holds stays paid by that one: only jobs left with no
+    // active payment go back to unpaid.
+    const others = await tx.guidePaymentJob.findMany({
+      where: { OR: held.map((h) => ({ guideId: h.guideId, date: h.date, slotIdx: h.slotIdx })), active: true },
+      select: { guideId: true, date: true, slotIdx: true, jobNo: true },
+    });
+    const takenBy = new Set(others.map((o) => `${o.guideId}|${o.date}|${o.slotIdx}`));
+    stillHeld = held.filter((h) => takenBy.has(`${h.guideId}|${h.date}|${h.slotIdx}`)).map((h) => h.jobNo);
+    const free = held.filter((h) => !takenBy.has(`${h.guideId}|${h.date}|${h.slotIdx}`));
+    if (!free.length) return;
+    const keys = free.map((h) => ({ guideId: h.guideId, date: h.date, slotIdx: h.slotIdx }));
+    // This payment's slip stops being the job's evidence; a slip from elsewhere stays.
+    if (p.slipUrl) await tx.tourPayment.updateMany({ where: { OR: keys, eslipUrl: p.slipUrl }, data: { eslipUrl: null } });
+    await tx.tourPayment.updateMany({ where: { OR: keys }, data: { status: "PENDING", paidAt: null, approvedBy: null, guidePaymentId: null } });
   });
   await audit({
     ...input.actor, action: "payment.reversed", entityType: "GuidePayment", entityId: p.id,
     detail: {
       paymentNo: p.paymentNo, guideId: p.guideId, reason,
       before: { status: "RECORDED", paymentDate: p.paymentDate, amountTransferred: Number(p.amountTransferred), jobs: p.jobs.map((j) => j.jobNo) },
-      after: { status: "REVERSED", jobsUnpaid: p.jobs.map((j) => j.jobNo) },
+      after: { status: "REVERSED", jobsUnpaid: p.jobs.map((j) => j.jobNo).filter((n) => !stillHeld.includes(n)), jobsStillPaidByAnotherPayment: stillHeld },
     },
   });
   return { ok: true, paymentNo: p.paymentNo, jobs: p.jobs.map((j) => j.jobNo) };
