@@ -12,6 +12,8 @@ const prismaMock = vi.hoisted(() => ({
   tour: { findMany: vi.fn() },
   tourPayment: { findMany: vi.fn() },
   guidePaymentDocument: { findMany: vi.fn() },
+  guidePaymentJob: { findMany: vi.fn() },
+  guidePayment: { findMany: vi.fn() },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -66,6 +68,8 @@ beforeEach(() => {
   prismaMock.tour.findMany.mockResolvedValue([{ id: "T-TEST", name: "Test tour" }]);
   prismaMock.tourPayment.findMany.mockResolvedValue([pay(A, "2020-04-15T13:09:00Z", null), pay(B, "2020-03-26T16:17:00Z", EXP_B)]);
   prismaMock.guidePaymentDocument.findMany.mockResolvedValue([]);
+  prismaMock.guidePaymentJob.findMany.mockResolvedValue([]);
+  prismaMock.guidePayment.findMany.mockResolvedValue([]);
 });
 
 describe("GET /api/payments — a job's EXP is its own, never a neighbour's", () => {

@@ -8,10 +8,10 @@ import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { matchState, type Slip } from "@/lib/payments/slips";
-import SplitSlipDialog, { type SlipUpload } from "@/components/SplitSlipDialog";
 import PeakPaymentDialog, { CreatedState, type CreatedDocument } from "@/components/PeakPaymentDialog";
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import RecordExpDialog from "@/components/RecordExpDialog";
+import RecordGuidePaymentDialog, { type PayableJob } from "@/components/RecordGuidePaymentDialog";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 import { type DocumentDrift } from "@/lib/payment-document-drift";
@@ -20,6 +20,9 @@ type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; a
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
   // together · one ref", and if not, why. The server refuses with the same rule.
   combinable?: boolean; combinedBlock?: { code: string; message: string; documentNo?: string } | null; sheetPeakDocumentNo?: string | null;
+  // Payments v2: the recorded payment that pays this job, and why it cannot be in one now.
+  payment?: { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; slipUrl: string | null; noSlipReason: string | null } | null;
+  payBlock?: string | null;
   // Paid per tour with no PEAK document number yet: "Record EXP…" can take one (api/pay PATCH).
   canRecordExp?: boolean;
   // Paid on its own record, approved, with no PEAK document: "Put paid jobs in PEAK" can take it.
@@ -57,7 +60,6 @@ const bkkDateOf = (iso: string) => new Date(new Date(iso).getTime() + 7 * 3600 *
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
 export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
-  const [slipBatch, setSlipBatch] = useState<{ guideId: string; job: Job; files: File[] } | null>(null);
   const [payTogether, setPayTogether] = useState<{ guideId: string; guide: string; jobs: Job[] } | null>(null);
   // Stage 2: record the payment against a document already created in PEAK.
   const [recordPayment, setRecordPayment] = useState<{ guideId: string; guide: string; doc: CreatedDocument } | null>(null);
@@ -66,6 +68,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // "Put paid jobs in PEAK": one document for jobs one transfer already paid.
   const [putInPeak, setPutInPeak] = useState<{ guideId: string; guide: string; jobs: Job[]; paidDate: string } | null>(null);
   const [paymentDocs, setPaymentDocs] = useState<PaymentDoc[]>([]);
+  const [recordPay, setRecordPay] = useState<{ guideId: string; guide: string; jobs: PayableJob[]; preselect: string[] } | null>(null);
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
@@ -107,13 +110,36 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       window.location.href = "/payment-batches";
     } else load(period);
   }
-  // Mark a single tour paid/unpaid (per-tour TourPayment via the /pay endpoint).
-  async function setJobPaid(j: Job, guideId: string, status: "PAID" | "PENDING", peakRef?: string) {
-    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status, ...(peakRef ? { peakRef } : {}) }) });
+  // Put a job marked paid BEFORE Payments v2 back to pending. A job paid by a recorded
+  // payment is not undone here — that payment is reversed, with a reason.
+  async function setJobPaid(j: Job, guideId: string) {
+    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: j.date, slotIdx: j.slotIdx, status: "PENDING" }) });
     if (r.ok) { load(period); return; }
     const d = await r.json().catch(() => ({}));
     alert(d.detail || `Couldn't update this payment (${r.status}).`);
   }
+
+  // Record payment: the jobs of this guide that a transfer could pay, with the reason
+  // beside any that cannot go in (the server applies the same rules).
+  function openRecordPayment(guideId: string, guide: string, jobs: Job[], preselect: string[] = []) {
+    const candidates: PayableJob[] = jobs
+      .filter((j) => !j.paid || j.payBlock === null)
+      .filter((j) => !j.payment)
+      .map((j) => ({ date: j.date, slotIdx: j.slotIdx, ref: j.ref, tour: j.tour, amount: j.amount, payBlock: j.payBlock ?? null }));
+    if (!candidates.some((c) => !c.payBlock)) { alert(`No job of ${guide}'s is waiting for a transfer this month.`); return; }
+    setRecordPay({ guideId, guide, jobs: candidates, preselect });
+  }
+
+  // Reverse a payment recorded by mistake: the record stays, marked reversed with a reason.
+  async function reversePayment(payment: NonNullable<Job["payment"]>) {
+    const reason = prompt(`Reverse ${payment.paymentNo} (${thb(payment.amountTransferred)})?\n\nIts jobs go back to unpaid and the payment stays on record, marked reversed.\n\nWhy is it being reversed?`, "");
+    if (reason === null) return;
+    const r = await fetch(`/api/guide-payments/${payment.id}/reverse`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) { load(period); return; }
+    alert(d.detail || `Couldn't reverse ${payment.paymentNo} (${r.status}).`);
+  }
+
   // Pay several tours in ONE transfer → ONE PEAK document: the guide as the contact,
   // one reference, one payment date, one Paid By account, one slip, and a line per job
   // and category. The dialog shows that document before anything is posted.
@@ -121,16 +147,9 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   async function payBatch(guideId: string, jobs: Job[]) {
     const payable = jobs.filter((j) => !j.paid && !j.peakPaymentRef && j.combinable);
     if (!payable.length) return;
-    if (payable.length > 1) {
-      setPayTogether({ guideId, guide: rows.find((x) => x.guideId === guideId)?.guide ?? guideId, jobs: payable });
-      return;
-    }
-    const typed = (payRef[guideId] ?? "").trim();
-    const r = await fetch("/api/pay", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, status: "PAID", peakRef: typed || undefined, jobs: payable.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }) });
-    if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); return; }
-    const d = await r.json().catch(() => ({}));
-    alert(d.detail || `Couldn't mark this job paid (${r.status}).`);
+    setPayTogether({ guideId, guide: rows.find((x) => x.guideId === guideId)?.guide ?? guideId, jobs: payable });
   }
+
   // Paying one job on its own while the guide has others unpaid costs a PEAK document
   // per transfer. Ask first, and point at the one-document path — unless this job
   // cannot go into that document anyway, when on its own is the only way to pay it.
@@ -176,6 +195,11 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
   // Out of sync: the document is not the payout the approved job sheets say. Blocked: a job IN
   // it changed since it was made — the server refuses the payment, so it is not offered.
   const outOfSync = (d: PaymentDoc) => !!d.drift && !d.drift.inSync;
+  // What paid this job: the payment record, or — for jobs paid before Payments v2 — a plain
+  // "paid" with whatever evidence was kept then.
+  const paymentChip = (j: Job) => j.payment
+    ? <span className="pay-pmt" title={`Recorded payment · ${thb(j.payment.amountTransferred)} on ${j.payment.paymentDate}${j.payment.slipUrl ? " · slip attached" : j.payment.noSlipReason ? ` · no slip: ${j.payment.noSlipReason}` : ""}`}>{j.payment.paymentNo}{j.payment.slipUrl ? " · slip" : ""}</span>
+    : j.paid ? <span className="pay-pmt legacy" title="Marked paid before payments were recorded — there is no payment record behind it">paid · no payment record</span> : null;
   const paymentBlocked = (d: PaymentDoc) => !!d.drift && d.drift.changed.length > 0;
   const docTag = (j: Job) => { const d = docFor(j); return d?.peakDocumentNo ? `Combined PEAK document ${d.peakDocumentNo}` : j.peakPaymentRef ?? ""; };
   const docBadge = (j: Job) => {
@@ -285,38 +309,6 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
     const r = await fetch("/api/payments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, status }) });
     if (r.ok) load(period);
   }
-  // Upload a bank payment slip (e-slip) for a guide's month. The slip IS proof of
-  // payment, so the backend flips the month — and all its tours — to PAID on upload.
-  async function uploadEslip(guideId: string, file: File) {
-    const blob = await shrinkImage(file);
-    const fd = new FormData(); fd.append("period", period); fd.append("guideId", guideId); fd.append("file", blob, shrunkName(file.name, blob));
-    const r = await fetch("/api/payments/eslip", { method: "POST", body: fd });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) load(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
-  }
-  // Upload ONE slip that covers one or several tours paid in a single transfer
-  // (the "merged payment"). Marks each listed tour paid + tags it with the slip.
-  async function uploadTourSlip(guideId: string, jobs: Job[], file: File) {
-    if (!jobs.length) return;
-    // A merged payment (2+ tours in one transfer) sticks together under ONE PEAK
-    // ref — use the one typed on the row, else ask for it. A single tour needs none.
-    let ref = (payRef[guideId] ?? "").trim();
-    if (jobs.length > 1 && !ref) {
-      const p = prompt(`PEAK ref for this payment (covers ${jobs.length} jobs in one transfer):`, "EXP-");
-      if (p === null) return;
-      ref = p.trim();
-    }
-    const fd = new FormData();
-    fd.append("guideId", guideId);
-    fd.append("jobs", JSON.stringify(jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx }))));
-    if (ref) fd.append("peakRef", ref);
-    const blob = await shrinkImage(file);
-    fd.append("file", blob, shrunkName(file.name, blob));
-    const r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) { setPayRef((p) => { const n = { ...p }; delete n[guideId]; return n; }); load(period); }
-    else alert(d.hint || d.detail || `Slip upload failed (${r.status}).`);
-  }
   // Split payment: add ONE slip (with its amount) to a single tour. Several slips
   // can be added and must sum to the tour's payout ("the right number") before it
   // shows Paid. A mismatch is reported so the operator can correct the amount.
@@ -335,35 +327,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
       .catch(() => {});
   };
 
-  // One slip up to the server. Returns the balance still outstanding afterwards —
-  // the server is the authority on the running total, not anything computed here.
-  async function uploadOneSlip(guideId: string, job: Job, file: File, amount: number): Promise<SlipUpload> {
-    const fd = new FormData();
-    fd.append("guideId", guideId);
-    fd.append("jobs", JSON.stringify([{ date: job.date, slotIdx: job.slotIdx }]));
-    fd.append("amount", String(amount));
-    let r: Response;
-    try {
-      const blob = await shrinkImage(file);
-      fd.append("file", blob, shrunkName(file.name, blob));
-      r = await fetch("/api/pay/eslip", { method: "POST", body: fd });
-    } catch {
-      return { ok: false, error: "Couldn't reach the server — this slip was not saved." };
-    }
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: d.hint || d.detail || `Upload failed (HTTP ${r.status}).` };
-    // The amount is recorded even when the Drive copy fails; say so rather than
-    // letting the row read as a clean success.
-    if (d.driveError) return { ok: false, error: `Amount saved, but the Drive copy failed: ${d.driveError}` };
-    return { ok: true, remaining: Number(d.remaining ?? 0) };
-  }
 
-  async function removeSplitSlip(guideId: string, job: Job, slip: Slip) {
-    if (!confirm(`Remove this slip (${thb(slip.amount)})? The Drive file stays; the tour total is recalculated.`)) return;
-    const r = await fetch("/api/pay/eslip", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId, date: job.date, slotIdx: job.slotIdx, at: slip.at }) });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) load(period); else alert(d.hint || d.detail || `Couldn't remove the slip (${r.status}).`);
-  }
   async function removeRow(guideId: string, guide: string) {
     if (!confirm(`Delete ${guide}'s entire pay for ${period}?\nThis permanently removes ALL their tours that month — assignments, job sheets, check-ins, reports, payments AND the imported bookings for those tours, so they won't re-sync back onto Payments.\n\nThis does NOT cancel anything on the OTA (GetYourGuide) — do that there first. Cannot be undone.`)) return;
     const r = await fetch("/api/payments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId }) });
@@ -518,8 +482,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
             {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">View slip</a>}
             {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
             {mode === "unpaid" && canEdit && payable.length > 0 && <button className="btn sm primary" title={payable.length > 1 ? `Pay ${payable.length} jobs in one transfer — ONE PEAK document with a line per job` : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Pay {payable.length}</button>}
-            {mode === "unpaid" && canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Record the transfer: upload the payment slip — marks this guide's month paid">Record transfer<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
-            {mode === "paid" && canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace the uploaded slip">Replace slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadEslip(r.guideId, f); e.target.value = ""; }} /></label>}
+            {mode === "unpaid" && canEdit && <button className="btn sm" title="Record a bank transfer to this guide: the jobs it paid, the date, the amount and the slip" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record payment…</button>}
           </td>
         </tr>
         {isOpen && (
@@ -583,8 +546,8 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                 <span className="pay-doc-note" title="PEAK bills each document created, not each job">= 1 PEAK document</span>
               </>}
               {leftOut && <span className="pay-doc-note" title="These jobs stay listed below and can still be paid on their own">Not in it: {leftOut}</span>}
-              <label className="btn sm" style={{ cursor: "pointer" }} title="Upload ONE bank slip that covers all these jobs (one transfer) — marks them paid and saves the slip to Drive">📎 Slip · covers {unlocked.length}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTourSlip(r.guideId, unlocked, f); e.target.value = ""; }} /></label>
-              <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Per-tour Slip / Mark paid below = separate transfers — a separate PEAK document each</span>
+              {canEdit && <button className="btn sm" title="Record the transfer that paid these jobs — date, amount, slip" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record payment · {unlocked.length} unpaid</button>}
+              <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>A job is paid by a recorded payment — one per bank transfer.</span>
             </div>}
             {jobs.map((j, i) => {
               const ms = matchState(j.slips ?? [], j.amount);
@@ -606,6 +569,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <span className="pay-job-status">
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                   {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to — every job in it shares this reference and document">{docTag(j)}</span>}
+                  {paymentChip(j)}
                   {inPeakTag(j)}
                   {peakBadge(j)}
                   {canEdit && expCandidate(j) && <button type="button" className="btn sm ghost" style={{ padding: "1px 8px" }} title="Record the number of the PEAK document made by hand for this payment" onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter(expCandidate), preselect: [`${j.date}|${j.slotIdx}`] })}>+ EXP</button>}
@@ -614,15 +578,15 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                   <span className="pay-job-actions">
                   <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(r.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                   {j.paid && j.eslipUrl && !hasSlips && <a className="btn sm" href={j.eslipUrl} target="_blank" rel="noopener noreferrer" title="View this tour's payment slip in Drive">E-slip</a>}
-                  {canEdit && !j.paid && !hasSlips && !j.peakPaymentRef && <label className="btn sm" style={{ cursor: "pointer" }} title="Pay this tour in full with one slip (one transfer) — marks it paid and saves the slip to Drive">📎 Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f && confirmSeparate(r.guide, payable.length, j)) uploadTourSlip(r.guideId, [j], f); e.target.value = ""; }} /></label>}
-                  {canEdit && !j.paid && !j.peakPaymentRef && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Add one or more split-payment slips. Enter each transfer amount; all slips must add up to the payout before it shows Paid">＋ Split slips<input type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => { const files = e.target.files; if (files?.length && confirmSeparate(r.guide, payable.length, j)) setSlipBatch({ guideId: r.guideId, job: j, files: Array.from(files) }); e.target.value = ""; }} /></label>}
                   {canEdit && (j.paid
                     ? (j.peakPaymentRef
                         // Paid inside a PEAK document with other jobs: undoing one job here
                         // would leave PEAK still paying it. Void the document there first.
                         ? <button className="btn sm ghost" title="Paid in one PEAK document with other jobs — void it in PEAK first, then record that here" onClick={() => { const d = paymentDocs.find((x) => x.paymentRef === j.peakPaymentRef); if (d) resolveDoc(d, "voided"); else alert(`Reload Payments to manage ${j.peakPaymentRef}.`); }}>Voided in PEAK…</button>
-                        : <button className="btn sm ghost" onClick={() => setJobPaid(j, r.guideId, "PENDING")}>Undo</button>)
-                    : !j.peakPaymentRef && <button className="btn sm primary" title="Mark this one job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(r.guide, payable.length, j)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, r.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>)}
+                        : j.payment
+                          ? <button className="btn sm ghost" title={`Paid by ${j.payment.paymentNo} — reverse that payment, with a reason; the record stays`} onClick={() => reversePayment(j.payment!)}>Reverse payment…</button>
+                          : <button className="btn sm ghost" title="Marked paid before payments were recorded — put it back to pending" onClick={() => setJobPaid(j, r.guideId)}>Undo</button>)
+                    : !j.peakPaymentRef && !j.payBlock && <button className="btn sm primary" title="Record the transfer that pays this job" onClick={() => openRecordPayment(r.guideId, r.guide, jobs, [`${j.date}|${j.slotIdx}`])}>Record payment…</button>)}
                   {canEdit && !j.peakPaymentRef && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
                   </span>
                 </div>
@@ -633,7 +597,6 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                         <span style={{ color: "var(--ink-soft)", minWidth: 48 }}>Slip {si + 1}</span>
                         <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 84, fontWeight: 600 }}>{thb(s.amount)}</span>
                         {s.url && <a className="btn sm" href={s.url} target="_blank" rel="noopener noreferrer">View</a>}
-                        {canEdit && <button className="btn sm danger" onClick={() => removeSplitSlip(r.guideId, j, s)}>Remove</button>}
                         <span style={{ flex: 1, textAlign: "right", fontSize: 11, color: "var(--ink-soft)" }}>{new Date(s.at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
                       </div>
                     ))}
@@ -742,7 +705,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
                     {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to">{docTag(j)} · {docBadge(j)}</span>}
                     {inPeakTag(j)}
                     {peakBadge(j)}
-                    {canEdit && !j.peakPaymentRef && <button className="btn sm primary" title="Mark this job paid on its own — a separate transfer is a separate PEAK document" onClick={() => { if (!confirmSeparate(j.guide, payableCountOf(j.guideId), j)) return; const ref = prompt("PEAK ref for this payment (optional):", "EXP-"); if (ref !== null) setJobPaid(j, j.guideId, "PAID", ref.trim() || undefined); }}>Mark paid</button>}
+                    {canEdit && !j.peakPaymentRef && !j.payBlock && <button className="btn sm primary" title="Record the transfer that pays this job" onClick={() => openRecordPayment(j.guideId, j.guide, rows.find((x) => x.guideId === j.guideId)?.jobs ?? [j], [`${j.date}|${j.slotIdx}`])}>Record payment…</button>}
                   </td>
                 </tr>
               ))}
@@ -885,6 +848,17 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           onClose={() => setRecordExp(null)}
           onDone={(msg) => { setRecordExp(null); load(period); alert(msg); }} />
       )}
+      {recordPay && (
+        <RecordGuidePaymentDialog
+          guideId={recordPay.guideId}
+          guide={recordPay.guide}
+          jobs={recordPay.jobs}
+          preselect={recordPay.preselect}
+          today={new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)}
+          onClose={() => setRecordPay(null)}
+          onDone={(msg) => { setRecordPay(null); load(period); alert(msg); }}
+        />
+      )}
       {recordPayment && (
         <RecordPaymentDialog
           guideId={recordPayment.guideId}
@@ -892,17 +866,6 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
           doc={recordPayment.doc}
           onClose={() => setRecordPayment(null)}
           onDone={() => { setRecordPayment(null); load(period); }}
-        />
-      )}
-      {slipBatch && (
-        <SplitSlipDialog
-          files={slipBatch.files}
-          payout={slipBatch.job.amount}
-          existingSlips={slipBatch.job.slips ?? []}
-          context={`${slipBatch.guideId} · ${slipBatch.job.date}`}
-          upload={(file, amount) => uploadOneSlip(slipBatch.guideId, slipBatch.job, file, amount)}
-          onClose={() => setSlipBatch(null)}
-          onFinished={() => { setSlipBatch(null); load(period); }}
         />
       )}
     </div>

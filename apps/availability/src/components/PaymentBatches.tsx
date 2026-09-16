@@ -131,7 +131,9 @@ export default function PaymentBatches({ canEdit }: { canEdit: boolean }) {
                 {detail.status !== "PAID" && <input type="date" value={detail.paymentDate ?? ""} onChange={(e) => patch(detail.id, { paymentDate: e.target.value || null })} className="peak-ref-in" title="Set the transfer date" />}
                 {detail.status === "DRAFT" && <button className="btn sm" disabled={busy} onClick={() => patch(detail.id, { status: "READY" })}>Mark ready</button>}
                 {(detail.status === "READY" || detail.status === "FAILED") && <button className="btn sm" disabled={busy} onClick={() => patch(detail.id, { status: "PROCESSING" })}>Start processing</button>}
-                {detail.status !== "PAID" && <button className="btn sm primary" disabled={busy} onClick={() => patch(detail.id, { status: "PAID" }, `Mark ${detail.batchNo} PAID? This records ${thb(detail.totalAmount)} as transferred.`)}>Mark paid</button>}
+                {/* A batch groups what to send; it does not pay. Each guide's transfer is
+                    recorded on Payments (date, amount, slip) and that is what pays their jobs. */}
+                {detail.status !== "PAID" && <a className="btn sm primary" href="/payments" title="A batch does not mark jobs paid — record each guide's transfer on Payments, with its date, amount and slip">Record payments on Payments →</a>}
                 {detail.status === "PROCESSING" && <button className="btn sm danger" disabled={busy} onClick={() => patch(detail.id, { status: "FAILED" })}>Mark failed</button>}
                 {detail.status === "PAID" && <button className="btn sm ghost" disabled={busy} onClick={() => patch(detail.id, { status: "READY" }, "Un-mark this batch as paid?")}>Undo paid</button>}
                 {detail.status !== "PAID" && <button className="btn sm danger" disabled={busy} style={{ marginLeft: "auto" }} onClick={() => del(detail.id, detail.batchNo)}>Delete batch</button>}
