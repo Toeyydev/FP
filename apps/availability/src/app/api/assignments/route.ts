@@ -10,6 +10,7 @@ import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { handoverLock } from "@/lib/tour-handover-server";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
@@ -249,6 +250,8 @@ export async function DELETE(req: NextRequest) {
       const c = historicalDeleteConflict();
       return NextResponse.json(c.body, { status: c.status });
     }
+    const history = await financialHistoryBlockers(prisma, [{ guideId, date, slotIdx }]);
+    if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId, date, slotIdx } }),

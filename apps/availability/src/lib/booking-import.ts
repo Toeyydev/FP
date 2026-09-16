@@ -11,6 +11,7 @@ import { bookingRef } from "@/lib/booking-ref";
 import { siteUrl } from "@/lib/site";
 import { hasHistoricalJobSheet } from "@/lib/historical-guard";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { tourStartMs } from "@/lib/no-show-count";
 
 export type ImportResult = "created" | "updated" | "skipped";
@@ -238,6 +239,13 @@ async function onBookingCancelled(b: { id?: string; confirmationCode?: string | 
             action: "historical.cleanup_skipped", entityType: "JobSheet",
             detail: { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, reason: "reconstructed historical sheet protected" },
           }).catch(() => {});
+          continue;
+        }
+        // A job with payment, slip, PEAK or advance history is never swept away by a
+        // channel cancellation. Skip it, audibly, and leave the record standing.
+        const history = await financialHistoryBlockers(prisma, [{ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx }]);
+        if (history.length) {
+          await audit({ action: "payment.cleanup_skipped", entityType: "JobSheet", detail: { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, reasons: history } }).catch(() => {});
           continue;
         }
         if (!paid) {

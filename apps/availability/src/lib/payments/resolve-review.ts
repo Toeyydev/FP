@@ -7,6 +7,8 @@
 // unit-testable with a mock.
 
 import type { PrismaClient } from "@prisma/client";
+import { audit } from "@/lib/audit";
+import { recordPaymentInTx } from "@/lib/payments-v2/service";
 
 export type ReviewAction = "confirm" | "dismiss";
 
@@ -21,8 +23,10 @@ export type ResolveReviewInput = {
 };
 
 export type ResolveReviewResult =
-  | { ok: true; status: string; markedPaid: boolean }
-  | { ok: false; error: "not-found" | "already-resolved" | "no-linked-sheet" | "job-not-found" | "job-ambiguous" };
+  | { ok: true; status: string; markedPaid: boolean; paymentNo?: string | null }
+  | { ok: false; error: "not-found" | "already-resolved" | "no-linked-sheet" | "job-not-found" | "job-ambiguous" }
+  /** The slip is real, but the payment rules refuse it (already paid, unapproved, no date…). */
+  | { ok: false; error: "payment-refused"; reasons: string[] };
 
 function withResolution(details: unknown, action: ReviewAction, actorId: string | null | undefined, note: string | null | undefined, at: Date, manualJobNo?: string | null) {
   const base = details && typeof details === "object" ? (details as Record<string, unknown>) : {};
@@ -36,10 +40,18 @@ function withResolution(details: unknown, action: ReviewAction, actorId: string 
   };
 }
 
+/** The Bangkok calendar date of an instant — the day the bank moved the money. */
+const bangkokDate = (d: Date) => new Date(d.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
 export async function resolveReview(prisma: PrismaClient, input: ResolveReviewInput): Promise<ResolveReviewResult> {
+  const pendingAudits: Parameters<typeof audit>[0][] = [];
   const txn = await prisma.paymentTransaction.findUnique({
     where: { id: input.id },
-    select: { id: true, validationStatus: true, matchedJobSheetId: true, matchedJobNo: true, validationDetails: true },
+    select: {
+      id: true, validationStatus: true, matchedJobSheetId: true, matchedJobNo: true, validationDetails: true,
+      paidAt: true, transferAmount: true, transactionId: true,
+      evidence: { select: { id: true, driveLink: true } },
+    },
   });
   if (!txn) return { ok: false, error: "not-found" };
   // Only items still awaiting a decision can be resolved (idempotency guard).
@@ -63,7 +75,7 @@ export async function resolveReview(prisma: PrismaClient, input: ResolveReviewIn
   const manualJobNo = !txn.matchedJobSheetId ? (input.jobNo?.trim() || null) : null;
   if (!txn.matchedJobSheetId && !manualJobNo) return { ok: false, error: "no-linked-sheet" };
 
-  return await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     let sheet: { id: string; guideId: string; date: string; slotIdx: number; tourId: string; ref: string | null } | null;
 
     if (txn.matchedJobSheetId) {
@@ -82,11 +94,23 @@ export async function resolveReview(prisma: PrismaClient, input: ResolveReviewIn
       sheet = sheets[0];
     }
 
-    await tx.tourPayment.upsert({
-      where: { guideId_date_slotIdx: { guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx } },
-      create: { guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, tourId: sheet.tourId, status: "PAID", paidAt: now },
-      update: { status: "PAID", paidAt: now },
+    // Confirming a slip pays its job the one canonical way: a payment record (Payments v2)
+    // dated by the bank, with this slip as its evidence. The rules still apply — an already
+    // paid or unapproved job is refused here too, and nothing is marked paid.
+    const paymentDate = txn.paidAt ? bangkokDate(txn.paidAt) : null;
+    const amount = txn.transferAmount == null ? null : Number(txn.transferAmount);
+    if (!sheet.ref) return { ok: false as const, error: "payment-refused" as const, reasons: ["The job sheet has no Job No. — a payment names the full Job No."] };
+    if (!paymentDate) return { ok: false as const, error: "payment-refused" as const, reasons: ["The slip has no transfer date — add it to the slip, or record the payment by hand"] };
+    if (amount == null) return { ok: false as const, error: "payment-refused" as const, reasons: ["The slip has no amount — record this payment by hand"] };
+    const recorded = await recordPaymentInTx(tx, {
+      guideId: sheet.guideId, jobs: [{ jobNo: sheet.ref, date: sheet.date, slotIdx: sheet.slotIdx }],
+      paymentDate, amountTransferred: amount, source: "SLIP_REVIEW",
+      slip: { url: txn.evidence?.driveLink ?? "", evidenceId: txn.evidence?.id ?? null, uploadedAt: new Date(), uploadedById: input.actorId ?? null },
+      bankRef: txn.transactionId, note: input.note ?? "Confirmed from the payment slips queue",
+      actor: { actorId: input.actorId ?? null, actorRole: null },
     });
+    if (!recorded.ok) return { ok: false as const, error: "payment-refused" as const, reasons: recorded.reasons };
+    pendingAudits.push(...recorded.audits);
 
     await tx.paymentTransaction.update({
       where: { id: txn.id },
@@ -99,6 +123,8 @@ export async function resolveReview(prisma: PrismaClient, input: ResolveReviewIn
       },
     });
 
-    return { ok: true as const, status: "MATCHED", markedPaid: true };
+    return { ok: true as const, status: "MATCHED", markedPaid: true, paymentNo: recorded.payment.paymentNo };
   });
+  for (const a of pendingAudits) await audit(a);
+  return result;
 }

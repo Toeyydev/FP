@@ -11,6 +11,8 @@ import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak
 import { createExpenseAllInOne, getExpense, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
+import { paidAtFor } from "@/lib/payments-v2/rules";
+import { recordPaymentInTx } from "@/lib/payments-v2/service";
 import { guidePayoutTotal } from "@/lib/peak-sync";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import {
@@ -534,7 +536,7 @@ export function prismaPayDeps(opts: {
 
 /** The selected payment date as an instant. Noon in Bangkok, so it reads as the same
  *  calendar date in any timezone an operator views it from. */
-export const paidAtFor = (paymentDate: string) => new Date(`${paymentDate}T12:00:00+07:00`);
+export { paidAtFor };
 
 /** Every job locked to this document becomes PAID and points at the same PEAK document. */
 async function markDocumentPaid(p: {
@@ -548,8 +550,9 @@ async function markDocumentPaid(p: {
   // paidAt is the date the money moved — the one sent to PEAK — not the moment someone
   // pressed the button. A transfer recorded the next morning still happened yesterday.
   const paidAt = paidAtFor(p.paymentDate);
+  const audits: Parameters<typeof audit>[0][] = [];
   await prisma.$transaction(async (tx) => {
-    const doc = await tx.guidePaymentDocument.findUnique({ where: { paymentRef: p.paymentRef }, select: { jobs: true } });
+    const doc = await tx.guidePaymentDocument.findUnique({ where: { paymentRef: p.paymentRef }, select: { jobs: true, guideId: true, total: true } });
     const expected = Array.isArray(doc?.jobs) ? doc!.jobs.length : -1;
     const moved = await tx.guidePaymentDocument.updateMany({
       where: { paymentRef: p.paymentRef, status: { in: ["PAYING", "PAYMENT_UNCERTAIN"] } },
@@ -560,22 +563,39 @@ async function markDocumentPaid(p: {
       },
     });
     if (moved.count !== 1) throw new Error(`${p.paymentRef} is not waiting on a payment`);
-    const paid = p.alreadyPaid
-      ? await tx.tourPayment.updateMany({
-          where: { peakPaymentRef: p.paymentRef, status: "PAID" },
-          data: { peakRef: p.documentNo, peakDocumentId: p.documentId },
-        })
-      : await tx.tourPayment.updateMany({
-          where: { peakPaymentRef: p.paymentRef, status: { not: "PAID" } },
-          data: {
-            status: "PAID", paidAt, approvedBy: p.actor.actorId, approvedAt: null,
-            peakRef: p.documentNo, peakDocumentId: p.documentId, ...(p.slipLink ? { eslipUrl: p.slipLink } : {}),
-          },
-        });
-    // A job that lost its lock in the meantime would be missing from the paid set while
-    // PEAK holds its payment. Refuse to half-record it; the document stays open to resolve.
-    if (paid.count !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${paid.count}`);
+    if (p.alreadyPaid) {
+      // The transfer happened before this document existed: the jobs only take its EXP.
+      const paid = await tx.tourPayment.updateMany({
+        where: { peakPaymentRef: p.paymentRef, status: "PAID" },
+        data: { peakRef: p.documentNo, peakDocumentId: p.documentId },
+      });
+      if (paid.count !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${paid.count}`);
+      return;
+    }
+    // Payments v2: PEAK confirmed the payment, so the transfer is real — it becomes a
+    // GuidePayment (FOLK-PMT-…), and THAT is what makes these jobs paid. One canonical
+    // path, whether an operator records a transfer or a PEAK document is settled.
+    const locked = await tx.tourPayment.findMany({ where: { peakPaymentRef: p.paymentRef }, select: { guideId: true, date: true, slotIdx: true } });
+    if (locked.length !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${locked.length}`);
+    const sheets = await tx.jobSheet.findMany({ where: { OR: locked.map((l) => ({ guideId: l.guideId, date: l.date, slotIdx: l.slotIdx })) }, select: { date: true, slotIdx: true, ref: true } });
+    const recorded = await recordPaymentInTx(tx, {
+      guideId: doc!.guideId,
+      jobs: locked.map((l) => ({ jobNo: sheets.find((x) => x.date === l.date && x.slotIdx === l.slotIdx)?.ref ?? "", date: l.date, slotIdx: l.slotIdx })),
+      paymentDate: p.paymentDate, amountTransferred: Number(doc!.total), source: "PEAK_DOCUMENT", peakPaymentRef: p.paymentRef,
+      slip: p.slipLink ? { url: p.slipLink, uploadedById: p.actor.actorId } : null,
+      noSlipReason: p.slipLink ? null : `Paid through PEAK document ${p.documentNo}, which holds the slip`,
+      note: `Recorded with PEAK document ${p.documentNo}`, actor: p.actor,
+    });
+    if (!recorded.ok) throw new PaymentClaimRefused(`The payment of ${p.documentNo} could not be recorded: ${recorded.reasons.join(" · ")}`);
+    audits.push(...recorded.audits);
+    // The jobs are paid by the payment above; here they take the document's EXP.
+    const stamped = await tx.tourPayment.updateMany({
+      where: { peakPaymentRef: p.paymentRef },
+      data: { peakRef: p.documentNo, peakDocumentId: p.documentId, ...(p.slipLink ? { eslipUrl: p.slipLink } : {}) },
+    });
+    if (stamped.count !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${stamped.count}`);
   });
+  for (const a of audits) await audit(a);
   await audit({ ...p.actor, action: "pay.peak_payment_recorded", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, documentNo: p.documentNo, paymentDate: p.paymentDate, alreadyPaid: !!p.alreadyPaid } });
 }
 
@@ -588,20 +608,23 @@ async function markDocumentPaid(p: {
  */
 async function releaseDocument(paymentRef: string, status: "FAILED" | "VOIDED", reason: string | null, resolvedBy: string | null) {
   const now = new Date();
-  const doc = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef }, select: { alreadyPaid: true } });
   await prisma.$transaction([
     prisma.guidePaymentDocument.update({
       where: { paymentRef },
       data: { status, error: reason, ...(resolvedBy !== null ? { resolvedById: resolvedBy, resolvedAt: now } : {}) },
     }),
-    status === "VOIDED" && doc?.alreadyPaid
-      ? prisma.tourPayment.updateMany({ where: { peakPaymentRef: paymentRef }, data: { peakRef: null, peakDocumentId: null, peakPaymentRef: null } })
-      : status === "VOIDED"
-      ? prisma.tourPayment.updateMany({
-          where: { peakPaymentRef: paymentRef },
-          data: { status: "PENDING", paidAt: null, approvedBy: null, peakRef: null, peakDocumentId: null, peakPaymentRef: null, eslipUrl: null },
-        })
-      : prisma.tourPayment.updateMany({ where: { peakPaymentRef: paymentRef }, data: { peakPaymentRef: null } }),
+    // VOIDED: a job whose money actually moved STAYS paid — voiding the bookkeeping does
+    // not undo a transfer. It only loses this document's EXP. Reverse its payment if the
+    // transfer itself was wrong. A job that was never paid goes back to unpaid.
+    ...(status === "VOIDED"
+      ? [
+          prisma.tourPayment.updateMany({ where: { peakPaymentRef: paymentRef, status: "PAID" }, data: { peakRef: null, peakDocumentId: null, peakPaymentRef: null } }),
+          prisma.tourPayment.updateMany({
+            where: { peakPaymentRef: paymentRef, status: { not: "PAID" } },
+            data: { status: "PENDING", paidAt: null, approvedBy: null, peakRef: null, peakDocumentId: null, peakPaymentRef: null, eslipUrl: null },
+          }),
+        ]
+      : [prisma.tourPayment.updateMany({ where: { peakPaymentRef: paymentRef }, data: { peakPaymentRef: null } })]),
   ]);
 }
 

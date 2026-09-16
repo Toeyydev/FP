@@ -124,6 +124,12 @@ export async function PATCH(req: NextRequest) {
   if (status) {
     data.status = status;
     const wasPaid = existing.status === "PAID";
+    // Payments v2: a batch groups what to send; it does not pay. Each guide's transfer is
+    // recorded on Payments, and the batch reads as paid once those payments exist.
+    if (status === "PAID" && !wasPaid) {
+      const reason = "A batch does not mark jobs paid. Record each guide's transfer on Payments → Record payment (date, amount, slip); the batch follows.";
+      return NextResponse.json({ error: "use-record-payment", reasons: [reason], detail: reason }, { status: 409 });
+    }
     if (status === "PAID" && !wasPaid) {
       // Settle the member tours. Skip (and report) any tour already PAID by another
       // route so a batch can never silently re-settle someone else's payment.

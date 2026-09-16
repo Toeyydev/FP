@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
@@ -542,6 +543,10 @@ export async function DELETE(req: NextRequest) {
     const c = historicalDeleteConflict();
     return NextResponse.json(c.body, { status: c.status });
   }
+  // Financial history is never deleted with a job: a payment, slip, batch, PEAK document
+  // or advance on it means this is reversed or voided, not erased (lib/payments-v2/history).
+  const history = await financialHistoryBlockers(prisma, [where]);
+  if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),

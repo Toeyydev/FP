@@ -2,8 +2,17 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
   historicalJobReview: { findUnique: vi.fn(), update: vi.fn() },
-  jobSheet: { count: vi.fn(), create: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
-  tourPayment: { findFirst: vi.fn() },
+  jobSheet: { count: vi.fn(), create: vi.fn(), findUnique: vi.fn(), delete: vi.fn(), findMany: vi.fn(async () => []) },
+  tourPayment: { findFirst: vi.fn(), findMany: vi.fn(async () => []) },
+  // Payments v2 reads these before any job is deleted (lib/payments-v2/history).
+  guidePaymentJob: { findMany: vi.fn(async () => []) },
+  guidePayment: { findMany: vi.fn(async () => []) },
+  guidePaymentDocument: { findMany: vi.fn(async () => []) },
+  paymentBatchItem: { findMany: vi.fn(async () => []) },
+  paymentBatch: { findMany: vi.fn(async () => []) },
+  paymentTransaction: { findMany: vi.fn(async () => []) },
+  guideAdvance: { findMany: vi.fn(async () => []) },
+  guideAdvanceReturn: { findMany: vi.fn(async () => []) },
   $transaction: vi.fn(),
 }));
 const authMock = vi.hoisted(() => vi.fn());

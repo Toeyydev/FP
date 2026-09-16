@@ -3,12 +3,15 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { normalizeExpRef, recordExpBlockers } from "@/lib/record-exp";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
+const USE_RECORD_PAYMENT = "A job becomes paid only through a recorded payment (FOLK-PMT-…): open Payments → Record payment, with the transfer date, the amount and the slip.";
+
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const bkkToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -73,23 +76,37 @@ export async function POST(req: NextRequest) {
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { guideId, status, peakRef } = parsed.data;
+  // Payments v2: nothing marks a job paid here. A payment is recorded — with its date,
+  // amount, slip and reconciliation — by lib/payments-v2, and that is what pays a job.
+  if (status === "PAID") return NextResponse.json({ error: "use-record-payment", reasons: [USE_RECORD_PAYMENT], detail: USE_RECORD_PAYMENT }, { status: 409 });
   const list = parsed.data.jobs?.length ? parsed.data.jobs : (parsed.data.date && parsed.data.slotIdx != null ? [{ date: parsed.data.date, slotIdx: parsed.data.slotIdx }] : []);
   if (!list.length) return NextResponse.json({ error: "no-jobs" }, { status: 400 });
   // A job paid — or being paid — in a combined PEAK payment document changes only
   // through that document, or its cost is settled twice. See lib/peak-payment-server.
   const locks = await paymentDocumentLocks(list.map((j) => ({ guideId, ...j })));
   if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
+  // A job paid by a recorded payment goes back to unpaid by reversing that payment — with
+  // a reason, keeping the record. Only jobs marked paid before Payments v2 are undone here.
+  const recorded = await prisma.tourPayment.findMany({ where: { OR: list.map((j) => ({ guideId, date: j.date, slotIdx: j.slotIdx })), guidePaymentId: { not: null } }, select: { date: true, slotIdx: true, guidePaymentId: true } });
+  if (recorded.length) {
+    const nos = await prisma.guidePayment.findMany({ where: { id: { in: recorded.map((r) => r.guidePaymentId!) } }, select: { paymentNo: true } });
+    const reasons = [`This job is paid by ${[...new Set(nos.map((n) => n.paymentNo))].join(", ")} — reverse that payment (with a reason) instead; the record stays.`];
+    return NextResponse.json({ error: "reverse-the-payment", reasons, detail: reasons[0] }, { status: 409 });
+  }
   const ref = peakRef?.trim() || null;
   const now = new Date();
   const uid = session!.user!.id ?? null;
   for (const j of list) {
     const a = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } } });
+    // PAID is refused above: only a recorded payment pays a job. What is left here is
+    // approving, cancelling, or putting a legacy paid job back to pending — which clears
+    // the paid date and the PEAK ref that belonged to that payment.
     const data = {
       status,
       approvedBy: status !== "PENDING" ? uid : null,
       approvedAt: status === "APPROVED" ? now : null,
-      paidAt: status === "PAID" ? now : null,
-      peakRef: status === "PAID" ? ref : null, // ref belongs to this payment; cleared if un-paid
+      paidAt: null,
+      peakRef: null,
     };
     await prisma.tourPayment.upsert({
       where: { guideId_date_slotIdx: { guideId, date: j.date, slotIdx: j.slotIdx } },
@@ -155,6 +172,10 @@ export async function DELETE(req: NextRequest) {
   const where = { guideId, date, slotIdx };
   const locks = await paymentDocumentLocks([where]);
   if (locks.length) return NextResponse.json({ error: "payment-document-lock", reasons: locks, detail: locks.join("\n") }, { status: 409 });
+  // Financial history is never deleted with a job: a payment, slip, batch, PEAK document
+  // or advance on it means this is reversed or voided, not erased (lib/payments-v2/history).
+  const history = await financialHistoryBlockers(prisma, [where]);
+  if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
   if (await hasHistoricalJobSheet(where)) {
     const c = historicalDeleteConflict();
     return NextResponse.json(c.body, { status: c.status });

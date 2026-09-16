@@ -55,10 +55,12 @@ export async function loadJobFacts(db: Db, guideId: string, jobs: { date: string
   const [sheets, pays, active, assigns, payrolls] = await Promise.all([
     db.jobSheet.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, ref: true, tourId: true, approvalStatus: true, accountingDate: true, expenses: true, guideFee: true, createdAt: true, peakDocumentNo: true, peakDocumentId: true, peakSyncStatus: true } }),
     db.tourPayment.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, status: true, guidePaymentId: true, peakPaymentRef: true, peakRef: true, peakDocumentId: true } }),
-    db.guidePaymentJob.findMany({ where: { OR: or, active: true }, select: { date: true, slotIdx: true, payment: { select: { paymentNo: true } } } }),
+    db.guidePaymentJob.findMany({ where: { OR: or, active: true }, select: { date: true, slotIdx: true, paymentId: true } }),
     db.assignment.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, createdAt: true } }),
     db.payrollStatus.findMany({ where: { guideId, period: { in: periods } }, select: { period: true, status: true, paidAt: true } }),
   ]);
+  const activeIds = [...new Set(active.map((a) => a.paymentId))];
+  const activePayments = activeIds.length ? await db.guidePayment.findMany({ where: { id: { in: activeIds } }, select: { id: true, paymentNo: true } }) : [];
   const refs = [...new Set(pays.map((p) => p.peakPaymentRef).filter((r): r is string => !!r))];
   const docRows = refs.length ? await db.guidePaymentDocument.findMany({ where: { paymentRef: { in: refs } }, select: { paymentRef: true, peakDocumentNo: true, peakDocumentId: true, status: true } }) : [];
   const docs = new Map(docRows.map((d) => [d.paymentRef, d]));
@@ -73,7 +75,7 @@ export async function loadJobFacts(db: Db, guideId: string, jobs: { date: string
       date: j.date, slotIdx: j.slotIdx,
       sheet: s ? { ref: s.ref, approvalStatus: s.approvalStatus, accountingDate: s.accountingDate, expenses: s.expenses, guideFee: s.guideFee } : null,
       payment: p ? { status: p.status, guidePaymentId: p.guidePaymentId, peakPaymentRef: p.peakPaymentRef } : null,
-      activePaymentNo: active.find((x) => key(x) === key(j))?.payment.paymentNo ?? null,
+      activePaymentNo: activePayments.find((p) => p.id === active.find((x) => key(x) === key(j))?.paymentId)?.paymentNo ?? null,
       paidByPayroll: !!created && coveredByPayrollRun(payroll, j.date, created),
       document: doc && documentHoldsJobs(doc.status) ? { paymentRef: doc.paymentRef, peakDocumentNo: doc.peakDocumentNo, status: doc.status } : null,
     };
@@ -97,7 +99,7 @@ async function evidenceContext(db: Db, input: Pick<RecordPaymentInput, "bankRef"
   return { bankRefUsedBy: byRef?.paymentNo ?? null, slipUsedBy: bySlip?.paymentNo ?? null };
 }
 
-const request = (input: RecordPaymentInput): PaymentRequest => ({ ...input, hasSlip: !!input.slip?.url });
+const request = (input: RecordPaymentInput): PaymentRequest => ({ ...input, hasSlip: !!(input.slip?.url || input.slip?.evidenceId) });
 
 /** The checks Record payment runs, with nothing written. */
 export async function previewPayment(db: Db, input: RecordPaymentInput): Promise<PaymentCheck> {

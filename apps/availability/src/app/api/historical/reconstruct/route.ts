@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isOps } from "@/lib/roles";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { applyAction, reconstructionNote } from "@/lib/historical-review";
 import { isRestrictViolation, historicalDeleteConflict } from "@/lib/historical-guard";
 
@@ -52,6 +53,8 @@ export async function POST(req: NextRequest) {
     if (pay && (pay.status === "PAID" || pay.paidAt || pay.peakRef)) {
       return NextResponse.json({ error: "payment-dependency" }, { status: 409 });
     }
+    const history = await financialHistoryBlockers(prisma, [{ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx }]);
+    if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
 
     await prisma.$transaction(async (tx) => {
       // Unlink first: the FK is RESTRICT, so the sheet cannot be deleted while the

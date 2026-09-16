@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { computeTotals, DEFAULT_GUIDE_FEE, guideFeeOrStandard, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { currentJobFigures, documentDrift } from "@/lib/payment-document-drift";
 import { guidePayoutTotal } from "@/lib/peak-sync";
@@ -172,10 +173,17 @@ export async function POST(req: NextRequest) {
   const parsed = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/), guideId: z.string().min(1), status: z.enum(["pending", "paid"]) }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { period, guideId, status } = parsed.data;
+  // Payments v2: a whole month is never flipped to paid — each transfer is recorded.
+  if (status === "paid") {
+    const reason = "A month is not marked paid: record each transfer on Payments → Record payment, with its date, amount and slip.";
+    return NextResponse.json({ error: "use-record-payment", reasons: [reason], detail: reason }, { status: 409 });
+  }
   await prisma.payrollStatus.upsert({
     where: { guideId_period: { guideId, period } },
-    create: { guideId, period, status, paidAt: status === "paid" ? new Date() : null },
-    update: { status, paidAt: status === "paid" ? new Date() : null },
+    // "paid" is refused above: only recorded payments pay jobs. This clears a legacy
+    // month back to pending.
+    create: { guideId, period, status, paidAt: null },
+    update: { status, paidAt: null },
   });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "payroll.marked", entityType: "PayrollStatus", detail: { period, guideId, status } });
   return NextResponse.json({ ok: true });
@@ -240,6 +248,10 @@ export async function DELETE(req: NextRequest) {
     const c = historicalDeleteConflict();
     return NextResponse.json(c.body, { status: c.status });
   }
+  // Financial history is never deleted with a job: a payment, slip, batch, PEAK document
+  // or advance on it means this is reversed or voided, not erased (lib/payments-v2/history).
+  const history = await financialHistoryBlockers(prisma, slots.map((s) => ({ guideId, ...s })));
+  if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
   await prisma.$transaction([
     prisma.jobSheet.deleteMany({ where }),
     prisma.tourPayment.deleteMany({ where }),

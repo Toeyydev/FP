@@ -12,6 +12,7 @@ type Where = Record<string, any>;
 
 const db = vi.hoisted(() => ({
   users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[], audits: [] as Row[],
+  payments: [] as Row[], paymentJobs: [] as Row[], paymentAdjustments: [] as Row[],
 }));
 
 const prismaMock = vi.hoisted(() => {
@@ -60,6 +61,21 @@ const prismaMock = vi.hoisted(() => {
     tourPayment: table(() => db.pays),
     payrollStatus: table(() => db.payrolls),
     guidePaymentDocument: table(() => db.docs),
+    // Payments v2: a settled document records a real payment (FOLK-PMT-…) through the
+    // canonical service, so these tables take part in stage 2.
+    guidePayment: {
+      ...table(() => db.payments),
+      create: vi.fn(async ({ data }: { data: Row }) => {
+        const { jobs, adjustments, ...rest } = data;
+        const row = { id: `gp_${db.payments.length}`, createdAt: new Date(), ...rest };
+        db.payments.push(row);
+        for (const j of jobs?.create ?? []) db.paymentJobs.push({ id: `gpj_${db.paymentJobs.length}`, paymentId: row.id, active: true, ...j });
+        for (const a of adjustments?.create ?? []) db.paymentAdjustments.push({ id: `gpa_${db.paymentAdjustments.length}`, paymentId: row.id, ...a });
+        return { ...row };
+      }),
+    },
+    guidePaymentJob: table(() => db.paymentJobs),
+    guidePaymentAdjustment: table(() => db.paymentAdjustments),
     tour: table(() => db.tours),
     auditLog: table(() => db.audits),
   };
@@ -123,6 +139,7 @@ function seed() {
   db.pays = [];
   db.payrolls = [];
   db.docs = [];
+  db.payments = []; db.paymentJobs = []; db.paymentAdjustments = [];
   db.tours = [{ id: "T-001", name: "Test Temple Tour" }];
   db.audits = [];
 }

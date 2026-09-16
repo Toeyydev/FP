@@ -4,9 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
-import { notifyGuide } from "@/lib/booking-import";
 import { computeTotals, expenseAmount, jobSheetDriveName, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
-import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -62,28 +60,12 @@ export async function POST(req: NextRequest) {
   if (pdfBase64 || eslipBase64) {
     const eslipMime = typeof body?.eslipMime === "string" ? body.eslipMime : "image/jpeg";
     const eslipExt = eslipMime.includes("png") ? "png" : eslipMime.includes("pdf") ? "pdf" : eslipMime.includes("webp") ? "webp" : "jpg";
-    // Mark the tour PAID first, independently of Drive. Attaching this tour's
-    // e-slip IS the proof of (daily) payment — that business fact must land
-    // even if the Drive copy hiccups (PDF e-slips, token refresh, large files).
-    let paid = false;
-    // A tour held by a combined PEAK payment document is paid through that document.
-    const locked = eslipBase64 ? (await paymentDocumentLocks([{ guideId, date, slotIdx }])).length > 0 : false;
-    if (eslipBase64 && !locked) {
-      try {
-        const now = new Date();
-        await prisma.tourPayment.upsert({
-          where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-          create: { guideId, date, slotIdx, tourId, status: "PAID", paidAt: now },
-          update: { status: "PAID", paidAt: now },
-        });
-        paid = true;
-        try {
-          await notifyGuide(guideId, `Your payment for the ${date} tour (${tour?.name ?? tourId}) has been transferred — ${thb(t.grandTotal)}. Thank you!`, "Payment transferred 💸", `${date} · ${thb(t.grandTotal)}`);
-        } catch { /* best-effort */ }
-      } catch { /* if this throws, paid stays false and is reported back */ }
-    }
+    // Payments v2: saving a slip here does NOT pay the tour. A transfer is recorded on
+    // Payments (date, amount, jobs, reconciliation, this slip) — that is what pays a job.
+    // The copy still goes to Drive, so the evidence is filed either way.
+    const paid = false;
 
-    // Save the job-sheet PDF + e-slip to Drive (best effort — must not block paid).
+    // Save the job-sheet PDF + e-slip to Drive (best effort).
     let link: string | undefined;
     let eslipLink: string | undefined;
     let driveError: string | undefined;
@@ -105,9 +87,9 @@ export async function POST(req: NextRequest) {
     }
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64, paid, drive: !!link } });
     // Only a hard failure (nothing saved AND payment didn't land) is an error.
-    if (!link && !eslipLink && !paid) return NextResponse.json({ error: "drive-failed", detail: driveError ?? "Drive save failed." }, { status: 502 });
-    // paid landed: that's success even if Drive was skipped/failed (reported in driveError).
-    return NextResponse.json({ ok: true, link, eslipLink, paid, driveError });
+    if (!link && !eslipLink) return NextResponse.json({ error: "drive-failed", detail: driveError ?? "Drive save failed." }, { status: 502 });
+    // The slip is filed, not paid: Payments records the transfer that pays this job.
+    return NextResponse.json({ ok: true, link, eslipLink, paid, driveError, recordPayment: !!eslipBase64 });
   }
   if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
