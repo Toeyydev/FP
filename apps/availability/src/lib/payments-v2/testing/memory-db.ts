@@ -31,7 +31,7 @@ const unique = (target: string[]) => new Prisma.PrismaClientKnownRequestError("U
 
 export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   const t: Record<string, Row[]> = {};
-  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "paymentTransaction", "paymentEvidence", "auditLog"];
+  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "guideAdvanceReceipt", "guideAdvanceEntry", "paymentTransaction", "paymentEvidence", "auditLog"];
   for (const n of names) t[n] = (seed[n] ?? []).map((r, i) => ({ id: r.id ?? `${n}_${i}`, ...clone(r) }));
   let seq = 1000;
   const relations: Record<string, Record<string, (row: Row) => any>> = {
@@ -85,8 +85,6 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   });
   const db: Row = Object.fromEntries(names.map((n) => [n, model(n)]));
   // Rollback on error, like a real transaction: restore every table.
-  // A database from before the advance ledger migration: the ledger tables are not there.
-  db.$queryRaw = async (q: TemplateStringsArray) => (/to_regclass/.test(q.join("?")) ? [{ present: false }] : []);
   db.$transaction = async (fn: any) => {
     if (Array.isArray(fn)) return Promise.all(fn);
     const snapshot = Object.fromEntries(names.map((n) => [n, t[n].map((r) => ({ ...r }))]));

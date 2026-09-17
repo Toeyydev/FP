@@ -53,13 +53,16 @@ describe("recordPayment — B and C", () => {
     const r = await recordPayment(mem.db, input({ jobs: [Z], amountTransferred: 30, bankRef: null }));
     expect(r.ok && mem.tables.guidePaymentJob[0]).toMatchObject({ feeGross: 0, wht: 0, reimbursement: 30, payable: 30 });
   });
-  it("C · jobs 1,646 − advance 70 = 1,576 transferred: the adjustment is its own line, job figures unchanged", async () => {
-    const r = await recordPayment(mem.db, input({ jobs: [A, Z], paymentDate: "2099-09-15", amountTransferred: 1576, adjustments: [{ type: "ADVANCE_SETTLEMENT", amount: -70, description: "Unspent advance returned against this payment" }] }));
+  // An ADVANCE_SETTLEMENT names a real advance and clears it in the same transaction
+  // (lib/advances) — that path is proven against PostgreSQL in ho-test/ledger-integration.
+  // Here the point is the reconciliation line, so the adjustment is one that needs no ledger.
+  it("C · jobs 1,646 − adjustment 70 = 1,576 transferred: the adjustment is its own line, job figures unchanged", async () => {
+    const r = await recordPayment(mem.db, input({ jobs: [A, Z], paymentDate: "2099-09-15", amountTransferred: 1576, adjustments: [{ type: "PREVIOUS_OVERPAYMENT", amount: -70, description: "Overpaid on the August transfer" }] }));
     expect(r.ok).toBe(true);
     expect(mem.tables.guidePayment[0]).toMatchObject({ jobTotal: 1646, adjustmentTotal: -70, amountTransferred: 1576 });
-    expect(mem.tables.guidePaymentAdjustment).toEqual([expect.objectContaining({ type: "ADVANCE_SETTLEMENT", amount: -70 })]);
+    expect(mem.tables.guidePaymentAdjustment).toEqual([expect.objectContaining({ type: "PREVIOUS_OVERPAYMENT", amount: -70 })]);
     expect(mem.tables.guidePaymentJob.map((j) => j.payable)).toEqual([1616, 30]);
-    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: "payment.adjustment_added", detail: expect.objectContaining({ type: "ADVANCE_SETTLEMENT", amount: -70 }) }));
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({ action: "payment.adjustment_added", detail: expect.objectContaining({ type: "PREVIOUS_OVERPAYMENT", amount: -70 }) }));
   });
 });
 

@@ -91,12 +91,31 @@ export function resolveExpenseAccount(e: Expense, accounts: PeakAccountMap = {})
 // ── Duplicate protection ─────────────────────────────────────────────────────
 // A company-direct expense is often already in PEAK from its own supplier invoice
 // or receipt. Posting the job sheet must not book it a second time.
-export type SyncDisposition = "SYNC" | "ALREADY_RECORDED" | "BLOCKED";
+export type SyncDisposition = "SYNC" | "ALREADY_RECORDED" | "BLOCKED" | "NOT_GUIDE_PAYABLE";
+
+/**
+ * Phase 3 guard. A job-sheet expense document is raised against the GUIDE as the
+ * vendor: every line on it is money the company owes that guide. A row the company
+ * already settled — paid direct to the supplier, or paid with cash it had already
+ * advanced the guide — is a real company cost but it is NOT owed to the guide, so
+ * putting it on that document books a payable that does not exist. (It happened once:
+ * a document carried an advance-funded meal and had to be voided.)
+ *
+ * These rows are held back from the document and listed instead — see
+ * lib/advances/unbooked — so the cost is followed up rather than lost. The combined
+ * payment document has always skipped them (lib/peak-payment-document); this makes the
+ * two paths agree.
+ */
+export function notGuidePayable(e: Expense): boolean {
+  const paid = canonicalPaidBy(e);
+  return paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE";
+}
 
 export function expenseDisposition(e: Expense, accounts: PeakAccountMap = {}): SyncDisposition {
   // An expense already booked in PEAK stays in this job's cost reporting but is
   // never re-sent — regardless of how well it is mapped.
   if (e.alreadyRecordedInPeak) return "ALREADY_RECORDED";
+  if (notGuidePayable(e)) return "NOT_GUIDE_PAYABLE";
   return expenseMappingStatus(e, accounts) === "READY" ? "SYNC" : "BLOCKED";
 }
 
@@ -112,7 +131,11 @@ export function syncableExpenses(expenses: Expense[], accounts: PeakAccountMap =
 // review" for it sends the operator hunting through rows that are all fine.
 export function expenseRowsReady(expenses: Expense[], accounts: PeakAccountMap = {}): boolean {
   const billed = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
-  return billed.length > 0 && billed.every((e) => expenseDisposition(e, accounts) !== "BLOCKED");
+  // Whether a row will be posted on the GUIDE's document is a different question (see
+  // notGuidePayable): a company-settled row still needs its category and account, because
+  // the accountant books it from the unbooked-cost register.
+  return billed.length > 0 && billed.every((e) => e.alreadyRecordedInPeak || expenseMappingStatus(e, accounts) === "READY");
+
 }
 
 // ── Job-sheet money ──────────────────────────────────────────────────────────

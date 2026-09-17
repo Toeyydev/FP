@@ -2,7 +2,7 @@
 // outside — /api/health reports it, and every database connection carries it as its
 // Postgres application_name, so pg_stat_activity can prove no older instance is still
 // connected (and so cannot still be writing) before the migration runs.
-export const ADVANCE_BUILD = "compat" as const;
+export const ADVANCE_BUILD = "ledger" as const;
 export const DB_APPLICATION_NAME = `folkops-${ADVANCE_BUILD}`;
 
 /** DATABASE_URL with application_name set, unless the URL already names one. */

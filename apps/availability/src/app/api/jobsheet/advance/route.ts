@@ -8,7 +8,11 @@ import { notifyGuide } from "@/lib/booking-import";
 import { thb } from "@/lib/jobsheet";
 import { uploadSlip } from "@/lib/advance-slip";
 import { recordAdvanceReturn } from "@/lib/guide-advance";
-import { advanceFrozenBody, advanceWritesBlocked } from "@/lib/advances/freeze";
+import { issueAdvance } from "@/lib/advances/service";
+import { jobAdvanceView } from "@/lib/advances/job-view";
+import type { Expense } from "@/lib/jobsheet";
+import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
+import { bangkokToday } from "@/lib/payments-v2/rules";
 
 // Guide advances + returns for one job (guideId + date + slotIdx). An advance is a
 // cash movement, never an expense (see lib/advance). Operators/admin record both;
@@ -17,6 +21,14 @@ import { advanceFrozenBody, advanceWritesBlocked } from "@/lib/advances/freeze";
 // store as receipts/e-slips (Folkpaths Job Sheets / <month> / Advances).
 
 const key = (guideId: string, date: string, slotIdx: number) => ({ guideId, date, slotIdx });
+/** The job's advances as the ledger holds them — the same view the sheet loads with. */
+async function viewFor(guideId: string, date: string, slotIdx: number) {
+  const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key(guideId, date, slotIdx) }, select: { expenses: true } });
+  return jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (sheet?.expenses as unknown as Expense[]) ?? [] });
+}
+
+/** The Bangkok calendar date of a moment — the date the bank actually moved the money. */
+const bangkokDate = (d: Date) => new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
 
 
 // POST (multipart) — record an advance or a return on a job.
@@ -26,9 +38,8 @@ const key = (guideId: string, date: string, slotIdx: number) => ({ guideId, date
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  // Cutover / rollback: no advance or return may be written while the switch is on, or at
-  // all once the ledger migration has run (this version cannot write the ledger).
-  if (await advanceWritesBlocked(prisma)) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  // Cutover: no advance or return may be written while the ledger is being migrated.
+  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
 
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "bad-body" }, { status: 400 });
@@ -44,6 +55,8 @@ export async function POST(req: NextRequest) {
   const peakRef = String(form.get("peakRef") || "").slice(0, 60) || null;
   const note = String(form.get("note") || "").slice(0, 500) || null;
   const advanceId = String(form.get("advanceId") || "") || null;
+  // Only an operator who has seen the money in the company account may say so.
+  const confirmedArrived = String(form.get("confirmedArrived") || "") === "1";
   const file = form.get("file") as unknown as { size?: number; type?: string; name?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
 
   if (!(kind === "advance" || kind === "return") || !guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
@@ -62,13 +75,10 @@ export async function POST(req: NextRequest) {
     const r = await recordAdvanceReturn({
       guideId, date, slotIdx, amount, at, method, txRef, note, advanceId,
       slipFile: file, actorId: session.user.id ?? null, actorRole: session.user.role ?? null, byGuide: !opsUser,
+      confirmedArrived: opsUser && confirmedArrived,
     });
     if (!r.ok) return NextResponse.json({ error: r.error, ...(r.hint ? { hint: r.hint } : {}) }, { status: r.status });
-    const [advances, returns] = await Promise.all([
-      prisma.guideAdvance.findMany({ where: key(guideId, date, slotIdx), orderBy: { paidAt: "asc" } }),
-      prisma.guideAdvanceReturn.findMany({ where: key(guideId, date, slotIdx), orderBy: { returnedAt: "asc" } }),
-    ]);
-    return NextResponse.json({ ok: true, advances, returns });
+    return NextResponse.json({ ok: true, ...(await viewFor(guideId, date, slotIdx)) });
   }
 
   const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key(guideId, date, slotIdx) }, select: { id: true, ref: true } });
@@ -96,8 +106,17 @@ export async function POST(req: NextRequest) {
 
   const createdById = session.user.id ?? null;
   if (kind === "advance") {
-    const row = await prisma.guideAdvance.create({ data: { ...key(guideId, date, slotIdx), amount, paidAt: at, method, txRef, peakRef, note, slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null, createdById } });
-    await audit({ actorId: createdById, actorRole: session.user.role ?? null, action: "advance.recorded", entityType: "GuideAdvance", entityId: row.id, detail: { ref: sheet.ref, guideId, date, slotIdx, amount, method, txRef, slip: !!slip } });
+    // Phase 3: an advance is a ledger row now — one writer, one set of rules
+    // (lib/advances/service), whether it is recorded here or from the Advances screen.
+    const issued = await issueAdvance(prisma, {
+      guideId, advanceDate: bangkokDate(at), amount, jobNo: sheet.ref ?? null,
+      method, bankRef: txRef, note, today: bangkokToday(),
+      slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null,
+      date, slotIdx, actor: { actorId: createdById, actorRole: session.user.role ?? null },
+    });
+    if (!issued.ok) return NextResponse.json({ error: "not-allowed", reasons: issued.reasons, detail: issued.reasons.join("\n") }, { status: issued.status });
+    const row = { id: issued.advance.id };
+    if (peakRef) await prisma.guideAdvance.update({ where: { id: row.id }, data: { peakRef } });
     // The guide must know money was sent: in-app + push + LINE (if linked) + email
     // fallback — same pipeline as booking changes. Best-effort, never blocks the record.
     await notifyGuide(
@@ -108,39 +127,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const [advances, returns] = await Promise.all([
-    prisma.guideAdvance.findMany({ where: key(guideId, date, slotIdx), orderBy: { paidAt: "asc" } }),
-    prisma.guideAdvanceReturn.findMany({ where: key(guideId, date, slotIdx), orderBy: { returnedAt: "asc" } }),
-  ]);
-  return NextResponse.json({ ok: true, advances, returns });
+  return NextResponse.json({ ok: true, ...(await viewFor(guideId, date, slotIdx)) });
 }
 
-// DELETE { kind, id, guideId, date, slotIdx } — operator/admin only. Removes one
-// advance or return row (a mis-entry). Financial rows are audit-logged with their
-// full content so nothing disappears silently; any Drive slip file stays.
+// DELETE — retired by Phase 3.
+//
+// Advances and returns are financial records on the ledger now; a mis-entry is corrected
+// by reversing it with a reason, never by deleting the row. It still answers, rather than
+// 404, so an old tab gets told where to go.
 export async function DELETE(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (await advanceWritesBlocked(prisma)) return NextResponse.json(advanceFrozenBody, { status: 503 });
-  const body = await req.json().catch(() => null);
-  const kind = String(body?.kind || "");
-  const id = String(body?.id || "");
-  if (!(kind === "advance" || kind === "return") || !id) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-
-  if (kind === "advance") {
-    const row = await prisma.guideAdvance.findUnique({ where: { id }, include: { returns: { select: { id: true } } } });
-    if (!row) return NextResponse.json({ error: "not-found" }, { status: 404 });
-    await prisma.guideAdvance.delete({ where: { id } }); // linked returns keep their money record (advanceId → null)
-    await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "advance.deleted", entityType: "GuideAdvance", entityId: id, detail: { ...row, returns: row.returns.length } });
-  } else {
-    const row = await prisma.guideAdvanceReturn.findUnique({ where: { id } });
-    if (!row) return NextResponse.json({ error: "not-found" }, { status: 404 });
-    await prisma.guideAdvanceReturn.delete({ where: { id } });
-    await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "advance.return_deleted", entityType: "GuideAdvanceReturn", entityId: id, detail: { ...row } });
-  }
-  const [advances, returns] = await Promise.all([
-    prisma.guideAdvance.findMany({ where: key(String(body?.guideId || ""), String(body?.date || ""), Number(body?.slotIdx)), orderBy: { paidAt: "asc" } }),
-    prisma.guideAdvanceReturn.findMany({ where: key(String(body?.guideId || ""), String(body?.date || ""), Number(body?.slotIdx)), orderBy: { returnedAt: "asc" } }),
-  ]);
-  return NextResponse.json({ ok: true, advances, returns });
+  void req;
+  const reason = "An advance or a return is a financial record and is not deleted. Open Payments → Advances: reverse the advance (if the money never left the bank) or the entry that was wrong, with a reason.";
+  return NextResponse.json({ error: "reverse-instead", reasons: [reason], detail: reason }, { status: 409 });
 }

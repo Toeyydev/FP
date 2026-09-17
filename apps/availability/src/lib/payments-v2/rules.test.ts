@@ -43,7 +43,7 @@ describe("checkPayment — C · an advance settled in the transfer", () => {
     { jobNo: "FOLK-BKK-20990903-01", date: "2099-09-03", slotIdx: 7, s: sheet("FOLK-BKK-20990903-01", fee(0), [guide("Food", 5, 1)]) },
   ];
   const facts = jobs.map((j) => fact(j.date, j.slotIdx, j.s));
-  const req = (amountTransferred: number, extra: Partial<PaymentRequest> = {}) => base({ jobs: jobs.map(({ jobNo, date, slotIdx }) => ({ jobNo, date, slotIdx })), amountTransferred, adjustments: [{ type: "ADVANCE_SETTLEMENT", amount: -70, description: "Unspent advance, 1 Sep food tour" }], ...extra });
+  const req = (amountTransferred: number, extra: Partial<PaymentRequest> = {}) => base({ jobs: jobs.map(({ jobNo, date, slotIdx }) => ({ jobNo, date, slotIdx })), amountTransferred, adjustments: [{ type: "ADVANCE_SETTLEMENT", advanceId: "adv-june", amount: -70, description: "Unspent advance, 1 Sep food tour" }], ...extra });
   it("6,499 − 70 = 6,429 reconciles; the jobs still pay 6,499", () => {
     const c = checkPayment(req(6429), facts, { today: TODAY });
     expect(c.reasons).toEqual([]);
@@ -55,8 +55,12 @@ describe("checkPayment — C · an advance settled in the transfer", () => {
     expect(checkPayment(req(6499), facts, { today: TODAY }).reasons.join(" ")).toContain("but 6499.00 was transferred");
     expect(checkPayment(req(6499, { mismatchReason: "Guide asked to settle the advance in cash" }), facts, { today: TODAY }).reasons).toEqual([]);
   });
+  it("an advance settlement must name the advance it clears", () => {
+    const c = checkPayment(req(6429, { adjustments: [{ type: "ADVANCE_SETTLEMENT", amount: -70, description: "Unspent advance" }] }), facts, { today: TODAY });
+    expect(c.reasons.join(" ")).toContain("choose the advance this settles");
+  });
   it("an advance settlement must lower the transfer", () => {
-    const c = checkPayment(req(6569, { adjustments: [{ type: "ADVANCE_SETTLEMENT", amount: 70, description: "wrong sign" }] }), facts, { today: TODAY });
+    const c = checkPayment(req(6569, { adjustments: [{ type: "ADVANCE_SETTLEMENT", advanceId: "adv-june", amount: 70, description: "wrong sign" }] }), facts, { today: TODAY });
     expect(c.reasons.join(" ")).toContain("enter it as a negative amount");
   });
 });

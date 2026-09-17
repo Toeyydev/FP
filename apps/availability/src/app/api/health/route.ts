@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { advanceWritesBlocked, advanceWritesFrozen, ledgerMigrated } from "@/lib/advances/freeze";
+import { advanceWritesFrozen } from "@/lib/advances/freeze";
 import { ADVANCE_BUILD, DB_APPLICATION_NAME } from "@/lib/advances/build";
 
 // Public health check: confirms the app can reach Postgres and reports the
@@ -18,7 +18,7 @@ export async function GET() {
   try {
     await prisma.$queryRaw`SELECT 1`;
     const dbMs = Date.now() - started;
-    return NextResponse.json({ ok: true, dbMs, advances: { build: ADVANCE_BUILD, dbApplicationName: DB_APPLICATION_NAME, writes: (await advanceWritesBlocked(prisma)) ? "frozen" : "open", switch: advanceWritesFrozen() ? "on" : "off", ledgerMigrated: await ledgerMigrated(prisma) } });
+    return NextResponse.json({ ok: true, dbMs, advances: { build: ADVANCE_BUILD, dbApplicationName: DB_APPLICATION_NAME, writes: advanceWritesFrozen() ? "frozen" : "open", switch: advanceWritesFrozen() ? "on" : "off" } });
   } catch {
     return NextResponse.json(
       { ok: false, dbMs: Date.now() - started },

@@ -766,16 +766,20 @@ model GuidePaymentJob {
 // A signed line that reconciles job payable to the transfer: −70 settles an advance
 // balance the guide still holds. It is NOT an expense and never changes a job's figures.
 model GuidePaymentAdjustment {
-  id              String       @id @default(cuid())
-  payment         GuidePayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  id              String        @id @default(cuid())
+  payment         GuidePayment  @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   paymentId       String
   type            String // ADVANCE_SETTLEMENT | PREVIOUS_OVERPAYMENT | PREVIOUS_UNDERPAYMENT | MANUAL_CORRECTION | OTHER
-  amount          Decimal      @db.Decimal(12, 2) // signed
+  amount          Decimal       @db.Decimal(12, 2) // signed
   description     String
   jobNo           String? // the job it relates to, when it relates to one
-  advanceReturnId String? // Phase 3: the GuideAdvanceReturn this settlement clears
+  advanceReturnId String? // unused — a Phase 1 placeholder aimed at the wrong object; the link below is the real one
+  // Phase 3: the advance this settlement clears. Required for new ADVANCE_SETTLEMENT
+  // rows; the ledger entry beside it is what actually moves the balance.
+  advance         GuideAdvance? @relation(fields: [advanceId], references: [id], onDelete: Restrict)
+  advanceId       String?
   createdById     String?
-  createdAt       DateTime     @default(now())
+  createdAt       DateTime      @default(now())
 
   @@index([paymentId])
 }
@@ -940,10 +944,113 @@ model GuideAdvance {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  returns GuideAdvanceReturn[]
+  // ── Phase 3 ledger ────────────────────────────────────────────────────────
+  // The columns above stay exactly as they were (legacy read paths still use
+  // them). These are the ledger's own: money in satang, a running settled total
+  // the DATABASE bounds, and the dates kept apart — advanceDate is when the bank
+  // moved it, createdAt is when someone typed it.
+  advanceNo        String    @unique // FOLK-ADV-YYYYMM-NNN
+  jobNo            String? // the Job No. it was issued for, when it was
+  advanceDate      String // "YYYY-MM-DD" (Bangkok) the money left the bank
+  amountSatang     Int // > 0
+  settledSatang    Int       @default(0) // Σ entries; 0 <= settled <= amountSatang (CHECK)
+  purpose          String?
+  evidenceId       String?
+  accountingPeriod String // "YYYY-MM"
+  peakDocumentNo   String? // recorded, never inferred
+  peakReference    String?
+  reversedAt       DateTime?
+  reversedById     String?
+  reversalReason   String?
+
+  returns     GuideAdvanceReturn[]
+  entries     GuideAdvanceEntry[]
+  adjustments GuidePaymentAdjustment[]
 
   @@index([guideId, date, slotIdx])
   @@index([date])
+  @@index([guideId, advanceDate])
+  @@index([accountingPeriod])
+}
+
+// Money coming BACK from a guide: one real incoming transfer, exactly like
+// GuidePayment is one real outgoing one. It is allocated to advances by
+// GuideAdvanceEntry rows — one receipt can clear several advances.
+//
+// A guide can only ever CLAIM one (from the app); it settles nothing until an
+// operator has seen the money in the bank and VERIFIED it. That is why
+// allocatedSatang is forced to 0 unless the status is VERIFIED (CHECK).
+model GuideAdvanceReceipt {
+  id              String    @id @default(cuid())
+  receiptNo       String    @unique // FOLK-ADR-YYYYMM-NNN
+  guideId         String
+  receivedDate    String // "YYYY-MM-DD" (Bangkok) the money reached the company
+  amountSatang    Int // > 0
+  allocatedSatang Int       @default(0) // Σ RETURN_ALLOCATION entries; 0 <= allocated <= amountSatang
+  status          String    @default("CLAIMED") // CLAIMED | VERIFIED | REJECTED
+  method          String    @default("bank")
+  bankAccount     String?
+  bankRef         String?
+  evidenceId      String?
+  slipUrl         String?
+  slipFileId      String?
+  note            String?
+  claimedById     String?
+  claimedAt       DateTime?
+  verifiedById    String?
+  verifiedAt      DateTime?
+  rejectedReason  String?
+  legacyReturnId  String?   @unique // the GuideAdvanceReturn row this came from
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  entries GuideAdvanceEntry[]
+
+  @@index([guideId, status])
+  @@index([receivedDate])
+}
+
+// Every movement that changes an advance balance. Append-only: written once,
+// never edited, never deleted. A correction that lowers the settled amount is a
+// REVERSAL of the entry that was wrong, not a negative entry — which is what
+// makes "a reversal can never be refused" true (see lib/advances/rules).
+//
+// Signs: every type except REVERSAL is strictly positive (it settles); a REVERSAL
+// is exactly the negative of the entry it reverses. Both enforced by CHECK.
+model GuideAdvanceEntry {
+  id                String               @id @default(cuid())
+  advance           GuideAdvance         @relation(fields: [advanceId], references: [id], onDelete: Restrict)
+  advanceId         String
+  type              String // EXPENSE_SETTLEMENT | RETURN_ALLOCATION | PAYMENT_DEDUCTION | CORRECTION | REVERSAL
+  amountSatang      Int // signed
+  effectiveDate     String // "YYYY-MM-DD" the movement took effect
+  accountingPeriod  String // "YYYY-MM"
+  sourceType        String // JOB_SHEET | RECEIPT | PAYMENT | MANUAL | REVERSAL
+  sourceId          String // jobSheetId | receiptId | guidePaymentId | the reversed entry id | a manual key
+  jobNo             String?
+  snapshot          Json? // what an EXPENSE_SETTLEMENT covered, as it was then
+  receipt           GuideAdvanceReceipt? @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  receiptId         String?
+  paymentId         String? // GuidePayment.id for PAYMENT_DEDUCTION
+  reverses          GuideAdvanceEntry?   @relation("EntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversesEntryId   String?              @unique
+  reversedBy        GuideAdvanceEntry?   @relation("EntryReversal")
+  reversedByEntryId String?              @unique // set on the target when it is reversed
+  reason            String?
+  requestKey        String // groups the entries written by one operator action
+  idempotencyKey    String               @unique // requestKey + advanceId
+  provenance        String               @default("OPERATOR") // OPERATOR | SYSTEM | MIGRATED
+  peakDocumentNo    String?
+  peakReference     String?
+  createdById       String?
+  createdAt         DateTime             @default(now())
+
+  @@index([advanceId])
+  @@index([receiptId])
+  @@index([paymentId])
+  @@index([requestKey])
+  @@index([accountingPeriod])
 }
 
 // The guide handing unused advance money back (possibly in several transfers).

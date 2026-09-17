@@ -97,9 +97,11 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
     if (!r.ok || !d.ok) { setMsg(d.detail || `Couldn't reverse ${p.paymentNo} (${r.status}).`); return; }
     const held = (d.stillPaid ?? []) as { jobNo: string; paymentNo: string }[];
     const unpaid = (d.unpaidJobs ?? []).length;
+    const reopened = (d.advancesReopened ?? []) as { advanceNo: string; amount: number }[];
     setMsg(
       `Payment ${d.paymentNo} reversed. ${unpaid} job${unpaid === 1 ? "" : "s"} unpaid again.` +
-      (held.length ? ` ${held.length} job${held.length === 1 ? "" : "s"} remain${held.length === 1 ? "s" : ""} paid because ${held.length === 1 ? "it belongs" : "they belong"} to another active payment: ${held.map((h) => `${h.jobNo} (${h.paymentNo})`).join(", ")}.` : "")
+      (held.length ? ` ${held.length} job${held.length === 1 ? "" : "s"} remain${held.length === 1 ? "s" : ""} paid because ${held.length === 1 ? "it belongs" : "they belong"} to another active payment: ${held.map((h) => `${h.jobNo} (${h.paymentNo})`).join(", ")}.` : "") +
+      (reopened.length ? ` Advance balance given back: ${reopened.map((a) => `${a.advanceNo} +${thb(a.amount)}`).join(", ")}.` : "")
     );
     setOpenPayment(null);
     load(period);

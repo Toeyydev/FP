@@ -68,7 +68,9 @@ export function jobFigures(expenses: Expense[] | null | undefined, guideFee: unk
   };
 }
 
-export type AdjustmentInput = { type: string; amount: number; description: string; jobNo?: string | null };
+export type AdjustmentInput = { type: string; amount: number; description: string; jobNo?: string | null;
+  /** Phase 3: the GuideAdvance this settlement clears. Required for ADVANCE_SETTLEMENT. */
+  advanceId?: string | null };
 
 export type PaymentRequest = {
   guideId: string;
@@ -181,6 +183,7 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     if (!ADJUSTMENT_TYPES.includes(a.type as AdjustmentType)) { reasons.push(`${n}: choose its type`); continue; }
     if (!Number.isFinite(a.amount) || a.amount === 0 || !hasAtMostTwoDecimals(a.amount)) { reasons.push(`${n}: enter a non-zero amount in baht and satang`); continue; }
     if (blank(a.description)) reasons.push(`${n}: describe it`);
+    if (a.type === "ADVANCE_SETTLEMENT" && !(a.advanceId ?? "").trim()) reasons.push(`${n}: choose the advance this settles — an advance settlement clears a recorded advance, not a free amount`);
     if ((a.type === "ADVANCE_SETTLEMENT" || a.type === "PREVIOUS_OVERPAYMENT") && a.amount > 0) reasons.push(`${n}: ${ADJUSTMENT_LABEL[a.type as AdjustmentType].toLowerCase()} lowers the transfer — enter it as a negative amount`);
     if (a.type === "PREVIOUS_UNDERPAYMENT" && a.amount < 0) reasons.push(`${n}: a previous underpayment raises the transfer — enter it as a positive amount`);
     if (a.jobNo && !FULL_JOB_NO.test(a.jobNo.trim())) reasons.push(`${n}: use the full Job No. it relates to`);
