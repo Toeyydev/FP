@@ -3,6 +3,8 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // Renders the Google Doc exactly as saveJobSheetToDrive builds it; only the database and
 // the Drive upload are mocked. All data is invented — this repo is public.
 const prismaMock = vi.hoisted(() => ({
+  // A database from before the advance ledger migration.
+  $queryRaw: vi.fn(async () => [{ present: false }]),
   jobSheet: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },
   user: { findUnique: vi.fn() },

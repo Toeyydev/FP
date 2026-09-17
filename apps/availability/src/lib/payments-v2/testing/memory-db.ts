@@ -85,6 +85,8 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   });
   const db: Row = Object.fromEntries(names.map((n) => [n, model(n)]));
   // Rollback on error, like a real transaction: restore every table.
+  // A database from before the advance ledger migration: the ledger tables are not there.
+  db.$queryRaw = async (q: TemplateStringsArray) => (/to_regclass/.test(q.join("?")) ? [{ present: false }] : []);
   db.$transaction = async (fn: any) => {
     if (Array.isArray(fn)) return Promise.all(fn);
     const snapshot = Object.fromEntries(names.map((n) => [n, t[n].map((r) => ({ ...r }))]));

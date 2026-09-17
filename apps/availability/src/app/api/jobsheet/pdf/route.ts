@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { ledgerOutstanding, withLedgerBalance, LEDGER_BALANCE_NOTE, LEDGER_BALANCE_NOTE_TH } from "@/lib/advances/freeze";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
@@ -64,6 +65,7 @@ export async function GET(req: NextRequest) {
         prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
       ])
     : [[], []];
+  const ledgerBal = guideId ? await ledgerOutstanding(prisma, { guideId, date, slotIdx }) : null;
   let sigSrc: string | null = null;
   try {
     sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`;
@@ -293,7 +295,7 @@ export async function GET(req: NextRequest) {
 
 
     ${advRows.length || retRows.length ? (() => {
-      const at = advanceTotals(advRows, retRows, expenses);
+      const at = withLedgerBalance(advanceTotals(advRows, retRows, expenses), ledgerBal);
       const st = ADVANCE_STATUS_LABEL[advanceStatus(at, true)];
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
       return `<div class="adv advance-settlement"><h3>Advance / Settlement <small>การเคลียร์เงินทดรองจ่าย</small></h3>
@@ -305,6 +307,7 @@ export async function GET(req: NextRequest) {
         ${expenses.filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0).map((e) => `<tr style="color:#6b746f"><td style="padding-left:30px">${esc(e.description)}</td><td></td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
         ${retRows.map((a) => `<tr><td style="padding-left:16px">Advance Returned <small>เงินทดรองคงเหลือส่งคืน</small>${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(dt(a.returnedAt))} · ${esc(a.method)}</td><td class="n">− ${thb(a.amount)}</td></tr>`).join("")}
         <tr class="tot"><td colspan="2" style="text-align:right">Outstanding Advance <small>เงินทดรองจ่ายคงค้าง</small></td><td class="n">${thb(at.outstanding)}</td></tr>
+        ${ledgerBal != null ? `<tr><td colspan="3" style="font-size:10px;color:#6b746f">${esc(LEDGER_BALANCE_NOTE)} <small>${esc(LEDGER_BALANCE_NOTE_TH)}</small></td></tr>` : ""}
         <tr><td class="st" colspan="3">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(st)}</td></tr>
       </tbody></table></div>`;
     })() : ""}

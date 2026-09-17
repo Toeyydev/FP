@@ -3,6 +3,8 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 // The route runs the real settlement rules (lib/guide-advance -> lib/advance); only
 // the database is a stand-in.
 const prismaMock = vi.hoisted(() => ({
+  // A database from before the advance ledger migration.
+  $queryRaw: vi.fn(async () => [{ present: false }]),
   user: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },
   guideAdvance: { findMany: vi.fn(), findFirst: vi.fn() },

@@ -3,6 +3,8 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // Renders the printable job sheet (the page the Drive PDF is made from). Only auth, the
 // database and decryption are mocked. All data is invented — this repo is public.
 const prismaMock = vi.hoisted(() => ({
+  // A database from before the advance ledger migration.
+  $queryRaw: vi.fn(async () => [{ present: false }]),
   user: { findUnique: vi.fn() },
   jobSheet: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },

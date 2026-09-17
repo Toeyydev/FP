@@ -8,6 +8,7 @@ import { notifyGuide } from "@/lib/booking-import";
 import { thb } from "@/lib/jobsheet";
 import { uploadSlip } from "@/lib/advance-slip";
 import { recordAdvanceReturn } from "@/lib/guide-advance";
+import { advanceFrozenBody, advanceWritesBlocked } from "@/lib/advances/freeze";
 
 // Guide advances + returns for one job (guideId + date + slotIdx). An advance is a
 // cash movement, never an expense (see lib/advance). Operators/admin record both;
@@ -25,6 +26,9 @@ const key = (guideId: string, date: string, slotIdx: number) => ({ guideId, date
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Cutover / rollback: no advance or return may be written while the switch is on, or at
+  // all once the ledger migration has run (this version cannot write the ledger).
+  if (await advanceWritesBlocked(prisma)) return NextResponse.json(advanceFrozenBody, { status: 503 });
 
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "bad-body" }, { status: 400 });
@@ -117,6 +121,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (await advanceWritesBlocked(prisma)) return NextResponse.json(advanceFrozenBody, { status: 503 });
   const body = await req.json().catch(() => null);
   const kind = String(body?.kind || "");
   const id = String(body?.id || "");
