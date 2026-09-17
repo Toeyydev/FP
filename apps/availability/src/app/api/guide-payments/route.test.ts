@@ -74,10 +74,10 @@ describe("POST /api/guide-payments", () => {
   });
 
   it("an adjustment reconciles the difference: 1,616 − 70 = 1,546", async () => {
-    const res = await post(body({ amountTransferred: 1546, adjustments: [{ type: "ADVANCE_SETTLEMENT", amount: -70, description: "Unspent advance" }] }));
+    const res = await post(body({ amountTransferred: 1546, adjustments: [{ type: "PREVIOUS_OVERPAYMENT", amount: -70, description: "Overpaid on the August transfer" }] }));
     expect(res.status).toBe(200);
     expect(mem.current!.tables.guidePayment[0]).toMatchObject({ jobTotal: 1616, adjustmentTotal: -70, amountTransferred: 1546 });
-    expect(mem.current!.tables.guidePaymentAdjustment[0]).toMatchObject({ type: "ADVANCE_SETTLEMENT", amount: -70 });
+    expect(mem.current!.tables.guidePaymentAdjustment[0]).toMatchObject({ type: "PREVIOUS_OVERPAYMENT", amount: -70 });
   });
 });
 

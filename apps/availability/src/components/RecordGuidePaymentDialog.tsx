@@ -14,7 +14,8 @@ export type RecordedPaymentResult = { id: string; paymentNo: string; paymentDate
 
 const key = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 const dShort = (d: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
-type Adjustment = { type: AdjustmentType; amount: string; description: string };
+type Adjustment = { type: AdjustmentType; amount: string; description: string; advanceId?: string };
+type OpenAdvance = { id: string; advanceNo: string; advanceDate: string; jobNo: string | null; outstanding: number };
 
 export default function RecordGuidePaymentDialog({ guideId, guide, jobs, preselect, today, onClose, onDone }: {
   guideId: string;
@@ -41,6 +42,16 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
   const [periodReason, setPeriodReason] = useState("");
   const [step, setStep] = useState<"compose" | "review">("compose");
   const [done, setDone] = useState<RecordedPaymentResult | null>(null);
+  // The guide's advances that still hold a balance — what an advance settlement can clear.
+  const [openAdvances, setOpenAdvances] = useState<OpenAdvance[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/advances?guideId=${encodeURIComponent(guideId)}&status=open`)
+      .then((r) => (r.ok ? r.json() : { advances: [] }))
+      .then((d) => { if (live) setOpenAdvances((d.advances ?? []) as OpenAdvance[]); })
+      .catch(() => { if (live) setOpenAdvances([]); });
+    return () => { live = false; };
+  }, [guideId]);
   const close = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
@@ -73,7 +84,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
     const payload = {
       guideId, jobs: chosen.map((j) => ({ jobNo: (j.ref ?? "").trim(), date: j.date, slotIdx: j.slotIdx })),
       paymentDate, amountTransferred: Number(amount),
-      adjustments: adjustments.filter((a) => a.description.trim() && a.amount.trim()).map((a) => ({ type: a.type, amount: Number(a.amount), description: a.description.trim() })),
+      adjustments: adjustments.filter((a) => a.description.trim() && a.amount.trim()).map((a) => ({ type: a.type, amount: Number(a.amount), description: a.description.trim(), ...(a.type === "ADVANCE_SETTLEMENT" ? { advanceId: a.advanceId || null } : {}) })),
       bankRef: bankRef.trim() || null, note: note.trim() || null,
       noSlipReason: file ? null : noSlipReason.trim() || null,
       mismatchReason: recon.balanced ? null : mismatchReason.trim() || null,
@@ -208,11 +219,21 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
                 <input value={a.description} onChange={(e) => setAdj(i, { description: e.target.value })} placeholder="What it settles" disabled={busy} aria-label="Adjustment description" />
                 <input value={a.amount} onChange={(e) => setAdj(i, { amount: e.target.value })} inputMode="decimal" placeholder="−70.00" className="num" disabled={busy} aria-label="Adjustment amount" />
                 <button type="button" className="btn sm ghost" onClick={() => setAdjustments((x) => x.filter((_, n) => n !== i))} disabled={busy}>Remove</button>
+                {a.type === "ADVANCE_SETTLEMENT" && (
+                  <select value={a.advanceId ?? ""} disabled={busy || !openAdvances?.length} aria-label="Advance this settles" style={{ gridColumn: "1 / -1", width: "100%" }}
+                    onChange={(e) => {
+                      const adv = openAdvances?.find((x) => x.id === e.target.value);
+                      setAdj(i, { advanceId: e.target.value, ...(adv && !a.amount.trim() ? { amount: (-adv.outstanding).toFixed(2) } : {}), ...(adv && !a.description.trim() ? { description: `Settles ${adv.advanceNo}` } : {}) });
+                    }}>
+                    <option value="">{openAdvances === null ? "Loading advances…" : openAdvances.length ? "Choose the advance…" : "No advance with a balance"}</option>
+                    {openAdvances?.map((x) => <option key={x.id} value={x.id}>{x.advanceNo} · {x.advanceDate} · {thb(x.outstanding)} outstanding</option>)}
+                  </select>
+                )}
               </div>
             ))}
             <div>
               <button type="button" className="btn sm" disabled={busy} onClick={() => setAdjustments((a) => [...a, { type: "ADVANCE_SETTLEMENT", amount: "", description: "" }])}>+ Add adjustment</button>
-              <span className="pay-doc-note" style={{ marginLeft: 8 }}>An advance the guide still holds lowers the transfer, never a job&rsquo;s expense.</span>
+              <div className="pay-doc-note" style={{ whiteSpace: "normal", marginTop: 6 }}>An advance settlement clears a recorded advance and lowers the transfer — never a job&rsquo;s expense. Reversing this payment gives the advance its balance back.</div>
             </div>
           </div>
 

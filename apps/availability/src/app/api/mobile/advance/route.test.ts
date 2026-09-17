@@ -1,18 +1,20 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
-// The route runs the real settlement rules (lib/guide-advance -> lib/advance); only
-// the database is a stand-in.
+// The route runs the real rules (lib/guide-advance -> lib/advances); the database and the
+// ledger's write are stand-ins. Phase 3: the balance is the ledger's, and a return filed
+// from the phone is a CLAIM that settles nothing until an operator confirms it.
 const prismaMock = vi.hoisted(() => ({
-  // A database from before the advance ledger migration.
-  $queryRaw: vi.fn(async () => [{ present: false }]),
   user: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },
   guideAdvance: { findMany: vi.fn(), findFirst: vi.fn() },
-  guideAdvanceReturn: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
+  guideAdvanceEntry: { findMany: vi.fn() },
+  guideAdvanceReceipt: { findMany: vi.fn(), findFirst: vi.fn() },
   jobSheet: { findUnique: vi.fn() },
   checkin: { count: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
+const recordReceipt = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/advances/service", () => ({ recordReceipt }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/booking-import", () => ({ notifyOps: vi.fn(), notifyGuide: vi.fn() }));
 vi.mock("@/lib/advance-slip", () => ({
@@ -35,13 +37,15 @@ beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   prismaMock.user.findUnique.mockResolvedValue(guide);
-  prismaMock.guideAdvance.findMany.mockResolvedValue([{ id: "a1", amount: 2000, paidAt: new Date(NOW - 86400000), method: "bank", txRef: null, note: null, slipUrl: null }]);
-  prismaMock.guideAdvanceReturn.findMany.mockResolvedValue([]);
-  prismaMock.jobSheet.findUnique.mockResolvedValue({ expenses: [{ description: "Grand Palace", price: 500, pax: 2, paidBy: "advance" }] });
+  // 2,000 advanced, 1,000 of it already settled by expenses on the ledger.
+  prismaMock.guideAdvance.findMany.mockResolvedValue([{ id: "a1", advanceNo: "FOLK-ADV-202609-001", amountSatang: 200_000, settledSatang: 100_000, advanceDate: "2026-09-11", paidAt: new Date(NOW - 86400000), method: "bank", txRef: null, note: null, slipUrl: null, reversedAt: null }]);
+  prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }]);
+  prismaMock.guideAdvanceReceipt.findMany.mockResolvedValue([]);
+  prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", ref: "FOLK-BKK-20300911-01" });
   prismaMock.checkin.count.mockResolvedValue(3);
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001" });
-  prismaMock.guideAdvanceReturn.findFirst.mockResolvedValue(null);
-  prismaMock.guideAdvanceReturn.create.mockResolvedValue({ id: "ret_1" });
+  prismaMock.guideAdvanceReceipt.findFirst.mockResolvedValue(null);
+  recordReceipt.mockResolvedValue({ ok: true, receipt: { id: "rcpt_1", receiptNo: "FOLK-ADR-202609-001", status: "CLAIMED" } });
   ({ token } = await mintMobileAccessToken(guide));
 });
 afterEach(() => vi.useRealTimers());
@@ -71,7 +75,7 @@ describe("GET /api/mobile/advance", () => {
 
   it("takes the guide from the token, never from the query", async () => {
     await get("?date=2026-09-12&slotIdx=0&guideId=G-999", token);
-    for (const call of [prismaMock.guideAdvance.findMany, prismaMock.guideAdvanceReturn.findMany, prismaMock.checkin.count]) {
+    for (const call of [prismaMock.guideAdvance.findMany, prismaMock.guideAdvanceReceipt.findMany, prismaMock.checkin.count]) {
       expect(call.mock.calls[0][0].where).toMatchObject({ guideId: "G-001" });
     }
   });
@@ -91,14 +95,14 @@ const RETURN = { date: "2026-09-12", slotIdx: "0", amount: "1,000" };
 describe("POST /api/mobile/advance", () => {
   it("answers 401 without a bearer token, and records nothing", async () => {
     expect((await post(form(RETURN))).status).toBe(401);
-    expect(prismaMock.guideAdvanceReturn.create).not.toHaveBeenCalled();
+    expect(recordReceipt).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed body", async () => {
     for (const fields of [{}, { ...RETURN, date: "2026-9-12" }, { ...RETURN, slotIdx: "-1" }]) {
       expect((await post(form(fields as Record<string, string>), token)).status, JSON.stringify(fields)).toBe(400);
     }
-    expect(prismaMock.guideAdvanceReturn.create).not.toHaveBeenCalled();
+    expect(recordReceipt).not.toHaveBeenCalled();
   });
 
   it("refuses a departure the guide was never given", async () => {
@@ -106,24 +110,24 @@ describe("POST /api/mobile/advance", () => {
     const res = await post(form(RETURN), token);
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe("not-assigned");
-    expect(prismaMock.guideAdvanceReturn.create).not.toHaveBeenCalled();
+    expect(recordReceipt).not.toHaveBeenCalled();
   });
 
-  it("records the return and answers with the balance as it now stands", async () => {
-    // 2000 advanced, 1000 spent from it, and now 1000 coming back.
-    prismaMock.guideAdvanceReturn.findMany.mockResolvedValue([{ id: "ret_1", amount: 1000, returnedAt: new Date(NOW), method: "bank", txRef: null, note: null, slipUrl: null }]);
+  it("records the return as a claim: the ledger balance stays, and the phone is not told to send it again", async () => {
+    prismaMock.guideAdvanceReceipt.findMany.mockResolvedValue([{ id: "rcpt_1", receiptNo: "FOLK-ADR-202609-001", amountSatang: 100_000, allocatedSatang: 0, status: "CLAIMED", receivedDate: "2026-09-12", createdAt: new Date(NOW), method: "bank", bankRef: "TX-5", note: null, slipUrl: null }]);
     const res = await post(form({ ...RETURN, txRef: "TX-5" }), token);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ ok: true, id: "ret_1" });
-    expect(body.summary).toMatchObject({ outstanding: 0, status: "SETTLED" });
+    expect(body).toMatchObject({ ok: true, id: "rcpt_1" });
+    // `outstanding` is what the app shows as "To return" and offers as "Send back".
+    expect(body.summary).toMatchObject({ ledgerOutstanding: 1000, pendingReturns: 1000, outstanding: 0, status: "PENDING_SETTLEMENT" });
     // The comma in "1,000" is a thousands separator, not a decimal point.
-    expect(prismaMock.guideAdvanceReturn.create.mock.calls[0][0].data).toMatchObject({ guideId: "G-001", amount: 1000, txRef: "TX-5" });
+    expect(recordReceipt.mock.calls[0][1]).toMatchObject({ guideId: "G-001", amount: 1000, bankRef: "TX-5", byGuide: true, confirmedArrived: false });
   });
 
   it("takes the guide from the token, whatever the form says", async () => {
     await post(form({ ...RETURN, guideId: "G-999" }), token);
-    expect(prismaMock.guideAdvanceReturn.create.mock.calls[0][0].data.guideId).toBe("G-001");
+    expect(recordReceipt.mock.calls[0][1].guideId).toBe("G-001");
   });
 
   it("carries a slip photo through to the job's Drive folder", async () => {
@@ -134,7 +138,7 @@ describe("POST /api/mobile/advance", () => {
   });
 
   it("passes the double-press guard back to the phone", async () => {
-    prismaMock.guideAdvanceReturn.findFirst.mockResolvedValue({ id: "ret_0" });
+    prismaMock.guideAdvanceReceipt.findFirst.mockResolvedValue({ id: "rcpt_0" });
     const res = await post(form(RETURN), token);
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe("duplicate");

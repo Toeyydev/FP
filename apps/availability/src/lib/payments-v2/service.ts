@@ -16,8 +16,9 @@ import { audit } from "@/lib/audit";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { peakJobStatus } from "@/lib/peak-job-status";
 import { documentHoldsJobs } from "@/lib/peak-payment-document";
+import { applyDeductionsInTx, LedgerConflict, reverseDeductionsForPaymentInTx } from "@/lib/advances/service";
 import {
-  bangkokToday, checkPayment, paidAtFor, paymentNoFor, ADJUSTMENT_TYPES,
+  bangkokToday, checkPayment, paidAtFor, paymentNoFor, toSatang, ADJUSTMENT_TYPES,
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation,
 } from "@/lib/payments-v2/rules";
 
@@ -159,11 +160,29 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
         }),
       },
       adjustments: {
-        create: adjustments.map((a) => ({ type: a.type, amount: a.amount, description: a.description.trim(), jobNo: t(a.jobNo), createdById: input.actor.actorId })),
+        create: adjustments.map((a) => ({ type: a.type, amount: a.amount, description: a.description.trim(), jobNo: t(a.jobNo), advanceId: t(a.advanceId), createdById: input.actor.actorId })),
       },
     },
     select: { id: true, paymentNo: true },
   });
+
+  // Phase 3: an ADVANCE_SETTLEMENT adjustment clears a real advance. The ledger entry
+  // is written inside THIS transaction — if the payment rolls back, so does the
+  // settlement. Advances are taken in id order (see lib/advances/service for the lock
+  // order shared by every path).
+  const advanceLines = adjustments
+    .filter((a) => a.type === "ADVANCE_SETTLEMENT" && (a.advanceId ?? "").trim())
+    .map((a) => ({ advanceId: (a.advanceId as string).trim(), amountSatang: Math.abs(toSatang(a.amount)) }));
+  const deducted = await applyDeductionsInTx(tx, {
+    guideId: input.guideId, paymentId: payment.id, paymentNo: payment.paymentNo,
+    paymentDate: input.paymentDate, deductions: advanceLines, actor: input.actor,
+  });
+  // The money math and the ledger must agree to the satang, or neither is written.
+  const ledgerSatang = deducted.reduce((sum, d) => sum + d.amountSatang, 0);
+  const adjustmentSatang = adjustments.filter((a) => a.type === "ADVANCE_SETTLEMENT").reduce((sum, a) => sum + Math.abs(toSatang(a.amount)), 0);
+  if (ledgerSatang !== adjustmentSatang) {
+    throw new LedgerConflict(`The advance settlements on this payment come to ${(adjustmentSatang / 100).toFixed(2)} but ${(ledgerSatang / 100).toFixed(2)} was cleared on the ledger`);
+  }
 
   for (const j of check.jobs) {
     const where = { guideId: input.guideId, date: j.date, slotIdx: j.slotIdx };
@@ -177,6 +196,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
 
   const summary = {
     paymentNo, guideId: input.guideId, source: input.source, paymentDate: input.paymentDate, accountingPeriod: check.accountingPeriod,
+    advancesSettled: deducted.map((d) => ({ advanceNo: d.advanceNo, amount: d.amountSatang / 100 })),
     jobs: check.jobs.map((j) => ({ jobNo: j.jobNo, payable: j.figures.payable })),
     jobTotal: check.reconciliation.jobTotal, adjustmentTotal: check.reconciliation.adjustmentTotal, amountTransferred: check.reconciliation.amountTransferred,
     balanced: check.reconciliation.balanced, mismatchReason: check.reconciliation.balanced ? null : t(input.mismatchReason),
@@ -211,6 +231,7 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
       return result;
     } catch (e) {
       if (e instanceof PaymentConflict) return { ok: false, code: "conflict", reasons: [e.message] };
+      if (e instanceof LedgerConflict) return { ok: false, code: "conflict", reasons: [e.message] };
       const target = uniqueTarget(e);
       if (target.includes("paymentNo")) continue; // two payments took the same number at once: try the next one
       if (target) return { ok: false, code: "conflict", reasons: ["One of these jobs was paid by another payment a moment ago — reload and check"] };
@@ -220,7 +241,9 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
   return { ok: false, code: "conflict", reasons: ["Could not allocate a payment number — try again"] };
 }
 
-export type ReversePaymentResult = { ok: true; paymentNo: string; jobs: string[] } | { ok: false; status: number; reasons: string[] };
+export type ReversePaymentResult =
+  | { ok: true; paymentNo: string; jobs: string[]; advancesReopened: { advanceNo: string; amount: number }[] }
+  | { ok: false; status: number; reasons: string[] };
 
 /**
  * Reverse a payment recorded by mistake. Nothing is deleted: the payment becomes REVERSED
@@ -244,10 +267,15 @@ export async function reversePayment(prisma: PrismaClient, input: { paymentId: s
   // pointer must not leave a job paid after its payment is reversed.
   const held = p.jobs.map((j) => ({ guideId: j.guideId, date: j.date, slotIdx: j.slotIdx, jobNo: j.jobNo }));
   let stillHeld: string[] = [];
+  let restoredAdvances: { advanceId: string; advanceNo: string; amountSatang: number }[] = [];
   await prisma.$transaction(async (tx) => {
     const moved = await tx.guidePayment.updateMany({ where: { id: p.id, status: "RECORDED" }, data: { status: "REVERSED", reversedAt: now, reversedById: input.actor.actorId, reversalReason: reason } });
     if (moved.count !== 1) throw new PaymentConflict(`${p.paymentNo} changed while it was being reversed`);
     await tx.guidePaymentJob.updateMany({ where: { paymentId: p.id }, data: { active: false } });
+    // The deductions this payment made never settled anything, because the money is
+    // being undone. Contra entries are always negative, so this can never be refused
+    // by the ledger's bounds (lib/advances/rules).
+    restoredAdvances = await reverseDeductionsForPaymentInTx(tx, { paymentId: p.id, paymentNo: p.paymentNo, reason, actor: input.actor });
     if (!held.length) return;
     // A job another payment still holds stays paid by that one: only jobs left with no
     // active payment go back to unpaid.
@@ -269,8 +297,8 @@ export async function reversePayment(prisma: PrismaClient, input: { paymentId: s
     detail: {
       paymentNo: p.paymentNo, guideId: p.guideId, reason,
       before: { status: "RECORDED", paymentDate: p.paymentDate, amountTransferred: Number(p.amountTransferred), jobs: p.jobs.map((j) => j.jobNo) },
-      after: { status: "REVERSED", jobsUnpaid: p.jobs.map((j) => j.jobNo).filter((n) => !stillHeld.includes(n)), jobsStillPaidByAnotherPayment: stillHeld },
+      after: { status: "REVERSED", jobsUnpaid: p.jobs.map((j) => j.jobNo).filter((n) => !stillHeld.includes(n)), jobsStillPaidByAnotherPayment: stillHeld, advancesReopened: restoredAdvances.map((a) => ({ advanceNo: a.advanceNo, amount: a.amountSatang / 100 })) },
     },
   });
-  return { ok: true, paymentNo: p.paymentNo, jobs: p.jobs.map((j) => j.jobNo) };
+  return { ok: true, paymentNo: p.paymentNo, jobs: p.jobs.map((j) => j.jobNo), advancesReopened: restoredAdvances.map((a) => ({ advanceNo: a.advanceNo, amount: a.amountSatang / 100 })) };
 }

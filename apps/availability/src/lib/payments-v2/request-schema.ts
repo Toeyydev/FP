@@ -8,7 +8,7 @@ export const paymentBody = z.object({
   jobs: z.array(z.object({ jobNo: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60),
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   amountTransferred: z.number(),
-  adjustments: z.array(z.object({ type: z.enum(ADJUSTMENT_TYPES), amount: z.number(), description: z.string().min(1).max(300), jobNo: z.string().max(64).nullish() })).max(20).optional(),
+  adjustments: z.array(z.object({ type: z.enum(ADJUSTMENT_TYPES), amount: z.number(), description: z.string().min(1).max(300), jobNo: z.string().max(64).nullish(), advanceId: z.string().max(64).nullish() })).max(20).optional(),
   bankRef: z.string().max(120).nullish(),
   noSlipReason: z.string().max(500).nullish(),
   mismatchReason: z.string().max(500).nullish(),

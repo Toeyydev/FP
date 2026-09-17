@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { ledgerOutstanding, withLedgerBalance, LEDGER_BALANCE_NOTE, LEDGER_BALANCE_NOTE_TH } from "@/lib/advances/freeze";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
@@ -11,7 +10,7 @@ import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
-import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
+import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -59,13 +58,8 @@ export async function GET(req: NextRequest) {
   const certDate = existing ? certificationDate(existing) : null;
   // Advance / settlement ledger for the accountant: only rendered when an advance
   // exists. Cash movements — never added into the expense or payable totals.
-  const [advRows, retRows] = guideId
-    ? await Promise.all([
-        prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
-        prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
-      ])
-    : [[], []];
-  const ledgerBal = guideId ? await ledgerOutstanding(prisma, { guideId, date, slotIdx }) : null;
+  // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
+  const advView = guideId ? await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (existing?.expenses as unknown as Expense[]) ?? [] }) : null;
   let sigSrc: string | null = null;
   try {
     sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`;
@@ -294,21 +288,22 @@ export async function GET(req: NextRequest) {
     </div>
 
 
-    ${advRows.length || retRows.length ? (() => {
-      const at = withLedgerBalance(advanceTotals(advRows, retRows, expenses), ledgerBal);
-      const st = ADVANCE_STATUS_LABEL[advanceStatus(at, true)];
+    ${advView && (advView.advances.length || advView.returns.length) ? (() => {
+      const v = advView;
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+      const waiting = v.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);
       return `<div class="adv advance-settlement"><h3>Advance / Settlement <small>การเคลียร์เงินทดรองจ่าย</small></h3>
       <table>
         <thead><tr><th>Description<small>รายการ</small></th><th style="width:120px">Date · Time<small>วันเวลาทำรายการ</small></th><th class="n" style="width:100px">Amount<small>จำนวนเงิน</small></th></tr></thead>
         <tbody>
-        ${advRows.map((a) => `<tr><td>Advance Paid <small>เงินทดรองจ่ายให้มัคคุเทศก์</small>${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(dt(a.paidAt))} · ${esc(a.method)}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
-        <tr><td style="padding-left:16px">Expenses Paid from Advance <small>ค่าใช้จ่ายที่ชำระจากเงินทดรอง</small></td><td></td><td class="n">− ${thb(at.usedFromAdvance)}</td></tr>
-        ${expenses.filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0).map((e) => `<tr style="color:#6b746f"><td style="padding-left:30px">${esc(e.description)}</td><td></td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
-        ${retRows.map((a) => `<tr><td style="padding-left:16px">Advance Returned <small>เงินทดรองคงเหลือส่งคืน</small>${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(dt(a.returnedAt))} · ${esc(a.method)}</td><td class="n">− ${thb(a.amount)}</td></tr>`).join("")}
-        <tr class="tot"><td colspan="2" style="text-align:right">Outstanding Advance <small>เงินทดรองจ่ายคงค้าง</small></td><td class="n">${thb(at.outstanding)}</td></tr>
-        ${ledgerBal != null ? `<tr><td colspan="3" style="font-size:10px;color:#6b746f">${esc(LEDGER_BALANCE_NOTE)} <small>${esc(LEDGER_BALANCE_NOTE_TH)}</small></td></tr>` : ""}
-        <tr><td class="st" colspan="3">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(st)}</td></tr>
+        ${v.advances.map((a) => `<tr><td>Advance Paid <small>เงินทดรองจ่ายให้มัคคุเทศก์</small> · ${esc(a.advanceNo)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.status === "REVERSED" ? " · reversed" : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(a.advanceDate)} · ${esc(a.method)}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
+        <tr><td style="padding-left:16px">Expenses settled from Advance <small>ค่าใช้จ่ายที่เคลียร์กับเงินทดรองแล้ว</small></td><td></td><td class="n">− ${thb(v.totals.usedFromAdvance)}</td></tr>
+        ${v.totals.tagsNotYetSettled > 0 ? `<tr style="color:#6b746f"><td style="padding-left:30px">Marked “from advance” on this sheet, not yet settled <small>ระบุว่าใช้เงินทดรอง แต่ยังไม่ได้เคลียร์</small></td><td></td><td class="n">(${thb(v.totals.tagsNotYetSettled)})</td></tr>` : ""}
+        ${v.returns.filter((r) => r.allocatedHere > 0).map((r) => `<tr><td style="padding-left:16px">Advance Returned <small>เงินทดรองคงเหลือส่งคืน</small> · ${esc(r.receiptNo)}${r.txRef ? ` · ${esc(r.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(r.receivedDate)} · ${esc(r.method)}</td><td class="n">− ${thb(r.allocatedHere)}</td></tr>`).join("")}
+        ${v.totals.deductedFromPayments > 0 ? `<tr><td style="padding-left:16px">Deducted from a guide payment <small>หักจากการจ่ายค่าตอบแทน</small></td><td></td><td class="n">− ${thb(v.totals.deductedFromPayments)}</td></tr>` : ""}
+        <tr class="tot"><td colspan="2" style="text-align:right">Outstanding Advance <small>เงินทดรองจ่ายคงค้าง</small></td><td class="n">${thb(v.totals.outstanding)}</td></tr>
+        ${waiting.length ? `<tr style="color:#6b746f"><td colspan="3">Returns not yet counted <small>เงินคืนที่ยังไม่นับ (รอตรวจ/รอจัดสรร)</small>: ${waiting.map((r) => `${esc(r.receiptNo)} ${thb(r.status === "CLAIMED" ? r.amount : r.unallocated)}${r.status === "CLAIMED" ? " — waiting to be checked" : " — not yet allocated"}`).join(" · ")}</td></tr>` : ""}
+        <tr><td class="st" colspan="3">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(JOB_ADVANCE_STATUS_LABEL[v.status] ?? v.status)}</td></tr>
       </tbody></table></div>`;
     })() : ""}
     <!-- Two blocks, side by side, matching the operator screen: what the job COST

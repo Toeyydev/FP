@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
-import { advanceStatus, advanceTotals, ADVANCE_STATUS_LABEL, PAYMENT_SOURCES } from "@/lib/advance";
+import { PAYMENT_SOURCES } from "@/lib/advance";
 import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -55,8 +55,12 @@ type Sheet = {
   certifiedAt?: string | null; // first successful save — the certification date (server-stamped, set once)
 };
 // Advance rows as returned by /api/jobsheet (paidAt on advances, returnedAt on returns).
-type AdvanceRow = { id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null };
-type AdvanceData = { advances: AdvanceRow[]; returns: AdvanceRow[]; frozen?: boolean; ledgerOutstanding?: number | null; ledgerPendingReturns?: number | null };
+// Phase 3: these come from the LEDGER (lib/advances/job-view), not re-added on the client.
+type AdvanceRow = { id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null;
+  advanceNo?: string; receiptNo?: string; receivedDate?: string; status?: string; settled?: number; outstanding?: number; allocated?: number; unallocated?: number; allocatedHere?: number };
+type AdvanceTotals = { totalAdvancePaid: number; usedFromAdvance: number; totalReturned: number; deductedFromPayments: number; outstanding: number; taggedFromAdvance: number; tagsNotYetSettled: number };
+type AdvanceData = { advances: AdvanceRow[]; returns: AdvanceRow[]; totals: AdvanceTotals; status: string; frozen: boolean };
+const EMPTY_ADVANCE: AdvanceData = { advances: [], returns: [], totals: { totalAdvancePaid: 0, usedFromAdvance: 0, totalReturned: 0, deductedFromPayments: 0, outstanding: 0, taggedFromAdvance: 0, tagsNotYetSettled: 0 }, status: "NO_ADVANCE", frozen: false };
 const dtShort = (iso?: string) => (iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 // Bilingual label — English with the Thai accounting term underneath, so the job
 // sheet reads as a proper Thai accounting document (accountant-requested).
@@ -103,9 +107,9 @@ export default function JobSheetEditor() {
   const [expBusy, setExpBusy] = useState(false);
   const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
   // Guide advance + settlement (cash movements — separate from expenses, see lib/advance)
-  const [advance, setAdvance] = useState<AdvanceData>({ advances: [], returns: [] });
+  const [advance, setAdvance] = useState<AdvanceData>(EMPTY_ADVANCE);
   const [advKind, setAdvKind] = useState<null | "advance" | "return">(null); // which record-form is open
-  const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null });
+  const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null; confirmedArrived: boolean }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null, confirmedArrived: false });
   const [advBusy, setAdvBusy] = useState(false);
   const [showCross, setShowCross] = useState(false); // expand the cross-check again after approval
   const [jobMeta, setJobMeta] = useState<JobMeta>(null); // operator / OTA / lead guest / meeting point
@@ -128,7 +132,7 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
-    setAdvance(d.advance ?? { advances: [], returns: [] });
+    setAdvance(d.advance ?? EMPTY_ADVANCE);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
     // expense lines (with prices) as a starting template to fill in.
@@ -274,32 +278,38 @@ export default function JobSheetEditor() {
   const noShowTotal = noShow.pax;
 
   // ---- Advance / settlement (cash movements; never part of the expense total) ----
-  // On a database the advance ledger has moved, the balance is the ledger's — this
-  // version's formula cannot see settlements, confirmed returns or payment deductions.
-  const advT0 = advanceTotals(advance.advances, advance.returns, sheet.expenses);
-  const advT = advance.ledgerOutstanding == null ? advT0 : { ...advT0, outstanding: advance.ledgerOutstanding };
-  // What the guide is asked to transfer: never money they already sent that is still being checked.
-  const advPending = advance.ledgerOutstanding == null ? 0 : (advance.ledgerPendingReturns ?? 0);
-  const advToTransfer = Math.max(0, Math.round((advT.outstanding - advPending) * 100) / 100);
+  // Phase 3: the balance is the LEDGER's (lib/advances), sent with the sheet. Tagging an
+  // expense "from the advance" proposes a settlement; it no longer moves the balance on
+  // its own, and a return settles nothing until an operator confirms and allocates it.
+  const advT = advance.totals;
   const todayBKKstr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   const tourCompleted = sheet.date < todayBKKstr || checkedIn;
-  const advSt = advanceStatus(advT, tourCompleted);
   const hasAdvance = advance.advances.length > 0 || advance.returns.length > 0;
-  const advChip = advSt === "SETTLED"
+  const liveAdvances = advance.advances.filter((a) => a.status !== "REVERSED");
+  // The older labels some summaries still use, derived from the ledger status.
+  const advSt: "SETTLED" | "NOT_REQUIRED" | "PENDING_SETTLEMENT" | "OPEN" =
+    advance.status === "SETTLED" ? "SETTLED" : advance.status === "NO_ADVANCE" ? "NOT_REQUIRED" : tourCompleted ? "PENDING_SETTLEMENT" : "OPEN";
+  const advChip = advance.status === "SETTLED"
     ? <span className="badge active">✓ Settled</span>
-    : advSt === "OVER_RETURNED"
-      ? <span className="badge" style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)" }}>⚠ Over-returned</span>
-      : advSt === "PENDING_SETTLEMENT"
+    : advance.status === "NO_ADVANCE"
+      ? <span className="badge muted">No advance</span>
+      : tourCompleted
         ? <span className="badge pending">Pending {thb(advT.outstanding)}</span>
-        : advSt === "OPEN"
-          ? <span className="badge invited">Open · {thb(advT.outstanding)} out</span>
-          : <span className="badge muted">No advance</span>;
+        : <span className="badge invited">Open · {thb(advT.outstanding)} out</span>;
+
+  const advError = (d: { error?: string; reasons?: string[]; detail?: string }, status: number) =>
+    status === 503 ? (d.detail ?? "Recording is paused while advances move to the new ledger — try again shortly.")
+    : d.error === "no-sheet" ? (canEdit ? "Save the sheet first." : "Ask the operator to save the job sheet first.")
+    : d.error === "duplicate" ? "That amount was just recorded — refresh before recording it again."
+    : d.error === "forbidden" ? "Not allowed."
+    : d.error === "bad-amount" ? "Enter a positive amount in baht."
+    : (d.error === "not-connected" || d.error === "not-configured") ? "Connect Google Drive first (slip upload)."
+    : d.detail || d.reasons?.join(" · ") || "Couldn't record it — try again.";
 
   async function submitAdvance(kind: "advance" | "return") {
     if (!sheet) return;
     const amt = Number(advForm.amount.replace(/[,\s]/g, ""));
     if (!Number.isFinite(amt) || amt <= 0) { setMsg("Enter a positive amount in baht."); return; }
-    if (kind === "return" && amt > Math.max(0, advT.outstanding) && !confirm(`Returned amount (${thb(amt)}) exceeds the remaining advance (${thb(Math.max(0, advT.outstanding))}).\n\nRecord it anyway? The job will show "Over-returned" for review.`)) return;
     if (canEdit && !saved) { const ok = await save(); if (!ok) return; } // the row keys off the persisted sheet
     setAdvBusy(true); setMsg("");
     const fd = new FormData();
@@ -309,6 +319,7 @@ export default function JobSheetEditor() {
     fd.append("method", advForm.method);
     if (advForm.txRef.trim()) fd.append("txRef", advForm.txRef.trim());
     if (advForm.note.trim()) fd.append("note", advForm.note.trim());
+    if (kind === "return" && canEdit && advForm.confirmedArrived) fd.append("confirmedArrived", "1");
     if (advForm.file) {
       let blob: Blob = advForm.file;
       try { blob = await shrinkImage(advForm.file); } catch { /* keep original */ }
@@ -317,29 +328,35 @@ export default function JobSheetEditor() {
     const r = await jfetch("/api/jobsheet/advance", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setAdvBusy(false);
-    if (!r.ok) {
-      setMsg(d.error === "no-sheet" ? (canEdit ? "Save the sheet first." : "Ask the operator to save the job sheet first.")
-        : d.error === "duplicate" ? "That amount was just recorded — refresh before recording it again."
-        : d.error === "forbidden" ? "Not allowed."
-        : d.error === "bad-amount" ? "Enter a positive amount in baht."
-        : (d.error === "not-connected" || d.error === "not-configured") ? "Connect Google Drive first (slip upload)."
-        : "Couldn't record it — try again.");
-      return;
-    }
-    setAdvance({ advances: d.advances, returns: d.returns });
-    setAdvKind(null); setAdvForm({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null });
-    setMsg(kind === "advance" ? "Advance recorded ✓" : "Return recorded ✓");
+    if (!r.ok) { setMsg(advError(d, r.status)); return; }
+    setAdvance({ ...EMPTY_ADVANCE, ...d });
+    setAdvKind(null); setAdvForm({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null, confirmedArrived: false });
+    setMsg(kind === "advance" ? "Advance recorded ✓"
+      : d.returns?.some((x: AdvanceRow) => x.status === "CLAIMED") ? "Return recorded — waiting to be checked against the bank ✓"
+      : "Return recorded as received ✓ — allocate it to the advance under Payments → Advances");
   }
-  async function removeAdvanceRow(kind: "advance" | "return", row: AdvanceRow) {
+
+  // Settle the advance with this sheet's rows tagged "from the advance". The tags propose
+  // the amount; this is the decision, written to the ledger with a snapshot of the rows.
+  async function settleTaggedExpenses() {
     if (!sheet) return;
-    if (!confirm(`Remove this ${kind === "advance" ? "advance" : "return"} of ${thb(row.amount)}? The full record is kept in the audit log; any slip stays in Drive.`)) return;
-    setAdvBusy(true);
-    const r = await jfetch("/api/jobsheet/advance", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, id: row.id, guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx }) });
+    const target = liveAdvances.find((a) => (a.outstanding ?? 0) > 0);
+    if (!target) { setMsg("No advance on this job has a balance left to settle."); return; }
+    const amount = Math.min(advT.tagsNotYetSettled, target.outstanding ?? 0);
+    if (!(amount > 0)) return;
+    if (!confirm(`Settle ${thb(amount)} of ${target.advanceNo} with the expenses on this sheet marked “from the advance”?`)) return;
+    setAdvBusy(true); setMsg("");
+    const r = await jfetch(`/api/advances/${target.id}/settle-expenses`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, amount, requestKey: `settle-${sheet.guideId}-${sheet.date}-${sheet.slotIdx}-${target.id}-${Date.now().toString(36)}` }),
+    });
     const d = await r.json().catch(() => ({}));
     setAdvBusy(false);
-    if (!r.ok) { setMsg("Couldn't remove it."); return; }
-    setAdvance({ advances: d.advances, returns: d.returns });
-    setMsg("Removed — kept in the audit log.");
+    if (!r.ok) { setMsg(advError(d, r.status)); return; }
+    const fresh = await jfetch(`/api/jobsheet?guideId=${encodeURIComponent(sheet.guideId)}&date=${sheet.date}&slotIdx=${sheet.slotIdx}`);
+    const fd2 = await fresh.json().catch(() => ({}));
+    if (fd2.advance) setAdvance(fd2.advance);
+    setMsg(`Settled ${thb(amount)} of ${target.advanceNo} ✓`);
   }
 
   // ---- Guide's own expense report (separate from the operator's official set) ----
@@ -890,19 +907,47 @@ export default function JobSheetEditor() {
                   <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
                 {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — counted as reimbursed until the operator confirms. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย นับเป็นเงินคืนไว้ก่อนจนกว่า operator ยืนยัน</div>}
-                {hasAdvance && (
-                  <div style={{ marginTop: 8, padding: "8px 10px", background: advSt === "SETTLED" ? "var(--ok-bg,#eef7f0)" : advSt === "OVER_RETURNED" ? "var(--danger-bg)" : "var(--grey-bg,#f7f7f7)", border: `1px solid ${advSt === "SETTLED" ? "var(--ok-line,#cfe6d6)" : advSt === "OVER_RETURNED" ? "var(--danger-line)" : "var(--line)"}`, borderRadius: 8, fontSize: 12 }}>
+                {hasAdvance && (() => {
+                  // Money the guide already sent back that is not counted yet: a claim being
+                  // checked, or confirmed money not yet put against an advance. A receipt is a
+                  // transfer, not a job, so this is the guide's whole pending amount — shown
+                  // with the arithmetic, so nobody transfers the same balance twice.
+                  const claimed = advance.returns.filter((r) => r.status === "CLAIMED").reduce((a, r) => a + r.amount, 0);
+                  const confirmedUncounted = advance.returns.filter((r) => r.status === "VERIFIED" && (r.unallocated ?? 0) > 0).reduce((a, r) => a + (r.unallocated ?? 0), 0);
+                  const pending = Math.round((claimed + confirmedUncounted) * 100) / 100;
+                  const stillToReturn = Math.max(0, Math.round((advT.outstanding - pending) * 100) / 100);
+                  return (
+                  <div style={{ marginTop: 8, padding: "8px 10px", background: advSt === "SETTLED" ? "var(--ok-bg,#eef7f0)" : "var(--grey-bg,#f7f7f7)", border: `1px solid ${advSt === "SETTLED" ? "var(--ok-line,#cfe6d6)" : "var(--line)"}`, borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700 }}>
                       <span>Advance from Folkpaths</span>
-                      <span>{advSt === "SETTLED" ? "✓ Settled" : advSt === "OVER_RETURNED" ? "⚠ Review" : advToTransfer > 0 ? `Return ${thb(advToTransfer)}` : advT.outstanding > 0 ? "Return being checked" : ""}</span>
+                      <span>{advSt === "SETTLED" ? "✓ Settled" : stillToReturn > 0 ? `Return ${thb(stillToReturn)}` : advT.outstanding > 0 ? "Return being checked" : ""}</span>
                     </div>
                     <div style={{ color: "var(--ink-soft)", marginTop: 3, fontVariantNumeric: "tabular-nums" }}>
                       Received {thb(advT.totalAdvancePaid)} · Spent {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)} · Balance {thb(advT.outstanding)}
                     </div>
-                    {advPending > 0 && <div style={{ color: "var(--ink)", marginTop: 4 }}>{thb(advPending)} you already sent is being checked — do not transfer it again.</div>}
-                    {advToTransfer > 0 && tourCompleted && <div style={{ color: "var(--ink)", marginTop: 4 }}>Transfer the unused {thb(advToTransfer)} back to Folkpaths, then record it in the full sheet (“See full details” → Record return).</div>}
+                    {claimed > 0 && (
+                      <div style={{ color: "var(--ink)", marginTop: 4 }}>
+                        Your return of {thb(claimed)} is being checked against the Folkpaths bank account — the balance changes once it is confirmed.
+                        <br /><small className="gs-calc">เงินที่แจ้งคืนกำลังตรวจสอบกับบัญชีบริษัท ยอดคงเหลือจะเปลี่ยนเมื่อยืนยันแล้ว</small>
+                      </div>
+                    )}
+                    {confirmedUncounted > 0 && (
+                      <div style={{ color: "var(--ink)", marginTop: 4 }}>
+                        Folkpaths has received {thb(confirmedUncounted)} from you and will count it against your advance.
+                        <br /><small className="gs-calc">บริษัทได้รับเงินคืนแล้ว รอบันทึกหักกับเงินทดรอง</small>
+                      </div>
+                    )}
+                    {stillToReturn > 0 && tourCompleted && (
+                      <div style={{ color: "var(--ink)", marginTop: 4 }}>
+                        Transfer {thb(stillToReturn)} back to Folkpaths{pending > 0 ? ` (balance ${thb(advT.outstanding)} less the ${thb(pending)} you already sent)` : ""}, then record it in the full sheet (“See full details” → Record return).
+                      </div>
+                    )}
+                    {stillToReturn === 0 && advT.outstanding > 0 && pending > 0 && (
+                      <div style={{ color: "var(--ink)", marginTop: 4 }}>Nothing more to transfer for now — what you sent covers the balance once it is counted.</div>
+                    )}
                   </div>
-                )}
+                  );
+                })()}
                 {paid && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--ok-bg, #eef7f0)", border: "1px solid var(--ok-line, #cfe6d6)", borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700, color: "var(--green, #2f7d4f)" }}>
@@ -1413,8 +1458,7 @@ export default function JobSheetEditor() {
         </h3>
         {advance.frozen && (
           <div className="no-print" role="status" style={{ margin: "6px 0", padding: "8px 12px", borderRadius: 8, background: "var(--warn-bg,#fbf4e4)", border: "1px solid var(--warn-line,#e2c27a)", fontSize: 12.5 }}>
-            Recording advances and returns is paused while they move to the new ledger. The figures below may not include the latest movements — do not settle from them.
-            {advance.ledgerOutstanding != null && <> The balance shown is the ledger&apos;s: <b>{thb(advance.ledgerOutstanding)}</b> still owed on this job.</>}
+            Recording advances and returns is paused while they move to the new ledger. The figures below are safe to read.
           </div>
         )}
         {hasAdvance ? (
@@ -1422,68 +1466,71 @@ export default function JobSheetEditor() {
             <table className="js-table" style={{ fontSize: 13 }}>
               <thead><tr>
                 <th style={{ textAlign: "left" }}>Description<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>รายการ</small></th>
-                <th style={{ width: 155 }}>Date · Time<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>วันเวลาทำรายการ</small></th>
+                <th style={{ width: 155 }}>Date<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>วันที่</small></th>
                 <th className="no-print" style={{ width: 70 }}>Slip<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>สลิป</small></th>
                 <th style={{ width: 110, textAlign: "right" }}>Amount<small style={{ display: "block", fontSize: 9, fontWeight: 500, color: "var(--ink-soft)" }}>จำนวนเงิน</small></th>
-                <th className="no-print" style={{ width: 34 }} />
               </tr></thead>
               <tbody>
                 {advance.advances.map((a) => (
-                  <tr key={a.id}>
-                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small>{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}{a.note ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.note}</span> : null}</td>
+                  <tr key={a.id} style={a.status === "REVERSED" ? { opacity: 0.55 } : undefined}>
+                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small> <span className="mono" style={{ fontSize: 11.5 }}>{a.advanceNo}</span>{a.status === "REVERSED" ? " · reversed" : ""}{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}</td>
                     <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{dtShort(a.paidAt)} · {a.method}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
-                    <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("advance", a)} hidden={!!advance.frozen}>×</button>}</td>
                   </tr>
                 ))}
                 <tr>
-                  <td style={{ paddingLeft: 18 }}>Expenses Paid from Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายที่ชำระจากเงินทดรอง"}</small></td>
+                  <td style={{ paddingLeft: 18 }}>Expenses settled from Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายที่เคลียร์กับเงินทดรองแล้ว"}</small></td>
                   <td /><td className="no-print" />
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(advT.usedFromAdvance)}</td>
-                  <td className="no-print" />
                 </tr>
-                {sheet.expenses.filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0).map((e, i) => (
-                  <tr key={`adv-exp-${i}`} style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
-                    <td style={{ paddingLeft: 34 }}>{e.description}</td>
+                {advT.tagsNotYetSettled > 0 && (
+                  <tr style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+                    <td style={{ paddingLeft: 34 }}>Marked “from advance” on this sheet, not yet settled<small style={{ fontSize: 10, marginLeft: 5 }}>{"ยังไม่ได้เคลียร์"}</small></td>
                     <td /><td className="no-print" />
-                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{thb(expenseAmount(e))}</td>
-                    <td className="no-print" />
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>({thb(advT.tagsNotYetSettled)})</td>
+                  </tr>
+                )}
+                {advance.returns.filter((r) => (r.allocatedHere ?? 0) > 0).map((r) => (
+                  <tr key={`ret-${r.id}`}>
+                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small> <span className="mono" style={{ fontSize: 11.5 }}>{r.receiptNo}</span></td>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{r.receivedDate} · {r.method}</td>
+                    <td className="no-print" style={{ textAlign: "center" }}>{r.slipUrl ? <a href={r.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(r.allocatedHere ?? 0)}</td>
                   </tr>
                 ))}
-                {advance.returns.map((a) => (
-                  <tr key={a.id}>
-                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small>{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}{a.note ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.note}</span> : null}</td>
-                    <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{dtShort(a.returnedAt)} · {a.method}</td>
-                    <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
-                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(a.amount)}</td>
-                    <td className="no-print" style={{ textAlign: "center" }}>{canEdit && <button className="btn sm danger" disabled={advBusy} title="Remove (kept in audit log)" onClick={() => removeAdvanceRow("return", a)} hidden={!!advance.frozen}>×</button>}</td>
+                {advT.deductedFromPayments > 0 && (
+                  <tr>
+                    <td style={{ paddingLeft: 18 }}>Deducted from a guide payment<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"หักจากการจ่ายค่าตอบแทน"}</small></td>
+                    <td /><td className="no-print" />
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(advT.deductedFromPayments)}</td>
                   </tr>
-                ))}
+                )}
                 <tr className="js-total">
                   <td colSpan={2} style={{ textAlign: "right" }}>Outstanding Advance<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายคงค้าง"}</small></td>
                   <td className="no-print" />
-                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: advT.outstanding < 0 ? "var(--danger)" : advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}><b>{thb(advT.outstanding)}</b></td>
-                  <td className="no-print" />
+                  <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: advT.outstanding === 0 ? "var(--green,#2f7d4f)" : "inherit" }}><b>{thb(advT.outstanding)}</b></td>
                 </tr>
               </tbody>
             </table>
-            {advSt === "OVER_RETURNED" && (
-              <div style={{ margin: "8px 0 0", padding: "8px 12px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 12.5 }}>
-                ⚠ Returned amount exceeds the remaining advance. Please review the settlement — check the expense rows’ payment source and the recorded amounts.
+            {advance.returns.filter((r) => r.status === "CLAIMED" || (r.unallocated ?? 0) > 0).length > 0 && (
+              <div style={{ margin: "8px 0 0", padding: "8px 12px", borderRadius: 8, background: "var(--grey-bg,#fafafa)", border: "1px solid var(--line)", fontSize: 12.5 }}>
+                <b>Returns not counted yet</b> — a return settles nothing until it is confirmed and allocated (Payments → Advances):{" "}
+                {advance.returns.filter((r) => r.status === "CLAIMED" || (r.unallocated ?? 0) > 0).map((r) => `${r.receiptNo} ${thb(r.status === "CLAIMED" ? r.amount : (r.unallocated ?? 0))} ${r.status === "CLAIMED" ? "waiting to be checked" : "not yet allocated"}`).join(" · ")}
               </div>
             )}
           </>
         ) : (
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "6px 2px" }}>No advance issued for this job. Record one if money was transferred to the guide before the tour — the actual spend then goes in the expense rows above with source “Guide Advance”.</div>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "6px 2px" }}>No advance issued for this job. Record one if money was transferred to the guide before the tour — the actual spend then goes in the expense rows above with source “From company advance”, and is settled against the advance.</div>
         )}
 
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          {canEdit && <button className="btn sm" disabled={advBusy || !!advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "" })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
-          {(canEdit || (hasAdvance && advT.outstanding > 0)) && <button className="btn sm" disabled={advBusy || !!advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "" })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
-          {hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Used {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)} · Balance {thb(advT.outstanding)}</span>}
+          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
+          {(canEdit || (hasAdvance && advT.outstanding > 0)) && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
+          {canEdit && advT.tagsNotYetSettled > 0 && liveAdvances.some((a) => (a.outstanding ?? 0) > 0) && <button className="btn sm" disabled={advBusy || advance.frozen || !saved} title="Settle the advance with the expense rows marked “from company advance”" onClick={settleTaggedExpenses}>Settle {thb(Math.min(advT.tagsNotYetSettled, liveAdvances.find((a) => (a.outstanding ?? 0) > 0)?.outstanding ?? 0))} from expenses</button>}
+          {hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (
           <div className="no-print" style={{ marginTop: 8, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg,#fafafa)", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -1499,6 +1546,12 @@ export default function JobSheetEditor() {
               <input style={{ ...L, width: 150, marginTop: 2 }} value={advForm.txRef} onChange={(e) => setAdvForm((f) => ({ ...f, txRef: e.target.value }))} /></label>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Note (optional)<br />
               <input style={{ ...L, width: 170, marginTop: 2 }} maxLength={500} value={advForm.note} onChange={(e) => setAdvForm((f) => ({ ...f, note: e.target.value }))} /></label>
+            {advKind === "return" && canEdit && (
+              <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }} title="Tick only if you have seen this money in the company bank account">
+                <input type="checkbox" checked={advForm.confirmedArrived} onChange={(e) => setAdvForm((f) => ({ ...f, confirmedArrived: e.target.checked }))} />
+                I have seen it in the company account
+              </label>
+            )}
             <label className="btn sm" style={{ cursor: "pointer" }} title="Attach the transfer slip (image or PDF, max 10 MB)">
               {advForm.file ? `📎 ${advForm.file.name.slice(0, 18)}…` : "📎 Slip"}
               <input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0] ?? null; setAdvForm((prev) => ({ ...prev, file: f })); e.target.value = ""; }} />
