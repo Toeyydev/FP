@@ -6,6 +6,7 @@ import { uploadSlip, type SlipFile } from "@/lib/advance-slip";
 import { thb } from "@/lib/jobsheet";
 import { bangkokToday } from "@/lib/guide-schedule";
 import type { Expense } from "@/lib/jobsheet";
+import { ledgerOutstanding, ledgerPendingReturns, stillToReturn, withLedgerBalance } from "@/lib/advances/freeze";
 
 /**
  * What a guide still owes on money the company advanced them for one job.
@@ -63,7 +64,13 @@ export async function guideAdvanceSummary(
   ]);
 
   const expenses = (sheet?.expenses as Expense[] | null) ?? [];
-  const totals = advanceTotals(advances, returns, expenses);
+  // On a migrated database the ledger holds the real balance; this version's formula does not.
+  const ledgerBal = await ledgerOutstanding(prisma, where);
+  const totals = withLedgerBalance(advanceTotals(advances, returns, expenses), ledgerBal);
+  // The phone shows `outstanding` as "To return" and offers "Send back" for it, so on a
+  // migrated database it is what the guide should STILL send: money they already sent that
+  // is being checked is not asked for twice. The status still follows the ledger balance.
+  const pending = ledgerBal == null ? null : await ledgerPendingReturns(prisma, guideId);
   // "Completed" exactly as the job sheet decides it: the day has passed in Bangkok,
   // or the guide has checked in.
   const tourCompleted = date < bangkokToday(nowMs) || checkins > 0;
@@ -72,6 +79,7 @@ export async function guideAdvanceSummary(
     date,
     slotIdx,
     ...totals,
+    ...(ledgerBal == null ? {} : { outstanding: stillToReturn(ledgerBal, pending) }),
     status: advanceStatus(totals, tourCompleted),
     advances: advances.map((a) => ({ id: a.id, amount: a.amount, at: a.paidAt, method: a.method, txRef: a.txRef, note: a.note, slip: a.slipUrl })),
     returns: returns.map((r) => ({ id: r.id, amount: r.amount, at: r.returnedAt, method: r.method, txRef: r.txRef, note: r.note, slip: r.slipUrl })),

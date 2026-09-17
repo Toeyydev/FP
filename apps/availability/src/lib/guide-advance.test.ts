@@ -1,6 +1,8 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
+  // A database from before the advance ledger migration.
+  $queryRaw: vi.fn(async () => [{ present: false }]),
   guideAdvance: { findMany: vi.fn(), findFirst: vi.fn() },
   guideAdvanceReturn: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
   jobSheet: { findUnique: vi.fn() },
@@ -19,6 +21,7 @@ import { guideAdvanceSummary, recordAdvanceReturn } from "./guide-advance";
 import { audit } from "@/lib/audit";
 import { notifyOps, notifyGuide } from "@/lib/booking-import";
 import { uploadSlip } from "@/lib/advance-slip";
+import { resetLedgerSeen } from "@/lib/advances/freeze";
 
 // 2026-09-12 in Bangkok (UTC+7).
 const NOW = Date.UTC(2026, 8, 12, 4, 0);
@@ -26,6 +29,8 @@ const movement = (id: string, amount: number, at: Date) => ({ id, amount, paidAt
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prismaMock.$queryRaw.mockImplementation((async () => [{ present: false }]) as never);
+  resetLedgerSeen();
   prismaMock.guideAdvance.findMany.mockResolvedValue([]);
   prismaMock.guideAdvanceReturn.findMany.mockResolvedValue([]);
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
@@ -37,6 +42,34 @@ beforeEach(() => {
 });
 
 describe("guideAdvanceSummary", () => {
+  // After a rollback to this build on a database the ledger version has written to: the
+  // phone shows `outstanding` as "To return" and pre-fills "Send back" with it.
+  it("on a migrated database, asks the guide only for what they have not already sent", async () => {
+    prismaMock.$queryRaw.mockImplementation((async (q: TemplateStringsArray) => {
+      const sql = q.join("?");
+      if (/to_regclass/.test(sql)) return [{ present: true }];
+      if (/GuideAdvanceReceipt/.test(sql)) return [{ satang: BigInt(20_000) }]; // 200 sent, being checked
+      if (/settledSatang/.test(sql)) return [{ satang: BigInt(70_000) }];     // ledger: 700 still owed
+      return [];
+    }) as never);
+    prismaMock.guideAdvance.findMany.mockResolvedValue([movement("a1", 1000, new Date(NOW - 86400000))]);
+    prismaMock.checkin.count.mockResolvedValue(1);
+    const s = await guideAdvanceSummary("G-001", "2026-09-12", 0, NOW);
+    expect(s.outstanding).toBe(500);
+    expect(s.status).toBe("PENDING_SETTLEMENT"); // not settled until the ledger says so
+
+    prismaMock.$queryRaw.mockImplementation((async (q: TemplateStringsArray) => {
+      const sql = q.join("?");
+      if (/to_regclass/.test(sql)) return [{ present: true }];
+      if (/GuideAdvanceReceipt/.test(sql)) return [{ satang: BigInt(90_000) }]; // sent more than is owed
+      if (/settledSatang/.test(sql)) return [{ satang: BigInt(70_000) }];
+      return [];
+    }) as never);
+    const t = await guideAdvanceSummary("G-001", "2026-09-12", 0, NOW);
+    expect(t.outstanding).toBe(0);
+    expect(t.status).toBe("PENDING_SETTLEMENT");
+  });
+
   it("says nothing is owed when no advance was ever paid", async () => {
     const s = await guideAdvanceSummary("G-001", "2026-09-12", 0, NOW);
     expect(s).toMatchObject({ totalAdvancePaid: 0, usedFromAdvance: 0, totalReturned: 0, outstanding: 0, status: "NOT_REQUIRED" });

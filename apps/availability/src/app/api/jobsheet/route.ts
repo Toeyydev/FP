@@ -4,6 +4,7 @@ import { paymentCoverage } from "@/lib/payment-coverage";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { advanceWritesBlocked, ledgerOutstanding, ledgerPendingReturns } from "@/lib/advances/freeze";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
@@ -145,7 +146,9 @@ export async function GET(req: NextRequest) {
     prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
     prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
   ]);
-  const advance = { advances, returns: advanceReturns };
+  // On a database the ledger has moved, this version's own balance (paid − tagged − returned)
+  // is out of date; the ledger's figure is sent alongside so the page can say so.
+  const advance = { advances, returns: advanceReturns, frozen: await advanceWritesBlocked(prisma), ledgerOutstanding: await ledgerOutstanding(prisma, { guideId, date, slotIdx }), ledgerPendingReturns: await ledgerPendingReturns(prisma, guideId) };
 
   // Collapse repeated guests to a single row — the same booking must appear only once
   // (a re-import or combine can leave a guest listed twice). The SAME booking can

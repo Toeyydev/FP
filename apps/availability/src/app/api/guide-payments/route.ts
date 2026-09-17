@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { advanceFrozenBody, advanceWritesBlocked } from "@/lib/advances/freeze";
 import { isOps, canViewFinance } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
@@ -58,6 +59,11 @@ export async function POST(req: NextRequest) {
   const parsed = paymentBody.safeParse(JSON.parse(String(form?.get("payload") ?? "null")));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   const body = parsed.data;
+  // Cutover / rollback: an advance settlement cannot be linked to the ledger from this
+  // version, so it is refused rather than recorded as free text the ledger never sees.
+  if ((body.adjustments ?? []).some((x) => x.type === "ADVANCE_SETTLEMENT") && (await advanceWritesBlocked(prisma))) {
+    return NextResponse.json(advanceFrozenBody, { status: 503 });
+  }
 
   const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
   const hasFile = !!file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0;

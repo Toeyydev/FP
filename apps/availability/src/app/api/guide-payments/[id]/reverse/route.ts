@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isOps } from "@/lib/roles";
 import { reversePayment } from "@/lib/payments-v2/service";
+import { liveLedgerDeductions } from "@/lib/advances/freeze";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
   const reason = String(body?.reason ?? "").slice(0, 500);
+  // A payment the ledger version recorded may have settled an advance. This version cannot
+  // give that balance back, so reversing here would leave the advance settled by a payment
+  // that no longer exists. Refused until the ledger version is live again.
+  const deductions = await liveLedgerDeductions(prisma, id);
+  if (deductions > 0) {
+    const detail = `This payment settled ${deductions === 1 ? "an advance" : `${deductions} advances`} in the advance ledger. Reversing it from this version would not give that balance back, so it is paused — reverse it once the ledger version is running again.`;
+    return NextResponse.json({ error: "advance-writes-frozen", reasons: [detail], detail }, { status: 503 });
+  }
   const result = await reversePayment(prisma, { paymentId: id, reason, actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null } });
   if (!result.ok) return NextResponse.json({ error: "not-reversed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
   // A job another ACTIVE payment owns stays paid — the operator is told which, rather than
