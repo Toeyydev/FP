@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { submitTourReport } from "@/lib/guide-lifecycle";
+import { guideExpenseZ, MAX_EXPENSE_LINES } from "@/lib/guide-expenses";
 
 // GET ?date&slotIdx — the bookings for the signed-in guide's own tour (for the
 // no-show checklist in the report). Guide-only; returns [] if not assigned.
@@ -19,8 +20,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ bookings: bookings.map((b) => ({ id: b.id, name: b.customerName || b.confirmationCode || b.externalRef || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShow: b.noShow, noShowPax: b.noShowPax })) });
 }
 
-// POST { date, slotIdx, bookedPax, noShow, leftEarly, comments? } — guide submits
-// the end-of-tour report for their assignment. Also records the COMPLETE check-in.
+// POST { date, slotIdx, bookedPax, noShow, leftEarly, comments?, expenses?, noExpenses? }
+// — guide submits the end-of-tour report for their assignment. Also records the
+// COMPLETE check-in AND files what the tour cost: finishing a tour means saying
+// what was spent on it, or that nothing was (lib/guide-lifecycle).
 // Attendance is recorded for quality/disputes — it does NOT change payout.
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -37,10 +40,15 @@ export async function POST(req: NextRequest) {
     noShowCounts: z.array(z.object({ id: z.string(), pax: z.number().int().min(0).max(100) })).max(100).optional(),
     leftEarly: z.number().int().min(0).max(100).default(0),
     comments: z.string().max(1000).optional(),
+    // The expense report the completion carries. Required by lib/guide-lifecycle
+    // whenever either field is present; both absent = an older build (see there).
+    expenses: z.array(guideExpenseZ).max(MAX_EXPENSE_LINES).optional(),
+    noExpenses: z.boolean().optional(),
+    expensesNote: z.string().max(500).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
   const r = await submitTourReport({ ...parsed.data, guideId, actorId: session.user?.id ?? null });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, expenses: r.expenses });
 }

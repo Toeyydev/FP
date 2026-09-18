@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateMobile } from "@/lib/mobile-auth";
 import { assignedTourId, submitTourReport } from "@/lib/guide-lifecycle";
+import { guideExpenseZ, MAX_EXPENSE_LINES } from "@/lib/guide-expenses";
 
 // POST { date, slotIdx, bookedPax?, noShow, noShowCounts?, leftEarly, comments? } —
 // FolkOPS Mobile files the end-of-tour report for the token guide's own departure,
@@ -24,6 +25,11 @@ export async function POST(req: Request) {
     noShowCounts: z.array(z.object({ id: z.string(), pax: z.number().int().min(0).max(100) })).max(100).optional(),
     leftEarly: z.number().int().min(0).max(100).default(0),
     comments: z.string().max(1000).optional(),
+    // The expense report the completion carries. Required by lib/guide-lifecycle
+    // whenever either field is present; both absent = an older build (see there).
+    expenses: z.array(guideExpenseZ).max(MAX_EXPENSE_LINES).optional(),
+    noExpenses: z.boolean().optional(),
+    expensesNote: z.string().max(500).optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
@@ -33,5 +39,5 @@ export async function POST(req: Request) {
 
   const r = await submitTourReport({ ...parsed.data, guideId, tourId, actorId: a.user.id });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, expenses: r.expenses });
 }
