@@ -1,6 +1,7 @@
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { sweepTourReminders } from "@/lib/tour-reminders";
+import { sweepExpenseReminders } from "@/lib/expense-reminders";
 
 // A self-scheduling background loop that keeps the board current even when nobody
 // has the app open — so it never again depends on the Bokun webhook being alive.
@@ -24,7 +25,14 @@ export function startSyncLoop(): void {
   // (one indexed query per tick when nothing's due) and idempotent, so a 5-min
   // beat is safe. Not folded into tick() — that would stretch the lead window to
   // the 30-min sync beat and miss the mark.
-  const remind = async () => { try { await sweepTourReminders(); } catch { /* keep looping */ } };
+  // Rides the same beat: the post-tour expense chase is due on a 24-hour clock, so
+  // it does not need 5-minute precision, but it is one indexed query when nothing is
+  // due and it sends at most one message per job — cheap enough not to warrant a
+  // third timer. Separate try so a failure in one sweep never skips the other.
+  const remind = async () => {
+    try { await sweepTourReminders(); } catch { /* keep looping */ }
+    try { await sweepExpenseReminders(); } catch { /* keep looping */ }
+  };
   setTimeout(() => { void remind(); }, 20_000);        // shortly after boot
   setInterval(() => { void remind(); }, 300_000);      // then every 5 min
 }

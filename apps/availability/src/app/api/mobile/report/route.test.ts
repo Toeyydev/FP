@@ -88,7 +88,7 @@ describe("POST /api/mobile/report", () => {
   it("files the report for the guide's own departure and completes the tour", async () => {
     const res = await post({ ...body, noShow: 1, leftEarly: 1, comments: "Ferry was late" }, token);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, expenses: "not-declared" });
     expect(prismaMock.tourReport.upsert.mock.calls[0][0].create).toMatchObject({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, tourId: "T-001", bookedPax: 8, noShow: 1, leftEarly: 1, completedPax: 6, comments: "Ferry was late" });
     expect(prismaMock.checkin.create.mock.calls[0][0].data).toMatchObject({ guideId: "G-001", tourId: "T-001", type: "COMPLETE" });
   });

@@ -4,6 +4,8 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { notifyOps } from "@/lib/booking-import";
 import { applyReportedAttendance, noShowStatus, syncAttractionTickets, type Booking, type Expense } from "@/lib/jobsheet";
 import { attributableBookings, guestNameKey, noShowSheetBooking, sheetRefs } from "@/lib/sheet-bookings";
+import { isReportedLine, submitGuideExpenses, type GuideExpenseInput } from "@/lib/guide-expenses";
+import { expenseReportAccess } from "@/lib/expense-report-access";
 
 // What a guide records on an assigned tour while running it: the lifecycle
 // check-ins (ARRIVE → START → COMPLETE) and how many of each booking's guests
@@ -23,6 +25,22 @@ export const CHECKIN_OPENS_BEFORE_MS = 45 * 60_000;
 // The end-of-tour report can't be filed earlier than this. Deliberately not the
 // same as check-in: a report is about a tour that has run.
 export const REPORT_OPENS_BEFORE_MS = 90 * 60_000;
+
+// Finishing a tour means saying what it cost. The guide completes the tour and
+// reports their expenses in ONE step: the completion carries the report, and a
+// completion that carries neither a line nor "nothing to claim" is refused before
+// anything is written (owner, 2026-09-18).
+//
+// A report is still accepted on its own afterwards (/api/jobsheet/expenses) — a
+// guide who remembers a receipt later must be able to file it, and an operator
+// files on their behalf. What this rule removes is finishing a tour and saying
+// nothing at all, which is how jobs reached payroll with no expenses on them.
+//
+// Older app builds send no declaration. They are NOT refused — a guide on cached
+// JavaScript would be unable to complete a tour at all, and the app updates only
+// when they fully close and reopen it. Their tour completes, the job stays
+// unreported, and lib/expense-reminders chases it. Once the fleet has updated,
+// `declared` can become mandatory here and that branch deleted.
 
 // Bookings still going ahead — the ones a guide's tour details list.
 const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
@@ -87,9 +105,17 @@ export async function recordCheckin(o: {
   return { ok: true, type };
 }
 
+/** What became of the expense report the completion carried. */
+export type ReportExpenses =
+  | "recorded"      // lines were filed
+  | "none-declared" // the guide said there was nothing to claim
+  | "not-declared"  // older app build: nothing was asked, nothing was filed
+  | "not-accepted"  // the job's reporting window is shut (already paid) — an operator must record it
+  | "failed";       // the tour completed but the report did not save — it can be re-sent
+
 export type ReportResult =
-  | { ok: true }
-  | { ok: false; status: 400; error: "too-early" }
+  | { ok: true; expenses: ReportExpenses }
+  | { ok: false; status: 400; error: "too-early" | "expenses-required" }
   | { ok: false; status: 404; error: "not-assigned" | "booking-not-found" };
 
 /** One booking's absent guests, as the guide's checklist reports them. */
@@ -111,13 +137,25 @@ export async function submitTourReport(o: {
   comments?: string;
   tourId?: string; // set by FolkOPS Mobile; see `scope` below
   actorId: string | null;
+  // ── The expense report this completion carries ────────────────────────────────
+  // Both absent = an older build that never asked; see the note on the rule above.
+  expenses?: GuideExpenseInput[];
+  noExpenses?: boolean; // the guide declared there was nothing to claim
+  expensesNote?: string;
 }, nowMs: number = Date.now()): Promise<ReportResult> {
   const { guideId, date, slotIdx, bookedPax, leftEarly, comments } = o;
   let noShow = o.noShow;
   const noShowByRef = new Map<string, number>(); // booking ref → no-show pax, for the sheet
 
-  // Both gates first: nothing is written for a report that is refused.
+  // Every gate first: nothing is written for a report that is refused.
   if (nowMs < slotStartMs(date, slotIdx) - REPORT_OPENS_BEFORE_MS) return { ok: false, status: 400, error: "too-early" };
+
+  // The expense declaration. Blank rows and rows seeded from the operator's set but
+  // never touched do not count as reporting — only a description with an amount does.
+  const declared = o.expenses !== undefined || o.noExpenses !== undefined;
+  const lines = (o.expenses ?? []).filter(isReportedLine);
+  if (declared && !o.noExpenses && lines.length === 0) return { ok: false, status: 400, error: "expenses-required" };
+
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return { ok: false, status: 404, error: "not-assigned" };
 
@@ -193,8 +231,39 @@ export async function submitTourReport(o: {
     const gName = (await prisma.user.findFirst({ where: { guideId }, select: { displayName: true } }))?.displayName ?? guideId;
     await notifyOps(`${guideId} ${gName} reported ${noShow} no-show${noShow === 1 ? "" : "s"} on the ${date} tour.`, "Guide reported a no-show", `${date} · ${noShow} no-show`);
   }
-  await audit({ actorId: o.actorId, actorRole: "GUIDE", action: "tour.reported", entityType: "Assignment", detail: { date, slotIdx, noShow, leftEarly } });
-  return { ok: true };
+
+  // File the expenses LAST: the payer default ("Guide paid own money") applies only
+  // once the tour is over, and the COMPLETE check-in written above is what proves it
+  // (lib/guide-expenses.guidePaidRule). Filing first would lose every guide their
+  // reimbursement default. It also reads the booking rows the attendance sync just
+  // wrote, so actual pax lands on the guests who were actually there.
+  let expensesOutcome: ReportExpenses = "not-declared";
+  if (declared) {
+    try {
+      // The same server-side rule the expense form and FolkOPS Mobile ask
+      // (lib/expense-report-access). A job already covered by a payroll run cannot take
+      // a report — a late report would still rewrite its guest rows — and that must hold
+      // here too, or completing a tour becomes a way around it. It is reachable: a
+      // September payroll marked paid in the afternoon covers a tour that ends that evening.
+      const access = await expenseReportAccess({ kind: "guide", guideId }, { guideId, date, slotIdx });
+      if (!access.ok) throw Object.assign(new Error(access.error), { refused: true });
+      await submitGuideExpenses({
+        guideId, date, slotIdx, expenses: lines, note: o.expensesNote,
+        actorId: o.actorId, actorRole: "GUIDE",
+        declaredNone: lines.length === 0, via: "tour-completion",
+      });
+      expensesOutcome = lines.length === 0 ? "none-declared" : "recorded";
+    } catch (e) {
+      // The tour IS complete — that is recorded and must not be rolled back over a
+      // failed expense write. Say so plainly rather than reporting a success that did
+      // not happen: a refusal is final and needs an operator, anything else is worth
+      // re-sending, and the 24-hour sweep chases it if the guide doesn't.
+      expensesOutcome = (e as { refused?: boolean })?.refused ? "not-accepted" : "failed";
+    }
+  }
+
+  await audit({ actorId: o.actorId, actorRole: "GUIDE", action: "tour.reported", entityType: "Assignment", detail: { date, slotIdx, noShow, leftEarly, expenses: expensesOutcome } });
+  return { ok: true, expenses: expensesOutcome };
 }
 
 export type NoShowResult =

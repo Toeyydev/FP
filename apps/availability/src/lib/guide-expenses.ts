@@ -47,6 +47,17 @@ export type GuideExpenseInput = z.infer<typeof guideExpenseZ>;
 /** At most this many lines in one report. */
 export const MAX_EXPENSE_LINES = 40;
 
+/**
+ * A line the guide actually filled in: something bought, for some money.
+ *
+ * The report form starts with blank rows and is seeded from the operator's set, so
+ * "the guide typed something" cannot be inferred from the array's length alone.
+ * Used to decide whether a required report has been given (lib/guide-lifecycle).
+ */
+export function isReportedLine(e: GuideExpenseInput): boolean {
+  return (e.description ?? "").trim().length > 0 && expenseAmount(e as Expense) > 0;
+}
+
 /** Paid By value for "Guide paid own money" — reimbursed to the guide in the payout. */
 export const GUIDE_PAID_OWN_MONEY = "guide";
 
@@ -141,6 +152,11 @@ export async function submitGuideExpenses(o: {
   note?: string | null;
   actorId: string | null;
   actorRole: string;
+  /** The guide said there was nothing to claim, rather than leaving the form blank.
+   *  Recorded in the audit log so an empty report reads as a decision, not a gap. */
+  declaredNone?: boolean;
+  /** Where the report came from, for the audit log. Defaults to the expense form. */
+  via?: string;
 }): Promise<{ ok: true; driveLink: string | null }> {
   const { guideId, date, slotIdx } = o;
   const note = o.note?.trim() || null;
@@ -212,6 +228,6 @@ export async function submitGuideExpenses(o: {
   // via the shared folder) get the record with no operator action. Best-effort.
   const driveLink = await saveJobSheetToDrive(guideId, date, slotIdx);
 
-  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, paidBy: { defaultAfterTour: paidRule.apply ? "applied" : paidRule.reason, sources: payers.counts } } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, via: o.via ?? "expense-form", ...(o.declaredNone ? { declared: "no-expenses" } : {}), paidBy: { defaultAfterTour: paidRule.apply ? "applied" : paidRule.reason, sources: payers.counts } } });
   return { ok: true, driveLink };
 }
