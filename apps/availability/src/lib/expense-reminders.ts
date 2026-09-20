@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { linePush, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
-import { sendEmail } from "@/lib/email";
+import { emailEnabled, sendEmail } from "@/lib/email";
 import { SLOT_TIMES } from "@/lib/slots";
 import { ymd, todayD, addDays } from "@/lib/dates";
 import { tourStartMs } from "@/lib/no-show-count";
@@ -143,7 +143,11 @@ export async function sweepExpenseReminders(nowMs: number = Date.now()): Promise
     if (!guide) continue;
     const viaLine = lineEnabled && !!guide.lineUserId;
     const viaPush = pushable.has(guide.id);
-    const viaEmail = !!guide.email && !/@(?:guides\.)?folkpath\.local$/i.test(guide.email);
+    // `emailEnabled` matters as much as having an address: with no SMTP configured
+    // sendEmail only logs and returns {sent:false}. Counting an address as a channel
+    // without it let the claim below be written for a message that never went out,
+    // which burns the one reminder that job will ever get.
+    const viaEmail = emailEnabled && !!guide.email && !/@(?:guides\.)?folkpath\.local$/i.test(guide.email);
     if (!viaLine && !viaPush && !viaEmail) continue;
 
     // Claim BEFORE sending so a crash mid-send cannot double-notify.
