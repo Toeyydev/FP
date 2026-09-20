@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildReviewQueue, reviewSummary, reviewHref, type ReviewableSheet } from "./expense-review";
+import { buildMissingQueue, buildReviewQueue, missingSummary, reviewSummary, reviewHref, type MissingRow, type ReviewableSheet, type UnreportedJob } from "./expense-review";
 
 const sheet = (over: Partial<ReviewableSheet> = {}): ReviewableSheet => ({
   guideId: "G-900", date: "2026-11-04", slotIdx: 0, ref: "FOLK-BKK-20261104-01", tourId: "T-900",
@@ -85,5 +85,50 @@ describe("reviewSummary", () => {
 
   it("reads as all-clear on an empty queue", () => {
     expect(reviewSummary([])).toEqual({ count: 0, guideTotal: 0, unpaid: 0, claimedMore: 0, claimedMoreTotal: 0, underpaidRisk: 0 });
+  });
+});
+
+const job = (over: Partial<UnreportedJob> = {}): UnreportedJob => ({
+  guideId: "G-900", date: "2026-11-04", slotIdx: 0, tourId: "T-900", pax: 4, ref: "FOLK-BKK-20261104-01", completed: true, ...over,
+});
+
+describe("buildMissingQueue", () => {
+  it("lists tours that ran with guests but carry no report", () => {
+    const rows = buildMissingQueue([job()], ctx());
+    expect(rows[0]).toMatchObject({ guideName: "Nok Example", tour: "Riverside Temples", pax: 4, completed: true, paid: false, paidWithNothingRecorded: false });
+    expect(rows[0].href).toBe(reviewHref("G-900", "2026-11-04", 0));
+  });
+
+  it("leaves out departures with nobody on them — nothing to buy, nothing to chase", () => {
+    expect(buildMissingQueue([job({ pax: 0 })], ctx())).toEqual([]);
+  });
+
+  it("flags a job already settled with nothing recorded", () => {
+    const [r] = buildMissingQueue([job()], ctx(() => true));
+    expect(r).toMatchObject({ paid: true, paidWithNothingRecorded: true });
+  });
+
+  it("keeps a job the guide never completed, so an abandoned tour is still visible", () => {
+    const [r] = buildMissingQueue([job({ completed: false })], ctx());
+    expect(r).toMatchObject({ completed: false });
+  });
+
+  it("puts the oldest first", () => {
+    const rows = buildMissingQueue([job({ date: "2026-11-09", slotIdx: 2 }), job({ date: "2026-10-30" }), job({ date: "2026-11-09", slotIdx: 0 })], ctx());
+    expect(rows.map((r) => `${r.date}#${r.slotIdx}`)).toEqual(["2026-10-30#0", "2026-11-09#0", "2026-11-09#2"]);
+  });
+});
+
+describe("missingSummary", () => {
+  it("separates what can still be fixed from what is already paid", () => {
+    const rows: MissingRow[] = buildMissingQueue(
+      [job({ slotIdx: 0, pax: 4 }), job({ slotIdx: 1, pax: 6 }), job({ slotIdx: 2, pax: 2 })],
+      ctx((_g, _d, s) => s === 1),
+    );
+    expect(missingSummary(rows)).toEqual({ count: 3, unpaid: 2, paidWithNothingRecorded: 1, pax: 12 });
+  });
+
+  it("reads as all-clear on an empty list", () => {
+    expect(missingSummary([])).toEqual({ count: 0, unpaid: 0, paidWithNothingRecorded: 0, pax: 0 });
   });
 });

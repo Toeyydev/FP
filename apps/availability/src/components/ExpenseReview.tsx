@@ -18,6 +18,8 @@ type Row = {
   paid: boolean; underpaidRisk: boolean; href: string;
 };
 type Summary = { count: number; guideTotal: number; unpaid: number; claimedMore: number; claimedMoreTotal: number; underpaidRisk: number };
+type Missing = { guideId: string; guideName: string | null; date: string; slotIdx: number; ref: string | null; tour: string; pax: number; completed: boolean; paid: boolean; paidWithNothingRecorded: boolean; href: string };
+type MissingSummary = { count: number; unpaid: number; paidWithNothingRecorded: number; pax: number };
 
 const baht = (n: number) => `฿${Math.round(n).toLocaleString("en-US")}`;
 const day = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -40,12 +42,14 @@ function Kpi({ v, label, tone }: { v: string; label: string; tone?: "warn" | "ba
 export default function ExpenseReview() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [missing, setMissing] = useState<Missing[]>([]);
+  const [missingSum, setMissingSum] = useState<MissingSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/expense-review", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { setRows(d.rows ?? []); setSummary(d.summary ?? null); })
+      .then((d) => { setRows(d.rows ?? []); setSummary(d.summary ?? null); setMissing(d.missing ?? []); setMissingSum(d.missingSummary ?? null); })
       .catch(() => setError("Could not load the review queue."));
   }, []);
 
@@ -71,7 +75,7 @@ export default function ExpenseReview() {
           </div>
         )}
 
-        {rows && rows.length === 0 && (
+        {rows && rows.length === 0 && missing.length === 0 && (
           <div style={{ padding: "22px 16px", textAlign: "center", border: "1px solid var(--line)", borderRadius: 12, color: "var(--ink-soft)", fontSize: 13.5 }}>
             Nothing waiting — every guide report has been reviewed. ✓
           </div>
@@ -128,6 +132,65 @@ export default function ExpenseReview() {
               </table>
             </div>
           </div>
+        )}
+
+        {missingSum && missing.length > 0 && (
+          <section style={{ marginTop: 28 }}>
+            <h2 style={{ margin: "0 0 2px", fontSize: 17 }}>Never reported</h2>
+            <p style={{ margin: "0 0 12px", color: "var(--ink-soft)", fontSize: 13 }}>
+              Tours that ran with guests but carry no expense report at all — so there is nothing to review, and no way to tell a tour that cost nothing from one nobody recorded.
+              <span style={{ display: "block" }}>ทัวร์ที่มีแขกจริงแต่ไม่มีการรายงานค่าใช้จ่ายเลย</span>
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+              <Kpi v={String(missingSum.count)} label="Tours with no report" tone="warn" />
+              <Kpi v={String(missingSum.unpaid)} label="Still unpaid — can be fixed before the transfer" />
+              <Kpi v={String(missingSum.paidWithNothingRecorded)} label="Already paid with nothing recorded" tone={missingSum.paidWithNothingRecorded ? "bad" : undefined} />
+            </div>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: "var(--paper)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--ink-soft)" }}>
+                      <th style={{ textAlign: "left", padding: "8px 10px" }}>Tour</th>
+                      <th style={{ textAlign: "left", padding: "8px 10px" }}>Guide</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px" }}>Guests</th>
+                      <th style={{ textAlign: "left", padding: "8px 10px" }}>State</th>
+                      <th style={{ padding: "8px 10px" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {missing.map((m) => (
+                      <tr key={`${m.guideId}|${m.date}|${m.slotIdx}`} style={{ borderTop: "1px solid var(--line)", background: m.paidWithNothingRecorded ? "var(--danger-bg)" : undefined }}>
+                        <td style={{ padding: "8px 10px" }}>
+                          <b>{day(m.date)}</b>
+                          <div style={{ color: "var(--ink-soft)", fontSize: 11.5 }}>{m.tour}{m.ref ? ` · ${m.ref}` : ""}</div>
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          {m.guideName ?? m.guideId}
+                          <div style={{ color: "var(--ink-soft)", fontSize: 11.5 }}>{m.guideId}</div>
+                        </td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{m.pax}</td>
+                        <td style={{ padding: "8px 10px", fontSize: 12, color: "var(--ink-soft)" }}>
+                          {m.completed ? "tour completed" : "not completed"}
+                          <div>
+                            {m.paidWithNothingRecorded
+                              ? <span style={{ color: "var(--danger)", fontWeight: 700, fontSize: 11.5 }}>⚠ paid, nothing recorded</span>
+                              : <span style={{ fontSize: 11.5 }}>unpaid</span>}
+                          </div>
+                        </td>
+                        <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                          <a className="btn sm" href={m.href}>Open sheet</a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <p style={{ marginTop: 10, fontSize: 11.5, color: "var(--ink-soft)" }}>
+              Ask the guide what they fronted, then record it on the sheet. Since 20 Sep 2026 a guide cannot finish a tour without reporting, so this list only grows from jobs completed before that — or completed for them by an operator.
+            </p>
+          </section>
         )}
 
         {rows && rows.length > 0 && (
