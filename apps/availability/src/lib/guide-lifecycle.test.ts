@@ -222,8 +222,10 @@ describe("recordNoShow", () => {
   });
 });
 
+// Every completion must carry an expense declaration, so the default here is the
+// cheapest valid one ("nothing to claim"); cases about the rule itself override it.
 const report = (over: Partial<Parameters<typeof submitTourReport>[0]> = {}, now = START + 3 * 60 * MIN) =>
-  submitTourReport({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, bookedPax: 8, noShow: 1, leftEarly: 0, actorId: "u_1", ...over }, now);
+  submitTourReport({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, bookedPax: 8, noShow: 1, leftEarly: 0, actorId: "u_1", noExpenses: true, ...over }, now);
 
 describe("submitTourReport", () => {
   const LIVE = { in: ["PENDING", "OFFERED", "ASSIGNED"] };
@@ -241,7 +243,7 @@ describe("submitTourReport", () => {
     expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
     expect(prismaMock.booking.updateMany).not.toHaveBeenCalled();
     expect(prismaMock.checkin.create).not.toHaveBeenCalled();
-    expect(await report({}, START - 90 * MIN)).toEqual({ ok: true, expenses: "not-declared" });
+    expect(await report({}, START - 90 * MIN)).toEqual({ ok: true, expenses: "none-declared" });
   });
 
   it("refuses a departure the guide is not assigned to, and writes nothing", async () => {
@@ -253,7 +255,7 @@ describe("submitTourReport", () => {
   });
 
   it("saves the report, works out who completed the tour, and completes it", async () => {
-    expect(await report({ bookedPax: 8, noShow: 1, leftEarly: 2, comments: "Heavy rain" })).toEqual({ ok: true, expenses: "not-declared" });
+    expect(await report({ bookedPax: 8, noShow: 1, leftEarly: 2, comments: "Heavy rain" })).toEqual({ ok: true, expenses: "none-declared" });
     const { where, create, update } = prismaMock.tourReport.upsert.mock.calls[0][0];
     expect(where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } });
     expect(create).toMatchObject({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, tourId: "T-001", bookedPax: 8, noShow: 1, leftEarly: 2, completedPax: 5, comments: "Heavy rain" });
@@ -271,7 +273,7 @@ describe("submitTourReport", () => {
 
   it("takes the tour's no-show total from the checklist, clamped to each booking", async () => {
     prismaMock.booking.findMany.mockResolvedValue(BOOKINGS);
-    expect(await report({ noShow: 99, noShowCounts: COUNTS })).toEqual({ ok: true, expenses: "not-declared" });
+    expect(await report({ noShow: 99, noShowCounts: COUNTS })).toEqual({ ok: true, expenses: "none-declared" });
     // Everyone in reach is reset first, then only those who didn't come are flagged.
     expect(prismaMock.booking.updateMany).toHaveBeenCalledWith({ where: { date: "2026-09-11", slotIdx: 0 }, data: { noShowPax: 0, noShow: false } });
     expect(prismaMock.booking.update.mock.calls.map(([a]) => [a.where.id, a.data])).toEqual([
@@ -372,7 +374,7 @@ describe("submitTourReport — the expense report it carries", () => {
   const LINE = { description: "Grand Palace ticket", price: 500, pax: 6 };
 
   it("refuses a completion that reports neither expenses nor \"nothing to claim\", and writes nothing", async () => {
-    expect(await report({ expenses: [] })).toEqual({ ok: false, status: 400, error: "expenses-required" });
+    expect(await report({ expenses: [], noExpenses: false })).toEqual({ ok: false, status: 400, error: "expenses-required" });
     expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
     expect(prismaMock.checkin.create).not.toHaveBeenCalled();
     expect(submitGuideExpenses).not.toHaveBeenCalled();
@@ -382,7 +384,7 @@ describe("submitTourReport — the expense report it carries", () => {
     // The form starts with a blank row and prefills pax, so "the guide typed something"
     // cannot be read off the array's length.
     const blanks = [{ description: "", price: null, pax: 6 }, { description: "Water", price: null, pax: 6 }, { description: "", price: 40, pax: 6 }];
-    expect(await report({ expenses: blanks })).toEqual({ ok: false, status: 400, error: "expenses-required" });
+    expect(await report({ expenses: blanks, noExpenses: false })).toEqual({ ok: false, status: 400, error: "expenses-required" });
     expect(prismaMock.checkin.create).not.toHaveBeenCalled();
   });
 
@@ -423,11 +425,13 @@ describe("submitTourReport — the expense report it carries", () => {
     expect(prismaMock.checkin.create).toHaveBeenCalled(); // the tour still completed
   });
 
-  it("still completes the tour for an older app build that sends no declaration", async () => {
-    // A guide on cached JavaScript must not be locked out of finishing their tour;
-    // lib/expense-reminders chases the missing report instead.
-    expect(await report({})).toEqual({ ok: true, expenses: "not-declared" });
-    expect(prismaMock.checkin.create).toHaveBeenCalled();
+  it("refuses a completion that carries no declaration at all, whatever sent it", async () => {
+    // Owner, 2026-09-20: no exception, not even for an older app build. A silent
+    // pass-through is exactly how the back office ended up unable to see anything.
+    expect(await submitTourReport({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, noShow: 0, leftEarly: 0, actorId: "u_1" }, START + 3 * 60 * MIN))
+      .toEqual({ ok: false, status: 400, error: "expenses-required" });
+    expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.checkin.create).not.toHaveBeenCalled();
     expect(submitGuideExpenses).not.toHaveBeenCalled();
   });
 });

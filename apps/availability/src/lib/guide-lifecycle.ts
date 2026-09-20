@@ -36,11 +36,14 @@ export const REPORT_OPENS_BEFORE_MS = 90 * 60_000;
 // files on their behalf. What this rule removes is finishing a tour and saying
 // nothing at all, which is how jobs reached payroll with no expenses on them.
 //
-// Older app builds send no declaration. They are NOT refused — a guide on cached
-// JavaScript would be unable to complete a tour at all, and the app updates only
-// when they fully close and reopen it. Their tour completes, the job stays
-// unreported, and lib/expense-reminders chases it. Once the fleet has updated,
-// `declared` can become mandatory here and that branch deleted.
+// There is NO exception, including for older app builds (owner, 2026-09-20:
+// "before the done button they must record expenses first"). A completion carrying
+// no declaration is refused whatever sent it. A guide whose PWA still holds cached
+// JavaScript sees the completion fail until they fully close and reopen the app:
+// deliberate, because the back office cannot review expenses that were never filed,
+// and a silent pass-through is how tours reached payroll with nothing recorded.
+// lib/expense-reminders stays the backstop for jobs that never reach this path at
+// all, such as an operator completing a tour on a guide's behalf.
 
 // Bookings still going ahead — the ones a guide's tour details list.
 const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
@@ -109,7 +112,6 @@ export async function recordCheckin(o: {
 export type ReportExpenses =
   | "recorded"      // lines were filed
   | "none-declared" // the guide said there was nothing to claim
-  | "not-declared"  // older app build: nothing was asked, nothing was filed
   | "not-accepted"  // the job's reporting window is shut (already paid) — an operator must record it
   | "failed";       // the tour completed but the report did not save — it can be re-sent
 
@@ -150,11 +152,11 @@ export async function submitTourReport(o: {
   // Every gate first: nothing is written for a report that is refused.
   if (nowMs < slotStartMs(date, slotIdx) - REPORT_OPENS_BEFORE_MS) return { ok: false, status: 400, error: "too-early" };
 
-  // The expense declaration. Blank rows and rows seeded from the operator's set but
-  // never touched do not count as reporting — only a description with an amount does.
-  const declared = o.expenses !== undefined || o.noExpenses !== undefined;
+  // The expense declaration, required of EVERY completion. Blank rows, and rows
+  // seeded from the operator's set but never touched, do not count as reporting:
+  // only a description with an amount does, and "nothing to claim" must be said.
   const lines = (o.expenses ?? []).filter(isReportedLine);
-  if (declared && !o.noExpenses && lines.length === 0) return { ok: false, status: 400, error: "expenses-required" };
+  if (!o.noExpenses && lines.length === 0) return { ok: false, status: 400, error: "expenses-required" };
 
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return { ok: false, status: 404, error: "not-assigned" };
@@ -237,8 +239,8 @@ export async function submitTourReport(o: {
   // (lib/guide-expenses.guidePaidRule). Filing first would lose every guide their
   // reimbursement default. It also reads the booking rows the attendance sync just
   // wrote, so actual pax lands on the guests who were actually there.
-  let expensesOutcome: ReportExpenses = "not-declared";
-  if (declared) {
+  let expensesOutcome: ReportExpenses;
+  {
     try {
       // The same server-side rule the expense form and FolkOPS Mobile ask
       // (lib/expense-report-access). A job already covered by a payroll run cannot take

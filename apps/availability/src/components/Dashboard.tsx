@@ -237,7 +237,7 @@ export default function Dashboard() {
             {orphaned.length > 0 && <Kpi n={orphaned.length} label="Orphaned" tone="bad" onClick={() => jumpTo("attention")} />}
             {d.finance && <>
               <MoneyKpi v={String(d.reportsPending ?? 0)} label="Reports pending" tone="warn" hot={(d.reportsPending ?? 0) > 0} sub="end-tour report" href="/tour-log" />
-              <MoneyKpi v={String(d.finance.expensesToReview.count)} label="Expenses to review" tone="warn" hot={d.finance.expensesToReview.count > 0} sub={d.finance.expensesToReview.count ? thb0(d.finance.expensesToReview.total) : undefined} href="/payments" />
+              <MoneyKpi v={String(d.finance.expensesToReview.count)} label="Expenses to review" tone="warn" hot={d.finance.expensesToReview.count > 0} sub={d.finance.expensesToReview.count ? thb0(d.finance.expensesToReview.total) : undefined} href="/expense-review" />
               <MoneyKpi v={thb0(d.finance.guidePayable.total)} label="Guide payable" sub={d.finance.guidePayable.guides ? `${d.finance.guidePayable.guides} guide${d.finance.guidePayable.guides === 1 ? "" : "s"} · ${d.finance.guidePayable.tours} tour${d.finance.guidePayable.tours === 1 ? "" : "s"}` : "all settled"} href="/payments" />
               <MoneyKpi v={String(d.finance.batches.open)} label="Open batches" tone="warn" hot={d.finance.batches.open > 0} sub={d.finance.batches.open ? `${thb0(d.finance.batches.openTotal)}` : "none open"} href="/payment-batches" />
               <MoneyKpi v={`${d.finance.peak.synced}`} label="PEAK refs" tone="warn" hot={d.finance.peak.pendingRef > 0} sub={d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} missing` : "all recorded"} href="/payments" />
@@ -379,7 +379,7 @@ export default function Dashboard() {
                   <div className="fin-row"><span>Payment batch</span><b>{d.finance.batches.open ? `${d.finance.batches.open} open · ${thb0(d.finance.batches.openTotal)}` : "No open batch"}</b></div>
                   <div className="fin-row"><span>Paid this week</span><b>{d.finance.batches.paidWeekCount ? thb0(d.finance.batches.paidWeekTotal) : "—"}</b></div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-                    <a className="btn sm" href="/payments">Review expenses</a>
+                    <a className="btn sm" href="/expense-review">Review expenses</a>
                     <a className="btn sm" href="/payment-batches">Batches</a>
                   </div>
                 </div>
