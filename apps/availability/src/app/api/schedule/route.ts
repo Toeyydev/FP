@@ -5,15 +5,20 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { guideSchedule } from "@/lib/guide-schedule";
+import { expensesDueForGuide } from "@/lib/expenses-due";
 import { sendPushToUser } from "@/lib/push";
 import { untagGuideSlotBookings } from "@/lib/offers";
 
-// GET — the signed-in guide's upcoming confirmed tours (today onward).
+// GET — the signed-in guide's upcoming confirmed tours (today onward), plus the
+// finished ones still waiting for their expense report. The schedule deliberately
+// hides past tours, which is why a guide could never see what they still owed; the
+// app already fetches this on every load, so the reminder rides along.
 export async function GET() {
   const session = await auth();
   const guideId = session?.user?.guideId;
-  if (!guideId) return NextResponse.json({ items: [] });
-  return NextResponse.json({ items: await guideSchedule(guideId) });
+  if (!guideId) return NextResponse.json({ items: [], expensesDue: [] });
+  const [items, expensesDue] = await Promise.all([guideSchedule(guideId), expensesDueForGuide(guideId)]);
+  return NextResponse.json({ items, expensesDue });
 }
 
 // POST { date, slotIdx, reason } — guide cancels their own tour (urgent). The

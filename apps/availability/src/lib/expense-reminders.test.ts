@@ -7,8 +7,11 @@ const prismaMock = vi.hoisted(() => ({
   user: { findMany: vi.fn() },
   tourPayment: { findMany: vi.fn() },
   payrollStatus: { findMany: vi.fn() },
+  pushSubscription: { findMany: vi.fn() },
 }));
 const lineMock = vi.hoisted(() => ({ linePush: vi.fn(), lineEnabled: true }));
+const pushMock = vi.hoisted(() => ({ sendPushToUser: vi.fn() }));
+vi.mock("@/lib/push", () => pushMock);
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/line", () => lineMock);
@@ -31,6 +34,8 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   lineMock.lineEnabled = true;
   lineMock.linePush.mockResolvedValue(undefined); // the real one returns a promise
+  pushMock.sendPushToUser.mockResolvedValue(1);
+  prismaMock.pushSubscription.findMany.mockResolvedValue([]); // no push unless a test says so
   prismaMock.assignment.findMany.mockResolvedValue([ASSIGNMENT]);
   prismaMock.jobSheet.findMany.mockResolvedValue([]);
   prismaMock.auditLog.findMany.mockResolvedValue([]);
@@ -101,16 +106,28 @@ describe("sweepExpenseReminders", () => {
     expect(lineMock.linePush).not.toHaveBeenCalled();
   });
 
-  it("skips a guide with no LINE link WITHOUT claiming, so they are chased if they link later", async () => {
-    prismaMock.user.findMany.mockResolvedValue([{ ...GUIDE, lineUserId: null }]);
+  it("skips a guide with no channel at all WITHOUT claiming, so they are chased if one appears", async () => {
+    prismaMock.user.findMany.mockResolvedValue([{ ...GUIDE, lineUserId: null }]); // and no push
     expect(await sweepExpenseReminders(NOW)).toBe(0);
     expect(prismaMock.auditLog.create).not.toHaveBeenCalled();
+    expect(pushMock.sendPushToUser).not.toHaveBeenCalled();
   });
 
-  it("does nothing at all when LINE is not configured", async () => {
+  it("still reaches a guide over push when LINE is not configured", async () => {
+    // A LINE-only chase reached almost nobody: most guides who owe reports never
+    // linked LINE. Push is the channel that does not depend on them having done so.
     lineMock.lineEnabled = false;
-    expect(await sweepExpenseReminders(NOW)).toBe(0);
-    expect(prismaMock.assignment.findMany).not.toHaveBeenCalled();
+    prismaMock.pushSubscription.findMany.mockResolvedValue([{ userId: "u_1" }]);
+    expect(await sweepExpenseReminders(NOW)).toBe(1);
+    expect(lineMock.linePush).not.toHaveBeenCalled();
+    expect(pushMock.sendPushToUser).toHaveBeenCalledWith("u_1", expect.objectContaining({ title: "Expenses not reported" }));
+  });
+
+  it("sends on both channels when the guide has both", async () => {
+    prismaMock.pushSubscription.findMany.mockResolvedValue([{ userId: "u_1" }]);
+    expect(await sweepExpenseReminders(NOW)).toBe(1);
+    expect(lineMock.linePush).toHaveBeenCalledTimes(1);
+    expect(pushMock.sendPushToUser).toHaveBeenCalledTimes(1);
   });
 
   it("never looks back past the date the rule starts, so a deploy cannot spam old tours", async () => {

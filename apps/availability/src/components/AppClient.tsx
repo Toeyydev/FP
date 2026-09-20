@@ -81,6 +81,10 @@ export default function AppClient({
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; kind?: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; durationMin: number | null; checkinState: string | null }[]>([]);
+  // Finished tours that still owe an expense report. The schedule hides past tours,
+  // so without this a guide had no way to see what they still owed — and the LINE
+  // chase never reaches the guides who did not link LINE.
+  const [expensesDue, setExpensesDue] = useState<{ date: string; slotIdx: number; time: string; tour: string; href: string }[]>([]);
   const [reportFor, setReportFor] = useState<{ date: string; slotIdx: number; tourName: string; pax: number | null } | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [lFrom, setLFrom] = useState(""); const [lTo, setLTo] = useState(""); const [lReason, setLReason] = useState("");
@@ -233,7 +237,7 @@ export default function AppClient({
   // Guide: load their upcoming confirmed tours (schedule).
   useEffect(() => {
     if (role !== "guide") return;
-    const f = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
+    const f = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => { setSchedule(d.items ?? []); setExpensesDue(d.expensesDue ?? []); }).catch(() => {});
     f();
     const id = window.setInterval(f, 15000);
     return () => window.clearInterval(id);
@@ -640,7 +644,7 @@ export default function AppClient({
   }
   // Capture GPS (best-effort) and record a lifecycle check-in for a tour.
   async function doCheckin(s: { date: string; slotIdx: number }, type: "ARRIVE" | "START" | "COMPLETE") {
-    const refresh = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
+    const refresh = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => { setSchedule(d.items ?? []); setExpensesDue(d.expensesDue ?? []); }).catch(() => {});
     const post = (lat?: number, lng?: number, accuracyM?: number) =>
       fetch("/api/checkin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: s.date, slotIdx: s.slotIdx, type, lat, lng, accuracyM }) })
         .then((r) => r.ok ? refresh() : toast(t("errGeneric")));
@@ -705,7 +709,7 @@ export default function AppClient({
       // The tour completed either way; the expense write is reported separately so a
       // guide is never told "submitted" when their reimbursement did not save.
       toast(d?.expenses === "failed" ? t("expensesSaveFailed") : d?.expenses === "not-accepted" ? t("expensesNotAccepted") : t("reportSubmitted"));
-      fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d2) => setSchedule(d2.items ?? []));
+      fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d2) => { setSchedule(d2.items ?? []); setExpensesDue(d2.expensesDue ?? []); });
     } catch { toast(t("errGeneric")); }
     finally { setRBusy(false); }
   }
@@ -749,6 +753,31 @@ export default function AppClient({
             ? <><b>{todayCount}</b> <span>{t("heroToursToday")}</span></>
             : <span>{t("heroNoTours")}</span>}
         </div>
+        {expensesDue.length > 0 && (
+          <div style={{ marginTop: 12, background: "#fff8c4", border: "1px solid #ecd9bf", borderRadius: 10, padding: "10px 12px", textAlign: "left" }}>
+            <div style={{ fontWeight: 800, fontSize: 13.5, color: "#7a5b12" }}>
+              {expensesDue.length === 1 ? t("expDueOne") : t("expDueMany").replace("{n}", String(expensesDue.length))}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#7a5b12", opacity: 0.85, margin: "2px 0 8px" }}>{t("expDueHint")}</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {expensesDue.slice(0, 4).map((e) => (
+                <a key={`${e.date}|${e.slotIdx}`} href={e.href}
+                   style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#fff", border: "1px solid #f0e6cf", borderRadius: 8, padding: "8px 10px", textDecoration: "none", color: "var(--ink)" }}>
+                  <span style={{ minWidth: 0 }}>
+                    <b style={{ fontSize: 13 }}>{e.tour}</b>
+                    <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-soft)" }}>
+                      {new Date(`${e.date}T00:00:00`).toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "short", day: "numeric", month: "short" })}{e.time ? ` \u00b7 ${e.time}` : ""}
+                    </span>
+                  </span>
+                  <span style={{ fontWeight: 800, color: "var(--primary)", whiteSpace: "nowrap", fontSize: 12.5 }}>{t("expDueAction")} ›</span>
+                </a>
+              ))}
+              {expensesDue.length > 4 && (
+                <span style={{ fontSize: 11.5, color: "#7a5b12" }}>{t("expDueMore").replace("{n}", String(expensesDue.length - 4))}</span>
+              )}
+            </div>
+          </div>
+        )}
       </section>
     );
   }
