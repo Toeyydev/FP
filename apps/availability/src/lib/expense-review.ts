@@ -102,3 +102,80 @@ export function reviewSummary(rows: ReviewRow[]) {
     underpaidRisk: rows.filter((r) => r.underpaidRisk).length,
   };
 }
+
+// ── Jobs where no report was ever filed ──────────────────────────────────────
+//
+// The queue above only holds reports the operator can compare. A job whose guide
+// never reported at all shows up nowhere, and from the back office that looks the
+// same as "no expenses on this tour" — silent, and impossible to tell apart from a
+// tour that genuinely cost nothing. Before the completion flow started demanding a
+// declaration, a guide could finish a tour without ever being asked, so these are
+// the jobs that slipped through: past, with real guests, and nothing recorded.
+
+export type UnreportedJob = {
+  guideId: string;
+  date: string;
+  slotIdx: number;
+  tourId: string;
+  /** Live booked pax on that departure — what makes it a job that should have cost something. */
+  pax: number;
+  ref: string | null;
+  /** The guide pressed Complete (or a report exists), so the tour demonstrably ran. */
+  completed: boolean;
+};
+
+export type MissingRow = {
+  guideId: string;
+  guideName: string | null;
+  date: string;
+  slotIdx: number;
+  ref: string | null;
+  tour: string;
+  pax: number;
+  completed: boolean;
+  paid: boolean;
+  /** Settled with nothing recorded — if the guide did front anything, it was never repaid. */
+  paidWithNothingRecorded: boolean;
+  href: string;
+};
+
+/**
+ * Jobs that ran but carry no guide report, oldest first.
+ *
+ * Only departures with guests count: a job with nobody on it has nothing to buy, and
+ * listing those would bury the ones that matter.
+ */
+export function buildMissingQueue(
+  jobs: UnreportedJob[],
+  ctx: { guideName: (guideId: string) => string | null; tourName: (tourId: string) => string; isPaid: (guideId: string, date: string, slotIdx: number) => boolean },
+): MissingRow[] {
+  return jobs
+    .filter((j) => j.pax > 0)
+    .map((j) => {
+      const paid = ctx.isPaid(j.guideId, j.date, j.slotIdx);
+      return {
+        guideId: j.guideId,
+        guideName: ctx.guideName(j.guideId),
+        date: j.date,
+        slotIdx: j.slotIdx,
+        ref: j.ref,
+        tour: ctx.tourName(j.tourId),
+        pax: j.pax,
+        completed: j.completed,
+        paid,
+        paidWithNothingRecorded: paid,
+        href: reviewHref(j.guideId, j.date, j.slotIdx),
+      };
+    })
+    .sort((a, b) => (a.date === b.date ? a.slotIdx - b.slotIdx : a.date < b.date ? -1 : 1));
+}
+
+export function missingSummary(rows: MissingRow[]) {
+  return {
+    count: rows.length,
+    unpaid: rows.filter((r) => !r.paid).length,
+    // Already settled with no expenses on record — too late to add before the transfer.
+    paidWithNothingRecorded: rows.filter((r) => r.paidWithNothingRecorded).length,
+    pax: rows.reduce((s, r) => s + r.pax, 0),
+  };
+}
