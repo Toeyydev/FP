@@ -60,6 +60,26 @@ describe("recordCheckin", () => {
     expect(await checkin({}, START - 45 * MIN)).toEqual({ ok: true, type: "ARRIVE" });
   });
 
+  it("refuses a guide's bare COMPLETE — finishing a tour goes through the report", async () => {
+    // The expense rule lived on submitTourReport, but a plain COMPLETE check-in
+    // recorded the same "this tour is finished" and asked for nothing.
+    expect(await checkin({ type: "COMPLETE" }, START + 60 * MIN)).toEqual({ ok: false, status: 409, error: "use-the-report" });
+    expect(prismaMock.checkin.create).not.toHaveBeenCalled();
+  });
+
+  it("still lets an OPERATOR record COMPLETE for a guide who cannot", async () => {
+    // They are not the one who spent the money, and the job then shows up on the
+    // operator's own unreported list instead of vanishing.
+    expect(await checkin({ type: "COMPLETE", recordedBy: { id: "u_ops", role: "OPERATOR" } }, START + 60 * MIN))
+      .toEqual({ ok: true, type: "COMPLETE" });
+    expect(prismaMock.checkin.create.mock.calls[0][0].data).toMatchObject({ type: "COMPLETE", recordedById: "u_ops", recordedByRole: "OPERATOR" });
+  });
+
+  it("leaves ARRIVE and START alone", async () => {
+    expect(await checkin({ type: "ARRIVE" })).toEqual({ ok: true, type: "ARRIVE" });
+    expect(await checkin({ type: "START" })).toEqual({ ok: true, type: "START" });
+  });
+
   it("refuses a tour the guide is not assigned to", async () => {
     prismaMock.assignment.findUnique.mockResolvedValue(null);
     expect(await checkin()).toEqual({ ok: false, status: 404, error: "not-assigned" });
