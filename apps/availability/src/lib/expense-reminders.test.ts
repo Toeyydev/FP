@@ -12,6 +12,8 @@ const prismaMock = vi.hoisted(() => ({
 const lineMock = vi.hoisted(() => ({ linePush: vi.fn(), lineEnabled: true }));
 const pushMock = vi.hoisted(() => ({ sendPushToUser: vi.fn() }));
 vi.mock("@/lib/push", () => pushMock);
+const emailMock = vi.hoisted(() => ({ sendEmail: vi.fn() }));
+vi.mock("@/lib/email", () => emailMock);
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/line", () => lineMock);
@@ -25,7 +27,7 @@ const DUE_AT = Date.UTC(2026, 8, 20, 4, 30);
 const NOW = Date.UTC(2026, 8, 20, 5, 0); // half an hour past due
 
 const ASSIGNMENT = { guideId: "G-001", date: TOUR_DATE, slotIdx: 0, tourId: "T-001", tour: { id: "T-001", name: "Grand Palace", durationMin: 180 } };
-const GUIDE = { id: "u_1", guideId: "G-001", displayName: "Mali Somchai", lineUserId: "U_line_1" };
+const GUIDE = { id: "u_1", guideId: "G-001", displayName: "Mali Somchai", lineUserId: "U_line_1", email: "nok@example.com" };
 const KEY = `${TOUR_DATE}:0:G-001`;
 
 beforeEach(() => {
@@ -35,6 +37,7 @@ beforeEach(() => {
   lineMock.lineEnabled = true;
   lineMock.linePush.mockResolvedValue(undefined); // the real one returns a promise
   pushMock.sendPushToUser.mockResolvedValue(1);
+  emailMock.sendEmail.mockResolvedValue({ sent: true });
   prismaMock.pushSubscription.findMany.mockResolvedValue([]); // no push unless a test says so
   prismaMock.assignment.findMany.mockResolvedValue([ASSIGNMENT]);
   prismaMock.jobSheet.findMany.mockResolvedValue([]);
@@ -107,10 +110,12 @@ describe("sweepExpenseReminders", () => {
   });
 
   it("skips a guide with no channel at all WITHOUT claiming, so they are chased if one appears", async () => {
-    prismaMock.user.findMany.mockResolvedValue([{ ...GUIDE, lineUserId: null }]); // and no push
+    // A placeholder address is not a channel, so this guide truly has none.
+    prismaMock.user.findMany.mockResolvedValue([{ ...GUIDE, lineUserId: null, email: "g001@guides.folkpath.local" }]);
     expect(await sweepExpenseReminders(NOW)).toBe(0);
     expect(prismaMock.auditLog.create).not.toHaveBeenCalled();
     expect(pushMock.sendPushToUser).not.toHaveBeenCalled();
+    expect(emailMock.sendEmail).not.toHaveBeenCalled();
   });
 
   it("still reaches a guide over push when LINE is not configured", async () => {
@@ -135,5 +140,16 @@ describe("sweepExpenseReminders", () => {
     const { where } = prismaMock.assignment.findMany.mock.calls[0][0];
     // 7 days back from 2026-09-20 is the 13th, but the rule starts on the 18th.
     expect(where.date.gte).toBe("2026-09-18");
+  });
+
+  it("emails the guides who have neither LINE nor push — the ones whose reports go missing", async () => {
+    // Mai's case: a real address, no LINE, no push. Without email the 24-hour chase
+    // reaches her on no channel at all.
+    lineMock.lineEnabled = false;
+    prismaMock.user.findMany.mockResolvedValue([{ ...GUIDE, lineUserId: null, email: "nok@example.com" }]);
+    expect(await sweepExpenseReminders(NOW)).toBe(1);
+    expect(emailMock.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "nok@example.com", subject: "Your expense report is still missing",
+    }));
   });
 });
