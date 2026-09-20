@@ -12,7 +12,9 @@ const files: string[] = [];
   for (const entry of readdirSync(dir)) {
     const p = join(dir, entry);
     if (statSync(p).isDirectory()) walk(p);
-    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) files.push(p);
+    // Tests are excluded, integration tests included: a fixture that creates a PAID
+    // row is how the paid branch gets exercised, not a production writer.
+    else if (/\.tsx?$/.test(entry) && !/\.i?test\.tsx?$/.test(entry)) files.push(p);
   }
 })(SRC);
 const rel = (p: string) => p.slice(SRC.length + 1);
