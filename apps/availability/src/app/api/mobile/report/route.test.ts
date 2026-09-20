@@ -13,6 +13,15 @@ const prismaMock = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/booking-import", () => ({ notifyOps: vi.fn() }));
+// Filing the expense report is covered by lib/guide-lifecycle's own tests; here it is
+// a stand-in so these cases stay about attendance. isReportedLine stays real, so the
+// route and the rule cannot disagree about what counts as a reported line.
+const expensesMock = vi.hoisted(() => ({ submitGuideExpenses: vi.fn() }));
+vi.mock("@/lib/guide-expenses", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/guide-expenses")>()),
+  submitGuideExpenses: expensesMock.submitGuideExpenses,
+}));
+vi.mock("@/lib/expense-report-access", () => ({ expenseReportAccess: vi.fn(async () => ({ ok: true })) }));
 
 import { POST } from "./route";
 import { mintMobileAccessToken } from "@/lib/mobile-auth";
@@ -45,7 +54,9 @@ const post = (body: unknown, token?: string) => POST(new Request("https://ops.fo
   method: "POST", body: JSON.stringify(body),
   headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
 }));
-const body = { date: "2026-09-11", slotIdx: 0, bookedPax: 8, noShow: 0, leftEarly: 0 };
+// Every completion must declare its expenses, so the shared fixture carries the
+// cheapest valid declaration; the test for the rule itself drops it.
+const body = { date: "2026-09-11", slotIdx: 0, bookedPax: 8, noShow: 0, leftEarly: 0, noExpenses: true };
 // The bookings a call actually reset, and the ones it flagged as absent.
 const reset = () => prismaMock.booking.updateMany.mock.calls.flatMap(([args]) => matching(args.where).map((b) => b.id));
 const flagged = () => prismaMock.booking.update.mock.calls.map(([args]) => args.where.id);
@@ -58,6 +69,7 @@ const refused = async (id: string) => {
 let token = "";
 beforeEach(async () => {
   vi.clearAllMocks();
+  expensesMock.submitGuideExpenses.mockResolvedValue({ ok: true, driveLink: null });
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(START + 10 * MIN);
   rows = SINGLE;
@@ -85,10 +97,18 @@ describe("POST /api/mobile/report", () => {
     expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
   });
 
+  it("refuses a completion that carries no expense declaration", async () => {
+    const { noExpenses: _omitted, ...noDeclaration } = body;
+    const res = await post({ ...noDeclaration, noShow: 1, leftEarly: 1 }, token);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "expenses-required" });
+    expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
+  });
+
   it("files the report for the guide's own departure and completes the tour", async () => {
-    const res = await post({ ...body, noShow: 1, leftEarly: 1, comments: "Ferry was late" }, token);
+    const res = await post({ ...body, noShow: 1, leftEarly: 1, comments: "Ferry was late", noExpenses: true }, token);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, expenses: "none-declared" });
     expect(prismaMock.tourReport.upsert.mock.calls[0][0].create).toMatchObject({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, tourId: "T-001", bookedPax: 8, noShow: 1, leftEarly: 1, completedPax: 6, comments: "Ferry was late" });
     expect(prismaMock.checkin.create.mock.calls[0][0].data).toMatchObject({ guideId: "G-001", tourId: "T-001", type: "COMPLETE" });
   });

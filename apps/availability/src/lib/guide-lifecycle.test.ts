@@ -11,10 +11,18 @@ const prismaMock = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/booking-import", () => ({ notifyOps: vi.fn() }));
+const expensesMock = vi.hoisted(() => ({ submitGuideExpenses: vi.fn() }));
+const accessMock = vi.hoisted(() => ({ expenseReportAccess: vi.fn() }));
+vi.mock("@/lib/expense-report-access", () => accessMock);
+vi.mock("@/lib/guide-expenses", async (importActual) => ({
+  ...(await importActual<typeof import("./guide-expenses")>()),
+  submitGuideExpenses: expensesMock.submitGuideExpenses,
+}));
 
 import { recordCheckin, recordNoShow, slotStartMs, submitTourReport } from "./guide-lifecycle";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
+import { submitGuideExpenses } from "@/lib/guide-expenses";
 
 // 2026-09-11, slot 0 = 08:30 in Bangkok = 01:30 UTC.
 const START = Date.UTC(2026, 8, 11, 1, 30);
@@ -22,6 +30,8 @@ const MIN = 60_000;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  expensesMock.submitGuideExpenses.mockResolvedValue({ ok: true, driveLink: null });
+  accessMock.expenseReportAccess.mockResolvedValue({ ok: true });
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { meetingLat: 13.7437, meetingLng: 100.493, meetingRadiusM: null } });
   prismaMock.checkin.count.mockResolvedValue(1);
   prismaMock.booking.findFirst.mockResolvedValue({ pax: 4 });
@@ -212,8 +222,10 @@ describe("recordNoShow", () => {
   });
 });
 
+// Every completion must carry an expense declaration, so the default here is the
+// cheapest valid one ("nothing to claim"); cases about the rule itself override it.
 const report = (over: Partial<Parameters<typeof submitTourReport>[0]> = {}, now = START + 3 * 60 * MIN) =>
-  submitTourReport({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, bookedPax: 8, noShow: 1, leftEarly: 0, actorId: "u_1", ...over }, now);
+  submitTourReport({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, bookedPax: 8, noShow: 1, leftEarly: 0, actorId: "u_1", noExpenses: true, ...over }, now);
 
 describe("submitTourReport", () => {
   const LIVE = { in: ["PENDING", "OFFERED", "ASSIGNED"] };
@@ -231,7 +243,7 @@ describe("submitTourReport", () => {
     expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
     expect(prismaMock.booking.updateMany).not.toHaveBeenCalled();
     expect(prismaMock.checkin.create).not.toHaveBeenCalled();
-    expect(await report({}, START - 90 * MIN)).toEqual({ ok: true });
+    expect(await report({}, START - 90 * MIN)).toEqual({ ok: true, expenses: "none-declared" });
   });
 
   it("refuses a departure the guide is not assigned to, and writes nothing", async () => {
@@ -243,7 +255,7 @@ describe("submitTourReport", () => {
   });
 
   it("saves the report, works out who completed the tour, and completes it", async () => {
-    expect(await report({ bookedPax: 8, noShow: 1, leftEarly: 2, comments: "Heavy rain" })).toEqual({ ok: true });
+    expect(await report({ bookedPax: 8, noShow: 1, leftEarly: 2, comments: "Heavy rain" })).toEqual({ ok: true, expenses: "none-declared" });
     const { where, create, update } = prismaMock.tourReport.upsert.mock.calls[0][0];
     expect(where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } });
     expect(create).toMatchObject({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, tourId: "T-001", bookedPax: 8, noShow: 1, leftEarly: 2, completedPax: 5, comments: "Heavy rain" });
@@ -261,7 +273,7 @@ describe("submitTourReport", () => {
 
   it("takes the tour's no-show total from the checklist, clamped to each booking", async () => {
     prismaMock.booking.findMany.mockResolvedValue(BOOKINGS);
-    expect(await report({ noShow: 99, noShowCounts: COUNTS })).toEqual({ ok: true });
+    expect(await report({ noShow: 99, noShowCounts: COUNTS })).toEqual({ ok: true, expenses: "none-declared" });
     // Everyone in reach is reset first, then only those who didn't come are flagged.
     expect(prismaMock.booking.updateMany).toHaveBeenCalledWith({ where: { date: "2026-09-11", slotIdx: 0 }, data: { noShowPax: 0, noShow: false } });
     expect(prismaMock.booking.update.mock.calls.map(([a]) => [a.where.id, a.data])).toEqual([
@@ -354,5 +366,72 @@ describe("recordNoShow — owner rule: lowering a reported no-show is deliberate
   it("the guide's own correction inside the reporting window is the report itself — no reason, still audited with the count before", async () => {
     expect(await noShow({ noShowPax: 1 })).toEqual({ ok: true, noShowPax: 1 });
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "booking.noshow", detail: expect.objectContaining({ previousNoShowPax: 3, noShowPax: 1 }) }));
+  });
+});
+
+// Finishing a tour means saying what it cost. See lib/guide-lifecycle for the rule.
+describe("submitTourReport — the expense report it carries", () => {
+  const LINE = { description: "Grand Palace ticket", price: 500, pax: 6 };
+
+  it("refuses a completion that reports neither expenses nor \"nothing to claim\", and writes nothing", async () => {
+    expect(await report({ expenses: [], noExpenses: false })).toEqual({ ok: false, status: 400, error: "expenses-required" });
+    expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.checkin.create).not.toHaveBeenCalled();
+    expect(submitGuideExpenses).not.toHaveBeenCalled();
+  });
+
+  it("does not count blank rows or rows with no amount as a report", async () => {
+    // The form starts with a blank row and prefills pax, so "the guide typed something"
+    // cannot be read off the array's length.
+    const blanks = [{ description: "", price: null, pax: 6 }, { description: "Water", price: null, pax: 6 }, { description: "", price: 40, pax: 6 }];
+    expect(await report({ expenses: blanks, noExpenses: false })).toEqual({ ok: false, status: 400, error: "expenses-required" });
+    expect(prismaMock.checkin.create).not.toHaveBeenCalled();
+  });
+
+  it("accepts \"nothing to claim\" and files it as a decision, not a blank", async () => {
+    expect(await report({ noExpenses: true })).toEqual({ ok: true, expenses: "none-declared" });
+    expect(submitGuideExpenses).toHaveBeenCalledWith(expect.objectContaining({
+      guideId: "G-001", date: "2026-09-11", slotIdx: 0, expenses: [], declaredNone: true, via: "tour-completion", actorRole: "GUIDE",
+    }));
+  });
+
+  it("files the reported lines, dropping the ones the guide left empty", async () => {
+    expect(await report({ expenses: [LINE, { description: "", price: null, pax: null }], expensesNote: "hot day" })).toEqual({ ok: true, expenses: "recorded" });
+    expect(submitGuideExpenses).toHaveBeenCalledWith(expect.objectContaining({ expenses: [LINE], note: "hot day", declaredNone: false }));
+  });
+
+  it("files the expenses only AFTER the tour is completed, so the guide keeps the reimbursement default", async () => {
+    // guidePaidRule applies "Guide paid own money" only once the tour is over, and the
+    // COMPLETE check-in is what proves it. Filing first would silently cost guides money.
+    await report({ expenses: [LINE] });
+    expect(prismaMock.checkin.create.mock.invocationCallOrder[0])
+      .toBeLessThan(expensesMock.submitGuideExpenses.mock.invocationCallOrder[0]);
+  });
+
+  it("keeps the completed tour when the expense write fails, and says so", async () => {
+    expensesMock.submitGuideExpenses.mockRejectedValue(new Error("drive down"));
+    expect(await report({ expenses: [LINE] })).toEqual({ ok: true, expenses: "failed" });
+    expect(prismaMock.tourReport.upsert).toHaveBeenCalled();
+    expect(prismaMock.checkin.create).toHaveBeenCalled();
+    expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ action: "tour.reported", detail: expect.objectContaining({ expenses: "failed" }) }));
+  });
+
+  it("will not file against a job whose reporting window is shut, and says an operator must", async () => {
+    // A payroll run marked paid in the afternoon covers a tour that ends that evening.
+    // Completing the tour must not become a way around lib/expense-report-access.
+    accessMock.expenseReportAccess.mockResolvedValue({ ok: false, status: 409, error: "already-paid" });
+    expect(await report({ expenses: [LINE] })).toEqual({ ok: true, expenses: "not-accepted" });
+    expect(submitGuideExpenses).not.toHaveBeenCalled();
+    expect(prismaMock.checkin.create).toHaveBeenCalled(); // the tour still completed
+  });
+
+  it("refuses a completion that carries no declaration at all, whatever sent it", async () => {
+    // Owner, 2026-09-20: no exception, not even for an older app build. A silent
+    // pass-through is exactly how the back office ended up unable to see anything.
+    expect(await submitTourReport({ guideId: "G-001", date: "2026-09-11", slotIdx: 0, noShow: 0, leftEarly: 0, actorId: "u_1" }, START + 3 * 60 * MIN))
+      .toEqual({ ok: false, status: 400, error: "expenses-required" });
+    expect(prismaMock.tourReport.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.checkin.create).not.toHaveBeenCalled();
+    expect(submitGuideExpenses).not.toHaveBeenCalled();
   });
 });

@@ -92,6 +92,12 @@ export default function AppClient({
   const [rComment, setRComment] = useState("");
   const [reportBookings, setReportBookings] = useState<{ id: string; name: string; ref: string; pax: number; noShow: boolean; noShowPax?: number }[]>([]);
   const [noShowCounts, setNoShowCounts] = useState<Record<string, number>>({}); // booking id → absent pax
+  // The expense report the completion carries. A tour is not finished until the guide
+  // has said what it cost — or that it cost them nothing (see /api/report).
+  const [rExp, setRExp] = useState<{ description: string; price: string; pax: string }[]>([]);
+  const [rNoExp, setRNoExp] = useState(false);
+  const [rExpNote, setRExpNote] = useState("");
+  const [rBusy, setRBusy] = useState(false);
   const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [installed, setInstalled] = useState(true); // home-screen install state
@@ -662,21 +668,46 @@ export default function AppClient({
   // Whether to show the lifecycle action: ARRIVE is time-gated; once started, always.
   const showAction = (s: { date: string; time: string; checkinState: string | null }, next: { type: string } | null) =>
     !!next && (next.type !== "ARRIVE" || checkInOpen(s.date, s.time));
+  // A line counts only once it names something AND carries an amount — the same rule
+  // the server applies (lib/guide-expenses.isReportedLine), so the button and the
+  // server can never disagree about whether the report has been given.
+  const expenseLines = rExp
+    .map((e) => ({ description: e.description.trim(), price: e.price.trim() === "" ? null : Number(e.price), pax: e.pax.trim() === "" ? null : Number(e.pax) }))
+    .filter((e) => e.description !== "" && (e.price ?? 0) * (e.pax ?? 0) > 0);
+  const expenseTotal = expenseLines.reduce((sum, e) => sum + (e.price ?? 0) * (e.pax ?? 0), 0);
+  const expenseDeclared = rNoExp || expenseLines.length > 0;
+  const setExp = (i: number, patch: Partial<{ description: string; price: string; pax: string }>) =>
+    setRExp((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
-    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({}); setReportFor(s);
+    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({});
+    // One blank line to start, with the pax count prefilled — most lines are a
+    // per-head ticket, and retyping the group size on every row is the tedious part.
+    setRExp([{ description: "", price: "", pax: String(s.pax ?? "") }]); setRNoExp(false); setRExpNote(""); setRBusy(false);
+    setReportFor(s);
     fetch(`/api/report?date=${s.date}&slotIdx=${s.slotIdx}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { const bs = d?.bookings ?? []; setReportBookings(bs); setNoShowCounts(Object.fromEntries(bs.map((b: { id: string; pax: number; noShow: boolean; noShowPax?: number }) => [b.id, b.noShowPax ?? (b.noShow ? b.pax : 0)]))); })
       .catch(() => {});
   }
   async function submitReport() {
-    if (!reportFor) return;
-    const r = await fetch("/api/report", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowCounts: reportBookings.map((b) => ({ id: b.id, pax: noShowCounts[b.id] ?? 0 })) } : {}) }),
-    });
-    if (r.ok) { setReportFor(null); toast(t("reportSubmitted")); fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d) => setSchedule(d.items ?? [])); }
-    else toast(t("errGeneric"));
+    if (!reportFor || rBusy) return;
+    if (!expenseDeclared) { toast(t("expensesRequired")); return; }
+    setRBusy(true);
+    try {
+      const r = await fetch("/api/report", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowCounts: reportBookings.map((b) => ({ id: b.id, pax: noShowCounts[b.id] ?? 0 })) } : {}), expenses: rNoExp ? [] : expenseLines, noExpenses: rNoExp, expensesNote: rExpNote.trim() || undefined }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { toast(d?.error === "expenses-required" ? t("expensesRequired") : t("errGeneric")); return; }
+      setReportFor(null);
+      // The tour completed either way; the expense write is reported separately so a
+      // guide is never told "submitted" when their reimbursement did not save.
+      toast(d?.expenses === "failed" ? t("expensesSaveFailed") : d?.expenses === "not-accepted" ? t("expensesNotAccepted") : t("reportSubmitted"));
+      fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d2) => setSchedule(d2.items ?? []));
+    } catch { toast(t("errGeneric")); }
+    finally { setRBusy(false); }
   }
 
   const loadLeaves = useCallback(() => {
@@ -1446,10 +1477,46 @@ export default function AppClient({
               <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("incidentsLabel")}</span>
                 <input value={rComment} onChange={(e) => setRComment(e.target.value)} placeholder={t("incidentsHint")} /></label>
               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 10 }}>✓ {t("completedShown")}: <b style={{ color: "var(--ink)" }}>{Math.max(0, (reportFor.pax ?? 0) - (reportBookings.length ? reportBookings.reduce((s2, b) => s2 + (noShowCounts[b.id] ?? 0), 0) : (Number(rNoShow) || 0)) - (Number(rLeft) || 0))}</b> · {t("payNotAffected")}</div>
+
+              {/* Expenses — required to finish. The tour is not closed until the guide
+                  has said what it cost them, so the money is claimed while they still
+                  remember it rather than chased days later. "Nothing" is one tap. */}
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+                <h4 style={{ margin: "0 0 2px", fontSize: 15 }}>{t("expensesTitle")}</h4>
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>{t("expensesHint")}</div>
+
+                <label style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", border: "1.5px solid", borderColor: rNoExp ? "var(--primary)" : "var(--line)", background: rNoExp ? "var(--ok-bg, #eef7f0)" : "transparent", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13.5 }}>
+                  <input type="checkbox" checked={rNoExp} onChange={(e) => setRNoExp(e.target.checked)} style={{ width: 17, height: 17, flex: "none", accentColor: "var(--primary)" }} />
+                  {t("noExpensesLabel")}
+                </label>
+
+                {!rNoExp && (
+                  <>
+                    <div style={{ display: "grid", gap: 6, margin: "10px 0 0", maxHeight: 240, overflowY: "auto" }}>
+                      {rExp.map((e, i) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 76px 58px 26px", gap: 6, alignItems: "center" }}>
+                          <input value={e.description} placeholder={t("expItemHint")} aria-label={t("expItem")} onChange={(ev) => setExp(i, { description: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px" }} />
+                          <input type="number" inputMode="decimal" min={0} value={e.price} placeholder={t("expPrice")} aria-label={t("expPrice")} onChange={(ev) => setExp(i, { price: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
+                          <input type="number" inputMode="numeric" min={0} value={e.pax} placeholder={t("expPax")} aria-label={t("expPax")} onChange={(ev) => setExp(i, { pax: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
+                          <button type="button" aria-label={t("expRemove")} title={t("expRemove")} onClick={() => setRExp((rows) => (rows.length > 1 ? rows.filter((_, j) => j !== i) : [{ description: "", price: "", pax: "" }]))} style={{ border: "none", background: "none", color: "var(--ink-soft)", cursor: "pointer", fontSize: 15, padding: 0 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+                      <button type="button" className="btn sm" onClick={() => setRExp((rows) => [...rows, { description: "", price: "", pax: String(reportFor.pax ?? "") }])}>{t("expAdd")}</button>
+                      <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "var(--primary)" }}>{t("expTotal")} ฿{Math.round(expenseTotal).toLocaleString("en-US")}</span>
+                    </div>
+                    <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("expNoteLabel")}</span>
+                      <input value={rExpNote} maxLength={500} onChange={(ev) => setRExpNote(ev.target.value)} placeholder={t("expNoteHint")} /></label>
+                  </>
+                )}
+
+                {!expenseDeclared && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 8 }}>{t("expensesRequired")}</div>}
+              </div>
             </div>
             <div className="mfoot">
               <button className="btn" onClick={() => setReportFor(null)}>{t("cancel")}</button>
-              <button className="btn primary" onClick={submitReport}>{t("submitComplete")}</button>
+              <button className="btn primary" disabled={rBusy || !expenseDeclared} title={expenseDeclared ? undefined : t("expensesRequired")} onClick={submitReport}>{rBusy ? "…" : t("submitComplete")}</button>
             </div>
           </div>
         </div>
