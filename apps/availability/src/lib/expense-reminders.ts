@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/db";
 import { linePush, lineEnabled } from "@/lib/line";
+import { sendPushToUser } from "@/lib/push";
+import { sendEmail } from "@/lib/email";
 import { SLOT_TIMES } from "@/lib/slots";
 import { ymd, todayD, addDays } from "@/lib/dates";
 import { tourStartMs } from "@/lib/no-show-count";
@@ -15,8 +17,16 @@ import { siteUrl } from "@/lib/site";
 // "Complete tour" never asked, a tour an operator completed on their behalf, or
 // a job that never went through the completion flow at all.
 //
-// Deliberately ONE message per job, not a daily nag. Owner's choice (2026-09-18):
-// LINE only — the channel guides actually read.
+// Deliberately ONE message per job, not a daily nag.
+//
+// LINE was the owner's original choice, but most guides who owe reports never linked
+// it — five of the seven with unreported tours had no LINE at all — so a LINE-only
+// chase reached almost nobody. It now sends on every channel the guide actually has:
+// LINE if linked, a push if they installed the app, email otherwise, and the app's
+// own banner (lib/expenses-due) regardless. Email is the catch-all for the same
+// reason lib/booking-import.notifyGuide uses it: a guide with neither LINE nor a
+// push subscription is otherwise unreachable, and those are exactly the guides whose
+// reports go missing.
 
 /** How long after a tour ENDS the guide's expense report is late. */
 export const EXPENSE_DUE_MS = 24 * 3600_000;
@@ -73,7 +83,6 @@ export function overdueMessage(o: { firstName: string; tourName: string; date: s
  * Best-effort throughout; one bad job never stops the sweep.
  */
 export async function sweepExpenseReminders(nowMs: number = Date.now()): Promise<number> {
-  if (!lineEnabled) return 0;
 
   const today = ymd(todayD());
   // The later of "as far back as we look" and "the first date this rule applies".
@@ -100,10 +109,14 @@ export async function sweepExpenseReminders(nowMs: number = Date.now()): Promise
   const [sheets, claimed, guides, tourPays, payrolls] = await Promise.all([
     prisma.jobSheet.findMany({ where: { date: range }, select: { guideId: true, date: true, slotIdx: true, guideExpensesAt: true } }),
     prisma.auditLog.findMany({ where: { action: EXPENSE_REMINDER_ACTION, entityId: { in: keys } }, select: { entityId: true } }),
-    prisma.user.findMany({ where: { guideId: { in: guideIds }, state: "ACTIVE" }, select: { id: true, guideId: true, displayName: true, lineUserId: true } }),
+    prisma.user.findMany({ where: { guideId: { in: guideIds }, state: "ACTIVE" }, select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true } }),
     prisma.tourPayment.findMany({ where: { date: range, guideId: { in: guideIds } }, select: { guideId: true, date: true, slotIdx: true, status: true, paidAt: true } }),
     prisma.payrollStatus.findMany({ where: { guideId: { in: guideIds }, period: { in: [...new Set(due.map((a) => a.date.slice(0, 7)))] } }, select: { guideId: true, period: true, status: true, paidAt: true } }),
   ]);
+
+  const pushable = new Set(
+    (await prisma.pushSubscription.findMany({ where: { userId: { in: guides.map((g) => g.id) } }, select: { userId: true } })).map((p) => p.userId),
+  );
 
   const jobKey = (x: { guideId: string; date: string; slotIdx: number }) => reminderKey(x.date, x.slotIdx, x.guideId);
   const reported = new Set(sheets.filter((s) => s.guideExpensesAt).map(jobKey));
@@ -124,7 +137,14 @@ export async function sweepExpenseReminders(nowMs: number = Date.now()): Promise
     if (coverage.paid) continue;
 
     const guide = byGuide.get(a.guideId);
-    if (!guide?.lineUserId) continue; // not linked — nothing to send; try again if they link
+    // Nothing to send on: no LINE and no push subscription. Skipped WITHOUT claiming,
+    // so they are chased if either channel appears later. The in-app banner still
+    // shows them the job every time they open the app.
+    if (!guide) continue;
+    const viaLine = lineEnabled && !!guide.lineUserId;
+    const viaPush = pushable.has(guide.id);
+    const viaEmail = !!guide.email && !/@(?:guides\.)?folkpath\.local$/i.test(guide.email);
+    if (!viaLine && !viaPush && !viaEmail) continue;
 
     // Claim BEFORE sending so a crash mid-send cannot double-notify.
     await prisma.auditLog.create({
@@ -136,7 +156,18 @@ export async function sweepExpenseReminders(nowMs: number = Date.now()): Promise
       tourName: a.tour?.name ?? a.tourId,
       date: a.date, slotIdx: a.slotIdx, guideId: a.guideId,
     });
-    await linePush(guide.lineUserId, text).catch(() => {});
+    if (viaLine) await linePush(guide.lineUserId!, text).catch(() => {});
+    if (viaPush) await sendPushToUser(guide.id, {
+      title: "Expenses not reported",
+      body: `${a.tour?.name ?? a.tourId} · ${a.date} — tell us what you paid, or that there was nothing.`,
+      url: `/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`,
+      tag: `expenses-${key}`,
+    }).catch(() => {});
+    if (viaEmail) await sendEmail({
+      to: guide.email!,
+      subject: "Your expense report is still missing",
+      text: text,
+    }).catch(() => {});
     sent++;
   }
 
