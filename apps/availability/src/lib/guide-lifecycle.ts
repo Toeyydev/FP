@@ -66,6 +66,7 @@ export function haversineM(lat1: number, lng1: number, lat2: number, lng2: numbe
 export type CheckinResult =
   | { ok: true; type: CheckinType }
   | { ok: false; status: 400; error: "too-early" }
+  | { ok: false; status: 409; error: "use-the-report" }
   | { ok: false; status: 404; error: "not-assigned" };
 
 // Record a lifecycle event for a guide's assignment, with the GPS captured at the
@@ -82,6 +83,15 @@ export async function recordCheckin(o: {
   recordedBy?: { id: string | null; role: string | null }; // set only when an OPERATOR records it for the guide
 }, nowMs: number = Date.now()): Promise<CheckinResult> {
   const { guideId, date, slotIdx, type, lat, lng, accuracyM } = o;
+
+  // Finishing a tour means saying what it cost, and this is the other door into
+  // "finished". submitTourReport refuses a completion with no expense declaration,
+  // but a bare COMPLETE check-in recorded the same fact and asked for nothing, so
+  // the rule guarded the report and not the completion. A guide must go through the
+  // report; an OPERATOR recording it for a guide who cannot is still allowed, since
+  // they are not the one who spent the money and the job then shows up unreported
+  // on the operator's own review list (lib/expense-review).
+  if (type === "COMPLETE" && !o.recordedBy) return { ok: false, status: 409, error: "use-the-report" };
 
   // Time-gate: a tour can't be checked in / started / completed more than 45 min
   // before it starts (prevents a guide running the lifecycle days early).
