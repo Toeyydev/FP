@@ -2,6 +2,7 @@ import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { sweepTourReminders } from "@/lib/tour-reminders";
 import { sweepExpenseReminders } from "@/lib/expense-reminders";
+import { recordLoopHeartbeat } from "@/lib/heartbeat";
 
 // A self-scheduling background loop that keeps the board current even when nobody
 // has the app open — so it never again depends on the Bokun webhook being alive.
@@ -32,6 +33,10 @@ export function startSyncLoop(): void {
   const remind = async () => {
     try { await sweepTourReminders(); } catch { /* keep looping */ }
     try { await sweepExpenseReminders(); } catch { /* keep looping */ }
+    // Leave a pulse last, so /api/health can tell "nothing was due" from "the loop
+    // stopped". These sweeps only write when they send something, so without it the
+    // two look identical from outside (lib/heartbeat).
+    try { await recordLoopHeartbeat(); } catch { /* observing must not break it */ }
   };
   setTimeout(() => { void remind(); }, 20_000);        // shortly after boot
   setInterval(() => { void remind(); }, 300_000);      // then every 5 min
