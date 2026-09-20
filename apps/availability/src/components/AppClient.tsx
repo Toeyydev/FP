@@ -102,7 +102,7 @@ export default function AppClient({
   const [rNoExp, setRNoExp] = useState(false);
   const [rExpNote, setRExpNote] = useState("");
   const [rBusy, setRBusy] = useState(false);
-  const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
+  const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[]; lineLinked?: boolean; lineLoginEnabled?: boolean }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [installed, setInstalled] = useState(true); // home-screen install state
   const [showNotif, setShowNotif] = useState(false);
@@ -1383,6 +1383,21 @@ export default function AppClient({
               </div>
             </li>
           </ol>
+        </section>
+      )}
+
+      {/* Connect LINE — one tap, on the screen the guide already opens.
+          The button existed only inside My details, which a guide has to know to go
+          looking for, so most never found it: five of the seven guides who owed
+          expense reports had no LINE at all. Signed in already, so no code and no
+          token — the route links LINE to this session (api/line/login/start). */}
+      {role === "guide" && profileGate.lineLoginEnabled && profileGate.lineLinked === false && (
+        <section className="setup-card">
+          <div className="setup-head"><b>{t("lineCardTitle")}</b><span>{t("lineCardBody")}</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "4px 2px 2px" }}>
+            <span style={{ fontSize: 12.5, color: "var(--ink-soft)", flex: "1 1 180px" }}>{t("lineCardHow")}</span>
+            <a className="btn primary sm" href="/api/line/login/start" style={{ whiteSpace: "nowrap" }}>{t("lineCardBtn")}</a>
+          </div>
         </section>
       )}
 
