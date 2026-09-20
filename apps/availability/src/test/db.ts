@@ -1,0 +1,40 @@
+import { prisma } from "@/lib/db";
+
+// Helpers for tests that use a real database. Importing this file at all is a
+// declaration that the test needs one; guard() fails loudly rather than letting a
+// suite pass by touching nothing.
+
+/** Tables these tests write, in an order safe to truncate together. */
+const TABLES = [
+  "AuditLog", "Checkin", "TourReport", "PushSubscription", "Notification",
+  "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
+  "Availability", "RefreshToken", "User", "Tour",
+];
+
+export function requireTestDatabase(): void {
+  const url = process.env.DATABASE_URL ?? "";
+  if (!url) throw new Error("integration tests need DATABASE_URL (a throwaway database)");
+  // A crude guard against ever pointing these at something real: they TRUNCATE.
+  if (/railway|amazonaws|supabase|\.com\b/i.test(url) && !/test/i.test(url)) {
+    throw new Error("DATABASE_URL looks like a real database; integration tests truncate tables and refuse to run");
+  }
+}
+
+export async function resetDatabase(): Promise<void> {
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${TABLES.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
+}
+
+/** A tour + an active guide, the two rows almost every case needs. */
+export async function seedGuide(guideId = "G-900", over: { displayName?: string; email?: string } = {}) {
+  await prisma.tour.upsert({
+    where: { id: "T-900" }, update: {},
+    create: { id: "T-900", name: "Riverside Temples", time: "08:30", durationMin: 180 },
+  });
+  return prisma.user.create({
+    data: {
+      email: over.email ?? `${guideId.toLowerCase()}@example.test`,
+      displayName: over.displayName ?? "Nok Example",
+      guideId, role: "GUIDE", state: "ACTIVE",
+    },
+  });
+}

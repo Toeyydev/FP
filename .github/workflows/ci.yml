@@ -25,6 +25,27 @@ jobs:
     defaults:
       run:
         working-directory: apps/availability
+
+    # A throwaway Postgres for the integration tests. A Prisma `where` clause cannot
+    # be unit-tested: `NOT: { col: "x" }` also drops NULL rows, which type-checks,
+    # passes every unit test, and returns an empty page in production. It did.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: folkops_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -51,5 +72,19 @@ jobs:
       - name: Typecheck (worker)
         run: npm run typecheck:worker
 
+      - name: Prepare the test database
+        run: npx prisma db push --skip-generate
+
+      - name: Integration tests (real database)
+        run: npm run test:integration
+
       - name: Build worker bundle
         run: npm run build:worker
+
+      # The app itself was never built here — only the worker — so a page that fails
+      # to compile or prerender passed CI and reached production.
+      - name: Build app
+        run: npx next build
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
