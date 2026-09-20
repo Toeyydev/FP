@@ -12,7 +12,7 @@ const prismaMock = vi.hoisted(() => ({
 const lineMock = vi.hoisted(() => ({ linePush: vi.fn(), lineEnabled: true }));
 const pushMock = vi.hoisted(() => ({ sendPushToUser: vi.fn() }));
 vi.mock("@/lib/push", () => pushMock);
-const emailMock = vi.hoisted(() => ({ sendEmail: vi.fn() }));
+const emailMock = vi.hoisted(() => ({ sendEmail: vi.fn(), emailEnabled: true }));
 vi.mock("@/lib/email", () => emailMock);
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
@@ -38,6 +38,7 @@ beforeEach(() => {
   lineMock.linePush.mockResolvedValue(undefined); // the real one returns a promise
   pushMock.sendPushToUser.mockResolvedValue(1);
   emailMock.sendEmail.mockResolvedValue({ sent: true });
+  emailMock.emailEnabled = true;
   prismaMock.pushSubscription.findMany.mockResolvedValue([]); // no push unless a test says so
   prismaMock.assignment.findMany.mockResolvedValue([ASSIGNMENT]);
   prismaMock.jobSheet.findMany.mockResolvedValue([]);
@@ -151,5 +152,16 @@ describe("sweepExpenseReminders", () => {
     expect(emailMock.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: "nok@example.com", subject: "Your expense report is still missing",
     }));
+  });
+
+  it("does NOT burn the reminder on an address it cannot actually send to", async () => {
+    // With no SMTP configured sendEmail only logs. Treating an address as a channel
+    // anyway would claim the send and leave the guide chased-on-nothing, for good.
+    emailMock.emailEnabled = false;
+    lineMock.lineEnabled = false;
+    prismaMock.user.findMany.mockResolvedValue([{ ...GUIDE, lineUserId: null, email: "nok@example.com" }]);
+    expect(await sweepExpenseReminders(NOW)).toBe(0);
+    expect(prismaMock.auditLog.create).not.toHaveBeenCalled();
+    expect(emailMock.sendEmail).not.toHaveBeenCalled();
   });
 });
