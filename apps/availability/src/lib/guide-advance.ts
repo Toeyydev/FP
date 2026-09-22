@@ -11,8 +11,8 @@ import type { Expense } from "@/lib/jobsheet";
 /**
  * What a guide still owes on money the company advanced them for one job.
  *
- * The company pays entrance tickets and transport by handing the guide cash up
- * front; afterwards the guide reports what they spent and returns the rest. Until
+ * The company pays customer tickets by handing the guide money up front;
+ * afterwards the guide reports the ticket cost and returns the rest. Until
  * now only an operator could see that balance — the guide could record a return
  * (POST /api/jobsheet/advance) without being able to find out how much was left.
  *
@@ -37,7 +37,7 @@ export type GuideAdvanceSummary = {
   date: string;
   slotIdx: number;
   totalAdvancePaid: number;
-  /** Spent out of the advance: the sheet's expense rows tagged paidBy "advance". */
+  /** Ticket costs already settled against the advance ledger. */
   usedFromAdvance: number;
   /** Money the guide sent back: returns the ledger has counted, plus money still being checked (up to what is owed). */
   totalReturned: number;

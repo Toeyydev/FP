@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps } from "@/lib/roles";
 import { settleFromExpenses } from "@/lib/advances/service";
-import { expenseAmount, type Expense } from "@/lib/jobsheet";
+import { expenseAmount, expenseCategory, type Expense } from "@/lib/jobsheet";
 
 export const dynamic = "force-dynamic";
 
@@ -35,10 +35,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (advance.guideId !== sheet.guideId) return NextResponse.json({ error: "not-allowed", reasons: ["That job sheet belongs to another guide"] }, { status: 409 });
   if (sheet.approvalStatus !== "APPROVED") return NextResponse.json({ error: "not-allowed", reasons: ["Approve the job sheet before settling an advance against its expenses"] }, { status: 409 });
 
-  const rows = ((sheet.expenses as unknown as Expense[]) ?? []).filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0);
+  const rows = ((sheet.expenses as unknown as Expense[]) ?? []).filter((e) => e.paidBy === "advance" && expenseCategory(e) === "entrance" && expenseAmount(e) > 0);
   const tagged = Math.round(rows.reduce((s, e) => s + expenseAmount(e), 0) * 100) / 100;
   if (parsed.data.amount > tagged) {
-    const reason = `This job sheet marks ${tagged.toFixed(2)} as paid from an advance — an expense settlement cannot be larger than that`;
+    const reason = `This job sheet marks ${tagged.toFixed(2)} of ticket costs as paid from an advance — a ticket-advance settlement cannot be larger than that`;
     return NextResponse.json({ error: "not-allowed", reasons: [reason], detail: reason }, { status: 409 });
   }
 

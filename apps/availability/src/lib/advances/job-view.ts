@@ -9,7 +9,7 @@
 // still reported — as a proposal, next to the settled figure, never inside it.
 import { advanceSyncStates } from "./peak-sync";
 import type { PrismaClient } from "@prisma/client";
-import { expenseAmount, type Expense } from "@/lib/jobsheet";
+import { expenseAmount, expenseCategory, type Expense } from "@/lib/jobsheet";
 import { advanceStatus, fromSatang } from "@/lib/advances/rules";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 
@@ -86,7 +86,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
 
   const sum = (type: string) => entries.filter((e) => e.type === type).reduce((s, e) => s + e.amountSatang, 0);
   const live = advances.filter((a) => !a.reversedAt);
-  const taggedSatang = Math.round((input.expenses ?? []).filter((e) => e.paidBy === "advance").reduce((s, e) => s + expenseAmount(e), 0) * 100);
+  const taggedSatang = Math.round((input.expenses ?? []).filter((e) => e.paidBy === "advance" && expenseCategory(e) === "entrance").reduce((s, e) => s + expenseAmount(e), 0) * 100);
   const totals = {
     totalAdvancePaid: fromSatang(live.reduce((s, a) => s + a.amountSatang, 0)),
     usedFromAdvance: fromSatang(sum("EXPENSE_SETTLEMENT")),

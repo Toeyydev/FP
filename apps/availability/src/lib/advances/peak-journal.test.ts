@@ -13,7 +13,8 @@ describe("advance journal money direction",()=>{
  it("refuses a payable in place of an advance asset",()=>expect(()=>advanceJournal(source,{...config,advanceAccountCode:"212203"})).toThrow("asset"));
  it("requires the bank subaccount, not just the GL code",()=>expect(()=>advanceJournal(source,{...config,bankAccountSubId:""})).toThrow());
  it("rejects impossible dates",()=>expect(()=>advanceJournal({...source,date:"2026-02-30"},config)).toThrow());
- it("blocks unmapped categories",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Ticket",amount:1000,category:"other"}]},config)).toThrow("account"));
+ it("blocks non-ticket categories",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Other cost",amount:1000,category:"other"}]},config)).toThrow("ticket expenses only"));
+ it("refuses non-ticket costs even when an account mapping exists",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Coach",amount:1000,category:"transport"}]},{...config,expenseAccounts:{...config.expenseAccounts,transport:"510104"}})).toThrow("ticket expenses only"));
 });
 describe("PEAK journal acknowledgements",()=>{
  it("requires a successful row AND envelope",()=>{expect(dailyJournalResult(200,{PeakDailyJournals:{resCode:"200",dailyJournals:[{resCode:"200",id:"id",code:"JV-1"}]}})).toMatchObject({ok:true,id:"id",code:"JV-1"});});

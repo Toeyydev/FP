@@ -59,7 +59,9 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
   let config: AdvancePeakConfig;
   try { config = advancePeakConfig(); } catch { return 0; }
   const mappings = await db.peakAccountMapping.findMany({ where: { isActive: true } });
-  const categoryKeys: Record<string,string> = { entrance: "ENTRANCE_TICKET", transport: "TRANSPORTATION", meal: "MEAL_REFRESHMENT", other: "OTHER_TOUR_COST" };
+  // This ledger is only for ticket money sent to a guide. Other tour costs follow
+  // their normal company-direct or guide-reimbursement workflows.
+  const categoryKeys: Record<string,string> = { entrance: "ENTRANCE_TICKET" };
   config.expenseAccounts = Object.fromEntries(Object.entries(categoryKeys).flatMap(([key, value]) => {
     const account = mappings.find(m => m.folkopsCategory === value)?.peakAccountCode;
     return account ? [[key, account]] : [];

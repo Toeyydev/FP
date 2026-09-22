@@ -343,7 +343,7 @@ export default function JobSheetEditor() {
       : "Return recorded as received ✓ — allocate it to the advance under Payments → Advances");
   }
 
-  // Settle the advance with this sheet's rows tagged "from the advance". The tags propose
+  // Settle the ticket advance with this sheet's Entrance Ticket rows tagged "from the advance". The tags propose
   // the amount; this is the decision, written to the ledger with a snapshot of the rows.
   async function settleTaggedExpenses() {
     if (!sheet) return;
@@ -351,7 +351,7 @@ export default function JobSheetEditor() {
     if (!target) { setMsg("No advance on this job has a balance left to settle."); return; }
     const amount = Math.min(advT.tagsNotYetSettled, target.outstanding ?? 0);
     if (!(amount > 0)) return;
-    if (!confirm(`Settle ${thb(amount)} of ${target.advanceNo} with the expenses on this sheet marked “from the advance”?`)) return;
+    if (!confirm(`Settle ${thb(amount)} of ${target.advanceNo} with the ticket expenses on this sheet marked “from company advance”?`)) return;
     setAdvBusy(true); setMsg("");
     const r = await jfetch(`/api/advances/${target.id}/settle-expenses`, {
       method: "POST", headers: { "content-type": "application/json" },
@@ -1143,7 +1143,13 @@ export default function JobSheetEditor() {
                 <td>
                   {ro ? expenseCategoryLabel(e) : (
                     <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(expenseCategory(e) ? {} : { color: "var(--ink-soft)" }) }}
-                      value={expenseCategory(e) ?? ""} onChange={(ev) => setExpense(i, { expenseType: ev.target.value })}
+                      value={expenseCategory(e) ?? ""} onChange={(ev) => {
+                        const expenseType = ev.target.value;
+                        setExpense(i, {
+                          expenseType,
+                          ...(expenseType !== "entrance" && paid === "GUIDE_ADVANCE" ? { paidBy: "", paidBySource: "operator" } : {}),
+                        });
+                      }}
                       title="The stable category this expense is booked under. Accounting maps on THIS, not on the description.">
                       <option value="">— choose —</option>
                       {EXPENSE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
@@ -1161,8 +1167,13 @@ export default function JobSheetEditor() {
                       guessing it silently either overpays or underpays a real person. */}
                   <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value, paidBySource: "operator" })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
-                    {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
+                    {PAYMENT_SOURCES.filter((s) => s.value !== "advance" || expenseCategory(e) === "entrance" || paid === "GUIDE_ADVANCE").map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
+                  {paid === "GUIDE_ADVANCE" && expenseCategory(e) !== "entrance" && (
+                    <div style={{ fontSize: 10.5, color: "var(--danger,#b3402f)", marginTop: 2, whiteSpace: "normal" }}>
+                      Ticket advance is allowed only for Entrance Ticket rows.
+                    </div>
+                  )}
                   {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
                       older app sent without saying who chose it. Picking any payer above confirms it. */}
                   {paid !== "UNSPECIFIED" && (e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
@@ -1528,15 +1539,15 @@ export default function JobSheetEditor() {
             )}
           </>
         ) : (
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "6px 2px" }}>No advance issued for this job. Record one if money was transferred to the guide before the tour — the actual spend then goes in the expense rows above with source “From company advance”, and is settled against the advance.</div>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", padding: "6px 2px" }}>No ticket advance issued for this job. Record one when the company transfers ticket money to the guide before the tour. The approved Entrance Ticket rows marked “From company advance” clear the balance.</div>
         )}
 
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
+          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record ticket advance"}</button>}
           {(canEdit || (hasAdvance && advT.outstanding > 0)) && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
-          {canEdit && advT.tagsNotYetSettled > 0 && liveAdvances.some((a) => (a.outstanding ?? 0) > 0) && <button className="btn sm" disabled={advBusy || advance.frozen || !saved} title="Settle the advance with the expense rows marked “from company advance”" onClick={settleTaggedExpenses}>Settle {thb(Math.min(advT.tagsNotYetSettled, liveAdvances.find((a) => (a.outstanding ?? 0) > 0)?.outstanding ?? 0))} from expenses</button>}
+          {canEdit && advT.tagsNotYetSettled > 0 && liveAdvances.some((a) => (a.outstanding ?? 0) > 0) && <button className="btn sm" disabled={advBusy || advance.frozen || !saved} title="Settle the ticket advance with approved Entrance Ticket rows" onClick={settleTaggedExpenses}>Settle {thb(Math.min(advT.tagsNotYetSettled, liveAdvances.find((a) => (a.outstanding ?? 0) > 0)?.outstanding ?? 0))} from tickets</button>}
           {hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (
@@ -1564,7 +1575,7 @@ export default function JobSheetEditor() {
               {advForm.file ? `📎 ${advForm.file.name.slice(0, 18)}…` : "📎 Slip"}
               <input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0] ?? null; setAdvForm((prev) => ({ ...prev, file: f })); e.target.value = ""; }} />
             </label>
-            <button className="btn sm primary" disabled={advBusy} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record advance" : "Record return"}</button>
+            <button className="btn sm primary" disabled={advBusy} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record ticket advance" : "Record return"}</button>
           </div>
         )}
        </div>

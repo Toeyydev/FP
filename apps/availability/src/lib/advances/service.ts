@@ -148,7 +148,7 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
           data: {
             guideId: input.guideId, advanceNo, jobNo,
             advanceDate: input.advanceDate, amountSatang, accountingPeriod: periodOf(input.advanceDate),
-            bankAccount: input.bankAccount ?? null, purpose: input.purpose ?? null, method: input.method ?? "bank", txRef: input.bankRef ?? null,
+            bankAccount: input.bankAccount ?? null, purpose: "Ticket advance", method: input.method ?? "bank", txRef: input.bankRef ?? null,
             note: input.note ?? null, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null,
             evidenceId: input.evidenceId ?? null, createdById: input.actor.actorId,
             // legacy columns, kept in step so the job-sheet panel keeps working

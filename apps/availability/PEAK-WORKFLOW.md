@@ -166,17 +166,18 @@ PEAK returns EXP-…  ──► save as peakRef · notify guide  ─► END
 
 ---
 
-## Guide advances, returns, and ticket settlement
+## Guide ticket advances, returns, and ticket settlement
 
-These records use **Daily Journals** because an advance is an asset balance, not an
-expense. FolkOPS creates one immutable outbox item in the same database transaction
+This workflow is only for money the company sends a guide to buy customer tickets.
+Transport, meals and other tour costs do not use this advance ledger. These records
+use **Daily Journals** because an advance is an asset balance, not an expense. FolkOPS creates one immutable outbox item in the same database transaction
 as each ledger event. The worker posts it once and stores PEAK's document number.
 
 | FolkOPS event | Daily journal |
 |---|---|
-| Company sends an advance | Dr guide advance asset / Cr company bank |
+| Company sends a ticket advance | Dr guide ticket advance asset / Cr company bank |
 | Guide returns unused money | Dr company bank / Cr guide advance asset |
-| Approved ticket or tour expense uses the advance | Dr mapped expense account per row / Cr guide advance asset |
+| Approved ticket expense uses the advance | Dr ticket expense / Cr guide advance asset |
 
 Automatic posting requires a Job No., the guide's linked PEAK contact, the selected
 company bank account, a unique bank reference and a transfer slip. A guide-submitted
@@ -201,7 +202,7 @@ PEAK_ADVANCE_CONFIG={
 }
 ```
 
-`expenseAccounts` is filled from active FolkOPS account mappings at runtime. Set
+Only the active `ENTRANCE_TICKET` mapping fills `expenseAccounts` at runtime. Set
 `PEAK_ADVANCE_AUTO_SYNC=1` on the worker only after the configuration and
 `PEAK_USER_TOKEN` are present and one preview has been checked. Do not backfill the
 outbox automatically: older advances may already exist in PEAK and must be reconciled

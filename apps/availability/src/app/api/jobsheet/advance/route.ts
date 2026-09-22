@@ -126,9 +126,9 @@ export async function POST(req: NextRequest) {
     // fallback — same pipeline as booking changes. Best-effort, never blocks the record.
     await notifyGuide(
       guideId,
-      `Folkpaths sent you an advance of ${thb(amount)} for your ${date} tour${sheet.ref ? ` (${sheet.ref})` : ""}. Use it for tour expenses (tickets, transport). After the tour, report what you spent and return any unused amount.`,
-      "Advance payment sent",
-      `${date} · ${thb(amount)} advance`,
+      `Folkpaths sent you a ticket advance of ${thb(amount)} for your ${date} tour${sheet.ref ? ` (${sheet.ref})` : ""}. Use it only to buy customer tickets. After the tour, report the ticket costs and return any unused amount.`,
+      "Ticket advance sent",
+      `${date} · ${thb(amount)} ticket advance`,
     );
   }
 
