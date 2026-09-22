@@ -175,7 +175,7 @@ as each ledger event. The worker posts it once and stores PEAK's document number
 
 | FolkOPS event | Daily journal |
 |---|---|
-| Company sends a ticket advance | Dr guide ticket advance asset / Cr company bank |
+| Company sends a ticket advance | Dr existing `เงินทดรองจ่าย - ไกด์` / Cr company bank |
 | Guide returns unused money | Dr company bank / Cr guide advance asset |
 | Approved ticket expense uses the advance | Dr ticket expense / Cr guide advance asset |
 
@@ -188,7 +188,7 @@ Set the following only after the accountant confirms the account and journal IDs
 
 ```json
 PEAK_ADVANCE_CONFIG={
-  "advanceAccountCode":"<guide-advance asset account>",
+  "advanceAccountCode":"<account code of the existing เงินทดรองจ่าย - ไกด์ account>",
   "advanceAccountSubId":"<optional subaccount>",
   "bankName":"<name shown in FolkOPS>",
   "bankAccountCode":"<bank ledger account>",
@@ -207,6 +207,10 @@ Only the active `ENTRANCE_TICKET` mapping fills `expenseAccounts` at runtime. Se
 `PEAK_USER_TOKEN` are present and one preview has been checked. Do not backfill the
 outbox automatically: older advances may already exist in PEAK and must be reconciled
 or recorded as an existing document first.
+
+Do not create a separate PEAK account named “เงินทดรองค่าตั๋วไกด์”. “Ticket only” is
+the FolkOPS usage rule; every advance, ticket settlement, and return clears through
+the existing PEAK account `เงินทดรองจ่าย - ไกด์` shown in its account activity.
 
 If a PEAK write times out, loses its response, or the local save fails after sending,
 the item becomes `UNCERTAIN`. The worker will not retry it. Check PEAK and reconcile
