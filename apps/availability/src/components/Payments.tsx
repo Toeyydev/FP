@@ -61,7 +61,7 @@ const bkkDateOf = (iso: string) => new Date(new Date(iso).getTime() + 7 * 3600 *
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
-export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
+export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?: boolean; isAdmin?: boolean }) {
   const [payTogether, setPayTogether] = useState<{ guideId: string; guide: string; jobs: Job[] } | null>(null);
   // Stage 2: record the payment against a document already created in PEAK.
   const [recordPayment, setRecordPayment] = useState<{ guideId: string; guide: string; doc: CreatedDocument } | null>(null);
@@ -643,7 +643,7 @@ export default function Payments({ canEdit = true }: { canEdit?: boolean }) {
         </div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
-      {view === "advances" ? <AdvancesWorkflow canEdit={canEdit} /> : view === "guide-payments" ? <GuidePaymentsWorkflow canEdit={canEdit} /> : (<>
+      {view === "advances" ? <AdvancesWorkflow canEdit={canEdit} isAdmin={isAdmin} /> : view === "guide-payments" ? <GuidePaymentsWorkflow canEdit={canEdit} /> : (<>
 
       {/* Payment execution at a glance: who needs paying, how much, done or not.
           Pending payment carries the emphasis; paid-to-date is a footnote. */}

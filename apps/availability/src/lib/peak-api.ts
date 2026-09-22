@@ -985,6 +985,52 @@ export function dailyJournalResult(httpStatus: number, body: Record<string, unkn
   const rejected = httpStatus < 500 && (row?.resCode === "400" || wrap?.resCode === "400" || httpStatus === 401 || httpStatus === 403);
   return { ok: false, uncertain: !rejected, desc: sanitizePeakError(row?.resDesc || wrap?.resDesc || `Unconfirmed PEAK response (HTTP ${httpStatus})`) };
 }
+export type PeakJournalState = {
+  id: string | null; code: string; journalTypeId: number | null; contactId: string | null;
+  isVoid: boolean; issuedDate: string | null;
+  entries: { accountCode: string; accountSubId: string | null; accountSubCode: string | null; debit: number; credit: number; description: string | null }[];
+};
+
+// Pure parser, exported so the shape can be tested without a connection. PEAK reports
+// "not found" as an empty list inside an HTTP 200, like everything else it does.
+export function parsePeakJournal(j: Record<string, unknown>): { journal: PeakJournalState } | { notFound: true } | { error: string } {
+  const wrap = peakWrap<{ dailyJournals?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakDailyJournals");
+  if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakDailyJournals wrapper" };
+  const list = Array.isArray(wrap.dailyJournals) ? (wrap.dailyJournals as Record<string, unknown>[]) : null;
+  if (!list) return { error: "PEAK returned no dailyJournals array" };
+  if (!list.length) return { notFound: true };
+  const d = list[0];
+  const num = (v: unknown) => (v == null || v === "" ? 0 : Number(v));
+  const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+  const lines = Array.isArray(d.journalEntries) ? (d.journalEntries as Record<string, unknown>[]) : [];
+  return {
+    journal: {
+      id: str(d.id), code: String(d.code ?? ""), journalTypeId: d.journalTypeId == null ? null : Number(d.journalTypeId),
+      contactId: str(d.contactId), isVoid: num(d.isVoid) === 1, issuedDate: str(d.issuedDate),
+      entries: lines.map((e) => ({
+        accountCode: String(e.accountCode ?? ""), accountSubId: str(e.accountSubId), accountSubCode: str(e.accountSubCode),
+        debit: num(e.debit), credit: num(e.credit), description: str(e.description),
+      })),
+    },
+  };
+}
+
+/**
+ * Read one daily journal. GET only — this exists so an existing document can be
+ * CHECKED before FolkOPS records that it already carries a movement. Reads are not
+ * billed, so nothing here needs to be rationed.
+ */
+export async function getDailyJournal(code: string): Promise<Res<{ journal?: PeakJournalState; notFound?: boolean }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(`${API}/DailyJournals?${new URLSearchParams({ code }).toString()}`, { method: "GET" }, "peakDailyJournals");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const parsed = parsePeakJournal(call.j);
+  if ("error" in parsed) return { ok: false, desc: parsed.error };
+  if ("notFound" in parsed) return { ok: true, notFound: true };
+  return { ok: true, journal: parsed.journal };
+}
+
 export async function createDailyJournal(journal: DailyJournalPayload): Promise<Res<{ id?: string; uncertain?: boolean }>> {
   if (!peakEnabled) return { ok: false, uncertain: false, desc: "PEAK connection is not configured" };
   const call = await authedCall(`${API}/DailyJournals`, {

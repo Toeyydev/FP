@@ -28,5 +28,7 @@
     "src/lib/advances/**/*.ts",
     "src/lib/payments/**/*.ts"
   ],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  // Tests are not part of the worker. An integration test under src/lib pulls in
+  // route handlers and Next types this config deliberately does not carry.
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.itest.ts"]
 }

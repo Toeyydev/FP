@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { advanceSyncStates } from "@/lib/advances/peak-sync";
+import { peakLinksFor } from "@/lib/advances/peak-link";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
@@ -24,9 +25,10 @@ export async function GET(req: NextRequest) {
     take: 500,
   });
   const sync = await advanceSyncStates(prisma, rows.map(r => `RETURN:${r.id}`));
+  const links = await peakLinksFor(prisma, "RETURN", rows.map((r) => r.id));
   return NextResponse.json({
     receipts: rows.map((r) => ({
-      peakSync: sync.get(`RETURN:${r.id}`) ?? null, id: r.id, receiptNo: r.receiptNo, guideId: r.guideId, receivedDate: r.receivedDate, status: r.status,
+      peakSync: sync.get(`RETURN:${r.id}`) ?? null, peakLink: links.get(r.id) ?? null, id: r.id, receiptNo: r.receiptNo, guideId: r.guideId, receivedDate: r.receivedDate, status: r.status,
       amount: fromSatang(r.amountSatang), allocated: fromSatang(r.allocatedSatang), unallocated: fromSatang(unallocatedSatang(r)),
       bankRef: r.bankRef, bankAccount: r.bankAccount, slipUrl: r.slipUrl, note: r.note,
       claimedAt: r.claimedAt, verifiedAt: r.verifiedAt, rejectedReason: r.rejectedReason,

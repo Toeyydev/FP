@@ -7,6 +7,10 @@ import { prisma } from "@/lib/db";
 /** Tables these tests write, in an order safe to truncate together. */
 const TABLES = [
   "AuditLog", "Checkin", "TourReport", "PushSubscription", "Notification",
+  // The advance ledger and everything that hangs off it. Listed before JobSheet
+  // and User because these rows reference them.
+  "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",
+  "GuideAdvanceReceipt", "GuideAdvanceReturn", "GuideAdvance",
   "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   "Availability", "RefreshToken", "User", "Tour",
 ];
