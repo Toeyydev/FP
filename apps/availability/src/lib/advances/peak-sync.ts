@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { createDailyJournal, sanitizePeakError } from "@/lib/peak-api";
 import { advanceJournal, type AdvancePeakConfig, type JournalSource } from "./peak-journal";
-import { advanceWritesFrozen } from "./freeze";
+import { advanceWritesFrozen, existingPeakLinksEnabled } from "./freeze";
 
 // Explicit configuration is shared by web and worker. Never infer bank IDs or journal
 // type numbers from a label. Only the deployment owner can enable automatic posting.
@@ -56,7 +56,9 @@ async function sourceFor(db: PrismaClient, kind: string, id: string, config: Adv
 
 /** Atomic claims plus an immutable payload. A timeout or process death never retries a POST. */
 export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJournal): Promise<number> {
-  if (process.env.PEAK_ADVANCE_AUTO_SYNC !== "1" || advanceWritesFrozen()) return 0;
+  // Three ways to be off, and reconciliation is one of them: while an admin is
+  // matching old movements to documents PEAK already holds, nothing may be sent.
+  if (process.env.PEAK_ADVANCE_AUTO_SYNC !== "1" || advanceWritesFrozen() || existingPeakLinksEnabled()) return 0;
   let config: AdvancePeakConfig;
   try { config = advancePeakConfig(); } catch { return 0; }
   const mappings = await db.peakAccountMapping.findMany({ where: { isActive: true } });

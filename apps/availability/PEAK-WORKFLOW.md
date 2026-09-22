@@ -202,6 +202,17 @@ PEAK_ADVANCE_CONFIG={
 }
 ```
 
+**Environment variables for the advance ledger**
+
+| Variable | Unset means | What it does |
+|---|---|---|
+| `PEAK_ADVANCE_CONFIG` | nothing is sent | The accounts, the bank sub-account and the journal books, as JSON. Needed by the web app (for the screens) and by the worker (which does the sending). |
+| `PEAK_ADVANCE_AUTO_SYNC` | `0` — off | `1` lets the worker post queued movements to PEAK. |
+| `ADVANCE_WRITES_FROZEN` | `0` — writes allowed | `1` refuses every ordinary advance write: recording an advance or a return, confirming, allocating, settling, reversing. |
+| `ADVANCE_EXISTING_PEAK_LINKS_ENABLED` | `0` — off | `1` lets an admin record a PEAK document that already exists, even while writes are frozen. Nothing else opens. |
+
+The worker says which of these it has at startup — `advancePeakConfig: ready|incomplete|unreadable|not-set` and `advanceAutoSync: true|false`. Status words only; it never logs a value.
+
 Only the active `ENTRANCE_TICKET` mapping fills `expenseAccounts` at runtime. Set
 `PEAK_ADVANCE_AUTO_SYNC=1` on the worker only after the configuration and
 `PEAK_USER_TOKEN` are present and one preview has been checked. Do not backfill the
@@ -235,3 +246,19 @@ the sender on cannot produce a second document for money that moved once.
   document that names no contact — which is what PEAK's own transfers look like —
   can still be linked, but only when the accounts and the amount match exactly.
 - Only ticket costs clear this way. A meal tagged "from company advance" is refused.
+
+**Reconciliation mode.** Matching the old records is itself a write, so it needs the
+freeze lifted for exactly one path and nothing else:
+
+```ini
+ADVANCE_WRITES_FROZEN=1                 # recording advances and returns stays refused
+ADVANCE_EXISTING_PEAK_LINKS_ENABLED=1   # an admin may record an EXISTING document
+PEAK_ADVANCE_AUTO_SYNC=0                # the sender stays off
+```
+
+While this is set, Payments → Advances shows a banner saying so, and the buttons that
+would write anything else are not offered — the server refuses them regardless. The
+link path refuses too if the sender is on (**409**), or if FolkOPS already has this
+movement in flight or posted, unless the same document is being recorded again. Turn
+`ADVANCE_EXISTING_PEAK_LINKS_ENABLED` back to `0` when the reconciliation is done; the
+sender will not run while it is `1`.

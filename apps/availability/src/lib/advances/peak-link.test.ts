@@ -16,6 +16,17 @@ describe("reading a document number", () => {
   it("accepts what PEAK shows, in any case, and trims it", () => {
     expect(normalizeDocumentNo("  jv-000001 ")).toBe("JV-000001");
   });
+
+  it("treats one document typed three ways as one document", () => {
+    // Whatever the unique index sees is what stops a second link, so the normalised
+    // value — not the typing — has to be the thing that is stored and compared.
+    const spellings = ["jvfn-209901001", " JVFN-209901001 ", "JVFN-209901001"];
+    expect(new Set(spellings.map(normalizeDocumentNo)).size).toBe(1);
+    expect(normalizeDocumentNo(spellings[0])).toBe("JVFN-209901001");
+    // A space where a hyphen belongs is a different number, not the same one typed
+    // loosely. Guessing there would be a way to link the wrong document.
+    expect(normalizeDocumentNo("jvfn 209901001")).not.toBe("JVFN-209901001");
+  });
   it("refuses something that is not a document number", () => {
     expect(normalizeDocumentNo("?")).toBeNull();
     expect(normalizeDocumentNo("")).toBeNull();

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isAdmin } from "@/lib/roles";
 import { linkExistingPeakDocument, previewLink, type LinkRequest } from "@/lib/advances/peak-link";
 
@@ -36,9 +35,11 @@ const body = z.object({
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isAdmin(session?.user?.role)) return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can record an existing PEAK document"] }, { status: 403 });
-  // The cutover switch covers this too: it writes ledger rows (a confirmation, an
-  // allocation, a settlement), and those are exactly what the freeze exists to stop.
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  // Not gated on the cutover freeze: this is the one path that has to work WHILE
+  // writes are frozen, because reconciling the old records is why they are frozen.
+  // Its own switch (ADVANCE_EXISTING_PEAK_LINKS_ENABLED) governs it instead, and
+  // linkExistingPeakDocument refuses — 503 off, 409 while the sender is on — so the
+  // rule holds for anything calling the service directly too.
 
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });

@@ -1,6 +1,9 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
 import { expenseAmount, expenseCategory, type Expense } from "@/lib/jobsheet";
+import {
+  advanceAutoSyncEnabled, AUTO_SYNC_ON_MESSAGE, existingPeakLinksEnabled, EXISTING_LINKS_OFF_MESSAGE,
+} from "./freeze";
 import { advancePeakConfig } from "./peak-sync";
 import { bumpAdvance, bumpReceipt, LedgerConflict, type Actor, type Fail } from "./service";
 import {
@@ -113,6 +116,23 @@ export function checkDocumentMatches(input: {
   return { reasons, warnings };
 }
 
+
+/**
+ * May anything be linked at all, right now?
+ *
+ * Linking writes to the ledger, so it cannot simply ignore the cutover freeze. It
+ * gets its own switch instead, and refuses while the sender is on: two writers
+ * reaching one movement is exactly the race this whole feature exists to prevent.
+ */
+export function checkLinkMode(): Fail | null {
+  if (!existingPeakLinksEnabled()) return fail(503, EXISTING_LINKS_OFF_MESSAGE);
+  if (advanceAutoSyncEnabled()) return fail(409, AUTO_SYNC_ON_MESSAGE);
+  return null;
+}
+
+/** Statuses that mean the sender may already have created a document for this event. */
+const IN_FLIGHT = ["SENDING", "PROCESSING", "UNCERTAIN", "POSTED"];
+
 /** The one link for a business event, if it has been recorded. */
 export async function peakLinkFor(db: Pick<PrismaClient, "advancePeakDocumentLink">, kind: LinkKind, sourceId: string) {
   if (!db.advancePeakDocumentLink?.findUnique) return null;
@@ -144,6 +164,8 @@ type Ctx = { documentNo: string; document: PeakDocument | null; verified: boolea
 export async function previewLink(prisma: PrismaClient, req: LinkRequest, lookup?: DocumentLookup): Promise<
   { ok: true; documentNo: string; amount: number; verified: boolean; warnings: string[]; describes: string } | Fail
 > {
+  const blocked = checkLinkMode();
+  if (blocked) return blocked;
   const prepared = await prepare(prisma, req, lookup);
   if ("ok" in prepared && prepared.ok === false) return prepared;
   const { ctx, amountSatang, describes } = prepared as Prepared;
@@ -272,6 +294,9 @@ function defaultLookup(): DocumentLookup | null {
  * before anyone can see it, so the sender never has a window in which to act.
  */
 export async function linkExistingPeakDocument(prisma: PrismaClient, req: LinkRequest, lookup?: DocumentLookup): Promise<LinkResult> {
+  const blocked = checkLinkMode();
+  if (blocked) return blocked;
+
   // Who owns this number, and is this movement already spoken for? Both are cheap
   // reads, and both come BEFORE asking PEAK: a number already in use is an answer on
   // its own, and there is no reason to read a document to learn it.
@@ -290,6 +315,18 @@ export async function linkExistingPeakDocument(prisma: PrismaClient, req: LinkRe
   }
   const clash = await prisma.advancePeakDocumentLink.findUnique({ where: { documentType_documentNo: { documentType: req.documentType, documentNo } } });
   if (clash) return fail(409, `${documentNo} is already recorded against another ${clash.kind.toLowerCase()} — one PEAK document belongs to one movement`);
+
+  // Has the sender already taken this event? A replay of the same document was
+  // answered above; anything else here is a person and a worker reaching for the
+  // same movement, and the person has to see what the worker did first.
+  if (req.kind !== "EXPENSE") {
+    const queued = await prisma.advancePeakSync.findUnique({ where: { id: `${req.kind}:${req.kind === "RETURN" ? req.receiptId : req.advanceId}` }, select: { status: true, documentNo: true } });
+    if (queued && IN_FLIGHT.includes(queued.status)) {
+      return fail(409, queued.status === "POSTED"
+        ? `FolkOPS already sent this to PEAK as ${queued.documentNo ?? "a document"} — reconcile that document instead of linking another`
+        : `FolkOPS is in the middle of sending this to PEAK (${queued.status.toLowerCase()}). Check PEAK and settle what happened before linking anything.`);
+    }
+  }
 
   const prepared = await prepare(prisma, req, lookup);
   if ("ok" in prepared && prepared.ok === false) return prepared;

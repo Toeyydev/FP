@@ -70,6 +70,7 @@ Do not use `/api/version` to tell which build is live; its value is fixed at bui
 | A4 | Run the migration against production | 6 |
 | A5 | If needed: run the sweep or the restore script against production | 8 |
 | A6 | Merge the R2 PR (deploys R2) | 10 |
+| A6b | Set `ADVANCE_EXISTING_PEAK_LINKS_ENABLED=1`, reconcile, then set it back to `0` | 11b |
 | A7 | Set `ADVANCE_WRITES_FROZEN=0` | 12 |
 | A8 | First real ledger actions (confirm returns, allocate, settle) | 13 |
 
@@ -210,6 +211,26 @@ Sign in as an operator:
 - Run `verify.sql` again: all `ok=true`.
 
 **STOP** on any mismatch. Leave the switch on and see §5.
+
+### Step 11b — reconcile what PEAK already has (optional, before Step 12)
+
+Some movements were recorded in PEAK by hand before FolkOPS tracked them. Record those
+documents BEFORE writes are opened, so the sender can never produce a second one.
+
+```ini
+ADVANCE_EXISTING_PEAK_LINKS_ENABLED=1   # keep ADVANCE_WRITES_FROZEN=1, PEAK_ADVANCE_AUTO_SYNC=0
+```
+
+Restart the web service, and expect the banner on Payments → Advances. For each
+movement: **PEAK doc…** → what is already in PEAK → the document number and why it is
+the right one → **Check in PEAK…** → **Record**. FolkOPS reads the document, matches the
+accounts and the amount, and closes the queue item against that number.
+
+**STOP** if a check refuses. A refusal here means the document is not the one this
+movement would have produced; find the right one rather than overriding it.
+
+When the list is empty, set `ADVANCE_EXISTING_PEAK_LINKS_ENABLED=0` and restart. The
+sender does not run while it is `1`, so leaving it on quietly keeps PEAK out of date.
 
 ### Step 12 — open writes (A7)
 Railway → `ADVANCE_WRITES_FROZEN=0`. Railway restarts R2, and its pre-deploy step does nothing.

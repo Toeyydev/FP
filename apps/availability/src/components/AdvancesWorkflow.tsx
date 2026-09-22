@@ -56,13 +56,16 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
   const [linking, setLinking] = useState<LinkTarget | null>(null);
+  const [mode, setMode] = useState<{ reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean } | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [a, r, u] = await Promise.all([
+      const [a, r, u, m] = await Promise.all([
         jfetch("/api/advances"), jfetch("/api/advances/returns"), jfetch("/api/advances/unbooked-expenses"),
+        jfetch("/api/advances/peak-config").catch(() => null),
       ]);
+      if (m) setMode(m as unknown as { reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean });
       setAdvances((a.advances ?? []) as Advance[]);
       setReceipts((r.receipts ?? []) as Receipt[]);
       setUnbooked(u as unknown as Unbooked);
@@ -77,11 +80,18 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
     finally { setBusy(false); }
   };
 
+  // While the cutover freeze is on the server refuses every ordinary advance write.
+  // Offering the buttons anyway only produces a 503 the operator cannot act on.
+  const canWrite = canEdit && !mode?.writesFrozen;
+  const canLink = isAdmin && !!mode?.existingLinks;
   const open = useMemo(() => advances.filter((a) => a.status === "OPEN" || a.status === "PARTIALLY_SETTLED"), [advances]);
   const waiting = useMemo(() => receipts.filter((r) => r.status === "CLAIMED"), [receipts]);
 
   return (
     <section style={{ display: "grid", gap: 18 }}>
+      {mode?.reconciliation && (
+        <div className="banner warn" role="status">โหมดเชื่อมเอกสาร PEAK เดิม — การสร้าง Advance และการ Sync อัตโนมัติยังปิดอยู่</div>
+      )}
       {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}</div>}
       {msg && <div className="banner ok" role="status">{msg}</div>}
 
@@ -90,10 +100,10 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
         <span className="muted" style={{ fontSize: 12.5 }}>
           {open.length} outstanding · {thb(open.reduce((s, a) => s + a.outstanding, 0))} with guides
         </span>
-        {canEdit && <button className="btn sm primary" disabled={busy} onClick={() => setIssuing(true)} style={{ marginLeft: "auto" }}>Record ticket advance…</button>}
+        {canWrite && <button className="btn sm primary" disabled={busy} onClick={() => setIssuing(true)} style={{ marginLeft: "auto" }}>Record ticket advance…</button>}
       </div>
 
-      {canEdit && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}
+      {canWrite && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}
       <div className="tablewrap">
         <table className="grid">
           <thead><tr><th>Advance</th><th>Guide</th><th>Date</th><th>Job</th><th className="r">Amount</th><th className="r">Settled</th><th className="r">Outstanding</th><th>Status</th><th /></tr></thead>
@@ -111,11 +121,11 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
                 <td><span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "REVERSED" ? " muted" : ""}`}>{STATUS_LABEL[a.status]}</span></td>
                 <td style={{ display: "flex", gap: 6 }}>
                   <button className="btn sm ghost" onClick={() => setDetail(a)}>Ledger</button>
-                  {isAdmin && (
+                  {canLink && (
                     <button className="btn sm ghost" disabled={busy} title="This transfer, or its ticket costs, are already in PEAK under a document your accountant created"
                       onClick={() => setLinking({ kind: "ADVANCE", advanceId: a.id, guideId: a.guideId, label: a.advanceNo, amount: a.amount, jobNo: a.jobNo, outstanding: a.outstanding })}>PEAK doc…</button>
                   )}
-                  {canEdit && a.status === "OPEN" && !a.peakLink && (
+                  {canWrite && a.status === "OPEN" && !a.peakLink && (
                     <button className="btn sm ghost" disabled={busy} title="The transfer never happened, or went to the wrong guide"
                       onClick={() => {
                         const reason = window.prompt(`Reverse ${a.advanceNo}? Say why — this records that the money never left the bank, not that it came back.`);
@@ -153,11 +163,11 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
                 </td>
                 <td>{r.slipUrl ? <a href={r.slipUrl} target="_blank" rel="noreferrer">slip</a> : <span className="muted">no slip</span>}{r.bankRef ? <span className="muted" style={{ fontSize: 11.5 }}> · {r.bankRef}</span> : null}</td>
                 <td style={{ display: "flex", gap: 6 }}>
-                  {isAdmin && !r.peakLink && r.status !== "REJECTED" && (
+                  {canLink && !r.peakLink && r.status !== "REJECTED" && (
                     <button className="btn sm ghost" disabled={busy} title="This return is already in PEAK — confirm it, put it against its advance and record that document, in one step"
                       onClick={() => setLinking({ kind: "RETURN", receiptId: r.id, guideId: r.guideId, label: r.receiptNo, amount: r.amount, unallocated: r.unallocated, bankRef: r.bankRef, status: r.status, advances: open.filter((a) => a.guideId === r.guideId).map((a) => ({ id: a.id, advanceNo: a.advanceNo, outstanding: a.outstanding })) })}>PEAK doc…</button>
                   )}
-                  {canEdit && !r.peakLink && r.status === "CLAIMED" && <>
+                  {canWrite && !r.peakLink && r.status === "CLAIMED" && <>
                     <button className="btn sm primary" disabled={busy || !returnBank} title={returnBank ? "You have seen this money in the company bank account" : "เลือกบัญชีธนาคารบริษัทก่อนยืนยัน"}
                       onClick={() => {
                         const bankRef = window.prompt(`Confirm that ${thb(r.amount)} from ${r.guideId} reached the company account.\n\nFind the transfer on the company bank statement and enter that line's reference. Leave this unconfirmed if you cannot find it.`);
@@ -166,7 +176,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
                     <button className="btn sm ghost" disabled={busy}
                       onClick={() => { const reason = window.prompt("Why can this return not be confirmed?"); if (reason) void act(() => jfetch(`/api/advances/returns/${r.id}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) }), `${r.receiptNo} rejected`); }}>Reject…</button>
                   </>}
-                  {canEdit && !r.peakLink && r.status === "VERIFIED" && r.unallocated > 0 && <button className="btn sm" disabled={busy} onClick={() => setAllocating(r)}>Allocate…</button>}
+                  {canWrite && !r.peakLink && r.status === "VERIFIED" && r.unallocated > 0 && <button className="btn sm" disabled={busy} onClick={() => setAllocating(r)}>Allocate…</button>}
                 </td>
               </tr>
             ))}

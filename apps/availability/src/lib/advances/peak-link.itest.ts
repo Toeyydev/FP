@@ -1,9 +1,16 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Only the session is stubbed. Everything else — the switches, the triggers, the
+// unique indexes — is the real thing against a real database.
+const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
+vi.mock("@/auth", () => authMock);
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { linkExistingPeakDocument, type DocumentLookup, type PeakDocument } from "./peak-link";
 import { syncAdvanceBatch } from "./peak-sync";
+import { POST as createAdvance } from "@/app/api/advances/route";
+import type { NextRequest } from "next/server";
 
 // Linking runs against a real database because the things that can go wrong are
 // database things: a trigger that queues a journal the moment a return is confirmed,
@@ -59,6 +66,9 @@ beforeAll(requireTestDatabase);
 beforeEach(async () => {
   vi.stubEnv("PEAK_ADVANCE_CONFIG", JSON.stringify(CONFIG));
   vi.stubEnv("ADVANCE_WRITES_FROZEN", "0");
+  vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "1");
+  vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "0");
+  authMock.auth.mockResolvedValue({ user: { id: "u_admin", role: "ADMIN" } });
   await resetDatabase();
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -199,6 +209,17 @@ describe("recording ticket costs that PEAK already carries", () => {
 });
 
 describe("the sender", () => {
+  it("does not run at all while reconciliation is open", async () => {
+    const { advance } = await fixture();
+    await prisma.advancePeakSync.update({ where: { id: `ADVANCE:${advance.id}` }, data: { status: "PENDING" } });
+    vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1"); // even with the sender switched on
+    const post = vi.fn();
+
+    expect(await syncAdvanceBatch(prisma, post)).toBe(0);
+    expect(post).not.toHaveBeenCalled();
+    expect(await outbox("ADVANCE", advance.id)).toMatchObject({ status: "PENDING" });
+  });
+
   it("never sends an event that already has a PEAK document", async () => {
     const { advance } = await fixture();
     await linkExistingPeakDocument(prisma, {
@@ -208,6 +229,9 @@ describe("the sender", () => {
     // Put the queue back to PENDING, the worst case: a row that looks unsent.
     await prisma.advancePeakSync.update({ where: { id: `ADVANCE:${advance.id}` }, data: { status: "PENDING", documentNo: null } });
 
+    // Reconciliation is over and the sender has been turned on: the state in which
+    // a forgotten PENDING row would otherwise produce a second document.
+    vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1");
     const post = vi.fn();
     const sent = await syncAdvanceBatch(prisma, post);
@@ -215,5 +239,84 @@ describe("the sender", () => {
     expect(post).not.toHaveBeenCalled();
     expect(sent).toBe(0);
     expect(await outbox("ADVANCE", advance.id)).toMatchObject({ status: "POSTED", documentNo: "JV-000005" });
+  });
+});
+
+describe("the reconciliation switch", () => {
+  const linkTheAdvance = (advanceId: string, over: Record<string, unknown> = {}) => linkExistingPeakDocument(prisma, {
+    kind: "ADVANCE", advanceId, documentNo: "JV-000100", documentType: "DAILY_JOURNAL",
+    note: "the transfer, already in the accountant's books", acknowledgeWarnings: true, requestKey: "req-mode-1", actor, ...over,
+  } as Parameters<typeof linkExistingPeakDocument>[1], lookupOf(journalFor("ADVANCE", 900, "JV-000100")));
+
+  it("records an existing document while ordinary writes are frozen", async () => {
+    const { advance } = await fixture();
+    vi.stubEnv("ADVANCE_WRITES_FROZEN", "1");
+
+    expect(await linkTheAdvance(advance.id)).toMatchObject({ ok: true, documentNo: "JV-000100" });
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
+  });
+
+  it("refuses when the reconciliation switch is off", async () => {
+    const { advance } = await fixture();
+    vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
+
+    const result = await linkTheAdvance(advance.id);
+    expect(result).toMatchObject({ ok: false, status: 503 });
+    expect((result as { reasons: string[] }).reasons.join(" ")).toContain("ADVANCE_EXISTING_PEAK_LINKS_ENABLED");
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(0);
+  });
+
+  it("leaves the ordinary write paths frozen", async () => {
+    // The opening is for existing documents only: recording a NEW advance is still
+    // refused, by the route that has always refused it.
+    vi.stubEnv("ADVANCE_WRITES_FROZEN", "1");
+    const res = await createAdvance(new Request("http://localhost/api/advances", { method: "POST", body: new FormData() }) as unknown as NextRequest);
+    expect(res.status).toBe(503);
+    expect(await prisma.guideAdvance.count()).toBe(0);
+  });
+
+  it("refuses while the automatic sender is on", async () => {
+    const { advance } = await fixture();
+    vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1");
+
+    const result = await linkTheAdvance(advance.id);
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect((result as { reasons: string[] }).reasons.join(" ")).toContain("PEAK_ADVANCE_AUTO_SYNC");
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(0);
+  });
+
+  it("refuses while the sender has this movement in flight", async () => {
+    const { advance } = await fixture();
+    // SENDING is this codebase's name for a send in progress; the guard also covers
+    // a PROCESSING row, should the outbox ever use that word.
+    // The trigger queued this row the moment the advance was created; put it into
+    // the state a half-finished send leaves behind.
+    await prisma.advancePeakSync.update({ where: { id: `ADVANCE:${advance.id}` }, data: { status: "SENDING" } });
+
+    const result = await linkTheAdvance(advance.id);
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect((result as { reasons: string[] }).reasons.join(" ")).toMatch(/middle of sending/i);
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(0);
+    expect(await outbox("ADVANCE", advance.id)).toMatchObject({ status: "SENDING" });
+  });
+
+  it("treats the same number typed differently as the same document", async () => {
+    const { advance, receipt } = await fixture();
+    expect(await linkTheAdvance(advance.id, { documentNo: "JV-000100" })).toMatchObject({ ok: true });
+
+    // Same movement, typed loosely: the first answer, and nothing written twice.
+    const again = await linkTheAdvance(advance.id, { documentNo: "  jv-000100 ", requestKey: "req-mode-2" });
+    expect(again).toMatchObject({ ok: true, replayed: true, documentNo: "JV-000100" });
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
+
+    // A DIFFERENT movement, same number typed loosely: refused by the unique key.
+    const elsewhere = await linkExistingPeakDocument(prisma, {
+      kind: "RETURN", receiptId: receipt.id, documentNo: " jv-000100 ", documentType: "DAILY_JOURNAL",
+      note: "the same number, typed in lower case", acknowledgeWarnings: true, requestKey: "req-mode-3", actor,
+      bankRef: "STMT-90", allocations: [{ advanceId: advance.id, amount: 300 }],
+    }, lookupOf(journalFor("RETURN", 300, "JV-000100")));
+    expect(elsewhere).toMatchObject({ ok: false, status: 409 });
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
+    expect(await prisma.guideAdvanceReceipt.findUnique({ where: { id: receipt.id } })).toMatchObject({ status: "CLAIMED" });
   });
 });
