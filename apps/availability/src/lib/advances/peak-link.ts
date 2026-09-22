@@ -414,6 +414,12 @@ export async function linkExistingPeakDocument(prisma: PrismaClient, req: LinkRe
   } catch (e) {
     if (e instanceof LedgerConflict) return fail(409, e.message);
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      // Two people, or two tabs, reaching the same movement at once. Which unique
+      // key gave way says which of the two mistakes it was.
+      const target = String((e.meta as { target?: unknown } | undefined)?.target ?? "");
+      if (target.includes("kind_sourceId") || target.includes("idempotencyKey")) {
+        return fail(409, "Someone recorded a document for this movement a moment ago — reload the page to see it");
+      }
       return fail(409, `${ctx.documentNo} is already recorded against another movement — one PEAK document belongs to one movement`);
     }
     throw e;

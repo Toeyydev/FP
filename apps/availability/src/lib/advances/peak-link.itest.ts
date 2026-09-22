@@ -208,6 +208,36 @@ describe("recording ticket costs that PEAK already carries", () => {
   });
 });
 
+describe("what the migrations put in the database", () => {
+  // These are the objects the ledger's rules actually live in. A test database built
+  // from schema.prisma alone has none of them, and every test below would then be
+  // proving something weaker than it claims.
+  const rows = <T>(sql: string) => prisma.$queryRawUnsafe<T[]>(sql);
+
+  it("carries the advance outbox triggers", async () => {
+    const found = await rows<{ tgname: string }>(`SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE 'advance_peak_%' ORDER BY tgname`);
+    expect(found.map((r) => r.tgname)).toEqual([
+      "advance_peak_cancel_expense", "advance_peak_cancel_issue", "advance_peak_expense", "advance_peak_issue", "advance_peak_return",
+    ]);
+  });
+
+  it("carries the advance ledger's CHECK constraints", async () => {
+    const found = await rows<{ conname: string }>(`SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid::regclass::text IN ('"GuideAdvance"','"GuideAdvanceEntry"','"GuideAdvanceReceipt"','"AdvancePeakSync"','"AdvancePeakDocumentLink"')`);
+    const names = found.map((r) => r.conname).join(" ");
+    expect(names).toContain("AdvancePeakSync_status");
+    expect(names).toContain("AdvancePeakDocumentLink_note");
+    expect(found.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("carries the link table, both of its unique keys, and the receipt's new columns", async () => {
+    const idx = await rows<{ indexname: string }>(`SELECT indexname FROM pg_indexes WHERE tablename = 'AdvancePeakDocumentLink' ORDER BY indexname`);
+    expect(idx.map((r) => r.indexname)).toContain("AdvancePeakDocumentLink_kind_sourceId_key");
+    expect(idx.map((r) => r.indexname)).toContain("AdvancePeakDocumentLink_documentType_documentNo_key");
+    const cols = await rows<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name = 'GuideAdvanceReceipt' AND column_name IN ('peakDocumentNo','peakReference')`);
+    expect(cols.map((c) => c.column_name).sort()).toEqual(["peakDocumentNo", "peakReference"]);
+  });
+});
+
 describe("the outbox the database keeps", () => {
   it("queues a new advance by itself", async () => {
     // The trigger from the outbox migration, not application code, is what makes
@@ -215,6 +245,49 @@ describe("the outbox the database keeps", () => {
     // alone does not have it — and then the tests below quietly prove nothing.
     const { advance } = await fixture();
     expect(await outbox("ADVANCE", advance.id)).toMatchObject({ kind: "ADVANCE", status: "PENDING" });
+  });
+});
+
+describe("two people at once", () => {
+  it("records one document and one ledger line, however the race lands", async () => {
+    const { advance } = await fixture();
+    const req = {
+      kind: "ADVANCE" as const, advanceId: advance.id, documentNo: "JV-000200", documentType: "DAILY_JOURNAL" as const,
+      note: "two operators pressing Record at the same moment", acknowledgeWarnings: true, actor,
+    };
+    const lookup = lookupOf(journalFor("ADVANCE", 900, "JV-000200"));
+
+    const [a, b] = await Promise.all([
+      linkExistingPeakDocument(prisma, { ...req, requestKey: "race-a" }, lookup),
+      linkExistingPeakDocument(prisma, { ...req, requestKey: "race-b" }, lookup),
+    ]);
+
+    // One of them wrote it. The other either found it already there (a replay) or
+    // was refused — never a second link, a second queue row or a second document.
+    expect([a.ok, b.ok].filter(Boolean).length).toBeGreaterThanOrEqual(1);
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
+    expect(await prisma.advancePeakSync.count()).toBe(1);
+    expect(await outbox("ADVANCE", advance.id)).toMatchObject({ status: "POSTED", documentNo: "JV-000200" });
+    expect(await prisma.guideAdvance.findUnique({ where: { id: advance.id } })).toMatchObject({ peakDocumentNo: "JV-000200" });
+  });
+
+  it("settles a job sheet once when two settlements race", async () => {
+    const { advance, sheet } = await fixture();
+    const req = {
+      kind: "EXPENSE" as const, advanceId: advance.id, jobSheetId: sheet.id, amount: 600,
+      documentNo: "PV-000200", documentType: "DAILY_JOURNAL" as const,
+      note: "the ticket line inside the payment document", acknowledgeWarnings: true, actor,
+    };
+    const lookup = lookupOf(journalFor("EXPENSE", 600, "PV-000200"));
+
+    await Promise.all([
+      linkExistingPeakDocument(prisma, { ...req, requestKey: "race-c" }, lookup),
+      linkExistingPeakDocument(prisma, { ...req, requestKey: "race-d" }, lookup),
+    ]);
+
+    expect(await prisma.guideAdvanceEntry.count()).toBe(1);
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
+    expect(await prisma.guideAdvance.findUnique({ where: { id: advance.id } })).toMatchObject({ settledSatang: 60_000 });
   });
 });
 
