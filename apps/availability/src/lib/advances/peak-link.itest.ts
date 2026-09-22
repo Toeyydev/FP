@@ -208,6 +208,16 @@ describe("recording ticket costs that PEAK already carries", () => {
   });
 });
 
+describe("the outbox the database keeps", () => {
+  it("queues a new advance by itself", async () => {
+    // The trigger from the outbox migration, not application code, is what makes
+    // "every movement is queued" true. A test database built from schema.prisma
+    // alone does not have it — and then the tests below quietly prove nothing.
+    const { advance } = await fixture();
+    expect(await outbox("ADVANCE", advance.id)).toMatchObject({ kind: "ADVANCE", status: "PENDING" });
+  });
+});
+
 describe("the sender", () => {
   it("does not run at all while reconciliation is open", async () => {
     const { advance } = await fixture();

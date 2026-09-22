@@ -72,8 +72,14 @@ jobs:
       - name: Typecheck (worker)
         run: npm run typecheck:worker
 
+      # `prisma db push` builds the schema from schema.prisma and therefore skips
+      # every hand-written object in the migrations: the outbox triggers, their
+      # functions, and the CHECK constraints that hold the advance ledger's rules.
+      # Integration tests then ran against a database that is not shaped like
+      # production — a row the database itself should have queued was simply absent.
+      # Applying the migrations is the same path production takes.
       - name: Prepare the test database
-        run: npx prisma db push --skip-generate
+        run: npx prisma migrate deploy
 
       - name: Integration tests (real database)
         run: npm run test:integration
