@@ -935,6 +935,7 @@ model GuideAdvance {
   amount      Float
   paidAt      DateTime
   method      String   @default("bank") // bank | cash | other
+  bankAccount String? // explicitly selected PEAK bank subaccount ID
   txRef       String? // bank transaction reference
   peakRef     String? // PEAK expense/advance ref once posted (future PEAK sync)
   slipUrl     String? // Drive link to the transfer slip (evidence)
@@ -1265,4 +1266,22 @@ model PaymentBatchItem {
 
   @@unique([guideId, date, slotIdx]) // a payout is in at most one batch at a time
   @@index([batchId])
+}
+
+// Transactional outbox: one journal for one source event. Old rows are NOT backfilled.
+model AdvancePeakSync {
+  id String @id // ADVANCE:<id> | RETURN:<id> | EXPENSE:<entry id>
+  kind String
+  sourceId String
+  status String @default("PENDING") // PENDING | BLOCKED | SENDING | UNCERTAIN | POSTED | CANCELLED
+  documentId String?
+  documentNo String?
+  error String?
+  payload Json?
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([kind, sourceId])
+  @@index([status, nextAttemptAt])
 }

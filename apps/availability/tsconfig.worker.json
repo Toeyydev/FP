@@ -24,6 +24,8 @@
     "src/lib/db.ts",
     "src/lib/audit.ts",
     "src/lib/kbiz-slip.ts",
+    "src/lib/peak-api.ts",
+    "src/lib/advances/**/*.ts",
     "src/lib/payments/**/*.ts"
   ],
   "exclude": ["node_modules", "**/*.test.ts"]

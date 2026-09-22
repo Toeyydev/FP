@@ -11,8 +11,8 @@ import type { Expense } from "@/lib/jobsheet";
 /**
  * What a guide still owes on money the company advanced them for one job.
  *
- * The company pays entrance tickets and transport by handing the guide cash up
- * front; afterwards the guide reports what they spent and returns the rest. Until
+ * The company pays customer tickets by handing the guide money up front;
+ * afterwards the guide reports the ticket cost and returns the rest. Until
  * now only an operator could see that balance — the guide could record a return
  * (POST /api/jobsheet/advance) without being able to find out how much was left.
  *
@@ -37,7 +37,7 @@ export type GuideAdvanceSummary = {
   date: string;
   slotIdx: number;
   totalAdvancePaid: number;
-  /** Spent out of the advance: the sheet's expense rows tagged paidBy "advance". */
+  /** Ticket costs already settled against the advance ledger. */
   usedFromAdvance: number;
   /** Money the guide sent back: returns the ledger has counted, plus money still being checked (up to what is owed). */
   totalReturned: number;
@@ -150,6 +150,7 @@ export type ReturnResult =
 const bangkokDate = (d: Date) => new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
 
 export async function recordAdvanceReturn(o: {
+  bankAccount?: string | null;
   guideId: string;
   date: string;
   slotIdx: number;
@@ -174,6 +175,7 @@ export async function recordAdvanceReturn(o: {
 
   const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: where }, select: { id: true, ref: true } });
   if (!sheet) return { ok: false, status: 404, error: "no-sheet", hint: "The operator has not saved this job sheet yet." };
+  if (!sheet.ref) return { ok: false, status: 400, error: "no-job-no", hint: "Ask the operator to assign a Job No. before returning advance money." };
 
   // Accidental double-submit guard: the same amount on this job within the last
   // minute is almost certainly the same press twice.
@@ -201,7 +203,7 @@ export async function recordAdvanceReturn(o: {
   const at = o.at ?? new Date();
   const receipt = await recordReceipt(prisma, {
     guideId, receivedDate: bangkokDate(at), amount, byGuide: o.byGuide, confirmedArrived: !o.byGuide && !!o.confirmedArrived, today: bangkokToday(Date.now()),
-    bankRef: o.txRef ?? null, method: o.method || "bank",
+    bankAccount: o.bankAccount ?? null, bankRef: o.txRef ?? null, method: o.method || "bank",
     note: [o.note, sheet.ref ? `Recorded on ${sheet.ref}` : null, o.advanceId ? `Guide says it is for advance ${o.advanceId}` : null].filter(Boolean).join(" · ") || null,
     slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null,
     actor: { actorId: o.actorId, actorRole: o.actorRole },

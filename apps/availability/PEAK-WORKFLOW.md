@@ -163,3 +163,55 @@ POST /Expenses/allinone  {contact, fee+WHT, expenses, bank payment}
         ▼
 PEAK returns EXP-…  ──► save as peakRef · notify guide  ─► END
 ```
+
+---
+
+## Guide ticket advances, returns, and ticket settlement
+
+This workflow is only for money the company sends a guide to buy customer tickets.
+Transport, meals and other tour costs do not use this advance ledger. These records
+use **Daily Journals** because an advance is an asset balance, not an expense. FolkOPS creates one immutable outbox item in the same database transaction
+as each ledger event. The worker posts it once and stores PEAK's document number.
+
+| FolkOPS event | Daily journal |
+|---|---|
+| Company sends a ticket advance | Dr existing `เงินทดรองจ่าย - ไกด์` / Cr company bank |
+| Guide returns unused money | Dr company bank / Cr guide advance asset |
+| Approved ticket expense uses the advance | Dr ticket expense / Cr guide advance asset |
+
+Automatic posting requires a Job No., the guide's linked PEAK contact, the selected
+company bank account, a unique bank reference and a transfer slip. A guide-submitted
+return remains a claim until an operator confirms it against the company bank and
+allocates the full amount to advances.
+
+Set the following only after the accountant confirms the account and journal IDs:
+
+```json
+PEAK_ADVANCE_CONFIG={
+  "advanceAccountCode":"<account code of the existing เงินทดรองจ่าย - ไกด์ account>",
+  "advanceAccountSubId":"<optional subaccount>",
+  "bankName":"<name shown in FolkOPS>",
+  "bankAccountCode":"<bank ledger account>",
+  "bankAccountSubId":"<PEAK bank subaccount id>",
+  "journalTypeIds":{
+    "ADVANCE":"<payment journal type id>",
+    "RETURN":"<receipt journal type id>",
+    "EXPENSE":"<general journal type id>"
+  },
+  "expenseAccounts":{}
+}
+```
+
+Only the active `ENTRANCE_TICKET` mapping fills `expenseAccounts` at runtime. Set
+`PEAK_ADVANCE_AUTO_SYNC=1` on the worker only after the configuration and
+`PEAK_USER_TOKEN` are present and one preview has been checked. Do not backfill the
+outbox automatically: older advances may already exist in PEAK and must be reconciled
+or recorded as an existing document first.
+
+Do not create a separate PEAK account named “เงินทดรองค่าตั๋วไกด์”. “Ticket only” is
+the FolkOPS usage rule; every advance, ticket settlement, and return clears through
+the existing PEAK account `เงินทดรองจ่าย - ไกด์` shown in its account activity.
+
+If a PEAK write times out, loses its response, or the local save fails after sending,
+the item becomes `UNCERTAIN`. The worker will not retry it. Check PEAK and reconcile
+the document number before taking any further action.
