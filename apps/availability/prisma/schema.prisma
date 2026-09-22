@@ -1006,6 +1006,11 @@ model GuideAdvanceReceipt {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  // An existing PEAK document, when the accountant had already recorded this return
+  // by hand. Recorded, never inferred — the same rule the advance and the ledger use.
+  peakDocumentNo String?
+  peakReference  String?
+
   entries GuideAdvanceEntry[]
 
   @@index([guideId, status])
@@ -1284,4 +1289,35 @@ model AdvancePeakSync {
   updatedAt DateTime @updatedAt
   @@unique([kind, sourceId])
   @@index([status, nextAttemptAt])
+}
+
+// A PEAK document that already existed before FolkOPS knew about it.
+//
+// The outbox (AdvancePeakSync) answers "did we send this?". This answers the other
+// question: "is this event already in PEAK, put there by someone else?" — which is
+// the only safe reason to close an outbox item without sending anything.
+//
+// One row per business event (kind, sourceId), and one row per PEAK document
+// (documentType, documentNo). The second key is what stops the same journal being
+// attached to two different advances: PEAK numbers its documents per type, so the
+// type belongs in the key.
+model AdvancePeakDocumentLink {
+  id           String   @id @default(cuid())
+  kind         String // ADVANCE | RETURN | EXPENSE
+  sourceId     String // GuideAdvance.id | GuideAdvanceReceipt.id | GuideAdvanceEntry.id
+  documentType String // DAILY_JOURNAL | EXPENSE
+  documentNo   String
+  documentId   String? // PEAK's own id, when the read-only lookup returned one
+  source       String   @default("EXISTING_PEAK_DOCUMENT")
+  status       String   @default("LINKED") // LINKED | SUPERSEDED
+  verified     Boolean  @default(false) // a read-only lookup confirmed amount + accounts
+  warning      String? // e.g. the document carries no contact, so only the figures matched
+  note         String // why this link is right — required, and kept for the auditor
+  linkedAt     DateTime @default(now())
+  linkedById   String?
+  createdAt    DateTime @default(now())
+
+  @@unique([kind, sourceId])
+  @@unique([documentType, documentNo])
+  @@index([documentNo])
 }

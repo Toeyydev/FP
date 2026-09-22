@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus, { type AdvancePeakState } from "./AdvancePeakStatus";
+import RecordExistingPeakDialog, { type LinkTarget } from "./RecordExistingPeakDialog";
 import { thb } from "@/lib/jobsheet";
 
 // The operator's view of company money a guide is holding.
@@ -13,14 +14,15 @@ import { thb } from "@/lib/jobsheet";
 // Nothing on this screen changes a balance by itself: every action posts to the ledger
 // (lib/advances), which refuses anything it cannot justify and says why.
 
+type PeakLink = { documentNo: string; documentType: string; linkedAt: string; note: string; warning: string | null; verified: boolean };
 type Advance = {
-  peakSync?: AdvancePeakState | null;
+  peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
   id: string; advanceNo: string; guideId: string; jobNo: string | null; advanceDate: string;
   amount: number; settled: number; outstanding: number; status: "OPEN" | "PARTIALLY_SETTLED" | "SETTLED" | "REVERSED";
   purpose: string | null; txRef: string | null; slipUrl: string | null; reversalReason: string | null;
 };
 type Receipt = {
-  peakSync?: AdvancePeakState | null;
+  peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
   id: string; receiptNo: string; guideId: string; receivedDate: string; status: "CLAIMED" | "VERIFIED" | "REJECTED";
   amount: number; allocated: number; unallocated: number; bankRef: string | null; slipUrl: string | null;
   note: string | null; verifiedAt: string | null; rejectedReason: string | null;
@@ -42,7 +44,7 @@ const jfetch = async (url: string, init?: RequestInit) => {
   return body as Record<string, unknown>;
 };
 
-export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean }) {
+export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { canEdit?: boolean; isAdmin?: boolean }) {
   const [advances, setAdvances] = useState<Advance[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [unbooked, setUnbooked] = useState<Unbooked | null>(null);
@@ -53,6 +55,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
   const [issuing, setIssuing] = useState(false);
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
+  const [linking, setLinking] = useState<LinkTarget | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -98,7 +101,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
             {advances.map((a) => (
               <tr key={a.id}>
-                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} /></td>
+                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} />}</td>
                 <td>{a.guideId}</td>
                 <td>{a.advanceDate}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
@@ -108,7 +111,11 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
                 <td><span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "REVERSED" ? " muted" : ""}`}>{STATUS_LABEL[a.status]}</span></td>
                 <td style={{ display: "flex", gap: 6 }}>
                   <button className="btn sm ghost" onClick={() => setDetail(a)}>Ledger</button>
-                  {canEdit && a.status === "OPEN" && (
+                  {isAdmin && (
+                    <button className="btn sm ghost" disabled={busy} title="This transfer, or its ticket costs, are already in PEAK under a document your accountant created"
+                      onClick={() => setLinking({ kind: "ADVANCE", advanceId: a.id, guideId: a.guideId, label: a.advanceNo, amount: a.amount, jobNo: a.jobNo, outstanding: a.outstanding })}>PEAK doc…</button>
+                  )}
+                  {canEdit && a.status === "OPEN" && !a.peakLink && (
                     <button className="btn sm ghost" disabled={busy} title="The transfer never happened, or went to the wrong guide"
                       onClick={() => {
                         const reason = window.prompt(`Reverse ${a.advanceNo}? Say why — this records that the money never left the bank, not that it came back.`);
@@ -135,7 +142,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
             {receipts.length === 0 && <tr><td colSpan={8} className="muted">No return has been recorded.</td></tr>}
             {receipts.map((r) => (
               <tr key={r.id}>
-                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} /></td>
+                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} />{r.peakLink && <LinkedBadge link={r.peakLink} />}</td>
                 <td>{r.guideId}</td>
                 <td>{r.receivedDate}</td>
                 <td className="r num">{thb(r.amount)}</td>
@@ -146,7 +153,11 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
                 </td>
                 <td>{r.slipUrl ? <a href={r.slipUrl} target="_blank" rel="noreferrer">slip</a> : <span className="muted">no slip</span>}{r.bankRef ? <span className="muted" style={{ fontSize: 11.5 }}> · {r.bankRef}</span> : null}</td>
                 <td style={{ display: "flex", gap: 6 }}>
-                  {canEdit && r.status === "CLAIMED" && <>
+                  {isAdmin && !r.peakLink && r.status !== "REJECTED" && (
+                    <button className="btn sm ghost" disabled={busy} title="This return is already in PEAK — confirm it, put it against its advance and record that document, in one step"
+                      onClick={() => setLinking({ kind: "RETURN", receiptId: r.id, guideId: r.guideId, label: r.receiptNo, amount: r.amount, unallocated: r.unallocated, bankRef: r.bankRef, status: r.status, advances: open.filter((a) => a.guideId === r.guideId).map((a) => ({ id: a.id, advanceNo: a.advanceNo, outstanding: a.outstanding })) })}>PEAK doc…</button>
+                  )}
+                  {canEdit && !r.peakLink && r.status === "CLAIMED" && <>
                     <button className="btn sm primary" disabled={busy || !returnBank} title={returnBank ? "You have seen this money in the company bank account" : "เลือกบัญชีธนาคารบริษัทก่อนยืนยัน"}
                       onClick={() => {
                         const bankRef = window.prompt(`Confirm that ${thb(r.amount)} from ${r.guideId} reached the company account.\n\nFind the transfer on the company bank statement and enter that line's reference. Leave this unconfirmed if you cannot find it.`);
@@ -155,7 +166,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
                     <button className="btn sm ghost" disabled={busy}
                       onClick={() => { const reason = window.prompt("Why can this return not be confirmed?"); if (reason) void act(() => jfetch(`/api/advances/returns/${r.id}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) }), `${r.receiptNo} rejected`); }}>Reject…</button>
                   </>}
-                  {canEdit && r.status === "VERIFIED" && r.unallocated > 0 && <button className="btn sm" disabled={busy} onClick={() => setAllocating(r)}>Allocate…</button>}
+                  {canEdit && !r.peakLink && r.status === "VERIFIED" && r.unallocated > 0 && <button className="btn sm" disabled={busy} onClick={() => setAllocating(r)}>Allocate…</button>}
                 </td>
               </tr>
             ))}
@@ -205,8 +216,20 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
 
       {issuing && <IssueAdvanceDialog onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }} />}
       {detail && <LedgerDialog advance={detail} canEdit={canEdit} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
+      {linking && <RecordExistingPeakDialog target={linking} bankAccount={returnBank || undefined} onClose={() => setLinking(null)} onDone={async (m) => { setLinking(null); setMsg(m); await load(); }} />}
       {allocating && <AllocateDialog receipt={allocating} advances={open.filter((a) => a.guideId === allocating.guideId)} onClose={() => setAllocating(null)} onDone={async (m) => { setAllocating(null); setMsg(m); await load(); }} />}
     </section>
+  );
+}
+
+/** Already in PEAK, under someone else's document — so FolkOPS will not send it. */
+function LinkedBadge({ link }: { link: PeakLink }) {
+  return (
+    <div style={{ fontSize: 12, marginTop: 2 }} title={`${link.note}${link.warning ? ` · ${link.warning}` : ""}`}>
+      <span className="badge ok">บันทึกใน PEAK อยู่แล้ว</span>{" "}
+      <span className="mono">{link.documentNo}</span>
+      {!link.verified && <span className="muted"> · figures not machine-checked</span>}
+    </div>
   );
 }
 

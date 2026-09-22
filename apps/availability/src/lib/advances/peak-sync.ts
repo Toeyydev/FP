@@ -26,6 +26,7 @@ async function sourceFor(db: PrismaClient, kind: string, id: string, config: Adv
     source = { kind, amountSatang: a.amountSatang, date: a.advanceDate, reference: a.advanceNo, jobNo: a.jobNo ?? "", slipUrl: a.slipUrl };
   } else if (kind === "RETURN") {
     const r = await db.guideAdvanceReceipt.findUniqueOrThrow({ where: { id }, include: { entries: { where: { type: "RETURN_ALLOCATION", reversedByEntryId: null }, include: { advance: true } } } });
+    if (r.peakDocumentNo) throw new Error("An existing PEAK reference needs reconciliation; do not post again");
     if (r.status !== "VERIFIED" || r.method !== "bank") throw new Error("Confirm the bank return before syncing");
     if (r.allocatedSatang !== r.amountSatang) throw new Error("Allocate this return to its Job No. before syncing");
     if (!r.bankRef || await db.guideAdvanceReceipt.count({ where: { bankRef: r.bankRef } }) !== 1) throw new Error("Missing or duplicate return bank reference");
@@ -74,6 +75,14 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
     // Claim BEFORE reading the source: the DB reversal trigger sees SENDING and refuses.
     const claim = await db.advancePeakSync.updateMany({ where: { id: row.id, status: row.status, updatedAt: row.updatedAt }, data: { status: "SENDING", attempts: { increment: 1 }, error: null } });
     if (!claim.count) continue;
+    // Someone recorded an existing PEAK document for this event. Close the item
+    // against that document instead of creating a second one. Checked after the
+    // claim, so a link written while this row was being claimed still wins.
+    const linked = await db.advancePeakDocumentLink?.findUnique?.({ where: { kind_sourceId: { kind: row.kind, sourceId: row.sourceId } } });
+    if (linked) {
+      await db.advancePeakSync.update({ where: { id: row.id }, data: { status: "POSTED", documentNo: linked.documentNo, documentId: linked.documentId, error: null } });
+      continue;
+    }
     let payload;
     try {
       payload = advanceJournal(await sourceFor(db, row.kind, row.sourceId, config), config);

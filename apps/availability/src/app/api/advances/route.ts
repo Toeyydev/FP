@@ -1,6 +1,7 @@
 import { uploadSlip } from "@/lib/advance-slip";
 import { NextRequest, NextResponse } from "next/server";
 import { advanceSyncStates } from "@/lib/advances/peak-sync";
+import { peakLinksFor } from "@/lib/advances/peak-link";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
@@ -29,9 +30,10 @@ export async function GET(req: NextRequest) {
     },
   });
   const sync = await advanceSyncStates(prisma, rows.map(r => `ADVANCE:${r.id}`));
+  const links = await peakLinksFor(prisma, "ADVANCE", rows.map((r) => r.id));
   const advances = rows
     .map((r) => ({
-      ...r, peakSync: sync.get(`ADVANCE:${r.id}`) ?? null, amount: fromSatang(r.amountSatang), settled: fromSatang(r.settledSatang),
+      ...r, peakSync: sync.get(`ADVANCE:${r.id}`) ?? null, peakLink: links.get(r.id) ?? null, amount: fromSatang(r.amountSatang), settled: fromSatang(r.settledSatang),
       outstanding: fromSatang(outstandingSatang(r)), status: advanceStatus(r),
     }))
     .filter((r) => (only === "open" ? r.status === "OPEN" || r.status === "PARTIALLY_SETTLED" : true));

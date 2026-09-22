@@ -21,7 +21,7 @@
 //   - SIGTERM / SIGINT drain the in-flight tick, disconnect Prisma, then exit(0) —
 //     Railway sends SIGTERM on redeploy/scale-down.
 
-import { syncAdvanceBatch } from "@/lib/advances/peak-sync";
+import { advancePeakConfig, syncAdvanceBatch } from "@/lib/advances/peak-sync";
 import { prisma } from "@/lib/db";
 import { extractFromText } from "@/lib/payments/slip-evidence";
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
@@ -157,6 +157,20 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
+/** "ready" | "incomplete" | "unreadable" | "not-set" — a status word, never a value. */
+function advanceConfigState(): string {
+  const raw = process.env.PEAK_ADVANCE_CONFIG;
+  if (!raw?.trim()) return "not-set";
+  try {
+    const c = advancePeakConfig();
+    const ready = !!(c.advanceAccountCode && c.bankAccountCode && c.bankAccountSubId
+      && c.journalTypeIds?.ADVANCE && c.journalTypeIds?.RETURN && c.journalTypeIds?.EXPENSE);
+    return ready ? "ready" : "incomplete";
+  } catch {
+    return "unreadable";
+  }
+}
+
 async function main(): Promise<void> {
   log("worker-start", {
     enabled: ENABLED,
@@ -165,6 +179,11 @@ async function main(): Promise<void> {
     bokunSync: BOKUN_SYNC_ENABLED,
     bokunSyncMs: BOKUN_SYNC_INTERVAL_MS,
     bokunConfigured: bokunApiEnabled,
+    // Whether the advance sender COULD run, never what it is configured with. A
+    // silent `return 0` on a broken JSON string is indistinguishable from "nothing
+    // to send", which is the failure this line exists to make visible.
+    advancePeakConfig: advanceConfigState(),
+    advanceAutoSync: process.env.PEAK_ADVANCE_AUTO_SYNC === "1",
     node: process.version,
   });
 

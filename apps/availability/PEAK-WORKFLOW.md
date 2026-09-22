@@ -215,3 +215,23 @@ the existing PEAK account `เงินทดรองจ่าย - ไกด�
 If a PEAK write times out, loses its response, or the local save fails after sending,
 the item becomes `UNCERTAIN`. The worker will not retry it. Check PEAK and reconcile
 the document number before taking any further action.
+
+### Money that is already in PEAK
+
+Some advances, returns and ticket costs were entered in PEAK by hand before FolkOPS
+tracked them. **Payments → Advances → PEAK doc…** (admin only) records that document
+number against the movement. It calls no PEAK write endpoint: it reads the document,
+checks that the accounts and the amount are the ones this movement would have used,
+and then closes the outbox item as `POSTED` against the existing number — so turning
+the sender on cannot produce a second document for money that moved once.
+
+- A return is confirmed, put against its advance, and linked in ONE transaction. If
+  any step fails, none of it happened.
+- A ticket settlement writes the ledger line and links it, again in one transaction,
+  and creates no journal — the cost is already in the document being linked.
+- One document number belongs to one movement, enforced by a unique index on
+  (document type, document number).
+- The reason typed into the box is kept with the link and in the audit log. A
+  document that names no contact — which is what PEAK's own transfers look like —
+  can still be linked, but only when the accounts and the amount match exactly.
+- Only ticket costs clear this way. A meal tagged "from company advance" is refused.
