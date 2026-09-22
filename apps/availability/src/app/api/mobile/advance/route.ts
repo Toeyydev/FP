@@ -41,6 +41,8 @@ export async function POST(req: Request) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isInteger(slotIdx) || slotIdx < 0) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
   const slip = form.get("slip") as unknown as { size?: number; type?: string; name?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+  const method = String(form.get("method") || "bank").slice(0, 24) || "bank";
+  const txRef = String(form.get("txRef") || "").slice(0, 120) || null;
   if (slip && (slip.size ?? 0) > MAX_SLIP_BYTES) return NextResponse.json({ error: "too-large" }, { status: 400 });
 
   const guideId = a.user.guideId;
@@ -48,8 +50,8 @@ export async function POST(req: Request) {
 
   const r = await recordAdvanceReturn({
     guideId, date, slotIdx, amount,
-    method: String(form.get("method") || "bank").slice(0, 24) || "bank",
-    txRef: String(form.get("txRef") || "").slice(0, 120) || null,
+    method,
+    txRef,
     note: String(form.get("note") || "").slice(0, 500) || null,
     advanceId: String(form.get("advanceId") || "") || null,
     slipFile: slip,

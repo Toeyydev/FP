@@ -21,6 +21,7 @@
 //   - SIGTERM / SIGINT drain the in-flight tick, disconnect Prisma, then exit(0) —
 //     Railway sends SIGTERM on redeploy/scale-down.
 
+import { syncAdvanceBatch } from "@/lib/advances/peak-sync";
 import { prisma } from "@/lib/db";
 import { extractFromText } from "@/lib/payments/slip-evidence";
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
@@ -110,6 +111,7 @@ async function tick(): Promise<void> {
   if (ticking || shuttingDown) return;
   ticking = true;
   try {
+    await syncAdvanceBatch(prisma);
     const n = await processQueuedBatch();
     if (n > 0) log("batch-processed", { count: n });
   } catch (err) {

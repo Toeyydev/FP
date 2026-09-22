@@ -9,6 +9,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date like 2026-09
 export const advanceBody = z.object({
   guideId: z.string().min(1),
   advanceDate: isoDate,
+  bankAccount: z.string().max(120).nullish(),
   amount: money,
   jobNo: z.string().max(60).nullish(),
   purpose: z.string().max(200).nullish(),

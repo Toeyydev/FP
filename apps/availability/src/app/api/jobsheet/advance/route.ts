@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
   const atRaw = String(form.get("at") || "");
   const at = atRaw ? new Date(atRaw) : new Date();
   const method = (String(form.get("method") || "bank").slice(0, 24)) || "bank";
+  const bankAccount = String(form.get("bankAccount") || "").slice(0,120) || null;
   const txRef = String(form.get("txRef") || "").slice(0, 120) || null;
   const peakRef = String(form.get("peakRef") || "").slice(0, 60) || null;
   const note = String(form.get("note") || "").slice(0, 500) || null;
@@ -67,13 +68,16 @@ export async function POST(req: NextRequest) {
   // (they made the transfer) but never an advance.
   const opsUser = isOps(session.user.role);
   if (!opsUser && !(kind === "return" && session.user.guideId === guideId)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (method === "bank" && !txRef) return NextResponse.json({ error: "bad-body", hint: "Enter the bank transfer reference." }, { status: 400 });
+  if (!file || typeof file.arrayBuffer !== "function" || !(file.size && file.size > 0)) return NextResponse.json({ error: "bad-body", hint: "Attach the transfer slip." }, { status: 400 });
+  if (opsUser && method === "bank" && !bankAccount) return NextResponse.json({ error: "bad-body", hint: "Choose the company bank account used for this transfer." }, { status: 400 });
 
   // A return goes through the shared rules (lib/guide-advance), which FolkOPS
   // Mobile uses too, so a return filed from a phone is the same row — with its
   // slip in the same Drive folder — as one typed here.
   if (kind === "return") {
     const r = await recordAdvanceReturn({
-      guideId, date, slotIdx, amount, at, method, txRef, note, advanceId,
+      guideId, date, slotIdx, amount, at, method, txRef, note, advanceId, bankAccount,
       slipFile: file, actorId: session.user.id ?? null, actorRole: session.user.role ?? null, byGuide: !opsUser,
       confirmedArrived: opsUser && confirmedArrived,
     });
@@ -83,6 +87,7 @@ export async function POST(req: NextRequest) {
 
   const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key(guideId, date, slotIdx) }, select: { id: true, ref: true } });
   if (!sheet) return NextResponse.json({ error: "no-sheet", hint: "Save the job sheet first." }, { status: 404 });
+  if (!sheet.ref) return NextResponse.json({ error: "bad-body", hint: "Assign a Job No. before recording an advance." }, { status: 400 });
   const gUser = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
   const guideName = gUser?.fullName || gUser?.displayName || guideId;
 
@@ -110,7 +115,7 @@ export async function POST(req: NextRequest) {
     // (lib/advances/service), whether it is recorded here or from the Advances screen.
     const issued = await issueAdvance(prisma, {
       guideId, advanceDate: bangkokDate(at), amount, jobNo: sheet.ref ?? null,
-      method, bankRef: txRef, note, today: bangkokToday(),
+      method, bankAccount, bankRef: txRef, note, today: bangkokToday(),
       slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null,
       date, slotIdx, actor: { actorId: createdById, actorRole: session.user.role ?? null },
     });

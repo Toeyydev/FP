@@ -237,7 +237,7 @@ async function requestClientToken(field: "password" | "connectKey"): Promise<Res
       signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     });
   } catch (e) { return { ok: false, desc: callFailure(e, TOKEN_TIMEOUT_MS) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  const j = await r.json().catch(() => ({})) as Record<string, unknown>;
   const t = peakWrap<{ token?: string; resCode?: string; resDesc?: string }>(j, "peakClientToken");
   if (t?.token) return { ok: true, token: t.token, code: t.resCode, desc: t.resDesc };
   // Non-2xx, or a 200 carrying PEAK's own error code: surface the code/description
@@ -299,7 +299,7 @@ async function authedCall(
     const ms = opts.timeoutMs ?? READ_TIMEOUT_MS;
     try {
       const r = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(ms) });
-      return { r, j: await r.json().catch(() => ({} as Record<string, unknown>)) };
+      return { r, j: await r.json().catch(() => ({})) as Record<string, unknown> };
     } catch (e) {
       return { error: callFailure(e, ms), sent: true };
     }
@@ -967,4 +967,29 @@ export async function collectPagedById<T extends { id: string }>(
     if (got.length < pageSize || added === 0) { ended = true; break; }
   }
   return { ok: true, items, pages: page, truncated: !ended };
+}
+
+/** Daily journals never retry a POST: a lost response is an unresolved document. */
+export type DailyJournalPayload = {
+  issuedDate: string; journalTypeId: string; contactId: string; reference: string;
+  description: string;
+  journalEntries: { accountCode: string; accountSubId?: string; debit: string; credit: string; description?: string }[];
+};
+export function dailyJournalResult(httpStatus: number, body: Record<string, unknown>): Res<{ id?: string; uncertain?: boolean }> {
+  const wrap = peakWrap<{ resCode?: string; resDesc?: string; dailyJournals?: { id?: string; code?: string; resCode?: string; resDesc?: string }[] }>(body, "peakDailyJournals");
+  const row = wrap?.dailyJournals?.[0];
+  if (httpStatus >= 200 && httpStatus < 300 && wrap?.resCode === "200" && row?.resCode === "200" && row.id && row.code) {
+    return { ok: true, id: row.id, code: row.code };
+  }
+  // Only a documented, explicit rejection proves no document was created.
+  const rejected = httpStatus < 500 && (row?.resCode === "400" || wrap?.resCode === "400" || httpStatus === 401 || httpStatus === 403);
+  return { ok: false, uncertain: !rejected, desc: sanitizePeakError(row?.resDesc || wrap?.resDesc || `Unconfirmed PEAK response (HTTP ${httpStatus})`) };
+}
+export async function createDailyJournal(journal: DailyJournalPayload): Promise<Res<{ id?: string; uncertain?: boolean }>> {
+  if (!peakEnabled) return { ok: false, uncertain: false, desc: "PEAK connection is not configured" };
+  const call = await authedCall(`${API}/DailyJournals`, {
+    method: "POST", body: JSON.stringify({ peakDailyJournals: { dailyJournals: [journal] } }),
+  }, "peakDailyJournals", { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS });
+  if ("error" in call) return { ok: false, uncertain: !!call.sent, desc: sanitizePeakError(call.error) };
+  return dailyJournalResult(call.r.status, call.j);
 }

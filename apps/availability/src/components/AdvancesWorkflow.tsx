@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AdvanceBankSelect from "./AdvanceBankSelect";
+import AdvancePeakStatus, { type AdvancePeakState } from "./AdvancePeakStatus";
 import { thb } from "@/lib/jobsheet";
 
 // The operator's view of company money a guide is holding.
@@ -12,11 +14,13 @@ import { thb } from "@/lib/jobsheet";
 // (lib/advances), which refuses anything it cannot justify and says why.
 
 type Advance = {
+  peakSync?: AdvancePeakState | null;
   id: string; advanceNo: string; guideId: string; jobNo: string | null; advanceDate: string;
   amount: number; settled: number; outstanding: number; status: "OPEN" | "PARTIALLY_SETTLED" | "SETTLED" | "REVERSED";
   purpose: string | null; txRef: string | null; slipUrl: string | null; reversalReason: string | null;
 };
 type Receipt = {
+  peakSync?: AdvancePeakState | null;
   id: string; receiptNo: string; guideId: string; receivedDate: string; status: "CLAIMED" | "VERIFIED" | "REJECTED";
   amount: number; allocated: number; unallocated: number; bankRef: string | null; slipUrl: string | null;
   note: string | null; verifiedAt: string | null; rejectedReason: string | null;
@@ -45,6 +49,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [returnBank, setReturnBank] = useState("");
   const [issuing, setIssuing] = useState(false);
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
@@ -85,6 +90,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
         {canEdit && <button className="btn sm primary" disabled={busy} onClick={() => setIssuing(true)} style={{ marginLeft: "auto" }}>Record an advance…</button>}
       </div>
 
+      {canEdit && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}
       <div className="tablewrap">
         <table className="grid">
           <thead><tr><th>Advance</th><th>Guide</th><th>Date</th><th>Job</th><th className="r">Amount</th><th className="r">Settled</th><th className="r">Outstanding</th><th>Status</th><th /></tr></thead>
@@ -92,7 +98,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No advance has been recorded.</td></tr>}
             {advances.map((a) => (
               <tr key={a.id}>
-                <td className="mono">{a.advanceNo}</td>
+                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} /></td>
                 <td>{a.guideId}</td>
                 <td>{a.advanceDate}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
@@ -129,7 +135,7 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
             {receipts.length === 0 && <tr><td colSpan={8} className="muted">No return has been recorded.</td></tr>}
             {receipts.map((r) => (
               <tr key={r.id}>
-                <td className="mono">{r.receiptNo}</td>
+                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} /></td>
                 <td>{r.guideId}</td>
                 <td>{r.receivedDate}</td>
                 <td className="r num">{thb(r.amount)}</td>
@@ -141,10 +147,10 @@ export default function AdvancesWorkflow({ canEdit = true }: { canEdit?: boolean
                 <td>{r.slipUrl ? <a href={r.slipUrl} target="_blank" rel="noreferrer">slip</a> : <span className="muted">no slip</span>}{r.bankRef ? <span className="muted" style={{ fontSize: 11.5 }}> · {r.bankRef}</span> : null}</td>
                 <td style={{ display: "flex", gap: 6 }}>
                   {canEdit && r.status === "CLAIMED" && <>
-                    <button className="btn sm primary" disabled={busy} title="You have seen this money in the company bank account"
+                    <button className="btn sm primary" disabled={busy || !returnBank} title={returnBank ? "You have seen this money in the company bank account" : "เลือกบัญชีธนาคารบริษัทก่อนยืนยัน"}
                       onClick={() => {
                         const bankRef = window.prompt(`Confirm that ${thb(r.amount)} from ${r.guideId} reached the company account.\n\nFind the transfer on the company bank statement and enter that line's reference. Leave this unconfirmed if you cannot find it.`);
-                        if (bankRef && bankRef.trim()) void act(() => jfetch(`/api/advances/returns/${r.id}/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bankRef: bankRef.trim() }) }), `${r.receiptNo} confirmed`);
+                        if (bankRef && bankRef.trim()) void act(() => jfetch(`/api/advances/returns/${r.id}/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bankRef: bankRef.trim(), bankAccount: returnBank }) }), `${r.receiptNo} confirmed`);
                       }}>Confirm received</button>
                     <button className="btn sm ghost" disabled={busy}
                       onClick={() => { const reason = window.prompt("Why can this return not be confirmed?"); if (reason) void act(() => jfetch(`/api/advances/returns/${r.id}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) }), `${r.receiptNo} rejected`); }}>Reject…</button>
@@ -208,16 +214,24 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
   const [advanceDate, setAdvanceDate] = useState(new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10));
   const [amount, setAmount] = useState("");
   const [jobNo, setJobNo] = useState("");
+  const [bankAccount, setBankAccount] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [purpose, setPurpose] = useState("");
   const [bankRef, setBankRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const submit = async () => {
+    if (!jobNo.trim()) { setErr("เลือก Job No. ของรายการเงินทดรอง"); return; }
+    if (!bankAccount) { setErr("เลือกบัญชีธนาคารบริษัทที่โอนเงินออก"); return; }
+    if (!bankRef.trim()) { setErr("ใส่เลขอ้างอิงรายการโอนจากธนาคาร"); return; }
+    if (!file) { setErr("แนบสลิปโอนเงินก่อนบันทึก"); return; }
     setBusy(true); setErr(null);
     try {
-      const body = { guideId: guideId.trim(), advanceDate, amount: Number(amount), jobNo: jobNo.trim() || null, purpose: purpose.trim() || null, bankRef: bankRef.trim() || null };
-      const r = await jfetch("/api/advances", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const body = new FormData();
+      for (const [key,value] of Object.entries({guideId:guideId.trim(),advanceDate,amount,jobNo:jobNo.trim(),purpose,bankRef,bankAccount})) body.set(key,value);
+      if (file) body.set("file",file);
+      const r = await jfetch("/api/advances", { method: "POST", body });
       onDone(`${(r.advance as { advanceNo: string }).advanceNo} recorded`);
     } catch (e) { setErr(String((e as Error).message)); setBusy(false); }
   };
@@ -236,14 +250,16 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
           <label>Guide ID<input value={guideId} onChange={(e) => setGuideId(e.target.value)} placeholder="G-000" disabled={busy} /></label>
           <label>Date the money left the bank<input type="date" value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} disabled={busy} /></label>
           <label>Amount (฿)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} /></label>
-          <label>Job No. (optional)<input value={jobNo} onChange={(e) => setJobNo(e.target.value)} placeholder="FOLK-BKK-…" disabled={busy} /></label>
+          <label>Job No.<input value={jobNo} onChange={(e) => setJobNo(e.target.value)} placeholder="FOLK-BKK-…" disabled={busy} /></label>
+          <AdvanceBankSelect value={bankAccount} onChange={setBankAccount} disabled={busy} />
+          <label>สลิปโอนเงิน<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={e=>setFile(e.target.files?.[0]??null)} /></label>
           <label>What it is for (optional)<input value={purpose} onChange={(e) => setPurpose(e.target.value)} disabled={busy} /></label>
-          <label>Bank reference (optional)<input value={bankRef} onChange={(e) => setBankRef(e.target.value)} disabled={busy} /></label>
+          <label>Bank reference<input value={bankRef} onChange={(e) => setBankRef(e.target.value)} disabled={busy} /></label>
         </div>
         </div>
         <div className="mfoot">
           <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={submit} disabled={busy || !guideId.trim() || !amount.trim()}>Record</button>
+          <button className="btn primary" onClick={submit} disabled={busy || !guideId.trim() || !amount.trim() || !jobNo.trim() || !bankAccount || !bankRef.trim() || !file}>Record</button>
         </div>
       </div>
     </div>
@@ -308,6 +324,7 @@ function AllocateDialog({ receipt, advances, onClose, onDone }: { receipt: Recei
 }
 
 type Entry = {
+  peakSync?: AdvancePeakState | null;
   id: string; type: string; label: string; amount: number; effectiveDate: string; jobNo: string | null; reason: string | null;
   paymentNo: string | null; paymentStatus: string | null; receiptNo: string | null;
   reversesEntryId: string | null; reversedByEntryId: string | null; canReverse: boolean;
@@ -357,7 +374,7 @@ function LedgerDialog({ advance, canEdit, onClose, onChanged }: { advance: Advan
               {entries?.map((e) => (
                 <tr key={e.id} style={e.reversedByEntryId ? { opacity: 0.6 } : undefined}>
                   <td>{e.effectiveDate}</td>
-                  <td>{e.label}{e.reversedByEntryId ? " · reversed" : ""}</td>
+                  <td>{e.label}{e.reversedByEntryId ? " · reversed" : ""}<AdvancePeakStatus state={e.peakSync} /></td>
                   <td className="mono" style={{ fontSize: 11.5 }}>{source(e)}</td>
                   <td className="r num">{thb(e.amount)}</td>
                   <td style={{ fontSize: 12 }}>{e.reason ?? ""}</td>

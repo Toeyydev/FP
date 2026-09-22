@@ -163,3 +163,50 @@ POST /Expenses/allinone  {contact, fee+WHT, expenses, bank payment}
         ▼
 PEAK returns EXP-…  ──► save as peakRef · notify guide  ─► END
 ```
+
+---
+
+## Guide advances, returns, and ticket settlement
+
+These records use **Daily Journals** because an advance is an asset balance, not an
+expense. FolkOPS creates one immutable outbox item in the same database transaction
+as each ledger event. The worker posts it once and stores PEAK's document number.
+
+| FolkOPS event | Daily journal |
+|---|---|
+| Company sends an advance | Dr guide advance asset / Cr company bank |
+| Guide returns unused money | Dr company bank / Cr guide advance asset |
+| Approved ticket or tour expense uses the advance | Dr mapped expense account per row / Cr guide advance asset |
+
+Automatic posting requires a Job No., the guide's linked PEAK contact, the selected
+company bank account, a unique bank reference and a transfer slip. A guide-submitted
+return remains a claim until an operator confirms it against the company bank and
+allocates the full amount to advances.
+
+Set the following only after the accountant confirms the account and journal IDs:
+
+```json
+PEAK_ADVANCE_CONFIG={
+  "advanceAccountCode":"<guide-advance asset account>",
+  "advanceAccountSubId":"<optional subaccount>",
+  "bankName":"<name shown in FolkOPS>",
+  "bankAccountCode":"<bank ledger account>",
+  "bankAccountSubId":"<PEAK bank subaccount id>",
+  "journalTypeIds":{
+    "ADVANCE":"<payment journal type id>",
+    "RETURN":"<receipt journal type id>",
+    "EXPENSE":"<general journal type id>"
+  },
+  "expenseAccounts":{}
+}
+```
+
+`expenseAccounts` is filled from active FolkOPS account mappings at runtime. Set
+`PEAK_ADVANCE_AUTO_SYNC=1` on the worker only after the configuration and
+`PEAK_USER_TOKEN` are present and one preview has been checked. Do not backfill the
+outbox automatically: older advances may already exist in PEAK and must be reconciled
+or recorded as an existing document first.
+
+If a PEAK write times out, loses its response, or the local save fails after sending,
+the item becomes `UNCERTAIN`. The worker will not retry it. Check PEAK and reconcile
+the document number before taking any further action.

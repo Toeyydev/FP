@@ -7,17 +7,20 @@
 // purpose: a tag is now a proposal until an operator settles it, and money the guide
 // sends back settles nothing until it is confirmed and allocated. The tagged total is
 // still reported — as a proposal, next to the settled figure, never inside it.
+import { advanceSyncStates } from "./peak-sync";
 import type { PrismaClient } from "@prisma/client";
 import { expenseAmount, type Expense } from "@/lib/jobsheet";
 import { advanceStatus, fromSatang } from "@/lib/advances/rules";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 
 export type JobAdvanceRow = {
+  peakSync?: { status: string; documentNo: string | null; error: string | null } | null;
   id: string; advanceNo: string; amount: number; paidAt: Date; advanceDate: string; method: string;
   txRef: string | null; peakRef: string | null; slipUrl: string | null; note: string | null;
   settled: number; outstanding: number; status: string;
 };
 export type JobReceiptRow = {
+  peakSync?: { status: string; documentNo: string | null; error: string | null } | null;
   id: string; receiptNo: string; amount: number; returnedAt: Date; receivedDate: string; method: string;
   txRef: string | null; slipUrl: string | null; note: string | null;
   status: string; allocated: number; unallocated: number;
@@ -42,7 +45,7 @@ export type JobAdvanceView = {
   frozen: boolean;
 };
 
-type Db = Pick<PrismaClient, "guideAdvance" | "guideAdvanceEntry" | "guideAdvanceReceipt" | "guideAdvanceReturn">;
+type Db = Pick<PrismaClient, "guideAdvance" | "guideAdvanceEntry" | "guideAdvanceReceipt" | "guideAdvanceReturn" | "advancePeakSync">;
 
 export async function jobAdvanceView(db: Db, input: { guideId: string; date: string; slotIdx: number; expenses: Expense[] | null | undefined }): Promise<JobAdvanceView> {
   const { guideId, date, slotIdx } = input;
@@ -98,15 +101,16 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
     : live.every((a) => a.settledSatang >= a.amountSatang) ? "SETTLED"
     : live.some((a) => a.settledSatang > 0) ? "PARTIALLY_SETTLED" : "OPEN";
 
+  const sync = await advanceSyncStates(db as PrismaClient, [...advances.map(a => `ADVANCE:${a.id}`), ...receipts.map(r => `RETURN:${r.id}`)]);
   return {
     advances: advances.map((a) => ({
-      id: a.id, advanceNo: a.advanceNo, amount: fromSatang(a.amountSatang), paidAt: a.paidAt, advanceDate: a.advanceDate,
+      peakSync: sync.get(`ADVANCE:${a.id}`) ?? null, id: a.id, advanceNo: a.advanceNo, amount: fromSatang(a.amountSatang), paidAt: a.paidAt, advanceDate: a.advanceDate,
       method: a.method, txRef: a.txRef, peakRef: a.peakRef, slipUrl: a.slipUrl, note: a.note,
       settled: fromSatang(a.settledSatang), outstanding: fromSatang(a.amountSatang - a.settledSatang),
       status: advanceStatus({ amountSatang: a.amountSatang, settledSatang: a.settledSatang, reversedAt: a.reversedAt }),
     })),
     returns: receipts.map((r) => ({
-      id: r.id, receiptNo: r.receiptNo, amount: fromSatang(r.amountSatang), returnedAt: r.createdAt, receivedDate: r.receivedDate,
+      peakSync: sync.get(`RETURN:${r.id}`) ?? null, id: r.id, receiptNo: r.receiptNo, amount: fromSatang(r.amountSatang), returnedAt: r.createdAt, receivedDate: r.receivedDate,
       method: r.method, txRef: r.bankRef, slipUrl: r.slipUrl, note: r.note, status: r.status,
       allocated: fromSatang(r.allocatedSatang), unallocated: fromSatang(r.amountSatang - r.allocatedSatang),
       allocatedHere: fromSatang(allocatedHereById.get(r.id) ?? 0),

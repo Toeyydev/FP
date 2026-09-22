@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { advanceSyncStates } from "@/lib/advances/peak-sync";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
@@ -19,6 +20,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     prisma.guidePayment.findMany({ where: { id: { in: entries.map((e) => e.paymentId).filter((x): x is string => !!x) } }, select: { id: true, paymentNo: true, status: true } }),
     prisma.guideAdvanceReceipt.findMany({ where: { id: { in: entries.map((e) => e.receiptId).filter((x): x is string => !!x) } }, select: { id: true, receiptNo: true } }),
   ]);
+  const sync = await advanceSyncStates(prisma, entries.map(e => `EXPENSE:${e.id}`));
   return NextResponse.json({
     advance: {
       id: advance.id, advanceNo: advance.advanceNo, guideId: advance.guideId, jobNo: advance.jobNo, advanceDate: advance.advanceDate,
@@ -28,7 +30,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     entries: entries.map((e) => {
       const payment = payments.find((p) => p.id === e.paymentId);
       return {
-        id: e.id, type: e.type, label: ENTRY_LABEL[e.type as EntryType] ?? e.type, amount: fromSatang(e.amountSatang),
+        peakSync: sync.get(`EXPENSE:${e.id}`) ?? null, id: e.id, type: e.type, label: ENTRY_LABEL[e.type as EntryType] ?? e.type, amount: fromSatang(e.amountSatang),
         effectiveDate: e.effectiveDate, jobNo: e.jobNo, reason: e.reason, createdAt: e.createdAt,
         paymentNo: payment?.paymentNo ?? null, paymentStatus: payment?.status ?? null,
         receiptNo: receipts.find((r) => r.id === e.receiptId)?.receiptNo ?? null,

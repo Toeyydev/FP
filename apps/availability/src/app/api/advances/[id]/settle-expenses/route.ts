@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const result = await settleFromExpenses(prisma, {
     advanceId: id, jobSheetId: sheet.id, jobNo: sheet.ref, amount: parsed.data.amount, effectiveDate: sheet.date,
-    snapshot: { rows: rows.map((e) => ({ description: e.description, amount: expenseAmount(e), category: e.expenseType ?? null })), tagged },
+    snapshot: { rows: rows.map((e) => ({ description: e.description, amount: expenseAmount(e), category: e.expenseType ?? null, peakAccountCode: e.peakAccountCode ?? null })), tagged },
     requestKey: parsed.data.requestKey,
     actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null },
   });

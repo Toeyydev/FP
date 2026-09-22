@@ -1,5 +1,7 @@
 "use client";
 
+import AdvanceBankSelect from "./AdvanceBankSelect";
+import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
@@ -56,7 +58,7 @@ type Sheet = {
 };
 // Advance rows as returned by /api/jobsheet (paidAt on advances, returnedAt on returns).
 // Phase 3: these come from the LEDGER (lib/advances/job-view), not re-added on the client.
-type AdvanceRow = { id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null;
+type AdvanceRow = { peakSync?: import("./AdvancePeakStatus").AdvancePeakState | null; id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null;
   advanceNo?: string; receiptNo?: string; receivedDate?: string; status?: string; settled?: number; outstanding?: number; allocated?: number; unallocated?: number; allocatedHere?: number };
 type AdvanceTotals = { totalAdvancePaid: number; usedFromAdvance: number; totalReturned: number; deductedFromPayments: number; outstanding: number; taggedFromAdvance: number; tagsNotYetSettled: number };
 type AdvanceData = { advances: AdvanceRow[]; returns: AdvanceRow[]; totals: AdvanceTotals; status: string; frozen: boolean };
@@ -109,6 +111,7 @@ export default function JobSheetEditor() {
   // Guide advance + settlement (cash movements — separate from expenses, see lib/advance)
   const [advance, setAdvance] = useState<AdvanceData>(EMPTY_ADVANCE);
   const [advKind, setAdvKind] = useState<null | "advance" | "return">(null); // which record-form is open
+  const [advanceBank, setAdvanceBank] = useState("");
   const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null; confirmedArrived: boolean }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null, confirmedArrived: false });
   const [advBusy, setAdvBusy] = useState(false);
   const [showCross, setShowCross] = useState(false); // expand the cross-check again after approval
@@ -310,6 +313,9 @@ export default function JobSheetEditor() {
     if (!sheet) return;
     const amt = Number(advForm.amount.replace(/[,\s]/g, ""));
     if (!Number.isFinite(amt) || amt <= 0) { setMsg("Enter a positive amount in baht."); return; }
+    if (advForm.method === "bank" && !advForm.txRef.trim()) { setMsg("ใส่เลขอ้างอิงรายการโอนจากธนาคาร"); return; }
+    if (!advForm.file) { setMsg("แนบสลิปโอนเงินก่อนบันทึก"); return; }
+    if (advForm.method === "bank" && canEdit && !advanceBank) { setMsg("เลือกบัญชีธนาคารบริษัทที่เงินจริงเข้า–ออก"); return; }
     if (canEdit && !saved) { const ok = await save(); if (!ok) return; } // the row keys off the persisted sheet
     setAdvBusy(true); setMsg("");
     const fd = new FormData();
@@ -317,6 +323,7 @@ export default function JobSheetEditor() {
     fd.append("amount", advForm.amount);
     if (advForm.at) fd.append("at", advForm.at);
     fd.append("method", advForm.method);
+    if (advanceBank) fd.append("bankAccount", advanceBank);
     if (advForm.txRef.trim()) fd.append("txRef", advForm.txRef.trim());
     if (advForm.note.trim()) fd.append("note", advForm.note.trim());
     if (kind === "return" && canEdit && advForm.confirmedArrived) fd.append("confirmedArrived", "1");
@@ -1473,7 +1480,7 @@ export default function JobSheetEditor() {
               <tbody>
                 {advance.advances.map((a) => (
                   <tr key={a.id} style={a.status === "REVERSED" ? { opacity: 0.55 } : undefined}>
-                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small> <span className="mono" style={{ fontSize: 11.5 }}>{a.advanceNo}</span>{a.status === "REVERSED" ? " · reversed" : ""}{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}</td>
+                    <td>Advance Paid<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองจ่ายให้มัคคุเทศก์"}</small> <span className="mono" style={{ fontSize: 11.5 }}>{a.advanceNo}</span><AdvancePeakStatus state={a.peakSync} />{a.status === "REVERSED" ? " · reversed" : ""}{a.txRef ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {a.txRef}</span> : null}</td>
                     <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{dtShort(a.paidAt)} · {a.method}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{a.slipUrl ? <a href={a.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(a.amount)}</td>
@@ -1493,7 +1500,7 @@ export default function JobSheetEditor() {
                 )}
                 {advance.returns.filter((r) => (r.allocatedHere ?? 0) > 0).map((r) => (
                   <tr key={`ret-${r.id}`}>
-                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small> <span className="mono" style={{ fontSize: 11.5 }}>{r.receiptNo}</span></td>
+                    <td style={{ paddingLeft: 18 }}>Advance Returned<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"เงินทดรองคงเหลือส่งคืน"}</small> <span className="mono" style={{ fontSize: 11.5 }}>{r.receiptNo}</span><AdvancePeakStatus state={r.peakSync} /></td>
                     <td style={{ whiteSpace: "nowrap", fontSize: 12.5, color: "var(--ink-soft)" }}>{r.receivedDate} · {r.method}</td>
                     <td className="no-print" style={{ textAlign: "center" }}>{r.slipUrl ? <a href={r.slipUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 700 }}>📎 Slip</a> : <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>—</span>}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>− {thb(r.allocatedHere ?? 0)}</td>
@@ -1542,8 +1549,9 @@ export default function JobSheetEditor() {
               <select style={{ ...L, width: 120, marginTop: 2 }} value={advForm.method} onChange={(e) => setAdvForm((f) => ({ ...f, method: e.target.value }))}>
                 <option value="bank">Bank transfer</option><option value="cash">Cash</option><option value="other">Other</option>
               </select></label>
-            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Transfer ref (optional)<br />
+            <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Transfer ref{advForm.method === "bank" ? "" : " (optional)"}<br />
               <input style={{ ...L, width: 150, marginTop: 2 }} value={advForm.txRef} onChange={(e) => setAdvForm((f) => ({ ...f, txRef: e.target.value }))} /></label>
+            {canEdit && <AdvanceBankSelect value={advanceBank} onChange={setAdvanceBank} disabled={advBusy} />}
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Note (optional)<br />
               <input style={{ ...L, width: 170, marginTop: 2 }} maxLength={500} value={advForm.note} onChange={(e) => setAdvForm((f) => ({ ...f, note: e.target.value }))} /></label>
             {advKind === "return" && canEdit && (
