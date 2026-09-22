@@ -204,12 +204,15 @@ PEAK_ADVANCE_CONFIG={
 
 **Environment variables for the advance ledger**
 
-| Variable | Unset means | What it does |
-|---|---|---|
-| `PEAK_ADVANCE_CONFIG` | nothing is sent | The accounts, the bank sub-account and the journal books, as JSON. Needed by the web app (for the screens) and by the worker (which does the sending). |
-| `PEAK_ADVANCE_AUTO_SYNC` | `0` — off | `1` lets the worker post queued movements to PEAK. |
-| `ADVANCE_WRITES_FROZEN` | `0` — writes allowed | `1` refuses every ordinary advance write: recording an advance or a return, confirming, allocating, settling, reversing. |
-| `ADVANCE_EXISTING_PEAK_LINKS_ENABLED` | `0` — off | `1` lets an admin record a PEAK document that already exists, even while writes are frozen. Nothing else opens. |
+| Variable | Set it on | Unset means | What it does |
+|---|---|---|---|
+| `PEAK_ADVANCE_CONFIG` | FP + payment-worker | nothing is sent | The accounts, the bank sub-account and the journal books, as JSON. The web app reads it for the screens; the worker reads it to send. |
+| `PEAK_ADVANCE_AUTO_SYNC` | FP + payment-worker | `0` — off | `1` lets the worker post queued movements to PEAK. The web app only reports it. |
+| `ADVANCE_WRITES_FROZEN` | FP (+ payment-worker to stop the sender) | `0` — writes allowed | `1` refuses every ordinary advance write: recording an advance or a return, confirming, allocating, settling, reversing. |
+| `ADVANCE_EXISTING_PEAK_LINKS_ENABLED` | FP **and** payment-worker | `0` — off | `1` lets an admin record a PEAK document that already exists, even while writes are frozen. On the worker it stands the sender down. Nothing else opens. |
+
+Both services read these through `lib/advances/freeze.ts`, so "on" means the same thing
+on either side. A flag set on only one of them is the dangerous case: set both.
 
 The worker says which of these it has at startup — `advancePeakConfig: ready|incomplete|unreadable|not-set` and `advanceAutoSync: true|false`. Status words only; it never logs a value.
 

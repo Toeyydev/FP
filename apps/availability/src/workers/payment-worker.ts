@@ -22,6 +22,7 @@
 //     Railway sends SIGTERM on redeploy/scale-down.
 
 import { advancePeakConfig, syncAdvanceBatch } from "@/lib/advances/peak-sync";
+import { existingPeakLinksEnabled } from "@/lib/advances/freeze";
 import { prisma } from "@/lib/db";
 import { extractFromText } from "@/lib/payments/slip-evidence";
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
@@ -184,6 +185,9 @@ async function main(): Promise<void> {
     // to send", which is the failure this line exists to make visible.
     advancePeakConfig: advanceConfigState(),
     advanceAutoSync: process.env.PEAK_ADVANCE_AUTO_SYNC === "1",
+    // On means an admin is matching old movements to documents PEAK already holds,
+    // and this worker sends nothing until it is off again.
+    advanceLinksMode: existingPeakLinksEnabled(),
     node: process.version,
   });
 
