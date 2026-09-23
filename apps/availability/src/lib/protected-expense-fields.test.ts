@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expenseZ } from "@/lib/jobsheet-schema";
 import { stampPayerActor, type PayerRuleRow } from "@/lib/payer-rules";
-import { claimsServerOwned, financialIdentity, isProtected, mergeServerOwned, stripServerOwned, SERVER_OWNED_ROW_FIELDS, type ProtectedRow } from "@/lib/protected-expense-fields";
+import { claimsServerOwned, DUPLICATE_IDENTITY, financialIdentity, isProtected, mergeServerOwned, stripServerOwned, SERVER_OWNED_ROW_FIELDS, type ProtectedRow } from "@/lib/protected-expense-fields";
 
 // A save used to be able to destroy an admin's signature without saying anything.
 //
@@ -95,7 +95,7 @@ describe("a signed-for row cannot be changed by a save", () => {
   });
 
   it("repricing it is refused", () => {
-    expect(refused([waived()], [row({ price: 25 })])[0]).toContain("different expense");
+    expect(refused([waived()], [row({ price: 25 })])[0]).toContain("is not in this save");
   });
 
   it("renaming it is refused", () => {
@@ -106,13 +106,13 @@ describe("a signed-for row cannot be changed by a save", () => {
     expect(refused([waived()], [row({ paidBy: "company" })])).toHaveLength(1);
   });
 
-  it("reordering it is refused, rather than letting the waiver follow the position", () => {
+  it("reordering carries the waiver with the expense, not with the position", () => {
     const bus = row({ description: "Bus", price: 15 });
-    const r = refused([waived(), bus], [bus, row()]);
-    expect(r).toHaveLength(1);
-    // The waiver must NOT have landed on the bus.
-    const { rows } = mergeServerOwned([waived(), bus], [bus, row()]);
-    expect(rows[0].evidenceWaiver).toBeUndefined();
+    const { rows, conflicts } = mergeServerOwned([waived(), bus], [bus, row()]);
+    expect(conflicts).toEqual([]);
+    expect(rows[0].description).toBe("Bus");
+    expect(rows[0].evidenceWaiver).toBeUndefined();   // the waiver did not follow index 0
+    expect(rows[1].evidenceWaiver).toEqual(waiver);   // it followed the ferry
   });
 
   it("a row carrying only a payer stamp is protected too", () => {
@@ -121,9 +121,9 @@ describe("a signed-for row cannot be changed by a save", () => {
 
   it("the refusal says which row and what changed, so it can be acted on", () => {
     const r = refused([waived()], [row({ price: 25 })])[0];
-    expect(r).toContain("Row 1");
-    expect(r).toMatch(/4×11/);
-    expect(r).toMatch(/4×25/);
+    expect(r).toContain("row 1");
+    expect(r).toMatch(/4×11/);   // what the acceptance was granted for
+    expect(r).toMatch(/4×25/);   // what is in that position now
   });
 
   it("an unprotected row can still be renamed, repriced, reordered and deleted", () => {
@@ -174,5 +174,68 @@ describe("the sheet the field list is kept in step with", () => {
     expect(route).toContain("mergeServerOwned");
     // Stamped after the merge, never before — otherwise the saver overwrites the recorder.
     expect(route.indexOf("mergeServerOwned")).toBeLessThan(route.lastIndexOf("stampPayerActor"));
+  });
+});
+
+describe("two rows that say the same thing", () => {
+  // Matching on what a row says is what lets a waiver survive a reorder. It also means
+  // two rows saying the same thing are indistinguishable — and the waivers on them need
+  // not be the same waiver, from the same admin, for the same reason. There is no answer
+  // in the data, so the save is refused instead of one being picked.
+  const other = { by: "u_other_admin", at: "2099-05-09T08:00:00.000Z", reason: "a second fare on the return leg, also unreceipted" };
+  const refused = (stored: ProtectedRow[], incoming: ProtectedRow[]) => mergeServerOwned(stored, incoming, "FOLK-TEST-20990401-01").conflicts;
+
+  it("two protected rows reading alike, carrying DIFFERENT waivers, are refused", () => {
+    const r = refused([waived(), waived({ evidenceWaiver: other })], [row(), row()]);
+    expect(r).toHaveLength(1);                       // one refusal for the identity, not one per row
+    expect(r[0]).toContain(DUPLICATE_IDENTITY);
+    expect(r[0]).toContain("FOLK-TEST-20990401-01"); // which job sheet
+    expect(r[0]).toContain("Ferry");                 // which expense
+  });
+
+  it("the refusal does not repeat the reason anybody wrote on the waiver", () => {
+    const r = refused([waived(), waived({ evidenceWaiver: other })], [row(), row()]);
+    expect(r[0]).not.toContain("unreceipted");
+    expect(r[0]).not.toContain("no printed ticket");
+    expect(r[0]).not.toContain("u_admin");
+  });
+
+  it("a duplicate on the SAVED sheet alone is refused, even though this save has one row", () => {
+    const r = refused([waived(), row()], [row()]);
+    expect(r[0]).toContain(DUPLICATE_IDENTITY);
+    expect(r[0]).toContain("2 on the saved sheet");
+  });
+
+  it("a duplicate in THIS SAVE alone is refused — the waiver would have no single home", () => {
+    const r = refused([waived()], [row(), row()]);
+    expect(r[0]).toContain(DUPLICATE_IDENTITY);
+    expect(r[0]).toContain("2 in this save");
+    // …and nothing was attached to either of them.
+    const { rows } = mergeServerOwned([waived()], [row(), row()]);
+    expect(rows.every((x) => x.evidenceWaiver === undefined)).toBe(true);
+  });
+
+  it("duplicates nobody signed for are none of this rule's business", () => {
+    const { rows, conflicts } = mergeServerOwned([row(), row()], [row(), row(), row()]);
+    expect(conflicts).toEqual([]);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("a duplicate elsewhere on the sheet does not block an unrelated protected row", () => {
+    const bus = row({ description: "Bus", price: 15 });
+    const { conflicts, rows } = mergeServerOwned([waived(), bus, bus], [bus, bus, row()]);
+    expect(conflicts).toEqual([]);
+    expect(rows[2].evidenceWaiver).toEqual(waiver);
+  });
+
+  it("several distinct protected rows all reorder, each keeping its own record", () => {
+    const a = waived({ description: "Ferry", price: 11 });
+    const b = waived({ description: "Bus", price: 15, evidenceWaiver: other });
+    const c = stamped({ description: "Water", price: 10 });
+    const { rows, conflicts } = mergeServerOwned([a, b, c], [row({ description: "Water", price: 10 }), row({ description: "Bus", price: 15 }), row({ description: "Ferry", price: 11 })]);
+    expect(conflicts).toEqual([]);
+    expect(rows[0].paidByBy).toBe("u_admin");        // Water kept its stamp
+    expect(rows[1].evidenceWaiver).toEqual(other);   // Bus kept ITS waiver, not the ferry's
+    expect(rows[2].evidenceWaiver).toEqual(waiver);  // Ferry kept its own
   });
 });

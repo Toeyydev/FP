@@ -21,6 +21,7 @@ import { PUT } from "./route";
 
 const GUIDE = "G-900";
 const DATE = "2099-04-01";
+const REF = "FOLK-BKK-20990401-01";
 const WAIVER = { by: "u_admin", at: "2099-04-01T03:00:00.000Z", reason: "the ferry operator issues no printed ticket" };
 const STAMP = { paidByBy: "u_admin", paidByAt: "2099-04-01T03:00:00.000Z" };
 
@@ -39,7 +40,7 @@ const save = async (expenses: Row[], over: Record<string, unknown> = {}) => {
 };
 
 const seedSheet = async (expenses: Row[]) =>
-  prisma.jobSheet.create({ data: { guideId: GUIDE, date: DATE, slotIdx: 0, tourId: "T-900", status: "Confirmed", bookings: [], guideFee: { price: 1200, time: 1, whtPct: 3 }, expenses: expenses as object[] } });
+  prisma.jobSheet.create({ data: { ref: REF, guideId: GUIDE, date: DATE, slotIdx: 0, tourId: "T-900", status: "Confirmed", bookings: [], guideFee: { price: 1200, time: 1, whtPct: 3 }, expenses: expenses as object[] } });
 
 const rowsNow = async (): Promise<Row[]> =>
   ((await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!.expenses as unknown as Row[]);
@@ -129,17 +130,18 @@ describe("a signed-for row cannot be changed by an ordinary save", () => {
     await seedSheet([ferry({ evidenceWaiver: WAIVER })]);
     const { status, body } = await save([ferry({ price: 25 })]);
     expect(status).toBe(409);
-    expect(body.reasons[0]).toContain("different expense");
+    expect(body.reasons[0]).toContain("is not in this save");
     expect((await rowsNow())[0].price).toBe(11);
   });
 
-  it("reordering it is refused, rather than moving the waiver onto another expense", async () => {
+  it("reordering moves the waiver with the expense it was granted for", async () => {
     await seedSheet([ferry({ evidenceWaiver: WAIVER }), bus()]);
     const { status } = await save([bus(), ferry()]);
-    expect(status).toBe(409);
+    expect(status).toBe(200);
     const rows = await rowsNow();
-    expect(rows[0].description).toBe("Ferry");
-    expect(rows[1].evidenceWaiver).toBeUndefined();
+    expect(rows[0].description).toBe("Bus");
+    expect(rows[0].evidenceWaiver).toBeUndefined();
+    expect(rows[1].evidenceWaiver).toEqual(WAIVER);
   });
 
   it("a row carrying only a payer stamp is protected too", async () => {
@@ -199,5 +201,56 @@ describe("a sheet shaped like the one this was found on", () => {
     expect(all.filter((r) => r.paidByBy === "u_admin").length).toBe(8);
     // …and not one of the eight recorded decisions was re-attributed to whoever saved.
     expect(all.some((r) => r.paidByAt === STAMP.paidByAt && r.paidByBy !== "u_admin")).toBe(false);
+  });
+});
+
+describe("two rows that say the same thing", () => {
+  const OTHER = { by: "u_other_admin", at: "2099-05-09T08:00:00.000Z", reason: "a second fare on the return leg, also unreceipted" };
+
+  it("two protected rows reading alike, carrying different waivers, are refused", async () => {
+    await seedSheet([ferry({ evidenceWaiver: WAIVER }), ferry({ evidenceWaiver: OTHER })]);
+    const { status, body } = await save([ferry(), ferry()]);
+    expect(status).toBe(409);
+    expect(body.error).toBe("protected-row");
+    expect(body.reasons).toHaveLength(1);
+    expect(body.reasons[0]).toContain("duplicate protected expense identity");
+    expect(body.reasons[0]).toContain(REF);                   // which job sheet
+    expect(body.reasons[0]).not.toContain("unreceipted");     // not the reason anybody wrote
+    const rows = await rowsNow();
+    expect(rows[0].evidenceWaiver).toEqual(WAIVER);           // both untouched
+    expect(rows[1].evidenceWaiver).toEqual(OTHER);
+  });
+
+  it("a duplicate on the saved sheet alone is refused", async () => {
+    await seedSheet([ferry({ evidenceWaiver: WAIVER }), ferry()]);
+    const { status, body } = await save([ferry()]);
+    expect(status).toBe(409);
+    expect(body.reasons[0]).toContain("duplicate protected expense identity");
+  });
+
+  it("a duplicate in this save alone is refused, and nothing is attached to either row", async () => {
+    await seedSheet([ferry({ evidenceWaiver: WAIVER })]);
+    const { status, body } = await save([ferry(), ferry()]);
+    expect(status).toBe(409);
+    expect(body.reasons[0]).toContain("duplicate protected expense identity");
+    expect(await rowsNow()).toHaveLength(1);
+  });
+
+  it("duplicates nobody signed for still save", async () => {
+    await seedSheet([ferry(), ferry()]);
+    const { status } = await save([ferry(), ferry(), ferry()]);
+    expect(status).toBe(200);
+    expect(await rowsNow()).toHaveLength(3);
+  });
+
+  it("distinct protected rows all reorder, each keeping its own record", async () => {
+    const water = (over: Row = {}) => ferry({ description: "Water", price: 10, ...over });
+    await seedSheet([ferry({ evidenceWaiver: WAIVER }), bus({ evidenceWaiver: OTHER }), water(STAMP)]);
+    const { status } = await save([water(), bus(), ferry()]);
+    expect(status).toBe(200);
+    const rows = await rowsNow();
+    expect(rows[0].paidByBy).toBe("u_admin");
+    expect(rows[1].evidenceWaiver).toEqual(OTHER);
+    expect(rows[2].evidenceWaiver).toEqual(WAIVER);
   });
 });

@@ -463,7 +463,7 @@ export async function PUT(req: NextRequest) {
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
       return { kind: "stale" as const };
     }
-    const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[]);
+    const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet");
     if (merged.conflicts.length) return { kind: "conflicts" as const, conflicts: merged.conflicts };
     // Stamped AFTER the merge, so a carried stamp is seen and left alone. Stamping the
     // request body instead would have put whoever pressed Save over the person who

@@ -71,43 +71,67 @@ export function financialIdentity(row: ProtectedRow | null | undefined): string 
 
 export type MergeResult = { rows: ProtectedRow[]; conflicts: string[] };
 
+/** The phrase every duplicate-identity refusal carries, so the case is greppable. */
+export const DUPLICATE_IDENTITY = "duplicate protected expense identity";
+
 /**
  * Carry the server's fields from the stored rows onto the ones being saved — or refuse.
  *
  * A row nobody has signed for passes straight through: operators reorder, retitle,
- * reprice and delete those all day and nothing is lost by it. A row that carries a
- * waiver or a payer stamp is different. It is matched at its own index, and it has to
- * still be the same expense. If it is not — moved, repriced, repaid by someone else,
- * deleted — this refuses the save and names the row, rather than guessing which of the
- * rows now in the array the admin meant to sign for.
+ * reprice and delete those all day and nothing is lost by it.
  *
- * Changing such a row is a real decision with a reason behind it, so it goes through the
- * admin action that records the reason, not through a save that says nothing.
+ * A row carrying a waiver or a payer stamp is found by WHAT IT SAYS, not by where it
+ * sits. There is no id on an expense row, and an index alone would let a waiver follow a
+ * position onto a different expense the moment somebody reorders the list. Matching on
+ * the expense itself means a row that merely moved keeps what was granted for it, and a
+ * row that was repriced, repaid by someone else or deleted is refused instead.
+ *
+ * When two rows say the same thing, nothing here can tell them apart — and the waivers on
+ * them may not be the same waiver, granted by the same person, for the same reason. There
+ * is no answer to read out of the data, so this refuses rather than picks one. Resolving
+ * it by position would be a guess wearing the clothes of a rule.
+ *
+ * Changing a signed-for row is a real decision with a reason behind it, so it goes
+ * through the admin action that records the reason, not through a save that says nothing.
  */
 export function mergeServerOwned(
   stored: readonly ProtectedRow[] | null | undefined,
   incoming: readonly ProtectedRow[] | null | undefined,
+  where = "This job sheet",
 ): MergeResult {
   const prev = (stored ?? []) as ProtectedRow[];
   const next = stripServerOwned(incoming ?? []);
   const conflicts: string[] = [];
 
+  const count = (rows: readonly ProtectedRow[], id: string) => rows.reduce((n, r) => n + (financialIdentity(r) === id ? 1 : 0), 0);
+  const reported = new Set<string>();
+
   prev.forEach((old, i) => {
     if (!isProtected(old)) return;
+    const id = financialIdentity(old);
     const what = (old.description ?? "").trim() || `row ${i + 1}`;
-    const now = next[i];
     const carries = old.evidenceWaiver ? "an accepted receipt waiver" : "a recorded payer";
-    if (!now) {
-      conflicts.push(`Row ${i + 1} "${what}" carries ${carries} and this save removes it. Have an admin withdraw the record first, with a reason — a row that was signed for cannot leave silently.`);
+
+    // Ambiguous on either side: two rows that read the same cannot be told apart, and the
+    // records on them need not match. Reported once per identity, not once per row.
+    const inPrev = count(prev, id), inNext = count(next, id);
+    if (inPrev > 1 || inNext > 1) {
+      if (reported.has(id)) return;
+      reported.add(id);
+      const sides = [inPrev > 1 ? `${inPrev} on the saved sheet` : "", inNext > 1 ? `${inNext} in this save` : ""].filter(Boolean).join(" and ");
+      conflicts.push(`${where}: ${DUPLICATE_IDENTITY} — "${what}" (${describe(old)}) appears ${sides}, and one of them carries ${carries}. Nothing can tell those rows apart, so this save is refused rather than attaching the record to whichever came first. Make the rows say what each one is for, or have an admin withdraw the record and grant it again.`);
       return;
     }
-    if (financialIdentity(old) !== financialIdentity(now)) {
-      conflicts.push(`Row ${i + 1} "${what}" carries ${carries} for a different expense than the one being saved (${describe(old)} → ${describe(now)}). Withdraw the record first if this row really changed — the acceptance was given for what it used to say.`);
+
+    const at = next.findIndex((r) => financialIdentity(r) === id);
+    if (at < 0) {
+      const replacing = next[i] ? ` The row now in position ${i + 1} is ${describe(next[i])}.` : "";
+      conflicts.push(`${where} row ${i + 1} "${what}" carries ${carries}, and the expense it was granted for (${describe(old)}) is not in this save.${replacing} Withdraw the record first if this row really changed — the acceptance was given for what it used to say.`);
       return;
     }
     for (const f of SERVER_OWNED_ROW_FIELDS) {
       const v = (old as Record<string, unknown>)[f];
-      if (v !== undefined && v !== null) (now as Record<string, unknown>)[f] = v;
+      if (v !== undefined && v !== null) (next[at] as Record<string, unknown>)[f] = v;
     }
   });
 
