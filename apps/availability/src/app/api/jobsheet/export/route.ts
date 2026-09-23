@@ -124,11 +124,19 @@ export async function GET(req: NextRequest) {
   if (b.fundedByCompany > 0) { set(`E${r}`, "  บริษัทจ่ายตรง / paid direct by company"); set(`F${r}`, b.fundedByCompany, { numFmt: BAHT }); r++; }
   if (b.unresolved > 0) { set(`E${r}`, "  ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน / Paid By not set"); set(`F${r}`, b.unresolved, { numFmt: BAHT }); r++; }
   r++;
+  // Each kind of pay with the tax it actually bears, so no line reads as if the fee
+  // were taxed at more than the rate.
   set(`E${r}`, "ค่าจ้างไกด์ / Guide fee"); set(`F${r}`, b.feeGross, { numFmt: BAHT }); r++;
-  if (b.reviewReward > 0) { set(`E${r}`, "ค่าตอบแทนรีวิวไกด์ / Review incentive"); set(`F${r}`, b.reviewReward, { numFmt: BAHT }); r++; }
+  set(`E${r}`, "  หัก ภาษี — ค่าจ้าง / WHT on fee"); set(`F${r}`, -b.whtOnFee, { numFmt: BAHT }); r++;
+  set(`E${r}`, "  ค่าจ้างไกด์สุทธิ / Guide fee, net"); set(`F${r}`, b.feeNet, { numFmt: BAHT }); r++;
+  if (b.reviewReward > 0) {
+    set(`E${r}`, "ค่าตอบแทนรีวิวไกด์ / Review incentive"); set(`F${r}`, b.reviewReward, { numFmt: BAHT }); r++;
+    set(`E${r}`, "  หัก ภาษี — ค่าตอบแทนรีวิว / WHT on review"); set(`F${r}`, -b.whtOnReview, { numFmt: BAHT }); r++;
+    set(`E${r}`, "  ค่าตอบแทนรีวิวสุทธิ / Review incentive, net"); set(`F${r}`, b.reviewNet, { numFmt: BAHT }); r++;
+  }
   set(`E${r}`, "ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์ / Reimbursable to guide"); set(`F${r}`, b.reimbursableToGuide, { numFmt: BAHT }); r++;
   set(`E${r}`, "รวมก่อนหักภาษี / Gross payable", { bold: true }); set(`F${r}`, b.grossPayable, { numFmt: BAHT }); r++;
-  set(`E${r}`, "หัก ภาษี ณ ที่จ่าย / Withholding tax"); set(`F${r}`, -b.withholding, { numFmt: BAHT }); r++;
+  set(`E${r}`, "หัก ภาษี ณ ที่จ่าย รวม / Withholding tax, total"); set(`F${r}`, -b.withholding, { numFmt: BAHT }); r++;
   set(`E${r}`, "ยอดโอนสุทธิให้ไกด์ / Net transfer", { bold: true }); const tot = set(`F${r}`, b.netTransfer, { bold: true, numFmt: BAHT }); tot.fill = fill("FFBFE3BF");
   // Said next to the figure, not left to be inferred: this net is not payable yet.
   if (b.unresolved > 0) { r++; set(`E${r}`, "ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย / not payable until Paid By is set", { bold: true }); }

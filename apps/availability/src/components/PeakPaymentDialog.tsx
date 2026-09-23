@@ -40,8 +40,9 @@ type Line = { description: string; jobRef: string; kind: string; category: strin
 // A billed row with no expense category (lib/peak-payment-document MissingCategoryRow).
 type MissingCategory = { jobRef: string; date: string; slotIdx: number; rowNo: number; description: string; amount: number };
 type Figures = { gross: number; reimbursement: number; whtBase: number; wht: number; net: number };
+type WhtByKind = { fee: number; review: number };
 type Preview =
-  | { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean; figures?: Figures; evidenceGaps?: MissingCategory[] }
+  | { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean; figures?: Figures; whtByKind?: WhtByKind; evidenceGaps?: MissingCategory[] }
   | { ok: false; reasons: string[]; missingCategories?: MissingCategory[]; evidenceGaps?: MissingCategory[] };
 type Outcome =
   | ({ kind: "created"; recordError: string | null; existing: boolean } & CreatedDocument)
@@ -87,7 +88,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
         if (mine !== seq.current) return;
         if (!r.ok) setPreview({ ok: false, reasons: [d.error === "forbidden" ? "Operator only" : `Could not build the preview (${r.status})`] });
         else setPreview(d.ok
-          ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip, figures: d.figures, evidenceGaps: Array.isArray(d.evidenceGaps) ? d.evidenceGaps : [] }
+          ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip, figures: d.figures, whtByKind: d.whtByKind, evidenceGaps: Array.isArray(d.evidenceGaps) ? d.evidenceGaps : [] }
           : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [], evidenceGaps: Array.isArray(d.evidenceGaps) ? d.evidenceGaps : [] });
       })
       .catch(() => { if (mine === seq.current) setPreview({ ok: false, reasons: ["Could not reach the server"] }); });
@@ -215,7 +216,17 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
                           guide's own money coming back, so it is paid whole. */}
                       {preview.figures && preview.figures.reimbursement > 0 && <Row label="Reimbursed to the guide — not taxed" value={thb(preview.figures.reimbursement)} />}
                       {preview.figures && preview.figures.whtBase > 0 && <Row label="Withholding base" value={thb(preview.figures.whtBase)} />}
-                      {preview.wht > 0 && <Row label="Withholding tax" value={`−${thb(preview.wht)}`} />}
+                      {/* One tax against the fee alone would read as a rate the fee was
+                          never charged. Each kind of pay carries its own. */}
+                      {preview.whtByKind && preview.whtByKind.review > 0 ? (
+                        <>
+                          <Row label="Withholding tax on the guide fee" value={`−${thb(preview.whtByKind.fee)}`} />
+                          <Row label="Withholding tax on the review incentive" value={`−${thb(preview.whtByKind.review)}`} />
+                          <Row label="Withholding tax, total" value={`−${thb(preview.wht)}`} />
+                        </>
+                      ) : (
+                        preview.wht > 0 && <Row label="Withholding tax" value={`−${thb(preview.wht)}`} />
+                      )}
                       <Row label={alreadyPaid ? `Paid to the guide on ${dShort(alreadyPaid.paidDate)} — recorded against this document next` : "Amount to pay the guide — recorded later, against this document"} value={thb(preview.total)} strong />
                     </div>
                     <EvidenceGapNote guideId={guideId} rows={preview.evidenceGaps ?? []} />

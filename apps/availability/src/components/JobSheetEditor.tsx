@@ -915,11 +915,15 @@ export default function JobSheetEditor() {
                   <div className="gs-payout-row"><span>{payoutView.status === "final" ? "Expenses reimbursed to you" : "Expenses to be reimbursed to you"}{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">{payoutView.status === "final" ? "เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย" : "ค่าใช้จ่ายที่ต้องคืนให้มัคคุเทศก์"}</small></span><b>{thb(expShown)}</b></div>
                   {payoutView.notReimbursed.company > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid by Folkpaths directly — not reimbursed<br /><small className="gs-calc">บริษัทจ่ายเอง ไม่ใช่เงินคืนให้มัคคุเทศก์</small></span><span>{thb(payoutView.notReimbursed.company)}</span></div>}
                   {payoutView.notReimbursed.advance > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid from a Folkpaths advance — settled with the advance<br /><small className="gs-calc">จ่ายจากเงินทดรอง เคลียร์กับเงินทดรอง</small></span><span>{thb(payoutView.notReimbursed.advance)}</span></div>}
-                  <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
-                  {reviewReward > 0 && <div className="gs-payout-row"><span>Review reward<br /><small className="gs-calc">ค่าตอบแทนรีวิว</small></span><b>{thb(reviewReward)}</b></div>}
+                  {/* Each line net of the tax taken on IT. The fee line used to carry the
+                      review reward's tax as well, and the reward was shown before tax —
+                      so a guide comparing the two against their bank statement found
+                      neither figure. The sum is the same; the lines are now true. */}
+                  <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT<br /><small className="gs-calc">ค่าจ้างไกด์ หลังหักภาษี {thb(payer.whtOnFee)}</small></span><b>{thb(payer.feeNet)}</b></div>
+                  {reviewReward > 0 && <div className="gs-payout-row"><span>Review reward · after {sheet.guideFee.whtPct ?? 3}% WHT<br /><small className="gs-calc">ค่าตอบแทนรีวิว หลังหักภาษี {thb(payer.whtOnReview)}</small></span><b>{thb(payer.reviewNet)}</b></div>}
                   <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
-                {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — counted as reimbursed until the operator confirms. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย นับเป็นเงินคืนไว้ก่อนจนกว่า operator ยืนยัน</div>}
+                {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — it is not in the figure above, and the payment waits until the operator records who paid. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย ยังไม่รวมในยอดข้างบน และจะยังจ่ายไม่ได้จนกว่า operator จะระบุ</div>}
                 {hasAdvance && (() => {
                   // Money the guide already sent back that is not counted yet: a claim being
                   // checked, or confirmed money not yet put against an advance. A receipt is a
@@ -1037,7 +1041,8 @@ export default function JobSheetEditor() {
              computeTotals() directly and showed the pre-correction payout, so the
              top of the sheet said 2,815 while the bottom said 1,815 — and
              "Reimbursement" was total expenses, not what the guide is owed back. */}
-         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(money.netGuideFee)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
+         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.feeNet)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
+         {payer.reviewReward > 0 && <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.reviewNet)}</b><span>Review incentive · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>}
          <div className="kpi"><b style={{ fontSize: 19 }}>{thb(money.reimbursementDue)}</b><span>Reimbursement due</span></div>
          <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(money.netPayToGuide)}</b><span>Net pay to guide</span></div>
        </div>
@@ -1445,8 +1450,29 @@ export default function JobSheetEditor() {
                 <b>{sheet.guideFee.whtPct ?? 0}%</b>
               </td>
             </tr>
-            <tr><td><TH en="WHT Amount" th="ภาษีหัก ณ ที่จ่าย" /></td><td className="js-amt"><b>{thb(t.wht)}</b></td></tr>
-            <tr className="js-total"><td><TH en="Net to Pay" th="ยอดจ่ายสุทธิ" /></td><td className="js-amt"><b>{thb(t.netGuideFee)}</b></td></tr>
+            {/* The tax, against the pay it was actually taken on.
+                This table used to end in `netGuideFee` — the FEE less ALL the
+                withholding, the review incentive's included — under the heading "Net to
+                Pay". On a job with a ฿400 incentive that read as ฿1,500 fee, ฿57 tax,
+                ฿1,443 net: a 3.8% rate on the fee, and the ฿400 the guide had earned
+                nowhere on the screen. Each kind of pay now carries its own tax, and the
+                total is the sum of the lines rather than a figure that explains none of
+                them. */}
+            <tr><td><TH en="WHT on fee" th="ภาษีหัก ณ ที่จ่าย — ค่าจ้าง" /></td><td className="js-amt"><b>−{thb(payer.whtOnFee)}</b></td></tr>
+            <tr className={payer.reviewReward > 0 ? "js-total js-comp-sub" : "js-total"}>
+              <td><TH en="Guide fee, net" th="ค่าจ้างไกด์สุทธิ" /></td><td className="js-amt"><b>{thb(payer.feeNet)}</b></td>
+            </tr>
+            {payer.reviewReward > 0 && (
+              <>
+                <tr><td><TH en="Review incentive" th="ค่าตอบแทนรีวิวไกด์" /></td><td className="js-amt"><b>{thb(payer.reviewReward)}</b></td></tr>
+                <tr><td><TH en="WHT on review incentive" th="ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว" /></td><td className="js-amt"><b>−{thb(payer.whtOnReview)}</b></td></tr>
+                <tr className="js-total js-comp-sub"><td><TH en="Review incentive, net" th="ค่าตอบแทนรีวิวสุทธิ" /></td><td className="js-amt"><b>{thb(payer.reviewNet)}</b></td></tr>
+                <tr className="js-total js-comp-total">
+                  <td><TH en="Total compensation, net" th="รวมค่าตอบแทนสุทธิ" /><small style={{ display: "block", fontSize: 9.5, fontWeight: 400, color: "var(--ink-soft)" }}>{`gross ${thb(payer.feeGross + payer.reviewReward)} − WHT ${thb(payer.withholding)}`}</small></td>
+                  <td className="js-amt"><b>{thb(payer.feeNet + payer.reviewNet)}</b></td>
+                </tr>
+              </>
+            )}
           </tbody>
         </table>
 
@@ -1660,7 +1686,10 @@ export default function JobSheetEditor() {
           {money.companyDirectTotal > 0 && <div className="js-sum-sub"><span>of which paid direct by company<small>บริษัทชำระโดยตรง</small></span><b>{thb(money.companyDirectTotal)}</b></div>}
           {money.unspecifiedTotal > 0 && <div className="js-sum-sub warn"><span>of which Paid By not set<small>ยังไม่ระบุแหล่งเงิน</small></span><b>{thb(money.unspecifiedTotal)}</b></div>}
           <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(money.guideFeeGross)}</b></div>
-          <div className="js-sum-sub"><span>of which withheld as tax (WHT)<small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>{thb(money.wht)}</b></div>
+          <div className="js-sum-sub"><span>of which withheld as tax (WHT){payer.reviewReward > 0 ? " — on the fee" : ""}<small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>{thb(payer.whtOnFee)}</b></div>
+          {payer.reviewReward > 0 && (
+            <div className="js-sum-sub"><span>and on the review incentive<small>ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว</small></span><b>{thb(payer.whtOnReview)}</b></div>
+          )}
           <div className="grand"><span>Total Company Cost<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>รวมต้นทุน</small></span><b>{thb(money.totalCompanyCost)}</b></div>
           {/* Total Company Cost is what the job cost; it is NOT what to transfer.
               Reading one as the other is the mistake this line exists to prevent. */}
@@ -1686,8 +1715,14 @@ export default function JobSheetEditor() {
               all settled by the company looks like the tour expenses simply vanished
               between the Summary above and this box. */}
           <div className="np-parts">
-            <div><span>Guide fee after WHT</span><b>{thb(money.netGuideFee)}</b></div>
-            {money.additionalGuidePayment > 0 && <div><span>Additional payment</span><b>{thb(money.additionalGuidePayment)}</b></div>}
+            {/* Each kind of pay less ITS OWN tax. These three add to the transfer; the
+                fee line used to carry the review incentive's tax as well, which made it
+                look short and left the incentive unexplained. */}
+            <div><span>Guide fee after WHT</span><b>{thb(payer.feeNet)}</b></div>
+            {payer.reviewReward > 0 && <div><span>Review incentive after WHT</span><b>{thb(payer.reviewNet)}</b></div>}
+            {money.additionalGuidePayment - payer.reviewReward > 0.005 && (
+              <div><span>Additional payment</span><b>{thb(money.additionalGuidePayment - payer.reviewReward)}</b></div>
+            )}
             <div><span>Reimbursement for expenses</span><b>{thb(money.reimbursementDue)}</b></div>
             {money.settledByCompany > 0 && (
               <div className="np-note">
