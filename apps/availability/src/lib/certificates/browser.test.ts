@@ -1,0 +1,228 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { CHROME_BUILD_ID, expectedExecutablePath, findExecutable } from "@/lib/certificates/browser";
+import { cachedProbe, probeRenderer, resetProbe, rendererStatusForHealth } from "@/lib/certificates/probe";
+
+// Finding the browser, and refusing to claim more than has been shown.
+//
+// The failure this replaces: apt installed Ubuntu's `chromium-browser`, which is a snap
+// shim — the deb lays down a stub and expects snapd to fetch the real thing, which a
+// container has not got. The build said "System doesn't have a working snapd, skipping"
+// and carried on. An environment variable pointed at a path nothing had created, and the
+// health endpoint reported `ready` because that variable was not empty.
+//
+// So: a version pinned by the package rather than by hand, a path computed rather than
+// searched for, and a status that comes from having rendered something.
+//
+// All data invented — this repo is public.
+
+afterEach(() => { vi.unstubAllEnvs(); resetProbe(); });
+
+const fakeExecutable = (name = "chrome-headless-shell") => {
+  const dir = mkdtempSync(join(tmpdir(), "fp-browser-"));
+  const path = join(dir, name);
+  writeFileSync(path, "#!/bin/sh\nexit 1\n");
+  chmodSync(path, 0o755);
+  return { dir, path };
+};
+
+describe("the version is the one this puppeteer expects", () => {
+  it("is pinned to a real build, never latest or stable", () => {
+    expect(CHROME_BUILD_ID).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    expect(CHROME_BUILD_ID).not.toMatch(/latest|stable/i);
+  });
+
+  it("comes from puppeteer-core itself, so an upgrade cannot leave them disagreeing", () => {
+    const src = readFileSync(join(process.cwd(), "src/lib/certificates/browser.ts"), "utf8");
+    expect(src).toContain("PUPPETEER_REVISIONS");
+    // Not a number somebody typed.
+    expect(src).not.toMatch(/CHROME_BUILD_ID\s*=\s*["'`]\d/);
+  });
+
+  it("the install script asks for the same build, and only the headless shell", () => {
+    const script = readFileSync(join(process.cwd(), "scripts/install-browser.mjs"), "utf8");
+    expect(script).toContain("PUPPETEER_REVISIONS");
+    expect(script).toContain("CHROMEHEADLESSSHELL");
+    expect(script).not.toMatch(/Browser\.CHROME\b/);   // not the full browser
+    expect(script).toMatch(/latest|stable/i);          // …only to refuse one
+  });
+});
+
+describe("where it looks, and what it accepts", () => {
+  it("computes the path from the cache directory rather than searching the machine", () => {
+    const p = expectedExecutablePath("/cache", "linux", "x64");
+    expect(p).toBe(`/cache/chrome-headless-shell/linux-${CHROME_BUILD_ID}/chrome-headless-shell-linux64/chrome-headless-shell`);
+    expect(expectedExecutablePath("/cache", "darwin", "arm64")).toContain("mac_arm-");
+  });
+
+  it("a path that names nothing is not installed, whatever the variable says", () => {
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", "/not/here/chrome-headless-shell");
+    const f = findExecutable();
+    expect(f.ok).toBe(false);
+    expect(f.ok === false && f.code).toBe("not-installed");
+  });
+
+  it("a directory is not an executable", () => {
+    const { dir } = fakeExecutable();
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", dir);
+    expect(findExecutable().ok).toBe(false);
+  });
+
+  it("a file nobody may run is not an executable", () => {
+    const { path } = fakeExecutable();
+    chmodSync(path, 0o644);
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", path);
+    const f = findExecutable();
+    expect(f.ok).toBe(false);
+    expect(f.ok === false && f.code).toBe("not-executable");
+  });
+
+  it("an override is still checked, and says it was an override", () => {
+    const { path } = fakeExecutable();
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", path);
+    const f = findExecutable();
+    expect(f.ok).toBe(true);
+    expect(f.ok && f.source).toBe("override");
+  });
+});
+
+describe("what the probe concludes", () => {
+  it("no executable at all is unavailable, and nothing is launched", async () => {
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", "/not/here/chrome-headless-shell");
+    const p = await probeRenderer({ force: true });
+    expect(p.status).toBe("unavailable");
+    expect(p.code).toBe("not-installed");
+  });
+
+  it("an executable that cannot launch is misconfigured, not unavailable", async () => {
+    // A file that is there, is a file, and may be run — and exits immediately, the way a
+    // binary missing a shared library does.
+    const { path } = fakeExecutable();
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", path);
+    const p = await probeRenderer({ force: true, timeoutMs: 8_000 });
+    expect(p.status).toBe("misconfigured");
+    expect(["launch-failed", "timeout", "launch-enoent", "missing-libraries"]).toContain(p.code);
+  }, 20_000);
+
+  it("a probe that runs out of time says so, and is not called ready", async () => {
+    const { path } = fakeExecutable();
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", path);
+    const p = await probeRenderer({ force: true, timeoutMs: 1 });
+    expect(p.status).toBe("misconfigured");
+    expect(p.status).not.toBe("ready");
+  }, 20_000);
+
+  it("the answer is cached, so health does not start a browser every request", async () => {
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", "/not/here/chrome-headless-shell");
+    const first = await probeRenderer({ force: true });
+    const second = await probeRenderer();
+    expect(second.at).toBe(first.at);                 // the same measurement, not a new one
+    expect(cachedProbe()?.at).toBe(first.at);
+  });
+
+  it("health never claims ready before anything has rendered", () => {
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", "/not/here/chrome-headless-shell");
+    const h = rendererStatusForHealth();
+    expect(h.status).toBe("unavailable");
+    expect(h.status).not.toBe("ready");
+  });
+
+  it("health reports a measurement once there is one", async () => {
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", "/not/here/chrome-headless-shell");
+    await probeRenderer({ force: true });
+    expect(rendererStatusForHealth()).toMatchObject({ status: "unavailable", code: "not-installed" });
+  });
+
+  it("nothing it reports could be a path, an environment or a stack", async () => {
+    const { path } = fakeExecutable();
+    vi.stubEnv("CHROME_HEADLESS_SHELL_PATH", path);
+    const p = await probeRenderer({ force: true, timeoutMs: 5_000 });
+    const asText = JSON.stringify(p);
+    expect(asText).not.toContain(path);
+    expect(asText).not.toContain("/");
+    expect(p.code).toMatch(/^[a-z-]+$/);              // a word, nothing more
+  }, 20_000);
+});
+
+describe("the probe touches nothing", () => {
+  const src = () => readFileSync(join(process.cwd(), "src/lib/certificates/probe.ts"), "utf8");
+
+  it("has no database, Drive or certificate anywhere in it", () => {
+    const s = src();
+    for (const forbidden of ["@/lib/db", "prisma", "google-drive", "certificates/drive", "expenseCertificate", "jobSheet"]) {
+      expect(s, `the probe must not reach ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("renders a page with no real data on it", () => {
+    const s = src();
+    expect(s).toContain("renderer probe");
+    // No job, no guide, no money.
+    expect(s).not.toMatch(/FOLK-|G-0\d\d|฿/);
+  });
+});
+
+describe("repository invariant — production config installs the browser it will use", () => {
+  const nixpacks = () => readFileSync(join(process.cwd(), "nixpacks.toml"), "utf8");
+
+  it("does not ask apt for chromium-browser, which is a snap shim", () => {
+    const s = nixpacks();
+    expect(s).not.toMatch(/"chromium-browser"|'chromium-browser'/);
+    expect(s).not.toMatch(/nixPkgs\s*=.*chromium/);
+  });
+
+  it("names no browser path, in any config", () => {
+    for (const f of ["nixpacks.toml", "railway.json", "railway.worker.json"]) {
+      const p = join(process.cwd(), f);
+      if (!statSync(p, { throwIfNoEntry: false })) continue;
+      const s = readFileSync(p, "utf8");
+      expect(s, `${f} must not hard-code a browser path`).not.toMatch(/\/nix\/.*chromium|CHROMIUM_PATH|PUPPETEER_EXECUTABLE_PATH/);
+    }
+  });
+
+  it("does not stop Puppeteer's tooling downloading, since that is how the browser arrives", () => {
+    expect(nixpacks()).not.toContain("PUPPETEER_SKIP_DOWNLOAD");
+  });
+
+  it("downloads the browser in a build step of its own, not in a lifecycle hook", () => {
+    const s = nixpacks();
+    expect(s).toContain("browser:install");
+    expect(s).toMatch(/\[phases\.browser\]/);
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+    expect(pkg.scripts["browser:install"]).toBeTruthy();
+    expect(pkg.scripts.postinstall ?? "", "the browser must not arrive via postinstall").not.toContain("browser");
+  });
+
+  it("installs the libraries and Thai fonts that binary needs", () => {
+    const s = nixpacks();
+    for (const need of ["libnss3", "libgbm1", "fontconfig"]) expect(s, `missing ${need}`).toContain(need);
+    expect(s).toMatch(/fonts-thai-tlwg|fonts-noto/);
+  });
+
+  it("nothing in the app falls back to a browser that happens to be on the machine", () => {
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const entry of readdirSync(dir)) {
+        const p = join(dir, entry);
+        if (entry === "node_modules" || entry === ".next") continue;
+        if (statSync(p).isDirectory()) walk(p, out);
+        else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$|\.itest\.tsx?$/.test(p)) out.push(p);
+      }
+      return out;
+    };
+    // Comments are exempt: the module that explains why `chromium-browser` is the wrong
+    // thing to install has to be able to name it.
+    const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const bad = /google-chrome|\/Applications\/Google Chrome|chromium-browser|which\s+chrom/i;
+    const offenders = walk(join(process.cwd(), "src")).filter((f) => bad.test(strip(readFileSync(f, "utf8"))));
+    expect(offenders.map((f) => f.replace(process.cwd(), ""))).toEqual([]);
+  });
+
+  it("the browser cache sits inside the app, so the build output carries it", () => {
+    const src = readFileSync(join(process.cwd(), "src/lib/certificates/browser.ts"), "utf8");
+    expect(src).toContain(".browser-cache");
+    expect(dirname(expectedExecutablePath("/app/.browser-cache", "linux", "x64"))).toContain("/app/.browser-cache/");
+  });
+});

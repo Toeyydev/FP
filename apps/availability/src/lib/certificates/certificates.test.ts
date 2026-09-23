@@ -402,10 +402,13 @@ describe("what a person can type cannot become part of the page", () => {
 });
 
 describe("the renderer's own guarantees", () => {
-  it("it refuses rather than guessing when no Chromium is named", async () => {
+  it("it refuses rather than guessing when no browser is installed", () => {
     const src = code("src/lib/certificates/pdf.ts");
     expect(src).toContain("PDF_UNAVAILABLE");
-    expect(src).toContain("CHROMIUM_PATH");
+    expect(src).toContain("findExecutable");
+    // The path is computed by lib/certificates/browser; nothing here reads an env var
+    // and treats it as a browser.
+    expect(src).not.toContain("process.env");
   });
 
   it("it blocks the network and turns scripts off before the page loads", () => {
