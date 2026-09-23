@@ -169,6 +169,10 @@ export function buildGuidePaymentDocument(input: {
   const missingCategories: MissingCategoryRow[] = [];
   // Reimbursements with nothing behind them. Reported whether or not they refuse.
   const evidenceGaps: MissingCategoryRow[] = [];
+  // When they DO refuse, the row is held out of the document. The payer-split invariant
+  // below has to know that, or it would report the shortfall as company money leaking
+  // in — the wrong cause, on a document that is already being refused for the right one.
+  const heldForEvidence = new Map<string, number>();
   const outJobs: GuidePaymentDocument["jobs"] = [];
   let expected = 0;
 
@@ -264,7 +268,12 @@ export function buildGuidePaymentDocument(input: {
       const evidence = evidenceState(e as ExpenseWithEvidence);
       if (evidence.state === "BLOCKED") {
         evidenceGaps.push({ jobRef: where, date: j.date, slotIdx: j.slotIdx, rowNo, description: desc, amount: round2(amt) });
-        if (evidenceRequired()) { reasons.add(`${where} row ${rowNo}: ${evidence.reason}`); continue; }
+        if (evidenceRequired()) {
+          reasons.add(`${where} row ${rowNo}: ${evidence.reason}`);
+          const k = `${j.date}|${j.slotIdx}`;
+          heldForEvidence.set(k, round2((heldForEvidence.get(k) ?? 0) + amt));
+          continue;
+        }
       }
       const key = expenseCategory(e);
       if (!key) {
@@ -315,10 +324,13 @@ export function buildGuidePaymentDocument(input: {
     const split = tourCostBreakdown(j.expenses ?? [], j.guideFee);
     const mine = traces.filter((t) => t.date === j.date && t.slotIdx === j.slotIdx);
     const booked = round2(mine.reduce((sum, t) => sum + (Number(t.price) || 0), 0));
-    if (booked !== split.grossPayable) {
+    // What this job SHOULD book: everything owed to the guide, less anything held back
+    // for want of a receipt. Those rows are refused above on their own terms.
+    const expected = round2(split.grossPayable - (heldForEvidence.get(`${j.date}|${j.slotIdx}`) ?? 0));
+    if (booked !== expected) {
       const notOwed = round2(split.fundedByAdvance + split.fundedByCompany);
       reasons.add(
-        `${where} would book ${thb(booked)} but only ${thb(split.grossPayable)} is owed to the guide` +
+        `${where} would book ${thb(booked)} but only ${thb(expected)} is owed to the guide` +
         (notOwed > 0 ? ` — ${thb(notOwed)} of this job was already paid by the company (advance or direct) and must not be transferred again` : "") +
         ". Nothing was created.",
       );
