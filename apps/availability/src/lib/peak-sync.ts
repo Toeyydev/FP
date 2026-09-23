@@ -25,6 +25,7 @@ import {
   type GuideFee,
   type Booking,
 } from "@/lib/jobsheet";
+import { paymentPayer } from "@/lib/payer-rules";
 
 // ── Paid By ──────────────────────────────────────────────────────────────────
 // Who fronted the cash. Deliberately separate from the accounting CATEGORY: what
@@ -384,7 +385,9 @@ export function tourCostBreakdown(expenses: Expense[] | null | undefined, guideF
     if (!amt) continue;
     // A review reward is earned, not spent: it is paid with the job, never a cost of it.
     if (isReviewExpense(e)) { reviewReward += amt; continue; }
-    switch (canonicalPaidBy(e)) {
+    // paymentPayer, not canonicalPaidBy: a payer FolkOPS filled in after the tour is
+    // not one a transfer may rely on (lib/payer-rules).
+    switch (paymentPayer(e)) {
       case "GUIDE_ADVANCE": fundedByAdvance += amt; break;
       case "COMPANY_DIRECT": fundedByCompany += amt; break;
       case "GUIDE_PERSONAL": reimbursableToGuide += amt; break;

@@ -23,6 +23,7 @@ import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } 
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
+import { payerRuleReasons, type PayerRuleRow } from "@/lib/payer-rules";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -406,6 +407,15 @@ export async function PUT(req: NextRequest) {
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", detail: parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : undefined }, { status: 400 });
   const d = parsed.data;
+
+  // The payer rules, enforced here and not only in the dropdown. A rule that lives in a
+  // select element is a rule until somebody posts JSON — and these decide whether money
+  // leaves the company, so they are refused server-side (lib/payer-rules).
+  const payerProblems = payerRuleReasons(d.expenses as PayerRuleRow[], "This sheet");
+  if (payerProblems.length) {
+    return NextResponse.json({ error: "payer-rule", reasons: payerProblems, detail: payerProblems.join("\n") }, { status: 409 });
+  }
+
   const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
 
   const existing = await prisma.jobSheet.findUnique({ where: key });
