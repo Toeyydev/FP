@@ -956,11 +956,14 @@ describe("every gate that money passes through asks the same verifier", () => {
     expect((await prisma.expenseCertificate.findUnique({ where: { id: cert.id } }))!.status).toBe("STALE");
   });
 
-  it("Drive being unreadable fails closed rather than passing", async () => {
+  it("Drive being unreadable is a refusal, not an exception thrown at a route", async () => {
     await linkedCert();
     const broken = fakeDrive();
     broken.findActive = async () => { throw new Error("drive 503: unavailable"); };
-    await expect(at("payment", deps({ drive: broken }))).rejects.toThrow(/unavailable/);
+    const g = await at("payment", deps({ drive: broken }));
+    expect(g.ok).toBe(false);
+    expect(g.reasons.join(" ")).toContain("could not be checked in Drive");
+    expect(g.stale).toEqual([]);   // an outage does not brand the certificate
   });
 
   it("a document that has vanished fails closed, and is not marked stale", async () => {

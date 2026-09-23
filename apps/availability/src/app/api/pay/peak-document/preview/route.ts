@@ -1,6 +1,5 @@
 import { certificateStatuses } from "@/lib/certificates/evidence";
 import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
-import { evidenceRequired } from "@/lib/reimbursement-evidence";
 import type { Expense as SheetExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -66,7 +65,10 @@ export async function POST(req: NextRequest) {
       { actorId: session?.user?.id ?? null, actorRole: session?.user?.role ?? null },
       {}, "preview",
     );
-    if (!evidence.ok && evidenceRequired()) {
+    // Refused whatever the flag says. This is not the receipts rule — every reason here
+    // is about a document a row ALREADY names, which the system has just found is not
+    // what it was. Rows with no certificate are reported through evidenceGaps as before.
+    if (!evidence.ok) {
       return NextResponse.json({ ok: false, reasons: [...reasons, ...evidence.reasons], missingCategories, evidenceGaps: doc.evidenceGaps, staleCertificates: evidence.stale });
     }
     if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
