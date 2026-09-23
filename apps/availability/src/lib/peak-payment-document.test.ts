@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { Expense, GuideFee } from "@/lib/jobsheet";
 import type { PeakAccountMap } from "@/lib/peak-sync";
 import {
@@ -312,6 +312,28 @@ describe("what belongs in a payment document", () => {
     expect(doc.lines.reduce((s, l) => s + l.withHoldingTaxAmount, 0)).toBe(48);
     expect(doc.lines.reduce((s, l) => s + l.price, 0)).toBe(1924);
     expect(doc.total).toBe(1876);                                                           // what leaves the bank
+  });
+
+  it("reports a reimbursement with no receipt, and still pays it while the switch is off", () => {
+    const doc = build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" }] as Expense[] }] });
+    expect(doc.evidenceGaps).toMatchObject([{ description: "Lunch", amount: 90 }]);
+    expect(doc.lines.some((l) => l.description.includes("Lunch") || l.price === 90)).toBe(true);
+  });
+
+  it("refuses it once the deployment says receipts are being collected", () => {
+    vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "1");
+    const reasons = reasonsOf(() => build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" }] as Expense[] }] }));
+    expect(reasons.join(" ")).toContain("no receipt attached");
+    vi.unstubAllEnvs();
+  });
+
+  it("takes an admin's written waiver in place of the receipt", () => {
+    vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "1");
+    const waived = [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide",
+      evidenceWaiver: { by: "u_admin", at: "2099-01-20T03:00:00.000Z", reason: "the temple prints no ticket" } }] as Expense[];
+    const doc = build({ jobs: [{ ...JOBS[0], expenses: waived }] });
+    expect(doc.evidenceGaps).toEqual([]);
+    vi.unstubAllEnvs();
   });
 
   it("refuses rather than posting a document that would not match the transfer", () => {
