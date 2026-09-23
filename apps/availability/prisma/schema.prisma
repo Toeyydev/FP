@@ -850,9 +850,11 @@ model GuidePaymentDocument {
   @@index([status])
   @@index([bankRef])
   @@index([bankRefNormalized])
-  // One bank reference settles one document, per account the money left from. Written as
-  // a partial unique index in the migration (COALESCE over a null payment method), which
-  // Prisma cannot express — see 20260923190000_payment_transfer_evidence.
+  // One bank reference settles one document, per account the money left from — reference
+  // numbers are only unique within a bank. Rows with no reference yet hold NULL, which
+  // Postgres treats as distinct, so every document without one is left alone. A blank
+  // payment method never reaches here: it is refused before the claim (buildPaymentInput).
+  @@unique([paymentMethodId, bankRefNormalized])
 }
 
 // Guide leave (holiday / unavailable range). Operator-approved; an approved leave

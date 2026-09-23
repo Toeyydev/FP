@@ -981,8 +981,32 @@ describe("a person checked the slip, and the record says so", () => {
     await create([J1, J2, J3]);
     expect((await payDoc({ bankRef: " kb 2030 0513 1234 " })).status).toBe(200);
     // Stored as typed for a human to read, and normalised for the database to compare.
-    expect(db.docs[0]).toMatchObject({ bankRef: "kb 2030 0513 1234", bankRefNormalized: "KB203005131234" });
+    expect(db.docs[0]).toMatchObject({ bankRef: "KB 2030 0513 1234", bankRefNormalized: "KB203005131234" });
     expect(db.payments[0]).toMatchObject({ bankRef: "KB203005131234" });
+  });
+
+  it("will not record a transfer with no account for the money to have left from", async () => {
+    // The bank reference is only ever stored beside the account it came from, because a
+    // reference is only unique within a bank. So a payment without one never gets that far.
+    await create([J1, J2, J3]);
+    const res = await payDoc({ paymentMethodId: "" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Paid By");
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+    expect(db.docs[0].bankRefNormalized ?? null).toBeNull();
+  });
+
+  it("names the payment a bank reference already settles, before writing anything", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    // A second document, and the same transfer reference typed again.
+    db.docs.push({ ...db.docs[0], id: "doc-2", paymentRef: "FOLK-PAY-203005-02", status: "AWAITING_PAYMENT", bankRef: null, bankRefNormalized: null, jobs: [] });
+    const res = await payDoc({ paymentRef: "FOLK-PAY-203005-02", bankRef: "kb 2030 0513 1234" });
+    expect(res.status).toBe(409);
+    const why = (await res.json()).reasons.join(" ");
+    expect(why).toContain("FOLK-PAY-203005-01");
+    expect(why).toContain("EXP-TEST-0042");
+    expect(why).toContain("one transfer settles one document");
   });
 
   it("keeps the slip's real extension — a PDF is filed as a PDF", async () => {

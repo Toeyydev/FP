@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   bankNote, canTransfer, checkTransferEvidence, normalizeBankRef, paymentPayloadHash, slipExtension,
-  slipFileName, transferFigures, transferStage, VERIFICATION_SOURCE, VERIFIED_LABEL_TH,
+  displayBankRef, slipFileName, transferFigures, transferStage,
+  VERIFICATION_SOURCE, VERIFIED_LABEL_TH, VERIFY_CHECKBOX_TH,
 } from "./payment-transfer";
 import type { PaymentLineTrace } from "./peak-payment-document";
 
@@ -221,6 +222,13 @@ describe("one reference, one spelling", () => {
     expect(normalizeBankRef("   ")).toBe("");
     expect(normalizeBankRef(null)).toBe("");
   });
+
+  it("what is stored and shown keeps the bank's spacing, trimmed and upper-cased", () => {
+    expect(displayBankRef("  trbs 2609 23ab  ")).toBe("TRBS 2609 23AB");
+    expect(displayBankRef(null)).toBe("");
+    // …and still compares equal to the same reference typed without the spaces.
+    expect(normalizeBankRef(displayBankRef(" trbs 2609 23ab "))).toBe(normalizeBankRef("TRBS260923AB"));
+  });
 });
 
 describe("what the file really is", () => {
@@ -245,7 +253,12 @@ describe("what the file really is", () => {
 describe("how the check is described", () => {
   it("says a person read the slip, and never claims a machine did", () => {
     expect(VERIFICATION_SOURCE).toBe("USER_VERIFIED_SLIP");
+    expect(VERIFY_CHECKBOX_TH).toBe("ตรวจสอบยอดและเลขรายการจากสลิปแล้ว");
     expect(VERIFIED_LABEL_TH).toBe("ตรวจสอบโดยผู้ใช้งานจากสลิป");
-    expect(`${VERIFICATION_SOURCE} ${VERIFIED_LABEL_TH}`.toLowerCase()).not.toContain("ocr");
+    expect(`${VERIFICATION_SOURCE} ${VERIFY_CHECKBOX_TH} ${VERIFIED_LABEL_TH}`.toLowerCase()).not.toContain("ocr");
+  });
+
+  it("the tick and the record say different things — one is a promise, the other a fact", () => {
+    expect(VERIFY_CHECKBOX_TH).not.toBe(VERIFIED_LABEL_TH);
   });
 });

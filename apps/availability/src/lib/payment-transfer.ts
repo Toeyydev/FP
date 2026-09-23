@@ -19,7 +19,9 @@ export const MAX_BANK_REF = 120;
 
 /** What the slip's amount and reference were checked against. Never "OCR" — a person read them. */
 export const VERIFICATION_SOURCE = "USER_VERIFIED_SLIP";
-/** How that is said on screen and in Thai correspondence. */
+/** What the operator ticks before recording a transfer. */
+export const VERIFY_CHECKBOX_TH = "ตรวจสอบยอดและเลขรายการจากสลิปแล้ว";
+/** How a recorded transfer's verification is described afterwards. */
 export const VERIFIED_LABEL_TH = "ตรวจสอบโดยผู้ใช้งานจากสลิป";
 
 /**
@@ -32,6 +34,15 @@ export const VERIFIED_LABEL_TH = "ตรวจสอบโดยผู้ใช�
  */
 export function normalizeBankRef(raw: string | null | undefined): string {
   return (raw ?? "").replace(/[\s\u200B-\u200D\uFEFF]+/g, "").toUpperCase();
+}
+
+/**
+ * The reference as it is stored and shown: trimmed and upper-cased, but with the spacing
+ * the bank prints left in, so an operator comparing the screen to the slip sees the same
+ * thing. `normalizeBankRef` is the stricter form underneath it, used only for comparing.
+ */
+export function displayBankRef(raw: string | null | undefined): string {
+  return (raw ?? "").trim().replace(/\s+/g, " ").toUpperCase();
 }
 
 // ── What the operator pastes into the bank ───────────────────────────────────

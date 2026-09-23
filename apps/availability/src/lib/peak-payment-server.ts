@@ -14,8 +14,8 @@ import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, ty
 import { paidAtFor } from "@/lib/payments-v2/rules";
 import { recordPaymentInTx } from "@/lib/payments-v2/service";
 import {
-  bankNote, canTransfer, normalizeBankRef, paymentPayloadHash, slipExtension, slipFileName,
-  transferFigures, transferStage, STAGE_LABEL, VERIFICATION_SOURCE, type TransferStage,
+  bankNote, canTransfer, displayBankRef, normalizeBankRef, paymentPayloadHash, slipExtension,
+  slipFileName, transferFigures, transferStage, STAGE_LABEL, VERIFICATION_SOURCE, type TransferStage,
 } from "@/lib/payment-transfer";
 import { guidePayoutTotal } from "@/lib/peak-sync";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
@@ -527,6 +527,10 @@ export async function transferReadiness(paymentRef: string): Promise<{
   };
 }
 
+/** One sentence, whichever way the duplicate was caught. */
+const bankRefTaken = (bankRef: string, other: { paymentRef: string; peakDocumentNo: string | null } | null) =>
+  `Bank reference ${bankRef} is already recorded on ${other ? `${other.paymentRef}${other.peakDocumentNo ? ` (${other.peakDocumentNo})` : ""}` : "another payment"} — one transfer settles one document. Nothing was paid.`;
+
 export function prismaPayDeps(opts: {
   document: DocRow;
   /** Kept for callers; the slip is named from the document itself now, not the person. */
@@ -548,7 +552,9 @@ export function prismaPayDeps(opts: {
   actor: Actor;
 }): PayDocumentDeps {
   const { document: doc, peakContactId, file, refreshToken, actor } = opts;
-  const bankRef = (opts.bankRef ?? "").trim();
+  // Stored trimmed and upper-cased so the screen and the slip read alike; compared in the
+  // stricter form, where spacing does not make two transfers out of one.
+  const bankRef = displayBankRef(opts.bankRef);
   const bankRefNormalized = normalizeBankRef(bankRef) || null;
   const savedSlip = (opts.savedSlip ?? "").trim() || null;
   const ext = slipExtension(opts.fileName, file?.mime ?? null);
@@ -557,6 +563,18 @@ export function prismaPayDeps(opts: {
 
   return {
     async claimPayment(p) {
+      // Said plainly before the write: which payment this reference already settles. The
+      // unique index below still decides — two operators pressing at the same moment both
+      // pass this check — but nobody should have to read a constraint violation to learn
+      // something the database could have been asked.
+      if (bankRefNormalized) {
+        const holders = await prisma.guidePaymentDocument.findMany({
+          where: { bankRefNormalized, paymentMethodId: p.paymentMethodId },
+          select: { paymentRef: true, peakDocumentNo: true },
+        });
+        const held = holders.find((h) => h.paymentRef !== p.paymentRef);
+        if (held) throw new PaymentClaimRefused(bankRefTaken(bankRef, held));
+      }
       try {
         await prisma.$transaction(async (tx) => {
           const blockers = await paymentBlockers(tx, doc);
@@ -583,15 +601,14 @@ export function prismaPayDeps(opts: {
         }, { timeout: 20_000 });
       } catch (e) {
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+          // The race: the other request won between the check above and this write.
           const other = bankRefNormalized
             ? await prisma.guidePaymentDocument.findFirst({
                 where: { bankRefNormalized, paymentMethodId: p.paymentMethodId, NOT: { paymentRef: p.paymentRef } },
                 select: { paymentRef: true, peakDocumentNo: true },
               })
             : null;
-          throw new PaymentClaimRefused(
-            `Bank reference ${bankRef} is already recorded on ${other ? `${other.paymentRef}${other.peakDocumentNo ? ` (${other.peakDocumentNo})` : ""}` : "another payment"} — one transfer settles one document. Nothing was paid.`,
-          );
+          throw new PaymentClaimRefused(bankRefTaken(bankRef, other));
         }
         throw e;
       }
