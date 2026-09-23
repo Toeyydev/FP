@@ -315,6 +315,28 @@ describe("repository invariant — the image itself is smoke tested", () => {
     expect(s).toContain("PID 1 is");
   });
 
+  it("the image runs an init that reaps, and the test does not supply one for it", () => {
+    // The four leftovers were zombies with ppid 1, and PID 1 was npm, which does not
+    // wait on children it did not start. `docker run --init` would have hidden that,
+    // and production does not run with it.
+    // Comment lines are exempt — the script has to be able to say why `--init` is not
+    // used without tripping the rule that forbids it.
+    const commands = smoke().split("\n").filter((l) => !l.trim().startsWith("#"));
+    expect(commands.filter((l) => /docker run[^\n]*--init/.test(l))).toEqual([]);
+    expect(smoke()).toContain("does not reap orphaned children");
+    const nix = readFileSync(join(process.cwd(), "nixpacks.toml"), "utf8");
+    expect(nix).toContain('"tini"');
+    expect(nix).toMatch(/\[start\][\s\S]*tini --/);
+    const railway = JSON.parse(readFileSync(join(process.cwd(), "railway.json"), "utf8"));
+    expect(railway.deploy.startCommand, "Railway overrides the image CMD, so it needs tini too").toContain("tini --");
+  });
+
+  it("cleanup is checked on the paths that are not the happy one", () => {
+    const s = smoke();
+    expect(s).toMatch(/throw, timeout and three consecutive renders/);
+    expect(s).toContain("after throw, timeout and three renders");
+  });
+
   it("the size is reported as a delta against what production runs", () => {
     const delta = readFileSync(join(process.cwd(), "scripts/image-size-delta.sh"), "utf8");
     expect(delta).toMatch(/git .*archive/);          // both images from clean exports

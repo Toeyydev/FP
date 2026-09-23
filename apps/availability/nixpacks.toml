@@ -26,6 +26,11 @@ aptPkgs = [
   "libxrandr2", "libgbm1", "libasound2t64", "libpango-1.0-0", "libcairo2",
   # Thai text, and the machinery that finds it
   "fontconfig", "fonts-noto-core", "fonts-thai-tlwg",
+  # An init that reaps. Chrome forks a zygote and helpers; when the browser closes they
+  # are re-parented to PID 1, and PID 1 here is npm, which does not wait on children it
+  # did not start. They stayed as zombies — four of them, measured at 0s, 5s and 15s,
+  # never collected. tini's whole job is to collect them.
+  "tini",
 ]
 
 [phases.browser]
@@ -36,3 +41,8 @@ cmds = ["npm run browser:install"]
 
 [phases.build]
 dependsOn = ["browser"]
+
+[start]
+# tini is PID 1, npm is its child. Without this the container's PID 1 is npm, and an
+# orphaned Chrome helper has nobody to reap it.
+cmd = "/usr/bin/tini -- npm run start"

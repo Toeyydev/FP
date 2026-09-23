@@ -109,7 +109,14 @@ say "what is running before anything has rendered"
 snapshot() { docker exec "$NAME" ps -eo pid,ppid,stat,etime,comm 2>/dev/null || true; }
 BASELINE="$(snapshot)"
 printf '%s\n' "$BASELINE" | sed 's/^/    /'
-echo "  PID 1 is: $(printf '%s\n' "$BASELINE" | awk '$1==1 {print $5}')"
+PID1="$(printf '%s\n' "$BASELINE" | awk '$1==1 {print $5}')"
+echo "  PID 1 is: $PID1"
+# An init that reaps is not a detail of the test environment — it is what the image
+# ships, and `docker run --init` would hide its absence.
+case "$PID1" in
+  *tini*|*init*|*dumb-init*) : ;;
+  *) fail "PID 1 in the image is '$PID1', which does not reap orphaned children" ;;
+esac
 BASE_PIDS="$(printf '%s\n' "$BASELINE" | awk 'NR>1 {print $1}' | sort -n)"
 
 say "asking the running app to render"
@@ -230,6 +237,9 @@ report_new() {
   now="$(snapshot)"
   echo "  --- $when ---"
   new="$(printf '%s\n' "$now" | awk 'NR>1' | while read -r pid ppid stat etime comm; do
+    # The `ps` this very snapshot is running is not a leftover: docker exec gives it
+    # ppid 0, and it exits the moment the snapshot does.
+    [ "$comm" = "ps" ] && [ "$ppid" = "0" ] && continue
     printf '%s\n' "$BASE_PIDS" | grep -qx "$pid" || printf '    pid=%-6s ppid=%-6s stat=%-5s elapsed=%-8s %s\n' "$pid" "$ppid" "$stat" "$etime" "$comm"
   done)"
   if [ -z "$new" ]; then echo "    (nothing new since the baseline)"; else printf '%s\n' "$new"; fi
@@ -242,6 +252,46 @@ report_new() {
 report_new "immediately after the render"
 sleep 5;  report_new "after 5s"
 sleep 10; report_new "after 15s"
+
+say "and after a render that throws, one that times out, and three in a row"
+# Cleanup that only works on the happy path is cleanup that will not be there when it
+# matters. Each of these is asked of the running container, and the count must come back
+# to the baseline every time rather than creeping up.
+docker exec "$NAME" node -e '
+(async () => {
+  const p = (await import("puppeteer-core")).default;
+  const { PUPPETEER_REVISIONS } = await import("puppeteer-core/internal/revisions.js");
+  const exe = `/app/.browser-cache/chrome-headless-shell/linux-${PUPPETEER_REVISIONS["chrome-headless-shell"]}/chrome-headless-shell-linux64/chrome-headless-shell`;
+  const open = () => p.launch({ executablePath: exe, args: ["--no-sandbox","--disable-dev-shm-usage"] });
+
+  // A render that throws part way through.
+  let b = await open();
+  try { const pg = await b.newPage(); await pg.setContent("<p>ล้มกลางคัน</p>"); throw new Error("deliberate"); }
+  catch { /* the point is what happens in finally */ }
+  finally { await b.close(); }
+
+  // A render abandoned by a timeout — the browser is still closed.
+  b = await open();
+  try {
+    const pg = await b.newPage();
+    await Promise.race([
+      pg.setContent("<p>หมดเวลา</p>").then(() => pg.pdf({ format: "A4" })),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1)),
+    ]);
+  } catch { /* expected */ }
+  finally { await b.close(); }
+
+  // Three in a row.
+  for (let i = 0; i < 3; i++) {
+    const n = await open();
+    try { const pg = await n.newPage(); await pg.setContent(`<p>รอบที่ ${i + 1}</p>`); await pg.pdf({ format: "A4" }); }
+    finally { await n.close(); }
+  }
+  console.log("  throw, timeout and three consecutive renders done");
+})().catch((e) => { console.error("  " + String(e)); process.exit(1); });
+' || fail "the failure-path renders did not complete"
+
+sleep 3; report_new "after throw, timeout and three renders"
 
 NEW_TOTAL=$(( LIVE + ZOMBIE ))
 echo "  PID 1 is still: $(docker exec "$NAME" ps -eo pid,comm 2>/dev/null | awk '$1==1 {print $2}')"

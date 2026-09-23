@@ -165,20 +165,21 @@ jobs:
           sudo chmod +x /usr/local/bin/nixpacks
           echo "nixpacks: $(nixpacks --version)"
 
-      - name: Runtime image smoke test (builds the image, runs it, renders inside it)
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
-        run: bash scripts/image-smoke.sh
-
       # Reported as a difference, not a total: a Next.js image with node_modules is most
       # of the number with no browser in it at all. `continue-on-error` because this is a
-      # measurement, not a gate — it builds the production image twice and should not be
-      # what stops a pull request.
+      # measurement, not a gate. It runs BEFORE the smoke test so the numbers exist even
+      # on a run where the smoke test fails — a failing gate should not take the
+      # measurement down with it.
       - name: Image size, this branch against what production runs
         continue-on-error: true
         env:
           BASELINE_REF: badaf97
         run: bash scripts/image-size-delta.sh
+
+      - name: Runtime image smoke test (builds the image, runs it, renders inside it)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
+        run: bash scripts/image-smoke.sh
 
       - name: Build app
         run: npx next build
