@@ -57,6 +57,17 @@ export async function POST(req: NextRequest) {
       // withholding is taken on, the tax, the guide's own money coming back, and what
       // the bank will actually send.
       figures: transferFigures({ lines: doc.traces, total: doc.total }),
+      // The tax split by the pay it was taken on, summed across the jobs — the screen
+      // must never show one tax against the fee alone.
+      whtByKind: doc.traces.reduce(
+        (acc, t) => {
+          const w = Number(t.wht) || 0;
+          if (t.kind === "REVIEW_REWARD") acc.review = Math.round((acc.review + w) * 100) / 100;
+          else acc.fee = Math.round((acc.fee + w) * 100) / 100;
+          return acc;
+        },
+        { fee: 0, review: 0 },
+      ),
       // …and the rows behind which there is no receipt, which are inside those figures
       // only while REIMBURSEMENT_EVIDENCE_REQUIRED is off.
       evidenceGaps: doc.evidenceGaps,

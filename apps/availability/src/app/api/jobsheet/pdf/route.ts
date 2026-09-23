@@ -5,7 +5,7 @@ import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
-import { jobSheetTotals } from "@/lib/peak-sync";
+import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
@@ -93,6 +93,8 @@ export async function GET(req: NextRequest) {
   const t = computeTotals(expenses, guideFee);
   const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
   const money = jobSheetTotals(expenses, guideFee, sheet.ref, bookings);
+  // The tax split by the pay it was taken on — the fee's tax is not the incentive's.
+  const payer = tourCostBreakdown(expenses, guideFee);
   // No saved sheet (e.g. exported from Incoming bookings before assignment) →
   // make the guest list, expenses and guide details fillable on the page so the
   // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
@@ -319,7 +321,8 @@ export async function GET(req: NextRequest) {
         ${money.reimbursementDue > 0 ? `<div class="sub"><span>of which reimbursable to guide <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
         ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
         <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
-        <div class="sub"><span>of which withheld as tax (WHT) <small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>${thb(t.wht)}</b></div>
+        <div class="sub"><span>of which withheld as tax (WHT)${payer.reviewReward > 0 ? " — on the fee" : ""} <small>ภาษีหัก ณ ที่จ่าย — ค่าจ้าง</small></span><b>${thb(payer.whtOnFee)}</b></div>
+        ${payer.reviewReward > 0 ? `<div class="sub"><span>and on the review incentive <small>ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว</small></span><b>${thb(payer.whtOnReview)}</b></div>` : ""}
         <!-- id kept on the figure the fillable prep script actually recomputes
              (expenses + review + gross fee). It previously sat on "Net Pay to
              Guide", so typing into the prep sheet overwrote the payment figure
@@ -333,8 +336,9 @@ export async function GET(req: NextRequest) {
           <span>Transfer to guide <small>ยอดที่ต้องโอนให้มัคคุเทศก์</small></span>
           <b>${thb(money.netPayToGuide)}</b>
         </div>
-        <div><span>Guide fee after WHT <small>ค่าจ้างหลังหักภาษี</small></span><b>${thb(t.netGuideFee)}</b></div>
-        ${money.additionalGuidePayment > 0 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment)}</b></div>` : ""}
+        <div><span>Guide fee after WHT <small>ค่าจ้างหลังหักภาษี</small></span><b>${thb(payer.feeNet)}</b></div>
+        ${payer.reviewReward > 0 ? `<div><span>Review incentive after WHT <small>ค่าตอบแทนรีวิวหลังหักภาษี</small></span><b>${thb(payer.reviewNet)}</b></div>` : ""}
+        ${money.additionalGuidePayment - payer.reviewReward > 0.005 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment - payer.reviewReward)}</b></div>` : ""}
         ${money.reimbursementDue > 0 ? `<div><span>Reimbursement for expenses <small>คืนเงินสำรองจ่าย</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
         ${money.settledByCompany > 0 ? `<div class="note">${thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it.<br><small>ค่าใช้จ่ายส่วนนี้บริษัทชำระให้ผู้ขายโดยตรงแล้ว</small></div>` : ""}
       </div>

@@ -1445,3 +1445,8 @@ body:has(.op-layout) .wrap{max-width:1440px}
   font-size: 10.5px; margin-top: 2px; white-space: normal; line-height: 1.3;
   color: var(--primary, #2f6f4e);
 }
+
+/* Compensation reads as lines that add up: each kind of pay with its own tax, then
+   the total. The sub-totals are quiet; the total is the one that carries. */
+.js-comp-sub td { font-weight: 600; }
+.js-comp-total td { border-top: 1.5px solid var(--ink, #1a1a1a); font-weight: 800; }

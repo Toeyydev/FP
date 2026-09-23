@@ -359,6 +359,18 @@ export type TourCostBreakdown = {
   grossPayable: number;
   withholding: number;
   netTransfer: number;
+  /**
+   * The withholding, split by what it was taken ON.
+   *
+   * Both kinds of pay are withheld at the same rate, but they are different income to
+   * the guide and a screen that shows one tax against one of them is telling the guide
+   * their FEE was taxed at more than the rate. `feeNet` and `reviewNet` are each gross
+   * less its own tax, so every line reads gross − tax = net and the three add up.
+   */
+  whtOnFee: number;
+  whtOnReview: number;
+  feeNet: number;
+  reviewNet: number;
 };
 
 const r2c = (n: number) => Math.round(n * 100) / 100;
@@ -390,6 +402,10 @@ export function tourCostBreakdown(expenses: Expense[] | null | undefined, guideF
   const tourCost = r2c(advance + company + reimbursable + unknown);
 
   const grossPayable = r2c(r2c(t.gross) + r2c(reviewReward) + reimbursable);
+  const whtOnFee = r2c(t.whtOnFee);
+  // The remainder rather than its own multiplication, so the two always add back to the
+  // whole and a satang cannot go missing between the lines and the total.
+  const whtOnReview = r2c(r2c(t.wht) - whtOnFee);
   const split = {
     tourCost,
     fundedByAdvance: advance,
@@ -401,11 +417,23 @@ export function tourCostBreakdown(expenses: Expense[] | null | undefined, guideF
     grossPayable,
     withholding: r2c(t.wht),
     netTransfer: r2c(grossPayable - t.wht),
+    whtOnFee,
+    whtOnReview,
+    feeNet: r2c(r2c(t.gross) - whtOnFee),
+    reviewNet: r2c(r2c(reviewReward) - whtOnReview),
   };
 
   // The identity the screens are built on. If it ever fails, a row has been counted
   // twice or not at all, and every figure downstream is wrong — better to say so here
   // than to render a total that does not match the lines under it.
+  const taxParts = r2c(split.whtOnFee + split.whtOnReview);
+  if (taxParts !== split.withholding) {
+    throw new Error(`withholding ${split.withholding} does not equal its parts ${taxParts} (fee ${split.whtOnFee}, review ${split.whtOnReview})`);
+  }
+  const payParts = r2c(split.feeNet + split.reviewNet + split.reimbursableToGuide);
+  if (payParts !== split.netTransfer) {
+    throw new Error(`net transfer ${split.netTransfer} does not equal its parts ${payParts} (fee net ${split.feeNet}, review net ${split.reviewNet}, reimbursed ${split.reimbursableToGuide})`);
+  }
   const parts = r2c(split.fundedByAdvance + split.fundedByCompany + split.reimbursableToGuide + split.unresolved);
   if (parts !== split.tourCost) {
     throw new Error(`tour cost ${split.tourCost} does not equal its parts ${parts} (advance ${split.fundedByAdvance}, company ${split.fundedByCompany}, reimbursable ${split.reimbursableToGuide}, unresolved ${split.unresolved})`);
