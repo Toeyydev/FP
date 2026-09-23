@@ -81,6 +81,21 @@ jobs:
       - name: Prepare the test database
         run: npx prisma migrate deploy
 
+      # The schema file and the migrations must describe the same database.
+      #
+      # Everything a migration writes by hand — a foreign key, an index, a column
+      # default — is invisible to `schema.prisma` unless someone also declares it there,
+      # and `prisma migrate dev` generates its next migration from `schema.prisma`. So an
+      # undeclared object is not a tidiness problem: it is a DROP waiting in the next
+      # migration somebody generates.
+      #
+      # The first command prints the SQL that would be needed (nothing, when they agree);
+      # the second fails the build if there is any.
+      - name: Schema and migrations agree
+        run: |
+          npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script
+          npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
+
       - name: Integration tests (real database)
         run: npm run test:integration
 

@@ -782,6 +782,8 @@ model GuidePaymentAdjustment {
   createdAt       DateTime      @default(now())
 
   @@index([paymentId])
+  // GuidePaymentAdjustment_advanceId_idx, created in 20260917100000_guide_advance_ledger.
+  @@index([advanceId])
 }
 
 model GuidePaymentDocument {
@@ -1039,10 +1041,22 @@ model GuideAdvanceEntry {
   receipt           GuideAdvanceReceipt? @relation(fields: [receiptId], references: [id], onDelete: Restrict)
   receiptId         String?
   paymentId         String? // GuidePayment.id for PAYMENT_DEDUCTION
-  reverses          GuideAdvanceEntry?   @relation("EntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  // Both directions are real foreign keys in the database (20260917100000_guide_advance_ledger:
+  // GuideAdvanceEntry_reversesEntryId_fkey and GuideAdvanceEntry_reversedByEntryId_fkey, each
+  // REFERENCES "GuideAdvanceEntry"("id") ON DELETE RESTRICT ON UPDATE CASCADE). Prisma
+  // declared only the first, so the second was invisible here and would have been offered
+  // for deletion by the next `prisma migrate dev`.
+  //
+  // A REVERSAL points back at what it reverses; the entry it reverses points forward at it.
+  // The pair is what `GuideAdvanceEntry_one_live_per_source` reads to free a source's slot.
+  reverses          GuideAdvanceEntry?   @relation("EntryReverses", fields: [reversesEntryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   reversesEntryId   String?              @unique
-  reversedBy        GuideAdvanceEntry?   @relation("EntryReversal")
+  /** The entry that reverses this one — the other side of `reverses`. No column. */
+  reversedByEntry   GuideAdvanceEntry?   @relation("EntryReverses")
+  reversedBy        GuideAdvanceEntry?   @relation("EntryReversedBy", fields: [reversedByEntryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   reversedByEntryId String?              @unique // set on the target when it is reversed
+  /** The entry whose `reversedByEntryId` names this one. No column. */
+  reversalTargetOf  GuideAdvanceEntry?   @relation("EntryReversedBy")
   reason            String?
   requestKey        String // groups the entries written by one operator action
   idempotencyKey    String               @unique // requestKey + advanceId
@@ -1286,7 +1300,9 @@ model AdvancePeakSync {
   attempts Int @default(0)
   nextAttemptAt DateTime @default(now())
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // DEFAULT CURRENT_TIMESTAMP in 20260923090000_advance_peak_outbox: a row inserted by
+  // the enqueue trigger names no updatedAt, so the database has to supply one.
+  updatedAt DateTime @default(now()) @updatedAt
   @@unique([kind, sourceId])
   @@index([status, nextAttemptAt])
 }
