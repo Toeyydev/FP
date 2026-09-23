@@ -217,6 +217,8 @@ PEAK records the payment ──► jobs marked PAID (payments-v2, FOLK-PMT-…)
 | Blank bank reference | refused |
 | No slip, or a slip for another amount | refused, and both figures are named |
 | "Create PEAK document" pressed twice | the same document is returned; never a second EXP |
+| The same bank reference on two documents | refused, naming the payment that already holds it — the account comes from PEAK, not from the page |
+| Moving a claimed or paid payment to another account | refused by the database |
 | An accountant made the document by hand | record it with **Record existing PEAK document**, never by creating another |
 
 Voiding and recreating keeps the old document's row and its audit trail. Nothing is

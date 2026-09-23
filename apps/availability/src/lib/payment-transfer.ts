@@ -37,6 +37,26 @@ export function normalizeBankRef(raw: string | null | undefined): string {
 }
 
 /**
+ * Which BANK ACCOUNT a transfer left from, as one comparable string.
+ *
+ * `paymentMethodId` is PEAK's id for a payment *channel*, not for an account: PEAK
+ * returns `bankName` and `accountNumber` on it, and nothing in PEAK's model stops two
+ * channels — a transfer and a QR, say — pointing at the same account. A reference is
+ * unique within a BANK, so keying uniqueness on the channel would let the same transfer
+ * be recorded twice by choosing the other channel.
+ *
+ * So the account number decides when PEAK gives one, reduced to its digits because the
+ * same account is written with and without hyphens. When PEAK gives none, the channel id
+ * is the best identity available and is marked as such, so the two can never collide.
+ */
+export function bankAccountKey(method: { id: string; accountNumber?: string | null } | null | undefined): string | null {
+  const digits = (method?.accountNumber ?? "").replace(/\D+/g, "");
+  if (digits) return `ACC:${digits}`;
+  const id = (method?.id ?? "").trim();
+  return id ? `PM:${id}` : null;
+}
+
+/**
  * The reference as it is stored and shown: trimmed and upper-cased, but with the spacing
  * the bank prints left in, so an operator comparing the screen to the slip sees the same
  * thing. `normalizeBankRef` is the stricter form underneath it, used only for comparing.
