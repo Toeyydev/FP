@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import { type Expense } from "@/lib/jobsheet";
 import { guidePayoutView, guidePayoutTotal } from "@/lib/peak-sync";
 
-const water: Expense = { description: "Water", price: 10, pax: 4 };        // 40
-const ferry: Expense = { description: "Ferry", price: 11, pax: 4 };        // 44
+// A guide's own reported rows say the guide paid — that is what reporting them means.
+// A row with no payer at all is its own case, below (`lotusBlank`).
+const water: Expense = { description: "Water", price: 10, pax: 4, paidBy: "guide" };  // 40
+const ferry: Expense = { description: "Ferry", price: 11, pax: 4, paidBy: "guide" };  // 44
 const review: Expense = { description: "Review reward", price: 50, pax: 1 }; // 50
 const NET_FEE = 970;
 const FEE = { price: 1000, time: 1, whtPct: 3 }; // → 970 net on the fee alone
@@ -111,16 +113,19 @@ describe("guidePayoutView — follows the payer rule of the actual transfer", ()
     // what makes it agree with the transfer.
     const netFee = 968.5;
     const v = guidePayoutView({ operatorExpenses: official, reportedExpenses: official, netGuideFee: netFee, useReported: true, approved: true });
-    expect(v.total).toBe(guidePayoutTotal(official, FEE).payout); // 968.50 + 40 + 30 + 50
-    expect(v.total).toBe(1088.5);
+    // 968.50 fee after WHT + 40 the guide fronted + 50 review. The ฿30 lotus row has
+    // no payer recorded, so it is in neither figure.
+    expect(v.total).toBe(guidePayoutTotal(official, FEE).payout);
+    expect(v.total).toBe(1058.5);
     expect(v.notReimbursed).toEqual({ company: 44, advance: 60 });
     expect(v).toMatchObject({ basis: "official", status: "confirmed" });
   });
 
-  it("a row with no payer counts as Payments counts it, and is reported as unconfirmed", () => {
+  it("a row with no payer is shown, and counted in neither figure", () => {
     const v = guidePayoutView({ operatorExpenses: [lotusBlank], reportedExpenses: [lotusBlank], netGuideFee: NET_FEE, useReported: true });
-    expect(v.tourExpenses).toBe(30);
     expect(v.unspecified).toBe(30);
+    expect(v.tourExpenses).toBe(0);            // nothing here is owed back yet
+    expect(v.total).toBe(NET_FEE);             // the fee alone
     expect(v.total).toBe(guidePayoutTotal([lotusBlank], FEE).payout);
   });
 

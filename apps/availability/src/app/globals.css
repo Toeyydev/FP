@@ -1427,3 +1427,21 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .acct-table .bk-filter-row th{padding:4px 6px 8px;text-transform:none;letter-spacing:0;font-weight:400}
 .acct-table .bk-filter{width:100%;min-width:90px;height:30px;padding:3px 8px;font-size:12.5px;box-sizing:border-box}
 
+
+/* The tour-expense table ends in several answers, not one: what the job cost, who
+   funded which part, and — the only figure anyone transfers — what is owed back to
+   the guide. The last of those is the loud one. */
+.js-total-sub td { font-weight: 500; color: var(--ink-soft, #8a8f8b); }
+/* Not a quieter shade of the same thing: money nobody has assigned a payer to stops
+   a payment, so it is coloured like a refusal rather than like a note. */
+.js-total-warn td { font-weight: 700; color: #b91c1c; background: rgba(185, 28, 28, 0.07); }
+.js-total-warn td small { color: #b91c1c; font-weight: 600; }
+.js-total-owed td { font-weight: 700; color: #b45309; background: rgba(180, 83, 9, 0.06); }
+.js-total-owed .js-amt b { font-size: 1.08em; }
+.js-cost-note { font-size: 10.5px; font-weight: 500; color: var(--ink-soft, #8a8f8b); text-align: right; padding: 0 0 6px; }
+/* A row the guide will not be paid for, said on the row itself rather than left to
+   be worked out from the Paid By column. */
+.js-not-owed {
+  font-size: 10.5px; margin-top: 2px; white-space: normal; line-height: 1.3;
+  color: var(--primary, #2f6f4e);
+}

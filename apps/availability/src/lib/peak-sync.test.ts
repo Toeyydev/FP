@@ -376,16 +376,18 @@ describe("figures that need rechecking are named, not implied", () => {
     expect(hit!.amount).toBe(60);
   });
 
-  it("a divergent Payments figure is called out — only when it really diverges", () => {
-    // Untagged money is still paid by Payments but excluded from Net Pay, so the
-    // two genuinely differ and the operator must be told.
+  it("Net Pay and what Payments transfers can no longer disagree", () => {
+    // They once did: Net Pay excluded untagged rows and Payments paid them. Both now
+    // follow the same payer rule, so the warning that existed to reconcile them has
+    // nothing left to report — on a sheet with untagged rows or without.
     const untagged: Expense[] = [{ description: "Legacy row", price: 300, pax: 1 }];
     const t2 = jobSheetTotals(untagged, FEE, null, []);
-    const hit = figuresNeedRecheck(untagged, t2, ACCOUNTS).find((x) => x.field === "netPayToGuide");
-    expect(hit).toBeTruthy();
-    expect(hit!.amount).toBe(300);
+    expect(t2.legacyPayout).toBe(t2.netPayToGuide);
+    expect(t2.payoutDiffersFromPayments).toBe(false);
+    expect(figuresNeedRecheck(untagged, t2, ACCOUNTS).some((x) => x.field === "netPayToGuide")).toBe(false);
+    // …and the untagged row is still reported, under the field it actually affects.
+    expect(figuresNeedRecheck(untagged, t2, ACCOUNTS).find((x) => x.field === "reimbursementDue")!.amount).toBe(300);
 
-    // …and stays quiet on a fully tagged sheet, where they now agree.
     const t3 = jobSheetTotals(EXAMPLE, FEE, null, []);
     expect(figuresNeedRecheck(EXAMPLE, t3, ACCOUNTS).some((x) => x.field === "netPayToGuide")).toBe(false);
   });
@@ -519,12 +521,18 @@ describe("what Payments transfers", () => {
     expect(guidePayoutTotal(rows, fee).payout).toBe(1655);
   });
 
-  it("UNTAGGED rows keep the old payout — never a guess about someone's wages", () => {
+  it("a row with no payer is in the cost and in nothing else — it is never guessed at", () => {
+    // Until 2026-09-23 an untagged row was PAID, on the reasoning that dropping it
+    // might swallow money a guide had fronted. But paying it might equally reimburse
+    // money they never spent, and the payment now stops instead of choosing: the row
+    // shows in the tour's cost, is left out of the transfer, and blocks it until a
+    // person records who paid.
     const rows: Expense[] = [{ description: "Legacy row", price: 300, pax: 1 }];
     const r = guidePayoutTotal(rows, fee);
-    expect(r.untaggedIncluded).toBe(300);
-    expect(r.payout).toBe(1755);                                   // unchanged
-    expect(r.payout).toBe(computeTotals(rows, fee).grandTotal);     // identical to before
+    expect(r.unresolved).toBe(300);
+    expect(r.payoutExpenses).toBe(0);
+    expect(r.payout).toBe(1455);                                   // the fee after WHT, nothing else
+    expect(r.payout).toBeLessThan(computeTotals(rows, fee).grandTotal);
   });
 
   it("review rewards are always paid", () => {

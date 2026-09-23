@@ -9,6 +9,7 @@ import { cached, DASHBOARD_CACHE_KEY, withTimeout } from "@/lib/api-cache";
 import { paxIndex } from "@/lib/assigned-pax";
 import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { money2 } from "@/lib/payment-batch";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -261,9 +262,10 @@ async function buildFinance(today: string, nowMin: number, startMin: (slot: numb
     if (paidKey.has(kk) || settledGuides.has(v.guideId)) continue;
     const sheet = sheetByKey.get(kk);
     const gf = sheet?.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? (sheet.guideFee as unknown as GuideFee) : DEFAULT_GUIDE_FEE;
-    const t = computeTotals((sheet?.expenses as unknown as Expense[]) ?? [], gf);
-    if (t.grandTotal <= 0) continue;
-    payableTotal += t.grandTotal; payableGuides.add(v.guideId); payableTours += 1;
+    // What is payable is what would be transferred — not what the job cost.
+    const b = tourCostBreakdown((sheet?.expenses as unknown as Expense[]) ?? [], gf);
+    if (b.netTransfer <= 0) continue;
+    payableTotal += b.netTransfer; payableGuides.add(v.guideId); payableTours += 1;
   }
 
   // PEAK refs on this month's PAID tours: recorded vs still missing.

@@ -5,6 +5,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
 import { computeTotals, expenseAmount, jobSheetDriveName, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -47,6 +48,8 @@ export async function POST(req: NextRequest) {
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
+  // The payer split: what the job cost, and — separately — what to transfer.
+  const b = tourCostBreakdown(expenses, guideFee);
   const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
   const guideName = u?.fullName || u?.displayName || guideId;
   const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
@@ -129,9 +132,17 @@ export async function POST(req: NextRequest) {
       <tbody>${expenseRows}</tbody>
     </table>
     <table style="margin-top:12px;border-collapse:collapse"><tbody>
-      <tr><td style="padding:2px 16px 2px 0;color:#555">Guide fee (net)</td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
-      <tr><td style="padding:2px 16px 2px 0;color:#555">Expenses</td><td align="right"><b>${esc(thb(t.totalExpenses))}</b></td></tr>
-      <tr><td style="padding:2px 16px 2px 0"><b>Total payout</b></td><td align="right"><b>${esc(thb(t.grandTotal))}</b></td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ต้นทุนทัวร์ทั้งหมด<br><span style="font-size:11px">Total tour cost</span></td><td align="right">${esc(thb(b.tourCost))}</td></tr>
+      ${b.fundedByAdvance > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">จ่ายจากเงินทดรองบริษัท<br><span style="font-size:11px">Funded by a company advance — not transferred</span></td><td align="right">${esc(thb(b.fundedByAdvance))}</td></tr>` : ""}
+      ${b.fundedByCompany > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">บริษัทจ่ายตรง<br><span style="font-size:11px">Paid direct by the company — not transferred</span></td><td align="right">${esc(thb(b.fundedByCompany))}</td></tr>` : ""}
+      ${b.unresolved > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b91c1c"><b>ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน</b><br><span style="font-size:11px">ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย · Paid By not set, so this job cannot be paid yet</span></td><td align="right" style="color:#b91c1c"><b>${esc(thb(b.unresolved))}</b></td></tr>` : ""}
+      <tr><td colspan="2" style="padding:2px 0 8px;color:#777;font-size:11px">ยอดนี้ใช้วัดต้นทุนของงาน ไม่ใช่ยอดที่ต้องโอนให้ไกด์</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าจ้างไกด์<br><span style="font-size:11px">Guide fee</span></td><td align="right">${esc(thb(b.feeGross))}</td></tr>
+      ${b.reviewReward > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">ค่าตอบแทนรีวิวไกด์<br><span style="font-size:11px">Review incentive</span></td><td align="right">${esc(thb(b.reviewReward))}</td></tr>` : ""}
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์<br><span style="font-size:11px">Reimbursable to the guide</span></td><td align="right">${esc(thb(b.reimbursableToGuide))}</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">หัก ภาษี ณ ที่จ่าย<br><span style="font-size:11px">Withholding tax</span></td><td align="right">−${esc(thb(b.withholding))}</td></tr>
+      <tr><td style="padding:4px 16px 2px 0;border-top:1px solid #999"><b>ยอดโอนสุทธิให้ไกด์</b><br><span style="font-size:11px">Net transfer to the guide</span></td><td align="right" style="border-top:1px solid #999"><b>${esc(thb(b.netTransfer))}</b></td></tr>
+      ${b.unresolved > 0 ? `<tr><td colspan="2" style="padding:4px 0 0;color:#b91c1c;font-size:11px">ยอดโอนนี้ยังไม่รวม ${esc(thb(b.unresolved))} ที่ยังไม่ระบุผู้จ่าย — ระบุ Paid By บนใบงานก่อน จึงจะจ่ายได้</td></tr>` : ""}
     </tbody></table>
   </body></html>`;
 

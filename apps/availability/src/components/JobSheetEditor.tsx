@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
-import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals } from "@/lib/peak-sync";
+import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -235,6 +235,9 @@ export default function JobSheetEditor() {
   // Cost view: tour operating rows, plus a review reward only when it belongs to
   // THIS job (lib/jobsheet) — a carried-over reward is payment, not job cost.
   const cost = jobCostBreakdown(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
+  // Who actually paid each row — the one calculator the documents and the payment
+  // screens use, so this table cannot disagree with them about the same job.
+  const payer = tourCostBreakdown(sheet.expenses, sheet.guideFee);
   // Every figure the Summary shows, derived once (lib/peak-sync). Net Pay excludes
   // Company Direct rows — the company already paid those vendors directly, so
   // reimbursing them would pay for the same thing twice.
@@ -906,7 +909,10 @@ export default function JobSheetEditor() {
                   </>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
                 <div className="gs-payout">
-                  <div className="gs-payout-row"><span>Expenses reimbursed to you{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย</small></span><b>{thb(expShown)}</b></div>
+                  {/* "Reimbursed" is a thing that has happened. Until the transfer is made it has
+                      not, and telling a guide their money is back when it is not is the one
+                      mistake this line can make. */}
+                  <div className="gs-payout-row"><span>{payoutView.status === "final" ? "Expenses reimbursed to you" : "Expenses to be reimbursed to you"}{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">{payoutView.status === "final" ? "เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย" : "ค่าใช้จ่ายที่ต้องคืนให้มัคคุเทศก์"}</small></span><b>{thb(expShown)}</b></div>
                   {payoutView.notReimbursed.company > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid by Folkpaths directly — not reimbursed<br /><small className="gs-calc">บริษัทจ่ายเอง ไม่ใช่เงินคืนให้มัคคุเทศก์</small></span><span>{thb(payoutView.notReimbursed.company)}</span></div>}
                   {payoutView.notReimbursed.advance > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid from a Folkpaths advance — settled with the advance<br /><small className="gs-calc">จ่ายจากเงินทดรอง เคลียร์กับเงินทดรอง</small></span><span>{thb(payoutView.notReimbursed.advance)}</span></div>}
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
@@ -1176,6 +1182,13 @@ export default function JobSheetEditor() {
                   )}
                   {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
                       older app sent without saying who chose it. Picking any payer above confirms it. */}
+                  {(paid === "GUIDE_ADVANCE" || paid === "COMPANY_DIRECT") && (
+                    <div className="js-not-owed" title={paid === "GUIDE_ADVANCE"
+                      ? "Bought with money the company had already handed the guide. It is a cost of the tour, and it settles against their advance — adding it to the transfer would pay for it twice."
+                      : "The company paid the vendor directly. It is a cost of the tour and was never the guide's money."}>
+                      {paid === "GUIDE_ADVANCE" ? "ไม่รวมในยอดโอนให้ไกด์ — ใช้ตัดเงินทดรอง" : "ไม่รวมในยอดโอนให้ไกด์ — บริษัทชำระโดยตรง"}
+                    </div>
+                  )}
                   {paid !== "UNSPECIFIED" && (e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
                     <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }} title={e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : "Sent by the app without saying who chose it — not a confirmed payer"}>
                       {e.paidBySource === "default-after-tour" ? "Default after tour · รอยืนยัน" : "Not confirmed · รอยืนยัน"}
@@ -1263,9 +1276,42 @@ export default function JobSheetEditor() {
                 </datalist>
               </td></tr>
             )}
+            {/* Three answers, not one. The table used to end in a single total, and the
+                single total was read as the amount to transfer — so a ticket bought with
+                a company advance looked like money owed to the guide. */}
+            {payer.fundedByAdvance > 0 && (
+              <tr className="js-total js-total-sub">
+                <td colSpan={5} style={{ textAlign: "right" }}>จ่ายจากเงินทดรองบริษัท<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>funded by a company advance — settles the advance, not transferred</small></td>
+                <td className="js-amt">{thb(payer.fundedByAdvance)}</td>
+                <td className="no-print" />
+              </tr>
+            )}
+            {payer.fundedByCompany > 0 && (
+              <tr className="js-total js-total-sub">
+                <td colSpan={5} style={{ textAlign: "right" }}>บริษัทจ่ายตรง<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>paid direct by the company — not transferred</small></td>
+                <td className="js-amt">{thb(payer.fundedByCompany)}</td>
+                <td className="no-print" />
+              </tr>
+            )}
+            {payer.unresolved > 0 && (
+              <tr className="js-total js-total-warn">
+                <td colSpan={5} style={{ textAlign: "right" }}>
+                  ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน
+                  <small style={{ display: "block", fontSize: 10, fontWeight: 500 }}>ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย</small>
+                  <small style={{ display: "block", fontSize: 10, fontWeight: 500 }}>Paid By not set — the payment is refused until it is</small>
+                </td>
+                <td className="js-amt"><b>{thb(payer.unresolved)}</b></td>
+                <td className="no-print" />
+              </tr>
+            )}
+            <tr className="js-total js-total-owed">
+              <td colSpan={5} style={{ textAlign: "right" }}>ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์<small style={{ fontSize: 10, fontWeight: 500, marginLeft: 5 }}>reimbursable to the guide — part of the transfer</small></td>
+              <td className="js-amt"><b>{thb(payer.reimbursableToGuide)}</b></td>
+              <td className="no-print" />
+            </tr>
             <tr className="js-total">
-              <td colSpan={5} style={{ textAlign: "right" }}>TOTAL TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว"}</small></td>
-              <td className="js-amt"><b>{thb(cost.tourExpenses)}</b></td>
+              <td colSpan={5} style={{ textAlign: "right" }}>ต้นทุนทัวร์ทั้งหมด<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รวมค่าใช้จ่ายในการนำเที่ยว — total tour cost"}</small></td>
+              <td className="js-amt"><b>{thb(payer.tourCost)}</b></td>
               <td className="no-print">
                 {/* Reflects the expense ROWS only. A missing guide contact blocks the
                     sheet but says nothing about this table — flagging it here would
@@ -1275,6 +1321,9 @@ export default function JobSheetEditor() {
                   : <span className="js-acct warn" title="One or more lines have no accepted accounting category yet">Needs review</span>}
               </td>
               <td className="no-print" />
+            </tr>
+            <tr className="js-cost-note-row">
+              <td colSpan={7} className="js-cost-note">ยอดนี้ใช้วัดต้นทุนของงาน ไม่ใช่ยอดที่ต้องโอนให้ไกด์<span style={{ display: "block" }}>this measures what the job cost — it is not the amount to transfer</span></td>
             </tr>
           </tbody>
         </table>
