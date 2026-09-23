@@ -145,6 +145,18 @@ jobs:
 
       # The app itself was never built here — only the worker — so a page that fails
       # to compile or prerender passed CI and reached production.
+      # The image, not the checkout. Everything above this line runs against a source
+      # tree and the runner's own node_modules; none of that is what ships. The failure
+      # this change exists to fix was an image with no browser in it while every check
+      # around it was green.
+      - name: Install Nixpacks
+        run: curl -fsSL https://nixpacks.com/install.sh | sudo bash
+
+      - name: Runtime image smoke test (builds the image, runs it, renders inside it)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
+        run: bash scripts/image-smoke.sh
+
       - name: Build app
         run: npx next build
         env:

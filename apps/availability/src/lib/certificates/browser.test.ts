@@ -226,3 +226,42 @@ describe("repository invariant — production config installs the browser it wil
     expect(dirname(expectedExecutablePath("/app/.browser-cache", "linux", "x64"))).toContain("/app/.browser-cache/");
   });
 });
+
+describe("repository invariant — the image itself is smoke tested", () => {
+  const smoke = () => readFileSync(join(process.cwd(), "scripts/image-smoke.sh"), "utf8");
+  const ci = () => readFileSync(join(process.cwd(), "../../.github/workflows/ci.yml"), "utf8");
+
+  it("CI builds an image and runs it, not just the checkout", () => {
+    const y = ci();
+    expect(y).toContain("image-smoke.sh");
+    expect(y).toContain("nixpacks.com/install.sh");
+  });
+
+  it("the container gets nothing from the host", () => {
+    const s = smoke();
+    // A mount would let the runner's source, node_modules or browser stand in for the
+    // image's, which is the whole thing this test is here to disprove.
+    expect(s).not.toMatch(/docker run[^\n]*\s-v\s/);
+    expect(s).not.toMatch(/--mount/);
+    expect(s).toContain("CHROME_HEADLESS_SHELL_PATH=");
+    expect(s).toContain("PUPPETEER_EXECUTABLE_PATH=");
+    expect(s).toContain("CHROMIUM_PATH=");
+  });
+
+  it("it checks the build id, the cache directory and the bytes that come out", () => {
+    const s = smoke();
+    expect(s).toContain(".browser-cache");
+    expect(s).toContain("PUPPETEER_REVISIONS");       // the id is read, not typed
+    expect(s).not.toMatch(/EXPECTED_BUILD_ID=["']?\d+\./);
+    expect(s).toContain("%PDF-");
+    expect(s).toContain("%%EOF");
+    expect(s).toContain("BaseFont");                   // a font is embedded, so Thai draws
+  });
+
+  it("it reports the image size, the peak memory and any leftover process", () => {
+    const s = smoke();
+    expect(s).toContain("image size");
+    expect(s).toContain("memory.peak");
+    expect(s).toMatch(/left running|browser processes/);
+  });
+});
