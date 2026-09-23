@@ -245,8 +245,11 @@ export function tourOperatingExpenses(expenses: Expense[]): number {
 // ── Accounting presentation (Job Sheet / PDF / Drive) ────────────────────────
 // Total Job Expenses = actual tour expenses + GROSS guide fee. WHT reduces the
 // cash paid to the guide (Net Payable), never the gross fee expense — so this is
-// deliberately NOT computeTotals().grandTotal (which is the guide-payout figure:
-// expenses + NET fee, used by Payments and left untouched).
+// deliberately NOT computeTotals().grandTotal. That figure adds EVERY expense row to
+// the net fee, including money the company itself paid, so it is neither the job's
+// cost nor the guide's transfer — nothing reads it as money any more (2026-09-23).
+// What the job cost and what to transfer both come from lib/peak-sync
+// tourCostBreakdown: `tourCost` and `netTransfer`.
 export function totalJobExpenses(t: { totalExpenses: number; gross: number }): number {
   return t.totalExpenses + t.gross;
 }
