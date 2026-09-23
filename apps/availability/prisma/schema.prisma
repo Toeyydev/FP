@@ -627,12 +627,25 @@ model ExpenseCertificate {
   pdfHash               String?
   driveFileId           String?   @unique
   driveUrl              String?
-  // Doubles as the claim on an upload: set before Drive is called and cleared after,
-  // so two requests cannot both be filing. A claim older than UPLOAD_CLAIM_MS is
-  // treated as abandoned, which is what a crashed process leaves behind.
+  // The lease on an upload, and the token that fences it.
+  //
+  // A time-based claim alone is not enough. A request can claim, stall past its own
+  // lease while a second one takes over and files the document, then wake up and finish
+  // its own work against a certificate it no longer owns. The token is what makes that
+  // impossible: it is new on every claim, every write after the claim carries it in its
+  // WHERE, and a request whose token is no longer the one on the row has been fenced out
+  // and may change nothing at all.
   uploadStartedAt       DateTime?
+  uploadClaimToken      String?
+  uploadLeaseUntil      DateTime?
   uploadAttempts        Int       @default(0)
   lastUploadError       String?
+  /// The attempt whose bytes are supposed to be in that file. Checked against the file
+  /// itself before the certificate is put to use: a write to Drive happens outside the
+  /// database's decision about who owns the upload, so a request that was fenced out can
+  /// still have had its bytes land afterwards. The token on the file is how that is
+  /// noticed rather than assumed away.
+  driveAttemptToken     String?
   /// Which deployment filed it. Part of the file's marker in Drive, so a staging run
   /// and production pointed at one account never find each other's documents.
   driveEnvironment      String?

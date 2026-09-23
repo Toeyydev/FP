@@ -23,6 +23,24 @@ export const MARKER = {
   certificateNo: "folkopsCertificateNo",
   payloadHash: "folkopsPayloadHash",
   environment: "folkopsEnvironment",
+  /**
+   * Which attempt wrote these bytes.
+   *
+   * The database decides who owns an upload, but the file is written outside that
+   * decision — so after the write the file is asked whose it is. A request that was
+   * fenced out mid-flight can still have had its bytes land, and if the token on the
+   * file is not this request's, somebody else's document is sitting there and this one
+   * must not be recorded against it.
+   */
+  attemptToken: "folkopsAttemptToken",
+} as const;
+
+/** Written on a file that failed its read-back, so the next attempt ignores it. */
+export const FORENSIC = {
+  certificateId: "folkopsQuarantinedCertificateId",
+  attemptToken: "folkopsQuarantinedAttemptToken",
+  at: "folkopsQuarantinedAt",
+  reason: "folkopsQuarantineReason",
 } as const;
 
 /**
@@ -43,7 +61,7 @@ export class DuplicateCertificateFile extends Error {
   }
 }
 
-export type CertificateFile = { id: string; name: string; link: string };
+export type CertificateFile = { id: string; name: string; link: string; attemptToken?: string | null };
 
 export type PutInput = {
   certificateId: string;
@@ -53,6 +71,8 @@ export type PutInput = {
   name: string;
   bytes: Buffer;
   folderPath: string[];
+  /** The upload lease this write belongs to. Read back off the file afterwards. */
+  attemptToken: string;
 };
 
 /** Everything the certificate workflow needs from a file store, so tests can supply one. */
@@ -64,7 +84,7 @@ export type CertificateDrive = {
   /** Read the filed bytes back, to hash what is actually there. */
   read(o: { fileId: string }): Promise<Buffer | null>;
   /** Move a file that should not be trusted out of the way, and say why on the file. */
-  quarantine(o: { fileId: string; reason: string; folderPath: string[] }): Promise<void>;
+  quarantine(o: { fileId: string; reason: string; folderPath: string[]; certificateId: string; attemptToken: string; at: string }): Promise<void>;
 };
 
 // ── The real one ─────────────────────────────────────────────────────────────
@@ -112,9 +132,9 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
         "trashed = false",
       ];
       if (parent) q.push(`'${parent}' in parents`);
-      const r = await fetch(`${api}/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id,name,webViewLink)&spaces=drive`, { headers: { authorization: `Bearer ${token}` } });
-      const j = (await r.json().catch(() => ({}))) as { files?: { id: string; name?: string; webViewLink?: string }[] };
-      return (j.files ?? []).map((f) => ({ id: f.id, name: f.name ?? "", link: linkOf(f.id, f.webViewLink) }));
+      const r = await fetch(`${api}/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id,name,webViewLink,appProperties)&spaces=drive`, { headers: { authorization: `Bearer ${token}` } });
+      const j = (await r.json().catch(() => ({}))) as { files?: { id: string; name?: string; webViewLink?: string; appProperties?: Record<string, string> }[] };
+      return (j.files ?? []).map((f) => ({ id: f.id, name: f.name ?? "", link: linkOf(f.id, f.webViewLink), attemptToken: f.appProperties?.[MARKER.attemptToken] ?? null }));
     },
 
     async put(o) {
@@ -128,6 +148,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
         [MARKER.certificateNo]: o.certificateNo,
         [MARKER.payloadHash]: o.payloadHash,
         [MARKER.environment]: o.environment,
+        [MARKER.attemptToken]: o.attemptToken,
       };
 
       if (found.length === 1) {
@@ -142,7 +163,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
           method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
           body: JSON.stringify({ name: o.name, appProperties }),
         }).catch(() => {});
-        return { id: uj.id, name: uj.name ?? o.name, link: linkOf(uj.id, uj.webViewLink) };
+        return { id: uj.id, name: uj.name ?? o.name, link: linkOf(uj.id, uj.webViewLink), attemptToken: o.attemptToken };
       }
 
       const meta = { name: o.name, parents: parent ? [parent] : undefined, appProperties };
@@ -157,7 +178,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
       });
       const j = (await r.json().catch(() => ({}))) as { id?: string; name?: string; webViewLink?: string };
       if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}`);
-      return { id: j.id, name: j.name ?? o.name, link: linkOf(j.id, j.webViewLink) };
+      return { id: j.id, name: j.name ?? o.name, link: linkOf(j.id, j.webViewLink), attemptToken: o.attemptToken };
     },
 
     async read({ fileId }) {
@@ -167,7 +188,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
       return Buffer.from(await r.arrayBuffer());
     },
 
-    async quarantine({ fileId, reason, folderPath }) {
+    async quarantine({ fileId, reason, folderPath, certificateId, attemptToken, at }) {
       const token = await bearer(refreshToken);
       // Kept, not deleted. A file whose bytes did not match is evidence of something,
       // and the person who has to work out what needs it to still exist.
@@ -181,8 +202,18 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
         method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({
           name: `QUARANTINED ${cj.name ?? fileId}`,
-          // The marker goes too, so a retry does not find this file and update it.
-          appProperties: { [MARKER.certificateId]: "", folkopsQuarantineReason: reason.slice(0, 120) },
+          // The live marker goes, so a retry does not find this file and update it —
+          // but what it WAS is written down. A file moved aside with nothing on it is a
+          // mystery for whoever finds it; this one says which certificate and which
+          // attempt put it there, and when.
+          appProperties: {
+            [MARKER.certificateId]: "",
+            [MARKER.attemptToken]: "",
+            [FORENSIC.certificateId]: certificateId,
+            [FORENSIC.attemptToken]: attemptToken,
+            [FORENSIC.at]: at,
+            [FORENSIC.reason]: reason.slice(0, 120),
+          },
         }),
       });
     },
