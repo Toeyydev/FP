@@ -299,6 +299,27 @@ describe("repository invariant — the image itself is smoke tested", () => {
     const s = smoke();
     expect(s).toContain("image size");
     expect(s).toContain("memory.peak");
-    expect(s).toMatch(/left running|browser processes/);
+    expect(s).toMatch(/left over from rendering/);
+  });
+
+  it("it takes a baseline before anything renders, and diffs against it", () => {
+    // Counting processes by name would count the Node server and whatever the base
+    // image runs. What matters is what RENDERING left behind.
+    const s = smoke();
+    expect(s).toContain("BASE_PIDS");
+    expect(s).toContain("api/version");              // a route that renders nothing
+    expect(s).toMatch(/report_new "immediately after the render"/);
+    expect(s).toMatch(/after 5s/);
+    expect(s).toMatch(/after 15s/);
+    expect(s).toContain("stat=Z");                   // zombies told apart from the living
+    expect(s).toContain("PID 1 is");
+  });
+
+  it("the size is reported as a delta against what production runs", () => {
+    const delta = readFileSync(join(process.cwd(), "scripts/image-size-delta.sh"), "utf8");
+    expect(delta).toMatch(/git .*archive/);          // both images from clean exports
+    expect(delta).toContain("BASELINE_REF");
+    expect(delta).toContain("delta_mb");
+    expect(ci()).toContain("image-size-delta.sh");
   });
 });

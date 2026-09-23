@@ -97,11 +97,20 @@ docker run -d --name "$NAME" --network host \
   "$IMAGE" >/dev/null
 
 say "waiting for it to answer"
+# /api/version renders nothing. Health does — its first call starts the probe — so the
+# baseline has to be taken before anything asks health a question.
 for i in $(seq 1 60); do
-  if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then break; fi
+  if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/api/version" >/dev/null 2>&1; then break; fi
   [ "$i" = 60 ] && { docker logs "$NAME" | tail -30; fail "the container never answered"; }
   sleep 2
 done
+
+say "what is running before anything has rendered"
+snapshot() { docker exec "$NAME" ps -eo pid,ppid,stat,etime,comm 2>/dev/null || true; }
+BASELINE="$(snapshot)"
+printf '%s\n' "$BASELINE" | sed 's/^/    /'
+echo "  PID 1 is: $(printf '%s\n' "$BASELINE" | awk '$1==1 {print $5}')"
+BASE_PIDS="$(printf '%s\n' "$BASELINE" | awk 'NR>1 {print $1}' | sort -n)"
 
 say "asking the running app to render"
 # The first health call starts the probe; the answer appears on a later one. What it
@@ -211,10 +220,32 @@ else
   echo "  peak memory: not exposed by this cgroup"
 fi
 
-say "no browser left running"
-LEFT=$(docker exec "$NAME" sh -c 'ps -eo comm 2>/dev/null | grep -ci "chrome\|headless_shell" || true')
-echo "  browser processes in the container: ${LEFT:-0}"
-[ "${LEFT:-0}" -eq 0 ] || fail "$LEFT browser process(es) left running inside the image"
+say "what is still running, and what it is"
+# Compared against the baseline rather than counted by name: the Node server and whatever
+# the base image runs were there before any render and are not this test's business.
+# Taken three times, because a process that is on its way out looks the same as one that
+# is staying, for a moment.
+report_new() {
+  local when="$1" now new
+  now="$(snapshot)"
+  echo "  --- $when ---"
+  new="$(printf '%s\n' "$now" | awk 'NR>1' | while read -r pid ppid stat etime comm; do
+    printf '%s\n' "$BASE_PIDS" | grep -qx "$pid" || printf '    pid=%-6s ppid=%-6s stat=%-5s elapsed=%-8s %s\n' "$pid" "$ppid" "$stat" "$etime" "$comm"
+  done)"
+  if [ -z "$new" ]; then echo "    (nothing new since the baseline)"; else printf '%s\n' "$new"; fi
+  # Counted separately: a zombie has been reaped by nobody, a live process is still running.
+  ZOMBIE=$(printf '%s\n' "$new" | grep -c "stat=Z" || true)
+  LIVE=$(printf '%s\n' "$new" | grep -c "stat=" || true)
+  LIVE=$(( LIVE - ZOMBIE ))
+  echo "    new since baseline: $LIVE alive, $ZOMBIE zombie"
+}
+report_new "immediately after the render"
+sleep 5;  report_new "after 5s"
+sleep 10; report_new "after 15s"
+
+NEW_TOTAL=$(( LIVE + ZOMBIE ))
+echo "  PID 1 is still: $(docker exec "$NAME" ps -eo pid,comm 2>/dev/null | awk '$1==1 {print $2}')"
+[ "$NEW_TOTAL" -eq 0 ] || fail "$LIVE live and $ZOMBIE zombie process(es) left over from rendering"
 
 say "image smoke passed"
 printf 'image_size_mb=%.0f\n' "$(awk -v b="$SIZE_BYTES" 'BEGIN{print b/1024/1024}')"
