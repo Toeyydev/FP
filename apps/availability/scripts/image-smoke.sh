@@ -40,8 +40,33 @@ fi
 [ -n "$EXPECTED_BUILD_ID" ] || fail "could not read the pinned browser build id"
 say "pinned build id: $EXPECTED_BUILD_ID"
 
+say "exporting a clean copy of this commit to build from"
+# NOT the working directory. By the time this step runs, the runner's checkout holds
+# things Railway's build context never has: a `tsconfig.tsbuildinfo` the typecheck steps
+# left behind, a `.next` from an earlier build, node_modules, and — worst of all — the
+# `.browser-cache` that an earlier step installed.
+#
+# The tsbuildinfo is what made the first two attempts fail: nixpacks emits a BuildKit
+# cache mount at that path, and a bind of a directory onto an existing FILE is refused.
+# But the browser cache is the dangerous one. Had the build succeeded, `COPY . /app`
+# would have carried the runner's browser into the image, and this test would have
+# passed while proving nothing about whether the image builds its own.
+#
+# `git archive` gives exactly what a fresh checkout gives, which is what Railway builds.
+REPO_ROOT="$(git -C "$APP_DIR" rev-parse --show-toplevel)"
+CTX="$(mktemp -d)"
+trap 'rm -rf "$CTX"; cleanup' EXIT
+git -C "$REPO_ROOT" archive HEAD | tar -x -C "$CTX"
+BUILD_DIR="$CTX/apps/availability"
+[ -f "$BUILD_DIR/nixpacks.toml" ] || fail "the exported copy has no nixpacks.toml"
+
+for leftover in .browser-cache .next node_modules tsconfig.tsbuildinfo dist; do
+  [ -e "$BUILD_DIR/$leftover" ] && fail "the build context carries '$leftover' from the runner — the image must build its own"
+done
+echo "  context is a clean export of $(git -C "$REPO_ROOT" rev-parse --short HEAD); no runner artefacts in it"
+
 say "building the image with the project's nixpacks config"
-cd "$APP_DIR"
+cd "$BUILD_DIR"
 nixpacks build . --name "$IMAGE" --platform linux/amd64 2>&1 | tail -20
 
 SIZE_BYTES=$(docker image inspect "$IMAGE" --format '{{.Size}}')

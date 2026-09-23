@@ -247,6 +247,17 @@ describe("repository invariant — the image itself is smoke tested", () => {
     expect(y).not.toContain("nixpacks.com/install.sh");   // unpinned
   });
 
+  it("the image is built from a clean export, not the runner's working directory", () => {
+    // By the time this step runs the checkout holds a tsbuildinfo the typecheck left,
+    // a .next, node_modules — and the .browser-cache an earlier step installed. Building
+    // from there would COPY the runner's browser into the image, and the test would pass
+    // while proving nothing about whether the image builds its own.
+    const s = smoke();
+    expect(s).toContain("git archive");
+    expect(s).toContain(".browser-cache .next node_modules tsconfig.tsbuildinfo");
+    expect(s).toMatch(/must build its own/);
+  });
+
   it("the container gets nothing from the host", () => {
     const s = smoke();
     // A mount would let the runner's source, node_modules or browser stand in for the
