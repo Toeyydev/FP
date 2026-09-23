@@ -250,12 +250,14 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
 
   const folderPath = certificateFolder(cert!.tourDate);
   let drive = deps.drive;
-  let mine: { id: string } | null = null;
+  let mine: { id: string; temp: string } | null = null;
 
-  /** Put this attempt's own candidate out of the way. Never anybody else's. */
+  /** Put this attempt's own files out of the way. Never anybody else's. */
   const quarantineMine = async (reason: string) => {
     if (!mine || !drive) return;
-    await drive.quarantine({ fileId: mine.id, reason, certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
+    for (const fileId of new Set([mine.id, mine.temp])) {
+      await drive.quarantine({ fileId, reason, certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
+    }
   };
 
   try {
@@ -279,9 +281,9 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
 
     // This attempt's own TEMP file. A retry under the SAME token reuses it; a retry
     // under a new token makes a new one and leaves every other file alone.
-    let filed;
+    let temp;
     try {
-      filed = await drive.putAttempt({ certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash, environment, attemptToken: token, name, bytes, folderPath });
+      temp = await drive.putAttempt({ certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash, environment, attemptToken: token, name, bytes, folderPath });
     } catch (err) {
       if (err instanceof DuplicateCertificateFile) {
         await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_duplicate", entityType: "ExpenseCertificate", entityId: id,
@@ -290,44 +292,77 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
       }
       throw err;
     }
-    mine = { id: filed.id };
+    mine = { id: temp.id, temp: temp.id };
 
-    // Hash what is in the file, not what was sent to it.
-    const filedBytes = await drive.read({ fileId: filed.id }).catch(() => null);
-    if (filedBytes && fileHash(filedBytes) !== pdfHash) {
-      await quarantineMine(`read-back hash did not match (${filedBytes.length} bytes filed, ${bytes.length} sent)`);
+    // Hash what is in the candidate, not what was sent to it.
+    const tempBytes = await drive.read({ fileId: temp.id }).catch(() => null);
+    if (!tempBytes || fileHash(tempBytes) !== pdfHash) {
+      await quarantineMine(`read-back hash did not match (${tempBytes?.length ?? "unreadable"} bytes filed, ${bytes.length} sent)`);
       await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_quarantined", entityType: "ExpenseCertificate", entityId: id,
-        detail: { certificateNo: cert!.certificateNo, driveFileId: filed.id, attemptToken: token, environment,
-          expectedPdfHash: pdfHash, actualPdfHash: fileHash(filedBytes), expectedBytes: bytes.length, filedBytes: filedBytes.length } });
+        detail: { certificateNo: cert!.certificateNo, driveFileId: temp.id, attemptToken: token, environment,
+          expectedPdfHash: pdfHash, actualPdfHash: tempBytes ? fileHash(tempBytes) : null, expectedBytes: bytes.length, filedBytes: tempBytes?.length ?? null } });
       refuse(["The document filed in Drive did not match the one that was rendered. It has been moved to Quarantine and nothing was recorded against it — try filing again."], 502);
     }
 
-    // The database decides the winner, under the fencing token. Nothing is promoted
-    // until this write succeeds, so two attempts cannot both believe they won.
+    await hold("creating the document");
+
+    // The document is a NEW file, written from the bytes that were just read back and
+    // checked. It is not the candidate promoted in place: a media upload aimed at the
+    // candidate could still be in the air, and arriving after a promotion it would
+    // rewrite the document. Nothing has ever held this file id.
+    //
+    // Idempotent on the attempt token, so a crash between creating it and recording it
+    // finds the one that exists rather than making a second.
+    const existing = await drive.findActiveByAttempt({ certificateId: cert!.id, environment, attemptToken: token, folderPath });
+    if (existing.length > 1) {
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_duplicate", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, environment, state: "ACTIVE", fileCount: existing.length, fileIds: existing.map((f) => f.id) } });
+      refuse([`Drive holds ${existing.length} documents for this attempt, so which one it means is unanswerable. Have someone remove the wrong one before trying again.`], 409);
+    }
+    const active = existing[0] ?? await drive.createActive({
+      certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash,
+      environment, attemptToken: token, name, bytes: tempBytes!, folderPath,
+    });
+    mine = { id: active.id, temp: temp.id };
+
+    // The document itself is read back and hashed before anything is recorded against it.
+    const activeBytes = await drive.read({ fileId: active.id }).catch(() => null);
+    if (!activeBytes || fileHash(activeBytes) !== pdfHash || (active.attemptToken && active.attemptToken !== token)) {
+      await drive.quarantine({ fileId: active.id, reason: "the created document did not read back as the bytes it was created from", certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_quarantined", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, driveFileId: active.id, attemptToken: token, environment, stage: "ACTIVE",
+          expectedPdfHash: pdfHash, actualPdfHash: activeBytes ? fileHash(activeBytes) : null } });
+      refuse(["The document created in Drive did not read back as what it was created from. It has been moved to Quarantine and nothing was recorded against it — try filing again."], 502);
+    }
+
+    // Only now does the database point at anything. Until this write, no row names this
+    // file, so a crash before it leaves a document nobody relies on.
     const wrote = await db.expenseCertificate.updateMany({
       where: { id, uploadClaimToken: token },
       data: {
-        status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: filed.id, driveUrl: filed.link,
+        status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: active.id, driveUrl: active.link,
         uploadedAt: now(), uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null,
         lastUploadError: null, driveEnvironment: environment, driveAttemptToken: token,
+        driveRevisionId: active.revisionId ?? null, driveMd5: active.md5 ?? null,
       },
     });
-    if (wrote.count === 0) throw new UploadFenced("recording the filed document");
+    if (wrote.count === 0) throw new UploadFenced("recording the created document");
 
-    // Won. Promote this file and put every other candidate away — including one this
-    // certificate settled on before, if it is being filed again.
-    const active = await drive.activate({ fileId: filed.id, attemptToken: token });
-    const others = (await drive.findAll({ certificateId: cert!.id, environment, folderPath })).filter((f) => f.id !== filed.id && f.state !== "QUARANTINED");
+    // Won. The candidate has done its job and is kept as the trail; every other file for
+    // this certificate — including a document this certificate settled on before — is
+    // put away, so exactly one ACTIVE remains.
+    await drive.retire({ fileId: temp.id, certificateId: cert!.id, attemptToken: token, at: now().toISOString(), reason: `bytes became document ${active.id}` }).catch(() => {});
+    const others = (await drive.findAll({ certificateId: cert!.id, environment, folderPath })).filter((f) => f.id !== active.id);
     for (const f of others) {
       await drive.quarantine({ fileId: f.id, reason: `superseded by attempt ${token}`, certificateId: cert!.id, attemptToken: f.attemptToken ?? "", at: now().toISOString() }).catch(() => {});
     }
-    await db.expenseCertificate.updateMany({ where: { id, driveAttemptToken: token }, data: { driveRevisionId: active.revisionId ?? null, driveMd5: active.md5 ?? null } });
 
     const done = (await db.expenseCertificate.findUnique({ where: { id } }))!;
     await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
-      detail: { certificateNo: done.certificateNo, driveFileId: filed.id, pdfHash, bytes: bytes.length, environment,
-        readBackVerified: Boolean(filedBytes), attempt: done.uploadAttempts, attemptToken: token,
+      detail: { certificateNo: done.certificateNo, driveFileId: active.id, retiredTempFileId: temp.id, pdfHash, bytes: bytes.length, environment,
+        readBackVerified: true, attempt: done.uploadAttempts, attemptToken: token,
         revisionId: active.revisionId ?? null, readOnly: active.readOnly ?? false,
+        reusedExistingDocument: Boolean(existing[0]) || undefined,
         supersededFiles: others.length ? others.map((f) => f.id) : undefined } });
     return done;
   } catch (err) {
@@ -368,15 +403,6 @@ export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = 
   }
   const active = await drive.findActive({ certificateId: cert.id, environment, folderPath });
   if (active.length === 0) {
-    // A winner recorded but never promoted — the process died between the two. Its own
-    // TEMP file is still the winner, and finishing the promotion is safe.
-    const mine = cert.driveAttemptToken
-      ? await drive.findAttempt({ certificateId: cert.id, environment, attemptToken: cert.driveAttemptToken, folderPath })
-      : [];
-    if (mine.length === 1 && mine[0].state === "TEMP" && mine[0].id === cert.driveFileId) {
-      await drive.activate({ fileId: mine[0].id, attemptToken: cert.driveAttemptToken! });
-      return checkFiledDocument(cert, { ...deps, drive }, actorId);
-    }
     return { ok: false, action: "drive_missing", reasons: ["The document is no longer in Drive where it was filed. File it again before relying on it."] };
   }
   if (active.length > 1) {

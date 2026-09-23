@@ -13,12 +13,21 @@ import { googleAccessToken } from "@/lib/google-calendar";
 //
 // So no file is ever shared between attempts. Each attempt writes its own, marked TEMP
 // and carrying its own token, and an attempt may only ever touch a file with its own
-// token on it. When the database picks a winner, that one file becomes ACTIVE and is
-// never written by this application again — the losers are moved to QUARANTINED, with
-// what they were still written on them.
+// token on it.
+//
+// And the document is never a file that was written to. Promoting the TEMP file in place
+// looked right and was not: a media upload that started while the file was still TEMP
+// can arrive after the promotion and rewrite the document. Checking the state before
+// writing does not help — the request was sent before the state changed — and a content
+// restriction applied afterwards does not cancel a call already in the air.
+//
+// So once an attempt's TEMP bytes have been read back and hashed, those verified bytes
+// are written to a BRAND NEW file, which becomes the document. Nothing has ever held
+// that file id, so nothing can be on its way to it.
 //
 //   TEMP         one attempt's candidate. Only that attempt may replace its bytes.
-//   ACTIVE       the document. Read, hashed, never rewritten.
+//   ACTIVE       the document. Created once from verified bytes; never written again.
+//   RETIRED      a TEMP whose bytes became the document. Kept as the trail.
 //   QUARANTINED  a candidate that lost, or one whose bytes did not read back.
 
 export const MARKER = {
@@ -38,7 +47,7 @@ export const FORENSIC = {
   reason: "folkopsQuarantineReason",
 } as const;
 
-export type FileState = "TEMP" | "ACTIVE" | "QUARANTINED";
+export type FileState = "TEMP" | "ACTIVE" | "RETIRED" | "QUARANTINED";
 
 export function certificateEnvironment(): string {
   return (process.env.FOLKOPS_ENV || process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "development").trim();
@@ -81,10 +90,18 @@ export type CertificateDrive = {
   findAll(o: { certificateId: string; environment: string; folderPath: string[] }): Promise<CertificateFile[]>;
   /** The document, if one has been settled on. */
   findActive(o: { certificateId: string; environment: string; folderPath: string[] }): Promise<CertificateFile[]>;
+  /** This attempt's ACTIVE candidate, if it already made one. */
+  findActiveByAttempt(o: { certificateId: string; environment: string; attemptToken: string; folderPath: string[] }): Promise<CertificateFile[]>;
   /** Write this attempt's candidate. Only ever its own TEMP file. */
   putAttempt(o: PutAttemptInput): Promise<CertificateFile>;
-  /** Promote the winner, and stop the application writing to it again. */
-  activate(o: { fileId: string; attemptToken: string }): Promise<CertificateFile>;
+  /**
+   * Create the document, as a NEW file, from bytes that have already been read back and
+   * checked. There is no update path: this file id has never existed before, so nothing
+   * can be in flight towards it.
+   */
+  createActive(o: PutAttemptInput): Promise<CertificateFile>;
+  /** Move a TEMP aside once its bytes have become the document. */
+  retire(o: { fileId: string; certificateId: string; attemptToken: string; at: string; reason: string }): Promise<void>;
   read(o: { fileId: string }): Promise<Buffer | null>;
   quarantine(o: { fileId: string; reason: string; certificateId: string; attemptToken: string; at: string }): Promise<void>;
 };
@@ -147,6 +164,52 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
   };
   const has = (key: string, value: string) => `appProperties has { key='${key}' and value='${esc(value)}' }`;
 
+  const createFile = async (o: PutAttemptInput, state: FileState): Promise<CertificateFile> => {
+    const token = await bearer(refreshToken);
+    const parent = await folder(token, o.folderPath);
+    const appProperties = {
+      [MARKER.certificateId]: o.certificateId,
+      [MARKER.certificateNo]: o.certificateNo,
+      [MARKER.payloadHash]: o.payloadHash,
+      [MARKER.environment]: o.environment,
+      [MARKER.attemptToken]: o.attemptToken,
+      [MARKER.fileState]: state,
+    };
+    const meta: Record<string, unknown> = { name: o.name, parents: parent ? [parent] : undefined, appProperties };
+    // Asked for at creation, so the document is locked from the moment it exists rather
+    // than a round trip later. Where the account refuses it, the hash still decides.
+    if (state === "ACTIVE") meta.contentRestrictions = [{ readOnly: true, reason: "Certificate in lieu of a receipt — settled accounting document" }];
+    const boundary = `folkpaths-cert-${Math.random().toString(36).slice(2)}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`, "utf8"),
+      o.bytes,
+      Buffer.from(`\r\n--${boundary}--`, "utf8"),
+    ]);
+    const r = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}`, {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body: new Uint8Array(body),
+    });
+    const j = (await r.json().catch(() => ({}))) as RawFile;
+    if (!r.ok || !j.id) {
+      if (state !== "ACTIVE") throw new Error(`drive-upload ${r.status}`);
+      // Some accounts refuse content restrictions outright. The state marker is what
+      // this relies on; the lock was only ever a second line.
+      delete meta.contentRestrictions;
+      const b2 = `folkpaths-cert-${Math.random().toString(36).slice(2)}`;
+      const body2 = Buffer.concat([
+        Buffer.from(`--${b2}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b2}\r\nContent-Type: application/pdf\r\n\r\n`, "utf8"),
+        o.bytes,
+        Buffer.from(`\r\n--${b2}--`, "utf8"),
+      ]);
+      const r2 = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${b2}` }, body: new Uint8Array(body2),
+      });
+      const j2 = (await r2.json().catch(() => ({}))) as RawFile;
+      if (!r2.ok || !j2.id) throw new Error(`drive-upload ${r2.status}`);
+      return shape({ ...j2, appProperties });
+    }
+    return shape({ ...j, appProperties });
+  };
+
   return {
     findAll: ({ certificateId, environment, folderPath }) =>
       search(folderPath, [has(MARKER.certificateId, certificateId), has(MARKER.environment, environment)]),
@@ -155,77 +218,49 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
       search(folderPath, [has(MARKER.certificateId, certificateId), has(MARKER.environment, environment), has(MARKER.fileState, "ACTIVE")]),
 
     findAttempt: ({ certificateId, environment, attemptToken, folderPath }) =>
-      search(folderPath, [has(MARKER.certificateId, certificateId), has(MARKER.environment, environment), has(MARKER.attemptToken, attemptToken)]),
+      search(folderPath, [has(MARKER.certificateId, certificateId), has(MARKER.environment, environment), has(MARKER.attemptToken, attemptToken), has(MARKER.fileState, "TEMP")]),
+
+    findActiveByAttempt: ({ certificateId, environment, attemptToken, folderPath }) =>
+      search(folderPath, [has(MARKER.certificateId, certificateId), has(MARKER.environment, environment), has(MARKER.attemptToken, attemptToken), has(MARKER.fileState, "ACTIVE")]),
 
     async putAttempt(o) {
       const token = await bearer(refreshToken);
-      const parent = await folder(token, o.folderPath);
       const mine = await this.findAttempt({ certificateId: o.certificateId, environment: o.environment, attemptToken: o.attemptToken, folderPath: o.folderPath });
       if (mine.length > 1) throw new DuplicateCertificateFile(o.certificateId, "TEMP", mine.map((f) => f.id));
-
-      const appProperties = {
-        [MARKER.certificateId]: o.certificateId,
-        [MARKER.certificateNo]: o.certificateNo,
-        [MARKER.payloadHash]: o.payloadHash,
-        [MARKER.environment]: o.environment,
-        [MARKER.attemptToken]: o.attemptToken,
-        [MARKER.fileState]: "TEMP",
-      };
-
-      // Only ever this attempt's own candidate, and only while it is still TEMP. A file
-      // that has been settled on is never written again by this application.
       if (mine.length === 1) {
-        if (mine[0].state === "ACTIVE") throw new Error("drive-immutable: this attempt's file is already the settled document and is not rewritten");
+        if (mine[0].state !== "TEMP") throw new Error("drive-immutable: only a TEMP candidate is ever written to");
         const ur = await fetch(`${uploadApi}/files/${mine[0].id}?uploadType=media&fields=${FIELDS}`, {
           method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/pdf" }, body: new Uint8Array(o.bytes),
         });
         const uj = (await ur.json().catch(() => ({}))) as RawFile;
         if (!ur.ok || !uj.id) throw new Error(`drive-upload ${ur.status}`);
-        await fetch(`${api}/files/${mine[0].id}?fields=${FIELDS}`, {
-          method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-          body: JSON.stringify({ name: o.name, appProperties }),
-        }).catch(() => {});
-        return shape({ ...uj, appProperties });
+        return shape(uj);
       }
-
-      const meta = { name: o.name, parents: parent ? [parent] : undefined, appProperties };
-      const boundary = `folkpaths-cert-${Math.random().toString(36).slice(2)}`;
-      const body = Buffer.concat([
-        Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`, "utf8"),
-        o.bytes,
-        Buffer.from(`\r\n--${boundary}--`, "utf8"),
-      ]);
-      const r = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}`, {
-        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body: new Uint8Array(body),
-      });
-      const j = (await r.json().catch(() => ({}))) as RawFile;
-      if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}`);
-      return shape({ ...j, appProperties });
+      return createFile(o, "TEMP");
     },
 
-    async activate({ fileId, attemptToken }) {
+    /** A new file every time. There is no update path, by construction. */
+    createActive: (o) => createFile(o, "ACTIVE"),
+
+    async retire({ fileId, certificateId, attemptToken, at, reason }) {
       const token = await bearer(refreshToken);
-      const r = await fetch(`${api}/files/${fileId}?fields=${FIELDS}`, {
+      const current = await fetch(`${api}/files/${fileId}?fields=name`, { headers: { authorization: `Bearer ${token}` } });
+      const cj = (await current.json().catch(() => ({}))) as { name?: string };
+      await fetch(`${api}/files/${fileId}`, {
         method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({
-          appProperties: { [MARKER.fileState]: "ACTIVE", [MARKER.attemptToken]: attemptToken },
-          // Drive's own lock, where the account supports it. Not relied on — the hash is
-          // what decides — but a second line that costs nothing to ask for.
-          contentRestrictions: [{ readOnly: true, reason: "Certificate in lieu of a receipt — settled accounting document" }],
+          name: `RETIRED ${cj.name ?? fileId}`,
+          appProperties: {
+            [MARKER.fileState]: "RETIRED",
+            [MARKER.certificateId]: "",
+            [MARKER.attemptToken]: "",
+            [FORENSIC.certificateId]: certificateId,
+            [FORENSIC.attemptToken]: attemptToken,
+            [FORENSIC.at]: at,
+            [FORENSIC.reason]: reason.slice(0, 120),
+          },
         }),
       });
-      const j = (await r.json().catch(() => ({}))) as RawFile;
-      if (!r.ok || !j.id) {
-        // Some accounts refuse content restrictions. The state marker still matters.
-        const retry = await fetch(`${api}/files/${fileId}?fields=${FIELDS}`, {
-          method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-          body: JSON.stringify({ appProperties: { [MARKER.fileState]: "ACTIVE", [MARKER.attemptToken]: attemptToken } }),
-        });
-        const rj = (await retry.json().catch(() => ({}))) as RawFile;
-        if (!retry.ok || !rj.id) throw new Error(`drive-activate ${retry.status}`);
-        return shape(rj);
-      }
-      return shape(j);
     },
 
     async read({ fileId }) {
