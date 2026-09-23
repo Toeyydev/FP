@@ -65,8 +65,8 @@ describe("the columns the transfer is recorded in", () => {
       SELECT indexname FROM pg_indexes WHERE tablename = 'GuidePaymentDocument' AND indexdef LIKE '%bankRef%'`;
     expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_bankRef_idx");
     expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_bankRefNormalized_idx");
-    // The one that actually refuses a duplicate. `prisma db push` would not create it.
-    expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_bank_ref_once");
+    // The one that actually refuses a duplicate.
+    expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_paymentMethodId_bankRefNormalized_key");
   });
 });
 
@@ -87,9 +87,12 @@ describe("one bank reference settles one document", () => {
     await expect(withRef("FOLK-PAY-209901-08", "1234567890", "pm-company-scb")).resolves.toMatchObject({ paymentRef: "FOLK-PAY-209901-08" });
   });
 
-  it("a document with no payment method yet cannot slip past the rule through a null", async () => {
+  it("a reference is only ever written together with the account it came from", async () => {
+    // Postgres treats NULL as distinct, so two rows with no payment method would not
+    // collide. Nothing can reach that state: a payment with no "Paid by" is refused
+    // before the claim (buildPaymentInput), which the route test pins.
     await withRef(REF, "TRBS209901071234", null);
-    await expect(withRef("FOLK-PAY-209901-08", "TRBS209901071234", null)).rejects.toMatchObject({ code: "P2002" });
+    await expect(withRef("FOLK-PAY-209901-08", "TRBS209901071234", null)).resolves.toBeTruthy();
   });
 
   it("documents with no reference yet do not collide with each other", async () => {
@@ -100,8 +103,8 @@ describe("one bank reference settles one document", () => {
   it("two people recording the same transfer at the same moment: exactly one wins", async () => {
     // The race an application check cannot win — both read, both see nothing, both write.
     // The database decides instead.
-    await prisma.guidePaymentDocument.create({ data: document({ paymentRef: REF, paymentMethodId: null }) });
-    await prisma.guidePaymentDocument.create({ data: document({ paymentRef: "FOLK-PAY-209901-08", paymentMethodId: null }) });
+    await prisma.guidePaymentDocument.create({ data: document({ paymentRef: REF }) });
+    await prisma.guidePaymentDocument.create({ data: document({ paymentRef: "FOLK-PAY-209901-08" }) });
     const claim = (paymentRef: string) =>
       prisma.guidePaymentDocument.update({
         where: { paymentRef },

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { Note, Row, type CreatedDocument } from "@/components/PeakPaymentDialog";
-import { checkTransferEvidence, VERIFIED_LABEL_TH } from "@/lib/payment-transfer";
+import { checkTransferEvidence, VERIFY_CHECKBOX_TH } from "@/lib/payment-transfer";
 
 // "Pay N jobs together · one ref", stage 2: record the payment against the EXISTING
 // PEAK document.
@@ -168,7 +168,7 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
                     statement, with their name and the time, is what the record keeps. */}
                 <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <input type="checkbox" checked={verified} onChange={(e) => setVerified(e.target.checked)} style={{ marginTop: 3 }} />
-                  <span>{VERIFIED_LABEL_TH}<br /><span style={{ fontSize: 12, color: "var(--ink-soft)" }}>I have checked the amount and the reference against the slip</span></span>
+                  <span>{VERIFY_CHECKBOX_TH}<br /><span style={{ fontSize: 12, color: "var(--ink-soft)" }}>I have checked the amount and the reference against the slip</span></span>
                 </label>
               </>
             )}

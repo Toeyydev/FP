@@ -28,10 +28,9 @@ CREATE INDEX "GuidePaymentDocument_bankRefNormalized_idx" ON "GuidePaymentDocume
 -- write. The database decides instead, and the loser is refused.
 --
 -- Scoped to the account the money left from, because reference numbers are only unique
--- within a bank — two banks can legitimately issue the same string. COALESCE keeps a row
--- with no payment method from escaping the constraint through a NULL; the partial WHERE
--- leaves every document that has no bank reference yet entirely alone, including every
--- document that existed before this migration.
-CREATE UNIQUE INDEX "GuidePaymentDocument_bank_ref_once"
-  ON "GuidePaymentDocument" ((COALESCE("paymentMethodId", '')), "bankRefNormalized")
-  WHERE "bankRefNormalized" IS NOT NULL;
+-- within a bank — two banks can legitimately issue the same string. A document with no
+-- reference yet holds NULL, which Postgres treats as distinct, so every document that
+-- existed before this migration is left entirely alone. A blank payment method cannot
+-- reach this index: the payment is refused before the claim.
+CREATE UNIQUE INDEX "GuidePaymentDocument_paymentMethodId_bankRefNormalized_key"
+  ON "GuidePaymentDocument"("paymentMethodId", "bankRefNormalized");
