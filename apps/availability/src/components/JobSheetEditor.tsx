@@ -460,11 +460,13 @@ export default function JobSheetEditor() {
     const s = { ...sheet!, ...override };
     const r = await jfetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "" }),
+      // The version this form was opened on. The server refuses a save built on a stale
+      // one rather than quietly undoing whoever saved in between.
+      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "offline" ? "No connection — your changes are still here. Try Save again." : d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
+    if (!r.ok) { setMsg(d.error === "stale" || d.error === "protected-row" ? (d.reasons ?? []).join(" ") || "Save refused." : d.error === "offline" ? "No connection — your changes are still here. Try Save again." : d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
     const kept: string[] = d.restoredNoShows ?? [];
     const differ: { bookingNo: string; absentOnSheet: number; reported: number }[] = d.noShowMismatches ?? [];
     setSheet(d.sheet); setSaved(true);
