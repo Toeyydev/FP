@@ -44,6 +44,8 @@ CREATE TABLE "ExpenseCertificate" (
     "uploadAttempts" INTEGER NOT NULL DEFAULT 0,
     "lastUploadError" TEXT,
     "driveAttemptToken" TEXT,
+    "driveRevisionId" TEXT,
+    "driveMd5" TEXT,
     "driveEnvironment" TEXT,
     "uploadedAt" TIMESTAMP(3),
     "linkedAt" TIMESTAMP(3),

@@ -201,22 +201,18 @@ export class UploadFenced extends Error {
 }
 
 /**
- * Filing the document, under a lease that can be taken away.
+ * Filing the document: one file per attempt, and the winner never written again.
  *
- * A claim with only a timeout on it is not enough. A request can claim, stall past its
- * own lease while a second one takes over and files the document properly, and then wake
- * up and finish its own work — overwriting the row, pointing it at its own file, and
- * turning somebody else's document into the evidence. The two requests never meet; each
- * one believes it is the owner.
+ * The lease says who may proceed. It cannot say who may write, because a call to Drive
+ * that has already left cannot be recalled — an attempt fenced out mid-flight can still
+ * have its bytes land afterwards, including after the document has been linked and is
+ * standing in for a receipt.
  *
- * So the claim carries a token that is new every time. Every write after the claim says
- * `WHERE uploadClaimToken = <mine>`, and a write that matches nothing means this request
- * was fenced out while it was away. It then changes nothing at all: not the state, not
- * the file link, and not the new owner's claim. It records that it was fenced and stops.
- *
- * The file gets the token too, because the database's decision and the write to Drive are
- * not one action. After the upload the file is asked whose attempt it belongs to, and a
- * file carrying somebody else's token is somebody else's document.
+ * So no two attempts ever share a file. Each writes its own, marked TEMP and carrying
+ * its own token, and may only ever touch a file with that token on it. The database then
+ * picks a winner under the fencing token, that one file is promoted to ACTIVE, and every
+ * other candidate is moved to QUARANTINED. A late write from a fenced attempt lands in
+ * its own losing file, where it belongs.
  */
 export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
@@ -228,13 +224,13 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
 
   const cert = await db.expenseCertificate.findUnique({ where: { id } });
   if (!cert) refuse(["No such certificate"], 404);
-  if (cert!.status !== "ATTESTED" && cert!.status !== "UPLOADED") refuse([moveRefusal(cert!.status as CertificateState, "UPLOADED") ?? "This certificate has not been attested yet."]);
+  if (!["ATTESTED", "UPLOADED", "STALE"].includes(cert!.status)) refuse([moveRefusal(cert!.status as CertificateState, "UPLOADED") ?? "This certificate has not been attested yet."]);
   if (!deps.drive && !pdfRendererAvailable() && !deps.renderPdf) {
     refuse(["This deployment has no PDF renderer configured, so the certificate cannot be filed. The attestation is recorded and filing can be retried once it is."], 503);
   }
 
-  // The claim, in the database, before anything reaches Drive. A new token every time —
-  // including on a reclaim, which is what makes the previous holder's writes fail.
+  // A new token on every claim and reclaim. This is what makes a previous holder's
+  // writes fail, and what keeps its file separate from this one's.
   const token = deps.newToken ? deps.newToken() : randomUUID();
   const until = () => new Date(now().getTime() + leaseMs);
   const claimed = await db.expenseCertificate.updateMany({
@@ -245,15 +241,22 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     refuse(["This certificate is already being filed. Give it a moment and reload — filing twice would put two documents in Drive for one certificate."], 409);
   }
 
-  /** Extend the lease, and say whether this request still owns it. */
   const renew = async (): Promise<boolean> =>
     (await db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadLeaseUntil: until() } })).count === 1;
-
-  /** Stop unless this request still owns the upload. */
   const hold = async (at: string): Promise<void> => { if (!(await renew())) throw new UploadFenced(at); };
 
   const beat = setInterval(() => { void renew().catch(() => {}); }, heartbeatMs);
   (beat as unknown as { unref?: () => void }).unref?.();
+
+  const folderPath = certificateFolder(cert!.tourDate);
+  let drive = deps.drive;
+  let mine: { id: string } | null = null;
+
+  /** Put this attempt's own candidate out of the way. Never anybody else's. */
+  const quarantineMine = async (reason: string) => {
+    if (!mine || !drive) return;
+    await drive.quarantine({ fileId: mine.id, reason, certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
+  };
 
   try {
     const payload = cert!.payload as unknown as CertificatePayload;
@@ -265,52 +268,42 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     const bytes = await render(html);
     const pdfHash = fileHash(bytes);
     const name = certificateFileName(cert!.certificateNo);
-    const folderPath = certificateFolder(cert!.tourDate);
 
-    let drive = deps.drive;
     if (!drive) {
       const dToken = await folkpathsDriveToken(actor.id);
       if (!dToken) refuse(["Google Drive is not connected, so the certificate cannot be filed. The attestation is recorded and filing can be retried."], 503);
       drive = googleCertificateDrive(dToken!);
     }
 
-    // Rendering can take a while. Nothing is written to Drive until the lease is
-    // confirmed again — an expired one here means somebody else is already filing.
-    await hold("writing to Drive");
+    await hold("writing this attempt's candidate");
 
+    // This attempt's own TEMP file. A retry under the SAME token reuses it; a retry
+    // under a new token makes a new one and leaves every other file alone.
     let filed;
     try {
-      filed = await drive.put({ certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash, environment, name, bytes, folderPath, attemptToken: token });
+      filed = await drive.putAttempt({ certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash, environment, attemptToken: token, name, bytes, folderPath });
     } catch (err) {
       if (err instanceof DuplicateCertificateFile) {
         await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_duplicate", entityType: "ExpenseCertificate", entityId: id,
-          detail: { certificateNo: cert!.certificateNo, environment, fileCount: err.fileIds.length, fileIds: err.fileIds } });
-        refuse([`Drive holds ${err.fileIds.length} files for this certificate. Filing cannot choose between them — have someone remove the wrong one before trying again.`], 409);
+          detail: { certificateNo: cert!.certificateNo, environment, state: err.state, fileCount: err.fileIds.length, fileIds: err.fileIds } });
+        refuse([`Drive holds ${err.fileIds.length} ${err.state} files for this attempt. Filing cannot choose between them — have someone remove the wrong one before trying again.`], 409);
       }
       throw err;
     }
+    mine = { id: filed.id };
 
-    // Whose bytes are in that file now? The lease says this request may write; the file
-    // says who actually did. If another attempt overwrote it between the two, its
-    // document is there and this one has no business recording itself against it.
-    const onFile = (await drive.find({ certificateId: cert!.id, environment, folderPath }))[0];
-    if (onFile && onFile.attemptToken && onFile.attemptToken !== token) throw new UploadFenced("confirming the filed document");
-    await hold("checking the filed document");
-
+    // Hash what is in the file, not what was sent to it.
     const filedBytes = await drive.read({ fileId: filed.id }).catch(() => null);
     if (filedBytes && fileHash(filedBytes) !== pdfHash) {
-      await hold("quarantining a document that did not match");
-      await drive.quarantine({
-        fileId: filed.id, folderPath, certificateId: cert!.id, attemptToken: token, at: now().toISOString(),
-        reason: `read-back hash did not match (${filedBytes.length} bytes filed, ${bytes.length} sent)`,
-      }).catch(() => {});
+      await quarantineMine(`read-back hash did not match (${filedBytes.length} bytes filed, ${bytes.length} sent)`);
       await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_quarantined", entityType: "ExpenseCertificate", entityId: id,
         detail: { certificateNo: cert!.certificateNo, driveFileId: filed.id, attemptToken: token, environment,
           expectedPdfHash: pdfHash, actualPdfHash: fileHash(filedBytes), expectedBytes: bytes.length, filedBytes: filedBytes.length } });
       refuse(["The document filed in Drive did not match the one that was rendered. It has been moved to Quarantine and nothing was recorded against it — try filing again."], 502);
     }
 
-    // The last write, fenced like every other one.
+    // The database decides the winner, under the fencing token. Nothing is promoted
+    // until this write succeeds, so two attempts cannot both believe they won.
     const wrote = await db.expenseCertificate.updateMany({
       where: { id, uploadClaimToken: token },
       data: {
@@ -321,29 +314,86 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     });
     if (wrote.count === 0) throw new UploadFenced("recording the filed document");
 
+    // Won. Promote this file and put every other candidate away — including one this
+    // certificate settled on before, if it is being filed again.
+    const active = await drive.activate({ fileId: filed.id, attemptToken: token });
+    const others = (await drive.findAll({ certificateId: cert!.id, environment, folderPath })).filter((f) => f.id !== filed.id && f.state !== "QUARANTINED");
+    for (const f of others) {
+      await drive.quarantine({ fileId: f.id, reason: `superseded by attempt ${token}`, certificateId: cert!.id, attemptToken: f.attemptToken ?? "", at: now().toISOString() }).catch(() => {});
+    }
+    await db.expenseCertificate.updateMany({ where: { id, driveAttemptToken: token }, data: { driveRevisionId: active.revisionId ?? null, driveMd5: active.md5 ?? null } });
+
     const done = (await db.expenseCertificate.findUnique({ where: { id } }))!;
     await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
       detail: { certificateNo: done.certificateNo, driveFileId: filed.id, pdfHash, bytes: bytes.length, environment,
         readBackVerified: Boolean(filedBytes), attempt: done.uploadAttempts, attemptToken: token,
-        resumed: cert!.uploadAttempts > 0 ? "an earlier attempt had already put a file there; this replaced its bytes rather than adding a second" : undefined } });
+        revisionId: active.revisionId ?? null, readOnly: active.readOnly ?? false,
+        supersededFiles: others.length ? others.map((f) => f.id) : undefined } });
     return done;
   } catch (err) {
     if (err instanceof UploadFenced) {
-      // Nothing is touched. Not the row, not the link, and above all not the claim —
-      // clearing it here would hand the certificate back to nobody while its new owner
-      // is still working.
+      // This attempt's own candidate is put away; nothing else is touched. Not the row,
+      // not the winner's file, and above all not the new owner's claim.
+      await quarantineMine(`attempt ${token} was fenced out before ${err.at}`);
       await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.upload_fenced", entityType: "ExpenseCertificate", entityId: id,
-        detail: { certificateNo: cert!.certificateNo, attemptToken: token, lostBefore: err.at, environment,
-          note: "this request's lease was taken over while it was working; it changed nothing" } });
+        detail: { certificateNo: cert!.certificateNo, attemptToken: token, lostBefore: err.at, environment, quarantinedFileId: mine?.id ?? null,
+          note: "this request's lease was taken over while it was working; its candidate was quarantined and nothing else changed" } });
       refuse(["Another request took over filing this certificate while this one was working, so nothing was changed. Reload to see where it got to."], 409);
     }
-    // An ordinary failure releases only THIS request's claim, and only if it still holds it.
     const message = err instanceof CertificateRefused ? err.reasons[0]?.slice(0, 300) ?? null : String(err).slice(0, 300);
     await db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null, lastUploadError: message } }).catch(() => {});
     throw err;
   } finally {
     clearInterval(beat);
   }
+}
+
+/**
+ * Is the document in Drive still the document that was checked?
+ *
+ * Asked before a certificate is relied on — at linking, and again at the point money
+ * moves. Everything it looks at is a fact about the file as it is now: exactly one
+ * ACTIVE file, the attempt on record, and bytes that hash to what was recorded.
+ */
+export type DocumentCheck = { ok: boolean; reasons: string[]; action?: "drive_overwritten" | "drive_changed" | "drive_missing" | "drive_duplicate" };
+
+export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = {}, actorId?: string): Promise<DocumentCheck> {
+  const environment = deps.environment ?? cert.driveEnvironment ?? certificateEnvironment();
+  const folderPath = certificateFolder(cert.tourDate);
+  let drive = deps.drive;
+  if (!drive) {
+    const t = await folkpathsDriveToken(actorId);
+    if (!t) return { ok: false, reasons: ["Google Drive is not connected, so the filed document cannot be checked."] };
+    drive = googleCertificateDrive(t);
+  }
+  const active = await drive.findActive({ certificateId: cert.id, environment, folderPath });
+  if (active.length === 0) {
+    // A winner recorded but never promoted — the process died between the two. Its own
+    // TEMP file is still the winner, and finishing the promotion is safe.
+    const mine = cert.driveAttemptToken
+      ? await drive.findAttempt({ certificateId: cert.id, environment, attemptToken: cert.driveAttemptToken, folderPath })
+      : [];
+    if (mine.length === 1 && mine[0].state === "TEMP" && mine[0].id === cert.driveFileId) {
+      await drive.activate({ fileId: mine[0].id, attemptToken: cert.driveAttemptToken! });
+      return checkFiledDocument(cert, { ...deps, drive }, actorId);
+    }
+    return { ok: false, action: "drive_missing", reasons: ["The document is no longer in Drive where it was filed. File it again before relying on it."] };
+  }
+  if (active.length > 1) {
+    return { ok: false, action: "drive_duplicate", reasons: [`Drive holds ${active.length} settled documents for this certificate, so which one it means is unanswerable. Have someone remove the wrong one, then file it again.`] };
+  }
+  const file = active[0];
+  if (file.id !== cert.driveFileId || (cert.driveAttemptToken && file.attemptToken && file.attemptToken !== cert.driveAttemptToken)) {
+    return { ok: false, action: "drive_overwritten", reasons: ["The document in Drive was written by a different attempt than the one on record, so what is filed there is not what was checked. File it again before relying on it."] };
+  }
+  if (cert.driveRevisionId && file.revisionId && file.revisionId !== cert.driveRevisionId) {
+    return { ok: false, action: "drive_changed", reasons: ["The document in Drive has been edited since it was filed. File it again before relying on it."] };
+  }
+  const bytes = await drive.read({ fileId: file.id }).catch(() => null);
+  if (bytes && cert.pdfHash && fileHash(bytes) !== cert.pdfHash) {
+    return { ok: false, action: "drive_changed", reasons: ["The document in Drive is not the one that was filed — its contents have changed since. File it again before relying on it."] };
+  }
+  return { ok: true, reasons: [] };
 }
 
 // ── 4. Link it to the rows ───────────────────────────────────────────────────
@@ -367,33 +417,15 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
     if (bad) refuse([bad]);
     if (!cert!.driveFileId || !cert!.pdfHash) refuse(["This certificate has not been filed in Drive yet, so there is no document for the rows to point at."]);
 
-    // The document is checked here, not taken on trust from the upload step. Writing to
-    // Drive happens outside the database's decision about who owned that upload, so a
-    // request that was fenced out mid-flight can still have had its bytes land
-    // afterwards. This is where that would be noticed, and it is the last moment before
-    // the file starts standing in for a receipt.
-    const drive = deps.drive ?? (await (async () => {
-      const t = await folkpathsDriveToken(actor.id);
-      if (!t) refuse(["Google Drive is not connected, so the filed document cannot be checked before it is put to use."], 503);
-      return googleCertificateDrive(t!);
-    })());
-    const environment = deps.environment ?? cert!.driveEnvironment ?? certificateEnvironment();
-    const files = await drive.find({ certificateId: cert!.id, environment, folderPath: certificateFolder(cert!.tourDate) });
-    if (files.length !== 1) {
-      refuse([files.length === 0
-        ? "The document is no longer in Drive where it was filed. File it again before putting it to use."
-        : `Drive holds ${files.length} files for this certificate, so which one the rows would point at is unanswerable. Have someone remove the wrong one, then file it again.`], 409);
-    }
-    if (cert!.driveAttemptToken && files[0].attemptToken && files[0].attemptToken !== cert!.driveAttemptToken) {
-      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_overwritten", entityType: "ExpenseCertificate", entityId: id,
-        detail: { certificateNo: cert!.certificateNo, driveFileId: cert!.driveFileId, expectedAttempt: cert!.driveAttemptToken, foundAttempt: files[0].attemptToken } });
-      refuse(["The document in Drive was written by a different attempt than the one on record, so what is filed there is not what was checked. File it again before putting it to use."], 409);
-    }
-    const nowBytes = await drive.read({ fileId: files[0].id }).catch(() => null);
-    if (nowBytes && fileHash(nowBytes) !== cert!.pdfHash) {
-      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_changed", entityType: "ExpenseCertificate", entityId: id,
-        detail: { certificateNo: cert!.certificateNo, driveFileId: files[0].id, expectedPdfHash: cert!.pdfHash, actualPdfHash: fileHash(nowBytes) } });
-      refuse(["The document in Drive is not the one that was filed — its contents have changed since. File it again before putting it to use."], 409);
+    // The document is checked here, not taken on trust from the upload step — this is
+    // the last moment before it starts standing in for a receipt.
+    const check = await checkFiledDocument(cert!, deps, actor.id);
+    if (!check.ok) {
+      if (check.action) {
+        await audit({ actorId: actor.id, actorRole: actor.role, action: `certificate.${check.action}`, entityType: "ExpenseCertificate", entityId: id,
+          detail: { certificateNo: cert!.certificateNo, driveFileId: cert!.driveFileId, expectedAttempt: cert!.driveAttemptToken, expectedPdfHash: cert!.pdfHash, reasons: check.reasons } });
+      }
+      refuse(check.reasons, 409);
     }
 
     const sheet = await tx.jobSheet.findUnique({ where: { id: cert!.jobSheetId } });
@@ -404,7 +436,7 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[] },
       { facts: facts(sheet!, name), expenses },
     );
-    if (drift.drifted) refuse(["This job sheet has changed since the certificate was approved:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);
+    if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);
 
     const covered = cert!.coveredRows as unknown as CertifiableRow[];
     const waiver: EvidenceWaiver = {

@@ -646,6 +646,11 @@ model ExpenseCertificate {
   /// still have had its bytes land afterwards. The token on the file is how that is
   /// noticed rather than assumed away.
   driveAttemptToken     String?
+  /// Drive's own view of the settled file, recorded beside our SHA-256 rather than
+  /// instead of it. A revision that has moved means the bytes changed, whatever else
+  /// looks right.
+  driveRevisionId       String?
+  driveMd5              String?
   /// Which deployment filed it. Part of the file's marker in Drive, so a staging run
   /// and production pointed at one account never find each other's documents.
   driveEnvironment      String?

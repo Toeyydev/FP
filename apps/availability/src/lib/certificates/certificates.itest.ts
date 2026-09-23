@@ -19,6 +19,7 @@ import { certificateStatuses } from "@/lib/certificates/evidence";
 import { fileHash } from "@/lib/certificates/payload";
 import { CertificateRefused, createCertificate, linkCertificate, attestCertificate, uploadCertificate, UPLOAD_LEASE_MS, voidCertificate, type Actor, type Deps } from "@/lib/certificates/service";
 import { DuplicateCertificateFile, type CertificateDrive } from "@/lib/certificates/drive";
+import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
 import { POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
@@ -32,51 +33,70 @@ const e = (description: string, price: number, pax = 5, over: Row = {}): Row =>
   ({ description, price, pax, expenseType: "transport", paidBy: "guide", paidBySource: "operator", ...over });
 
 /**
- * A Drive that behaves the way the real one does in the way that matters: files are
- * found by the marker on them, a folder may hold two files with the same NAME, and
- * nothing is keyed on a filename anywhere.
+ * A Drive that behaves the way the real one does in the ways that matter: files are
+ * found by the markers on them, a folder may hold two files with the same NAME, each
+ * attempt owns its own file, and a file that has been settled on is never rewritten.
  */
-type FakeFile = { id: string; name: string; folder: string; certificateId: string; environment: string; bytes: Buffer; attemptToken?: string; quarantined?: string; forensic?: Record<string, string> };
+type FakeFile = {
+  id: string; name: string; folder: string; certificateId: string; environment: string;
+  attemptToken: string | null; state: "TEMP" | "ACTIVE" | "QUARANTINED" | null;
+  bytes: Buffer; revisionId: string; readOnly?: boolean; forensic?: Record<string, string>;
+};
 const drive = {
   files: [] as FakeFile[],
-  writes: 0,
+  revisions: 0,
+  reset() { this.files = []; this.revisions = 0; this.failPut = null; this.corruptOnRead = false; },
   failPut: null as null | string,
   corruptOnRead: false,
-  reset() { this.files = []; this.writes = 0; this.failPut = null; this.corruptOnRead = false; },
-  live() { return this.files.filter((f) => !f.quarantined); },
+  live() { return this.files.filter((f) => f.state !== "QUARANTINED"); },
+  active() { return this.files.filter((f) => f.state === "ACTIVE"); },
+  shape(f: FakeFile) { return { id: f.id, name: f.name, link: `https://drive.example.test/file/${f.id}`, attemptToken: f.attemptToken, state: f.state, revisionId: f.revisionId, md5: null, readOnly: f.readOnly }; },
 };
 
-const fakeDrive = (): CertificateDrive => ({
-  async find({ certificateId, environment, folderPath }) {
-    const key = folderPath.join("/");
-    return drive.live()
-      .filter((f) => f.certificateId === certificateId && f.environment === environment && f.folder === key)
-      .map((f) => ({ id: f.id, name: f.name, link: `https://drive.example.test/file/${f.id}`, attemptToken: f.attemptToken ?? null }));
-  },
-  async put(o) {
-    if (drive.failPut) throw new Error(drive.failPut);
-    const key = o.folderPath.join("/");
-    const found = drive.live().filter((f) => f.certificateId === o.certificateId && f.environment === o.environment && f.folder === key);
-    if (found.length > 1) throw new DuplicateCertificateFile(o.certificateId, found.map((f) => f.id));
-    drive.writes++;
-    if (found.length === 1) { found[0].bytes = o.bytes; found[0].name = o.name; found[0].attemptToken = o.attemptToken; return { id: found[0].id, name: o.name, link: `https://drive.example.test/file/${found[0].id}`, attemptToken: o.attemptToken }; }
-    const file: FakeFile = { id: `drive_${drive.files.length + 1}`, name: o.name, folder: key, certificateId: o.certificateId, environment: o.environment, bytes: o.bytes, attemptToken: o.attemptToken };
-    drive.files.push(file);
-    return { id: file.id, name: file.name, link: `https://drive.example.test/file/${file.id}`, attemptToken: o.attemptToken };
-  },
-  async read({ fileId }) {
-    const f = drive.files.find((x) => x.id === fileId);
-    if (!f) return null;
-    return drive.corruptOnRead ? Buffer.concat([f.bytes, Buffer.from("tampered")]) : f.bytes;
-  },
-  async quarantine({ fileId, reason, certificateId, attemptToken, at }) {
-    const f = drive.files.find((x) => x.id === fileId);
-    if (f) {
-      f.quarantined = reason; f.certificateId = ""; f.attemptToken = undefined; f.name = `QUARANTINED ${f.name}`;
+const fakeDrive = (): CertificateDrive => {
+  const key = (folderPath: string[]) => folderPath.join("/");
+  const mine = (o: { certificateId: string; environment: string; folderPath: string[] }) =>
+    drive.files.filter((f) => f.state !== "QUARANTINED" && f.certificateId === o.certificateId && f.environment === o.environment && f.folder === key(o.folderPath));
+  return {
+    async findAll(o) { return mine(o).map((f) => drive.shape(f)); },
+    async findActive(o) { return mine(o).filter((f) => f.state === "ACTIVE").map((f) => drive.shape(f)); },
+    async findAttempt(o) { return mine(o).filter((f) => f.attemptToken === o.attemptToken).map((f) => drive.shape(f)); },
+    async putAttempt(o) {
+      if (drive.failPut) throw new Error(drive.failPut);
+      const own = mine(o).filter((f) => f.attemptToken === o.attemptToken);
+      if (own.length > 1) throw new DuplicateCertificateFile(o.certificateId, "TEMP", own.map((f) => f.id));
+      if (own.length === 1) {
+        if (own[0].state === "ACTIVE") throw new Error("drive-immutable: this attempt's file is already the settled document and is not rewritten");
+        own[0].bytes = o.bytes; own[0].name = o.name; own[0].revisionId = `rev_${++drive.revisions}`;
+        return drive.shape(own[0]);
+      }
+      const file: FakeFile = {
+        id: `drive_${drive.files.length + 1}`, name: o.name, folder: key(o.folderPath),
+        certificateId: o.certificateId, environment: o.environment, attemptToken: o.attemptToken,
+        state: "TEMP", bytes: o.bytes, revisionId: `rev_${++drive.revisions}`,
+      };
+      drive.files.push(file);
+      return drive.shape(file);
+    },
+    async activate({ fileId, attemptToken }) {
+      const f = drive.files.find((x) => x.id === fileId)!;
+      f.state = "ACTIVE"; f.attemptToken = attemptToken; f.readOnly = true;
+      return drive.shape(f);
+    },
+    async read({ fileId }) {
+      const f = drive.files.find((x) => x.id === fileId);
+      if (!f) return null;
+      return drive.corruptOnRead ? Buffer.concat([f.bytes, Buffer.from("tampered")]) : f.bytes;
+    },
+    async quarantine({ fileId, reason, certificateId, attemptToken, at }) {
+      const f = drive.files.find((x) => x.id === fileId);
+      if (!f) return;
+      f.state = "QUARANTINED"; f.certificateId = ""; f.attemptToken = null; f.readOnly = false;
+      f.name = `QUARANTINED ${f.name}`;
       f.forensic = { certificateId, attemptToken, at, reason };
-    }
-  },
-});
+    },
+  };
+};
 
 const ENV = "test-env";
 const deps = (over: Deps = {}): Deps => ({
@@ -232,7 +252,7 @@ describe("filing it, and Drive's actual behaviour", () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    const decoy = { id: "drive_decoy", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: "some_other_certificate", environment: ENV, bytes: Buffer.from("SOMEBODY ELSE'S DOCUMENT"), attemptToken: "someone-elses-attempt" };
+    const decoy = { id: "drive_decoy", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: "some_other_certificate", environment: ENV, bytes: Buffer.from("SOMEBODY ELSE'S DOCUMENT"), attemptToken: "someone-elses-attempt", state: "ACTIVE" as const, revisionId: "rev_x" };
     drive.files.push(decoy);
     await uploadCertificate(c.id, ADMIN, deps());
     expect(decoy.bytes.toString()).toBe("SOMEBODY ELSE'S DOCUMENT");
@@ -243,7 +263,7 @@ describe("filing it, and Drive's actual behaviour", () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    const other = { id: "drive_prod", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: c.id, environment: "production", bytes: Buffer.from("PRODUCTION COPY"), attemptToken: "prod-attempt" };
+    const other = { id: "drive_prod", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: c.id, environment: "production", bytes: Buffer.from("PRODUCTION COPY"), attemptToken: "prod-attempt", state: "ACTIVE" as const, revisionId: "rev_p" };
     drive.files.push(other);
     await uploadCertificate(c.id, ADMIN, deps());
     expect(other.bytes.toString()).toBe("PRODUCTION COPY");
@@ -255,10 +275,10 @@ describe("filing it, and Drive's actual behaviour", () => {
     await attestCertificate(c.id, ADMIN, deps());
     const folder = "Folkpaths Job Sheets/2099-04 April/Expense Certificates";
     drive.files.push(
-      { id: "dup_a", name: "a.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("A"), attemptToken: "a" },
-      { id: "dup_b", name: "b.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("B"), attemptToken: "b" },
+      { id: "dup_a", name: "a.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("A"), attemptToken: "dup-token", state: "TEMP" as const, revisionId: "rev_a" },
+      { id: "dup_b", name: "b.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("B"), attemptToken: "dup-token", state: "TEMP" as const, revisionId: "rev_b" },
     );
-    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps())))[0]).toContain("Drive holds 2 files");
+    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps({ newToken: () => "dup-token" }))))[0]).toContain("Drive holds 2 TEMP files");
     const log = await prisma.auditLog.findFirst({ where: { action: "certificate.drive_duplicate" } });
     expect((log!.detail as { fileIds: string[] }).fileIds.sort()).toEqual(["dup_a", "dup_b"]);
     expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("ATTESTED");
@@ -280,23 +300,34 @@ describe("filing it, and Drive's actual behaviour", () => {
     expect((await uploadCertificate(c.id, ADMIN, deps())).status).toBe("UPLOADED");
   });
 
-  it("an upload that landed while the database write failed resumes the same file", async () => {
+  it("a retry under the SAME token reuses that attempt's own file", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
     // The file reaches Drive; everything after it blows up, the way a crash would.
     const crashing = fakeDrive();
-    const put = crashing.put.bind(crashing);
-    crashing.put = async (o) => { await put(o); throw new Error("process died after the upload"); };
-    await expect(uploadCertificate(c.id, ADMIN, deps({ drive: crashing }))).rejects.toThrow();
+    const put = crashing.putAttempt.bind(crashing);
+    crashing.putAttempt = async (o) => { await put(o); throw new Error("process died after the upload"); };
+    await expect(uploadCertificate(c.id, ADMIN, deps({ drive: crashing, newToken: () => "token-A" }))).rejects.toThrow();
     expect(drive.live()).toHaveLength(1);
     const fileId = drive.live()[0].id;
 
-    const retried = await uploadCertificate(c.id, ADMIN, deps());
-    expect(retried.driveFileId).toBe(fileId);       // resumed, not replaced
+    const retried = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" }));
+    expect(retried.driveFileId).toBe(fileId);       // its own candidate, reused
     expect(drive.live()).toHaveLength(1);           // and no second file
-    const log = await prisma.auditLog.findFirst({ where: { action: "certificate.uploaded" } });
-    expect((log!.detail as { resumed?: string }).resumed).toContain("rather than adding a second");
+    expect(drive.active()).toHaveLength(1);
+  });
+
+  it("a retry under a NEW token files its own candidate and puts the old one away", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const first = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" }));
+    const second = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B" }));
+    expect(second.driveFileId).not.toBe(first.driveFileId);
+    expect(drive.active()).toHaveLength(1);                       // exactly one document
+    expect(drive.active()[0].id).toBe(second.driveFileId);
+    expect(drive.files.find((f) => f.id === first.driveFileId)!.state).toBe("QUARANTINED");
   });
 
   it("a claim already held refuses the second request rather than filing twice", async () => {
@@ -304,8 +335,8 @@ describe("filing it, and Drive's actual behaviour", () => {
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
     const slow = fakeDrive();
-    const put = slow.put.bind(slow);
-    slow.put = async (o) => { await new Promise((r) => setTimeout(r, 120)); return put(o); };
+    const put = slow.putAttempt.bind(slow);
+    slow.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 120)); return put(o); };
     const [a, b] = await Promise.allSettled([
       uploadCertificate(c.id, ADMIN, deps({ drive: slow })),
       new Promise((r) => setTimeout(r, 20)).then(() => uploadCertificate(c.id, ADMIN, deps({ drive: slow }))),
@@ -329,7 +360,8 @@ describe("filing it, and Drive's actual behaviour", () => {
     await attestCertificate(c.id, ADMIN, deps());
     drive.corruptOnRead = true;
     expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps())))[0]).toContain("moved to Quarantine");
-    expect(drive.files[0].quarantined).toContain("read-back hash did not match");
+    expect(drive.files[0].state).toBe("QUARANTINED");
+    expect(drive.files[0].forensic!.reason).toContain("read-back hash did not match");
     expect(drive.live()).toHaveLength(0);
     const after = await prisma.expenseCertificate.findUnique({ where: { id: c.id } });
     expect(after!.status).toBe("ATTESTED");
@@ -379,7 +411,7 @@ describe("putting it to use", () => {
     await attestCertificate(c.id, ADMIN, deps());
     await uploadCertificate(c.id, ADMIN, deps());
     await prisma.jobSheet.update({ where: { id: c.jobSheetId }, data: { expenses: [e("Ferry", 11), e("Water", 10)] as object[] } });
-    expect((await refusal(() => linkCertificate(c.id, ADMIN, deps()))).join(" ")).toContain("has changed since the certificate was approved");
+    expect((await refusal(() => linkCertificate(c.id, ADMIN, deps()))).join(" ")).toContain("has changed since the certificate was attested");
   });
 });
 
@@ -518,8 +550,8 @@ describe("a request that loses its lease while it is working", () => {
 
     // A claims, then goes away for longer than its own lease.
     const slowDrive = fakeDrive();
-    const put = slowDrive.put.bind(slowDrive);
-    slowDrive.put = async (o) => { await new Promise((r) => setTimeout(r, 400)); return put(o); };
+    const put = slowDrive.putAttempt.bind(slowDrive);
+    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 400)); return put(o); };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 60, heartbeatMs: 10_000, newToken: () => "token-A" }));
 
     // B waits for A's lease to lapse, then takes over and files properly.
@@ -535,19 +567,16 @@ describe("a request that loses its lease while it is working", () => {
     expect(after!.driveFileId).toBe(bDone.driveFileId);   // B's file, not A's
     expect(after!.pdfHash).toBe(bDone.pdfHash);
     expect(after!.uploadClaimToken).toBeNull();           // B released it; A did not clear it
-    expect(drive.live()).toHaveLength(1);                 // one document, not two
+    // A's bytes DID land after B's — a call to Drive already in the air cannot be
+    // recalled. They landed in A's OWN file, which is the point of one file per attempt:
+    // B's document was never writable by A at all.
+    expect(drive.active()).toHaveLength(1);
+    expect(drive.active()[0].id).toBe(bDone.driveFileId);
+    expect(drive.active()[0].attemptToken).toBe("token-B");
+    const aFile = drive.files.find((f) => f.forensic?.attemptToken === "token-A");
+    expect(aFile!.state).toBe("QUARANTINED");
 
-    // A's bytes did land in B's file afterwards — a write to Drive happens outside the
-    // database's decision about who owns the upload, and no lease can prevent that. What
-    // matters is that it is NOTICED rather than assumed away: the file now carries A's
-    // token, and linking refuses until it is filed again.
-    expect(drive.live()[0].attemptToken).toBe("token-A");
-    expect((await refusal(() => linkCertificate(c.id, ADMIN, deps())))[0]).toContain("written by a different attempt");
-    expect(await prisma.auditLog.count({ where: { action: "certificate.drive_overwritten" } })).toBe(1);
-
-    // Filing again settles it, and then it can be used.
-    const refiled = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-C" }));
-    expect(refiled.driveAttemptToken).toBe("token-C");
+    // And the document can be used, because nothing touched it.
     expect((await linkCertificate(c.id, ADMIN, deps())).status).toBe("LINKED");
 
     const fenced = await prisma.auditLog.findFirst({ where: { action: "certificate.upload_fenced" } });
@@ -557,26 +586,27 @@ describe("a request that loses its lease while it is working", () => {
   it("A cannot make its own file the evidence", async () => {
     const c = await attested();
     const slowDrive = fakeDrive();
-    const put = slowDrive.put.bind(slowDrive);
-    slowDrive.put = async (o) => { await new Promise((r) => setTimeout(r, 400)); return put(o); };
+    const put = slowDrive.putAttempt.bind(slowDrive);
+    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 400)); return put(o); };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 60, heartbeatMs: 10_000, newToken: () => "token-A" }));
     await new Promise((r) => setTimeout(r, 150));
     const bDone = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B" }));
     await expect(a).rejects.toThrow();
 
-    // Linking checks the file before it becomes evidence, so A's stray write cannot
-    // slip through as B's document.
-    expect((await refusal(() => linkCertificate(c.id, ADMIN, deps())))[0]).toContain("different attempt");
-    expect(bDone.driveFileId).toBe(drive.live()[0].id);
+    // What becomes evidence is B's file, and the bytes in it hash to what B recorded.
+    const linked = await linkCertificate(c.id, ADMIN, deps());
+    expect(linked.driveFileId).toBe(bDone.driveFileId);
+    const onDisk = drive.files.find((f) => f.id === bDone.driveFileId)!;
+    expect(fileHash(onDisk.bytes)).toBe(bDone.pdfHash);
     const rows = await rowsNow();
-    expect(rows[0].evidenceWaiver).toBeUndefined();   // nothing was made evidence
+    expect(rows[0].evidenceWaiver?.certificateId).toBe(c.id);
   });
 
   it("A does not clear the claim of whoever holds it now", async () => {
     const c = await attested();
     const slowDrive = fakeDrive();
-    const put = slowDrive.put.bind(slowDrive);
-    slowDrive.put = async (o) => { await new Promise((r) => setTimeout(r, 300)); return put(o); };
+    const put = slowDrive.putAttempt.bind(slowDrive);
+    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 300)); return put(o); };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 50, heartbeatMs: 10_000, newToken: () => "token-A" }));
     await new Promise((r) => setTimeout(r, 120));
     // B claims and keeps hold of it — it has not finished.
@@ -591,26 +621,26 @@ describe("a request that loses its lease while it is working", () => {
   it("the heartbeat keeps a long upload from being taken over", async () => {
     const c = await attested();
     const slowDrive = fakeDrive();
-    const put = slowDrive.put.bind(slowDrive);
-    slowDrive.put = async (o) => { await new Promise((r) => setTimeout(r, 300)); return put(o); };
+    const put = slowDrive.putAttempt.bind(slowDrive);
+    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 300)); return put(o); };
     // A lease far shorter than the work, renewed often enough to survive it.
     const done = await uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 80, heartbeatMs: 25, newToken: () => "token-A" }));
     expect(done.status).toBe("UPLOADED");
     expect(drive.live()[0].attemptToken).toBe("token-A");
   });
 
-  it("a file overwritten by another attempt is not recorded by this one", async () => {
+  it("a settled document edited behind the application's back is refused at the point of use", async () => {
     const c = await attested();
     // The lease holds, but the file underneath is replaced by a different attempt
     // between writing it and confirming it.
     const meddling = fakeDrive();
-    const find = meddling.find.bind(meddling);
-    meddling.find = async (o) => (await find(o)).map((f) => ({ ...f, attemptToken: "somebody-elses-attempt" }));
-    await expect(uploadCertificate(c.id, ADMIN, deps({ drive: meddling, newToken: () => "token-A" }))).rejects.toMatchObject({
-      reasons: [expect.stringContaining("took over filing")],
-    });
-    expect((await held(c.id))!.status).toBe("ATTESTED");
-    expect((await held(c.id))!.driveFileId).toBeNull();
+    await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" }));
+    // Someone replaces the settled document behind the application's back.
+    const active = drive.active()[0];
+    active.bytes = Buffer.from("A DIFFERENT DOCUMENT ENTIRELY");
+    active.revisionId = "rev_tampered";
+    expect((await refusal(() => linkCertificate(c.id, ADMIN, deps({ drive: meddling }))))[0]).toMatch(/edited since|not the one that was filed/);
+    expect((await held(c.id))!.status).toBe("UPLOADED");
   });
 });
 
@@ -622,9 +652,10 @@ describe("what a quarantined file says about itself", () => {
     drive.corruptOnRead = true;
     await refusal(() => uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" })));
 
-    const f = drive.files[0];
+    const f = drive.files.find((x) => x.forensic?.attemptToken === "token-A")!;
     expect(f.certificateId).toBe("");                 // the live marker is gone
-    expect(f.attemptToken).toBeUndefined();
+    expect(f.attemptToken).toBeNull();
+    expect(f.state).toBe("QUARANTINED");
     expect(f.forensic).toMatchObject({ certificateId: c.id, attemptToken: "token-A" });
     expect(Date.parse(f.forensic!.at)).not.toBeNaN();
 
@@ -635,5 +666,117 @@ describe("what a quarantined file says about itself", () => {
     expect(d.expectedPdfHash).not.toBe(d.actualPdfHash);
     expect(String(d.expectedPdfHash)).toMatch(/^[0-9a-f]{64}$/);
     expect(String(d.actualPdfHash)).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe("the document is checked again before money moves", () => {
+  const linked = async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" }));
+    return linkCertificate(c.id, ADMIN, deps());
+  };
+  const gate = async (d: Deps) =>
+    checkEvidenceBeforePaying([await rowsNow() as Expense[]], { actorId: ADMIN.id, actorRole: ADMIN.role }, d);
+
+  it("an untouched document passes", async () => {
+    await linked();
+    const g = await gate(deps());
+    expect(g.ok).toBe(true);
+    expect(g.stale).toEqual([]);
+  });
+
+  it("a document edited after linking blocks the payment and is marked stale", async () => {
+    const cert = await linked();
+    // Somebody opens the file in Drive and changes it.
+    const active = drive.active()[0];
+    active.bytes = Buffer.from("SOMETHING ELSE ENTIRELY");
+    active.revisionId = "rev_tampered";
+
+    const g = await gate(deps());
+    expect(g.ok).toBe(false);
+    expect(g.reasons.join(" ")).toContain(cert.certificateNo);
+    expect(g.stale).toEqual([cert.certificateNo]);
+
+    const after = await prisma.expenseCertificate.findUnique({ where: { id: cert.id } });
+    expect(after!.status).toBe("STALE");
+    const log = await prisma.auditLog.findFirst({ where: { action: "certificate.marked_stale" } });
+    expect((log!.detail as { why: string }).why).toBe("drive_changed");
+
+    // …and every screen stops treating those rows as evidenced.
+    const rows = await rowsNow();
+    const state = evidenceState(rows[0], await certificateStatuses([rows as Expense[]]));
+    expect(state.state).toBe("BLOCKED");
+    expect(state.state === "BLOCKED" && state.reason).toContain("no longer matches the document");
+  });
+
+  it("a stale certificate can be filed again, and then it counts once more", async () => {
+    const cert = await linked();
+    drive.active()[0].bytes = Buffer.from("TAMPERED");
+    drive.active()[0].revisionId = "rev_tampered";
+    await gate(deps());
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: cert.id } }))!.status).toBe("STALE");
+
+    const refiled = await uploadCertificate(cert.id, ADMIN, deps({ newToken: () => "token-B" }));
+    expect(refiled.status).toBe("UPLOADED");
+    expect(drive.active()).toHaveLength(1);
+    expect(drive.active()[0].attemptToken).toBe("token-B");
+    await linkCertificate(cert.id, ADMIN, deps());
+    expect((await gate(deps())).ok).toBe(true);
+  });
+
+  it("a withdrawn certificate blocks the payment too", async () => {
+    const cert = await linked();
+    await voidCertificate(cert.id, "withdrawn while testing the payment gate", ADMIN, deps());
+    const g = await gate(deps());
+    expect(g.ok).toBe(false);
+    expect(g.reasons.join(" ")).toContain("was withdrawn");
+  });
+
+  it("a missing document blocks the payment", async () => {
+    await linked();
+    drive.files.length = 0;
+    expect((await gate(deps())).ok).toBe(false);
+  });
+
+  it("two settled documents fail closed rather than picking one", async () => {
+    const cert = await linked();
+    const first = drive.active()[0];
+    drive.files.push({ ...first, id: "drive_clone", revisionId: "rev_clone" });
+    const g = await gate(deps());
+    expect(g.ok).toBe(false);
+    expect(g.reasons.join(" ")).toContain("2 settled documents");
+    expect(g.stale).toEqual([cert.certificateNo]);
+  });
+
+  it("rows with no certificate behind them are none of this gate's business", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const g = await checkEvidenceBeforePaying([await rowsNow() as Expense[]], { actorId: ADMIN.id, actorRole: ADMIN.role }, deps());
+    expect(g.ok).toBe(true);
+  });
+});
+
+describe("a settled document is never written again", () => {
+  it("the same attempt cannot overwrite its own file once it is ACTIVE", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" }));
+    const d = fakeDrive();
+    await expect(d.putAttempt({
+      certificateId: c.id, certificateNo: c.certificateNo, payloadHash: c.payloadHash, environment: ENV,
+      attemptToken: "token-A", name: "x.pdf", bytes: Buffer.from("NEW BYTES"),
+      folderPath: ["Folkpaths Job Sheets", "2099-04 April", "Expense Certificates"],
+    })).rejects.toThrow(/drive-immutable/);
+  });
+
+  it("a promoted file is marked read-only where Drive allows it", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const up = await uploadCertificate(c.id, ADMIN, deps());
+    expect(drive.active()[0].readOnly).toBe(true);
+    expect(up.driveRevisionId).toBeTruthy();
   });
 });

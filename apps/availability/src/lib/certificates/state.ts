@@ -12,7 +12,7 @@
 // the file agree, nobody should be paid on the strength of it, so nothing short of LINKED
 // counts. That is the whole reason the states are separate.
 
-export const CERTIFICATE_STATES = ["DRAFT", "READY_TO_ATTEST", "ATTESTED", "UPLOADED", "LINKED", "VOID"] as const;
+export const CERTIFICATE_STATES = ["DRAFT", "READY_TO_ATTEST", "ATTESTED", "UPLOADED", "LINKED", "STALE", "VOID"] as const;
 export type CertificateState = (typeof CERTIFICATE_STATES)[number];
 
 const NEXT: Record<CertificateState, CertificateState[]> = {
@@ -22,7 +22,10 @@ const NEXT: Record<CertificateState, CertificateState[]> = {
   // An upload that has to be retried comes back through UPLOADED, so a half-finished
   // one is not a dead end.
   UPLOADED: ["LINKED", "UPLOADED", "VOID"],
-  LINKED: ["VOID"],
+  // A linked certificate whose document has changed in Drive. It was evidence and is
+  // not any more; filing it again is what brings it back.
+  LINKED: ["STALE", "VOID"],
+  STALE: ["ATTESTED", "VOID"],
   VOID: [],
 };
 
@@ -34,6 +37,7 @@ export function moveRefusal(from: CertificateState, to: CertificateState): strin
   if (canMove(from, to)) return null;
   if (from === "VOID") return "This certificate was withdrawn. Issue a new one instead — a withdrawn document is kept as it was.";
   if (from === "LINKED") return "This certificate is already in use as evidence. Withdraw it, with a reason, before anything else.";
+  if (from === "STALE") return "The document behind this certificate has changed, so it is not evidence any more. File it again, or withdraw it.";
   return `A certificate cannot go from ${LABEL[from]} to ${LABEL[to]}.`;
 }
 
@@ -50,6 +54,7 @@ export const LABEL: Record<CertificateState, string> = {
   ATTESTED: "Approved",
   UPLOADED: "Filed in Drive",
   LINKED: "In use as evidence",
+  STALE: "Document changed — not evidence",
   VOID: "Withdrawn",
 };
 
@@ -59,6 +64,7 @@ export const LABEL_TH: Record<CertificateState, string> = {
   ATTESTED: "รับรองแล้ว",
   UPLOADED: "จัดเก็บใน Drive แล้ว",
   LINKED: "ใช้เป็นหลักฐานแล้ว",
+  STALE: "เอกสารเปลี่ยน — ใช้เป็นหลักฐานไม่ได้",
   VOID: "ยกเลิกแล้ว",
 };
 

@@ -95,6 +95,7 @@ export function evidenceState(e: ExpenseWithEvidence, certificates?: Certificate
     if (status === "LINKED") return { state: "WAIVED", waiver: w };
     const named = (w.certificateNo ?? "").trim() || "its certificate";
     const why = status === "VOID" ? `${named} was withdrawn`
+      : status === "STALE" ? `${named} no longer matches the document filed for it`
       : status ? `${named} is not in use as evidence yet (${status})`
       : `${named} could not be checked`;
     return { state: "BLOCKED", reason: `"${what}" is being reimbursed to the guide against ${named}, and ${why}. Until the certificate is in force there is nothing behind this row.` };

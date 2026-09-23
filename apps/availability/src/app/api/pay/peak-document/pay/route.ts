@@ -1,3 +1,5 @@
+import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
+import type { Expense as CertExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -84,6 +86,19 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     if (e instanceof PaymentNotRecordable) return NextResponse.json({ error: doc.status === "PAID" ? "already-paid" : "not-payable", reasons: e.reasons }, { status: 409 });
     throw e;
+  }
+
+  // The certificates these rows lean on, checked against what is in Drive right now.
+  // Linking checked the document once; that was days ago and Drive is a folder people
+  // have hands in. One that has changed since is refused here and marked stale, so it
+  // stops being treated as evidence everywhere else too.
+  const sheets = await prisma.jobSheet.findMany({
+    where: { OR: documentJobs(doc).map((j) => ({ guideId: doc.guideId, date: j.date, slotIdx: j.slotIdx })) },
+    select: { expenses: true },
+  });
+  const evidence = await checkEvidenceBeforePaying(sheets.map((s) => (s.expenses as unknown as CertExpense[]) ?? []), actor);
+  if (!evidence.ok) {
+    return NextResponse.json({ error: "evidence-stale", reasons: evidence.reasons, staleCertificates: evidence.stale }, { status: 409 });
   }
 
   // Drive saves an uploaded slip, or reads the saved one back to attach it in PEAK.
