@@ -265,3 +265,31 @@ link path refuses too if the sender is on (**409**), or if FolkOPS already has t
 movement in flight or posted, unless the same document is being recorded again. Turn
 `ADVANCE_EXISTING_PEAK_LINKS_ENABLED` back to `0` when the reconciliation is done; the
 sender will not run while it is `1`.
+
+## Review incentives are paid inside FOLK-PAY, and nowhere else
+
+A review incentive is extra pay for the guide's work, so **3% is withheld on it, exactly
+as on the guide fee** (owner decision, 2026-09-23):
+
+```
+WHT base = guide fee + review incentive
+```
+
+Reimbursements — meals, transport, tickets the guide paid for — are the guide's own money
+coming back and never join that base. Neither does a ticket bought with a company advance,
+which was never the guide's money at all.
+
+**One path, so the tax cannot be lost.** The incentive rides in the guide's payment
+document under its `FOLK-PAY-…` number, on account `510110`, with its own withholding
+beside it. The per-job-sheet expense document does not carry review rows at all, so it
+withholds on the fee alone — and a job can only ever be posted through one of those two
+paths, because each refuses a job the other already has.
+
+A standalone review payout (`FOLK-RR-…`, its own weekly run) was designed once and never
+merged. It must not be, until it carries withholding and reaches PEAK, because money paid
+that way leaves without its tax. `src/lib/no-separate-review-payout.test.ts` fails the
+build if such a path appears. The message to show anyone who tries:
+
+> ค่าตอบแทนรีวิวไกด์ต้องรวมในเอกสารจ่ายเงินไกด์ FOLK-PAY เพื่อคำนวณภาษีหัก ณ ที่จ่าย 3%
+
+Existing records stay readable — this is about creating, approving or paying a new one.
