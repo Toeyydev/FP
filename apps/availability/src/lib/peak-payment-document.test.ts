@@ -292,6 +292,28 @@ describe("what belongs in a payment document", () => {
     expect(doc.total).toBe(1261);
   });
 
+  it("the ฿1,924 example: one document, both withholdings, and a transfer of ฿1,876", () => {
+    // The owner's worked example (2026-09-23), built as PEAK would receive it.
+    const doc = build({
+      jobs: [{
+        date: "2030-05-06", slotIdx: 0, ref: "FOLK-BKK-20300506-01",
+        guideFee: { price: 1500, time: 1, whtPct: 3 },
+        expenses: [
+          { description: "Review reward", price: 100, pax: 1 },
+          { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" },
+          { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" },
+        ] as Expense[],
+      }],
+    });
+    const byAccount = (code: string) => doc.lines.filter((l) => l.accountCode === code);
+    expect(byAccount("510111")).toMatchObject([{ price: 1500, withHoldingTaxAmount: 45 }]);
+    expect(byAccount("510110")).toMatchObject([{ price: 100, withHoldingTaxAmount: 3 }]);   // once, and only once
+    expect(byAccount("510104").reduce((s, l) => s + l.price, 0)).toBe(324);                 // meal + transport, untaxed
+    expect(doc.lines.reduce((s, l) => s + l.withHoldingTaxAmount, 0)).toBe(48);
+    expect(doc.lines.reduce((s, l) => s + l.price, 0)).toBe(1924);
+    expect(doc.total).toBe(1876);                                                           // what leaves the bank
+  });
+
   it("refuses rather than posting a document that would not match the transfer", () => {
     expect(reasonsOf(() => build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Mystery", price: 10, pax: 1, paidBy: "guide" }] }] })).join(" "))
       .toContain("has no expense category");
