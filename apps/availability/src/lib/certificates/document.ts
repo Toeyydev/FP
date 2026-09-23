@@ -36,16 +36,21 @@ export function thaiDateTime(iso: string | null | undefined): string {
 }
 
 const money = (satang: number) => (satang / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+// Everything that reaches the page goes through one of these two. The payload is read
+// back out of a JSON column, so a value that was a number when it was written is only
+// "a number" by convention by the time it is printed — `int` makes that true again
+// rather than trusting it.
+const esc = (s: unknown) => String(s ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" })[c]!);
+const int = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : 0);
 
 export type CertificateView = {
   certificateNo: string;
   payload: CertificatePayload;
   payloadHash: string;
-  signerName: string;
-  signerRole: string;
+  attestedByName: string;
+  attestedByRole: string;
   /** ISO. The moment the approval was recorded. */
-  signedAt: string;
+  attestedAt: string;
   auditRef: string;
 };
 
@@ -55,8 +60,8 @@ export function renderCertificateHtml(v: CertificateView): string {
       <td class="c">${i + 1}</td>
       <td>${esc(r.description)}</td>
       <td class="c">${esc(r.category)}</td>
-      <td class="c">${r.pax}</td>
-      <td class="r">${money(Math.round(r.price * 100))}</td>
+      <td class="c">${int(r.pax)}</td>
+      <td class="r">${money(Math.round(int(r.price * 100)))}</td>
       <td class="r">${money(r.amountSatang)}</td>
     </tr>`).join("\n");
 
@@ -109,10 +114,10 @@ export function renderCertificateHtml(v: CertificateView): string {
 
 <table class="facts">
   <tr><th>ใบงานเลขที่</th><td>${esc(p.jobRef)}</td></tr>
-  <tr><th>วันที่ปฏิบัติงาน</th><td>${esc(thaiDate(p.tourDate))} (รอบที่ ${p.slotIdx})</td></tr>
+  <tr><th>วันที่ปฏิบัติงาน</th><td>${esc(thaiDate(p.tourDate))} (รอบที่ ${int(p.slotIdx)})</td></tr>
   <tr><th>ไกด์ผู้สำรองจ่าย</th><td>${esc(p.guideName)} (รหัส ${esc(p.guideId)})</td></tr>
   <tr><th>ไกด์ส่งรายงานค่าใช้จ่าย</th><td>${p.guideReportedAt ? `ไกด์ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนเมื่อ ${esc(thaiDateTime(p.guideReportedAt))}` : "ไม่มีบันทึกการส่งรายงานจากบัญชีของไกด์"}</td></tr>
-  <tr><th>จำนวนรายการ</th><td>${p.rows.length} รายการ รวม ${money(p.totalSatang)} บาท</td></tr>
+  <tr><th>จำนวนรายการ</th><td>${int(p.rows.length)} รายการ รวม ${money(p.totalSatang)} บาท</td></tr>
 </table>
 
 <p>บริษัทขอรับรองว่า ค่าใช้จ่ายตามรายการข้างล่างนี้เกิดขึ้นจริงในการปฏิบัติงานนำเที่ยวตามใบงานที่อ้างถึง โดยไกด์เป็นผู้สำรองจ่ายไปก่อนและบริษัทมีหน้าที่ต้องจ่ายคืน</p>
@@ -132,9 +137,9 @@ ${rows}
 <div class="approve">
   <h2>${esc(APPROVAL_TERM_TH)}</h2>
   <table>
-    <tr><th>ผู้รับรอง</th><td>${esc(v.signerName)}</td></tr>
-    <tr><th>ตำแหน่ง/สิทธิ์</th><td>${esc(v.signerRole)}</td></tr>
-    <tr><th>รับรองเมื่อ</th><td>${esc(thaiDateTime(v.signedAt))}</td></tr>
+    <tr><th>ผู้รับรอง</th><td>${esc(v.attestedByName)}</td></tr>
+    <tr><th>ตำแหน่ง/สิทธิ์</th><td>${esc(v.attestedByRole)}</td></tr>
+    <tr><th>รับรองเมื่อ</th><td>${esc(thaiDateTime(v.attestedAt))}</td></tr>
     <tr><th>อ้างอิง audit</th><td class="hash">${esc(v.auditRef)}</td></tr>
     <tr><th>ลายนิ้วมือข้อมูลต้นทาง</th><td class="hash">${esc(shortHash(v.payloadHash))}…</td></tr>
   </table>

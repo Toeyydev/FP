@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { isAdmin } from "@/lib/roles";
-import { CertificateRefused, linkCertificate, signCertificate, uploadCertificate, voidCertificate, type Actor } from "@/lib/certificates/service";
+import { CertificateRefused, linkCertificate, attestCertificate, uploadCertificate, voidCertificate, type Actor } from "@/lib/certificates/service";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 // is not a cryptographic signature and nothing in this file should call it one.
 
 const bodyZ = z.object({
-  action: z.enum(["sign", "upload", "link", "void"]),
+  action: z.enum(["attest", "upload", "link", "void"]),
   reason: z.string().max(500).optional(),
 });
 
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const { action, reason } = parsed.data;
     const cert =
-      action === "sign" ? await signCertificate(id, actor)
+      action === "attest" ? await attestCertificate(id, actor)
       : action === "upload" ? await uploadCertificate(id, actor)
       : action === "link" ? await linkCertificate(id, actor)
       : await voidCertificate(id, reason ?? "", actor);
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ok: true,
       certificate: {
         id: cert.id, certificateNo: cert.certificateNo, status: cert.status,
-        signerName: cert.signerName, signerRole: cert.signerRole, signedAt: cert.signedAt,
+        attestedByName: cert.attestedByName, attestedByRole: cert.attestedByRole, attestedAt: cert.attestedAt,
         driveUrl: cert.driveUrl, pdfHash: cert.pdfHash, payloadHash: cert.payloadHash,
         linkedAt: cert.linkedAt, voidedAt: cert.voidedAt, voidReason: cert.voidReason,
       },

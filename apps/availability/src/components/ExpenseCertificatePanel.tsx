@@ -16,7 +16,7 @@ type Covered = { index: number; description: string; pax: number; price: number;
 type Certificate = {
   id: string; certificateNo: string; status: string; label: string; labelTh: string; isEvidence: boolean;
   totalSatang: number; payloadHash: string; pdfHash: string | null; driveUrl: string | null;
-  signerName: string | null; signerRole: string | null; signedAt: string | null;
+  attestedByName: string | null; attestedByRole: string | null; attestedAt: string | null;
   uploadedAt: string | null; linkedAt: string | null; voidedAt: string | null; voidReason: string | null;
   coveredRows: Covered[];
 };
@@ -31,7 +31,7 @@ const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-GB"
 const short = (h: string | null | undefined) => (h ?? "").slice(0, 12);
 
 const TONE: Record<string, string> = {
-  DRAFT: "#78716c", READY_TO_SIGN: "#b45309", SIGNED: "#0369a1",
+  DRAFT: "#78716c", READY_TO_ATTEST: "#b45309", ATTESTED: "#0369a1",
   UPLOADED: "#0369a1", LINKED: "#2f7d4f", VOID: "#b91c1c",
 };
 
@@ -118,9 +118,9 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
             <b>{live.certificateNo}</b>
             <span style={{ color: TONE[live.status] ?? "#78716c", fontWeight: 700 }}>{live.labelTh}</span>
           </div>
-          {live.signedAt && (
+          {live.attestedAt && (
             <div style={{ marginTop: 4 }}>
-              รับรองโดย <b>{live.signerName}</b> ({live.signerRole}) เมื่อ {when(live.signedAt)}
+              รับรองโดย <b>{live.attestedByName}</b> ({live.attestedByRole}) เมื่อ {when(live.attestedAt)}
             </div>
           )}
           <div style={{ marginTop: 4, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 10.5, color: "var(--muted,#78716c)" }}>
@@ -142,19 +142,19 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
               สร้างใบรับรองแทนใบเสร็จ
             </button>
           )}
-          {live?.status === "READY_TO_SIGN" && (
+          {live?.status === "READY_TO_ATTEST" && (
             <>
               <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11.5, flexBasis: "100%" }}>
                 <input type="checkbox" checked={confirmed} onChange={(ev) => setConfirmed(ev.target.checked)} />
                 <span>ข้าพเจ้าตรวจสอบรายการและรับรองว่าเป็นค่าใช้จ่ายที่เกิดขึ้นจริงเพื่อกิจการ</span>
               </label>
               <button type="button" className="btn" disabled={busy || !confirmed}
-                onClick={() => act(`/api/jobsheet/certificate/${live.id}`, { action: "sign" }, "รับรองเอกสารแล้ว")}>
+                onClick={() => act(`/api/jobsheet/certificate/${live.id}`, { action: "attest" }, "รับรองเอกสารแล้ว")}>
                 รับรองเอกสารทางอิเล็กทรอนิกส์
               </button>
             </>
           )}
-          {live?.status === "SIGNED" && (
+          {live?.status === "ATTESTED" && (
             <button type="button" className="btn" disabled={busy}
               onClick={() => act(`/api/jobsheet/certificate/${live.id}`, { action: "upload" }, "จัดเก็บใน Drive แล้ว")}>
               จัดเก็บเอกสารใน Drive

@@ -598,7 +598,7 @@ model ExpenseCertificate {
   jobRef                String?
   tourDate              String
   slotIdx               Int
-  // DRAFT | READY_TO_SIGN | SIGNED | UPLOADED | LINKED | VOID.
+  // DRAFT | READY_TO_ATTEST | ATTESTED | UPLOADED | LINKED | VOID.
   // Only LINKED is evidence — see lib/certificates/state.
   status                String    @default("DRAFT")
   // One ACTIVE certificate per job sheet, enforced by the database rather than by a
@@ -618,10 +618,10 @@ model ExpenseCertificate {
   sourceGuideReportedAt DateTime?
   sourceSheetUpdatedAt  DateTime
   // Who approved it, read from their session and never from a request body.
-  signerUserId          String?
-  signerName            String?
-  signerRole            String?
-  signedAt              DateTime?
+  attestedByUserId          String?
+  attestedByName            String?
+  attestedByRole            String?
+  attestedAt              DateTime?
   // The file. uploadStartedAt is written BEFORE the upload is attempted, so an upload
   // that succeeded while the database write failed can be found and finished.
   pdfHash               String?

@@ -16,7 +16,9 @@
 # from — filing is never silently skipped.
 
 [phases.setup]
-nixPkgs = ["...", "chromium"]
+# noto-fonts carries the Thai block. Without a font that can draw it, Chromium lays out
+# boxes where the Thai should be and the PDF is confidently wrong.
+nixPkgs = ["...", "chromium", "noto-fonts", "fontconfig"]
 
 [variables]
 PUPPETEER_SKIP_DOWNLOAD = "1"

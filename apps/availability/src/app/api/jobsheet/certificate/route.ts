@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 // GET  — what the sheet has, and what a new certificate would cover
 // POST — issue a draft, ready for someone to certify
 //
-// The signer's identity is never in a request body. It is read from the session, here
+// The attester's identity is never in a request body. It is read from the session, here
 // and at every later step, so a browser cannot name somebody else as the approver.
 
 const key = z.object({
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
     select: {
       id: true, certificateNo: true, status: true, totalSatang: true, payloadHash: true, pdfHash: true,
-      driveUrl: true, signerName: true, signerRole: true, signedAt: true, uploadedAt: true, linkedAt: true,
+      driveUrl: true, attestedByName: true, attestedByRole: true, attestedAt: true, uploadedAt: true, linkedAt: true,
       voidedAt: true, voidReason: true, coveredRows: true, createdAt: true,
     },
   });

@@ -96,6 +96,24 @@ jobs:
           npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script
           npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
 
+      # Chromium and a Thai font, so the certificate renderer is exercised against a
+      # Linux container rather than whatever a developer happens to have installed. A
+      # Mac with Chrome and the system Thai fonts renders the page beautifully and says
+      # nothing about what ships.
+      - name: Install Chromium and Thai fonts (for the certificate renderer)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq chromium-browser fonts-thai-tlwg fonts-noto-core || \
+          sudo apt-get install -y -qq chromium fonts-thai-tlwg fonts-noto-core
+          fc-cache -f >/dev/null 2>&1 || true
+          echo "CHROMIUM_PATH=$(command -v chromium-browser || command -v chromium)" >> "$GITHUB_ENV"
+
+      - name: The certificate renderer works in a container like the deployment's
+        run: |
+          test -n "$CHROMIUM_PATH" || { echo "no chromium on PATH"; exit 1; }
+          fc-list | grep -qiE 'thai|noto' || { echo "no Thai-capable font installed"; exit 1; }
+          npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts
+
       - name: Integration tests (real database)
         run: npm run test:integration
 

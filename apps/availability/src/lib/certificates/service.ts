@@ -8,7 +8,7 @@ import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHas
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { certificateFileName, certificateFolder, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
-import { folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { downloadDriveFile, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -22,6 +22,8 @@ export type Deps = {
   db?: PrismaClient;
   renderPdf?: RenderPdf;
   uploadPdf?: (o: { bytes: Buffer; name: string; folderPath: string[] }) => Promise<{ id: string; link: string }>;
+  /** Read the filed bytes back, so the record is of the file that is actually there. */
+  fetchPdf?: (o: { fileId: string; link: string }) => Promise<Buffer | null>;
   now?: () => Date;
 };
 
@@ -99,7 +101,7 @@ export async function createCertificate(key: { guideId: string; date: string; sl
       data: {
         certificateNo, jobSheetId: sheet.id, activeJobSheetId: sheet.id,
         guideId: sheet.guideId, jobRef: sheet.ref, tourDate: sheet.date, slotIdx: sheet.slotIdx,
-        status: "READY_TO_SIGN" satisfies CertificateState,
+        status: "READY_TO_ATTEST" satisfies CertificateState,
         payload: payload as unknown as Prisma.InputJsonValue,
         payloadHash: payloadHash(payload),
         coveredRows: rows as unknown as Prisma.InputJsonValue,
@@ -122,16 +124,16 @@ export async function createCertificate(key: { guideId: string; date: string; sl
 // the sheet as it was; if it has moved since, approving would put a person's name on a
 // document that no longer describes anything.
 //
-// The signer is taken from `actor`, which every caller builds from the session. Nothing
+// The attester is taken from `actor`, which every caller builds from the session. Nothing
 // on this path reads a name, an id or a role out of a request body.
 
-export async function signCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
+export async function attestCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
   const signed = await db.$transaction(async (tx) => {
     const cert = await tx.expenseCertificate.findUnique({ where: { id } });
     if (!cert) refuse(["No such certificate"], 404);
-    const bad = moveRefusal(cert!.status as CertificateState, "SIGNED");
+    const bad = moveRefusal(cert!.status as CertificateState, "ATTESTED");
     if (bad) refuse([bad]);
 
     const sheet = await tx.jobSheet.findUnique({ where: { id: cert!.jobSheetId } });
@@ -156,13 +158,13 @@ export async function signCertificate(id: string, actor: Actor, deps: Deps = {})
     return tx.expenseCertificate.update({
       where: { id, status: cert!.status },
       data: {
-        status: "SIGNED" satisfies CertificateState,
-        signerUserId: actor.id, signerName: actor.name, signerRole: actor.role, signedAt: now(),
+        status: "ATTESTED" satisfies CertificateState,
+        attestedByUserId: actor.id, attestedByName: actor.name, attestedByRole: actor.role, attestedAt: now(),
         sourceSheetUpdatedAt: sheet!.updatedAt, sourceGuideReportedAt: sheet!.guideExpensesAt,
       },
     });
   });
-  await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.signed", entityType: "ExpenseCertificate", entityId: signed.id,
+  await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.attested", entityType: "ExpenseCertificate", entityId: signed.id,
     detail: { certificateNo: signed.certificateNo, jobRef: signed.jobRef, totalSatang: signed.totalSatang, payloadHash: signed.payloadHash,
       approval: "electronic certification by an authenticated user — session identity, role and this audit row; no cryptographic signature" } });
   return signed;
@@ -173,7 +175,7 @@ export async function signCertificate(id: string, actor: Actor, deps: Deps = {})
 // The one step that is not a transaction, because it calls out to Drive.
 //
 // The order is: say we are about to upload, upload, then record what came back. If the
-// last write fails, the row is left at SIGNED with uploadStartedAt set — visibly
+// last write fails, the row is left at ATTESTED with uploadStartedAt set — visibly
 // half-finished rather than silently wrong — and pressing the button again re-renders
 // the same payload to the same filename, which Drive replaces in place and returns the
 // same file id for. Nothing is orphaned and nothing is duplicated.
@@ -185,7 +187,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
 
   const cert = await db.expenseCertificate.findUnique({ where: { id } });
   if (!cert) refuse(["No such certificate"], 404);
-  if (cert!.status !== "SIGNED" && cert!.status !== "UPLOADED") refuse([moveRefusal(cert!.status as CertificateState, "UPLOADED") ?? "This certificate has not been approved yet."]);
+  if (cert!.status !== "ATTESTED" && cert!.status !== "UPLOADED") refuse([moveRefusal(cert!.status as CertificateState, "UPLOADED") ?? "This certificate has not been approved yet."]);
   if (!deps.uploadPdf && !deps.renderPdf && !pdfRendererAvailable()) {
     refuse(["This deployment has no PDF renderer configured, so the certificate cannot be filed. The approval is recorded and filing can be retried once it is."], 503);
   }
@@ -198,9 +200,9 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     certificateNo: cert!.certificateNo,
     payload,
     payloadHash: cert!.payloadHash,
-    signerName: cert!.signerName ?? "",
-    signerRole: cert!.signerRole ?? "",
-    signedAt: (cert!.signedAt ?? new Date(0)).toISOString(),
+    attestedByName: cert!.attestedByName ?? "",
+    attestedByRole: cert!.attestedByRole ?? "",
+    attestedAt: (cert!.attestedAt ?? new Date(0)).toISOString(),
     auditRef: cert!.id,
   });
   const bytes = await render(html);
@@ -217,12 +219,31 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     filed = await saveBufferToDrive({ refreshToken: token!, name, base64: bytes.toString("base64"), mimeType: "application/pdf", folderPath });
   }
 
+  // Read it back and hash what is actually there. An upload that half-landed, or landed
+  // against a name something else already had, would otherwise be recorded as this
+  // document — and the hash would be of bytes nobody can fetch.
+  const verify = deps.fetchPdf ?? (async ({ link }) => {
+    const token = await folkpathsDriveToken(actor.id);
+    if (!token) return null;
+    const got = await downloadDriveFile(token, link);
+    return got ? Buffer.from(got.base64, "base64") : null;
+  });
+  const filedBytes = await verify({ fileId: filed.id, link: filed.link }).catch(() => null);
+  if (filedBytes && fileHash(filedBytes) !== pdfHash) {
+    // Left at ATTESTED with the attempt recorded; filing can be retried, and the retry
+    // replaces the file in place rather than adding a second.
+    refuse([`The document filed in Drive does not match the one that was rendered (${filedBytes.length} bytes there, ${bytes.length} sent). Nothing has been recorded against it — try filing it again.`], 502);
+  }
+  const verified = Boolean(filedBytes);
+
   const done = await db.expenseCertificate.update({
     where: { id },
     data: { status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: filed.id, driveUrl: filed.link, uploadedAt: now() },
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
-    detail: { certificateNo: done.certificateNo, driveFileId: filed.id, pdfHash, bytes: bytes.length } });
+    detail: { certificateNo: done.certificateNo, driveFileId: filed.id, pdfHash, bytes: bytes.length,
+      // Whether the bytes were read back and matched, or Drive would not return them.
+      readBackVerified: verified } });
   return done;
 }
 

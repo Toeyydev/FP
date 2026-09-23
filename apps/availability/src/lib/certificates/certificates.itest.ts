@@ -17,7 +17,7 @@ import type { Expense } from "@/lib/jobsheet";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { certificateStatuses } from "@/lib/certificates/evidence";
 import { fileHash } from "@/lib/certificates/payload";
-import { CertificateRefused, createCertificate, linkCertificate, signCertificate, uploadCertificate, voidCertificate, type Actor, type Deps } from "@/lib/certificates/service";
+import { CertificateRefused, createCertificate, linkCertificate, attestCertificate, uploadCertificate, voidCertificate, type Actor, type Deps } from "@/lib/certificates/service";
 import { POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
@@ -64,7 +64,7 @@ const rowsNow = async (): Promise<ExpenseWithEvidence[]> =>
 /** Take a certificate all the way to being evidence. */
 const throughToLinked = async () => {
   const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-  await signCertificate(c.id, ADMIN, deps());
+  await attestCertificate(c.id, ADMIN, deps());
   await uploadCertificate(c.id, ADMIN, deps());
   return linkCertificate(c.id, ADMIN, deps());
 };
@@ -88,7 +88,7 @@ describe("issuing one", () => {
   it("covers exactly the rows that have no receipt and are the guide's own money", async () => {
     await seedSheet([e("Ferry", 11), e("Temple", 500, 2, { paidBy: "advance", expenseType: "entrance" }), e("Bus", 15)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    expect(c.status).toBe("READY_TO_SIGN");
+    expect(c.status).toBe("READY_TO_ATTEST");
     expect((c.coveredRows as unknown as { description: string }[]).map((r) => r.description)).toEqual(["Ferry", "Bus"]);
     expect(c.totalSatang).toBe(11 * 5 * 100 + 15 * 5 * 100);
     expect(c.certificateNo).toBe(`CERT-${REF}-01`);
@@ -135,13 +135,13 @@ describe("certifying it", () => {
   it("records the approver from the session, with their role and the moment", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    const signed = await signCertificate(c.id, ADMIN, deps());
-    expect(signed.status).toBe("SIGNED");
-    expect(signed.signerUserId).toBe("u_admin");
-    expect(signed.signerName).toBe("Malee Testsuite");
-    expect(signed.signerRole).toBe("ADMIN");
-    expect(signed.signedAt).toBeTruthy();
-    const log = await prisma.auditLog.findFirst({ where: { action: "certificate.signed" } });
+    const signed = await attestCertificate(c.id, ADMIN, deps());
+    expect(signed.status).toBe("ATTESTED");
+    expect(signed.attestedByUserId).toBe("u_admin");
+    expect(signed.attestedByName).toBe("Malee Testsuite");
+    expect(signed.attestedByRole).toBe("ADMIN");
+    expect(signed.attestedAt).toBeTruthy();
+    const log = await prisma.auditLog.findFirst({ where: { action: "certificate.attested" } });
     expect(log!.actorId).toBe("u_admin");
     expect(String((log!.detail as Record<string, unknown>).approval)).toContain("no cryptographic signature");
   });
@@ -150,17 +150,17 @@ describe("certifying it", () => {
     await seedSheet([e("Ferry", 11), e("Bus", 15)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await prisma.jobSheet.update({ where: { id: c.jobSheetId }, data: { expenses: [e("Ferry", 25), e("Bus", 15)] as object[] } });
-    const why = await refusal(() => signCertificate(c.id, ADMIN, deps()));
+    const why = await refusal(() => attestCertificate(c.id, ADMIN, deps()));
     expect(why[0]).toContain("has changed since the certificate was prepared");
-    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("READY_TO_SIGN");
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("READY_TO_ATTEST");
   });
 
   it("only one of two simultaneous approvals succeeds", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    const results = await Promise.allSettled([signCertificate(c.id, ADMIN, deps()), signCertificate(c.id, ADMIN, deps())]);
+    const results = await Promise.allSettled([attestCertificate(c.id, ADMIN, deps()), attestCertificate(c.id, ADMIN, deps())]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(await prisma.auditLog.count({ where: { action: "certificate.signed" } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { action: "certificate.attested" } })).toBe(1);
   });
 });
 
@@ -168,7 +168,7 @@ describe("filing it, and what happens when Drive does not cooperate", () => {
   it("hashes the bytes it uploaded, and records where they went", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    await signCertificate(c.id, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
     const up = await uploadCertificate(c.id, ADMIN, deps());
     expect(up.status).toBe("UPLOADED");
     expect(up.driveFileId).toBe("drive_1");
@@ -179,7 +179,7 @@ describe("filing it, and what happens when Drive does not cooperate", () => {
   it("the file hash is of the bytes that were sent, not of anything else", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    await signCertificate(c.id, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
     let sent: Buffer | null = null;
     const up = await uploadCertificate(c.id, ADMIN, deps({ uploadPdf: async ({ bytes }) => { sent = bytes; return { id: "d1", link: "https://drive.example.test/d1" }; } }));
     expect(up.pdfHash).toBe(fileHash(sent!));
@@ -188,11 +188,11 @@ describe("filing it, and what happens when Drive does not cooperate", () => {
   it("an upload that fails leaves it approved and retryable, not half-filed", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    await signCertificate(c.id, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
     uploadFails = true;
     await expect(uploadCertificate(c.id, ADMIN, deps())).rejects.toThrow(/drive-upload/);
     const after = await prisma.expenseCertificate.findUnique({ where: { id: c.id } });
-    expect(after!.status).toBe("SIGNED");
+    expect(after!.status).toBe("ATTESTED");
     expect(after!.uploadStartedAt).toBeTruthy();   // the attempt is on the record
     expect(after!.driveFileId).toBeNull();
     // …and retrying finishes it.
@@ -203,7 +203,7 @@ describe("filing it, and what happens when Drive does not cooperate", () => {
   it("an upload that landed while the write failed converges on the same file, not a second", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    await signCertificate(c.id, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
     // The file reaches Drive; the database write is what blows up.
     await expect(uploadCertificate(c.id, ADMIN, deps({
       uploadPdf: async ({ bytes, name }) => { uploads.push({ name, bytes: bytes.length }); driveFiles.set(name, "drive_1"); throw new Error("db write failed after upload"); },
@@ -234,7 +234,7 @@ describe("putting it to use", () => {
   it("and only then do those rows count as evidenced", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    await signCertificate(c.id, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
     await uploadCertificate(c.id, ADMIN, deps());
     // Approved and filed, but not yet linked: the row has no waiver at all.
     expect(evidenceState((await rowsNow())[0], await certificateStatuses([await rowsNow() as Expense[]])).state).toBe("BLOCKED");
@@ -246,7 +246,7 @@ describe("putting it to use", () => {
   it("refuses if the sheet moved between filing and linking", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    await signCertificate(c.id, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
     await uploadCertificate(c.id, ADMIN, deps());
     await prisma.jobSheet.update({ where: { id: c.jobSheetId }, data: { expenses: [e("Ferry", 11), e("Water", 10)] as object[] } });
     expect((await refusal(() => linkCertificate(c.id, ADMIN, deps()))).join(" ")).toContain("has changed since the certificate was approved");
@@ -309,18 +309,18 @@ describe("who may do any of this", () => {
 
   it("a client naming somebody else as the approver is ignored — the session decides", async () => {
     await seedSheet([e("Ferry", 11)]);
-    const created = await call({ guideId: GUIDE, date: DATE, slotIdx: 0, signerUserId: "u_someone_important", signerName: "Someone Else", signerRole: "OWNER" });
+    const created = await call({ guideId: GUIDE, date: DATE, slotIdx: 0, attestedByUserId: "u_someone_important", attestedByName: "Someone Else", attestedByRole: "OWNER" });
     expect(created.status).toBe(200);
     const id = (await created.json()).certificate.id;
     const res = await certificateAction(
-      new Request("https://ops.example.test/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "sign", signerUserId: "u_someone_important", signerName: "Someone Else", signerRole: "OWNER" }) }) as unknown as Parameters<typeof certificateAction>[0],
+      new Request("https://ops.example.test/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "attest", attestedByUserId: "u_someone_important", attestedByName: "Someone Else", attestedByRole: "OWNER" }) }) as unknown as Parameters<typeof certificateAction>[0],
       { params: Promise.resolve({ id }) },
     );
     expect(res.status).toBe(200);
     const cert = await prisma.expenseCertificate.findUnique({ where: { id } });
-    expect(cert!.signerUserId).toBe("u_admin");
-    expect(cert!.signerName).toBe("Malee Testsuite");
-    expect(cert!.signerRole).toBe("ADMIN");
+    expect(cert!.attestedByUserId).toBe("u_admin");
+    expect(cert!.attestedByName).toBe("Malee Testsuite");
+    expect(cert!.attestedByRole).toBe("ADMIN");
   });
 });
 
@@ -349,7 +349,7 @@ describe("what a payment makes of it", () => {
     const certs = [];
     for (const s of SHEETS) {
       const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: s.slot }, ADMIN, deps());
-      await signCertificate(c.id, ADMIN, deps());
+      await attestCertificate(c.id, ADMIN, deps());
       await uploadCertificate(c.id, ADMIN, deps());
       certs.push(c);
     }
