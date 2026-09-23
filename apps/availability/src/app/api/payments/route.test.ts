@@ -155,7 +155,7 @@ describe("GET /api/payments — after undoing false paid marks", () => {
     const c = rows[0].jobs.find((j) => j.ref === "FOLK-TEST-C")!;
     expect(c).toMatchObject({ paid: false, payStatus: "PENDING", peakRef: null, amount: 1470, combinable: true });
     expect(c.peakStatus.state).toBe("NOT_IN_PEAK");
-    expect(rows[0].jobs.filter((j) => !j.paid).reduce((s, j) => s + j.amount, 0)).toBe(5165);
+    expect(rows[0].jobs.filter((j) => !j.paid).reduce((s, j) => s + j.amount, 0)).toBe(5163.8);
   });
 
   it("a ฿0 fee stays ฿0: the job pays only its reimbursement and review reward", async () => {
@@ -169,11 +169,13 @@ describe("GET /api/payments — after undoing false paid marks", () => {
     expect(d).toMatchObject({ total: 4471, gross: 4600, wht: 129 });
     expect(d.drift).toMatchObject({
       stored: { jobs: 4, gross: 4600, wht: 129, net: 4471 },
-      current: { jobs: 5, gross: 5300, wht: 135, net: 5165 },
-      delta: { gross: 700, wht: 6, net: 694 },
+      current: { jobs: 5, gross: 5300, wht: 136.2, net: 5163.8 },
+      delta: { gross: 700, wht: 7.2, net: 692.8 },
       inSync: false,
     });
-    expect(d.drift!.changed.map((c) => c.ref)).toEqual(["FOLK-TEST-D"]);
+    // B is in the list too: its document was created when a review incentive was
+    // paid untaxed, so the stored figures no longer match the ledger.
+    expect(d.drift!.changed.map((c) => c.ref)).toEqual(["FOLK-TEST-B", "FOLK-TEST-D"]);
     expect(d.drift!.leftOut.map((j) => j.ref)).toEqual(["FOLK-TEST-C"]);
   });
 

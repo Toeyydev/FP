@@ -282,10 +282,36 @@ describe("what belongs in a payment document", () => {
     expect(doc.total).toBe(1184);
   });
 
-  it("includes a review reward, booked to its own account, because it is in the transfer", () => {
+  it("includes a review incentive, booked to its own account and withheld on like the fee", () => {
     const doc = build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Review reward", price: 100, pax: 1 }] }] });
-    expect(doc.lines[1]).toMatchObject({ description: "Review reward - FOLK-BKK-20300506-01", accountCode: "510110", price: 100, withHoldingTaxAmount: 0 });
-    expect(doc.total).toBe(1264);
+    // Its own line, its own account, and its own 3% — the withholding the company
+    // files for this guide is the tax on the fee AND on this (owner, 2026-09-23).
+    expect(doc.lines[1]).toMatchObject({ accountCode: "510110", price: 100, withHoldingTaxAmount: 3 });
+    expect(doc.lines[1].description).toContain("Review incentive - FOLK-BKK-20300506-01");
+    expect(doc.lines.reduce((s, l) => s + l.withHoldingTaxAmount, 0)).toBe(39);
+    expect(doc.total).toBe(1261);
+  });
+
+  it("the ฿1,924 example: one document, both withholdings, and a transfer of ฿1,876", () => {
+    // The owner's worked example (2026-09-23), built as PEAK would receive it.
+    const doc = build({
+      jobs: [{
+        date: "2030-05-06", slotIdx: 0, ref: "FOLK-BKK-20300506-01",
+        guideFee: { price: 1500, time: 1, whtPct: 3 },
+        expenses: [
+          { description: "Review reward", price: 100, pax: 1 },
+          { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" },
+          { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" },
+        ] as Expense[],
+      }],
+    });
+    const byAccount = (code: string) => doc.lines.filter((l) => l.accountCode === code);
+    expect(byAccount("510111")).toMatchObject([{ price: 1500, withHoldingTaxAmount: 45 }]);
+    expect(byAccount("510110")).toMatchObject([{ price: 100, withHoldingTaxAmount: 3 }]);   // once, and only once
+    expect(byAccount("510104").reduce((s, l) => s + l.price, 0)).toBe(324);                 // meal + transport, untaxed
+    expect(doc.lines.reduce((s, l) => s + l.withHoldingTaxAmount, 0)).toBe(48);
+    expect(doc.lines.reduce((s, l) => s + l.price, 0)).toBe(1924);
+    expect(doc.total).toBe(1876);                                                           // what leaves the bank
   });
 
   it("refuses rather than posting a document that would not match the transfer", () => {
@@ -323,7 +349,7 @@ describe("Paid By must be known before a row is paid through PEAK", () => {
     ];
     expect(reasonsOf(() => build({ jobs: [job(rows)] })).join(" ")).toContain('row 2 "Bus": Paid By is not set');
     const ok = build({ jobs: [job(rows.slice(0, 2))] });
-    expect(ok.lines.map((l) => l.description)).toContain("Review reward - FOLK-BKK-20300506-01");
+    expect(ok.lines.some((l) => l.description.startsWith("Review incentive - FOLK-BKK-20300506-01"))).toBe(true);
   });
 
   it("still leaves company-direct and advance rows out without asking", () => {

@@ -6,7 +6,7 @@ const water: Expense = { description: "Water", price: 10, pax: 4 };        // 40
 const ferry: Expense = { description: "Ferry", price: 11, pax: 4 };        // 44
 const review: Expense = { description: "Review reward", price: 50, pax: 1 }; // 50
 const NET_FEE = 970;
-const FEE = { price: 1000, time: 1, whtPct: 3 }; // → 970 net
+const FEE = { price: 1000, time: 1, whtPct: 3 }; // → 970 net on the fee alone
 
 describe("guidePayoutView — what the guide is told they will receive", () => {
   it("THE BUG: the review reward survives the guide filing their own report", () => {
@@ -106,9 +106,13 @@ describe("guidePayoutView — follows the payer rule of the actual transfer", ()
 
   it("AFTER the operator accepts and approves: equals what Payments transfers", () => {
     const official = [waterGuide, ferryCompany, busAdvance, lotusBlank, review];
-    const v = guidePayoutView({ operatorExpenses: official, reportedExpenses: official, netGuideFee: NET_FEE, useReported: true, approved: true });
-    expect(v.total).toBe(guidePayoutTotal(official, FEE).payout); // 970 + 40 + 30 + 50 = 1090
-    expect(v.total).toBe(1090);
+    // The ฿50 review incentive is in the withholding base (2026-09-23), so the net
+    // fee this job actually pays is 1,000 − 31.50. Handing the view that figure is
+    // what makes it agree with the transfer.
+    const netFee = 968.5;
+    const v = guidePayoutView({ operatorExpenses: official, reportedExpenses: official, netGuideFee: netFee, useReported: true, approved: true });
+    expect(v.total).toBe(guidePayoutTotal(official, FEE).payout); // 968.50 + 40 + 30 + 50
+    expect(v.total).toBe(1088.5);
     expect(v.notReimbursed).toEqual({ company: 44, advance: 60 });
     expect(v).toMatchObject({ basis: "official", status: "confirmed" });
   });

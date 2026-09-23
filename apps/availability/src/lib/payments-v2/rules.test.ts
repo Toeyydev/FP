@@ -19,7 +19,9 @@ describe("jobFigures — what one approved job pays", () => {
   });
   it("splits fee, WHT, reimbursement and review reward; advance-funded rows are not owed back", () => {
     const f = jobFigures([guide("Water", 10, 7), guide("Bus", 13, 7), { description: "Food", price: 600, pax: 1, paidBy: "advance" }, { description: "Review reward", price: 50, pax: 2 }], fee(1500));
-    expect(f).toEqual({ feeGross: 1500, wht: 45, feeNet: 1455, reimbursement: 161, reviewReward: 100, payable: 1716 });
+    // Withholding runs on fee + review incentive (1,600 × 3% = 48), so the payable
+    // is ฿3 lower than when the reward was paid untaxed.
+    expect(f).toEqual({ feeGross: 1500, wht: 48, feeNet: 1452, reimbursement: 161, reviewReward: 100, payable: 1713 });
   });
 });
 

@@ -51,7 +51,10 @@ export const ACCOUNTING_CATEGORIES: CategorySpec[] = [
   // Consistently additional compensation to the guide, so it takes a standing
   // account like any other fixed category — asking per job created repetitive
   // accounting work for an answer that never changes.
-  { key: "REVIEW_REWARD", label: "Review Reward / Additional Guide Payment", th: "ค่าตอบแทนรีวิว", example: "Reward paid to the guide for a guest review", scope: "FIXED" },
+  // Withheld on like the fee since 2026-09-23: it is extra pay for the guide's work,
+  // not a reimbursement. The key stays REVIEW_REWARD — every stored row, mapping and
+  // PEAK account (510110) is filed under it.
+  { key: "REVIEW_REWARD", label: "Review incentive", th: "ค่าตอบแทนรีวิวไกด์", example: "Extra pay to the guide when a guest leaves a review — withheld on like the guide fee", scope: "FIXED" },
 ];
 
 // The categories that gate accountChartReady: every FIXED one. OTHER_TOUR_COST is

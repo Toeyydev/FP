@@ -44,11 +44,21 @@ describe("currentJobFigures — gross − WHT = net, zero fee kept", () => {
   it("a job with an intentional ฿0 fee books only what is still owed: no fee, no WHT", () => {
     expect(currentJobFigures(sheets["2099-04-05|3"].expenses, sheets["2099-04-05|3"].guideFee)).toEqual({ gross: 70, wht: 0, net: 70 });
   });
-  it("company-advance rows are not in gross or net; review rewards are, without WHT", () => {
-    expect(currentJobFigures(sheets["2099-04-01|7"].expenses, sheets["2099-04-01|7"].guideFee)).toEqual({ gross: 1140, wht: 33, net: 1107 });
+  it("company-advance rows are not in gross or net; review rewards are, and are withheld on", () => {
+    // ฿40 of review incentive joins the ฿1,100 fee in the base: 1,140 × 3% = 34.20.
+    expect(currentJobFigures(sheets["2099-04-01|7"].expenses, sheets["2099-04-01|7"].guideFee)).toEqual({ gross: 1140, wht: 34.2, net: 1105.8 });
     expect(jobC).toMatchObject({ gross: 1500, wht: 30, net: 1470 });
   });
 });
+
+// A job sheet that still agrees with the document it was written into. Job B needs
+// one because a document created before 2026-09-23 withheld nothing on its review
+// incentive, so today's ledger differs from it by design; these two cases are about
+// a document that matches, and that difference would mask what they test.
+const asStored = (j: { date: string; slotIdx: number }) =>
+  j.date === "2099-04-05" && j.slotIdx === 3 ? { gross: 870, wht: 24, net: 846 }
+  : j.date === "2099-04-01" && j.slotIdx === 7 ? { gross: 1140, wht: 33, net: 1107 }
+  : null;
 
 describe("documentDrift — the stored document vs the current job sheets", () => {
   const drift = documentDrift({ document: stored, currentOf, leftOut: [jobC] });
@@ -57,29 +67,37 @@ describe("documentDrift — the stored document vs the current job sheets", () =
     expect(drift.stored).toEqual({ jobs: 4, gross: 4600, wht: 129, net: 4471 });
   });
   it("counts the current payout from today's job sheets, including the job left out", () => {
-    expect(drift.current).toEqual({ jobs: 5, gross: 5300, wht: 135, net: 5165 });
+    expect(drift.current).toEqual({ jobs: 5, gross: 5300, wht: 136.2, net: 5163.8 });
     expect(drift.current.gross - drift.current.wht).toBe(drift.current.net);
   });
   it("reports the difference, the changed job and the job left out — and is out of sync", () => {
-    expect(drift.delta).toEqual({ gross: 700, wht: 6, net: 694 });
-    expect(drift.changed).toEqual([{ date: "2099-04-05", slotIdx: 3, ref: "FOLK-TEST-D", stored: { gross: 870, wht: 24, net: 846 }, current: { gross: 70, wht: 0, net: 70 } }]);
+    expect(drift.delta).toEqual({ gross: 700, wht: 7.2, net: 692.8 });
+    // Two jobs now differ from the document. D changed because its fee did — and B
+    // changed because the document was created when a review incentive was paid
+    // untaxed. That second one is the signal this drift check exists for: a stored
+    // document written under the old withholding rule no longer matches the ledger.
+    expect(drift.changed).toEqual([
+      { date: "2099-04-01", slotIdx: 7, ref: "FOLK-TEST-B", stored: { gross: 1140, wht: 33, net: 1107 }, current: { gross: 1140, wht: 34.2, net: 1105.8 } },
+      { date: "2099-04-05", slotIdx: 3, ref: "FOLK-TEST-D", stored: { gross: 870, wht: 24, net: 846 }, current: { gross: 70, wht: 0, net: 70 } },
+    ]);
     expect(drift.leftOut.map((j) => j.ref)).toEqual(["FOLK-TEST-C"]);
     expect(drift.inSync).toBe(false);
   });
   it("refuses the payment for the job whose figures changed, naming old and new gross, WHT and payout", () => {
     const reasons = documentChangeReasons(drift, "EXP-TEST-0004");
-    expect(reasons).toHaveLength(2);
-    expect(reasons[0]).toBe("FOLK-TEST-D now pays ฿70.00, but EXP-TEST-0004 was created for ฿846.00 — its figures changed after the PEAK document was made: gross ฿70.00 (was ฿870.00), WHT ฿0.00 (was ฿24.00)");
-    expect(reasons[1]).toContain("net −฿776.00 on the jobs in it");
+    expect(reasons).toHaveLength(3);
+    expect(reasons[0]).toContain("FOLK-TEST-B now pays ฿1,105.80, but EXP-TEST-0004 was created for ฿1,107.00");
+    expect(reasons[1]).toBe("FOLK-TEST-D now pays ฿70.00, but EXP-TEST-0004 was created for ฿846.00 — its figures changed after the PEAK document was made: gross ฿70.00 (was ฿870.00), WHT ฿0.00 (was ฿24.00)");
+    expect(reasons[2]).toContain("net −฿777.20 on the jobs in it");
   });
   it("a job only left out is shown, not a refusal — it may be paid by a later document", () => {
-    const onlyLeftOut = documentDrift({ document: stored, currentOf: (j) => (j.slotIdx === 3 && j.date === "2099-04-05" ? { gross: 870, wht: 24, net: 846 } : currentOf(j)), leftOut: [jobC] });
+    const onlyLeftOut = documentDrift({ document: stored, currentOf: (j) => asStored(j) ?? currentOf(j), leftOut: [jobC] });
     expect(onlyLeftOut.inSync).toBe(false);
     expect(onlyLeftOut.delta.net).toBe(1470);
     expect(documentChangeReasons(onlyLeftOut, "EXP-TEST-0004")).toEqual([]);
   });
   it("a document that still matches is in sync and blocks nothing", () => {
-    const unchanged = documentDrift({ document: stored, currentOf: (j) => stored.jobs.find((x) => x.date === j.date && x.slotIdx === j.slotIdx)!.ref === "FOLK-TEST-D" ? { gross: 870, wht: 24, net: 846 } : currentOf(j), leftOut: [] });
+    const unchanged = documentDrift({ document: stored, currentOf: (j) => asStored(j) ?? currentOf(j), leftOut: [] });
     expect(unchanged.inSync).toBe(true);
     expect(unchanged.delta).toEqual({ gross: 0, wht: 0, net: 0 });
     expect(documentChangeReasons(unchanged, "EXP-TEST-0004")).toEqual([]);

@@ -86,7 +86,9 @@ describe("review reward: job cost vs additional guide payment (booking-no-first)
     expect(c.reviewOwn).toBe(50);
     expect(c.reviewOther).toBe(0);
     expect(c.jobExpenses).toBe(2698); // 848 + 50 + 1800
-    expect(c.netGuideFee).toBe(1746); // WHT base untouched
+    // The ฿50 review is now in the withholding base with the fee (2026-09-23), so
+    // the net fee carries 3% of 1,850 rather than of 1,800.
+    expect(c.netGuideFee).toBe(1744.5);
   });
 
   it("blank booking no. = a guest of this job", () => {

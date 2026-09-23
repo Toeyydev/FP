@@ -144,8 +144,11 @@ export function expenseRowsReady(expenses: Expense[], accounts: PeakAccountMap =
 export type JobSheetTotals = {
   totalTourExpenses: number;        // every billed tour-expense row, whoever paid
   guideFeeGross: number;            // agreed fee before tax
-  wht: number;                      // withholding tax on the guide fee only
-  netGuideFee: number;              // fee after WHT
+  wht: number;                      // the whole withholding: fee + review incentive
+  whtOnFee: number;                 // …the part the fee bears
+  whtOnReview: number;              // …the part the review incentive bears
+  whtBase: number;                  // fee + review incentive — never reimbursements
+  netGuideFee: number;              // fee after the whole withholding
   additionalGuidePayment: number;   // review rewards paid out with this job
   additionalOwnedByJob: number;     // …the part earned on THIS job (a cost of it)
   reimbursementDue: number;         // GUIDE_PERSONAL rows only
@@ -187,6 +190,9 @@ export function jobSheetTotals(
     totalTourExpenses: cost.tourExpenses,
     guideFeeGross: t.gross,
     wht: t.wht,
+    whtOnFee: t.whtOnFee,
+    whtOnReview: t.whtOnReview,
+    whtBase: t.whtBase,
     netGuideFee: t.netGuideFee,
     additionalGuidePayment,
     additionalOwnedByJob: cost.reviewOwn,
@@ -581,13 +587,17 @@ export function buildJobSheetExpense(input: {
     const code = (guideFeeAccount?.code ?? "").trim();
     if (!code) throw new JobSheetNotPostable(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
     lines.push({
-      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.wht))}`,
+      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.whtOnFee))}`,
       quantity: 1,
       price: round2(totals.guideFeeGross),
       accountCode: code,
       vatType,
-      // WHT belongs to the guide fee alone — tour expenses are not taxed like it.
-      withHoldingTaxAmount: round2(totals.wht),
+      // The fee's own withholding, not the whole of it. A review incentive is also
+      // withheld on (2026-09-23) but never appears in THIS document — syncableExpenses
+      // leaves review rows out — and a document must not carry tax for a line it does
+      // not have. That withholding rides with the payment document, where the review
+      // line is.
+      withHoldingTaxAmount: round2(totals.whtOnFee),
     });
   }
 
