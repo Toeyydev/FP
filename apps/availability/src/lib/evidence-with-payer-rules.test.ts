@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Expense, type GuideFee } from "@/lib/jobsheet";
 import { tourCostBreakdown, guidePayoutTotal } from "@/lib/peak-sync";
 import { buildGuidePaymentDocument, PaymentDocumentNotPostable, type PaymentAccounts } from "@/lib/peak-payment-document";
-import { evidenceState } from "@/lib/reimbursement-evidence";
+import { evidenceRequired, evidenceState } from "@/lib/reimbursement-evidence";
 import { currentJobFigures, documentChangeReasons, documentDrift } from "@/lib/payment-document-drift";
 
 // Three rules meet on one document and none of them may weaken the others:
@@ -226,5 +226,74 @@ describe("the document PEAK holds, against the job as it stands now", () => {
 
   it("a document whose job is unchanged does not drift", () => {
     expect(drifted(WITH_RECEIPT)).toBe("");
+  });
+});
+
+// ── The switch, in every shape a deployment can leave it ─────────────────────
+
+describe("with the switch off, nothing about a payment changes", () => {
+  const fee = FEE(1500);
+  // One row with a receipt, one without — the case the switch decides.
+  const ROWS: Expense[] = [
+    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" } as Expense,
+    { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide", ...receipt } as Expense,
+  ];
+  // What the same job pays when every row has its receipt — the figure that must not move.
+  const withEverything = ROWS.map((e) => ({ ...e, ...receipt }) as Expense);
+
+  const OFF = [
+    ["unset", undefined],
+    ["empty", ""],
+    ["whitespace", "   "],
+    ["zero", "0"],
+    ["false", "false"],
+    ["no", "no"],
+  ] as const;
+
+  for (const [name, value] of OFF) {
+    it(`${name} is off`, () => {
+      if (value === undefined) vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", undefined as unknown as string);
+      else vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", value);
+      expect(evidenceRequired()).toBe(false);
+
+      const doc = build(ROWS, fee);
+      const asIfComplete = build(withEverything, fee);
+
+      // The payout is the payout: a missing receipt moves no figure.
+      expect(doc.gross).toBe(asIfComplete.gross);
+      expect(doc.wht).toBe(asIfComplete.wht);
+      expect(doc.total).toBe(asIfComplete.total);
+      expect(doc.total).toBe(1779);
+      expect(doc.lines.length).toBe(asIfComplete.lines.length);
+      // Nothing is refused.
+      expect(refusal(ROWS, fee)).toBeNull();
+      // And the gap is reported — data for a screen, not a rule.
+      expect(doc.evidenceGaps).toMatchObject([{ description: "Lunch", amount: 90 }]);
+    });
+  }
+
+  it("only the exact string \"1\" turns it on", () => {
+    vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "1");
+    expect(evidenceRequired()).toBe(true);
+    vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", " 1 ");
+    expect(evidenceRequired()).toBe(true);   // trimmed
+    vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "11");
+    expect(evidenceRequired()).toBe(false);
+    vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "true");
+    expect(evidenceRequired()).toBe(false);
+  });
+
+  it("a document created with the switch off does not drift because of evidence", () => {
+    // Drift compares the figures the document was created for against the job now.
+    // With the switch off the evidence rule touches no figure, so a row losing or
+    // gaining a receipt cannot make an existing document unpayable.
+    const doc = build(ROWS, fee);
+    const stripped = ROWS.map(({ receiptUrl: _drop, ...rest }) => rest as Expense);
+    const d = documentDrift({
+      document: { paymentRef: doc.paymentRef, peakDocumentNo: "EXP-20990300001", jobs: doc.jobs, lines: doc.traces, total: doc.total },
+      currentOf: () => currentJobFigures(stripped, fee),
+      leftOut: [],
+    });
+    expect(documentChangeReasons(d, "EXP-20990300001")).toEqual([]);
   });
 });
