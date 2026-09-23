@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
   const bankRef = String(form?.get("bankRef") || "").trim();
   const slipAmountRaw = String(form?.get("slipAmount") || "").trim();
   const slipAmount = slipAmountRaw ? Number(slipAmountRaw.replace(/,/g, "")) : null;
-  const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+  // The operator states they checked the amount and the reference against the slip.
+  // Nothing reads the image: this is the verification, and it is recorded as such.
+  const verified = ["1", "true", "on", "yes"].includes(String(form?.get("verifiedFromSlip") || "").trim().toLowerCase());
+  const file = form?.get("file") as unknown as { size?: number; type?: string; name?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
+  const fileName = (file?.name ?? "") || null;
   if (!paymentRef || !documentNo) return NextResponse.json({ error: "bad-body", reasons: ["Which PEAK document is being paid?"] }, { status: 400 });
   const hasFile = !!file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0;
 
@@ -56,7 +60,7 @@ export async function POST(req: NextRequest) {
   // An already-paid document is recording a transfer made before it existed; its slip and
   // amount were recorded then, so only the bank reference is asked for, if it is known.
   if (!doc.alreadyPaid) {
-    const problems = checkTransferEvidence({ bankRef, slipAmount, hasSlip: hasFile }, Number(doc.total) || 0);
+    const problems = checkTransferEvidence({ bankRef, slipAmount, hasSlip: hasFile, verified }, Number(doc.total) || 0);
     if (problems.length) return NextResponse.json({ error: "no-evidence", reasons: problems }, { status: 400 });
   }
   if (hasFile && (file!.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", reasons: ["The slip is over 10 MB"] }, { status: 400 });
@@ -90,7 +94,8 @@ export async function POST(req: NextRequest) {
   const base64 = hasFile ? Buffer.from(await file!.arrayBuffer!()).toString("base64") : null;
   const deps = prismaPayDeps({
     document: doc, guideName: user?.fullName || user?.displayName || doc.guideId, peakContactId: user?.peakContactId ?? null,
-    file: base64 ? { base64, mime } : null, savedSlip, refreshToken: refreshToken ?? null, bankRef, slipAmount, actor,
+    file: base64 ? { base64, mime } : null, savedSlip, refreshToken: refreshToken ?? null,
+    bankRef, slipAmount, verified, fileName, actor,
   });
 
   let result;

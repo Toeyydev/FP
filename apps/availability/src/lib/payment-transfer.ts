@@ -17,6 +17,23 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 /** Longest bank reference payments-v2 will store (GuidePayment.bankRef). */
 export const MAX_BANK_REF = 120;
 
+/** What the slip's amount and reference were checked against. Never "OCR" — a person read them. */
+export const VERIFICATION_SOURCE = "USER_VERIFIED_SLIP";
+/** How that is said on screen and in Thai correspondence. */
+export const VERIFIED_LABEL_TH = "ตรวจสอบโดยผู้ใช้งานจากสลิป";
+
+/**
+ * One transfer reference, spelled one way.
+ *
+ * Banks print the same reference with different spacing, and people retype it with
+ * different case, so "trbs 2609 23xx" and "TRBS260923XX" are one transfer, not two. The
+ * raw text is kept as the operator typed it; THIS is what is compared and made unique.
+ * Hyphens and slashes are left alone — they are part of some banks' references.
+ */
+export function normalizeBankRef(raw: string | null | undefined): string {
+  return (raw ?? "").replace(/[\s\u200B-\u200D\uFEFF]+/g, "").toUpperCase();
+}
+
 // ── What the operator pastes into the bank ───────────────────────────────────
 
 /**
@@ -37,10 +54,34 @@ const slug = (s: string) => (s ?? "").trim().replace(/[^A-Za-z0-9-]+/g, "-").rep
 const amountPart = (n: number) => round2(n).toFixed(2);
 
 /**
- * `<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext>`
+ * The real extension of what was uploaded — never a guess.
+ *
+ * A PDF renamed `.jpeg` is a file that will not open, and the name is the only thing
+ * anyone sees in a Drive folder. The uploaded filename's own extension is trusted when
+ * it is plausible; otherwise the type the browser sent decides.
+ */
+export function slipExtension(originalName: string | null | undefined, mime: string | null | undefined): string {
+  const fromName = (originalName ?? "").trim().toLowerCase().match(/\.([a-z0-9]{2,5})$/)?.[1] ?? "";
+  if (fromName && /^(jpe?g|png|webp|heic|heif|gif|pdf|tiff?)$/.test(fromName)) return fromName === "jpg" ? "jpg" : fromName;
+  const m = (mime ?? "").toLowerCase();
+  if (m.includes("pdf")) return "pdf";
+  if (m.includes("png")) return "png";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("heic") || m.includes("heif")) return "heic";
+  if (m.includes("tiff")) return "tiff";
+  return "jpg";
+}
+
+/**
+ * `<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<original extension>`
  *
  * Every field someone would otherwise have to open the file to learn. Underscores
- * separate the fields and hyphens live inside them, so the name splits cleanly.
+ * separate the fields and hyphens live inside them, so the name splits cleanly. The
+ * amount is fixed at two decimals with no thousands separator, and the bank reference
+ * is the normalised one, so a folder sorts and searches predictably.
+ *
+ * The extension is whatever the file really is: renaming a PDF to `.jpeg` would make it
+ * unopenable, and the guide's name is not in the name — the screen shows that.
  */
 export function slipFileName(p: {
   documentNo: string | null | undefined;
@@ -50,8 +91,8 @@ export function slipFileName(p: {
   bankRef: string;
   ext: string;
 }): string {
-  const parts = [slug(p.documentNo ?? "") || "NO-EXP", slug(p.paymentRef), slug(p.guideId), amountPart(p.net), slug(p.bankRef) || "NO-REF"];
-  return `${parts.join("_")}.${slug(p.ext).toLowerCase() || "jpeg"}`;
+  const parts = [slug(p.documentNo ?? "") || "NO-EXP", slug(p.paymentRef), slug(p.guideId), amountPart(p.net), slug(normalizeBankRef(p.bankRef)) || "NO-REF"];
+  return `${parts.join("_")}.${slug(p.ext).toLowerCase() || "jpg"}`;
 }
 
 // ── The figures, from the document's own lines ───────────────────────────────
@@ -91,6 +132,8 @@ export type TransferEvidence = {
   /** The amount printed on the slip, as the operator read it. */
   slipAmount: number | null;
   hasSlip: boolean;
+  /** The operator states they checked the amount and the reference against the slip. */
+  verified: boolean;
 };
 
 const near = (a: number, b: number) => Math.abs(a - b) <= 0.005;
@@ -106,7 +149,7 @@ const near = (a: number, b: number) => Math.abs(a - b) <= 0.005;
  */
 export function checkTransferEvidence(e: TransferEvidence, net: number): string[] {
   const reasons: string[] = [];
-  const bankRef = (e.bankRef ?? "").trim();
+  const bankRef = normalizeBankRef(e.bankRef);
   if (!bankRef) reasons.push("Enter the bank reference from the slip — the transfer cannot be traced without it");
   else if (bankRef.length > MAX_BANK_REF) reasons.push(`The bank reference is longer than ${MAX_BANK_REF} characters`);
   if (!e.hasSlip) reasons.push("Attach the payment slip");
@@ -114,6 +157,9 @@ export function checkTransferEvidence(e: TransferEvidence, net: number): string[
   else if (!near(e.slipAmount, net)) {
     reasons.push(`The slip says ${thb(e.slipAmount)} but this document is for ${thb(net)} — nothing was recorded. Transfer the difference, or void the document in PEAK and create one for what was actually sent`);
   }
+  // The figures above were typed by a person, so a person has to say they checked them.
+  // That statement is what the audit trail records as the source of the verification.
+  if (!e.verified) reasons.push("Tick to confirm you have checked the amount and the reference against the slip");
   return reasons;
 }
 

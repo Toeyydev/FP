@@ -159,7 +159,9 @@ const payDoc = (over: Record<string, string> = {}) => {
   // The transfer's own evidence: the bank's reference and the amount read off the slip.
   if (over.noBankRef !== "1") fd.append("bankRef", over.bankRef ?? "KB203005131234");
   if (over.noSlipAmount !== "1") fd.append("slipAmount", over.slipAmount ?? "4169");
-  if (over.noFile !== "1") fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "slip.png");
+  // A person states they checked the amount and the reference against the slip.
+  if (over.noVerify !== "1") fd.append("verifiedFromSlip", "1");
+  if (over.noFile !== "1") fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: over.mime ?? "image/png" }), over.fileName ?? "slip.png");
   return PAY(new Request("https://ops.folkpaths.com/api/pay/peak-document/pay", { method: "POST", body: fd }) as unknown as Parameters<typeof PAY>[0]);
 };
 // PEAK's read-back of the created document: approved, unpaid, owing the gross with the withholding apart.
@@ -937,5 +939,106 @@ describe("GET /api/pay/peak-document/ready", () => {
 
   it("says so when there is no such payment", async () => {
     expect((await ready("FOLK-PAY-209912-99")).status).toBe(404);
+  });
+});
+
+// ── The evidence a transfer has to come back with ────────────────────────────
+describe("a person checked the slip, and the record says so", () => {
+  it("will not record a transfer nobody says they checked", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ noVerify: "1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).reasons.join(" ")).toContain("checked the amount and the reference against the slip");
+    expect(peak.get).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+  });
+
+  it("keeps who checked it, when, and that a person did it — never a claim a machine did", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    const doc = db.docs[0];
+    expect(doc).toMatchObject({ verificationSource: "USER_VERIFIED_SLIP", slipVerifiedById: "op_1", slipAmount: 4169 });
+    expect(doc.slipVerifiedAt).toBeInstanceOf(Date);
+  });
+
+  it("writes the evidence into the audit trail, and never the file", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    const written = vi.mocked(audit).mock.calls.map((c) => c[0] as { action: string; detail?: Record<string, unknown> });
+    const claimed = written.find((a) => a.action === "pay.peak_payment_claimed");
+    const recorded = written.find((a) => a.action === "pay.peak_payment_recorded");
+    expect(claimed!.detail).toMatchObject({ oldStatus: "AWAITING_PAYMENT", newStatus: "PAYING", bankRef: "KB203005131234", slipAmount: 4169, verificationSource: "USER_VERIFIED_SLIP" });
+    expect(recorded!.detail).toMatchObject({ oldStatus: "PAYING", newStatus: "PAID", bankRef: "KB203005131234", verificationSource: "USER_VERIFIED_SLIP" });
+    // A slip is a file; a file does not belong in an audit row.
+    const everything = JSON.stringify(written);
+    expect(everything).not.toContain("base64");
+    expect(everything).not.toContain("iVBOR");
+    expect(everything.toLowerCase()).not.toContain("ocr");
+  });
+
+  it("one reference typed in any case or spacing is one transfer", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc({ bankRef: " kb 2030 0513 1234 " })).status).toBe(200);
+    // Stored as typed for a human to read, and normalised for the database to compare.
+    expect(db.docs[0]).toMatchObject({ bankRef: "kb 2030 0513 1234", bankRefNormalized: "KB203005131234" });
+    expect(db.payments[0]).toMatchObject({ bankRef: "KB203005131234" });
+  });
+
+  it("keeps the slip's real extension — a PDF is filed as a PDF", async () => {
+    await create([J1, J2, J3]);
+    await payDoc({ fileName: "statement.pdf", mime: "application/pdf" });
+    expect(drive.save.mock.calls[0][0].name).toBe("EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.pdf");
+  });
+
+  it("gives back the bank reference when PEAK refuses the payment — the document settles nothing", async () => {
+    await create([J1, J2, J3]);
+    peak.pay.mockResolvedValue({ ok: false, desc: "PEAK refused" });
+    expect((await payDoc()).status).toBe(502);
+    expect(db.docs[0]).toMatchObject({ status: "AWAITING_PAYMENT", bankRef: null, bankRefNormalized: null, slipAmount: null, verificationSource: null });
+  });
+
+  it("fails closed when PEAK cannot be read at all — a timeout is not a yes", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue({ ok: false, desc: "timeout" });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Could not read");
+    expect(peak.pay).not.toHaveBeenCalled();
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("reads PEAK again at the moment of paying — an earlier ready answer is not trusted", async () => {
+    await create([J1, J2, J3]);
+    // Ready said yes...
+    expect((await (await READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"))).json()).canTransfer).toBe(true);
+    // …and the document was voided in PEAK in the meantime.
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    expect((await payDoc()).status).toBe(409);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("a payment already recorded keeps what it was recorded with — it is never re-refused", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    const snapshot = { ...db.docs[0] };
+    // Everything that would block a new payment is now true: the sheet has changed and
+    // PEAK shows the document paid. A settled payment does not reopen.
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.guideFee = FEE(9999);
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    const body = await (await READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"))).json();
+    expect(body).toMatchObject({ stage: "PAID", label: "Paid", canTransfer: false, reasons: [] });
+    expect(body.figures).toEqual({ gross: 4295, reimbursement: 95, whtBase: 4200, wht: 126, net: 4169 });
+    expect(db.docs[0]).toMatchObject({ status: "PAID", bankRef: snapshot.bankRef, slipAmount: snapshot.slipAmount });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PAID");
+  });
+
+  it("the withholding the screen shows is the withholding PEAK was given", async () => {
+    await create([J1, J2, J3]);
+    const body = await (await READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"))).json();
+    const lines = peak.create.mock.calls[0][0].products as Row[];
+    expect(body.figures.wht).toBe(lines.reduce((t: number, l: Row) => t + Number(l.withHoldingTaxAmount ?? 0), 0));
+    expect(body.figures.whtBase).toBe(lines.filter((l: Row) => Number(l.withHoldingTaxAmount) > 0).reduce((t: number, l: Row) => t + Number(l.price), 0));
+    expect(body.figures.gross - body.figures.wht).toBe(body.figures.net);
   });
 });
