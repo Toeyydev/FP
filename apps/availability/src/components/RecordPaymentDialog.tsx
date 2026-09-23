@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { Note, Row, type CreatedDocument } from "@/components/PeakPaymentDialog";
-import { checkTransferEvidence } from "@/lib/payment-transfer";
+import { checkTransferEvidence, VERIFIED_LABEL_TH } from "@/lib/payment-transfer";
 
 // "Pay N jobs together · one ref", stage 2: record the payment against the EXISTING
 // PEAK document.
@@ -44,6 +44,7 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
   const [file, setFile] = useState<File | null>(null);
   const [bankRef, setBankRef] = useState("");
   const [slipAmount, setSlipAmount] = useState("");
+  const [verified, setVerified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
 
@@ -75,7 +76,7 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
   // rather than after it. An already-paid document records a transfer made before it
   // existed: its slip and amount were recorded then.
   const typedAmount = slipAmount.trim() ? Number(slipAmount.replace(/,/g, "")) : null;
-  const evidenceProblems = already ? [] : checkTransferEvidence({ bankRef, slipAmount: Number.isFinite(typedAmount) ? typedAmount : null, hasSlip: !!file }, doc.total);
+  const evidenceProblems = already ? [] : checkTransferEvidence({ bankRef, slipAmount: Number.isFinite(typedAmount) ? typedAmount : null, hasSlip: !!file, verified }, doc.total);
   const canRecord = !locked && dateOk && !!methodId && evidenceProblems.length === 0;
 
   async function record() {
@@ -90,6 +91,7 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
     if (method) fd.append("paymentMethodName", method.name);
     fd.append("bankRef", bankRef.trim());
     if (typedAmount != null && Number.isFinite(typedAmount)) fd.append("slipAmount", String(typedAmount));
+    if (verified) fd.append("verifiedFromSlip", "1");
     if (file) {
       const blob = await shrinkImage(file);
       fd.append("file", blob, shrunkName(file.name, blob));
@@ -160,6 +162,13 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
                 <label>
                   <span className="paydoc-label">Amount on the slip</span>
                   <input inputMode="decimal" value={slipAmount} onChange={(e) => setSlipAmount(e.target.value)} placeholder={`Type what the slip says — it must be ${thb(doc.total)}`} />
+                </label>
+                {/* Nothing here reads the image. The amount and the reference above were
+                    typed by a person, so a person states they checked them — and that
+                    statement, with their name and the time, is what the record keeps. */}
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <input type="checkbox" checked={verified} onChange={(e) => setVerified(e.target.checked)} style={{ marginTop: 3 }} />
+                  <span>{VERIFIED_LABEL_TH}<br /><span style={{ fontSize: 12, color: "var(--ink-soft)" }}>I have checked the amount and the reference against the slip</span></span>
                 </label>
               </>
             )}

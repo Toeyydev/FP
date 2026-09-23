@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  bankNote, canTransfer, checkTransferEvidence, paymentPayloadHash, slipFileName, transferFigures, transferStage,
+  bankNote, canTransfer, checkTransferEvidence, normalizeBankRef, paymentPayloadHash, slipExtension,
+  slipFileName, transferFigures, transferStage, VERIFICATION_SOURCE, VERIFIED_LABEL_TH,
 } from "./payment-transfer";
 import type { PaymentLineTrace } from "./peak-payment-document";
 
@@ -67,9 +68,28 @@ describe("the slip's filename", () => {
   });
 
   it("keeps underscores between the fields and out of them", () => {
-    const n = slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "KB 2099/01 #12", ext: "JPEG" });
-    expect(n).toBe(`${EXP}_${REF}_G-901_2584.00_KB-2099-01-12.jpeg`);
+    const n = slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "kb 2099/01 #12", ext: "JPEG" });
+    expect(n).toBe(`${EXP}_${REF}_G-901_2584.00_KB2099-01-12.jpeg`);
     expect(n.split("_")).toHaveLength(5);
+  });
+
+  it("files a reference typed in any case or spacing under one name", () => {
+    const name = (bankRef: string) => slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef, ext: "jpeg" });
+    expect(name(" trbs260923ab ")).toBe(name("TRBS260923AB"));
+    expect(name("TRBS 2609 23AB")).toBe(name("trbs260923ab"));
+  });
+
+  it("keeps the file's real extension — a renamed PDF is a file that will not open", () => {
+    const of = (ext: string) => slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "R1", ext });
+    expect(of("pdf").endsWith(".pdf")).toBe(true);
+    expect(of("png").endsWith(".png")).toBe(true);
+    expect(of("heic").endsWith(".heic")).toBe(true);
+  });
+
+  it("the guide's name is not in it — the screen shows that, the folder does not need it", () => {
+    const stem = slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "R1", ext: "jpeg" }).replace(/\.[a-z0-9]+$/, "");
+    expect(stem).not.toMatch(/[a-z]/); // only ids, numbers and the amount
+    expect(stem).not.toContain(" ");
   });
 
   it("still names a file when the pieces are missing, rather than producing a blank one", () => {
@@ -79,7 +99,7 @@ describe("the slip's filename", () => {
 });
 
 describe("evidence of the transfer", () => {
-  const ok = { bankRef: "KB209901051234", slipAmount: 2584, hasSlip: true };
+  const ok = { bankRef: "KB209901051234", slipAmount: 2584, hasSlip: true, verified: true };
 
   it("passes when the slip, its amount and the bank reference all agree", () => {
     expect(checkTransferEvidence(ok, 2584)).toEqual([]);
@@ -108,8 +128,17 @@ describe("evidence of the transfer", () => {
     expect(checkTransferEvidence({ ...ok, slipAmount: 2584.02 }, 2584)).not.toEqual([]);
   });
 
+  it("refuses until a person says they checked the figures against the slip", () => {
+    const [why] = checkTransferEvidence({ ...ok, verified: false }, 2584);
+    expect(why).toContain("checked the amount and the reference against the slip");
+  });
+
+  it("a reference of only spaces is no reference", () => {
+    expect(checkTransferEvidence({ ...ok, bankRef: "   " }, 2584).join(" ")).toContain("bank reference");
+  });
+
   it("lists everything wrong at once, not one refusal per press", () => {
-    expect(checkTransferEvidence({ bankRef: "", slipAmount: null, hasSlip: false }, 2584)).toHaveLength(3);
+    expect(checkTransferEvidence({ bankRef: "", slipAmount: null, hasSlip: false, verified: false }, 2584)).toHaveLength(4);
   });
 });
 
@@ -175,5 +204,48 @@ describe("the payload fingerprint", () => {
 
   it("is eight hex characters, not a secret", () => {
     expect(paymentPayloadHash(payload)).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+describe("one reference, one spelling", () => {
+  it("case and spacing do not make two transfers", () => {
+    expect(normalizeBankRef(" trbs 2609 23ab ")).toBe("TRBS260923AB");
+    expect(normalizeBankRef("TRBS260923AB")).toBe(normalizeBankRef("trbs260923ab"));
+  });
+
+  it("keeps the characters banks actually use", () => {
+    expect(normalizeBankRef("kb-2099/01")).toBe("KB-2099/01");
+  });
+
+  it("nothing at all normalises to nothing, not to a reference", () => {
+    expect(normalizeBankRef("   ")).toBe("");
+    expect(normalizeBankRef(null)).toBe("");
+  });
+});
+
+describe("what the file really is", () => {
+  it("trusts the uploaded name when it is plausible", () => {
+    expect(slipExtension("slip.PDF", "image/jpeg")).toBe("pdf");
+    expect(slipExtension("slip.png", "application/octet-stream")).toBe("png");
+    expect(slipExtension("slip.jpg", "image/jpeg")).toBe("jpg");
+  });
+
+  it("falls back to what the browser said when the name says nothing", () => {
+    expect(slipExtension("slip", "application/pdf")).toBe("pdf");
+    expect(slipExtension(null, "image/png")).toBe("png");
+    expect(slipExtension("", "image/webp")).toBe("webp");
+  });
+
+  it("never invents an image out of a document", () => {
+    expect(slipExtension("statement.pdf", "application/pdf")).toBe("pdf");
+    expect(slipExtension("slip.exe", "application/pdf")).toBe("pdf");
+  });
+});
+
+describe("how the check is described", () => {
+  it("says a person read the slip, and never claims a machine did", () => {
+    expect(VERIFICATION_SOURCE).toBe("USER_VERIFIED_SLIP");
+    expect(VERIFIED_LABEL_TH).toBe("ตรวจสอบโดยผู้ใช้งานจากสลิป");
+    expect(`${VERIFICATION_SOURCE} ${VERIFIED_LABEL_TH}`.toLowerCase()).not.toContain("ocr");
   });
 });
