@@ -44,8 +44,8 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("gross ฿2,605 · reimbursement ฿105 · WHT base ฿2,500 · WHT ฿75 · net ฿2,530", () => {
   const ROWS: Expense[] = [
-    { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide", ...receipt } as Expense,
-    { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide", ...receipt } as Expense,
+    { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide", ...receipt, paidBySource: "operator" } as Expense,
+    { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide", ...receipt, paidBySource: "operator" } as Expense,
     { description: "Transport", price: 45, pax: 1, expenseType: "transport", paidBy: "guide", ...receipt } as Expense,
   ];
   const fee = FEE(2500);
@@ -134,7 +134,7 @@ describe("a receipt is only ever asked for on money that is owed", () => {
 describe("a reimbursement with nothing behind it", () => {
   const fee = FEE(1500);
   const ROWS: Expense[] = [
-    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" } as Expense,
+    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" } as Expense,
     { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide", ...receipt } as Expense,
   ];
 
@@ -174,7 +174,7 @@ describe("the review incentive is pay, not a reimbursement", () => {
     vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "1");
     const rows: Expense[] = [
       { description: "Review reward", price: 100, pax: 1 } as Expense,
-      { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", ...receipt } as Expense,
+      { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", ...receipt, paidBySource: "operator" } as Expense,
       { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide", ...receipt } as Expense,
     ];
     const b = tourCostBreakdown(rows, FEE(1500));
@@ -197,7 +197,7 @@ describe("the review incentive is pay, not a reimbursement", () => {
 describe("the document PEAK holds, against the job as it stands now", () => {
   const fee = FEE(1500);
   const WITH_RECEIPT: Expense[] = [
-    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", ...receipt } as Expense,
+    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", ...receipt, paidBySource: "operator" } as Expense,
   ];
   const drifted = (now: Expense[]) => {
     const doc = build(WITH_RECEIPT, fee);
@@ -235,7 +235,7 @@ describe("with the switch off, nothing about a payment changes", () => {
   const fee = FEE(1500);
   // One row with a receipt, one without — the case the switch decides.
   const ROWS: Expense[] = [
-    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" } as Expense,
+    { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" } as Expense,
     { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide", ...receipt } as Expense,
   ];
   // What the same job pays when every row has its receipt — the figure that must not move.

@@ -158,8 +158,8 @@ describe("the screens ask the right question", () => {
     // and settles the withholding separately. The pilot's shape: ฿2,605 gross, ฿2,530
     // transferred — both describe one job, and the comparison must use the first.
     const pilot: Expense[] = [
-      { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide" },
-      { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide" },
+      { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
+      { description: "Meal", price: 30, pax: 1, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
       { description: "Transport", price: 45, pax: 1, expenseType: "transport", paidBy: "guide" },
     ];
     const b = tourCostBreakdown(pilot, { price: 2500, time: 1, whtPct: 3 });

@@ -4,7 +4,8 @@ import { tourCostBreakdown } from "@/lib/peak-sync";
 import { buildGuidePaymentDocument, PaymentDocumentNotPostable, type PaymentAccounts } from "@/lib/peak-payment-document";
 import { currentJobFigures, documentChangeReasons, documentDrift } from "@/lib/payment-document-drift";
 import {
-  defaultPayer, expenseKind, isOverride, paymentPayer, payerAllowed, payerRuleReasons,
+  defaultPayer, effectivePayer, expenseKind, isOverride, paymentPayer, payerAllowed,
+  payerRuleReasons, stampPayerActor, unconfirmedPayerRows,
 } from "@/lib/payer-rules";
 
 // One default used to cover every line a guide reported after a tour: "the guide paid
@@ -184,5 +185,123 @@ describe("history is left exactly as it was", () => {
     const b = tourCostBreakdown([row({ description: "Bus", expenseType: "transport", paidBy: "guide", paidBySource: "default-after-tour", price: 75 })], FEE);
     expect(b.unresolved).toBe(75);
     // …which is a statement about what may be paid NEXT, not about what was paid.
+  });
+});
+
+// ── What each kind needs before a payment may rely on it ─────────────────────
+
+describe("a meal needs a person; transport needs only its rule", () => {
+  const meal = (over: Partial<Expense> = {}) => row({ description: "Water", expenseType: "meal", price: 10, pax: 3, ...over });
+  const bus = (over: Partial<Expense> = {}) => row({ description: "Bus", expenseType: "transport", price: 15, pax: 3, ...over });
+
+  it("a meal with a payer and no recorded source waits", () => {
+    expect(effectivePayer(meal({ paidBy: "guide" }))).toEqual({ payer: "UNSPECIFIED", basis: "UNCONFIRMED" });
+    expect(effectivePayer(meal({ paidBy: "company" }))).toEqual({ payer: "UNSPECIFIED", basis: "UNCONFIRMED" });
+  });
+
+  it("a meal an operator chose is relied on", () => {
+    expect(effectivePayer(meal({ paidBy: "guide", paidBySource: "operator" }))).toEqual({ payer: "GUIDE_PERSONAL", basis: "OPERATOR" });
+    expect(effectivePayer(meal({ paidBy: "company", paidBySource: "operator" }))).toEqual({ payer: "COMPANY_DIRECT", basis: "OPERATOR" });
+  });
+
+  it("a meal the guide chose for their own line is relied on too", () => {
+    expect(effectivePayer(meal({ paidBy: "guide", paidBySource: "guide" }))).toEqual({ payer: "GUIDE_PERSONAL", basis: "GUIDE" });
+  });
+
+  it("a meal with nothing on it at all waits", () => {
+    expect(effectivePayer(meal())).toEqual({ payer: "UNSPECIFIED", basis: "NONE" });
+  });
+
+  it("transport with no source falls back to the rule for its kind, and says so", () => {
+    expect(effectivePayer(bus({ paidBy: "guide" }))).toEqual({ payer: "GUIDE_PERSONAL", basis: "BUSINESS_RULE" });
+    expect(effectivePayer(bus())).toEqual({ payer: "GUIDE_PERSONAL", basis: "BUSINESS_RULE" });
+  });
+
+  it("…but a transport row the old blanket default filled in still waits", () => {
+    expect(effectivePayer(bus({ paidBy: "guide", paidBySource: "default-after-tour" }))).toEqual({ payer: "UNSPECIFIED", basis: "UNCONFIRMED" });
+    expect(effectivePayer(meal({ paidBy: "guide", paidBySource: "default-after-tour" }))).toEqual({ payer: "UNSPECIFIED", basis: "UNCONFIRMED" });
+    expect(effectivePayer(row({ description: "Wat Pho", expenseType: "entrance", paidBy: "advance", paidBySource: "default-after-tour" })))
+      .toEqual({ payer: "UNSPECIFIED", basis: "UNCONFIRMED" });
+  });
+});
+
+describe("the shape production is in", () => {
+  // The same shape as one guide's six unpaid sheets, with invented figures: the old
+  // blanket default on three of them, and one meal whose payer nobody recorded.
+  const sheet = (rows: Expense[]) => rows;
+  const SHEETS: Record<string, Expense[]> = {
+    "JOB-1": sheet([
+      row({ description: "Water", expenseType: "meal", price: 10, pax: 5, paidBy: "guide", paidBySource: "operator" }),   // 50 — chosen
+      row({ description: "Ferry", expenseType: "transport", price: 11, pax: 5, paidBy: "guide", paidBySource: "operator" }), // 55
+      row({ description: "Bus", expenseType: "transport", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" }), // 75 — waits
+    ]),
+    "JOB-2": sheet([
+      row({ description: "Water", expenseType: "meal", price: 10, pax: 3, paidBy: "guide", paidBySource: "operator" }),   // 30 — chosen
+    ]),
+    "JOB-3": sheet([
+      row({ description: "Water", expenseType: "meal", price: 10, pax: 3, paidBy: "guide" }),                              // 30 — no source, waits
+      row({ description: "Bus", expenseType: "transport", price: 15, pax: 3, paidBy: "guide" }),                           // 45 — the rule stands
+    ]),
+    "JOB-4": sheet([
+      row({ description: "Water", expenseType: "meal", price: 10, pax: 2, paidBy: "guide", paidBySource: "default-after-tour" }),     // 20
+      row({ description: "Ferry", expenseType: "transport", price: 11, pax: 2, paidBy: "guide", paidBySource: "default-after-tour" }), // 22
+      row({ description: "Bus", expenseType: "transport", price: 15, pax: 2, paidBy: "guide", paidBySource: "default-after-tour" }),   // 30
+    ]),
+    "JOB-5": sheet([
+      row({ description: "Water", expenseType: "meal", price: 10, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" }),      // 50
+      row({ description: "Ferry", expenseType: "transport", price: 11, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" }), // 55
+      row({ description: "Bus", expenseType: "transport", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" }),   // 75
+    ]),
+    "JOB-6": sheet([
+      row({ description: "Water", expenseType: "meal", price: 10, pax: 2, paidBy: "guide", paidBySource: "operator" }),   // 20 — chosen
+    ]),
+  };
+
+  it("eight rows across four sheets wait for a person, ฿357 in all", () => {
+    const blocked = Object.entries(SHEETS).flatMap(([ref, rows]) => unconfirmedPayerRows(rows).map((r) => ({ ref, ...r })));
+    expect(blocked).toHaveLength(8);
+    expect(new Set(blocked.map((b) => b.ref)).size).toBe(4);
+    expect(blocked.reduce((t, b) => t + b.amount, 0)).toBe(357);
+  });
+
+  it("of the meals, three are settled and three are not — ฿100 each way", () => {
+    const meals = Object.values(SHEETS).flat().filter((e) => expenseKind(e) === "MEAL");
+    const waiting = meals.filter((e) => paymentPayer(e) === "UNSPECIFIED");
+    const settled = meals.filter((e) => paymentPayer(e) !== "UNSPECIFIED");
+    expect(waiting).toHaveLength(3);
+    expect(settled).toHaveLength(3);
+    expect(waiting.reduce((t, e) => t + (e.price ?? 0) * (e.pax ?? 0), 0)).toBe(100);
+    expect(settled.reduce((t, e) => t + (e.price ?? 0) * (e.pax ?? 0), 0)).toBe(100);
+  });
+
+  it("transport with no source is not among them — its own rule stands behind it", () => {
+    const bus = SHEETS["JOB-3"][1];
+    expect(effectivePayer(bus).basis).toBe("BUSINESS_RULE");
+    expect(unconfirmedPayerRows(SHEETS["JOB-3"]).map((r) => r.description)).toEqual(["Water"]);
+  });
+});
+
+describe("recording who chose a payer", () => {
+  it("stamps the actor and the time on the rows an operator just chose", () => {
+    const at = new Date("2099-01-20T03:00:00.000Z");
+    const [chosen, untouched] = stampPayerActor([
+      row({ description: "Water", expenseType: "meal", paidBy: "guide", paidBySource: "operator" }),
+      row({ description: "Bus", expenseType: "transport", paidBy: "guide", paidBySource: "category-default" }),
+    ], "u_ops", at);
+    expect(chosen).toMatchObject({ paidByBy: "u_ops", paidByAt: "2099-01-20T03:00:00.000Z" });
+    expect(untouched).not.toHaveProperty("paidByBy");
+  });
+
+  it("never rewrites a stamp that is already there", () => {
+    const existing = { ...row({ expenseType: "meal", paidBy: "guide", paidBySource: "operator" }), paidByBy: "u_first", paidByAt: "2098-01-01T00:00:00.000Z" };
+    expect(stampPayerActor([existing], "u_second")[0]).toMatchObject({ paidByBy: "u_first" });
+  });
+
+  it("older rows keep none, and are not asked to decide again", () => {
+    // A row an operator chose before anyone was recording still counts: re-asking for a
+    // decision already made would be its own kind of wrong.
+    const old = row({ description: "Water", expenseType: "meal", paidBy: "guide", paidBySource: "operator" });
+    expect(old).not.toHaveProperty("paidByBy");
+    expect(paymentPayer(old)).toBe("GUIDE_PERSONAL");
   });
 });

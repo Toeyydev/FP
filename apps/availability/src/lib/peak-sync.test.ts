@@ -27,7 +27,7 @@ const FEE: GuideFee = { price: 1500, time: 1, whtPct: 3 };
 const EXAMPLE: Expense[] = [
   { description: "Grand Palace ticket", price: 500, pax: 1, expenseType: "entrance", paidBy: "company" },
   { description: "Chao Phraya Express Boat to Wat Arun", price: 100, pax: 2, expenseType: "transport", paidBy: "guide" },
-  { description: "Drinking water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide" },
+  { description: "Drinking water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
   { description: "Temple offering set", price: 40, pax: 2, expenseType: "other", paidBy: "company" },
   { description: "Review reward", price: 100, pax: 1 },
 ];
@@ -401,7 +401,7 @@ describe("figures that need rechecking are named, not implied", () => {
   it("a fully tagged, fully mapped, non-divergent sheet has nothing to recheck", () => {
     const clean: Expense[] = [
       { description: "Boat", price: 100, pax: 2, expenseType: "transport", paidBy: "guide" },
-      { description: "Water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide" },
+      { description: "Water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
     ];
     const t = jobSheetTotals(clean, FEE, null, []);
     expect(t.payoutDiffersFromPayments).toBe(false);
@@ -415,7 +415,7 @@ describe("Total Company Cost excludes withholding tax", () => {
   // Revenue Department. Reimbursement Due is likewise a SUBSET of tour expenses,
   // not an extra line — adding either would overstate what the job cost.
   const fee: GuideFee = { price: 1000, time: 1, whtPct: 3 };
-  const rows: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "company" }];
+  const rows: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "company", paidBySource: "operator" }];
 
   it("reproduces the live sheet: 50 + 1,000 = 1,050, WHT of 30 excluded", () => {
     const t = jobSheetTotals(rows, fee, null, []);
@@ -432,7 +432,7 @@ describe("Total Company Cost excludes withholding tax", () => {
   });
 
   it("Reimbursement Due is inside Total Tour Expenses, not added to it", () => {
-    const guidePaid: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "guide" }];
+    const guidePaid: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }];
     const t = jobSheetTotals(guidePaid, fee, null, []);
     expect(t.reimbursementDue).toBe(50);
     expect(t.totalTourExpenses).toBe(50);   // the same 50, not 100

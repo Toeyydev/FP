@@ -23,7 +23,7 @@ import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } 
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
-import { payerRuleReasons, type PayerRuleRow } from "@/lib/payer-rules";
+import { payerRuleReasons, stampPayerActor, type PayerRuleRow } from "@/lib/payer-rules";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -415,6 +415,9 @@ export async function PUT(req: NextRequest) {
   if (payerProblems.length) {
     return NextResponse.json({ error: "payer-rule", reasons: payerProblems, detail: payerProblems.join("\n") }, { status: 409 });
   }
+  // Who chose each payer, and when — recorded as the choice is made, so a meal's payer
+  // can be relied on later by more than a label. Existing stamps are never rewritten.
+  d.expenses = stampPayerActor(d.expenses as PayerRuleRow[], session.user.id ?? null) as typeof d.expenses;
 
   const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
 

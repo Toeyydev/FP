@@ -22,7 +22,7 @@ import { jobFigures } from "@/lib/payments-v2/rules";
 const FEE: GuideFee = { price: 1500, time: 1, whtPct: 3 };
 const ROWS: Expense[] = [
   { description: "Review reward", price: 100, pax: 1 } as Expense,
-  { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" } as Expense,
+  { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" } as Expense,
   { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" } as Expense,
 ];
 
