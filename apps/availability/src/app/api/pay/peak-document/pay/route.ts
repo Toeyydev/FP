@@ -7,10 +7,12 @@ import { peakEnabled } from "@/lib/peak-api";
 import { buildPaymentInput, payCombinedDocument, PaymentNotRecordable } from "@/lib/peak-payment-document";
 import { bangkokToday, documentJobs, PaymentClaimRefused, prismaPayDeps } from "@/lib/peak-payment-server";
 import { paidTransferOf } from "@/lib/combined-payment";
+import { checkTransferEvidence } from "@/lib/payment-transfer";
 
 export const dynamic = "force-dynamic";
 
-// POST (multipart) { paymentRef, documentNo, paymentDate, paymentMethodId, paymentMethodName?, file }
+// POST (multipart) { paymentRef, documentNo, paymentDate, paymentMethodId, paymentMethodName?,
+//                     bankRef, slipAmount, file }
 //
 // STAGE 2 of "Pay N jobs together · one ref": record the actual bank payment against the
 // EXISTING combined PEAK document. Never creates a document.
@@ -37,6 +39,9 @@ export async function POST(req: NextRequest) {
   let paymentDate = String(form?.get("paymentDate") || "").trim();
   const paymentMethodId = String(form?.get("paymentMethodId") || "").trim();
   const paymentMethodName = String(form?.get("paymentMethodName") || "").trim().slice(0, 120) || null;
+  const bankRef = String(form?.get("bankRef") || "").trim();
+  const slipAmountRaw = String(form?.get("slipAmount") || "").trim();
+  const slipAmount = slipAmountRaw ? Number(slipAmountRaw.replace(/,/g, "")) : null;
   const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
   if (!paymentRef || !documentNo) return NextResponse.json({ error: "bad-body", reasons: ["Which PEAK document is being paid?"] }, { status: 400 });
   const hasFile = !!file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0;
@@ -44,7 +49,16 @@ export async function POST(req: NextRequest) {
   const doc = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef } });
   if (!doc) return NextResponse.json({ error: "no-document", reasons: [`There is no combined PEAK document ${paymentRef} — create the document first`] }, { status: 404 });
 
-  if (!hasFile && !doc.alreadyPaid) return NextResponse.json({ error: "no-slip", reasons: ["Attach the payment slip"] }, { status: 400 });
+  // The transfer's evidence, before anything is claimed: a bank reference that finds it in
+  // the statement, and the amount read off the slip, which must be the amount this document
+  // is for. A transfer that went out at another figure does not settle this document.
+  //
+  // An already-paid document is recording a transfer made before it existed; its slip and
+  // amount were recorded then, so only the bank reference is asked for, if it is known.
+  if (!doc.alreadyPaid) {
+    const problems = checkTransferEvidence({ bankRef, slipAmount, hasSlip: hasFile }, Number(doc.total) || 0);
+    if (problems.length) return NextResponse.json({ error: "no-evidence", reasons: problems }, { status: 400 });
+  }
   if (hasFile && (file!.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", reasons: ["The slip is over 10 MB"] }, { status: 400 });
   const mime = (hasFile && file!.type) || "image/jpeg";
   if (hasFile && !/^image\//.test(mime) && mime !== "application/pdf") return NextResponse.json({ error: "bad-file", reasons: ["The slip must be an image or a PDF"] }, { status: 400 });
@@ -76,7 +90,7 @@ export async function POST(req: NextRequest) {
   const base64 = hasFile ? Buffer.from(await file!.arrayBuffer!()).toString("base64") : null;
   const deps = prismaPayDeps({
     document: doc, guideName: user?.fullName || user?.displayName || doc.guideId, peakContactId: user?.peakContactId ?? null,
-    file: base64 ? { base64, mime } : null, savedSlip, refreshToken: refreshToken ?? null, actor,
+    file: base64 ? { base64, mime } : null, savedSlip, refreshToken: refreshToken ?? null, bankRef, slipAmount, actor,
   });
 
   let result;

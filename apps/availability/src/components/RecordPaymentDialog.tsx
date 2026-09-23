@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { Note, Row, type CreatedDocument } from "@/components/PeakPaymentDialog";
+import { checkTransferEvidence } from "@/lib/payment-transfer";
 
 // "Pay N jobs together · one ref", stage 2: record the payment against the EXISTING
 // PEAK document.
@@ -41,6 +42,8 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
   const [methodsError, setMethodsError] = useState("");
   const [methodId, setMethodId] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [bankRef, setBankRef] = useState("");
+  const [slipAmount, setSlipAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
 
@@ -68,7 +71,12 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
   const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(paymentDate) && paymentDate >= latestTour && paymentDate <= bkkToday();
   const paid = outcome?.kind === "paid";
   const locked = busy || paid || outcome?.kind === "uncertain";
-  const canRecord = !locked && dateOk && !!methodId && (!!file || already);
+  // The same check the server runs, so the refusal is on the screen before the press
+  // rather than after it. An already-paid document records a transfer made before it
+  // existed: its slip and amount were recorded then.
+  const typedAmount = slipAmount.trim() ? Number(slipAmount.replace(/,/g, "")) : null;
+  const evidenceProblems = already ? [] : checkTransferEvidence({ bankRef, slipAmount: Number.isFinite(typedAmount) ? typedAmount : null, hasSlip: !!file }, doc.total);
+  const canRecord = !locked && dateOk && !!methodId && evidenceProblems.length === 0;
 
   async function record() {
     if (!canRecord || (!file && !already)) return;
@@ -80,6 +88,8 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
     fd.append("paymentDate", paymentDate);
     fd.append("paymentMethodId", methodId);
     if (method) fd.append("paymentMethodName", method.name);
+    fd.append("bankRef", bankRef.trim());
+    if (typedAmount != null && Number.isFinite(typedAmount)) fd.append("slipAmount", String(typedAmount));
     if (file) {
       const blob = await shrinkImage(file);
       fd.append("file", blob, shrunkName(file.name, blob));
@@ -141,8 +151,23 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
               <span className="paydoc-label">{already ? (doc.hasSavedSlip === false ? "Payment slip (none was saved — optional)" : "Payment slip (optional — the one saved then is used)") : "Payment slip"}</span>
               <input type="file" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
             </label>
+            {!already && (
+              <>
+                <label>
+                  <span className="paydoc-label">Bank reference</span>
+                  <input value={bankRef} onChange={(e) => setBankRef(e.target.value)} placeholder="The transaction reference printed on the slip" maxLength={120} />
+                </label>
+                <label>
+                  <span className="paydoc-label">Amount on the slip</span>
+                  <input inputMode="decimal" value={slipAmount} onChange={(e) => setSlipAmount(e.target.value)} placeholder={`Type what the slip says — it must be ${thb(doc.total)}`} />
+                </label>
+              </>
+            )}
           </fieldset>
           {methodsError && <Note tone="danger">{methodsError}</Note>}
+          {!already && !locked && evidenceProblems.length > 0 && (file || bankRef.trim() || slipAmount.trim()) && (
+            <Note tone="warn">{evidenceProblems.map((x, i) => <div key={i} style={{ marginTop: i ? 4 : 0 }}>{x}</div>)}</Note>
+          )}
           {already && <Note tone="warn">These jobs stay paid as recorded on {doc.paidDate ? dShort(doc.paidDate) : "the day they were paid"} and take {doc.documentNo}. The payment is recorded in PEAK only — no money moves, and the guide is not told again.</Note>}
           {!dateOk && <Note tone="warn">{already ? "These jobs have no single paid date on or after their last tour — correct the payment before recording it." : `The payment date must be on or after the last tour (${latestTour}) and not in the future.`}</Note>}
 
@@ -159,7 +184,7 @@ export default function RecordPaymentDialog({ guideId, guide, doc, onClose, onDo
 
         <div className="mfoot">
           {busy && <span aria-live="polite" style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>Recording the payment in PEAK…</span>}
-          {!busy && !outcome && (!methodId || (!file && !already)) && <span style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>{!methodId ? "Choose Paid by" : "Attach the slip"} to continue</span>}
+          {!busy && !outcome && !canRecord && <span style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>{!methodId ? "Choose Paid by" : !file && !already ? "Attach the slip" : evidenceProblems.length ? "Enter the bank reference and the slip amount" : "Check the payment date"} to continue</span>}
           <button className="btn ghost" onClick={close} disabled={busy}>{outcome ? "Close" : "Cancel"}</button>
           {!paid && outcome?.kind !== "uncertain" && (
             <button className="btn primary" onClick={record} disabled={!canRecord}>{busy ? "Recording…" : already ? `Record in PEAK · ${thb(doc.total)}` : `Record payment · ${thb(doc.total)}`}</button>

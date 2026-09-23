@@ -112,6 +112,7 @@ import { POST, PATCH } from "./route";
 import { POST as PAY } from "./pay/route";
 import { POST as SYNC } from "../../jobsheet/peak-sync/route";
 import { POST as PREVIEW } from "./preview/route";
+import { GET as READY } from "./ready/route";
 import { GET as PAYMENTS } from "../../payments/route";
 import { NextRequest } from "next/server";
 import { POST as MARK_VOIDED } from "../../jobsheet/peak-voided/route";
@@ -155,6 +156,9 @@ const payDoc = (over: Record<string, string> = {}) => {
   fd.append("paymentDate", over.paymentDate ?? "2030-05-13");
   fd.append("paymentMethodId", over.paymentMethodId ?? "pm-test");
   fd.append("paymentMethodName", "Test bank account");
+  // The transfer's own evidence: the bank's reference and the amount read off the slip.
+  if (over.noBankRef !== "1") fd.append("bankRef", over.bankRef ?? "KB203005131234");
+  if (over.noSlipAmount !== "1") fd.append("slipAmount", over.slipAmount ?? "4169");
   if (over.noFile !== "1") fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "slip.png");
   return PAY(new Request("https://ops.folkpaths.com/api/pay/peak-document/pay", { method: "POST", body: fd }) as unknown as Parameters<typeof PAY>[0]);
 };
@@ -795,5 +799,143 @@ describe("Voided in PEAK: a job-sheet document voided in PEAK can be paid togeth
     }
     expect(sheetOf(J1).peakDocumentNo).toBe("EXP-TEST-0027");
     expect(db.audits).toHaveLength(0);
+  });
+});
+
+// ── The PEAK reference comes first, and the transfer answers to it ────────────
+//
+// A guide's money used to leave the bank and pick up an accounting document afterwards,
+// if anyone remembered. These are the rules that reverse that order, and the evidence the
+// transfer has to come back with. All data invented.
+describe("no transfer without a document, and no document settled without evidence", () => {
+  it("stores what PEAK answered, when it answered, and the fingerprint of what was sent", async () => {
+    await create([J1, J2, J3]);
+    const doc = db.docs[0];
+    expect(doc).toMatchObject({ peakDocumentNo: "EXP-TEST-0042", peakDocumentId: "peak-doc-42", peakDocumentStatus: "OPEN" });
+    expect(doc.peakPostedAt).toBeInstanceOf(Date);
+    // Written with the claim, before PEAK was called — so a document whose answer is lost
+    // still knows what it asked for.
+    expect(doc.peakPayloadHash).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it("will not record a transfer with no bank reference", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ noBankRef: "1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).reasons.join(" ")).toContain("bank reference");
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.get).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+  });
+
+  it("will not record a transfer whose slip amount was never entered", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ noSlipAmount: "1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).reasons.join(" ")).toContain("amount printed on the slip");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("refuses a slip for a different amount, naming both figures — nothing is uploaded or paid", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ slipAmount: "4000" });
+    expect(res.status).toBe(400);
+    const why = (await res.json()).reasons.join(" ");
+    expect(why).toContain("4,000");
+    expect(why).toContain("4,169");
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("keeps the bank reference on the document and on the payment it becomes", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    expect(db.docs[0]).toMatchObject({ bankRef: "KB203005131234", slipAmount: 4169, peakDocumentStatus: "PAID" });
+    expect(db.docs[0].slipUploadedAt).toBeInstanceOf(Date);
+    // payments-v2 holds it too, where a second transfer cannot reuse the same reference.
+    expect(db.payments[0]).toMatchObject({ bankRef: "KB203005131234" });
+  });
+
+  it("files the slip under the document, the payment, the guide, the amount and the bank reference", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    expect(drive.save).toHaveBeenCalledTimes(1);
+    expect(drive.save.mock.calls[0][0]).toMatchObject({
+      name: "EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.png",
+      folderPath: ["Folkpaths E-slips", "2030-05 May"],
+    });
+  });
+
+  it("a document PEAK has voided cannot be paid, whatever FolkOPS still stores", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("voided in PEAK");
+    expect(peak.pay).not.toHaveBeenCalled();
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("a document PEAK cannot find cannot be paid", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue({ ok: true, notFound: true });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("not found in PEAK");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("money the company advanced is not the guide's money coming back — it is in no line and in no total", async () => {
+    // A ticket the company funded sits on the sheet like any row, but the guide is not
+    // owed it, so it belongs in neither the document nor the transfer.
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.expenses.push(
+      { description: "Temple tickets", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance" },
+    );
+    const res = await create([J1, J2, J3]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ total: 4169, gross: 4295 });
+    const lines = peak.create.mock.calls[0][0].products as Row[];
+    expect(lines.some((l) => String(l.description).includes("Temple tickets"))).toBe(false);
+    expect(lines.reduce((t: number, l: Row) => t + Number(l.price), 0)).toBe(4295);
+  });
+});
+
+// ── "Ready to transfer" is an answer, not a stored value ─────────────────────
+describe("GET /api/pay/peak-document/ready", () => {
+  const ready = (paymentRef = "FOLK-PAY-203005-01") =>
+    READY(new NextRequest(`https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=${paymentRef}`));
+
+  it("gives the bank note and the amount once it has re-read PEAK and found nothing moved", async () => {
+    await create([J1, J2, J3]);
+    const body = await (await ready()).json();
+    expect(body).toMatchObject({
+      ok: true, stage: "READY_TO_TRANSFER", label: "Ready to transfer", canTransfer: true,
+      bankNote: "EXP-TEST-0042 FOLK-PAY-203005-01", reasons: [],
+    });
+    expect(body.figures).toEqual({ gross: 4295, reimbursement: 95, whtBase: 4200, wht: 126, net: 4169 });
+    // Reading is free and creates nothing.
+    expect(peak.create).toHaveBeenCalledTimes(1);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("gives no bank note when a job sheet moved under the document", async () => {
+    await create([J1, J2, J3]);
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.guideFee = FEE(1900);
+    const body = await (await ready()).json();
+    expect(body).toMatchObject({ stage: "PEAK_DRIFT", label: "PEAK drift", canTransfer: false, bankNote: null });
+    expect(body.reasons.join(" ")).toContain("EXP-TEST-0042 was created for");
+  });
+
+  it("gives no bank note when PEAK has voided the document", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    const body = await (await ready()).json();
+    expect(body).toMatchObject({ stage: "PEAK_VOIDED", canTransfer: false, bankNote: null, peakStatus: "VOID" });
+  });
+
+  it("says so when there is no such payment", async () => {
+    expect((await ready("FOLK-PAY-209912-99")).status).toBe(404);
   });
 });
