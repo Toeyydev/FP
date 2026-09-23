@@ -1112,3 +1112,108 @@ describe("a person checked the slip, and the record says so", () => {
     expect(body.figures.gross - body.figures.wht).toBe(body.figures.net);
   });
 });
+
+// ── The two changes together, on one worked example ──────────────────────────
+//
+// #251 puts the review incentive into the withholding base; #253 makes the PEAK document
+// come before the transfer. This is the example the owner set, checked end to end:
+//
+//   Guide fee            1,500
+//   Review incentive       100
+//   Reimbursement          324      (meals 90 + transport 234 — the guide's own money)
+//   ──────────────────────────
+//   Gross                1,924
+//   WHT base             1,600      = fee + review incentive
+//   WHT 3%                  48
+//   Net                  1,876      ← what the bank sends, and what the slip must say
+//
+// All data invented.
+describe("฿1,924: the review incentive is withheld on, and the transfer answers to the EXP", () => {
+  const JOB = { date: "2030-05-06", slotIdx: 0 };
+  const REF = "FOLK-PAY-203005-01";
+  const readyOf = () => READY(new NextRequest(`https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=${REF}`));
+
+  beforeEach(() => {
+    db.sheets = [{
+      guideId: GUIDE, ...JOB, tourId: "T-001", ref: "FOLK-BKK-20300506-01",
+      expenses: [
+        { description: "Review reward", price: 100, pax: 1 },
+        { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" },
+        { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" },
+      ],
+      guideFee: FEE(1500), origin: "NORMAL", createdAt: new Date("2030-05-01"),
+      peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED",
+    }];
+    db.assigns = [{ guideId: GUIDE, ...JOB, tourId: "T-001", createdAt: new Date("2030-05-01") }];
+    // PEAK holds the document unpaid, owing the gross with the withholding apart.
+    peak.get.mockResolvedValue({ ok: true, expense: { id: "peak-doc-42", code: "EXP-TEST-0042", reference: REF, contactId: "contact-guide-a", status: "Approve", statusId: 3, isVoid: false, netAmount: 1924, whtAmount: 48, paymentAmount: 0, remainAmount: 1924, remainWhtAmount: 48, documentLink: "https://peak.example/42", payments: 0 } });
+  });
+
+  const pay = (over: Record<string, string> = {}) => payDoc({ slipAmount: "1876", ...over });
+
+  it("PEAK is given the fee, the incentive and the reimbursements — and withholds on the first two", async () => {
+    const res = await create([JOB]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ gross: 1924, wht: 48, total: 1876 });
+    const lines = (peak.create.mock.calls[0][0].products as Row[]).map((l) => [l.accountCode, l.price, l.withHoldingTaxAmount]);
+    expect(lines).toEqual([
+      ["510111", 1500, 45],  // guide fee
+      ["510110", 100, 3],    // review incentive — withheld on, as of #251
+      ["510104", 90, 0],     // meals, reimbursed whole
+      ["510104", 234, 0],    // transport, reimbursed whole
+    ]);
+    // What PEAK is asked to book and what the guide is owed differ by exactly the tax.
+    expect(lines.reduce((t, l) => t + Number(l[1]), 0)).toBe(1924);
+    expect(lines.reduce((t, l) => t + Number(l[2]), 0)).toBe(48);
+  });
+
+  it("there is no bank note until the EXP exists", async () => {
+    expect((await readyOf()).status).toBe(404);
+    await create([JOB]);
+    const body = await (await readyOf()).json();
+    expect(body).toMatchObject({ stage: "READY_TO_TRANSFER", canTransfer: true, bankNote: `EXP-TEST-0042 ${REF}` });
+    expect(body.figures).toEqual({ gross: 1924, reimbursement: 324, whtBase: 1600, wht: 48, net: 1876 });
+  });
+
+  it("the slip has to say 1,876 — not the gross, not the fee", async () => {
+    await create([JOB]);
+    for (const wrong of ["1924", "1500", "1879"]) {
+      const res = await pay({ slipAmount: wrong });
+      expect(res.status).toBe(400);
+      expect((await res.json()).reasons.join(" ")).toContain("1,876");
+    }
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("records the payment when everything is there, and pays exactly the net after the tax", async () => {
+    await create([JOB]);
+    const res = await pay();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, status: "PAID", amount: 1876 });
+    expect(peak.pay.mock.calls[0][0]).toMatchObject({ amount: 1876, withholdingTaxAmount: 48 });
+    expect(payOf(JOB)).toMatchObject({ status: "PAID", peakRef: "EXP-TEST-0042" });
+    expect(db.docs[0]).toMatchObject({ status: "PAID", slipAmount: 1876, verificationSource: "USER_VERIFIED_SLIP", bankAccountKey: "ACC:1234567890" });
+    expect(drive.save.mock.calls[0][0].name).toBe(`EXP-TEST-0042_${REF}_G-TEST_1876.00_KB203005131234.png`);
+  });
+
+  it("a fee changed after the EXP was made is drift — no bank note, and nothing paid", async () => {
+    await create([JOB]);
+    db.sheets[0].guideFee = FEE(1600);
+    const body = await (await readyOf()).json();
+    expect(body).toMatchObject({ stage: "PEAK_DRIFT", canTransfer: false, bankNote: null });
+    const res = await pay();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("void");
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(payOf(JOB)!.status).toBe("PENDING");
+  });
+
+  it("a review incentive added after the EXP was made is drift too — the tax would be wrong", async () => {
+    await create([JOB]);
+    db.sheets[0].expenses.push({ description: "Review reward", price: 100, pax: 1 });
+    const body = await (await readyOf()).json();
+    expect(body).toMatchObject({ stage: "PEAK_DRIFT", canTransfer: false });
+    expect((await pay()).status).toBe(409);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+});
