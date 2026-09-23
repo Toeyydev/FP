@@ -151,7 +151,19 @@ jobs:
       # this change exists to fix was an image with no browser in it while every check
       # around it was green.
       - name: Install Nixpacks
-        run: curl -fsSL https://nixpacks.com/install.sh | sudo bash
+        # Pinned to the version Railway's builder reports, not whatever the install
+        # script hands out today. A smoke test that builds the image with a DIFFERENT
+        # builder than production is testing something production does not do — and the
+        # first run proved it: a newer CLI emitted a cache mount for
+        # `tsconfig.tsbuildinfo` that BuildKit could not bind (a directory onto a file),
+        # which Railway's own build never hits.
+        env:
+          NIXPACKS_VERSION: "1.41.0"
+        run: |
+          curl -fsSL "https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nixpacks
+          sudo chmod +x /usr/local/bin/nixpacks
+          echo "nixpacks: $(nixpacks --version)"
 
       - name: Runtime image smoke test (builds the image, runs it, renders inside it)
         env:

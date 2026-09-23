@@ -234,7 +234,17 @@ describe("repository invariant — the image itself is smoke tested", () => {
   it("CI builds an image and runs it, not just the checkout", () => {
     const y = ci();
     expect(y).toContain("image-smoke.sh");
-    expect(y).toContain("nixpacks.com/install.sh");
+    expect(y).toMatch(/nixpacks/i);
+  });
+
+  it("with the builder Railway uses, pinned — not whatever is current", () => {
+    // A smoke test that builds the image with a different builder than production is
+    // testing something production does not do. The first run of this step proved the
+    // point: a newer CLI emitted a cache mount Railway's build never emits, and the
+    // image failed to build for a reason that had nothing to do with the app.
+    const y = ci();
+    expect(y).toMatch(/NIXPACKS_VERSION:\s*"?\d+\.\d+\.\d+/);
+    expect(y).not.toContain("nixpacks.com/install.sh");   // unpinned
   });
 
   it("the container gets nothing from the host", () => {
