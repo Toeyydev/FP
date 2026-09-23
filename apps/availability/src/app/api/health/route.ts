@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { pdfRendererAvailable } from "@/lib/certificates/pdf";
 import { prisma } from "@/lib/db";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 import { ADVANCE_BUILD, DB_APPLICATION_NAME } from "@/lib/advances/build";
@@ -33,6 +34,12 @@ export async function GET() {
       ok: true, dbMs,
       loop,
       channels: { line: lineEnabled, push: pushEnabled, email: emailEnabled },
+      // Whether this deployment can turn a certificate into a PDF. Reported as a word,
+
+      // never as a path — where a binary lives is not something to publish.
+
+      certificateRenderer: pdfRendererAvailable() ? "ready" : "unavailable",
+
       advances: { build: ADVANCE_BUILD, dbApplicationName: DB_APPLICATION_NAME, writes: advanceWritesFrozen() ? "frozen" : "open", switch: advanceWritesFrozen() ? "on" : "off" },
     });
   } catch {

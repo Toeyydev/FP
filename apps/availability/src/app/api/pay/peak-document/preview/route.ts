@@ -1,3 +1,6 @@
+import { certificateStatuses } from "@/lib/certificates/evidence";
+import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
+import type { Expense as SheetExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -49,7 +52,25 @@ export async function POST(req: NextRequest) {
       // The number is assigned when the document is created. It changes no line.
       paymentRef: "FOLK-PAY-(assigned when created)",
       jobs: candidates, accounts: ctx.accounts,
+      // A row whose receipt was waived against a certificate is only evidenced while
+      // that certificate is in force (lib/certificates/evidence).
+      certificates: await certificateStatuses(candidates.map((j) => (j.expenses ?? []) as SheetExpense[])),
     });
+    // The same verifier the payment uses, asked of the same folder. Only reported here —
+    // a preview does not stop anybody — but reported from the file as it is right now,
+    // so the figures a person is about to act on are not resting on a document that has
+    // already changed. It refuses in step with the rest once receipts are enforced.
+    const evidence = await checkEvidenceBeforePaying(
+      candidates.map((j) => (j.expenses ?? []) as SheetExpense[]),
+      { actorId: session?.user?.id ?? null, actorRole: session?.user?.role ?? null },
+      {}, "preview",
+    );
+    // Refused whatever the flag says. This is not the receipts rule — every reason here
+    // is about a document a row ALREADY names, which the system has just found is not
+    // what it was. Rows with no certificate are reported through evidenceGaps as before.
+    if (!evidence.ok) {
+      return NextResponse.json({ ok: false, reasons: [...reasons, ...evidence.reasons], missingCategories, evidenceGaps: doc.evidenceGaps, staleCertificates: evidence.stale });
+    }
     if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
     return NextResponse.json({
       ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
