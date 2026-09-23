@@ -5,6 +5,7 @@ import { isOps } from "@/lib/roles";
 import { peakEnabled } from "@/lib/peak-api";
 import { buildGuidePaymentDocument, PaymentDocumentNotPostable, type MissingCategoryRow } from "@/lib/peak-payment-document";
 import { loadPaymentContext } from "@/lib/peak-payment-server";
+import { transferFigures } from "@/lib/payment-transfer";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,10 @@ export async function POST(req: NextRequest) {
     if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories });
     return NextResponse.json({
       ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
+      // What the operator checks before pressing Create: the whole figure, the part
+      // withholding is taken on, the tax, the guide's own money coming back, and what
+      // the bank will actually send.
+      figures: transferFigures({ lines: doc.traces, total: doc.total }),
       ...(alreadyPaid ? { alreadyPaid, paidDate: ctx.paidDate, hasSlip: !!ctx.slipLink } : {}),
     });
   } catch (e) {

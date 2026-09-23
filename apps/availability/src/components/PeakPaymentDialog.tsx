@@ -39,7 +39,10 @@ export type CreatedDocument = {
 type Line = { description: string; jobRef: string; kind: string; category: string | null; accountCode: string; price: number; wht: number };
 // A billed row with no expense category (lib/peak-payment-document MissingCategoryRow).
 type MissingCategory = { jobRef: string; date: string; slotIdx: number; rowNo: number; description: string; amount: number };
-type Preview = { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean } | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
+type Figures = { gross: number; reimbursement: number; whtBase: number; wht: number; net: number };
+type Preview =
+  | { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean; figures?: Figures }
+  | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
 type Outcome =
   | ({ kind: "created"; recordError: string | null; existing: boolean } & CreatedDocument)
   | { kind: "uncertain"; paymentRef: string; reasons: string[] }
@@ -83,7 +86,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
         const d = await r.json().catch(() => ({}));
         if (mine !== seq.current) return;
         if (!r.ok) setPreview({ ok: false, reasons: [d.error === "forbidden" ? "Operator only" : `Could not build the preview (${r.status})`] });
-        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip } : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [] });
+        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip, figures: d.figures } : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [] });
       })
       .catch(() => { if (mine === seq.current) setPreview({ ok: false, reasons: ["Could not reach the server"] }); });
     // selectedKeys stands in for `selected`, which is a new array every render.
@@ -203,7 +206,11 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
                     </div>
                     <div className="paydoc-sum">
                       <Row label={`${preview.lines.length} lines, before withholding`} value={thb(preview.gross)} />
-                      {preview.wht > 0 && <Row label="Withholding tax on guide fees" value={`−${thb(preview.wht)}`} />}
+                      {/* What the tax was taken on, and what it was not. A reimbursement is the
+                          guide's own money coming back, so it is paid whole. */}
+                      {preview.figures && preview.figures.reimbursement > 0 && <Row label="Reimbursed to the guide — not taxed" value={thb(preview.figures.reimbursement)} />}
+                      {preview.figures && preview.figures.whtBase > 0 && <Row label="Withholding base" value={thb(preview.figures.whtBase)} />}
+                      {preview.wht > 0 && <Row label="Withholding tax" value={`−${thb(preview.wht)}`} />}
                       <Row label={alreadyPaid ? `Paid to the guide on ${dShort(alreadyPaid.paidDate)} — recorded against this document next` : "Amount to pay the guide — recorded later, against this document"} value={thb(preview.total)} strong />
                     </div>
                     <div className="paydoc-credit" title="PEAK bills each document created, not each line">
@@ -261,6 +268,7 @@ export function CreatedState({ doc, onRecordPayment, compact }: { doc: CreatedDo
         <Row label={doc.alreadyPaid ? "Amount paid" : "Amount to pay"} value={thb(doc.total)} strong />
       </div>
       {doc.recordError && <Note tone="danger">{doc.recordError}. The jobs stay locked so nothing creates a second document — resolve it on the Payments page.</Note>}
+      {!doc.alreadyPaid && <TransferInstructions paymentRef={doc.paymentRef} />}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {doc.documentLink
           ? <a className="btn sm" href={doc.documentLink} target="_blank" rel="noopener noreferrer" title="Opens the link PEAK returned for this document">View PEAK document</a>
@@ -268,6 +276,56 @@ export function CreatedState({ doc, onRecordPayment, compact }: { doc: CreatedDo
         {onRecordPayment && <button className="btn sm primary" onClick={onRecordPayment}>{doc.alreadyPaid && doc.paidDate ? `Record the ${dShort(doc.paidDate)} payment` : "Record payment"}</button>}
       </div>
     </div>
+  );
+}
+
+// What to put in the bank, once a server has said this document may be transferred
+// against — and nothing at all until then.
+//
+// The check is made here, on opening, rather than rendered from what the page already
+// holds: a document can be voided in PEAK, or a job sheet edited, between the page
+// loading and someone opening their banking app. It reads; it creates nothing.
+function TransferInstructions({ paymentRef }: { paymentRef: string }) {
+  const [state, setState] = useState<{ ok: boolean; label: string; note: string | null; net: number; reasons: string[] } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/pay/peak-document/ready?paymentRef=${encodeURIComponent(paymentRef)}`, { cache: "no-store" })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!live) return;
+        if (!r.ok || !d.ok) { setState({ ok: false, label: "Could not check PEAK", note: null, net: 0, reasons: Array.isArray(d.reasons) ? d.reasons : [] }); return; }
+        setState({ ok: !!d.canTransfer, label: String(d.label ?? ""), note: d.bankNote ?? null, net: Number(d.figures?.net ?? 0), reasons: Array.isArray(d.reasons) ? d.reasons : [] });
+      })
+      .catch(() => { if (live) setState({ ok: false, label: "Could not reach the server", note: null, net: 0, reasons: [] }); });
+    return () => { live = false; };
+  }, [paymentRef]);
+
+  if (state === null) return <div className="skel-row" />;
+  if (!state.ok) {
+    return (
+      <Note tone="warn">
+        <b>Not ready to transfer — {state.label}.</b>
+        {state.reasons.length > 0 && <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{state.reasons.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+        <div style={{ marginTop: 4 }}>Put the jobs back as they were, or void the document in PEAK and create a new one — then transfer.</div>
+      </Note>
+    );
+  }
+  return (
+    <Note tone="ok">
+      <b>Ready to transfer — {thb(state.net)}.</b>
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <code style={{ fontFamily: "monospace", fontSize: 13, background: "var(--paper-2, rgba(0,0,0,.05))", padding: "4px 8px", borderRadius: 6 }}>{state.note}</code>
+        <button
+          className="btn sm"
+          onClick={async () => {
+            try { await navigator.clipboard.writeText(state.note ?? ""); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { setCopied(false); }
+          }}
+        >{copied ? "Copied" : "Copy bank note"}</button>
+      </div>
+      <div style={{ marginTop: 6 }}>Put that in the transfer&rsquo;s note, send exactly {thb(state.net)}, then come back and record it with the slip and the bank reference.</div>
+    </Note>
   );
 }
 

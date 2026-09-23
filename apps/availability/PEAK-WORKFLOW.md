@@ -166,6 +166,71 @@ PEAK returns EXP-…  ──► save as peakRef · notify guide  ─► END
 
 ---
 
+## The order a guide is paid in
+
+The flow above describes the original one-step posting, where the money moved and a PEAK
+document was made afterwards. That order is reversed. **The document comes first, and the
+transfer answers to it.**
+
+```
+Job sheets approved
+        │
+        ▼
+FolkOPS mints FOLK-PAY-YYYYMM-NN and shows the figures:
+   gross · withholding base · withholding · reimbursement · net
+        │
+        ▼
+Admin presses "Create PEAK document"          POST /api/pay/peak-document
+        │                                     → one unpaid EXP in PEAK
+        │                                     → peakDocumentId · peakDocumentNo
+        │                                     → peakDocumentStatus · peakPostedAt
+        │                                     → peakPayloadHash  (all in one transaction)
+        ▼
+"May this be transferred?"                    GET /api/pay/peak-document/ready
+   re-reads PEAK · recomputes every job        → Ready to transfer  → bank note + amount
+   → anything moved?                           → PEAK drift / PEAK voided → no bank note
+        ▼
+Bank note, copied from the screen:   <EXP number> <FOLK-PAY number>
+Admin transfers exactly the net
+        ▼
+Admin uploads the slip, types the bank reference and the amount on it
+        │                                     POST /api/pay/peak-document/pay
+        ▼
+Server checks again before anything is paid:
+   · the bank reference is present
+   · the slip's amount is this document's amount
+   · every job still approved, still locked, still unchanged
+   · PEAK still shows the EXP open, unpaid, owing exactly this
+        ▼
+PEAK records the payment ──► jobs marked PAID (payments-v2, FOLK-PMT-…)
+                        ──► slip filed as
+                            <EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext>
+```
+
+**The rules the server enforces, not the screen:**
+
+| | |
+|---|---|
+| No `peakDocumentNo` | the payment cannot be recorded at all |
+| The document is a draft, voided, or not in PEAK | refused, nothing paid |
+| A job's figures moved since the document was made | refused — void it in PEAK and create a new one |
+| Blank bank reference | refused |
+| No slip, or a slip for another amount | refused, and both figures are named |
+| "Create PEAK document" pressed twice | the same document is returned; never a second EXP |
+| The same bank reference on two documents | refused, naming the payment that already holds it — the account comes from PEAK, not from the page |
+| Moving a claimed or paid payment to another account | refused by the database |
+| An accountant made the document by hand | record it with **Record existing PEAK document**, never by creating another |
+
+Voiding and recreating keeps the old document's row and its audit trail. Nothing is
+overwritten: a voided document stays readable, with its EXP, its hash and who resolved it.
+
+**The slip's amount is typed, not read from the image.** Nothing in FolkOPS does OCR —
+`lib/kbiz-slip` parses text a bank gives us, not a photograph. Typing it is a second
+statement of the amount, made while looking at the slip, and it catches a transfer that
+went out at the wrong figure before the document is settled rather than at the next audit.
+
+---
+
 ## Guide ticket advances, returns, and ticket settlement
 
 This workflow is only for money the company sends a guide to buy customer tickets.
