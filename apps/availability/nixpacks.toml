@@ -1,0 +1,23 @@
+# Chromium, for rendering a certificate in lieu of a receipt to PDF on the server.
+#
+# Every other PDF in FolkOPS is made in the operator's browser and posted back as
+# base64. That is fine for a page somebody printed; it is not fine for an accounting
+# document whose file hash is supposed to mean something, because bytes that arrive from
+# a browser are bytes the browser chose.
+#
+# Chromium rather than a PDF library because of Thai. Thai stacks vowels above and below
+# consonants and shifts tone marks depending on what sits underneath — that is text
+# shaping, and the Node PDF libraries do not do it. They would place the marks wrongly
+# and the document would be quietly incorrect in a way an English-reading reviewer would
+# never catch.
+#
+# puppeteer-core is the client only; it downloads nothing. If CHROMIUM_PATH is unset the
+# renderer refuses and the certificate stays at SIGNED, which the workflow can retry
+# from — filing is never silently skipped.
+
+[phases.setup]
+nixPkgs = ["...", "chromium"]
+
+[variables]
+PUPPETEER_SKIP_DOWNLOAD = "1"
+CHROMIUM_PATH = "/nix/var/nix/profiles/default/bin/chromium"

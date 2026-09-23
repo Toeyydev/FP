@@ -140,6 +140,12 @@ export function buildGuidePaymentDocument(input: {
   vatType?: string;
   /** "YYYY-MM-DD" (Bangkok) the document is created — its due date. Omitted: due on the issued date. */
   createdOn?: string;
+  /**
+   * Certificate id → status, for rows whose waiver rests on a certificate in lieu of a
+   * receipt. A row pointing at a certificate that is not LINKED is not evidenced, and a
+   * caller that loads none leaves every such row unproven rather than assumed good.
+   */
+  certificates?: Readonly<Record<string, string>>;
 }): GuidePaymentDocument {
   const { guideId, peakContactId, paymentRef, accounts, vatType } = input;
   const reasons = new Set<string>();
@@ -265,7 +271,7 @@ export function buildGuidePaymentDocument(input: {
       // coming back against evidence. With nothing behind it that claim is not true,
       // and the row is pay. Reported on every document; refused once the deployment
       // says receipts are being collected (REIMBURSEMENT_EVIDENCE_REQUIRED=1).
-      const evidence = evidenceState(e as ExpenseWithEvidence);
+      const evidence = evidenceState(e as ExpenseWithEvidence, input.certificates);
       if (evidence.state === "BLOCKED") {
         evidenceGaps.push({ jobRef: where, date: j.date, slotIdx: j.slotIdx, rowNo, description: desc, amount: round2(amt) });
         if (evidenceRequired()) {

@@ -567,9 +567,79 @@ model JobSheet {
   createdById        String?
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
+  certificates       ExpenseCertificate[]
 
   @@unique([guideId, date, slotIdx])
   @@index([date])
+}
+
+// A certificate that stands in for receipts on one job sheet.
+//
+// Some things a guide pays for on a tour issue no receipt at all — a ferry fare, a bus
+// ticket, a bottle of water from a roadside stall. The expense is real and the company
+// owes it back, but there is no paper, and a reimbursement with nothing behind it is
+// pay. This is the company's own record that it happened: one document per job, listing
+// the rows it covers, approved by a named person from their own signed-in session.
+//
+// It is NOT a digital signature. No key signs anything and no certificate authority is
+// involved. What makes it evidence is an authenticated approval and an audit trail —
+// the wording throughout is "รับรองเอกสารทางอิเล็กทรอนิกส์", never "ลายเซ็นดิจิทัล".
+//
+// The two hashes answer two different questions, and neither identifies the approver:
+//   payloadHash  did the job sheet change after this was approved?
+//   pdfHash      is the file in Drive the file that was uploaded?
+model ExpenseCertificate {
+  id                    String    @id @default(cuid())
+  certificateNo         String    @unique // CERT-<job ref>-NN
+  jobSheetId            String
+  jobSheet              JobSheet  @relation(fields: [jobSheetId], references: [id], onDelete: Cascade)
+  // Snapshots, so a voided certificate still reads correctly years later.
+  guideId               String
+  jobRef                String?
+  tourDate              String
+  slotIdx               Int
+  // DRAFT | READY_TO_SIGN | SIGNED | UPLOADED | LINKED | VOID.
+  // Only LINKED is evidence — see lib/certificates/state.
+  status                String    @default("DRAFT")
+  // One ACTIVE certificate per job sheet, enforced by the database rather than by a
+  // check somebody could forget. Holds the job sheet id while the certificate is alive
+  // and NULL once it is voided, and Postgres does not compare NULLs in a unique index —
+  // so a voided certificate frees the sheet for a new one without a partial index,
+  // which Prisma cannot declare and the schema-drift gate would delete.
+  activeJobSheetId      String?   @unique
+  // Exactly what was approved, and the fingerprint of it.
+  payload               Json
+  payloadHash           String
+  coveredRows           Json // [{ index, identity, description, pax, price, amountSatang }]
+  totalSatang           Int
+  // The guide's own act: they filed the expense report from their own account at this
+  // time. NOT certifiedAt — that is the operator's first save and says nothing about
+  // the guide (lib/certifier).
+  sourceGuideReportedAt DateTime?
+  sourceSheetUpdatedAt  DateTime
+  // Who approved it, read from their session and never from a request body.
+  signerUserId          String?
+  signerName            String?
+  signerRole            String?
+  signedAt              DateTime?
+  // The file. uploadStartedAt is written BEFORE the upload is attempted, so an upload
+  // that succeeded while the database write failed can be found and finished.
+  pdfHash               String?
+  driveFileId           String?   @unique
+  driveUrl              String?
+  uploadStartedAt       DateTime?
+  uploadedAt            DateTime?
+  linkedAt              DateTime?
+  voidedAt              DateTime?
+  voidedById            String?
+  voidReason            String?
+  createdById           String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([jobSheetId, status])
+  @@index([guideId])
+  @@index([status])
 }
 
 // Tour lifecycle proof-of-work: a guide's check-in / start / complete events for

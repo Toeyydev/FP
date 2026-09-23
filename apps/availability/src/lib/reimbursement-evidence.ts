@@ -25,6 +25,20 @@ export type EvidenceWaiver = {
   at: string;
   /** Why the row can be paid without one. Free text, kept with the sheet and audited. */
   reason: string;
+  /**
+   * The certificate that stands behind this waiver, when one does.
+   *
+   * A waiver written by an admin on its own is a person saying "pay it anyway", and it
+   * stands on their name. A waiver that names a certificate stands on a DOCUMENT as
+   * well — and a document can be withdrawn. So when this is set, the waiver is only
+   * worth anything while that certificate is LINKED, which is checked by the caller
+   * that knows about certificates (lib/certificates/evidence). Nothing here reads the
+   * database, so this module stays pure.
+   *
+   * Older waivers have none, and keep the meaning they had when they were granted.
+   */
+  certificateId?: string | null;
+  certificateNo?: string | null;
 };
 
 /** The waiver lives on the row itself — `expenses` is JSON, so this needs no migration. */
@@ -53,17 +67,38 @@ export type EvidenceState =
   | { state: "WAIVED"; waiver: EvidenceWaiver }
   | { state: "BLOCKED"; reason: string };
 
-export function evidenceState(e: ExpenseWithEvidence): EvidenceState {
+/**
+ * Certificates whose state a waiver may rely on: id → status.
+ *
+ * Passed in rather than looked up, so `evidenceState` keeps taking a row and returning
+ * an answer with no database behind it. A caller that has not loaded any certificates
+ * passes nothing, and a waiver naming one is then treated as unproven — refusing to
+ * assume a document is in force is the safe direction to be wrong in.
+ */
+export type CertificateStatuses = Readonly<Record<string, string>> | null | undefined;
+
+export function evidenceState(e: ExpenseWithEvidence, certificates?: CertificateStatuses): EvidenceState {
   // Only money we are handing back to a guide needs a receipt. Company-direct rows and
   // advance-funded rows are the company's own spending, evidenced elsewhere.
   if (canonicalPaidBy(e) !== "GUIDE_PERSONAL") return { state: "NOT_REQUIRED" };
   if (expenseAmount(e) <= 0) return { state: "NOT_REQUIRED" };
   if ((e.receiptUrl ?? "").trim() || (e.receiptFileId ?? "").trim()) return { state: "HAS_RECEIPT" };
   const w = e.evidenceWaiver;
-  if (w && (w.reason ?? "").trim().length >= MIN_WAIVER_REASON && (w.by ?? "").trim() && (w.at ?? "").trim()) {
-    return { state: "WAIVED", waiver: w };
-  }
   const what = (e.description ?? "").trim() || "an expense row";
+  if (w && (w.reason ?? "").trim().length >= MIN_WAIVER_REASON && (w.by ?? "").trim() && (w.at ?? "").trim()) {
+    const certId = (w.certificateId ?? "").trim();
+    if (!certId) return { state: "WAIVED", waiver: w };
+    // A waiver that rests on a certificate is worth exactly what that certificate is
+    // worth today. Approved-but-not-yet-filed, filed-but-not-yet-linked, or withdrawn
+    // are all "not evidence" — see lib/certificates/state.
+    const status = certificates?.[certId];
+    if (status === "LINKED") return { state: "WAIVED", waiver: w };
+    const named = (w.certificateNo ?? "").trim() || "its certificate";
+    const why = status === "VOID" ? `${named} was withdrawn`
+      : status ? `${named} is not in use as evidence yet (${status})`
+      : `${named} could not be checked`;
+    return { state: "BLOCKED", reason: `"${what}" is being reimbursed to the guide against ${named}, and ${why}. Until the certificate is in force there is nothing behind this row.` };
+  }
   return { state: "BLOCKED", reason: `"${what}" is being reimbursed to the guide with no receipt attached. Attach it, or have an admin record why it can be paid without one — a reimbursement with no evidence is pay, and pay is withheld on.` };
 }
 

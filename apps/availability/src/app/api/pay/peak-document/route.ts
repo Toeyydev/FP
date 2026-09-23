@@ -1,3 +1,5 @@
+import { certificateStatuses } from "@/lib/certificates/evidence";
+import type { Expense as SheetExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -72,13 +74,15 @@ export async function POST(req: NextRequest) {
 
   let doc: GuidePaymentDocument | null = null;
   let result: CreateDocumentResult | null = null;
+  // A waiver that rests on a certificate counts only while that certificate is LINKED.
+  const certs = await certificateStatuses(ctx.jobs.map((j) => (j.expenses ?? []) as SheetExpense[]));
   const deps = prismaCreateDeps({ guideId, actor, alreadyPaid });
   // The FOLK-PAY number is a count + 1, so two documents in the same second can pick the
   // same one. The claim is the first write and fails atomically, so try the next number.
   for (let attempt = 0; attempt < 3 && !result; attempt++) {
     const paymentRef = await nextPaymentRef(bangkokToday());
     try {
-      doc = buildGuidePaymentDocument({ guideId, peakContactId: ctx.peakContactId, paymentRef, jobs: ctx.jobs, accounts: ctx.accounts, createdOn: bangkokToday() });
+      doc = buildGuidePaymentDocument({ guideId, peakContactId: ctx.peakContactId, paymentRef, jobs: ctx.jobs, accounts: ctx.accounts, createdOn: bangkokToday(), certificates: certs });
     } catch (e) {
       if (e instanceof PaymentDocumentNotPostable) return NextResponse.json({ error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories, evidenceGaps: e.evidenceGaps }, { status: 409 });
       throw e;

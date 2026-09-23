@@ -14,6 +14,8 @@ const TABLES = [
   // A guide's transfers, and the PEAK document each one settles. Before TourPayment,
   // which a recorded payment points back at.
   "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
+  // Certificates in lieu of receipts hang off JobSheet, so they truncate before it.
+  "ExpenseCertificate",
   "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   "Availability", "RefreshToken", "User", "Tour",
 ];

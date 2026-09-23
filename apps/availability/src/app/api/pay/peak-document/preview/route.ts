@@ -1,3 +1,5 @@
+import { certificateStatuses } from "@/lib/certificates/evidence";
+import type { Expense as SheetExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -49,6 +51,9 @@ export async function POST(req: NextRequest) {
       // The number is assigned when the document is created. It changes no line.
       paymentRef: "FOLK-PAY-(assigned when created)",
       jobs: candidates, accounts: ctx.accounts,
+      // A row whose receipt was waived against a certificate is only evidenced while
+      // that certificate is in force (lib/certificates/evidence).
+      certificates: await certificateStatuses(candidates.map((j) => (j.expenses ?? []) as SheetExpense[])),
     });
     if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
     return NextResponse.json({

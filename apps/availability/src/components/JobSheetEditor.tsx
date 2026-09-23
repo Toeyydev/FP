@@ -17,6 +17,7 @@ import PeakPaymentDialog, { type CreatedDocument } from "@/components/PeakPaymen
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover";
 import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
+import ExpenseCertificatePanel from "@/components/ExpenseCertificatePanel";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -84,6 +85,7 @@ export default function JobSheetEditor() {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [checkedIn, setCheckedIn] = useState(false);
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
@@ -134,7 +136,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setIsAdmin(d.isAdmin === true); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -1782,6 +1784,15 @@ export default function JobSheetEditor() {
           );
         })()}
        </div>
+
+       {/* Certificates in lieu of receipts — the rows a guide fronted that no supplier
+           issues paper for. Shown here, next to the expenses they are about, and never
+           on the printed sheet. */}
+       {canEdit && sheet.ref && (
+         <div className="no-print">
+           <ExpenseCertificatePanel guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} isAdmin={isAdmin} onChanged={() => void load()} />
+         </div>
+       )}
 
        {/* Certified by — the document sign-off. Fixed authorized certifier (see
            lib/certifier); the date is the sheet's FIRST successful save, stamped
