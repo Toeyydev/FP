@@ -175,13 +175,37 @@ export function reviewRewardTotal(expenses: Expense[]): number {
   return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
 }
 
+/**
+ * Every figure the job sheet, the payout and the PEAK documents are built from.
+ *
+ * WITHHOLDING BASE — owner decision 2026-09-23. A review incentive is extra pay for
+ * the guide's work, so it is withheld on exactly like the fee:
+ *
+ *     base = guide fee + review incentive          (NOT meals, transport, tickets)
+ *     wht  = base × whtPct
+ *
+ * Reimbursements are the guide's own money coming back and are never taxed, so
+ * nothing else in the expense table joins the base.
+ *
+ * `wht` is the WHOLE withholding, which is what the transfer and ภ.ง.ด.3 need, and
+ * `netGuideFee` stays `gross − wht` so every total built on it lands on the right
+ * amount without each caller having to learn the new rule. `whtOnFee` and
+ * `whtOnReview` split it for the documents, which must show the tax beside the line
+ * that bears it; they are derived by subtraction so rounding can never leak a satang
+ * between them.
+ */
 export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   const totalExpenses = (expenses ?? []).reduce((s, e) => s + expenseAmount(e), 0);
   const gross = n(guideFee?.price) * n(guideFee?.time);
-  const wht = gross * (n(guideFee?.whtPct) / 100);
+  const rate = n(guideFee?.whtPct) / 100;
+  const reviewReward = reviewRewardTotal(expenses);
+  const whtBase = gross + reviewReward;
+  const wht = whtBase * rate;
+  const whtOnFee = gross * rate;
+  const whtOnReview = wht - whtOnFee;
   const netGuideFee = gross - wht;
   const grandTotal = totalExpenses + netGuideFee;
-  return { totalExpenses, gross, wht, netGuideFee, grandTotal };
+  return { totalExpenses, gross, reviewReward, whtBase, wht, whtOnFee, whtOnReview, netGuideFee, grandTotal };
 }
 
 // A booking's true no-show pax: the recorded per-booking count when present,

@@ -69,10 +69,14 @@ describe("§12 Summary — the spec's worked example", () => {
     expect(t.totalTourExpenses).toBe(840);
     expect(t.guideFeeGross).toBe(1500);
     expect(t.additionalGuidePayment).toBe(100);
-    expect(t.wht).toBe(45);
+    // Withholding runs on fee + review incentive (1,500 + 100) since 2026-09-23.
+    expect(t.whtBase).toBe(1600);
+    expect(t.wht).toBe(48);
+    expect(t.whtOnFee).toBe(45);
+    expect(t.whtOnReview).toBe(3);
     expect(t.reimbursementDue).toBe(260);
     expect(t.totalCompanyCost).toBe(2340);   // 840 + 1,500 — reward excluded
-    expect(t.netPayToGuide).toBe(1815);     // …but the guide is still paid it
+    expect(t.netPayToGuide).toBe(1812);     // …but the guide is still paid it, less its tax
   });
 
   it("Net Pay excludes Company Direct expenses — the bug this update fixes", () => {
@@ -127,7 +131,7 @@ describe("§12 Summary — the spec's worked example", () => {
     expect(withAdvance.totalTourExpenses).toBe(840);   // still a cost of the tour
     expect(withAdvance.totalCompanyCost).toBe(2340);   // still the company's money
     expect(withAdvance.reimbursementDue).toBe(200);    // …but not owed to the guide
-    expect(withAdvance.netPayToGuide).toBe(1755);
+    expect(withAdvance.netPayToGuide).toBe(1752);   // ฿3 withheld on the review incentive
   });
 
   it("an untagged row is counted as cost but never paid out", () => {
@@ -356,7 +360,7 @@ describe("expense-table readiness is narrower than sheet eligibility", () => {
     const t = jobSheetTotals(clean, FEE, null, []);
     expect(t.totalTourExpenses).toBe(760);
     expect(t.reimbursementDue).toBe(260);   // unchanged — that row was company-paid
-    expect(t.netPayToGuide).toBe(1815);     // unchanged — never included company-direct
+    expect(t.netPayToGuide).toBe(1812);     // unchanged — never included company-direct
     expect(t.totalCompanyCost).toBe(2260);  // 760 + 1,500 — reward excluded
   });
 });
@@ -528,7 +532,8 @@ describe("what Payments transfers", () => {
       { description: "Review reward", price: 100, pax: 1 },
       { description: "Tickets", price: 500, pax: 1, paidBy: "company" },
     ];
-    expect(guidePayoutTotal(rows, fee).payout).toBe(1555);
+    // 1,500 fee + 100 reward − 3% of 1,600 = 1,552
+    expect(guidePayoutTotal(rows, fee).payout).toBe(1552);
   });
 
   it("a fully tagged sheet makes the two screens agree exactly", () => {

@@ -271,7 +271,11 @@ describe("job-sheet document totals add up", () => {
 
   it("Net Pay to Guide still reimburses the reward — the split is presentation only", () => {
     const t = computeTotals(expenses, fee);
-    expect(t.grandTotal).toBe(860 + (1500 - 45)); // expenses incl. reward + net fee
+    // The reward is paid in full and withheld on: 3% of the fee AND of the ฿100
+    // reward, so the net fee carries ฿48, not ฿45 (owner decision 2026-09-23).
+    expect(t.whtBase).toBe(1600);
+    expect(t.wht).toBe(48);
+    expect(t.grandTotal).toBe(860 + (1500 - 48)); // expenses incl. reward + net fee
   });
 });
 

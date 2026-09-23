@@ -282,10 +282,14 @@ describe("what belongs in a payment document", () => {
     expect(doc.total).toBe(1184);
   });
 
-  it("includes a review reward, booked to its own account, because it is in the transfer", () => {
+  it("includes a review incentive, booked to its own account and withheld on like the fee", () => {
     const doc = build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Review reward", price: 100, pax: 1 }] }] });
-    expect(doc.lines[1]).toMatchObject({ description: "Review reward - FOLK-BKK-20300506-01", accountCode: "510110", price: 100, withHoldingTaxAmount: 0 });
-    expect(doc.total).toBe(1264);
+    // Its own line, its own account, and its own 3% — the withholding the company
+    // files for this guide is the tax on the fee AND on this (owner, 2026-09-23).
+    expect(doc.lines[1]).toMatchObject({ accountCode: "510110", price: 100, withHoldingTaxAmount: 3 });
+    expect(doc.lines[1].description).toContain("Review incentive - FOLK-BKK-20300506-01");
+    expect(doc.lines.reduce((s, l) => s + l.withHoldingTaxAmount, 0)).toBe(39);
+    expect(doc.total).toBe(1261);
   });
 
   it("refuses rather than posting a document that would not match the transfer", () => {
@@ -323,7 +327,7 @@ describe("Paid By must be known before a row is paid through PEAK", () => {
     ];
     expect(reasonsOf(() => build({ jobs: [job(rows)] })).join(" ")).toContain('row 2 "Bus": Paid By is not set');
     const ok = build({ jobs: [job(rows.slice(0, 2))] });
-    expect(ok.lines.map((l) => l.description)).toContain("Review reward - FOLK-BKK-20300506-01");
+    expect(ok.lines.some((l) => l.description.startsWith("Review incentive - FOLK-BKK-20300506-01"))).toBe(true);
   });
 
   it("still leaves company-direct and advance rows out without asking", () => {

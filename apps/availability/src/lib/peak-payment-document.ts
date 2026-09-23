@@ -15,7 +15,7 @@
 // This file is pure: no database, no network. The routes supply the jobs and the
 // saved account chart, and the side effects arrive through CreateDocumentDeps and
 // PayDocumentDeps — which is what lets the order of operations be tested without either.
-import { expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import {
   canonicalPaidBy, guidePayoutTotal, resolveExpenseAccount, whtNote, type PeakAccount, type PeakAccountMap,
@@ -184,8 +184,13 @@ export function buildGuidePaymentDocument(input: {
     // Guide fee: posted GROSS with its withholding, so PEAK files the WHT the company
     // owes the Revenue Department. Posting the net figure would erase that tax from
     // the books while the transfer still matches.
+    // One split, computed once: the fee's own withholding and the review incentive's,
+    // taken from the same figures the transfer is built on so the document's tax can
+    // never disagree with what was actually withheld.
+    const jobTotals = computeTotals(expenses, j.guideFee as GuideFee);
     const gross = round2((Number(j.guideFee?.price) || 0) * (Number(j.guideFee?.time) || 0));
-    const wht = round2(gross * ((Number(j.guideFee?.whtPct) || 0) / 100));
+    const wht = round2(jobTotals.whtOnFee);
+    const reviewWht = round2(jobTotals.whtOnReview);
     if (gross > 0) {
       const code = (accounts.guideFee?.code ?? "").trim();
       if (!code) reasons.add(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
@@ -208,14 +213,13 @@ export function buildGuidePaymentDocument(input: {
 
       if (isReviewExpense(e)) {
         // Included because the reward is part of the money transferred (owner decision,
-        // 2026-09-13), booked to the REVIEW_REWARD account (510110) with NO withholding.
-        // TODO(accountant): confirm the WHT treatment of review rewards paid to a guide.
-        // The guide fee withholds 3%; this line withholds nothing, which may be an
-        // under-withholding (ภ.ง.ด.3). Until an accountant confirms, do not change the
-        // rate here on a guess — change it here, once, when they answer.
+        // 2026-09-13), booked to the REVIEW_REWARD account (510110) — and withheld on
+        // at the guide's rate since 2026-09-23, when the owner answered the question
+        // this line used to carry: a review incentive is extra pay for the guide's
+        // work, so it belongs in the ภ.ง.ด.3 base beside the fee.
         const code = (accounts.reviewReward?.code ?? "").trim();
         if (!code) reasons.add(`${categoryLabel("REVIEW_REWARD")} has no PEAK account mapping`);
-        add("REVIEW_REWARD", "REVIEW_REWARD", code, "Review reward", amt);
+        add("REVIEW_REWARD", "REVIEW_REWARD", code, "Review incentive", amt);
         continue;
       }
 
@@ -253,7 +257,10 @@ export function buildGuidePaymentDocument(input: {
       }
       add("REIMBURSEMENT", category, code, `Reimbursement / ${categoryLabel(category)}`, amt);
     }
-    for (const g of groups.values()) push(g.kind, g.category, g.code, round2(g.amount), 0, `${g.label} - ${ref}`);
+    for (const g of groups.values()) {
+      const lineWht = g.kind === "REVIEW_REWARD" ? reviewWht : 0;
+      push(g.kind, g.category, g.code, round2(g.amount), lineWht, `${g.label} - ${ref}${lineWht > 0 ? whtNote(j.guideFee?.whtPct, lineWht) : ""}`);
+    }
   }
 
   const gross = round2(lines.reduce((s, l) => s + l.price, 0));
