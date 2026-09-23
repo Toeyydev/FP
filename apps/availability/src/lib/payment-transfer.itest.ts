@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase } from "@/test/db";
-import { normalizeBankRef, paymentPayloadHash } from "./payment-transfer";
+import { bankAccountKey, normalizeBankRef, paymentPayloadHash } from "./payment-transfer";
 
 // The transfer evidence against a real database, because what this adds is database
 // shape: six columns and an index that has to exist after `prisma migrate deploy`, not
@@ -23,9 +23,16 @@ const document = (over: Record<string, unknown> = {}) => ({
 });
 
 /** A document that has been given a transfer reference, typed as the operator typed it. */
-const withRef = (paymentRef: string, typed: string, paymentMethodId: string | null = "pm-company-kbank") =>
+const KBANK = { id: "pm-kbank-transfer", accountNumber: "123-4-56789-0" };
+const KBANK_QR = { id: "pm-kbank-qr", accountNumber: "1234567890" }; // same account, other channel
+const SCB = { id: "pm-scb", accountNumber: "987-6-54321-0" };
+
+const withRef = (paymentRef: string, typed: string, method: { id: string; accountNumber?: string } | null = KBANK) =>
   prisma.guidePaymentDocument.create({
-    data: document({ paymentRef, paymentMethodId, bankRef: typed, bankRefNormalized: normalizeBankRef(typed) }),
+    data: document({
+      paymentRef, paymentMethodId: method?.id ?? null, bankAccountKey: bankAccountKey(method),
+      bankRef: typed, bankRefNormalized: normalizeBankRef(typed),
+    }),
   });
 
 describe("the columns the transfer is recorded in", () => {
@@ -66,7 +73,7 @@ describe("the columns the transfer is recorded in", () => {
     expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_bankRef_idx");
     expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_bankRefNormalized_idx");
     // The one that actually refuses a duplicate.
-    expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_paymentMethodId_bankRefNormalized_key");
+    expect(rows.map((r) => r.indexname)).toContain("GuidePaymentDocument_bankAccountKey_bankRefNormalized_key");
   });
 });
 
@@ -81,16 +88,23 @@ describe("one bank reference settles one document", () => {
     await expect(withRef("FOLK-PAY-209901-08", " trbs 2099 0107 1234 ")).rejects.toMatchObject({ code: "P2002" });
   });
 
-  it("the same reference from a different account is a different transfer", async () => {
+  it("the same reference from a different bank account is a different transfer", async () => {
     // Reference numbers are only unique within a bank.
-    await withRef(REF, "1234567890", "pm-company-kbank");
-    await expect(withRef("FOLK-PAY-209901-08", "1234567890", "pm-company-scb")).resolves.toMatchObject({ paymentRef: "FOLK-PAY-209901-08" });
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await expect(withRef("FOLK-PAY-209901-08", "TRBS209901071234", SCB)).resolves.toMatchObject({ paymentRef: "FOLK-PAY-209901-08" });
+  });
+
+  it("the same reference through ANOTHER payment method on the SAME account is still one transfer", async () => {
+    // The hole this closes: PEAK's payment method is a channel, so keying uniqueness on
+    // it would let the same transfer be recorded twice by choosing the other channel.
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await expect(withRef("FOLK-PAY-209901-08", "TRBS209901071234", KBANK_QR)).rejects.toMatchObject({ code: "P2002" });
   });
 
   it("a reference is only ever written together with the account it came from", async () => {
-    // Postgres treats NULL as distinct, so two rows with no payment method would not
-    // collide. Nothing can reach that state: a payment with no "Paid by" is refused
-    // before the claim (buildPaymentInput), which the route test pins.
+    // Postgres treats NULL as distinct, so two rows with no account would not collide.
+    // Nothing can reach that state: a payment with no "Paid by" is refused before the
+    // claim, PEAK is asked which account it is, and the two columns are written together.
     await withRef(REF, "TRBS209901071234", null);
     await expect(withRef("FOLK-PAY-209901-08", "TRBS209901071234", null)).resolves.toBeTruthy();
   });
@@ -108,7 +122,10 @@ describe("one bank reference settles one document", () => {
     const claim = (paymentRef: string) =>
       prisma.guidePaymentDocument.update({
         where: { paymentRef },
-        data: { status: "PAYING", paymentMethodId: "pm-company-kbank", bankRef: "TRBS209901071234", bankRefNormalized: normalizeBankRef("TRBS209901071234") },
+        data: {
+          status: "PAYING", paymentMethodId: KBANK.id, bankAccountKey: bankAccountKey(KBANK),
+          bankRef: "TRBS209901071234", bankRefNormalized: normalizeBankRef("TRBS209901071234"),
+        },
       });
     const results = await Promise.allSettled([claim(REF), claim("FOLK-PAY-209901-08")]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
@@ -120,9 +137,59 @@ describe("one bank reference settles one document", () => {
   it("names the payment a reference is already recorded on", async () => {
     await withRef(REF, "TRBS209901071234");
     const clash = await prisma.guidePaymentDocument.findFirst({
-      where: { bankRefNormalized: normalizeBankRef("trbs 2099 0107 1234"), paymentMethodId: "pm-company-kbank" },
+      where: { bankRefNormalized: normalizeBankRef("trbs 2099 0107 1234"), bankAccountKey: bankAccountKey(KBANK) },
       select: { paymentRef: true },
     });
     expect(clash).toEqual({ paymentRef: REF });
+  });
+});
+
+describe("the account a transfer left from is a fact about money that has moved", () => {
+  it("cannot be changed once a bank reference is recorded against it", async () => {
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await expect(prisma.guidePaymentDocument.update({
+      where: { paymentRef: REF }, data: { paymentMethodId: SCB.id, bankAccountKey: bankAccountKey(SCB) },
+    })).rejects.toThrow(/recorded against another account/);
+  });
+
+  it("cannot be changed once PEAK has confirmed the payment", async () => {
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await prisma.guidePaymentDocument.update({ where: { paymentRef: REF }, data: { status: "PAID" } });
+    await expect(prisma.guidePaymentDocument.update({
+      where: { paymentRef: REF }, data: { paymentMethodId: SCB.id, bankAccountKey: bankAccountKey(SCB) },
+    })).rejects.toThrow(/is recorded/);
+  });
+
+  it("neither can the reference or the amount, once it is paid", async () => {
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await prisma.guidePaymentDocument.update({ where: { paymentRef: REF }, data: { status: "PAID", slipAmount: 2584 } });
+    await expect(prisma.guidePaymentDocument.update({ where: { paymentRef: REF }, data: { bankRefNormalized: "SOMETHINGELSE" } })).rejects.toThrow(/is recorded/);
+    await expect(prisma.guidePaymentDocument.update({ where: { paymentRef: REF }, data: { slipAmount: 1 } })).rejects.toThrow(/is recorded/);
+  });
+
+  it("but the whole claim can still be withdrawn — that leaves nothing claimed", async () => {
+    // PEAK refusing the payment, or an operator confirming no payment exists, clears the
+    // reference and the account together.
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await expect(prisma.guidePaymentDocument.update({
+      where: { paymentRef: REF },
+      data: { status: "AWAITING_PAYMENT", paymentMethodId: null, bankAccountKey: null, bankRef: null, bankRefNormalized: null, slipAmount: null },
+    })).resolves.toBeTruthy();
+    // …and the reference is free again.
+    await expect(withRef("FOLK-PAY-209901-08", "TRBS209901071234", KBANK)).resolves.toBeTruthy();
+  });
+
+  it("everything else about a paid document may still be recorded", async () => {
+    await withRef(REF, "TRBS209901071234", KBANK);
+    await prisma.guidePaymentDocument.update({ where: { paymentRef: REF }, data: { status: "PAID" } });
+    await expect(prisma.guidePaymentDocument.update({
+      where: { paymentRef: REF }, data: { attachmentStatus: "ATTACHED", peakDocumentStatus: "PAID" },
+    })).resolves.toBeTruthy();
+  });
+
+  it("the trigger that enforces it is really in the database", async () => {
+    const rows = await prisma.$queryRaw<{ tgname: string }[]>`
+      SELECT tgname FROM pg_trigger WHERE tgrelid = '"GuidePaymentDocument"'::regclass AND NOT tgisinternal`;
+    expect(rows.map((r) => r.tgname)).toContain("guide_payment_account_frozen");
   });
 });

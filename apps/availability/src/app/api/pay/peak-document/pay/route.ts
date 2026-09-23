@@ -5,7 +5,7 @@ import { isOps } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken } from "@/lib/google-drive";
 import { peakEnabled } from "@/lib/peak-api";
 import { buildPaymentInput, payCombinedDocument, PaymentNotRecordable } from "@/lib/peak-payment-document";
-import { bangkokToday, documentJobs, PaymentClaimRefused, prismaPayDeps } from "@/lib/peak-payment-server";
+import { bangkokToday, documentJobs, PaymentClaimRefused, prismaPayDeps, resolveBankAccount } from "@/lib/peak-payment-server";
 import { paidTransferOf } from "@/lib/combined-payment";
 import { checkTransferEvidence } from "@/lib/payment-transfer";
 
@@ -91,11 +91,21 @@ export async function POST(req: NextRequest) {
   if (hasFile && !refreshToken) return NextResponse.json({ error: "not-connected", reasons: ["Connect the Folkpaths Google account first"] }, { status: 400 });
   const user = await prisma.user.findFirst({ where: { guideId: doc.guideId }, select: { peakContactId: true, fullName: true, displayName: true } });
 
+  // Which bank account the money left from, asked of PEAK rather than taken from the
+  // page: a bank reference is unique within a bank, and the page could name another
+  // account to get the same transfer recorded twice. Fails closed.
+  let bankAccountKey: string | null = null;
+  if (!doc.alreadyPaid) {
+    const account = await resolveBankAccount(input.paymentMethodId);
+    if (!account.ok) return NextResponse.json({ error: "peak-check-failed", reasons: account.reasons }, { status: 409 });
+    bankAccountKey = account.key;
+  }
+
   const base64 = hasFile ? Buffer.from(await file!.arrayBuffer!()).toString("base64") : null;
   const deps = prismaPayDeps({
     document: doc, guideName: user?.fullName || user?.displayName || doc.guideId, peakContactId: user?.peakContactId ?? null,
     file: base64 ? { base64, mime } : null, savedSlip, refreshToken: refreshToken ?? null,
-    bankRef, slipAmount, verified, fileName, actor,
+    bankRef, slipAmount, verified, fileName, bankAccountKey, actor,
   });
 
   let result;

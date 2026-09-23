@@ -821,6 +821,11 @@ model GuidePaymentDocument {
   // and what must be unique: banks print one reference several ways and people retype
   // it in several cases, and those are one transfer, not two.
   bankRefNormalized String?
+  // WHICH BANK ACCOUNT the money left from, as one comparable string — the PEAK payment
+  // method's account number reduced to digits (`ACC:…`), or its channel id when PEAK
+  // gives no account (`PM:…`). A payment method is a channel, not an account: two
+  // channels can name the same account, and a bank reference is unique within a BANK.
+  bankAccountKey    String?
   slipAmount        Float? // the amount printed on the slip, as the operator read it
   slipUploadedAt    DateTime?
   // Who says the amount and the reference match the slip, and when. There is no OCR:
@@ -848,11 +853,12 @@ model GuidePaymentDocument {
   @@index([status])
   @@index([bankRef])
   @@index([bankRefNormalized])
-  // One bank reference settles one document, per account the money left from — reference
-  // numbers are only unique within a bank. Rows with no reference yet hold NULL, which
-  // Postgres treats as distinct, so every document without one is left alone. A blank
-  // payment method never reaches here: it is refused before the claim (buildPaymentInput).
-  @@unique([paymentMethodId, bankRefNormalized])
+  // One bank reference settles one document, per BANK ACCOUNT the money left from —
+  // reference numbers are only unique within a bank. Rows with no reference yet hold
+  // NULL, which Postgres treats as distinct, so every document without one is left
+  // alone. Neither column is ever written without the other (peak-payment-server), and
+  // a trigger refuses to let either change once a transfer has been recorded.
+  @@unique([bankAccountKey, bankRefNormalized])
 }
 
 // Guide leave (holiday / unavailable range). Operator-approved; an approved leave

@@ -84,7 +84,7 @@ const prismaMock = vi.hoisted(() => {
 });
 
 const authMock = vi.hoisted(() => vi.fn());
-const peak = vi.hoisted(() => ({ create: vi.fn(), attach: vi.fn(), get: vi.fn(), pay: vi.fn() }));
+const peak = vi.hoisted(() => ({ create: vi.fn(), attach: vi.fn(), get: vi.fn(), pay: vi.fn(), methods: vi.fn() }));
 const drive = vi.hoisted(() => ({ save: vi.fn() }));
 
 vi.mock("@prisma/client", () => ({ Prisma: { PrismaClientKnownRequestError: class extends Error { code = ""; } } }));
@@ -100,6 +100,7 @@ vi.mock("@/lib/peak-api", () => ({
   insertExpenseFile: peak.attach,
   getExpense: peak.get,
   payExistingExpense: peak.pay,
+  getPaymentMethods: peak.methods,
   sanitizePeakError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 vi.mock("@/lib/peak-account-map", () => ({
@@ -179,6 +180,8 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2030-05-20T03:00:00Z"));
   authMock.mockResolvedValue({ user: { id: "op_1", role: "OPERATOR" } });
   drive.save.mockResolvedValue({ id: "file-1", link: "https://drive.example/slip-1" });
+  // PEAK knows the account the money leaves from; its number is the account's identity.
+  peak.methods.mockResolvedValue({ ok: true, methods: [{ id: "pm-test", name: "Test bank account", bankName: "Test Bank", accountNumber: "123-4-56789-0" }] });
   peak.create.mockResolvedValue({ ok: true, code: "EXP-TEST-0042", id: "peak-doc-42", link: "https://peak.example/42" });
   peak.attach.mockResolvedValue({ ok: true, desc: "Success" });
   peak.get.mockResolvedValue(peakExpense());
@@ -1007,6 +1010,49 @@ describe("a person checked the slip, and the record says so", () => {
     expect(why).toContain("FOLK-PAY-203005-01");
     expect(why).toContain("EXP-TEST-0042");
     expect(why).toContain("one transfer settles one document");
+  });
+
+  it("records which bank account the money left from, asked of PEAK — not of the page", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    // PEAK's payment method is a channel; its account number is the account's identity.
+    expect(db.docs[0]).toMatchObject({ paymentMethodId: "pm-test", bankAccountKey: "ACC:1234567890" });
+  });
+
+  it("fails closed when PEAK cannot say which account that is", async () => {
+    await create([J1, J2, J3]);
+    peak.methods.mockResolvedValue({ ok: false, desc: "timeout" });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Could not read the payment accounts from PEAK");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("refuses an account PEAK has never heard of", async () => {
+    await create([J1, J2, J3]);
+    peak.methods.mockResolvedValue({ ok: true, methods: [{ id: "pm-other", name: "Another account" }] });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("does not have the account");
+    expect(db.docs[0].bankAccountKey ?? null).toBeNull();
+  });
+
+  it("will not move a claimed payment to another account", async () => {
+    await create([J1, J2, J3]);
+    db.docs[0].status = "PAYING"; // claimed, PEAK not yet answered
+    const res = await payDoc({ paymentMethodId: "pm-other" });
+    expect(res.status).toBe(409);
+    expect(db.docs[0].paymentMethodId ?? null).not.toBe("pm-other");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("will not move a recorded payment to another account", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    peak.methods.mockResolvedValue({ ok: true, methods: [{ id: "pm-other", name: "Another account", accountNumber: "999-9-99999-9" }] });
+    const res = await payDoc({ paymentMethodId: "pm-other", bankRef: "KBOTHER1" });
+    expect(res.status).toBe(409);
+    expect(db.docs[0]).toMatchObject({ status: "PAID", paymentMethodId: "pm-test", bankAccountKey: "ACC:1234567890", bankRef: "KB203005131234" });
   });
 
   it("keeps the slip's real extension — a PDF is filed as a PDF", async () => {

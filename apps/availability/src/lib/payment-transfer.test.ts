@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bankNote, canTransfer, checkTransferEvidence, normalizeBankRef, paymentPayloadHash, slipExtension,
-  displayBankRef, slipFileName, transferFigures, transferStage,
+  bankAccountKey, displayBankRef, slipFileName, transferFigures, transferStage,
   VERIFICATION_SOURCE, VERIFIED_LABEL_TH, VERIFY_CHECKBOX_TH,
 } from "./payment-transfer";
 import type { PaymentLineTrace } from "./peak-payment-document";
@@ -228,6 +228,31 @@ describe("one reference, one spelling", () => {
     expect(displayBankRef(null)).toBe("");
     // …and still compares equal to the same reference typed without the spaces.
     expect(normalizeBankRef(displayBankRef(" trbs 2609 23ab "))).toBe(normalizeBankRef("TRBS260923AB"));
+  });
+});
+
+describe("which account the money left from", () => {
+  it("is the account number, because a payment method is a channel and two can share one account", () => {
+    const transfer = { id: "pm-transfer", accountNumber: "123-4-56789-0" };
+    const qr = { id: "pm-qr", accountNumber: "1234567890" };
+    expect(bankAccountKey(transfer)).toBe("ACC:1234567890");
+    expect(bankAccountKey(qr)).toBe(bankAccountKey(transfer));
+  });
+
+  it("different accounts are different, however alike they look", () => {
+    expect(bankAccountKey({ id: "a", accountNumber: "123-4-56789-0" })).not.toBe(bankAccountKey({ id: "b", accountNumber: "123-4-56789-1" }));
+  });
+
+  it("falls back to the channel when PEAK gives no account, and says which it is", () => {
+    expect(bankAccountKey({ id: "pm-cash" })).toBe("PM:pm-cash");
+    expect(bankAccountKey({ id: "pm-cash", accountNumber: "" })).toBe("PM:pm-cash");
+    // The two forms can never be mistaken for one another.
+    expect(bankAccountKey({ id: "1234567890" })).not.toBe(bankAccountKey({ id: "x", accountNumber: "1234567890" }));
+  });
+
+  it("nothing identifiable is null, not a key everything shares", () => {
+    expect(bankAccountKey(null)).toBeNull();
+    expect(bankAccountKey({ id: "  " })).toBeNull();
   });
 });
 
