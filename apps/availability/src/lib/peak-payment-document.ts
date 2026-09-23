@@ -17,6 +17,7 @@
 // PayDocumentDeps — which is what lets the order of operations be tested without either.
 import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
+import { evidenceRequired, evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import {
   canonicalPaidBy,
   guidePayoutTotal,
@@ -87,6 +88,9 @@ export type GuidePaymentDocument = {
   wht: number;    // Σ withholding
   total: number;  // net paid = gross − wht = Σ each job's payout = the transfer
   jobs: { date: string; slotIdx: number; ref: string; payout: number }[];
+  /** Reimbursements paid with no receipt behind them. Reported always; refused only
+   *  when the deployment sets REIMBURSEMENT_EVIDENCE_REQUIRED=1. */
+  evidenceGaps: MissingCategoryRow[];
   issuedDate: string;
 };
 
@@ -106,7 +110,12 @@ export type MissingCategoryRow = {
  *  meet the next, is how a payment gets abandoned half-done. */
 export class PaymentDocumentNotPostable extends Error {
   readonly code = "payment-document-not-postable";
-  constructor(readonly reasons: string[], readonly missingCategories: MissingCategoryRow[] = []) {
+  constructor(
+    readonly reasons: string[],
+    readonly missingCategories: MissingCategoryRow[] = [],
+    /** Reimbursements with no receipt — listed whether or not they are what refused it. */
+    readonly evidenceGaps: MissingCategoryRow[] = [],
+  ) {
     super(reasons.join("; "));
     this.name = "PaymentDocumentNotPostable";
   }
@@ -158,6 +167,8 @@ export function buildGuidePaymentDocument(input: {
   const lines: PeakPaymentLine[] = [];
   const traces: PaymentLineTrace[] = [];
   const missingCategories: MissingCategoryRow[] = [];
+  // Reimbursements with nothing behind them. Reported whether or not they refuse.
+  const evidenceGaps: MissingCategoryRow[] = [];
   const outJobs: GuidePaymentDocument["jobs"] = [];
   let expected = 0;
 
@@ -245,6 +256,16 @@ export function buildGuidePaymentDocument(input: {
         reasons.add(`"${desc}" on ${where} is marked as already in PEAK but is still being paid to the guide — it cannot be both`);
         continue;
       }
+
+      // A reimbursement is money leaving untaxed because it is the guide's own money
+      // coming back against evidence. With nothing behind it that claim is not true,
+      // and the row is pay. Reported on every document; refused once the deployment
+      // says receipts are being collected (REIMBURSEMENT_EVIDENCE_REQUIRED=1).
+      const evidence = evidenceState(e as ExpenseWithEvidence);
+      if (evidence.state === "BLOCKED") {
+        evidenceGaps.push({ jobRef: where, date: j.date, slotIdx: j.slotIdx, rowNo, description: desc, amount: round2(amt) });
+        if (evidenceRequired()) { reasons.add(`${where} row ${rowNo}: ${evidence.reason}`); continue; }
+      }
       const key = expenseCategory(e);
       if (!key) {
         missingCategories.push({ jobRef: where, date: j.date, slotIdx: j.slotIdx, rowNo, description: desc, amount: round2(amt) });
@@ -304,7 +325,7 @@ export function buildGuidePaymentDocument(input: {
     }
   }
 
-  if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories);
+  if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories, evidenceGaps);
 
   const issuedDate = compact(latest);
   // Due the day it is created, never before it is issued. Due on the tour date, a
@@ -320,6 +341,7 @@ export function buildGuidePaymentDocument(input: {
     wht,
     total,
     jobs: outJobs,
+    evidenceGaps,
     issuedDate,
     expense: {
       // Dated when the last tour ran, so the cost books into the month the service was

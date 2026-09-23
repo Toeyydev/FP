@@ -41,26 +41,31 @@ export async function POST(req: NextRequest) {
   // Pure: this builds a payload in memory and sends it nowhere.
   const candidates = loaded.ok ? ctx.jobs : [...ctx.jobs, ...ctx.awaitingApproval];
   let missingCategories: MissingCategoryRow[] = [];
+  let evidenceGaps: MissingCategoryRow[] = [];
   try {
-    if (!candidates.length) return NextResponse.json({ ok: false, reasons, missingCategories });
+    if (!candidates.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps });
     const doc = buildGuidePaymentDocument({
       guideId, peakContactId: ctx.peakContactId,
       // The number is assigned when the document is created. It changes no line.
       paymentRef: "FOLK-PAY-(assigned when created)",
       jobs: candidates, accounts: ctx.accounts,
     });
-    if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories });
+    if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
     return NextResponse.json({
       ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
       // What the operator checks before pressing Create: the whole figure, the part
       // withholding is taken on, the tax, the guide's own money coming back, and what
       // the bank will actually send.
       figures: transferFigures({ lines: doc.traces, total: doc.total }),
+      // …and the rows behind which there is no receipt, which are inside those figures
+      // only while REIMBURSEMENT_EVIDENCE_REQUIRED is off.
+      evidenceGaps: doc.evidenceGaps,
       ...(alreadyPaid ? { alreadyPaid, paidDate: ctx.paidDate, hasSlip: !!ctx.slipLink } : {}),
     });
   } catch (e) {
     if (!(e instanceof PaymentDocumentNotPostable)) throw e;
     missingCategories = e.missingCategories;
-    return NextResponse.json({ ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories });
+    evidenceGaps = e.evidenceGaps;
+    return NextResponse.json({ ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories, evidenceGaps });
   }
 }

@@ -41,8 +41,8 @@ type Line = { description: string; jobRef: string; kind: string; category: strin
 type MissingCategory = { jobRef: string; date: string; slotIdx: number; rowNo: number; description: string; amount: number };
 type Figures = { gross: number; reimbursement: number; whtBase: number; wht: number; net: number };
 type Preview =
-  | { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean; figures?: Figures }
-  | { ok: false; reasons: string[]; missingCategories?: MissingCategory[] };
+  | { ok: true; lines: Line[]; gross: number; wht: number; total: number; hasSlip?: boolean; figures?: Figures; evidenceGaps?: MissingCategory[] }
+  | { ok: false; reasons: string[]; missingCategories?: MissingCategory[]; evidenceGaps?: MissingCategory[] };
 type Outcome =
   | ({ kind: "created"; recordError: string | null; existing: boolean } & CreatedDocument)
   | { kind: "uncertain"; paymentRef: string; reasons: string[] }
@@ -86,7 +86,9 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
         const d = await r.json().catch(() => ({}));
         if (mine !== seq.current) return;
         if (!r.ok) setPreview({ ok: false, reasons: [d.error === "forbidden" ? "Operator only" : `Could not build the preview (${r.status})`] });
-        else setPreview(d.ok ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip, figures: d.figures } : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [] });
+        else setPreview(d.ok
+          ? { ok: true, lines: d.lines, gross: d.gross, wht: d.wht, total: d.total, hasSlip: d.hasSlip, figures: d.figures, evidenceGaps: Array.isArray(d.evidenceGaps) ? d.evidenceGaps : [] }
+          : { ok: false, reasons: d.reasons ?? ["Not payable"], missingCategories: Array.isArray(d.missingCategories) ? d.missingCategories : [], evidenceGaps: Array.isArray(d.evidenceGaps) ? d.evidenceGaps : [] });
       })
       .catch(() => { if (mine === seq.current) setPreview({ ok: false, reasons: ["Could not reach the server"] }); });
     // selectedKeys stands in for `selected`, which is a new array every render.
@@ -185,7 +187,10 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
                 {preview === null ? (
                   <div className="skel-row" />
                 ) : !preview.ok ? (
-                  <MissingCategoryNote guideId={guideId} reasons={preview.reasons} rows={preview.missingCategories ?? []} />
+                  <>
+                    <MissingCategoryNote guideId={guideId} reasons={preview.reasons} rows={preview.missingCategories ?? []} />
+                    <EvidenceGapNote guideId={guideId} rows={preview.evidenceGaps ?? []} />
+                  </>
                 ) : (
                   <>
                     <div className="grid-scroll">
@@ -213,6 +218,7 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
                       {preview.wht > 0 && <Row label="Withholding tax" value={`−${thb(preview.wht)}`} />}
                       <Row label={alreadyPaid ? `Paid to the guide on ${dShort(alreadyPaid.paidDate)} — recorded against this document next` : "Amount to pay the guide — recorded later, against this document"} value={thb(preview.total)} strong />
                     </div>
+                    <EvidenceGapNote guideId={guideId} rows={preview.evidenceGaps ?? []} />
                     <div className="paydoc-credit" title="PEAK bills each document created, not each line">
                       Creates <b>1 PEAK document</b> with {preview.lines.length} line{preview.lines.length === 1 ? "" : "s"} for {selected.length} job{selected.length === 1 ? "" : "s"}, <b>unpaid</b> — 1 PEAK API credit.
                       {selected.length > 1 && <> Posted one at a time, the same jobs would take {selected.length} documents.</>}
@@ -332,6 +338,37 @@ function TransferInstructions({ paymentRef }: { paymentRef: string }) {
 // Every refusal at once. Rows with no expense category get a table of their own — job,
 // row, description, amount — because nine one-line sentences are hard to work through,
 // and each one is a separate trip to a job sheet. Categories are never filled in here.
+// Reimbursements going back to a guide with no receipt behind them. Shown on every
+// document; whether they also REFUSE it is the deployment's call
+// (REIMBURSEMENT_EVIDENCE_REQUIRED), because today almost none of them have one.
+function EvidenceGapNote({ guideId, rows }: { guideId: string; rows: MissingCategory[] }) {
+  if (!rows.length) return null;
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  return (
+    <Note tone="warn">
+      <b>{rows.length} reimbursement{rows.length === 1 ? "" : "s"} with no receipt — {thb(total)}</b>
+      <div style={{ marginTop: 4 }}>
+        This is the guide&rsquo;s own money coming back, so it is paid untaxed. Without a receipt there is nothing showing it was spent. Attach one on the job sheet, or have an admin record why it can be paid without.
+      </div>
+      <div className="grid-scroll" style={{ marginTop: 8 }}>
+        <table className="acct-table paydoc-table" aria-label="Reimbursements with no receipt">
+          <thead><tr><th>Job No.</th><th style={{ width: 44 }}>Row</th><th>Description</th><th className="r" style={{ width: 96 }}>Amount</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.date}|${r.slotIdx}|${r.rowNo}`}>
+                <td className="num"><a href={`/job-sheet?guideId=${encodeURIComponent(guideId)}&date=${r.date}&slotIdx=${r.slotIdx}`} target="_blank" rel="noopener noreferrer">{r.jobRef}</a></td>
+                <td className="num">{r.rowNo}</td>
+                <td>{r.description}</td>
+                <td className="r num">{thb(r.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Note>
+  );
+}
+
 function MissingCategoryNote({ guideId, reasons, rows }: { guideId: string; reasons: string[]; rows: MissingCategory[] }) {
   const others = rows.length ? reasons.filter((x) => !x.includes("has no expense category")) : reasons;
   return (
