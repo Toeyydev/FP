@@ -134,14 +134,15 @@ export async function POST(req: NextRequest) {
     <table style="margin-top:12px;border-collapse:collapse"><tbody>
       <tr><td style="padding:2px 16px 2px 0;color:#555">ต้นทุนทัวร์ทั้งหมด<br><span style="font-size:11px">Total tour cost</span></td><td align="right">${esc(thb(b.tourCost))}</td></tr>
       ${b.fundedByAdvance > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">จ่ายจากเงินทดรองบริษัท<br><span style="font-size:11px">Funded by a company advance — not transferred</span></td><td align="right">${esc(thb(b.fundedByAdvance))}</td></tr>` : ""}
-      ${b.fundedByCompany > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">บริษัทชำระโดยตรง<br><span style="font-size:11px">Paid direct by the company — not transferred</span></td><td align="right">${esc(thb(b.fundedByCompany))}</td></tr>` : ""}
-      ${b.unresolved > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#a15c00">ยังไม่ระบุแหล่งเงิน<br><span style="font-size:11px">Paid By not set — not transferred until it is</span></td><td align="right">${esc(thb(b.unresolved))}</td></tr>` : ""}
+      ${b.fundedByCompany > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">บริษัทจ่ายตรง<br><span style="font-size:11px">Paid direct by the company — not transferred</span></td><td align="right">${esc(thb(b.fundedByCompany))}</td></tr>` : ""}
+      ${b.unresolved > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b91c1c"><b>ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน</b><br><span style="font-size:11px">ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย · Paid By not set, so this job cannot be paid yet</span></td><td align="right" style="color:#b91c1c"><b>${esc(thb(b.unresolved))}</b></td></tr>` : ""}
       <tr><td colspan="2" style="padding:2px 0 8px;color:#777;font-size:11px">ยอดนี้ใช้วัดต้นทุนของงาน ไม่ใช่ยอดที่ต้องโอนให้ไกด์</td></tr>
       <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าจ้างไกด์<br><span style="font-size:11px">Guide fee</span></td><td align="right">${esc(thb(b.feeGross))}</td></tr>
       ${b.reviewReward > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">ค่าตอบแทนรีวิวไกด์<br><span style="font-size:11px">Review incentive</span></td><td align="right">${esc(thb(b.reviewReward))}</td></tr>` : ""}
-      <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าใช้จ่ายที่ไกด์ออกเอง<br><span style="font-size:11px">Reimbursed to the guide</span></td><td align="right">${esc(thb(b.reimbursableToGuide))}</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์<br><span style="font-size:11px">Reimbursable to the guide</span></td><td align="right">${esc(thb(b.reimbursableToGuide))}</td></tr>
       <tr><td style="padding:2px 16px 2px 0;color:#555">หัก ภาษี ณ ที่จ่าย<br><span style="font-size:11px">Withholding tax</span></td><td align="right">−${esc(thb(b.withholding))}</td></tr>
       <tr><td style="padding:4px 16px 2px 0;border-top:1px solid #999"><b>ยอดโอนสุทธิให้ไกด์</b><br><span style="font-size:11px">Net transfer to the guide</span></td><td align="right" style="border-top:1px solid #999"><b>${esc(thb(b.netTransfer))}</b></td></tr>
+      ${b.unresolved > 0 ? `<tr><td colspan="2" style="padding:4px 0 0;color:#b91c1c;font-size:11px">ยอดโอนนี้ยังไม่รวม ${esc(thb(b.unresolved))} ที่ยังไม่ระบุผู้จ่าย — ระบุ Paid By บนใบงานก่อน จึงจะจ่ายได้</td></tr>` : ""}
     </tbody></table>
   </body></html>`;
 

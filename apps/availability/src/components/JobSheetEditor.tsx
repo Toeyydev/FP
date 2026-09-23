@@ -909,7 +909,10 @@ export default function JobSheetEditor() {
                   </>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
                 <div className="gs-payout">
-                  <div className="gs-payout-row"><span>Expenses reimbursed to you{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย</small></span><b>{thb(expShown)}</b></div>
+                  {/* "Reimbursed" is a thing that has happened. Until the transfer is made it has
+                      not, and telling a guide their money is back when it is not is the one
+                      mistake this line can make. */}
+                  <div className="gs-payout-row"><span>{payoutView.status === "final" ? "Expenses reimbursed to you" : "Expenses to be reimbursed to you"}{payoutView.basis === "reported" ? " (your report)" : ""}<br /><small className="gs-calc">{payoutView.status === "final" ? "เงินคืนค่าใช้จ่ายที่มัคคุเทศก์สำรองจ่าย" : "ค่าใช้จ่ายที่ต้องคืนให้มัคคุเทศก์"}</small></span><b>{thb(expShown)}</b></div>
                   {payoutView.notReimbursed.company > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid by Folkpaths directly — not reimbursed<br /><small className="gs-calc">บริษัทจ่ายเอง ไม่ใช่เงินคืนให้มัคคุเทศก์</small></span><span>{thb(payoutView.notReimbursed.company)}</span></div>}
                   {payoutView.notReimbursed.advance > 0 && <div className="gs-payout-row" style={{ color: "var(--ink-soft)" }}><span>Paid from a Folkpaths advance — settled with the advance<br /><small className="gs-calc">จ่ายจากเงินทดรอง เคลียร์กับเงินทดรอง</small></span><span>{thb(payoutView.notReimbursed.advance)}</span></div>}
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT</span><b>{thb(t.netGuideFee)}</b></div>
@@ -1285,20 +1288,24 @@ export default function JobSheetEditor() {
             )}
             {payer.fundedByCompany > 0 && (
               <tr className="js-total js-total-sub">
-                <td colSpan={5} style={{ textAlign: "right" }}>บริษัทชำระโดยตรง<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>paid direct by the company — not transferred</small></td>
+                <td colSpan={5} style={{ textAlign: "right" }}>บริษัทจ่ายตรง<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>paid direct by the company — not transferred</small></td>
                 <td className="js-amt">{thb(payer.fundedByCompany)}</td>
                 <td className="no-print" />
               </tr>
             )}
             {payer.unresolved > 0 && (
               <tr className="js-total js-total-warn">
-                <td colSpan={5} style={{ textAlign: "right" }}>ยังไม่ระบุแหล่งเงิน<small style={{ fontSize: 10, fontWeight: 500, marginLeft: 5 }}>Paid By not set — the payment is refused until it is</small></td>
-                <td className="js-amt">{thb(payer.unresolved)}</td>
+                <td colSpan={5} style={{ textAlign: "right" }}>
+                  ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน
+                  <small style={{ display: "block", fontSize: 10, fontWeight: 500 }}>ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย</small>
+                  <small style={{ display: "block", fontSize: 10, fontWeight: 500 }}>Paid By not set — the payment is refused until it is</small>
+                </td>
+                <td className="js-amt"><b>{thb(payer.unresolved)}</b></td>
                 <td className="no-print" />
               </tr>
             )}
             <tr className="js-total js-total-owed">
-              <td colSpan={5} style={{ textAlign: "right" }}>ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์<small style={{ fontSize: 10, fontWeight: 500, marginLeft: 5 }}>reimbursed to the guide — part of the transfer</small></td>
+              <td colSpan={5} style={{ textAlign: "right" }}>ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์<small style={{ fontSize: 10, fontWeight: 500, marginLeft: 5 }}>reimbursable to the guide — part of the transfer</small></td>
               <td className="js-amt"><b>{thb(payer.reimbursableToGuide)}</b></td>
               <td className="no-print" />
             </tr>

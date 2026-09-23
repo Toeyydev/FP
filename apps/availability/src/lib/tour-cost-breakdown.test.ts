@@ -178,3 +178,87 @@ describe("the screens ask the right question", () => {
     expect(ui).toContain("ไม่รวมในยอดโอนให้ไกด์ — ใช้ตัดเงินทดรอง");
   });
 });
+
+// ── Every payer, shown for what it is ────────────────────────────────────────
+
+describe("the four kinds of money, each said plainly", () => {
+  const FOUR: Expense[] = [
+    { description: "Water", price: 50, pax: 1, expenseType: "other", paidBy: "guide" },
+    { description: "Grand Palace", price: 1000, pax: 1, expenseType: "entrance", paidBy: "advance" },
+    { description: "Coach invoice", price: 800, pax: 1, expenseType: "transport", paidBy: "company" },
+    { description: "Lotus offering", price: 30, pax: 1, expenseType: "other" },
+  ];
+
+  it("company-direct money is its own line, and is in no transfer", () => {
+    const b = tourCostBreakdown(FOUR, FEE);
+    expect(b.fundedByCompany).toBe(800);
+    expect(b.reimbursableToGuide).toBe(50);
+    expect(b.grossPayable).toBe(1550);   // fee 1,500 + the ฿50 the guide fronted
+    expect(guidePayoutTotal(FOUR, FEE).payout).toBe(b.netTransfer);
+    expect(b.netTransfer).toBe(1505);
+  });
+
+  it("money with no payer is in the cost, in no transfer, and stops the payment", () => {
+    const b = tourCostBreakdown(FOUR, FEE);
+    expect(b.unresolved).toBe(30);
+    expect(b.tourCost).toBe(1880);
+    // It is in neither the gross nor the net…
+    expect(b.grossPayable).toBe(1550);
+    // …and the document refuses to be built at all.
+    expect(() => build({ jobs: [{ ...JOB, expenses: FOUR }] })).toThrow(PaymentDocumentNotPostable);
+  });
+
+  it("the parts always add up to the cost, to the satang", () => {
+    for (const rows of [FOUR, ROWS, [], [FOUR[3]]]) {
+      const b = tourCostBreakdown(rows, FEE);
+      expect(b.fundedByAdvance + b.fundedByCompany + b.reimbursableToGuide + b.unresolved).toBe(b.tourCost);
+    }
+    // …including where each part rounds on its own.
+    const thirds: Expense[] = [
+      { description: "a", price: 0.005, pax: 1, paidBy: "guide", expenseType: "other" },
+      { description: "b", price: 0.005, pax: 1, paidBy: "advance", expenseType: "other" },
+      { description: "c", price: 0.005, pax: 1, paidBy: "company", expenseType: "other" },
+      { description: "d", price: 0.005, pax: 1, expenseType: "other" },
+    ];
+    const odd = tourCostBreakdown(thirds, FEE);
+    expect(odd.fundedByAdvance + odd.fundedByCompany + odd.reimbursableToGuide + odd.unresolved).toBe(odd.tourCost);
+  });
+});
+
+describe("the words the screens use", () => {
+  const read = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
+
+  it("every payer that has money gets a line of its own", () => {
+    const ui = read("src/components/JobSheetEditor.tsx");
+    for (const label of ["จ่ายจากเงินทดรองบริษัท", "บริษัทจ่ายตรง", "ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์", "ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน"]) {
+      expect(ui, `the footer must say "${label}"`).toContain(label);
+    }
+    expect(ui).toContain("ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย");
+  });
+
+  it("money owed is not called reimbursed until it has been", () => {
+    // "Reimbursed" is a thing that has happened. The job sheet document and the export
+    // are produced before any transfer, so they say reimbursABLE…
+    for (const f of ["src/app/api/jobsheet/drive/route.ts", "src/app/api/jobsheet/export/route.ts"]) {
+      expect(read(f), `${f} should say reimbursable`).toContain("Reimbursable to");
+      expect(read(f), `${f} still says "reimbursed"`).not.toMatch(/Reimbursed to/i);
+    }
+    // …and the figure the guide is shown says which it is, rather than claiming their
+    // money is back before it has moved.
+    const ui = read("src/components/JobSheetEditor.tsx");
+    expect(ui).toContain("Expenses to be reimbursed to you");
+    expect(ui).toContain("ค่าใช้จ่ายที่ต้องคืนให้มัคคุเทศก์");
+    expect(ui).toContain(`payoutView.status === "final" ? "Expenses reimbursed to you"`);
+    // The operator's own footer never uses the past tense at all.
+    expect(ui).toContain("reimbursable to the guide — part of the transfer");
+  });
+
+  it("the documents say why an unresolved figure is not the transfer", () => {
+    const drive = read("src/app/api/jobsheet/drive/route.ts");
+    expect(drive).toContain("ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน");
+    expect(drive).toContain("ยังไม่รวมในยอดโอน");
+    const xlsx = read("src/app/api/jobsheet/export/route.ts");
+    expect(xlsx).toContain("ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน");
+    expect(xlsx).toContain("ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย");
+  });
+});

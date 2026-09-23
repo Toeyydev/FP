@@ -1432,7 +1432,10 @@ body:has(.op-layout) .wrap{max-width:1440px}
    funded which part, and — the only figure anyone transfers — what is owed back to
    the guide. The last of those is the loud one. */
 .js-total-sub td { font-weight: 500; color: var(--ink-soft, #8a8f8b); }
-.js-total-warn td { font-weight: 600; color: var(--assign, #a15c00); }
+/* Not a quieter shade of the same thing: money nobody has assigned a payer to stops
+   a payment, so it is coloured like a refusal rather than like a note. */
+.js-total-warn td { font-weight: 700; color: #b91c1c; background: rgba(185, 28, 28, 0.07); }
+.js-total-warn td small { color: #b91c1c; font-weight: 600; }
 .js-total-owed td { font-weight: 700; color: #b45309; background: rgba(180, 83, 9, 0.06); }
 .js-total-owed .js-amt b { font-size: 1.08em; }
 .js-cost-note { font-size: 10.5px; font-weight: 500; color: var(--ink-soft, #8a8f8b); text-align: right; padding: 0 0 6px; }

@@ -379,19 +379,38 @@ export function tourCostBreakdown(expenses: Expense[] | null | undefined, guideF
       default: unresolved += amt;
     }
   }
-  const grossPayable = t.gross + reviewReward + reimbursableToGuide;
-  return {
-    tourCost: r2c(fundedByAdvance + fundedByCompany + reimbursableToGuide + unresolved),
-    fundedByAdvance: r2c(fundedByAdvance),
-    fundedByCompany: r2c(fundedByCompany),
-    reimbursableToGuide: r2c(reimbursableToGuide),
-    unresolved: r2c(unresolved),
+  // Each part is rounded FIRST and the cost is the sum of the rounded parts, so the
+  // split adds up to the total exactly. Rounding the total separately would let a
+  // satang appear or vanish between the lines and the figure above them — on a screen
+  // whose whole purpose is that the parts explain the whole.
+  const advance = r2c(fundedByAdvance);
+  const company = r2c(fundedByCompany);
+  const reimbursable = r2c(reimbursableToGuide);
+  const unknown = r2c(unresolved);
+  const tourCost = r2c(advance + company + reimbursable + unknown);
+
+  const grossPayable = r2c(r2c(t.gross) + r2c(reviewReward) + reimbursable);
+  const split = {
+    tourCost,
+    fundedByAdvance: advance,
+    fundedByCompany: company,
+    reimbursableToGuide: reimbursable,
+    unresolved: unknown,
     reviewReward: r2c(reviewReward),
     feeGross: r2c(t.gross),
-    grossPayable: r2c(grossPayable),
+    grossPayable,
     withholding: r2c(t.wht),
     netTransfer: r2c(grossPayable - t.wht),
   };
+
+  // The identity the screens are built on. If it ever fails, a row has been counted
+  // twice or not at all, and every figure downstream is wrong — better to say so here
+  // than to render a total that does not match the lines under it.
+  const parts = r2c(split.fundedByAdvance + split.fundedByCompany + split.reimbursableToGuide + split.unresolved);
+  if (parts !== split.tourCost) {
+    throw new Error(`tour cost ${split.tourCost} does not equal its parts ${parts} (advance ${split.fundedByAdvance}, company ${split.fundedByCompany}, reimbursable ${split.reimbursableToGuide}, unresolved ${split.unresolved})`);
+  }
+  return split;
 }
 
 export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): GuidePayout {
