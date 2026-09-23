@@ -927,3 +927,123 @@ describe("dying part way through", () => {
     }
   });
 });
+
+describe("every gate that money passes through asks the same verifier", () => {
+  const linkedCert = async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" }));
+    return linkCertificate(c.id, ADMIN, deps());
+  };
+  const at = async (stage: "preview" | "document" | "payment", d: Deps = deps()) =>
+    checkEvidenceBeforePaying([await rowsNow() as Expense[]], { actorId: ADMIN.id, actorRole: ADMIN.role }, d, stage);
+
+  it("an edited document blocks pricing, document creation and payment alike", async () => {
+    const cert = await linkedCert();
+    drive.active()[0].bytes = Buffer.from("EDITED IN DRIVE");
+    drive.active()[0].revisionId = "rev_edited";
+
+    const preview = await at("preview");
+    expect(preview.ok).toBe(false);
+    expect(preview.stale).toEqual([cert.certificateNo]);          // marked on first sight
+    // …and every later gate agrees, without needing to notice it again.
+    for (const stage of ["document", "payment"] as const) {
+      const g = await at(stage);
+      expect(g.ok, stage).toBe(false);
+      expect(g.reasons.join(" ")).toContain("no longer matching its document");
+    }
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: cert.id } }))!.status).toBe("STALE");
+  });
+
+  it("Drive being unreadable fails closed rather than passing", async () => {
+    await linkedCert();
+    const broken = fakeDrive();
+    broken.findActive = async () => { throw new Error("drive 503: unavailable"); };
+    await expect(at("payment", deps({ drive: broken }))).rejects.toThrow(/unavailable/);
+  });
+
+  it("a document that has vanished fails closed, and is not marked stale", async () => {
+    const cert = await linkedCert();
+    drive.files.length = 0;
+    const g = await at("payment");
+    expect(g.ok).toBe(false);
+    expect(g.reasons.join(" ")).toContain("no longer in Drive");
+    // Missing is not the same as changed: a folder problem should not brand the
+    // certificate, because the document may still be recoverable.
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: cert.id } }))!.status).toBe("LINKED");
+  });
+
+  it("two settled documents fail closed at every stage", async () => {
+    await linkedCert();
+    const first = drive.active()[0];
+    drive.files.push({ ...first, id: "drive_clone", revisionId: "rev_clone" });
+    for (const stage of ["preview", "document", "payment"] as const) {
+      expect((await at(stage)).ok, stage).toBe(false);
+    }
+  });
+
+  it("an untouched document passes every stage", async () => {
+    await linkedCert();
+    for (const stage of ["preview", "document", "payment"] as const) {
+      const g = await at(stage);
+      expect(g.ok, stage).toBe(true);
+      expect(g.checked).toBe(1);
+    }
+  });
+});
+
+describe("what survives a failure after the document is settled", () => {
+  it("cleanup failing after it is recorded leaves the evidence untouched", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+
+    // Retiring the candidate and quarantining the losers both fail — the tidying up,
+    // not the document.
+    const messy = fakeDrive();
+    messy.retire = async () => { throw new Error("drive 500: retire failed"); };
+    messy.quarantine = async () => { throw new Error("drive 500: quarantine failed"); };
+    const done = await uploadCertificate(c.id, ADMIN, deps({ drive: messy, newToken: () => "token-A" }));
+
+    expect(done.status).toBe("UPLOADED");
+    const active = drive.files.find((f) => f.id === done.driveFileId)!;
+    expect(active.state).toBe("ACTIVE");
+    expect(fileHash(active.bytes)).toBe(done.pdfHash);            // the bytes are the bytes
+    expect((await linkCertificate(c.id, ADMIN, deps({ drive: messy }))).status).toBe("LINKED");
+  });
+
+  it("a certificate that is LINKED never names a candidate", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+    await linkCertificate(c.id, ADMIN, deps());
+    const linkedRows = await prisma.expenseCertificate.findMany({ where: { status: "LINKED" } });
+    expect(linkedRows.length).toBeGreaterThan(0);
+    for (const row of linkedRows) {
+      const f = drive.files.find((x) => x.id === row.driveFileId);
+      expect(f, `${row.certificateNo} names a file that is not in Drive`).toBeTruthy();
+      expect(f!.state, `${row.certificateNo} names a ${f!.state} file`).toBe("ACTIVE");
+    }
+  });
+
+  it("a reused document from an earlier attempt is checked again before it is used", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    // The document is created, then the process dies before it is recorded.
+    const dying = fakeDrive();
+    const create = dying.createActive.bind(dying);
+    dying.createActive = async (o) => { await create(o); throw new Error("process died"); };
+    await expect(uploadCertificate(c.id, ADMIN, deps({ drive: dying, newToken: () => "token-A" }))).rejects.toThrow();
+    const orphan = drive.active()[0];
+
+    // Somebody edits that orphan before the retry finds it.
+    orphan.bytes = Buffer.from("EDITED WHILE NOBODY WAS LOOKING");
+    const why = await refusal(() => uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-A" })));
+    expect(why[0]).toContain("did not read back");
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.driveFileId).toBeNull();
+    expect(drive.files.find((f) => f.id === orphan.id)!.state).toBe("QUARANTINED");
+  });
+});

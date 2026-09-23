@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
     where: { OR: documentJobs(doc).map((j) => ({ guideId: doc.guideId, date: j.date, slotIdx: j.slotIdx })) },
     select: { expenses: true },
   });
-  const evidence = await checkEvidenceBeforePaying(sheets.map((s) => (s.expenses as unknown as CertExpense[]) ?? []), actor);
+  const evidence = await checkEvidenceBeforePaying(sheets.map((s) => (s.expenses as unknown as CertExpense[]) ?? []), actor, {}, "payment");
   if (!evidence.ok) {
     return NextResponse.json({ error: "evidence-stale", reasons: evidence.reasons, staleCertificates: evidence.stale }, { status: 409 });
   }

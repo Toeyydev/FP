@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Expense } from "@/lib/jobsheet";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
@@ -426,9 +426,40 @@ describe("the renderer's own guarantees", () => {
   });
 
   it("the payment worker never loads it — it has no certificates to render", () => {
+    // Chromium in the worker image would be a few hundred megabytes for nothing, and a
+    // worker that could render could also file, which is not a decision a background
+    // process should be making.
     const worker = readFileSync(join(process.cwd(), "src/workers/payment-worker.ts"), "utf8");
-    expect(worker).not.toContain("certificates/");
-    expect(worker).not.toContain("puppeteer");
+    for (const forbidden of ["certificates/", "puppeteer", "certificates/drive", "certificates/pdf"]) {
+      expect(worker, `the worker must not pull in ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("nor does anything the worker bundles reach the renderer or the Drive client", () => {
+    // The import graph, not just the entry file: a transitive import would put Chromium
+    // in the worker build all the same.
+    const seen = new Set<string>();
+    const resolve = (from: string, spec: string) => {
+      if (spec.startsWith("@/")) return join(process.cwd(), "src", spec.slice(2));
+      if (spec.startsWith(".")) return join(from, "..", spec);
+      return null;
+    };
+    const walkImports = (file: string) => {
+      for (const ext of ["", ".ts", ".tsx", "/index.ts"]) {
+        const p = `${file}${ext}`;
+        if (!existsSync(p) || statSync(p).isDirectory() || seen.has(p)) continue;
+        seen.add(p);
+        const src = readFileSync(p, "utf8");
+        for (const m of src.matchAll(/from\s+["']([^"']+)["']/g)) {
+          const next = resolve(p, m[1]);
+          if (next) walkImports(next);
+        }
+        return;
+      }
+    };
+    walkImports(join(process.cwd(), "src/workers/payment-worker.ts"));
+    const reached = [...seen].filter((f) => /certificates\/(pdf|drive)\.ts$/.test(f));
+    expect(reached.map((f) => f.replace(process.cwd(), "")), "the worker's import graph reaches the renderer or Drive client").toEqual([]);
   });
 });
 

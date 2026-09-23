@@ -1,4 +1,5 @@
 import { certificateStatuses } from "@/lib/certificates/evidence";
+import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
 import type { Expense as SheetExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -76,6 +77,17 @@ export async function POST(req: NextRequest) {
   let result: CreateDocumentResult | null = null;
   // A waiver that rests on a certificate counts only while that certificate is LINKED.
   const certs = await certificateStatuses(ctx.jobs.map((j) => (j.expenses ?? []) as SheetExpense[]));
+  // Checked against Drive before a document is created, not only before it is paid: a
+  // PEAK document is the company committing to a figure, and a figure that leans on a
+  // certificate nobody can still verify is not one to commit to.
+  const evidence = await checkEvidenceBeforePaying(
+    ctx.jobs.map((j) => (j.expenses ?? []) as SheetExpense[]),
+    { actorId: actor.actorId ?? null, actorRole: actor.actorRole ?? null },
+    {}, "document",
+  );
+  if (!evidence.ok) {
+    return NextResponse.json({ error: "evidence-stale", reasons: evidence.reasons, staleCertificates: evidence.stale }, { status: 409 });
+  }
   const deps = prismaCreateDeps({ guideId, actor, alreadyPaid });
   // The FOLK-PAY number is a count + 1, so two documents in the same second can pick the
   // same one. The claim is the first write and fails atomically, so try the next number.

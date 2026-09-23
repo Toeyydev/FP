@@ -319,13 +319,32 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
         detail: { certificateNo: cert!.certificateNo, environment, state: "ACTIVE", fileCount: existing.length, fileIds: existing.map((f) => f.id) } });
       refuse([`Drive holds ${existing.length} documents for this attempt, so which one it means is unanswerable. Have someone remove the wrong one before trying again.`], 409);
     }
-    const active = existing[0] ?? await drive.createActive({
+    const reused = existing[0] ?? null;
+    const active = reused ?? await drive.createActive({
       certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash,
       environment, attemptToken: token, name, bytes: tempBytes!, folderPath,
     });
     mine = { id: active.id, temp: temp.id };
 
-    // The document itself is read back and hashed before anything is recorded against it.
+    // A document found from an earlier attempt of this same token is not taken on trust
+    // because the query that found it said the right things. Everything is asked of the
+    // file itself, and anything that does not line up stops here rather than being
+    // resolved by picking.
+    if (reused) {
+      const wrong: string[] = [];
+      if (reused.state !== "ACTIVE") wrong.push("it is not the settled document");
+      if (reused.attemptToken !== token) wrong.push("it belongs to a different attempt");
+      if (cert!.driveFileId && cert!.driveFileId !== reused.id) wrong.push("the certificate already names a different document");
+      if (cert!.driveRevisionId && reused.revisionId && reused.revisionId !== cert!.driveRevisionId) wrong.push("its revision has moved since it was recorded");
+      if (wrong.length) {
+        await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_candidate_rejected", entityType: "ExpenseCertificate", entityId: id,
+          detail: { certificateNo: cert!.certificateNo, environment, attemptToken: token, foundFileId: reused.id, foundState: reused.state, problems: wrong } });
+        refuse([`A document from an earlier attempt was found but cannot be used: ${wrong.join("; ")}. Have someone look at the folder before filing again.`], 409);
+      }
+    }
+
+    // The document is downloaded and hashed before anything is recorded against it —
+    // whether it was just created or found from an earlier attempt.
     const activeBytes = await drive.read({ fileId: active.id }).catch(() => null);
     if (!activeBytes || fileHash(activeBytes) !== pdfHash || (active.attemptToken && active.attemptToken !== token)) {
       await drive.quarantine({ fileId: active.id, reason: "the created document did not read back as the bytes it was created from", certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});

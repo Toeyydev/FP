@@ -17,7 +17,19 @@ import { checkFiledDocument, type Deps } from "@/lib/certificates/service";
 // what to do about it. Leaving it LINKED would mean the next person to look sees a
 // document that says it is in force, backing rows whose evidence is gone.
 
-export type EvidenceGate = { ok: boolean; reasons: string[]; stale: string[] };
+export type EvidenceGate = { ok: boolean; reasons: string[]; stale: string[]; checked: number };
+
+/**
+ * Where the check is being made. Only the wording differs — every caller asks the same
+ * verifier the same questions of the same folder, so no path can be more lenient than
+ * another by accident.
+ */
+export type EvidenceStage = "preview" | "document" | "payment";
+const STAGE: Record<EvidenceStage, string> = {
+  preview: "before this is priced",
+  document: "before a PEAK document is created for it",
+  payment: "before paying",
+};
 
 /** Certificates any of these rows lean on, in the order they were named. */
 async function certificatesFor(rowsets: readonly (readonly Expense[])[]): Promise<ExpenseCertificate[]> {
@@ -37,22 +49,24 @@ export async function checkEvidenceBeforePaying(
   rowsets: readonly (readonly Expense[])[],
   actor: { actorId?: string | null; actorRole?: string | null },
   deps: Deps = {},
+  stage: EvidenceStage = "payment",
 ): Promise<EvidenceGate> {
   const certs = await certificatesFor(rowsets);
   const reasons: string[] = [];
   const stale: string[] = [];
 
+  const when = STAGE[stage];
   for (const cert of certs) {
     if (cert.status === "VOID") {
-      reasons.push(`${cert.certificateNo} was withdrawn, so the rows it covered have nothing behind them. Issue a new certificate before paying.`);
+      reasons.push(`${cert.certificateNo} was withdrawn, so the rows it covered have nothing behind them. Issue a new certificate ${when}.`);
       continue;
     }
     if (cert.status === "STALE") {
-      reasons.push(`${cert.certificateNo} is marked as no longer matching its document. File it again before paying.`);
+      reasons.push(`${cert.certificateNo} is marked as no longer matching its document. File it again ${when}.`);
       continue;
     }
     if (cert.status !== "LINKED") {
-      reasons.push(`${cert.certificateNo} is not in use as evidence yet (${cert.status}). Finish filing and linking it before paying.`);
+      reasons.push(`${cert.certificateNo} is not in use as evidence yet (${cert.status}). Finish filing and linking it ${when}.`);
       continue;
     }
     const check = await checkFiledDocument(cert, deps, actor.actorId ?? undefined);
@@ -69,12 +83,12 @@ export async function checkEvidenceBeforePaying(
           action: "certificate.marked_stale", entityType: "ExpenseCertificate", entityId: cert.id,
           detail: { certificateNo: cert.certificateNo, jobRef: cert.jobRef, why: check.action, reasons: check.reasons,
             recordedFileId: cert.driveFileId, recordedPdfHash: cert.pdfHash, recordedRevisionId: cert.driveRevisionId,
-            note: "found at Mark Paid; the rows it covered are no longer evidenced until it is filed again" },
+            stage, note: "the rows it covered are no longer evidenced until it is filed again" },
         });
       }
     }
     reasons.push(`${cert.certificateNo}: ${check.reasons.join(" ")}`);
   }
 
-  return { ok: reasons.length === 0, reasons, stale };
+  return { ok: reasons.length === 0, reasons, stale, checked: certs.length };
 }
