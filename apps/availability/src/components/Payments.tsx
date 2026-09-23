@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { thb } from "@/lib/jobsheet";
+import { STAGE_LABEL, transferStage } from "@/lib/payment-transfer";
 import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
@@ -43,6 +44,7 @@ type PaymentDoc = {
   paymentRef: string; guideId: string; status: string; error: string | null; total: number; gross: number; wht: number; lineCount: number;
   jobs: unknown; peakDocumentNo: string | null; peakDocumentLink: string | null; paymentDate: string | null;
   attachmentStatus: string | null; attachmentError: string | null; updatedAt?: string;
+  slipUrl?: string | null; bankRef?: string | null;
   // Jobs paid before the document existed: its payment is the transfer already made
   // (paidDate, and whether a slip was saved then). Shown under Paid, not Unpaid.
   alreadyPaid?: boolean; paidDate?: string | null; hasSavedSlip?: boolean;
@@ -207,9 +209,13 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
     : j.paid ? <span className="pay-pmt legacy" title="Marked paid before payments were recorded — there is no payment record behind it">paid · no payment record</span> : null;
   const paymentBlocked = (d: PaymentDoc) => !!d.drift && d.drift.changed.length > 0;
   const docTag = (j: Job) => { const d = docFor(j); return d?.peakDocumentNo ? `Combined PEAK document ${d.peakDocumentNo}` : j.peakPaymentRef ?? ""; };
+  // One name for where a payment stands (lib/payment-transfer). The page has not re-read
+  // PEAK, so a document it holds says "PEAK created", never "Ready to transfer" — that
+  // answer is only given by the check made when the payment is opened.
   const docBadge = (j: Job) => {
-    const st = docFor(j)?.status;
-    return st === "AWAITING_PAYMENT" ? "Awaiting payment" : st === "PAYING" || st === "PAYMENT_UNCERTAIN" ? "Payment unconfirmed" : st === "PAID" ? "Paid" : "Waiting on PEAK";
+    const d = docFor(j);
+    if (!d) return STAGE_LABEL.WAITING_FOR_PEAK;
+    return STAGE_LABEL[transferStage(d, { drift: paymentBlocked(d) })];
   };
   // Settle a payment document by what only PEAK can say.
   async function resolveDoc(doc: PaymentDoc, resolution: "found" | "not-found" | "payment-found" | "payment-not-found" | "voided") {

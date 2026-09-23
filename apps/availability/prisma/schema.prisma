@@ -813,9 +813,20 @@ model GuidePaymentDocument {
   status            String    @default("CREATING")
   error             String?
   slipUrl           String?
+  // Evidence of the transfer, recorded at stage 2 before the payment is confirmed.
+  // bankRef also reaches GuidePayment.bankRef, where payments-v2 refuses to record the
+  // same bank reference against two transfers.
+  bankRef           String?
+  slipAmount        Float? // the amount printed on the slip, as the operator read it
+  slipUploadedAt    DateTime?
   peakDocumentId    String?
   peakDocumentNo    String? // EXP-…
   peakDocumentLink  String?
+  peakDocumentStatus String? // what PEAK last said about it (open / paid / voided …)
+  peakPostedAt      DateTime? // when PEAK accepted the document — not when the row was made
+  // Fingerprint of the payload PEAK was given (lib/payment-transfer paymentPayloadHash).
+  // A payload that no longer hashes the same is drift the figure comparison may not model.
+  peakPayloadHash   String?
   attachmentStatus  String? // ATTACHED | FAILED — the slip on the PEAK document; never affects paid state
   attachmentError   String?
   createdById       String?
@@ -826,6 +837,7 @@ model GuidePaymentDocument {
 
   @@index([guideId])
   @@index([status])
+  @@index([bankRef])
 }
 
 // Guide leave (holiday / unavailable range). Operator-approved; an approved leave
