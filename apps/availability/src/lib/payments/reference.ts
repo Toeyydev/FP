@@ -10,7 +10,8 @@ export type PaymentReferenceType =
   | "JOB_NO" // FOLK-BKK-YYYYMMDD-NN — one individual job sheet
   | "PAYOUT_ITEM_NO" // FP-PAY-YYYYMMDD-Gnnn — one guide's (weekly) payout item
   | "PAYMENT_BATCH_NO" // FP-BATCH-YYYYMMDD-nnn — a K CASH CONNECT PLUS bank batch
-  | "PEAK_EXPENSE_NO" // EXP-YYYYMM-nnnnn — a PEAK accounting expense
+  | "PEAK_EXPENSE_NO" // EXP-YYYYMMnnnnn (PEAK's own numbering; EXP-YYYYMM-nnnnn also accepted)
+  | "GUIDE_PAYMENT_NO" // FOLK-PAY-YYYYMM-NN — one transfer to one guide
   | "OTHER" // non-empty memo with no recognised reference
   | "NOT_FOUND"; // empty / no memo
 
@@ -26,7 +27,10 @@ const PATTERNS: { type: PaymentReferenceType; re: RegExp }[] = [
   { type: "JOB_NO", re: /\bFOLK-BKK-\d{8}-\d{1,}\b/ },
   { type: "PAYOUT_ITEM_NO", re: /\bFP-PAY-\d{8}-G\d{1,}\b/ },
   { type: "PAYMENT_BATCH_NO", re: /\bFP-BATCH-\d{8}-\d{1,}\b/ },
-  { type: "PEAK_EXPENSE_NO", re: /\bEXP-\d{6}-\d{1,}\b/ },
+  // PEAK numbers its documents EXP-YYYYMMnnnnn, with no separator before the sequence.
+  // The hyphenated form is accepted too — some exports carry it.
+  { type: "PEAK_EXPENSE_NO", re: /\bEXP-\d{6}-?\d{2,}\b/ },
+  { type: "GUIDE_PAYMENT_NO", re: /\bFOLK-PAY-\d{6}-\d{1,}\b/ },
 ];
 
 // Normalise for matching only. Strips zero-width chars, tidies spaced hyphens

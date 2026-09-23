@@ -11,6 +11,9 @@ const TABLES = [
   // and User because these rows reference them.
   "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",
   "GuideAdvanceReceipt", "GuideAdvanceReturn", "GuideAdvance",
+  // A guide's transfers, and the PEAK document each one settles. Before TourPayment,
+  // which a recorded payment points back at.
+  "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
   "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   "Availability", "RefreshToken", "User", "Tour",
 ];

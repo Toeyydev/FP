@@ -84,7 +84,7 @@ const prismaMock = vi.hoisted(() => {
 });
 
 const authMock = vi.hoisted(() => vi.fn());
-const peak = vi.hoisted(() => ({ create: vi.fn(), attach: vi.fn(), get: vi.fn(), pay: vi.fn() }));
+const peak = vi.hoisted(() => ({ create: vi.fn(), attach: vi.fn(), get: vi.fn(), pay: vi.fn(), methods: vi.fn() }));
 const drive = vi.hoisted(() => ({ save: vi.fn() }));
 
 vi.mock("@prisma/client", () => ({ Prisma: { PrismaClientKnownRequestError: class extends Error { code = ""; } } }));
@@ -100,6 +100,7 @@ vi.mock("@/lib/peak-api", () => ({
   insertExpenseFile: peak.attach,
   getExpense: peak.get,
   payExistingExpense: peak.pay,
+  getPaymentMethods: peak.methods,
   sanitizePeakError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 vi.mock("@/lib/peak-account-map", () => ({
@@ -112,6 +113,7 @@ import { POST, PATCH } from "./route";
 import { POST as PAY } from "./pay/route";
 import { POST as SYNC } from "../../jobsheet/peak-sync/route";
 import { POST as PREVIEW } from "./preview/route";
+import { GET as READY } from "./ready/route";
 import { GET as PAYMENTS } from "../../payments/route";
 import { NextRequest } from "next/server";
 import { POST as MARK_VOIDED } from "../../jobsheet/peak-voided/route";
@@ -155,7 +157,12 @@ const payDoc = (over: Record<string, string> = {}) => {
   fd.append("paymentDate", over.paymentDate ?? "2030-05-13");
   fd.append("paymentMethodId", over.paymentMethodId ?? "pm-test");
   fd.append("paymentMethodName", "Test bank account");
-  if (over.noFile !== "1") fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "slip.png");
+  // The transfer's own evidence: the bank's reference and the amount read off the slip.
+  if (over.noBankRef !== "1") fd.append("bankRef", over.bankRef ?? "KB203005131234");
+  if (over.noSlipAmount !== "1") fd.append("slipAmount", over.slipAmount ?? "4169");
+  // A person states they checked the amount and the reference against the slip.
+  if (over.noVerify !== "1") fd.append("verifiedFromSlip", "1");
+  if (over.noFile !== "1") fd.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: over.mime ?? "image/png" }), over.fileName ?? "slip.png");
   return PAY(new Request("https://ops.folkpaths.com/api/pay/peak-document/pay", { method: "POST", body: fd }) as unknown as Parameters<typeof PAY>[0]);
 };
 // PEAK's read-back of the created document: approved, unpaid, owing the gross with the withholding apart.
@@ -173,6 +180,8 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2030-05-20T03:00:00Z"));
   authMock.mockResolvedValue({ user: { id: "op_1", role: "OPERATOR" } });
   drive.save.mockResolvedValue({ id: "file-1", link: "https://drive.example/slip-1" });
+  // PEAK knows the account the money leaves from; its number is the account's identity.
+  peak.methods.mockResolvedValue({ ok: true, methods: [{ id: "pm-test", name: "Test bank account", bankName: "Test Bank", accountNumber: "123-4-56789-0" }] });
   peak.create.mockResolvedValue({ ok: true, code: "EXP-TEST-0042", id: "peak-doc-42", link: "https://peak.example/42" });
   peak.attach.mockResolvedValue({ ok: true, desc: "Success" });
   peak.get.mockResolvedValue(peakExpense());
@@ -795,5 +804,416 @@ describe("Voided in PEAK: a job-sheet document voided in PEAK can be paid togeth
     }
     expect(sheetOf(J1).peakDocumentNo).toBe("EXP-TEST-0027");
     expect(db.audits).toHaveLength(0);
+  });
+});
+
+// ── The PEAK reference comes first, and the transfer answers to it ────────────
+//
+// A guide's money used to leave the bank and pick up an accounting document afterwards,
+// if anyone remembered. These are the rules that reverse that order, and the evidence the
+// transfer has to come back with. All data invented.
+describe("no transfer without a document, and no document settled without evidence", () => {
+  it("stores what PEAK answered, when it answered, and the fingerprint of what was sent", async () => {
+    await create([J1, J2, J3]);
+    const doc = db.docs[0];
+    expect(doc).toMatchObject({ peakDocumentNo: "EXP-TEST-0042", peakDocumentId: "peak-doc-42", peakDocumentStatus: "OPEN" });
+    expect(doc.peakPostedAt).toBeInstanceOf(Date);
+    // Written with the claim, before PEAK was called — so a document whose answer is lost
+    // still knows what it asked for.
+    expect(doc.peakPayloadHash).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it("will not record a transfer with no bank reference", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ noBankRef: "1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).reasons.join(" ")).toContain("bank reference");
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.get).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+  });
+
+  it("will not record a transfer whose slip amount was never entered", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ noSlipAmount: "1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).reasons.join(" ")).toContain("amount printed on the slip");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("refuses a slip for a different amount, naming both figures — nothing is uploaded or paid", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ slipAmount: "4000" });
+    expect(res.status).toBe(400);
+    const why = (await res.json()).reasons.join(" ");
+    expect(why).toContain("4,000");
+    expect(why).toContain("4,169");
+    expect(drive.save).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("keeps the bank reference on the document and on the payment it becomes", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    expect(db.docs[0]).toMatchObject({ bankRef: "KB203005131234", slipAmount: 4169, peakDocumentStatus: "PAID" });
+    expect(db.docs[0].slipUploadedAt).toBeInstanceOf(Date);
+    // payments-v2 holds it too, where a second transfer cannot reuse the same reference.
+    expect(db.payments[0]).toMatchObject({ bankRef: "KB203005131234" });
+  });
+
+  it("files the slip under the document, the payment, the guide, the amount and the bank reference", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    expect(drive.save).toHaveBeenCalledTimes(1);
+    expect(drive.save.mock.calls[0][0]).toMatchObject({
+      name: "EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.png",
+      folderPath: ["Folkpaths E-slips", "2030-05 May"],
+    });
+  });
+
+  it("a document PEAK has voided cannot be paid, whatever FolkOPS still stores", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("voided in PEAK");
+    expect(peak.pay).not.toHaveBeenCalled();
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("a document PEAK cannot find cannot be paid", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue({ ok: true, notFound: true });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("not found in PEAK");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("money the company advanced is not the guide's money coming back — it is in no line and in no total", async () => {
+    // A ticket the company funded sits on the sheet like any row, but the guide is not
+    // owed it, so it belongs in neither the document nor the transfer.
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.expenses.push(
+      { description: "Temple tickets", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance" },
+    );
+    const res = await create([J1, J2, J3]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ total: 4169, gross: 4295 });
+    const lines = peak.create.mock.calls[0][0].products as Row[];
+    expect(lines.some((l) => String(l.description).includes("Temple tickets"))).toBe(false);
+    expect(lines.reduce((t: number, l: Row) => t + Number(l.price), 0)).toBe(4295);
+  });
+});
+
+// ── "Ready to transfer" is an answer, not a stored value ─────────────────────
+describe("GET /api/pay/peak-document/ready", () => {
+  const ready = (paymentRef = "FOLK-PAY-203005-01") =>
+    READY(new NextRequest(`https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=${paymentRef}`));
+
+  it("gives the bank note and the amount once it has re-read PEAK and found nothing moved", async () => {
+    await create([J1, J2, J3]);
+    const body = await (await ready()).json();
+    expect(body).toMatchObject({
+      ok: true, stage: "READY_TO_TRANSFER", label: "Ready to transfer", canTransfer: true,
+      bankNote: "EXP-TEST-0042 FOLK-PAY-203005-01", reasons: [],
+    });
+    expect(body.figures).toEqual({ gross: 4295, reimbursement: 95, whtBase: 4200, wht: 126, net: 4169 });
+    // Reading is free and creates nothing.
+    expect(peak.create).toHaveBeenCalledTimes(1);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("gives no bank note when a job sheet moved under the document", async () => {
+    await create([J1, J2, J3]);
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.guideFee = FEE(1900);
+    const body = await (await ready()).json();
+    expect(body).toMatchObject({ stage: "PEAK_DRIFT", label: "PEAK drift", canTransfer: false, bankNote: null });
+    expect(body.reasons.join(" ")).toContain("EXP-TEST-0042 was created for");
+  });
+
+  it("gives no bank note when PEAK has voided the document", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    const body = await (await ready()).json();
+    expect(body).toMatchObject({ stage: "PEAK_VOIDED", canTransfer: false, bankNote: null, peakStatus: "VOID" });
+  });
+
+  it("says so when there is no such payment", async () => {
+    expect((await ready("FOLK-PAY-209912-99")).status).toBe(404);
+  });
+});
+
+// ── The evidence a transfer has to come back with ────────────────────────────
+describe("a person checked the slip, and the record says so", () => {
+  it("will not record a transfer nobody says they checked", async () => {
+    await create([J1, J2, J3]);
+    const res = await payDoc({ noVerify: "1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).reasons.join(" ")).toContain("checked the amount and the reference against the slip");
+    expect(peak.get).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+  });
+
+  it("keeps who checked it, when, and that a person did it — never a claim a machine did", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    const doc = db.docs[0];
+    expect(doc).toMatchObject({ verificationSource: "USER_VERIFIED_SLIP", slipVerifiedById: "op_1", slipAmount: 4169 });
+    expect(doc.slipVerifiedAt).toBeInstanceOf(Date);
+  });
+
+  it("writes the evidence into the audit trail, and never the file", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    const written = vi.mocked(audit).mock.calls.map((c) => c[0] as { action: string; detail?: Record<string, unknown> });
+    const claimed = written.find((a) => a.action === "pay.peak_payment_claimed");
+    const recorded = written.find((a) => a.action === "pay.peak_payment_recorded");
+    expect(claimed!.detail).toMatchObject({ oldStatus: "AWAITING_PAYMENT", newStatus: "PAYING", bankRef: "KB203005131234", slipAmount: 4169, verificationSource: "USER_VERIFIED_SLIP" });
+    expect(recorded!.detail).toMatchObject({ oldStatus: "PAYING", newStatus: "PAID", bankRef: "KB203005131234", verificationSource: "USER_VERIFIED_SLIP" });
+    // A slip is a file; a file does not belong in an audit row.
+    const everything = JSON.stringify(written);
+    expect(everything).not.toContain("base64");
+    expect(everything).not.toContain("iVBOR");
+    expect(everything.toLowerCase()).not.toContain("ocr");
+  });
+
+  it("one reference typed in any case or spacing is one transfer", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc({ bankRef: " kb 2030 0513 1234 " })).status).toBe(200);
+    // Stored as typed for a human to read, and normalised for the database to compare.
+    expect(db.docs[0]).toMatchObject({ bankRef: "KB 2030 0513 1234", bankRefNormalized: "KB203005131234" });
+    expect(db.payments[0]).toMatchObject({ bankRef: "KB203005131234" });
+  });
+
+  it("will not record a transfer with no account for the money to have left from", async () => {
+    // The bank reference is only ever stored beside the account it came from, because a
+    // reference is only unique within a bank. So a payment without one never gets that far.
+    await create([J1, J2, J3]);
+    const res = await payDoc({ paymentMethodId: "" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Paid By");
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+    expect(db.docs[0].bankRefNormalized ?? null).toBeNull();
+  });
+
+  it("names the payment a bank reference already settles, before writing anything", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    // A second document, and the same transfer reference typed again.
+    db.docs.push({ ...db.docs[0], id: "doc-2", paymentRef: "FOLK-PAY-203005-02", status: "AWAITING_PAYMENT", bankRef: null, bankRefNormalized: null, jobs: [] });
+    const res = await payDoc({ paymentRef: "FOLK-PAY-203005-02", bankRef: "kb 2030 0513 1234" });
+    expect(res.status).toBe(409);
+    const why = (await res.json()).reasons.join(" ");
+    expect(why).toContain("FOLK-PAY-203005-01");
+    expect(why).toContain("EXP-TEST-0042");
+    expect(why).toContain("one transfer settles one document");
+  });
+
+  it("records which bank account the money left from, asked of PEAK — not of the page", async () => {
+    await create([J1, J2, J3]);
+    expect((await payDoc()).status).toBe(200);
+    // PEAK's payment method is a channel; its account number is the account's identity.
+    expect(db.docs[0]).toMatchObject({ paymentMethodId: "pm-test", bankAccountKey: "ACC:1234567890" });
+  });
+
+  it("fails closed when PEAK cannot say which account that is", async () => {
+    await create([J1, J2, J3]);
+    peak.methods.mockResolvedValue({ ok: false, desc: "timeout" });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Could not read the payment accounts from PEAK");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("refuses an account PEAK has never heard of", async () => {
+    await create([J1, J2, J3]);
+    peak.methods.mockResolvedValue({ ok: true, methods: [{ id: "pm-other", name: "Another account" }] });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("does not have the account");
+    expect(db.docs[0].bankAccountKey ?? null).toBeNull();
+  });
+
+  it("will not move a claimed payment to another account", async () => {
+    await create([J1, J2, J3]);
+    db.docs[0].status = "PAYING"; // claimed, PEAK not yet answered
+    const res = await payDoc({ paymentMethodId: "pm-other" });
+    expect(res.status).toBe(409);
+    expect(db.docs[0].paymentMethodId ?? null).not.toBe("pm-other");
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("will not move a recorded payment to another account", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    peak.methods.mockResolvedValue({ ok: true, methods: [{ id: "pm-other", name: "Another account", accountNumber: "999-9-99999-9" }] });
+    const res = await payDoc({ paymentMethodId: "pm-other", bankRef: "KBOTHER1" });
+    expect(res.status).toBe(409);
+    expect(db.docs[0]).toMatchObject({ status: "PAID", paymentMethodId: "pm-test", bankAccountKey: "ACC:1234567890", bankRef: "KB203005131234" });
+  });
+
+  it("keeps the slip's real extension — a PDF is filed as a PDF", async () => {
+    await create([J1, J2, J3]);
+    await payDoc({ fileName: "statement.pdf", mime: "application/pdf" });
+    expect(drive.save.mock.calls[0][0].name).toBe("EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.pdf");
+  });
+
+  it("gives back the bank reference when PEAK refuses the payment — the document settles nothing", async () => {
+    await create([J1, J2, J3]);
+    peak.pay.mockResolvedValue({ ok: false, desc: "PEAK refused" });
+    expect((await payDoc()).status).toBe(502);
+    expect(db.docs[0]).toMatchObject({ status: "AWAITING_PAYMENT", bankRef: null, bankRefNormalized: null, slipAmount: null, verificationSource: null });
+  });
+
+  it("fails closed when PEAK cannot be read at all — a timeout is not a yes", async () => {
+    await create([J1, J2, J3]);
+    peak.get.mockResolvedValue({ ok: false, desc: "timeout" });
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("Could not read");
+    expect(peak.pay).not.toHaveBeenCalled();
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PENDING");
+  });
+
+  it("reads PEAK again at the moment of paying — an earlier ready answer is not trusted", async () => {
+    await create([J1, J2, J3]);
+    // Ready said yes...
+    expect((await (await READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"))).json()).canTransfer).toBe(true);
+    // …and the document was voided in PEAK in the meantime.
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    expect((await payDoc()).status).toBe(409);
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("a payment already recorded keeps what it was recorded with — it is never re-refused", async () => {
+    await create([J1, J2, J3]);
+    await payDoc();
+    const snapshot = { ...db.docs[0] };
+    // Everything that would block a new payment is now true: the sheet has changed and
+    // PEAK shows the document paid. A settled payment does not reopen.
+    db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.guideFee = FEE(9999);
+    peak.get.mockResolvedValue(peakExpense({ isVoid: true }));
+    const body = await (await READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"))).json();
+    expect(body).toMatchObject({ stage: "PAID", label: "Paid", canTransfer: false, reasons: [] });
+    expect(body.figures).toEqual({ gross: 4295, reimbursement: 95, whtBase: 4200, wht: 126, net: 4169 });
+    expect(db.docs[0]).toMatchObject({ status: "PAID", bankRef: snapshot.bankRef, slipAmount: snapshot.slipAmount });
+    for (const j of [J1, J2, J3]) expect(payOf(j)!.status).toBe("PAID");
+  });
+
+  it("the withholding the screen shows is the withholding PEAK was given", async () => {
+    await create([J1, J2, J3]);
+    const body = await (await READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"))).json();
+    const lines = peak.create.mock.calls[0][0].products as Row[];
+    expect(body.figures.wht).toBe(lines.reduce((t: number, l: Row) => t + Number(l.withHoldingTaxAmount ?? 0), 0));
+    expect(body.figures.whtBase).toBe(lines.filter((l: Row) => Number(l.withHoldingTaxAmount) > 0).reduce((t: number, l: Row) => t + Number(l.price), 0));
+    expect(body.figures.gross - body.figures.wht).toBe(body.figures.net);
+  });
+});
+
+// ── The two changes together, on one worked example ──────────────────────────
+//
+// #251 puts the review incentive into the withholding base; #253 makes the PEAK document
+// come before the transfer. This is the example the owner set, checked end to end:
+//
+//   Guide fee            1,500
+//   Review incentive       100
+//   Reimbursement          324      (meals 90 + transport 234 — the guide's own money)
+//   ──────────────────────────
+//   Gross                1,924
+//   WHT base             1,600      = fee + review incentive
+//   WHT 3%                  48
+//   Net                  1,876      ← what the bank sends, and what the slip must say
+//
+// All data invented.
+describe("฿1,924: the review incentive is withheld on, and the transfer answers to the EXP", () => {
+  const JOB = { date: "2030-05-06", slotIdx: 0 };
+  const REF = "FOLK-PAY-203005-01";
+  const readyOf = () => READY(new NextRequest(`https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=${REF}`));
+
+  beforeEach(() => {
+    db.sheets = [{
+      guideId: GUIDE, ...JOB, tourId: "T-001", ref: "FOLK-BKK-20300506-01",
+      expenses: [
+        { description: "Review reward", price: 100, pax: 1 },
+        { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" },
+        { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" },
+      ],
+      guideFee: FEE(1500), origin: "NORMAL", createdAt: new Date("2030-05-01"),
+      peakDocumentNo: null, peakDocumentId: null, approvalStatus: "APPROVED",
+    }];
+    db.assigns = [{ guideId: GUIDE, ...JOB, tourId: "T-001", createdAt: new Date("2030-05-01") }];
+    // PEAK holds the document unpaid, owing the gross with the withholding apart.
+    peak.get.mockResolvedValue({ ok: true, expense: { id: "peak-doc-42", code: "EXP-TEST-0042", reference: REF, contactId: "contact-guide-a", status: "Approve", statusId: 3, isVoid: false, netAmount: 1924, whtAmount: 48, paymentAmount: 0, remainAmount: 1924, remainWhtAmount: 48, documentLink: "https://peak.example/42", payments: 0 } });
+  });
+
+  const pay = (over: Record<string, string> = {}) => payDoc({ slipAmount: "1876", ...over });
+
+  it("PEAK is given the fee, the incentive and the reimbursements — and withholds on the first two", async () => {
+    const res = await create([JOB]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ gross: 1924, wht: 48, total: 1876 });
+    const lines = (peak.create.mock.calls[0][0].products as Row[]).map((l) => [l.accountCode, l.price, l.withHoldingTaxAmount]);
+    expect(lines).toEqual([
+      ["510111", 1500, 45],  // guide fee
+      ["510110", 100, 3],    // review incentive — withheld on, as of #251
+      ["510104", 90, 0],     // meals, reimbursed whole
+      ["510104", 234, 0],    // transport, reimbursed whole
+    ]);
+    // What PEAK is asked to book and what the guide is owed differ by exactly the tax.
+    expect(lines.reduce((t, l) => t + Number(l[1]), 0)).toBe(1924);
+    expect(lines.reduce((t, l) => t + Number(l[2]), 0)).toBe(48);
+  });
+
+  it("there is no bank note until the EXP exists", async () => {
+    expect((await readyOf()).status).toBe(404);
+    await create([JOB]);
+    const body = await (await readyOf()).json();
+    expect(body).toMatchObject({ stage: "READY_TO_TRANSFER", canTransfer: true, bankNote: `EXP-TEST-0042 ${REF}` });
+    expect(body.figures).toEqual({ gross: 1924, reimbursement: 324, whtBase: 1600, wht: 48, net: 1876 });
+  });
+
+  it("the slip has to say 1,876 — not the gross, not the fee", async () => {
+    await create([JOB]);
+    for (const wrong of ["1924", "1500", "1879"]) {
+      const res = await pay({ slipAmount: wrong });
+      expect(res.status).toBe(400);
+      expect((await res.json()).reasons.join(" ")).toContain("1,876");
+    }
+    expect(peak.pay).not.toHaveBeenCalled();
+  });
+
+  it("records the payment when everything is there, and pays exactly the net after the tax", async () => {
+    await create([JOB]);
+    const res = await pay();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, status: "PAID", amount: 1876 });
+    expect(peak.pay.mock.calls[0][0]).toMatchObject({ amount: 1876, withholdingTaxAmount: 48 });
+    expect(payOf(JOB)).toMatchObject({ status: "PAID", peakRef: "EXP-TEST-0042" });
+    expect(db.docs[0]).toMatchObject({ status: "PAID", slipAmount: 1876, verificationSource: "USER_VERIFIED_SLIP", bankAccountKey: "ACC:1234567890" });
+    expect(drive.save.mock.calls[0][0].name).toBe(`EXP-TEST-0042_${REF}_G-TEST_1876.00_KB203005131234.png`);
+  });
+
+  it("a fee changed after the EXP was made is drift — no bank note, and nothing paid", async () => {
+    await create([JOB]);
+    db.sheets[0].guideFee = FEE(1600);
+    const body = await (await readyOf()).json();
+    expect(body).toMatchObject({ stage: "PEAK_DRIFT", canTransfer: false, bankNote: null });
+    const res = await pay();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toContain("void");
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(payOf(JOB)!.status).toBe("PENDING");
+  });
+
+  it("a review incentive added after the EXP was made is drift too — the tax would be wrong", async () => {
+    await create([JOB]);
+    db.sheets[0].expenses.push({ description: "Review reward", price: 100, pax: 1 });
+    const body = await (await readyOf()).json();
+    expect(body).toMatchObject({ stage: "PEAK_DRIFT", canTransfer: false });
+    expect((await pay()).status).toBe(409);
+    expect(peak.pay).not.toHaveBeenCalled();
   });
 });

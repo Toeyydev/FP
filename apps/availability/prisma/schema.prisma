@@ -815,9 +815,34 @@ model GuidePaymentDocument {
   status            String    @default("CREATING")
   error             String?
   slipUrl           String?
+  // Evidence of the transfer, recorded at stage 2 before the payment is confirmed.
+  // bankRef also reaches GuidePayment.bankRef, where payments-v2 refuses to record the
+  // same bank reference against two transfers.
+  bankRef           String? // exactly as the operator typed it, for display
+  // The same reference with spacing removed and upper-cased. This is what is compared
+  // and what must be unique: banks print one reference several ways and people retype
+  // it in several cases, and those are one transfer, not two.
+  bankRefNormalized String?
+  // WHICH BANK ACCOUNT the money left from, as one comparable string — the PEAK payment
+  // method's account number reduced to digits (`ACC:…`), or its channel id when PEAK
+  // gives no account (`PM:…`). A payment method is a channel, not an account: two
+  // channels can name the same account, and a bank reference is unique within a BANK.
+  bankAccountKey    String?
+  slipAmount        Float? // the amount printed on the slip, as the operator read it
+  slipUploadedAt    DateTime?
+  // Who says the amount and the reference match the slip, and when. There is no OCR:
+  // a person read the slip, and the record says so (USER_VERIFIED_SLIP).
+  slipVerifiedById  String?
+  slipVerifiedAt    DateTime?
+  verificationSource String?
   peakDocumentId    String?
   peakDocumentNo    String? // EXP-…
   peakDocumentLink  String?
+  peakDocumentStatus String? // what PEAK last said about it (open / paid / voided …)
+  peakPostedAt      DateTime? // when PEAK accepted the document — not when the row was made
+  // Fingerprint of the payload PEAK was given (lib/payment-transfer paymentPayloadHash).
+  // A payload that no longer hashes the same is drift the figure comparison may not model.
+  peakPayloadHash   String?
   attachmentStatus  String? // ATTACHED | FAILED — the slip on the PEAK document; never affects paid state
   attachmentError   String?
   createdById       String?
@@ -828,6 +853,14 @@ model GuidePaymentDocument {
 
   @@index([guideId])
   @@index([status])
+  @@index([bankRef])
+  @@index([bankRefNormalized])
+  // One bank reference settles one document, per BANK ACCOUNT the money left from —
+  // reference numbers are only unique within a bank. Rows with no reference yet hold
+  // NULL, which Postgres treats as distinct, so every document without one is left
+  // alone. Neither column is ever written without the other (peak-payment-server), and
+  // a trigger refuses to let either change once a transfer has been recorded.
+  @@unique([bankAccountKey, bankRefNormalized])
 }
 
 // Guide leave (holiday / unavailable range). Operator-approved; an approved leave

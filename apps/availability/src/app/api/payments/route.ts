@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
   const paymentDocs = docRefs.length
     ? await prisma.guidePaymentDocument.findMany({
         where: { paymentRef: { in: docRefs } },
-        select: { paymentRef: true, guideId: true, status: true, alreadyPaid: true, error: true, total: true, jobs: true, lines: true, paymentDate: true, paymentMethodName: true, peakDocumentNo: true, peakDocumentLink: true, slipUrl: true, attachmentStatus: true, attachmentError: true, createdAt: true, updatedAt: true },
+        select: { paymentRef: true, guideId: true, status: true, alreadyPaid: true, error: true, total: true, jobs: true, lines: true, paymentDate: true, paymentMethodName: true, peakDocumentNo: true, peakDocumentLink: true, slipUrl: true, bankRef: true, slipAmount: true, verificationSource: true, attachmentStatus: true, attachmentError: true, createdAt: true, updatedAt: true },
       })
     : [];
   const docOf = new Map(paymentDocs.map((d) => [d.paymentRef, d]));

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { thb } from "@/lib/jobsheet";
+import { STAGE_LABEL, transferStage, VERIFICATION_SOURCE, VERIFIED_LABEL_TH } from "@/lib/payment-transfer";
 import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
@@ -43,6 +44,7 @@ type PaymentDoc = {
   paymentRef: string; guideId: string; status: string; error: string | null; total: number; gross: number; wht: number; lineCount: number;
   jobs: unknown; peakDocumentNo: string | null; peakDocumentLink: string | null; paymentDate: string | null;
   attachmentStatus: string | null; attachmentError: string | null; updatedAt?: string;
+  slipUrl?: string | null; bankRef?: string | null; slipAmount?: number | null; verificationSource?: string | null;
   // Jobs paid before the document existed: its payment is the transfer already made
   // (paidDate, and whether a slip was saved then). Shown under Paid, not Unpaid.
   alreadyPaid?: boolean; paidDate?: string | null; hasSavedSlip?: boolean;
@@ -207,9 +209,21 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
     : j.paid ? <span className="pay-pmt legacy" title="Marked paid before payments were recorded — there is no payment record behind it">paid · no payment record</span> : null;
   const paymentBlocked = (d: PaymentDoc) => !!d.drift && d.drift.changed.length > 0;
   const docTag = (j: Job) => { const d = docFor(j); return d?.peakDocumentNo ? `Combined PEAK document ${d.peakDocumentNo}` : j.peakPaymentRef ?? ""; };
+  // How the transfer was checked, said plainly. A person read the slip — never a claim
+  // that a bank or a machine confirmed it.
+  const docEvidence = (j: Job) => {
+    const d = docFor(j);
+    if (!d?.bankRef) return "";
+    const checked = d.verificationSource === VERIFICATION_SOURCE ? ` · ${VERIFIED_LABEL_TH}` : "";
+    return ` · ${d.bankRef}${d.slipAmount != null ? ` · ${thb(d.slipAmount)}` : ""}${checked}`;
+  };
+  // One name for where a payment stands (lib/payment-transfer). The page has not re-read
+  // PEAK, so a document it holds says "PEAK created", never "Ready to transfer" — that
+  // answer is only given by the check made when the payment is opened.
   const docBadge = (j: Job) => {
-    const st = docFor(j)?.status;
-    return st === "AWAITING_PAYMENT" ? "Awaiting payment" : st === "PAYING" || st === "PAYMENT_UNCERTAIN" ? "Payment unconfirmed" : st === "PAID" ? "Paid" : "Waiting on PEAK";
+    const d = docFor(j);
+    if (!d) return STAGE_LABEL.WAITING_FOR_PEAK;
+    return STAGE_LABEL[transferStage(d, { drift: paymentBlocked(d) })];
   };
   // Settle a payment document by what only PEAK can say.
   async function resolveDoc(doc: PaymentDoc, resolution: "found" | "not-found" | "payment-found" | "payment-not-found" | "voided") {
@@ -713,7 +727,7 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
                   </td>
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(j.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
-                    {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to">{docTag(j)} · {docBadge(j)}</span>}
+                    {j.peakPaymentRef && <span className="pay-doc-tag" title={`The combined PEAK document this job belongs to${docEvidence(j)}`}>{docTag(j)} · {docBadge(j)}</span>}
                     {inPeakTag(j)}
                     {peakBadge(j)}
                     {canEdit && !j.peakPaymentRef && !j.payBlock && <button className="btn sm primary" title="Record the transfer that pays this job" onClick={() => openRecordPayment(j.guideId, j.guide, rows.find((x) => x.guideId === j.guideId)?.jobs ?? [j], [`${j.date}|${j.slotIdx}`])}>Record payment…</button>}

@@ -8,11 +8,16 @@ import { downloadDriveFile, saveBufferToDrive } from "@/lib/google-drive";
 import { DEFAULT_GUIDE_FEE, guideFeeOrStandard, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { currentJobFigures, documentChangeReasons, documentDrift, type Figures } from "@/lib/payment-document-drift";
 import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
-import { createExpenseAllInOne, getExpense, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
+import { createExpenseAllInOne, getExpense, getPaymentMethods, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
 import { paidAtFor } from "@/lib/payments-v2/rules";
 import { recordPaymentInTx } from "@/lib/payments-v2/service";
+import {
+  bankAccountKey, bankNote, canTransfer, displayBankRef, normalizeBankRef, paymentPayloadHash,
+  slipExtension, slipFileName, transferFigures, transferStage, STAGE_LABEL, VERIFICATION_SOURCE,
+  type TransferStage,
+} from "@/lib/payment-transfer";
 import { guidePayoutTotal } from "@/lib/peak-sync";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import {
@@ -316,6 +321,9 @@ export function prismaCreateDeps(opts: { guideId: string; actor: Actor; alreadyP
               jobs: doc.jobs as unknown as Prisma.InputJsonValue,
               lines: doc.traces as unknown as Prisma.InputJsonValue,
               total: doc.total, status: "CREATING", createdById: actor.actorId, alreadyPaid,
+              // The fingerprint of what PEAK is about to be sent, written before the call:
+              // a document whose answer is lost still knows what it asked for.
+              peakPayloadHash: paymentPayloadHash(doc.expense),
             },
           });
           for (const j of doc.jobs) {
@@ -357,7 +365,12 @@ export function prismaCreateDeps(opts: { guideId: string; actor: Actor; alreadyP
     async recordCreated(p) {
       const moved = await prisma.guidePaymentDocument.updateMany({
         where: { paymentRef: p.paymentRef, status: { in: ["CREATING", "CREATE_UNCERTAIN"] } },
-        data: { status: "AWAITING_PAYMENT", error: null, peakDocumentNo: p.documentNo, peakDocumentId: p.documentId, peakDocumentLink: p.documentLink },
+        data: {
+          status: "AWAITING_PAYMENT", error: null, peakDocumentNo: p.documentNo, peakDocumentId: p.documentId, peakDocumentLink: p.documentLink,
+          // When PEAK accepted the document, not when the row was made: the two differ by
+          // however long PEAK took, and a retried create by much more.
+          peakPostedAt: new Date(), peakDocumentStatus: "OPEN",
+        },
       });
       if (moved.count !== 1) throw new Error(`${p.paymentRef} is no longer waiting for its PEAK document`);
       await audit({ ...actor, action: "pay.peak_document_created", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, guideId, documentNo: p.documentNo, documentId: p.documentId } });
@@ -400,7 +413,7 @@ export const documentFigures = (doc: { lines: unknown; total: number }) => {
  * paying the EXP would settle a document that no longer matches the jobs. Stop instead:
  * nothing here ever makes another EXP.
  */
-async function paymentBlockers(tx: Prisma.TransactionClient, doc: DocRow): Promise<string[]> {
+async function paymentBlockers(tx: Prisma.TransactionClient | typeof prisma, doc: DocRow): Promise<string[]> {
   const reasons: string[] = [];
   const docNo = doc.peakDocumentNo ?? doc.paymentRef;
   const jobs = documentJobs(doc);
@@ -426,9 +439,121 @@ async function paymentBlockers(tx: Prisma.TransactionClient, doc: DocRow): Promi
   return reasons;
 }
 
+/**
+ * What has moved under the document since it was created, in the words an operator
+ * reads. Read-only, and the same comparison stage 2 refuses on.
+ */
+export async function documentDriftReasons(doc: DocRow): Promise<string[]> {
+  const jobs = documentJobs(doc);
+  const current = new Map<string, Figures>();
+  for (const j of jobs) {
+    const sheet = await prisma.jobSheet.findUnique({ where: key(doc.guideId, j), select: { expenses: true, guideFee: true } });
+    if (sheet) current.set(`${j.date}|${j.slotIdx}`, currentJobFigures((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)));
+  }
+  const drift = documentDrift({ document: doc, currentOf: (j) => current.get(`${j.date}|${j.slotIdx}`) ?? null, leftOut: [] });
+  return documentChangeReasons(drift, doc.peakDocumentNo ?? doc.paymentRef);
+}
+
+/**
+ * Where one payment stands, checked now rather than remembered.
+ *
+ * Read-only: it reads the document, recomputes every job's figures from the job sheets
+ * as they are at this moment, and asks PEAK what it still holds. Nothing is written and
+ * no PEAK document is created — reads cost nothing.
+ *
+ * This is what turns "PEAK created" into "Ready to transfer". Until a check has passed,
+ * the screen does not offer a bank note or an amount, because a document can be voided
+ * in PEAK, or a job sheet edited, between the page loading and someone opening their
+ * banking app.
+ */
+export async function transferReadiness(paymentRef: string): Promise<{
+  stage: TransferStage;
+  label: string;
+  canTransfer: boolean;
+  reasons: string[];
+  documentNo: string | null;
+  documentLink: string | null;
+  bankNote: string | null;
+  figures: ReturnType<typeof transferFigures>;
+  payloadHash: string | null;
+  peakStatus: string | null;
+  bankRef: string | null;
+} | null> {
+  const doc = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef } });
+  if (!doc) return null;
+
+  const figures = transferFigures(doc);
+  const reasons: string[] = [];
+  let peakOpen: boolean | undefined;
+  let peakStatus: string | null = doc.peakDocumentStatus ?? null;
+
+  // Only a document waiting to be paid is worth checking; a paid or voided one is settled.
+  if (doc.status === "AWAITING_PAYMENT" && doc.peakDocumentNo) {
+    const blockers = await paymentBlockers(prisma, doc);
+    reasons.push(...blockers);
+    const r = await getExpense({ id: doc.peakDocumentId, code: doc.peakDocumentNo });
+    if (!r.ok) reasons.push(`Could not read ${doc.peakDocumentNo} from PEAK: ${r.desc ?? "no answer"}`);
+    else if (r.notFound || !r.expense) {
+      peakOpen = false;
+      peakStatus = "NOT_FOUND";
+      reasons.push(`${doc.peakDocumentNo} is not in PEAK — it was deleted or never created. Create the document again before transferring.`);
+    } else {
+      const plan = peakPaymentPlan({
+        expense: r.expense, documentNo: doc.peakDocumentNo, documentId: doc.peakDocumentId,
+        paymentRef, peakContactId: r.expense.contactId, gross: figures.gross, wht: figures.wht, net: figures.net,
+      });
+      peakStatus = r.expense.isVoid ? "VOID" : r.expense.status ?? null;
+      peakOpen = !r.expense.isVoid && plan.ok;
+      if (!plan.ok) reasons.push(...plan.reasons);
+    }
+  }
+
+  // Drift outranks a clean PEAK read: the document can be perfectly good in PEAK and no
+  // longer match the jobs it was made for. Asked as its own question rather than read
+  // back out of the sentences above.
+  const drift = doc.status === "AWAITING_PAYMENT" ? (await documentDriftReasons(doc)).length > 0 : false;
+  const stage = transferStage(doc, { drift, peakOpen });
+  return {
+    stage,
+    label: STAGE_LABEL[stage],
+    canTransfer: canTransfer(stage) && reasons.length === 0,
+    reasons,
+    documentNo: doc.peakDocumentNo,
+    documentLink: doc.peakDocumentLink,
+    bankNote: canTransfer(stage) && reasons.length === 0 ? bankNote(doc.peakDocumentNo, paymentRef) : null,
+    figures,
+    payloadHash: doc.peakPayloadHash,
+    peakStatus,
+    bankRef: doc.bankRef,
+  };
+}
+
+/**
+ * Which bank account a PEAK payment method draws on, asked of PEAK rather than taken
+ * from the browser. Reads are free and create nothing.
+ *
+ * Fails closed: if PEAK cannot be reached, or does not know the method the operator
+ * chose, no payment is recorded. The alternative — trusting an account key sent by the
+ * page — would let the same transfer be recorded twice by sending a different one.
+ */
+export async function resolveBankAccount(paymentMethodId: string): Promise<{ ok: true; key: string; name: string | null } | { ok: false; reasons: string[] }> {
+  const r = await getPaymentMethods();
+  if (!r.ok) return { ok: false, reasons: [`Could not read the payment accounts from PEAK: ${r.desc ?? "no answer"} — nothing was paid`] };
+  const method = (r.methods ?? []).find((m) => m.id === paymentMethodId);
+  if (!method) return { ok: false, reasons: ["PEAK does not have the account this payment says it left from — reload Payments and choose it again"] };
+  const key = bankAccountKey(method);
+  if (!key) return { ok: false, reasons: ["That PEAK payment account has no identity FolkOPS can record a transfer against"] };
+  return { ok: true, key, name: [method.bankName, method.accountNumber].filter(Boolean).join(" ") || method.name || null };
+}
+
+/** One sentence, whichever way the duplicate was caught. */
+const bankRefTaken = (bankRef: string, other: { paymentRef: string; peakDocumentNo: string | null } | null) =>
+  `Bank reference ${bankRef} is already recorded on ${other ? `${other.paymentRef}${other.peakDocumentNo ? ` (${other.peakDocumentNo})` : ""}` : "another payment"} — one transfer settles one document. Nothing was paid.`;
+
 export function prismaPayDeps(opts: {
   document: DocRow;
-  guideName: string;
+  /** Kept for callers; the slip is named from the document itself now, not the person. */
+  guideName?: string;
   peakContactId: string | null;
   /** The slip uploaded now. Optional only for an already-paid document, which uses the
    *  slip saved when its jobs were paid (`savedSlip`), if there is one. */
@@ -436,27 +561,90 @@ export function prismaPayDeps(opts: {
   savedSlip?: string | null;
   /** Folkpaths Drive — needed to save `file` or read `savedSlip` back. */
   refreshToken: string | null;
+  /** The bank's own reference for the transfer, and the amount printed on the slip. */
+  bankRef: string;
+  slipAmount: number | null;
+  /** The operator states they checked both against the slip. There is no OCR. */
+  verified: boolean;
+  /** The bank account the money left from, resolved from PEAK (never from the page). */
+  bankAccountKey: string | null;
+  /** The uploaded file's own name, so the slip keeps the extension it really has. */
+  fileName?: string | null;
   actor: Actor;
 }): PayDocumentDeps {
-  const { document: doc, guideName, peakContactId, file, refreshToken, actor } = opts;
+  const { document: doc, peakContactId, file, refreshToken, actor } = opts;
+  // Stored trimmed and upper-cased so the screen and the slip read alike; compared in the
+  // stricter form, where spacing does not make two transfers out of one.
+  const bankRef = displayBankRef(opts.bankRef);
+  const bankRefNormalized = normalizeBankRef(bankRef) || null;
   const savedSlip = (opts.savedSlip ?? "").trim() || null;
-  const ext = extOf(file?.mime ?? "");
+  const ext = slipExtension(opts.fileName, file?.mime ?? null);
   const docNo = doc.peakDocumentNo ?? "";
   const jobs = documentJobs(doc);
 
   return {
     async claimPayment(p) {
-      await prisma.$transaction(async (tx) => {
-        const blockers = await paymentBlockers(tx, doc);
-        if (blockers.length) throw new PaymentClaimRefused(blockers.join("\n"));
-        const moved = await tx.guidePaymentDocument.updateMany({
-          where: { paymentRef: p.paymentRef, status: "AWAITING_PAYMENT", peakDocumentNo: docNo },
-          data: { status: "PAYING", error: null, paymentDate: p.paymentDate, paymentMethodId: p.paymentMethodId, paymentMethodName: p.paymentMethodName },
+      // Said plainly before the write: which payment this reference already settles. The
+      // unique index below still decides — two operators pressing at the same moment both
+      // pass this check — but nobody should have to read a constraint violation to learn
+      // something the database could have been asked.
+      if (bankRefNormalized) {
+        const holders = await prisma.guidePaymentDocument.findMany({
+          where: { bankRefNormalized, bankAccountKey: opts.bankAccountKey },
+          select: { paymentRef: true, peakDocumentNo: true },
         });
-        // A second press, or another operator paying the same document, matches nothing.
-        if (moved.count !== 1) throw new PaymentClaimRefused(`${p.paymentRef} is no longer awaiting payment — reload Payments`);
-      }, { timeout: 20_000 });
-      await audit({ ...actor, action: "pay.peak_payment_claimed", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, documentNo: docNo, paymentDate: p.paymentDate, paymentMethodName: p.paymentMethodName, amount: doc.total } });
+        const held = holders.find((h) => h.paymentRef !== p.paymentRef);
+        if (held) throw new PaymentClaimRefused(bankRefTaken(bankRef, held));
+      }
+      try {
+        await prisma.$transaction(async (tx) => {
+          const blockers = await paymentBlockers(tx, doc);
+          if (blockers.length) throw new PaymentClaimRefused(blockers.join("\n"));
+          const moved = await tx.guidePaymentDocument.updateMany({
+            where: { paymentRef: p.paymentRef, status: "AWAITING_PAYMENT", peakDocumentNo: docNo },
+            data: {
+              status: "PAYING", error: null, paymentDate: p.paymentDate, paymentMethodId: p.paymentMethodId, paymentMethodName: p.paymentMethodName,
+              // The transfer's evidence is written HERE, before PEAK is touched: a bank
+              // reference already used by another document has to lose now, not after the
+              // money has been recorded. Two operators pressing at the same moment is the
+              // race an application check cannot win, so the unique index decides.
+              ...(doc.alreadyPaid ? {} : {
+                bankRef: bankRef || null, bankRefNormalized,
+                // Always written together: a reference means nothing without the account.
+                bankAccountKey: bankRefNormalized ? opts.bankAccountKey : null,
+                slipAmount: opts.slipAmount,
+                slipVerifiedById: opts.verified ? actor.actorId : null,
+                slipVerifiedAt: opts.verified ? new Date() : null,
+                verificationSource: opts.verified ? VERIFICATION_SOURCE : null,
+              }),
+            },
+          });
+          // A second press, or another operator paying the same document, matches nothing.
+          if (moved.count !== 1) throw new PaymentClaimRefused(`${p.paymentRef} is no longer awaiting payment — reload Payments`);
+        }, { timeout: 20_000 });
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+          // The race: the other request won between the check above and this write.
+          const other = bankRefNormalized
+            ? await prisma.guidePaymentDocument.findFirst({
+                where: { bankRefNormalized, bankAccountKey: opts.bankAccountKey, NOT: { paymentRef: p.paymentRef } },
+                select: { paymentRef: true, peakDocumentNo: true },
+              })
+            : null;
+          throw new PaymentClaimRefused(bankRefTaken(bankRef, other));
+        }
+        throw e;
+      }
+      await audit({
+        ...actor, action: "pay.peak_payment_claimed", entityType: "GuidePaymentDocument",
+        detail: {
+          paymentRef: p.paymentRef, documentNo: docNo, paymentDate: p.paymentDate, paymentMethodName: p.paymentMethodName, amount: doc.total,
+          oldStatus: "AWAITING_PAYMENT", newStatus: "PAYING",
+          // The evidence, as recorded — the normalised reference, never the file itself.
+          bankRef: bankRefNormalized, slipAmount: opts.slipAmount,
+          verificationSource: opts.verified ? VERIFICATION_SOURCE : null,
+        },
+      });
     },
 
     async checkExpense() {
@@ -477,10 +665,17 @@ export function prismaPayDeps(opts: {
       if (!refreshToken) throw new Error("Google Drive is not connected");
       const earliest = [...jobs.map((j) => j.date)].sort()[0] ?? bangkokToday();
       const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
-      const name = `${doc.guideId} ${guideName} — ${docNo} ${doc.paymentRef} (${jobs.length} tour${jobs.length === 1 ? "" : "s"}) — e-slip.${ext}`;
+      // <EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext> — the document it settles, the
+      // payment it belongs to, whose it is, what left the bank and the bank's own
+      // reference, so a slip found on its own can be placed without opening it.
+      const name = slipFileName({ documentNo: docNo, paymentRef: doc.paymentRef, guideId: doc.guideId, net: Number(doc.total) || 0, bankRef, ext });
       const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", monthFolder] });
       // Stored now, so a payment that later needs resolving by hand still has its slip.
-      await prisma.guidePaymentDocument.update({ where: { paymentRef: doc.paymentRef }, data: { slipUrl: link } });
+      // The bank reference and the amount were written with the claim, before PEAK.
+      await prisma.guidePaymentDocument.update({
+        where: { paymentRef: doc.paymentRef },
+        data: { slipUrl: link, slipUploadedAt: new Date() },
+      });
       return { link };
     },
 
@@ -488,7 +683,7 @@ export function prismaPayDeps(opts: {
 
     async recordPaid({ paymentRef, slipLink }) {
       const current = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef }, select: { paymentDate: true } });
-      await markDocumentPaid({ paymentRef, documentNo: docNo, documentId: doc.peakDocumentId, slipLink: slipLink || null, paymentDate: current?.paymentDate ?? bangkokToday(), actor, alreadyPaid: !!doc.alreadyPaid });
+      await markDocumentPaid({ paymentRef, documentNo: docNo, documentId: doc.peakDocumentId, slipLink: slipLink || null, bankRef: bankRefNormalized, slipAmount: opts.slipAmount, verified: opts.verified, paymentDate: current?.paymentDate ?? bangkokToday(), actor, alreadyPaid: !!doc.alreadyPaid });
     },
 
     async recordPaymentFailed({ paymentRef, reason, uncertain }) {
@@ -500,7 +695,13 @@ export function prismaPayDeps(opts: {
       // Nothing was recorded in PEAK: the document is awaiting payment again, exactly as before.
       await prisma.guidePaymentDocument.updateMany({
         where: { paymentRef, status: "PAYING" },
-        data: { status: "AWAITING_PAYMENT", error: reason, paymentDate: null, paymentMethodId: null, paymentMethodName: null, slipUrl: null },
+        // Exactly as before, evidence included: nothing was recorded, so the bank
+        // reference must not stay claimed against a document that settles nothing.
+        data: {
+          status: "AWAITING_PAYMENT", error: reason, paymentDate: null, paymentMethodId: null, paymentMethodName: null, slipUrl: null,
+          bankRef: null, bankRefNormalized: null, bankAccountKey: null, slipAmount: null, slipUploadedAt: null,
+          slipVerifiedById: null, slipVerifiedAt: null, verificationSource: null,
+        },
       });
       await audit({ ...actor, action: "pay.peak_payment_failed", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: docNo, reason } });
     },
@@ -541,6 +742,10 @@ export { paidAtFor };
 /** Every job locked to this document becomes PAID and points at the same PEAK document. */
 async function markDocumentPaid(p: {
   paymentRef: string; documentNo: string; documentId: string | null; slipLink: string | null;
+  /** The bank's reference for the transfer, normalised. payments-v2 refuses it twice. */
+  bankRef?: string | null;
+  slipAmount?: number | null;
+  verified?: boolean;
   paymentDate: string; actor: Actor; resolvedBy?: string | null;
   /** The jobs were paid before the document existed: they only take its EXP; their paid
    *  date, slip and approver stay as recorded when the money moved. */
@@ -558,7 +763,12 @@ async function markDocumentPaid(p: {
       where: { paymentRef: p.paymentRef, status: { in: ["PAYING", "PAYMENT_UNCERTAIN"] } },
       data: {
         status: "PAID", error: null, peakDocumentNo: p.documentNo, peakDocumentId: p.documentId,
+        peakDocumentStatus: "PAID",
         ...(p.slipLink ? { slipUrl: p.slipLink } : {}),
+        // The bank reference was written with the claim, before PEAK was touched, and
+        // is not rewritten here — only an already-paid document, which never had one,
+        // can still take it now.
+        ...((p.bankRef ?? "").trim() && p.alreadyPaid ? { bankRef: p.bankRef!.trim(), bankRefNormalized: p.bankRef!.trim() } : {}),
         ...(p.resolvedBy !== undefined ? { resolvedById: p.resolvedBy, resolvedAt: now } : {}),
       },
     });
@@ -582,6 +792,7 @@ async function markDocumentPaid(p: {
       guideId: doc!.guideId,
       jobs: locked.map((l) => ({ jobNo: sheets.find((x) => x.date === l.date && x.slotIdx === l.slotIdx)?.ref ?? "", date: l.date, slotIdx: l.slotIdx })),
       paymentDate: p.paymentDate, amountTransferred: Number(doc!.total), source: "PEAK_DOCUMENT", peakPaymentRef: p.paymentRef,
+      bankRef: (p.bankRef ?? "").trim() || null,
       slip: p.slipLink ? { url: p.slipLink, uploadedById: p.actor.actorId } : null,
       noSlipReason: p.slipLink ? null : `Paid through PEAK document ${p.documentNo}, which holds the slip`,
       note: `Recorded with PEAK document ${p.documentNo}`, actor: p.actor,
@@ -596,7 +807,17 @@ async function markDocumentPaid(p: {
     if (stamped.count !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${stamped.count}`);
   });
   for (const a of audits) await audit(a);
-  await audit({ ...p.actor, action: "pay.peak_payment_recorded", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, documentNo: p.documentNo, paymentDate: p.paymentDate, alreadyPaid: !!p.alreadyPaid } });
+  await audit({
+    ...p.actor, action: "pay.peak_payment_recorded", entityType: "GuidePaymentDocument",
+    detail: {
+      paymentRef: p.paymentRef, documentNo: p.documentNo, paymentDate: p.paymentDate, alreadyPaid: !!p.alreadyPaid,
+      oldStatus: "PAYING", newStatus: "PAID",
+      // The reference as it is compared, the amount the operator read, and who says so.
+      // Never the slip itself: a file does not belong in an audit row.
+      bankRef: (p.bankRef ?? "").trim() || null, slipAmount: p.slipAmount ?? null,
+      verificationSource: p.verified ? VERIFICATION_SOURCE : null,
+    },
+  });
 }
 
 /**
@@ -682,7 +903,15 @@ export async function resolvePaymentDocument(
     if (r.resolution === "payment-not-found") {
       await prisma.guidePaymentDocument.updateMany({
         where: { paymentRef, status: { in: ["PAYMENT_UNCERTAIN", "PAYING"] } },
-        data: { status: "AWAITING_PAYMENT", error: "Payment not found in PEAK (confirmed by an operator)", paymentDate: null, paymentMethodId: null, paymentMethodName: null, slipUrl: null, resolvedById: actor.actorId, resolvedAt: new Date() },
+        // The whole claim is withdrawn, evidence included: a bank reference must not stay
+        // recorded against a document that settles nothing.
+        data: {
+          status: "AWAITING_PAYMENT", error: "Payment not found in PEAK (confirmed by an operator)",
+          paymentDate: null, paymentMethodId: null, paymentMethodName: null, slipUrl: null,
+          bankRef: null, bankRefNormalized: null, bankAccountKey: null, slipAmount: null, slipUploadedAt: null,
+          slipVerifiedById: null, slipVerifiedAt: null, verificationSource: null,
+          resolvedById: actor.actorId, resolvedAt: new Date(),
+        },
       });
       await audit({ ...actor, action: "pay.peak_payment_resolved_not_found", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: doc.peakDocumentNo } });
       return { ok: true };
