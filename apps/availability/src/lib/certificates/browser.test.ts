@@ -255,7 +255,23 @@ describe("repository invariant — the image itself is smoke tested", () => {
     expect(s).not.toMatch(/EXPECTED_BUILD_ID=["']?\d+\./);
     expect(s).toContain("%PDF-");
     expect(s).toContain("%%EOF");
-    expect(s).toContain("BaseFont");                   // a font is embedded, so Thai draws
+  });
+
+  it("it reads the Thai back out, rather than trusting that a font was embedded", () => {
+    // A page of boxes embeds a font too. The question is whether the WORDS are there.
+    const s = smoke();
+    expect(s).toContain("pdftotext");
+    expect(s).toContain("ใบรับรองแทนใบเสร็จรับเงิน");
+    // …with a fallback for a PDF that carries no ToUnicode map, which proves the same
+    // thing the long way: a Thai face embedded, and ink where the words should be.
+    expect(s).toContain("pdffonts");
+    expect(s).toContain("pdftoppm");
+    expect(s).toMatch(/noto\|garuda\|laksaman|garuda/);
+    expect(s).toContain("blank band");                 // the control region
+  });
+
+  it("CI installs the tools that reading a PDF back needs", () => {
+    expect(ci()).toContain("poppler-utils");
   });
 
   it("it reports the image size, the peak memory and any leftover process", () => {

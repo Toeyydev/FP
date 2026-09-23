@@ -93,12 +93,12 @@ done
 echo "  certificateRenderer: status=$STATUS code=$CODE"
 [ "$STATUS" = "ready" ] || { docker logs "$NAME" | tail -40; fail "the renderer in the image reported '$STATUS' ($CODE)"; }
 
-say "rendering Thai inside the container, and looking at the bytes"
+say "rendering Thai inside the container"
 # Independent of the app's own probe: this uses the image's puppeteer-core and the
-# image's browser directly, so a PDF coming back proves the shared libraries and a
-# Thai-capable font are both really in there.
+# image's browser directly, so what comes back proves the shared libraries and a
+# Thai-capable font are really in there — not that the probe agrees with itself.
+THAI_PHRASE="ใบรับรองแทนใบเสร็จรับเงิน"
 docker exec "$NAME" node -e '
-const { execPath } = process;
 (async () => {
   const p = (await import("puppeteer-core")).default;
   const { PUPPETEER_REVISIONS } = await import("puppeteer-core/internal/revisions.js");
@@ -107,20 +107,76 @@ const { execPath } = process;
   const b = await p.launch({ executablePath: exe, args: ["--no-sandbox","--disable-dev-shm-usage"] });
   try {
     const page = await b.newPage();
+    // One Thai line near the top, then a deliberately empty band underneath. The empty
+    // band is the control: if the "text" region and the blank region carry the same
+    // amount of ink, nothing was drawn where the words should be.
     await page.setContent(`<!doctype html><html lang="th"><head><meta charset="utf-8"></head>
-      <body style="font-size:20pt"><p>ใบรับรองแทนใบเสร็จรับเงิน</p><p>ค่าเรือข้ามฟาก</p></body></html>`, { waitUntil: "load" });
+      <body style="margin:0"><div style="height:60px;font-size:28pt;padding:8px">ใบรับรองแทนใบเสร็จรับเงิน</div>
+      <div style="height:400px"></div></body></html>`, { waitUntil: "load" });
     const pdf = Buffer.from(await page.pdf({ format: "A4", printBackground: true }));
+    require("fs").writeFileSync("/tmp/thai.pdf", pdf);
     const head = pdf.subarray(0,5).toString("latin1");
     const tail = pdf.subarray(-1024).toString("latin1");
-    const fonts = [...pdf.toString("latin1").matchAll(/\/BaseFont\s*\/([A-Za-z0-9+#-]+)/g)].map(m=>m[1]);
     if (head !== "%PDF-") throw new Error("not a pdf: " + head);
     if (!tail.includes("%%EOF")) throw new Error("truncated pdf");
-    if (!fonts.length) throw new Error("no font embedded — Thai would be drawn as boxes");
-    if (pdf.length < 8000) throw new Error("suspiciously small for an embedded Thai face: " + pdf.length);
-    console.log(`  thai pdf: ${pdf.length} bytes, fonts embedded: ${fonts.length}, build ${buildId}`);
+    console.log(`  rendered ${pdf.length} bytes with build ${buildId}`);
   } finally { await b.close(); }
 })().catch((e) => { console.error("  " + String(e)); process.exit(1); });
 ' || fail "rendering Thai inside the image failed"
+
+docker cp "$NAME:/tmp/thai.pdf" /tmp/thai.pdf >/dev/null || fail "could not fetch the rendered PDF"
+
+say "reading the Thai back out of that PDF"
+# The real question is not "was a font embedded" — a page of boxes embeds a font too.
+# It is whether the words are in there. pdftotext answers that directly when the PDF
+# carries a ToUnicode map, which Chromium normally writes.
+EXTRACTED=$(pdftotext -enc UTF-8 /tmp/thai.pdf - 2>/dev/null | tr -d "[:space:]" || true)
+WANTED=$(printf '%s' "$THAI_PHRASE" | tr -d "[:space:]")
+if printf '%s' "$EXTRACTED" | grep -qF "$WANTED"; then
+  echo "  pdftotext: the phrase read back in full"
+else
+  echo "  pdftotext: the phrase did not round-trip (no ToUnicode map?) — falling back to fonts and ink"
+
+  say "which fonts the page actually uses"
+  FONTS=$(pdffonts /tmp/thai.pdf 2>/dev/null || true)
+  printf '%s
+' "$FONTS" | sed 's/^/    /'
+  printf '%s' "$FONTS" | grep -qiE "noto|garuda|laksaman|loma|tlwg|sarabun" \
+    || fail "no Thai-capable font is embedded — the page would be drawn as boxes"
+  printf '%s' "$FONTS" | awk 'NR>2 && $NF ~ /no/ { bad=1 } END { exit bad }' 2>/dev/null \
+    || echo "    (at least one font is not embedded; the Thai face is what matters)"
+
+  say "and that there is ink where the words are"
+  # A greyscale raster, parsed without any image library: P5, a header, then one byte a
+  # pixel. The band with the words must be markedly darker than the empty band below it.
+  pdftoppm -gray -r 72 -singlefile /tmp/thai.pdf /tmp/thai >/dev/null 2>&1 || fail "pdftoppm could not rasterise the page"
+  node -e '
+    const fs = require("fs");
+    const buf = fs.readFileSync("/tmp/thai.pgm");
+    let i = 0, fields = [];
+    while (fields.length < 4) {
+      while (buf[i] === 0x23) { while (buf[i] !== 0x0a) i++; i++; }        // a comment line
+      let t = "";
+      while (i < buf.length && buf[i] > 0x20) t += String.fromCharCode(buf[i++]);
+      while (i < buf.length && buf[i] <= 0x20) i++;
+      if (t) fields.push(t);
+    }
+    const [magic, w, h] = [fields[0], +fields[1], +fields[2]];
+    if (magic !== "P5") throw new Error("not a greyscale raster: " + magic);
+    const px = buf.subarray(i);
+    const dark = (from, to) => {
+      let n = 0;
+      for (let y = from; y < to; y++) for (let x = 0; x < w; x++) if (px[y * w + x] < 200) n++;
+      return n;
+    };
+    const band = Math.floor(h * 0.10);            // the strip the line of text sits in
+    const blank = dark(band + 10, band + 110);    // the deliberately empty strip below it
+    const text = dark(0, band);
+    console.log(`  ink: ${text} dark pixels where the words are, ${blank} in the blank band below`);
+    if (text < 200) throw new Error("the text band is empty — nothing was drawn");
+    if (text <= blank) throw new Error("the text band is no darker than the blank one");
+  ' || fail "the Thai line did not draw anything"
+fi
 
 say "peak memory, as the container itself measured it"
 PEAK=$(docker exec "$NAME" sh -c 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null || echo ""' || echo "")
