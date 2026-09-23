@@ -15,6 +15,8 @@ import { advanceWritesFrozen } from "@/lib/advances/freeze";
 
 export type JobAdvanceRow = {
   peakSync?: { status: string; documentNo: string | null; error: string | null } | null;
+    voucherUrl?: string | null;
+    acknowledgedAt?: Date | null;
   id: string; advanceNo: string; amount: number; paidAt: Date; advanceDate: string; method: string;
   txRef: string | null; peakRef: string | null; slipUrl: string | null; note: string | null;
   settled: number; outstanding: number; status: string;
@@ -52,7 +54,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
   const advances = await db.guideAdvance.findMany({
     where: { guideId, date, slotIdx },
     orderBy: [{ advanceDate: "asc" }, { advanceNo: "asc" }],
-    select: { id: true, advanceNo: true, amountSatang: true, settledSatang: true, paidAt: true, advanceDate: true, method: true, txRef: true, peakRef: true, slipUrl: true, note: true, reversedAt: true },
+    select: { id: true, advanceNo: true, amountSatang: true, settledSatang: true, paidAt: true, advanceDate: true, method: true, txRef: true, peakRef: true, slipUrl: true, note: true, reversedAt: true, voucherUrl: true, acknowledgedAt: true },
   });
   const liveIds = advances.filter((a) => !a.reversedAt).map((a) => a.id);
 
@@ -106,6 +108,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
     advances: advances.map((a) => ({
       peakSync: sync.get(`ADVANCE:${a.id}`) ?? null, id: a.id, advanceNo: a.advanceNo, amount: fromSatang(a.amountSatang), paidAt: a.paidAt, advanceDate: a.advanceDate,
       method: a.method, txRef: a.txRef, peakRef: a.peakRef, slipUrl: a.slipUrl, note: a.note,
+      voucherUrl: a.voucherUrl, acknowledgedAt: a.acknowledgedAt,
       settled: fromSatang(a.settledSatang), outstanding: fromSatang(a.amountSatang - a.settledSatang),
       status: advanceStatus({ amountSatang: a.amountSatang, settledSatang: a.settledSatang, reversedAt: a.reversedAt }),
     })),

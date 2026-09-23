@@ -56,17 +56,17 @@ async function findOrCreateFolder(token: string, name: string, parentId?: string
   if (parentId) q.push(`'${parentId}' in parents`);
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  const j = await r.json().catch(() => ({}));
+  const j = (await r.json().catch(() => ({}))) as { files?: { id?: string }[] };
   let id: string;
-  if (j.files?.[0]?.id) id = j.files[0].id as string;
+  if (j.files?.[0]?.id) id = j.files[0].id;
   else {
     const cr = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
       method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: parentId ? [parentId] : undefined }),
     });
-    const cj = await cr.json().catch(() => ({}));
+    const cj = (await cr.json().catch(() => ({}))) as { id?: string };
     if (!cr.ok || !cj.id) throw new Error(`drive-folder ${cr.status}: ${JSON.stringify(cj).slice(0, 160)}`);
-    id = cj.id as string;
+    id = cj.id;
   }
   // Give the accounting account(s) reader access to the top-level company folders
   // ("Folkpaths Job Sheets" / "Folkpaths E-slips"), so every file inside is visible.
@@ -91,9 +91,9 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
   const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body,
   });
-  const j = await r.json().catch(() => ({}));
+  const j = (await r.json().catch(() => ({}))) as { id?: string; webViewLink?: string };
   if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
-  return { id: j.id as string, link: (j.webViewLink as string) ?? `https://docs.google.com/document/d/${j.id}/edit` };
+  return { id: j.id, link: j.webViewLink ?? `https://docs.google.com/document/d/${j.id}/edit` };
 }
 
 
@@ -107,8 +107,8 @@ async function findFilesInFolder(token: string, name: string, parentId?: string)
   if (parentId) q.push(`'${parentId}' in parents`);
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive&orderBy=modifiedTime desc`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  const j = await r.json().catch(() => ({}));
-  return (j.files ?? []).map((f: { id: string }) => f.id);
+  const j = (await r.json().catch(() => ({}))) as { files?: { id: string }[] };
+  return (j.files ?? []).map((f) => f.id);
 }
 
 async function trashFile(token: string, id: string): Promise<void> {
@@ -133,8 +133,8 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
     const ur = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${keep}?uploadType=media&fields=id,webViewLink`, {
       method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": opts.mimeType }, body: Buffer.from(opts.base64, "base64"),
     });
-    const uj = await ur.json().catch(() => ({}));
-    if (ur.ok && uj.id) return { id: uj.id as string, link: (uj.webViewLink as string) ?? `https://drive.google.com/file/d/${uj.id}/view` };
+    const uj = (await ur.json().catch(() => ({}))) as { id?: string; webViewLink?: string };
+    if (ur.ok && uj.id) return { id: uj.id, link: uj.webViewLink ?? `https://drive.google.com/file/d/${uj.id}/view` };
     // if the update failed, fall through and create a fresh file
   }
 
@@ -146,9 +146,11 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body,
   });
-  const j = await r.json().catch(() => ({}));
+  // Typed where it is read: under the worker's stricter config an untyped `j`
+  // is `unknown`, and the file only escaped that because nothing there imported it.
+  const j = (await r.json().catch(() => ({}))) as { id?: string; webViewLink?: string };
   if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
-  return { id: j.id as string, link: (j.webViewLink as string) ?? `https://drive.google.com/file/d/${j.id}/view` };
+  return { id: j.id, link: j.webViewLink ?? `https://drive.google.com/file/d/${j.id}/view` };
 }
 
 /** The Drive file id inside a link this app stored ("…/file/d/<id>/view", "…?id=<id>"). */

@@ -2,6 +2,7 @@ import { uploadSlip } from "@/lib/advance-slip";
 import { NextRequest, NextResponse } from "next/server";
 import { advanceSyncStates } from "@/lib/advances/peak-sync";
 import { peakLinksFor } from "@/lib/advances/peak-link";
+import { issueVoucherFor } from "@/lib/advances/voucher-issue";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
@@ -27,6 +28,7 @@ export async function GET(req: NextRequest) {
       id: true, advanceNo: true, guideId: true, jobNo: true, advanceDate: true, accountingPeriod: true,
       amountSatang: true, settledSatang: true, purpose: true, method: true, txRef: true, slipUrl: true,
       reversedAt: true, reversalReason: true, peakDocumentNo: true,
+      voucherUrl: true, acknowledgedAt: true,
     },
   });
   const sync = await advanceSyncStates(prisma, rows.map(r => `ADVANCE:${r.id}`));
@@ -66,5 +68,8 @@ export async function POST(req: NextRequest) {
     actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null },
   });
   if (!result.ok) return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
-  return NextResponse.json({ ok: true, advance: result.advance });
+  // The guide gets a voucher for money they are now holding. Best-effort: a Drive
+  // hiccup must not undo a recorded transfer, and the document can be re-filed.
+  const voucherUrl = await issueVoucherFor(result.advance.id);
+  return NextResponse.json({ ok: true, advance: result.advance, voucherUrl });
 }

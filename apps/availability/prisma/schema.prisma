@@ -995,6 +995,15 @@ model GuideAdvance {
   accountingPeriod String // "YYYY-MM"
   peakDocumentNo   String? // recorded, never inferred
   peakReference    String?
+
+  // The voucher the guide receives, and their acknowledgement of it. The document
+  // is derived from this row, so these only record where the copy was filed and
+  // when the guide said they had it — nothing here changes a balance.
+  voucherUrl       String?
+  voucherFileId    String?
+  voucherIssuedAt  DateTime?
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
   reversedAt       DateTime?
   reversedById     String?
   reversalReason   String?

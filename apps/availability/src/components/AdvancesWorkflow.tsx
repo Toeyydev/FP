@@ -20,6 +20,7 @@ type Advance = {
   id: string; advanceNo: string; guideId: string; jobNo: string | null; advanceDate: string;
   amount: number; settled: number; outstanding: number; status: "OPEN" | "PARTIALLY_SETTLED" | "SETTLED" | "REVERSED";
   purpose: string | null; txRef: string | null; slipUrl: string | null; reversalReason: string | null;
+  voucherUrl?: string | null; acknowledgedAt?: string | null;
 };
 type Receipt = {
   peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
@@ -111,7 +112,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
             {advances.map((a) => (
               <tr key={a.id}>
-                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} />}</td>
+                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} />}<VoucherLine advance={a} /></td>
                 <td>{a.guideId}</td>
                 <td>{a.advanceDate}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
@@ -229,6 +230,19 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
       {linking && <RecordExistingPeakDialog target={linking} bankAccount={returnBank || undefined} onClose={() => setLinking(null)} onDone={async (m) => { setLinking(null); setMsg(m); await load(); }} />}
       {allocating && <AllocateDialog receipt={allocating} advances={open.filter((a) => a.guideId === allocating.guideId)} onClose={() => setAllocating(null)} onDone={async (m) => { setAllocating(null); setMsg(m); await load(); }} />}
     </section>
+  );
+}
+
+/** The guide's own copy: where it is filed, and whether they have confirmed it. */
+function VoucherLine({ advance }: { advance: Advance }) {
+  if (!advance.voucherUrl && !advance.acknowledgedAt) return null;
+  return (
+    <div style={{ fontSize: 11.5, marginTop: 2 }}>
+      {advance.voucherUrl && <a href={advance.voucherUrl} target="_blank" rel="noreferrer">ใบสำคัญจ่าย</a>}
+      {advance.acknowledgedAt
+        ? <span className="badge ok" style={{ marginLeft: 6 }}>ไกด์ยืนยันรับแล้ว</span>
+        : <span className="muted" style={{ marginLeft: 6 }}>รอไกด์ยืนยันรับ</span>}
+    </div>
   );
 }
 
