@@ -34,7 +34,9 @@ export type Expense = {
   // Where the payer on this line came from — NOT a payment fact, a provenance label:
   //   "operator"           recorded by an operator on the sheet
   //   "guide"              the guide picked it (FolkOPS Mobile sends paidByChoice)
-  //   "default-after-tour" FolkOPS filled "guide" by the owner's default; nobody confirmed it
+  //   "category-default"   FolkOPS filled the default for the row's CATEGORY (lib/payer-rules)
+  //   "default-after-tour" legacy: FolkOPS filled "guide" on every unanswered line. Kept on
+  //                        old rows, never written again, and NOT eligible for a payout.
   //   "unconfirmed"        a payer arrived without anyone saying who chose it (older app builds
   //                        pre-selected "guide" on every line), and it is not the operator's
   paidBySource?: PaidBySource;
@@ -75,7 +77,7 @@ export type Expense = {
   relatedBookingNo?: string;
   relatedJobRef?: string; // legacy job-ref form, still honoured when present
 };
-export const PAID_BY_SOURCES = ["operator", "guide", "default-after-tour", "unconfirmed"] as const;
+export const PAID_BY_SOURCES = ["operator", "guide", "category-default", "default-after-tour", "unconfirmed"] as const;
 export type PaidBySource = (typeof PAID_BY_SOURCES)[number];
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 

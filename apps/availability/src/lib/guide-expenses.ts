@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
 import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isReviewExpense, type Expense, type PaidBySource } from "@/lib/jobsheet";
+import { defaultPayer, expenseKind, PAID_BY_VALUE } from "@/lib/payer-rules";
 import { canonicalPaidBy } from "@/lib/peak-sync";
 import { tourStartMs } from "@/lib/no-show-count";
 import { resolveDurationMin } from "@/lib/tour-duration";
@@ -64,10 +65,17 @@ export const GUIDE_PAID_OWN_MONEY = "guide";
 /**
  * The payer on each reported line, and where it came from (Expense.paidBySource).
  *
- * Business default set by the owner (2026-09-14), NOT evidence of who paid: when a guide
- * files their report after the tour, a billed line with no payer yet starts as "Guide
- * paid own money" and is labelled "default-after-tour" — nobody confirmed it, and the
- * operator can still change it. A ฿0 line or a review reward gets no default.
+ * Business default set by the owner (2026-09-23), NOT evidence of who paid: a billed line
+ * with no payer yet takes the default for its CATEGORY — a ticket to the company advance,
+ * local transport to the guide — and is labelled "category-default", which an operator
+ * can still change. A MEAL gets no default at all: either answer is plausible, so the
+ * line stays blank and the payment waits for a person. A ฿0 line or a review reward gets
+ * no default either.
+ *
+ * The older blanket default, "default-after-tour" (every unanswered line became "the
+ * guide paid it"), is no longer written and no longer counts towards a payout — see
+ * lib/payer-rules paymentPayer. Existing rows keep it; only what a payment concludes
+ * from it has changed.
  *
  * A line sent without a payer keeps the payer the operator recorded on that line ("operator").
  *
@@ -84,7 +92,7 @@ export function classifyPayers(
   rows: GuideExpenseInput[],
   ctx: { official?: Expense[] | null; previous?: Expense[] | null; defaultApplies: boolean },
 ): { rows: Expense[]; counts: PayerCounts } {
-  const counts: PayerCounts = { operator: 0, guide: 0, "default-after-tour": 0, unconfirmed: 0 };
+  const counts: PayerCounts = { operator: 0, guide: 0, "default-after-tour": 0, "category-default": 0, unconfirmed: 0 };
   const same = (a?: string | null, b?: string | null) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
   const out = rows.map(({ paidByChoice, ...line }) => {
     const e = line as Expense;
@@ -97,8 +105,15 @@ export function classifyPayers(
       // (the app leaves an unchosen line out rather than guess); only then does the default apply.
       if (official && (official.paidBy ?? "").trim()) { counts.operator++; return { ...e, paidBy: official.paidBy, paidBySource: "operator" as const }; }
       if (!ctx.defaultApplies || isReviewExpense(e) || expenseAmount(e) <= 0) return e;
-      counts["default-after-tour"]++;
-      return { ...e, paidBy: GUIDE_PAID_OWN_MONEY, paidBySource: "default-after-tour" as const };
+      // The default now follows the KIND of expense (lib/payer-rules): a ticket is
+      // bought with a company advance, local transport is fronted by the guide, and a
+      // meal is left blank because either answer is plausible and only a person on the
+      // day knows which. A blank stops the payment rather than guessing at it.
+      const kind = expenseKind(e);
+      const def = defaultPayer(kind);
+      if (!def) return e;
+      counts["category-default"]++;
+      return { ...e, paidBy: PAID_BY_VALUE[def], paidBySource: "category-default" as const };
     }
     const source: PaidBySource =
       official && (official.paidBy ?? "").trim() && canonicalPaidBy(official) === canonicalPaidBy(e) ? "operator"

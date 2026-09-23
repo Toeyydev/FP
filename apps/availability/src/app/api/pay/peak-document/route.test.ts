@@ -757,7 +757,11 @@ describe("the preview lists every row with no expense category, including on a j
 
   it("once the categories are set on the sheets, the same jobs preview as one document", async () => {
     sheetOf(J1).approvalStatus = "APPROVED";
-    for (const j of [J1, J2, J3]) sheetOf(j).expenses = noCategory().map((e) => ({ ...e, expenseType: e.description.startsWith("Water") ? "meal" : "transport" }));
+    // Setting the category is the operator's pass over the sheet; a meal's payer is
+    // theirs to choose at the same time, so it carries their label.
+    for (const j of [J1, J2, J3]) sheetOf(j).expenses = noCategory().map((e) => (e.description.startsWith("Water")
+      ? { ...e, expenseType: "meal", paidBySource: "operator" }
+      : { ...e, expenseType: "transport" }));
     const body = await (await preview([J1, J2, J3])).json();
     expect(body).toMatchObject({ ok: true });
     expect(body.missingCategories).toBeUndefined();
@@ -1138,7 +1142,7 @@ describe("฿1,924: the review incentive is withheld on, and the transfer answer
       guideId: GUIDE, ...JOB, tourId: "T-001", ref: "FOLK-BKK-20300506-01",
       expenses: [
         { description: "Review reward", price: 100, pax: 1 },
-        { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" },
+        { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
         { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" },
       ],
       guideFee: FEE(1500), origin: "NORMAL", createdAt: new Date("2030-05-01"),

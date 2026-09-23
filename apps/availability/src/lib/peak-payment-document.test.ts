@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Expense, GuideFee } from "@/lib/jobsheet";
 import type { PeakAccountMap } from "@/lib/peak-sync";
 import {
@@ -129,6 +129,11 @@ function fakeStore(opts: {
 
 // ── Required: one document, the right total, the right lines ─────────────────
 
+
+// A stubbed switch must not outlive the test that set it: one failure leaking
+// REIMBURSEMENT_EVIDENCE_REQUIRED into the rest turns one red test into twenty.
+afterEach(() => vi.unstubAllEnvs());
+
 describe("one PEAK document for several jobs — stage 1 creates it, unpaid", () => {
   it("creates exactly ONE PEAK document for all the selected jobs", async () => {
     const { calls, create } = fakeStore();
@@ -251,8 +256,8 @@ describe("account resolution", () => {
 
   it("splits one job's reimbursements by category and account, and merges same-account rows", () => {
     const rows: Expense[] = [
-      { description: "Water", price: 10, pax: 3, expenseType: "meal", paidBy: "guide" },
-      { description: "Snack", price: 25, pax: 2, expenseType: "meal", paidBy: "guide" },
+      { description: "Water", price: 10, pax: 3, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
+      { description: "Snack", price: 25, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
       { description: "Taxi", price: 120, pax: 1, expenseType: "transport", paidBy: "guide" },
       { description: "Flowers", price: 40, pax: 1, expenseType: "other", paidBy: "guide", peakAccountCode: "530201" },
       { description: "Incense", price: 15, pax: 1, expenseType: "other", paidBy: "guide" },
@@ -275,7 +280,7 @@ describe("what belongs in a payment document", () => {
     const rows: Expense[] = [
       { description: "Grand Palace ticket", price: 500, pax: 2, expenseType: "entrance", paidBy: "company" },
       { description: "Boat from advance", price: 50, pax: 2, expenseType: "transport", paidBy: "advance" },
-      { description: "Water", price: 20, pax: 1, expenseType: "meal", paidBy: "guide" },
+      { description: "Water", price: 20, pax: 1, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
     ];
     const doc = build({ jobs: [{ ...JOBS[0], expenses: rows }] });
     expect(doc.lines.map((l) => l.description)).toEqual(["Guide fee - FOLK-BKK-20300506-01 · WHT 3% ฿36.00", "Reimbursement / Meal / Refreshment - FOLK-BKK-20300506-01"]);
@@ -300,7 +305,7 @@ describe("what belongs in a payment document", () => {
         guideFee: { price: 1500, time: 1, whtPct: 3 },
         expenses: [
           { description: "Review reward", price: 100, pax: 1 },
-          { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" },
+          { description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
           { description: "Van", price: 117, pax: 2, expenseType: "transport", paidBy: "guide" },
         ] as Expense[],
       }],
@@ -315,21 +320,21 @@ describe("what belongs in a payment document", () => {
   });
 
   it("reports a reimbursement with no receipt, and still pays it while the switch is off", () => {
-    const doc = build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" }] as Expense[] }] });
+    const doc = build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }] as Expense[] }] });
     expect(doc.evidenceGaps).toMatchObject([{ description: "Lunch", amount: 90 }]);
     expect(doc.lines.some((l) => l.description.includes("Lunch") || l.price === 90)).toBe(true);
   });
 
   it("refuses it once the deployment says receipts are being collected", () => {
     vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "1");
-    const reasons = reasonsOf(() => build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide" }] as Expense[] }] }));
+    const reasons = reasonsOf(() => build({ jobs: [{ ...JOBS[0], expenses: [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }] as Expense[] }] }));
     expect(reasons.join(" ")).toContain("no receipt attached");
     vi.unstubAllEnvs();
   });
 
   it("takes an admin's written waiver in place of the receipt", () => {
     vi.stubEnv("REIMBURSEMENT_EVIDENCE_REQUIRED", "1");
-    const waived = [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide",
+    const waived = [{ description: "Lunch", price: 45, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator",
       evidenceWaiver: { by: "u_admin", at: "2099-01-20T03:00:00.000Z", reason: "the temple prints no ticket" } }] as Expense[];
     const doc = build({ jobs: [{ ...JOBS[0], expenses: waived }] });
     expect(doc.evidenceGaps).toEqual([]);
@@ -366,7 +371,7 @@ describe("Paid By must be known before a row is paid through PEAK", () => {
   it("counts review-reward rows out of the numbering, and still pays a review reward with no Paid By", () => {
     const rows: Expense[] = [
       { description: "Review reward", price: 100, pax: 1 },                                        // not numbered, no Paid By needed
-      { description: "Water", price: 10, pax: 2, expenseType: "meal", paidBy: "guide" },
+      { description: "Water", price: 10, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
       { description: "Bus", price: 15, pax: 2, expenseType: "transport" },                          // row 2
     ];
     expect(reasonsOf(() => build({ jobs: [job(rows)] })).join(" ")).toContain('row 2 "Bus": Paid By is not set');

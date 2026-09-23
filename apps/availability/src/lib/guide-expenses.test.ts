@@ -170,17 +170,20 @@ describe("submitGuideExpenses", () => {
   });
 });
 
-// Business default (not proof of the payer): a guide's report filed after the tour starts as
-// Guide paid own money, labelled "default-after-tour". A made-up departure: 6 Apr 2030, slot 0
-// (08:30 Bangkok), default 3-hour tour → ends 11:30.
+// Business default (not proof of the payer): a line the guide reports after the tour takes
+// the default for its CATEGORY — a ticket to the company's advance, local transport to the
+// guide — and a MEAL takes none, because either answer is plausible and only a person on
+// the day knows. A made-up departure: 6 Apr 2030, slot 0 (08:30 Bangkok), 3-hour tour.
 describe("Paid By on a report the guide files after the tour", () => {
   const DAY = "2030-04-06";
   const at = (hhmm: string) => new Date(`${DAY}T${hhmm}:00+07:00`);
   const lines = () => [
-    { description: "Water (Inc. Guide)", price: 10, pax: 4 },                     // billed, no payer → default
-    { description: "Grand Palace", price: 500, pax: null },                        // ฿0 line → left blank
-    { description: "Ferry (Inc. Guide)", price: 5, pax: 4, paidBy: "company" },    // the operator's own record → kept
-    { description: "Review reward", price: 50, pax: 1 },                           // compensation, not spending → left alone
+    { description: "Bus (Inc. Guide)", price: 10, pax: 4, expenseType: "transport" },   // transport → the guide fronts it
+    { description: "Water (Inc. Guide)", price: 10, pax: 4, expenseType: "meal" },      // a meal → nobody guesses; left blank
+    { description: "Wat Pho", price: 300, pax: 2, expenseType: "entrance" },            // a ticket → the company's advance
+    { description: "Grand Palace", price: 500, pax: null, expenseType: "entrance" },    // ฿0 line → left blank
+    { description: "Ferry (Inc. Guide)", price: 5, pax: 4, paidBy: "company", expenseType: "transport" }, // the operator's own record → kept
+    { description: "Review reward", price: 50, pax: 1 },                                 // compensation, not spending → left alone
   ];
   const OFFICIAL = [{ description: "Ferry (Inc. Guide)", price: 5, pax: null, paidBy: "company" }];
   const file = (over: Partial<Parameters<typeof submitGuideExpenses>[0]> = {}) =>
@@ -195,30 +198,32 @@ describe("Paid By on a report the guide files after the tour", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("fills the default on each billed line with no payer once the tour's time is over, labelled as a default", async () => {
+  it("gives each billed line the default for its category, and a meal none at all", async () => {
     vi.setSystemTime(at("12:00"));
     await file();
     expect(summary()).toEqual([
-      ["Water (Inc. Guide)", "guide", "default-after-tour"],
-      ["Grand Palace", undefined, undefined],
-      ["Ferry (Inc. Guide)", "company", "operator"],
-      ["Review reward", undefined, undefined],
+      ["Bus (Inc. Guide)", "guide", "category-default"],       // transport → the guide fronts it
+      ["Water (Inc. Guide)", undefined, undefined],            // a meal → an operator must choose
+      ["Wat Pho", "advance", "category-default"],              // a ticket → bought with a company advance
+      ["Grand Palace", undefined, undefined],                  // ฿0 → nothing to decide
+      ["Ferry (Inc. Guide)", "company", "operator"],           // the operator already said
+      ["Review reward", undefined, undefined],                 // earned, not spent
     ]);
-    expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 1, unconfirmed: 0 } });
+    expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 0, "category-default": 2, unconfirmed: 0 } });
   });
 
   it("counts the tour as over as soon as the guide completed it", async () => {
     vi.setSystemTime(at("09:30"));
     prismaMock.checkin.findFirst.mockResolvedValue({ id: "c_1" });
     await file();
-    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "category-default" });
   });
 
   it("counts a filed tour report as the tour being over", async () => {
     vi.setSystemTime(at("09:30"));
     prismaMock.tourReport.findUnique.mockResolvedValue({ id: "r_1" });
     await file();
-    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "category-default" });
   });
 
   it("leaves the payer blank on a report filed while the tour is still running", async () => {
@@ -258,7 +263,7 @@ describe("Paid By on a report the guide files after the tour", () => {
     prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", tour: { id: "T-001", durationMin: 0 } });
     prismaMock.jobOffer.findFirst.mockResolvedValue({ id: "o_neg", durationMin: -60 });
     await file();
-    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(stored()[0]).toMatchObject({ paidBy: "guide", paidBySource: "category-default" });
   });
 
   it("leaves the payer to the operator when a company advance is on record for the job", async () => {
@@ -281,8 +286,9 @@ describe("Paid By on a report the guide files after the tour", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue(null);
     await file();
     const created = prismaMock.jobSheet.create.mock.calls[0][0].data;
-    expect(created.guideExpenses[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
-    expect(created.guideExpenses[2]).toMatchObject({ paidBy: "company", paidBySource: "unconfirmed" }); // no operator record to match yet
+    expect(created.guideExpenses[0]).toMatchObject({ paidBy: "guide", paidBySource: "category-default" });   // transport
+    expect(created.guideExpenses[1].paidBy).toBeUndefined();                                                   // a meal waits for a person
+    expect(created.guideExpenses[4]).toMatchObject({ paidBy: "company", paidBySource: "unconfirmed" }); // no operator record to match yet
     expect(created.expenses.every((e: { paidBy?: string }) => e.paidBy === undefined)).toBe(true);   // the operator's set is untouched
   });
 });
@@ -320,9 +326,9 @@ describe("classifyPayers — a payer that arrives with a line is labelled, never
     expect(classifyPayers([water], { official, defaultApplies: true }).rows[0]).toMatchObject({ paidBy: "guide", paidBySource: "operator" });
   });
   it("never overwrites a payer that arrived with the line, even a different one", () => {
-    const { rows, counts } = classifyPayers([{ description: "Bus", price: 15, pax: 3, paidBy: "advance" }, { description: "Bus 2", price: 15, pax: 3, paidBy: "  " }], { defaultApplies: true });
+    const { rows, counts } = classifyPayers([{ description: "Bus", price: 15, pax: 3, paidBy: "advance", expenseType: "transport" }, { description: "Bus 2", price: 15, pax: 3, paidBy: "  ", expenseType: "transport" }], { defaultApplies: true });
     expect(rows.map((r) => r.paidBy)).toEqual(["advance", "guide"]);
-    expect(counts).toEqual({ operator: 0, guide: 0, "default-after-tour": 1, unconfirmed: 1 });
+    expect(counts).toEqual({ operator: 0, guide: 0, "default-after-tour": 0, "category-default": 1, unconfirmed: 1 });
   });
 });
 
