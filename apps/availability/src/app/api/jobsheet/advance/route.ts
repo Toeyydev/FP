@@ -9,6 +9,7 @@ import { thb } from "@/lib/jobsheet";
 import { uploadSlip } from "@/lib/advance-slip";
 import { recordAdvanceReturn } from "@/lib/guide-advance";
 import { issueAdvance } from "@/lib/advances/service";
+import { issueVoucherFor } from "@/lib/advances/voucher-issue";
 import { jobAdvanceView } from "@/lib/advances/job-view";
 import type { Expense } from "@/lib/jobsheet";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
@@ -122,11 +123,14 @@ export async function POST(req: NextRequest) {
     if (!issued.ok) return NextResponse.json({ error: "not-allowed", reasons: issued.reasons, detail: issued.reasons.join("\n") }, { status: issued.status });
     const row = { id: issued.advance.id };
     if (peakRef) await prisma.guideAdvance.update({ where: { id: row.id }, data: { peakRef } });
+    // File the guide's voucher first, so the message that tells them the money is
+    // theirs to spend can carry the document that says what it is for.
+    const voucherUrl = await issueVoucherFor(row.id);
     // The guide must know money was sent: in-app + push + LINE (if linked) + email
     // fallback — same pipeline as booking changes. Best-effort, never blocks the record.
     await notifyGuide(
       guideId,
-      `Folkpaths sent you a ticket advance of ${thb(amount)} for your ${date} tour${sheet.ref ? ` (${sheet.ref})` : ""}. Use it only to buy customer tickets. After the tour, report the ticket costs and return any unused amount.`,
+      `Folkpaths sent you a ticket advance of ${thb(amount)} for your ${date} tour${sheet.ref ? ` (${sheet.ref})` : ""}. Use it only to buy customer tickets. After the tour, report the ticket costs and return any unused amount.${voucherUrl ? `\n\nAdvance voucher / ใบสำคัญจ่ายเงินทดรอง: ${voucherUrl}` : ""}`,
       "Ticket advance sent",
       `${date} · ${thb(amount)} ticket advance`,
     );
