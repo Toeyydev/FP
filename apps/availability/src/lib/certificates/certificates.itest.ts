@@ -17,7 +17,8 @@ import type { Expense } from "@/lib/jobsheet";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { certificateStatuses } from "@/lib/certificates/evidence";
 import { fileHash } from "@/lib/certificates/payload";
-import { CertificateRefused, createCertificate, linkCertificate, attestCertificate, uploadCertificate, voidCertificate, type Actor, type Deps } from "@/lib/certificates/service";
+import { CertificateRefused, createCertificate, linkCertificate, attestCertificate, uploadCertificate, UPLOAD_CLAIM_MS, voidCertificate, type Actor, type Deps } from "@/lib/certificates/service";
+import { DuplicateCertificateFile, type CertificateDrive } from "@/lib/certificates/drive";
 import { POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
@@ -30,19 +31,55 @@ type Row = Record<string, unknown>;
 const e = (description: string, price: number, pax = 5, over: Row = {}): Row =>
   ({ description, price, pax, expenseType: "transport", paidBy: "guide", paidBySource: "operator", ...over });
 
-/** A stubbed renderer and Drive, so nothing leaves the machine. */
-const uploads: { name: string; bytes: number }[] = [];
-const driveFiles = new Map<string, string>(); // name → id, so a retry lands on the same file
-let uploadFails = false;
+/**
+ * A Drive that behaves the way the real one does in the way that matters: files are
+ * found by the marker on them, a folder may hold two files with the same NAME, and
+ * nothing is keyed on a filename anywhere.
+ */
+type FakeFile = { id: string; name: string; folder: string; certificateId: string; environment: string; bytes: Buffer; quarantined?: string };
+const drive = {
+  files: [] as FakeFile[],
+  writes: 0,
+  failPut: null as null | string,
+  corruptOnRead: false,
+  reset() { this.files = []; this.writes = 0; this.failPut = null; this.corruptOnRead = false; },
+  live() { return this.files.filter((f) => !f.quarantined); },
+};
+
+const fakeDrive = (): CertificateDrive => ({
+  async find({ certificateId, environment, folderPath }) {
+    const key = folderPath.join("/");
+    return drive.live()
+      .filter((f) => f.certificateId === certificateId && f.environment === environment && f.folder === key)
+      .map((f) => ({ id: f.id, name: f.name, link: `https://drive.example.test/file/${f.id}` }));
+  },
+  async put(o) {
+    if (drive.failPut) throw new Error(drive.failPut);
+    const key = o.folderPath.join("/");
+    const found = drive.live().filter((f) => f.certificateId === o.certificateId && f.environment === o.environment && f.folder === key);
+    if (found.length > 1) throw new DuplicateCertificateFile(o.certificateId, found.map((f) => f.id));
+    drive.writes++;
+    if (found.length === 1) { found[0].bytes = o.bytes; found[0].name = o.name; return { id: found[0].id, name: o.name, link: `https://drive.example.test/file/${found[0].id}` }; }
+    const file: FakeFile = { id: `drive_${drive.files.length + 1}`, name: o.name, folder: key, certificateId: o.certificateId, environment: o.environment, bytes: o.bytes };
+    drive.files.push(file);
+    return { id: file.id, name: file.name, link: `https://drive.example.test/file/${file.id}` };
+  },
+  async read({ fileId }) {
+    const f = drive.files.find((x) => x.id === fileId);
+    if (!f) return null;
+    return drive.corruptOnRead ? Buffer.concat([f.bytes, Buffer.from("tampered")]) : f.bytes;
+  },
+  async quarantine({ fileId, reason }) {
+    const f = drive.files.find((x) => x.id === fileId);
+    if (f) { f.quarantined = reason; f.certificateId = ""; f.name = `QUARANTINED ${f.name}`; }
+  },
+});
+
+const ENV = "test-env";
 const deps = (over: Deps = {}): Deps => ({
   renderPdf: async (html: string) => Buffer.from(`%PDF-1.4 ${html.length}`),
-  uploadPdf: async ({ bytes, name }) => {
-    if (uploadFails) throw new Error("drive-upload 503: unavailable");
-    uploads.push({ name, bytes: bytes.length });
-    const id = driveFiles.get(name) ?? `drive_${driveFiles.size + 1}`;
-    driveFiles.set(name, id);
-    return { id, link: `https://drive.example.test/file/${id}` };
-  },
+  drive: fakeDrive(),
+  environment: ENV,
   ...over,
 });
 
@@ -79,7 +116,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await resetDatabase();
   await seedGuide(GUIDE);
-  uploads.length = 0; driveFiles.clear(); uploadFails = false;
+  drive.reset();
   authMock.auth.mockResolvedValue({ user: { id: ADMIN.id, name: ADMIN.name, role: "ADMIN" } });
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -164,8 +201,8 @@ describe("certifying it", () => {
   });
 });
 
-describe("filing it, and what happens when Drive does not cooperate", () => {
-  it("hashes the bytes it uploaded, and records where they went", async () => {
+describe("filing it, and Drive's actual behaviour", () => {
+  it("hashes the bytes it filed, and records where they went", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
@@ -173,50 +210,138 @@ describe("filing it, and what happens when Drive does not cooperate", () => {
     expect(up.status).toBe("UPLOADED");
     expect(up.driveFileId).toBe("drive_1");
     expect(up.pdfHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(uploads[0].name).toBe(`${c.certificateNo}.pdf`);
+    expect(up.driveEnvironment).toBe(ENV);
+    expect(up.uploadStartedAt).toBeNull();          // the claim is released
   });
 
-  it("the file hash is of the bytes that were sent, not of anything else", async () => {
+  it("the file hash is of the bytes that are actually in Drive", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    let sent: Buffer | null = null;
-    const up = await uploadCertificate(c.id, ADMIN, deps({ uploadPdf: async ({ bytes }) => { sent = bytes; return { id: "d1", link: "https://drive.example.test/d1" }; } }));
-    expect(up.pdfHash).toBe(fileHash(sent!));
+    const up = await uploadCertificate(c.id, ADMIN, deps());
+    expect(up.pdfHash).toBe(fileHash(drive.files[0].bytes));
   });
 
-  it("an upload that fails leaves it approved and retryable, not half-filed", async () => {
+  it("a file with the SAME NAME but another certificate's marker is never touched", async () => {
+    // Drive allows two files in one folder to share a name. Keying on the name would
+    // have updated this one.
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    uploadFails = true;
+    const decoy = { id: "drive_decoy", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: "some_other_certificate", environment: ENV, bytes: Buffer.from("SOMEBODY ELSE'S DOCUMENT") };
+    drive.files.push(decoy);
+    await uploadCertificate(c.id, ADMIN, deps());
+    expect(decoy.bytes.toString()).toBe("SOMEBODY ELSE'S DOCUMENT");
+    expect(drive.live()).toHaveLength(2);
+  });
+
+  it("a file with the same marker from another environment is never touched", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const other = { id: "drive_prod", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: c.id, environment: "production", bytes: Buffer.from("PRODUCTION COPY") };
+    drive.files.push(other);
+    await uploadCertificate(c.id, ADMIN, deps());
+    expect(other.bytes.toString()).toBe("PRODUCTION COPY");
+  });
+
+  it("two files carrying this certificate's marker fail closed, naming both", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const folder = "Folkpaths Job Sheets/2099-04 April/Expense Certificates";
+    drive.files.push(
+      { id: "dup_a", name: "a.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("A") },
+      { id: "dup_b", name: "b.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("B") },
+    );
+    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps())))[0]).toContain("Drive holds 2 files");
+    const log = await prisma.auditLog.findFirst({ where: { action: "certificate.drive_duplicate" } });
+    expect((log!.detail as { fileIds: string[] }).fileIds.sort()).toEqual(["dup_a", "dup_b"]);
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("ATTESTED");
+  });
+
+  it("an upload that fails leaves it attested, claim released, and retryable", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    drive.failPut = "drive-upload 503: unavailable";
     await expect(uploadCertificate(c.id, ADMIN, deps())).rejects.toThrow(/drive-upload/);
     const after = await prisma.expenseCertificate.findUnique({ where: { id: c.id } });
     expect(after!.status).toBe("ATTESTED");
-    expect(after!.uploadStartedAt).toBeTruthy();   // the attempt is on the record
-    expect(after!.driveFileId).toBeNull();
-    // …and retrying finishes it.
-    uploadFails = false;
+    expect(after!.uploadStartedAt).toBeNull();
+    expect(after!.lastUploadError).toContain("drive-upload");
+    expect(after!.uploadAttempts).toBe(1);
+    drive.failPut = null;
     expect((await uploadCertificate(c.id, ADMIN, deps())).status).toBe("UPLOADED");
   });
 
-  it("an upload that landed while the write failed converges on the same file, not a second", async () => {
+  it("an upload that landed while the database write failed resumes the same file", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    // The file reaches Drive; the database write is what blows up.
-    await expect(uploadCertificate(c.id, ADMIN, deps({
-      uploadPdf: async ({ bytes, name }) => { uploads.push({ name, bytes: bytes.length }); driveFiles.set(name, "drive_1"); throw new Error("db write failed after upload"); },
-    }))).rejects.toThrow();
+    // The file reaches Drive; everything after it blows up, the way a crash would.
+    const crashing = fakeDrive();
+    const put = crashing.put.bind(crashing);
+    crashing.put = async (o) => { await put(o); throw new Error("process died after the upload"); };
+    await expect(uploadCertificate(c.id, ADMIN, deps({ drive: crashing }))).rejects.toThrow();
+    expect(drive.live()).toHaveLength(1);
+    const fileId = drive.live()[0].id;
+
     const retried = await uploadCertificate(c.id, ADMIN, deps());
-    expect(retried.driveFileId).toBe("drive_1");            // the same file, replaced in place
-    expect(new Set(uploads.map((u) => u.name)).size).toBe(1); // one name, so one file
+    expect(retried.driveFileId).toBe(fileId);       // resumed, not replaced
+    expect(drive.live()).toHaveLength(1);           // and no second file
+    const log = await prisma.auditLog.findFirst({ where: { action: "certificate.uploaded" } });
+    expect((log!.detail as { resumed?: string }).resumed).toContain("rather than adding a second");
   });
 
-  it("refuses to file something nobody has certified", async () => {
+  it("a claim already held refuses the second request rather than filing twice", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
-    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps())))[0]).toMatch(/not been approved|cannot go from/);
+    await attestCertificate(c.id, ADMIN, deps());
+    const slow = fakeDrive();
+    const put = slow.put.bind(slow);
+    slow.put = async (o) => { await new Promise((r) => setTimeout(r, 120)); return put(o); };
+    const [a, b] = await Promise.allSettled([
+      uploadCertificate(c.id, ADMIN, deps({ drive: slow })),
+      new Promise((r) => setTimeout(r, 20)).then(() => uploadCertificate(c.id, ADMIN, deps({ drive: slow }))),
+    ]);
+    expect([a.status, b.status].filter((s) => s === "fulfilled")).toHaveLength(1);
+    expect(drive.live()).toHaveLength(1);
+  });
+
+  it("an abandoned claim is picked up again once it is old enough", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    // What a crashed process leaves behind: a claim nobody will ever release.
+    await prisma.expenseCertificate.update({ where: { id: c.id }, data: { uploadStartedAt: new Date(Date.now() - UPLOAD_CLAIM_MS - 1000) } });
+    expect((await uploadCertificate(c.id, ADMIN, deps())).status).toBe("UPLOADED");
+  });
+
+  it("bytes that read back wrong are moved to quarantine, not left looking right", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    drive.corruptOnRead = true;
+    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps())))[0]).toContain("moved to Quarantine");
+    expect(drive.files[0].quarantined).toContain("read-back hash did not match");
+    expect(drive.live()).toHaveLength(0);
+    const after = await prisma.expenseCertificate.findUnique({ where: { id: c.id } });
+    expect(after!.status).toBe("ATTESTED");
+    expect(after!.driveFileId).toBeNull();
+    expect(await prisma.auditLog.count({ where: { action: "certificate.drive_quarantined" } })).toBe(1);
+
+    // …and the quarantined file is not found again, so the retry makes a clean one.
+    drive.corruptOnRead = false;
+    const ok = await uploadCertificate(c.id, ADMIN, deps());
+    expect(ok.status).toBe("UPLOADED");
+    expect(ok.driveFileId).not.toBe("drive_1");
+  });
+
+  it("refuses to file something nobody has attested", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps())))[0]).toMatch(/not been attested|cannot go from/);
   });
 });
 

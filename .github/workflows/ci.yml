@@ -110,9 +110,30 @@ jobs:
 
       - name: The certificate renderer works in a container like the deployment's
         run: |
-          test -n "$CHROMIUM_PATH" || { echo "no chromium on PATH"; exit 1; }
-          fc-list | grep -qiE 'thai|noto' || { echo "no Thai-capable font installed"; exit 1; }
-          npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts
+          # Resolved, never printed: where a binary lives is not something to publish in
+          # a public build log.
+          if [ -n "$CHROMIUM_PATH" ] && [ -x "$CHROMIUM_PATH" ]; then
+            echo "chromium: resolved ($("$CHROMIUM_PATH" --version 2>/dev/null | head -1 | cut -d' ' -f1-2))"
+          else
+            echo "chromium: NOT resolved"; exit 1
+          fi
+          fc-list | grep -qiE 'thai|noto' \
+            && echo "thai font: present ($(fc-list | grep -icE 'thai|noto') faces)" \
+            || { echo "thai font: MISSING"; exit 1; }
+          npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts \
+            --reporter=json --outputFile=/tmp/renderer.json
+          node -e '
+            const r = require("/tmp/renderer.json");
+            const skipped = r.numPendingTests + r.numTodoTests;
+            const passed = r.numPassedTests;
+            console.log(`renderer suite: ${passed} passed, ${skipped} skipped`);
+            if (skipped > 0) { console.error("the renderer suite must not skip in CI"); process.exit(1); }
+            if (passed < 6) { console.error("the renderer suite did not run"); process.exit(1); }
+          '
+          # Nothing may be left running once the suite is done.
+          sleep 2
+          leftover=$(pgrep -fc "chrome|chromium" || true)
+          [ "${leftover:-0}" -eq 0 ] && echo "browser processes: none left" || { echo "browser processes left behind: $leftover"; exit 1; }
 
       - name: Integration tests (real database)
         run: npm run test:integration

@@ -39,7 +39,10 @@ const html = () => {
 };
 
 const ready = pdfRendererAvailable();
-const describeRenderer = ready ? describe : describe.skip;
+// In CI this suite always runs. Skipping is for a developer's laptop, where there is
+// nothing meaningful to point it at; a CI run that quietly skipped would be a green
+// tick over the one thing nobody else checks.
+const describeRenderer = ready || process.env.CI ? describe : describe.skip;
 
 describe("the renderer is configured where it is supposed to be", () => {
   it("CI and the deployment name a Chromium; a developer's laptop need not", () => {

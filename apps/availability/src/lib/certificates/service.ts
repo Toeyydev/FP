@@ -8,7 +8,8 @@ import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHas
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { certificateFileName, certificateFolder, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
-import { downloadDriveFile, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { folkpathsDriveToken } from "@/lib/google-drive";
+import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -21,9 +22,10 @@ import { downloadDriveFile, folkpathsDriveToken, saveBufferToDrive } from "@/lib
 export type Deps = {
   db?: PrismaClient;
   renderPdf?: RenderPdf;
-  uploadPdf?: (o: { bytes: Buffer; name: string; folderPath: string[] }) => Promise<{ id: string; link: string }>;
-  /** Read the filed bytes back, so the record is of the file that is actually there. */
-  fetchPdf?: (o: { fileId: string; link: string }) => Promise<Buffer | null>;
+  /** Where certificate files live. Supplied by tests; built from the session otherwise. */
+  drive?: CertificateDrive;
+  /** Which deployment is filing. Part of a file's marker, so environments never collide. */
+  environment?: string;
   now?: () => Date;
 };
 
@@ -180,71 +182,100 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
 // the same payload to the same filename, which Drive replaces in place and returns the
 // same file id for. Nothing is orphaned and nothing is duplicated.
 
+/** How long a claim on an upload is believed before it is treated as abandoned. */
+export const UPLOAD_CLAIM_MS = 5 * 60_000;
+
 export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
   const render = deps.renderPdf ?? defaultRenderPdf;
+  const environment = deps.environment ?? certificateEnvironment();
 
   const cert = await db.expenseCertificate.findUnique({ where: { id } });
   if (!cert) refuse(["No such certificate"], 404);
-  if (cert!.status !== "ATTESTED" && cert!.status !== "UPLOADED") refuse([moveRefusal(cert!.status as CertificateState, "UPLOADED") ?? "This certificate has not been approved yet."]);
-  if (!deps.uploadPdf && !deps.renderPdf && !pdfRendererAvailable()) {
-    refuse(["This deployment has no PDF renderer configured, so the certificate cannot be filed. The approval is recorded and filing can be retried once it is."], 503);
+  if (cert!.status !== "ATTESTED" && cert!.status !== "UPLOADED") refuse([moveRefusal(cert!.status as CertificateState, "UPLOADED") ?? "This certificate has not been attested yet."]);
+  if (!deps.drive && !pdfRendererAvailable() && !deps.renderPdf) {
+    refuse(["This deployment has no PDF renderer configured, so the certificate cannot be filed. The attestation is recorded and filing can be retried once it is."], 503);
   }
 
-  // Written before the call, so a crash between here and the response is recoverable.
-  await db.expenseCertificate.update({ where: { id }, data: { uploadStartedAt: now() } });
-
-  const payload = cert!.payload as unknown as CertificatePayload;
-  const html = renderCertificateHtml({
-    certificateNo: cert!.certificateNo,
-    payload,
-    payloadHash: cert!.payloadHash,
-    attestedByName: cert!.attestedByName ?? "",
-    attestedByRole: cert!.attestedByRole ?? "",
-    attestedAt: (cert!.attestedAt ?? new Date(0)).toISOString(),
-    auditRef: cert!.id,
+  // The claim, in the database, before anything reaches Drive. Two people pressing at
+  // once both read the same row above; only one of them matches this WHERE, so only one
+  // uploads. A filename could not do this — Drive lets two files share one, which is the
+  // whole reason this workflow does not key on names.
+  const stale = new Date(now().getTime() - UPLOAD_CLAIM_MS);
+  const claimed = await db.expenseCertificate.updateMany({
+    where: { id, status: cert!.status, OR: [{ uploadStartedAt: null }, { uploadStartedAt: { lt: stale } }] },
+    data: { uploadStartedAt: now(), uploadAttempts: { increment: 1 } },
   });
-  const bytes = await render(html);
-  const pdfHash = fileHash(bytes);
-  const name = certificateFileName(cert!.certificateNo);
-  const folderPath = certificateFolder(cert!.tourDate);
-
-  let filed: { id: string; link: string };
-  if (deps.uploadPdf) {
-    filed = await deps.uploadPdf({ bytes, name, folderPath });
-  } else {
-    const token = await folkpathsDriveToken(actor.id);
-    if (!token) refuse(["Google Drive is not connected, so the certificate cannot be filed. The approval is recorded and filing can be retried."], 503);
-    filed = await saveBufferToDrive({ refreshToken: token!, name, base64: bytes.toString("base64"), mimeType: "application/pdf", folderPath });
+  if (claimed.count === 0) {
+    refuse(["This certificate is already being filed. Give it a moment and reload — filing twice would put two documents in Drive for one certificate."], 409);
   }
 
-  // Read it back and hash what is actually there. An upload that half-landed, or landed
-  // against a name something else already had, would otherwise be recorded as this
-  // document — and the hash would be of bytes nobody can fetch.
-  const verify = deps.fetchPdf ?? (async ({ link }) => {
-    const token = await folkpathsDriveToken(actor.id);
-    if (!token) return null;
-    const got = await downloadDriveFile(token, link);
-    return got ? Buffer.from(got.base64, "base64") : null;
-  });
-  const filedBytes = await verify({ fileId: filed.id, link: filed.link }).catch(() => null);
-  if (filedBytes && fileHash(filedBytes) !== pdfHash) {
-    // Left at ATTESTED with the attempt recorded; filing can be retried, and the retry
-    // replaces the file in place rather than adding a second.
-    refuse([`The document filed in Drive does not match the one that was rendered (${filedBytes.length} bytes there, ${bytes.length} sent). Nothing has been recorded against it — try filing it again.`], 502);
-  }
-  const verified = Boolean(filedBytes);
+  const release = async (error: string | null) => {
+    await db.expenseCertificate.updateMany({ where: { id }, data: { uploadStartedAt: null, lastUploadError: error } }).catch(() => {});
+  };
 
-  const done = await db.expenseCertificate.update({
-    where: { id },
-    data: { status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: filed.id, driveUrl: filed.link, uploadedAt: now() },
-  });
-  await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
-    detail: { certificateNo: done.certificateNo, driveFileId: filed.id, pdfHash, bytes: bytes.length,
-      // Whether the bytes were read back and matched, or Drive would not return them.
-      readBackVerified: verified } });
-  return done;
+  try {
+    const payload = cert!.payload as unknown as CertificatePayload;
+    const html = renderCertificateHtml({
+      certificateNo: cert!.certificateNo, payload, payloadHash: cert!.payloadHash,
+      attestedByName: cert!.attestedByName ?? "", attestedByRole: cert!.attestedByRole ?? "",
+      attestedAt: (cert!.attestedAt ?? new Date(0)).toISOString(), auditRef: cert!.id,
+    });
+    const bytes = await render(html);
+    const pdfHash = fileHash(bytes);
+    const name = certificateFileName(cert!.certificateNo);
+    const folderPath = certificateFolder(cert!.tourDate);
+
+    let drive = deps.drive;
+    if (!drive) {
+      const token = await folkpathsDriveToken(actor.id);
+      if (!token) refuse(["Google Drive is not connected, so the certificate cannot be filed. The attestation is recorded and filing can be retried."], 503);
+      drive = googleCertificateDrive(token!);
+    }
+
+    // Found by the marker on the file, never by its name — so a retry after a failed
+    // database write resumes the file that is already there.
+    let filed;
+    try {
+      filed = await drive.put({ certificateId: cert!.id, certificateNo: cert!.certificateNo, payloadHash: cert!.payloadHash, environment, name, bytes, folderPath });
+    } catch (err) {
+      if (err instanceof DuplicateCertificateFile) {
+        await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_duplicate", entityType: "ExpenseCertificate", entityId: id,
+          detail: { certificateNo: cert!.certificateNo, environment, fileCount: err.fileIds.length, fileIds: err.fileIds } });
+        refuse([`Drive holds ${err.fileIds.length} files for this certificate. Filing cannot choose between them — have someone remove the wrong one before trying again.`], 409);
+      }
+      throw err;
+    }
+
+    // Hash what is actually there, not what was sent.
+    const filedBytes = await drive.read({ fileId: filed.id }).catch(() => null);
+    if (filedBytes && fileHash(filedBytes) !== pdfHash) {
+      // Not left sitting in the folder looking like the document. Moved aside, marked,
+      // and its marker cleared so the next attempt does not find and update it.
+      await drive.quarantine({ fileId: filed.id, reason: `read-back hash did not match (${filedBytes.length} bytes filed, ${bytes.length} sent)`, folderPath }).catch(() => {});
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_quarantined", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, driveFileId: filed.id, expectedBytes: bytes.length, filedBytes: filedBytes.length, environment } });
+      refuse(["The document filed in Drive did not match the one that was rendered. It has been moved to Quarantine and nothing was recorded against it — try filing again."], 502);
+    }
+
+    const done = await db.expenseCertificate.update({
+      where: { id },
+      data: {
+        status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: filed.id, driveUrl: filed.link,
+        uploadedAt: now(), uploadStartedAt: null, lastUploadError: null, driveEnvironment: environment,
+      },
+    });
+    await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
+      detail: { certificateNo: done.certificateNo, driveFileId: filed.id, pdfHash, bytes: bytes.length, environment,
+        readBackVerified: Boolean(filedBytes), attempt: done.uploadAttempts,
+        resumed: cert!.uploadAttempts > 0 ? "an earlier attempt had already put a file there; this replaced its bytes rather than adding a second" : undefined } });
+    return done;
+  } catch (err) {
+    if (!(err instanceof CertificateRefused)) await release(String(err).slice(0, 300));
+    else await release(err.reasons[0]?.slice(0, 300) ?? null);
+    throw err;
+  }
 }
 
 // ── 4. Link it to the rows ───────────────────────────────────────────────────

@@ -627,7 +627,15 @@ model ExpenseCertificate {
   pdfHash               String?
   driveFileId           String?   @unique
   driveUrl              String?
+  // Doubles as the claim on an upload: set before Drive is called and cleared after,
+  // so two requests cannot both be filing. A claim older than UPLOAD_CLAIM_MS is
+  // treated as abandoned, which is what a crashed process leaves behind.
   uploadStartedAt       DateTime?
+  uploadAttempts        Int       @default(0)
+  lastUploadError       String?
+  /// Which deployment filed it. Part of the file's marker in Drive, so a staging run
+  /// and production pointed at one account never find each other's documents.
+  driveEnvironment      String?
   uploadedAt            DateTime?
   linkedAt              DateTime?
   voidedAt              DateTime?
