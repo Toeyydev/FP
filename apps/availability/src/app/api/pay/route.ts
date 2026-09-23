@@ -8,6 +8,7 @@ import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { normalizeExpRef, recordExpBlockers } from "@/lib/record-exp";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const USE_RECORD_PAYMENT = "A job becomes paid only through a recorded payment (FOLK-PMT-…): open Payments → Record payment, with the transfer date, the amount and the slip.";
@@ -18,8 +19,9 @@ const bkkToday = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slic
 // Live pay breakdown for one assignment, from its job sheet (net guide fee after
 // WHT + reimbursable expenses). Falls back to the standard guide fee if no sheet.
 function breakdownOf(sheet: { expenses: unknown; guideFee: unknown } | undefined) {
-  if (!sheet) return computeTotals([], DEFAULT_GUIDE_FEE);
-  return computeTotals((sheet.expenses as Expense[]) ?? [], (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
+  const rows = ((sheet?.expenses as Expense[]) ?? []);
+  const fee = ((sheet?.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
+  return { ...computeTotals(rows, fee), payer: tourCostBreakdown(rows, fee) };
 }
 
 // GET — guide: their own tours' pay + status. operator (?view=ops): all tours
@@ -50,8 +52,11 @@ export async function GET(req: NextRequest) {
     return {
       guideId: a.guideId, guide: opsView ? gName(a.guideId) : undefined,
       date: a.date, slotIdx: a.slotIdx, tour: a.tour?.name ?? a.tourId, pax: a.pax ?? null,
-      fee: r2(t.netGuideFee), expenses: r2(t.totalExpenses),
-      amount: r2(t.grandTotal), status: payOf.get(k)?.status ?? "PENDING",
+      // `expenses` is the tour's cost; `amount` is what the transfer must be. They are
+      // different questions, and this row used to answer the first while being read as
+      // the second — a ticket bought with a company advance was counted as money owed.
+      fee: r2(t.netGuideFee), expenses: t.payer.tourCost,
+      amount: t.payer.netTransfer, status: payOf.get(k)?.status ?? "PENDING",
     };
   });
   const totals = { pending: 0, approved: 0, paid: 0 };

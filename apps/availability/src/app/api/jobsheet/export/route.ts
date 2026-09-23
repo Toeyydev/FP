@@ -6,6 +6,7 @@ import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -35,6 +36,7 @@ export async function GET(req: NextRequest) {
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
+  const b = tourCostBreakdown(expenses, guideFee);
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Job Sheet", { properties: { defaultColWidth: 16 } });
@@ -115,9 +117,19 @@ export async function GET(req: NextRequest) {
 
   // Summary
   r += 2;
-  set(`E${r}`, "Total Expenses", { bold: true }); set(`F${r}`, t.totalExpenses, { numFmt: BAHT }); r++;
-  set(`E${r}`, "Net Guide Fee", { bold: true }); set(`F${r}`, t.netGuideFee, { numFmt: BAHT }); r++;
-  set(`E${r}`, "Total", { bold: true }); const tot = set(`F${r}`, t.grandTotal, { bold: true, numFmt: BAHT }); tot.fill = fill("FFBFE3BF");
+  // The job's cost and the guide's transfer, kept apart — the one number an operator
+  // acts on is the last, and the rows above say why it is not the cost.
+  set(`E${r}`, "ต้นทุนทัวร์ทั้งหมด / Total tour cost", { bold: true }); set(`F${r}`, b.tourCost, { numFmt: BAHT }); r++;
+  if (b.fundedByAdvance > 0) { set(`E${r}`, "  จ่ายจากเงินทดรองบริษัท / funded by advance"); set(`F${r}`, b.fundedByAdvance, { numFmt: BAHT }); r++; }
+  if (b.fundedByCompany > 0) { set(`E${r}`, "  บริษัทชำระโดยตรง / paid direct by company"); set(`F${r}`, b.fundedByCompany, { numFmt: BAHT }); r++; }
+  if (b.unresolved > 0) { set(`E${r}`, "  ยังไม่ระบุแหล่งเงิน / Paid By not set"); set(`F${r}`, b.unresolved, { numFmt: BAHT }); r++; }
+  r++;
+  set(`E${r}`, "ค่าจ้างไกด์ / Guide fee"); set(`F${r}`, b.feeGross, { numFmt: BAHT }); r++;
+  if (b.reviewReward > 0) { set(`E${r}`, "ค่าตอบแทนรีวิวไกด์ / Review incentive"); set(`F${r}`, b.reviewReward, { numFmt: BAHT }); r++; }
+  set(`E${r}`, "ค่าใช้จ่ายที่ไกด์ออกเอง / Reimbursed to guide"); set(`F${r}`, b.reimbursableToGuide, { numFmt: BAHT }); r++;
+  set(`E${r}`, "รวมก่อนหักภาษี / Gross payable", { bold: true }); set(`F${r}`, b.grossPayable, { numFmt: BAHT }); r++;
+  set(`E${r}`, "หัก ภาษี ณ ที่จ่าย / Withholding tax"); set(`F${r}`, -b.withholding, { numFmt: BAHT }); r++;
+  set(`E${r}`, "ยอดโอนสุทธิให้ไกด์ / Net transfer", { bold: true }); const tot = set(`F${r}`, b.netTransfer, { bold: true, numFmt: BAHT }); tot.fill = fill("FFBFE3BF");
 
   const buf = await wb.xlsx.writeBuffer();
   const fname = `${sheet.ref || `job-sheet-${guideId}-${date}`}.xlsx`;

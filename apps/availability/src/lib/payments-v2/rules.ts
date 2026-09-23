@@ -12,7 +12,7 @@
 //
 // Pure: no database, no network. lib/payments-v2/service loads the facts and writes.
 import { computeTotals, guideFeeOrStandard, isApproved, reviewRewardTotal, type Expense } from "@/lib/jobsheet";
-import { guidePayoutTotal } from "@/lib/peak-sync";
+import { guidePayoutTotal, tourCostBreakdown } from "@/lib/peak-sync";
 
 export const ADJUSTMENT_TYPES = ["ADVANCE_SETTLEMENT", "PREVIOUS_OVERPAYMENT", "PREVIOUS_UNDERPAYMENT", "MANUAL_CORRECTION", "OTHER"] as const;
 export type AdjustmentType = (typeof ADJUSTMENT_TYPES)[number];
@@ -206,6 +206,18 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
   };
   if (amountOk && !reconciliation.balanced && tooShort(req.mismatchReason)) {
     reasons.push(`Jobs + adjustments come to ${reconciliationLine({ ...reconciliation, balanced: true }).replace(" ✓", "")}, but ${reconciliation.amountTransferred.toFixed(2)} was transferred — correct it, add the adjustment, or give the reason`);
+  }
+
+  // A row whose payer nobody recorded cannot be paid on a guess. Paying it might
+  // reimburse money the guide never spent; dropping it might swallow money they did.
+  // It is counted in the tour's cost, left out of the transfer, and the transfer waits.
+  for (const f of facts) {
+    if (!f.sheet) continue;
+    const split = tourCostBreakdown((f.sheet.expenses as Expense[]) ?? [], guideFeeOrStandard(f.sheet.guideFee));
+    if (split.unresolved > 0) {
+      const where = f.sheet.ref || `${f.date} slot ${f.slotIdx + 1}`;
+      reasons.push(`${where} has ${split.unresolved.toFixed(2)} of expenses with no Paid By — set it on the job sheet (Guide Personal, Guide Advance or Company Direct) before paying`);
+    }
   }
 
   // Evidence.

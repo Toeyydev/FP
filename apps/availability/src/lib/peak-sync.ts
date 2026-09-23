@@ -269,17 +269,8 @@ export function figuresNeedRecheck(
     out.push({
       field: "reimbursementDue",
       short: untagged.length === 1 ? "1 expense has no Paid By" : `${untagged.length} expenses have no Paid By`,
-      detail: `Reimbursement Due and Net Pay exclude them, so both may be understated. Set Paid By on ${untagged.length === 1 ? "that row" : "those rows"} before paying.`,
+      detail: `They are counted in the tour's cost and in nothing else — not reimbursed, not transferred — and the payment is refused until someone says who paid. Set Paid By on ${untagged.length === 1 ? "that row" : "those rows"}.`,
       amount: totals.unspecifiedTotal,
-    });
-  }
-
-  if (totals.payoutDiffersFromPayments) {
-    out.push({
-      field: "netPayToGuide",
-      short: "Payments transfers a different amount",
-      detail: `The Payments screen still pays ${thbLike(totals.legacyPayout)} — it includes expenses the company paid directly. Confirm which figure is correct before transferring.`,
-      amount: Math.abs(totals.legacyPayout - totals.netPayToGuide),
     });
   }
 
@@ -331,22 +322,86 @@ export type GuidePayout = {
   payoutExpenses: number;   // expense rows that are still owed to the guide
   payout: number;           // + net guide fee — what to transfer
   excludedTagged: number;   // company/advance rows deliberately left out
-  untaggedIncluded: number; // rows still paid only because nobody said who paid
+  /** Rows whose payer nobody recorded. Not paid, not dropped — they block the payment. */
+  unresolved: number;
 };
 
-export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): GuidePayout {
-  const t = computeTotals(expenses, guideFee);
-  let payoutExpenses = 0, excludedTagged = 0, untaggedIncluded = 0;
-  for (const e of expenses ?? []) {
+/**
+ * What the job COST, and — separately — what the guide is OWED.
+ *
+ * These are two different questions and the screens kept answering the first when
+ * someone asked the second. A ticket bought with a company advance is a real cost of
+ * the tour and belongs in its total; it is not money the guide is owed, because the
+ * company already handed it over. Adding it to a transfer pays for the ticket twice.
+ *
+ * One function answers both, so a job sheet, a payment preview, a PEAK payload and a
+ * PDF cannot disagree about the same job.
+ *
+ *   tourCost            every operating row, whoever paid — the cost of the job
+ *     = fundedByAdvance + fundedByCompany + reimbursableToGuide + unresolved
+ *
+ *   grossPayable        feeGross + reviewReward + reimbursableToGuide
+ *   netTransfer         grossPayable − withholding        ← the only figure to transfer
+ *
+ * `unresolved` is in the cost and in nothing else. A row whose payer nobody recorded
+ * cannot be paid on a guess: paying it might reimburse money the guide never spent,
+ * and dropping it might swallow money they did. It is shown, and it blocks the
+ * payment until a person says who paid.
+ */
+export type TourCostBreakdown = {
+  tourCost: number;
+  fundedByAdvance: number;
+  fundedByCompany: number;
+  reimbursableToGuide: number;
+  unresolved: number;
+  reviewReward: number;
+  feeGross: number;
+  grossPayable: number;
+  withholding: number;
+  netTransfer: number;
+};
+
+const r2c = (n: number) => Math.round(n * 100) / 100;
+
+export function tourCostBreakdown(expenses: Expense[] | null | undefined, guideFee: GuideFee): TourCostBreakdown {
+  const rows = expenses ?? [];
+  const t = computeTotals(rows, guideFee);
+  let fundedByAdvance = 0, fundedByCompany = 0, reimbursableToGuide = 0, unresolved = 0, reviewReward = 0;
+  for (const e of rows) {
     const amt = expenseAmount(e);
     if (!amt) continue;
-    if (isReviewExpense(e)) { payoutExpenses += amt; continue; }
-    const paid = canonicalPaidBy(e);
-    if (paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE") { excludedTagged += amt; continue; }
-    if (paid === "UNSPECIFIED") untaggedIncluded += amt;
-    payoutExpenses += amt;
+    // A review reward is earned, not spent: it is paid with the job, never a cost of it.
+    if (isReviewExpense(e)) { reviewReward += amt; continue; }
+    switch (canonicalPaidBy(e)) {
+      case "GUIDE_ADVANCE": fundedByAdvance += amt; break;
+      case "COMPANY_DIRECT": fundedByCompany += amt; break;
+      case "GUIDE_PERSONAL": reimbursableToGuide += amt; break;
+      default: unresolved += amt;
+    }
   }
-  return { payoutExpenses, payout: payoutExpenses + t.netGuideFee, excludedTagged, untaggedIncluded };
+  const grossPayable = t.gross + reviewReward + reimbursableToGuide;
+  return {
+    tourCost: r2c(fundedByAdvance + fundedByCompany + reimbursableToGuide + unresolved),
+    fundedByAdvance: r2c(fundedByAdvance),
+    fundedByCompany: r2c(fundedByCompany),
+    reimbursableToGuide: r2c(reimbursableToGuide),
+    unresolved: r2c(unresolved),
+    reviewReward: r2c(reviewReward),
+    feeGross: r2c(t.gross),
+    grossPayable: r2c(grossPayable),
+    withholding: r2c(t.wht),
+    netTransfer: r2c(grossPayable - t.wht),
+  };
+}
+
+export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): GuidePayout {
+  const b = tourCostBreakdown(expenses, guideFee);
+  return {
+    payoutExpenses: r2c(b.reimbursableToGuide + b.reviewReward),
+    payout: b.netTransfer,
+    excludedTagged: r2c(b.fundedByAdvance + b.fundedByCompany),
+    unresolved: b.unresolved,
+  };
 }
 
 // What the GUIDE is shown they will receive, on their own job page.
@@ -395,7 +450,10 @@ export function guidePayoutView(args: {
     const paid = canonicalPaidBy(e);
     if (paid === "COMPANY_DIRECT") { company += amt; continue; }
     if (paid === "GUIDE_ADVANCE") { advance += amt; continue; }
-    if (paid === "UNSPECIFIED") unspecified += amt;
+    // A row nobody has assigned a payer to is not money we can say is owed. It is
+    // shown separately so the guide can see it is still being decided, and it is left
+    // out of the figure, exactly as the transfer leaves it out.
+    if (paid === "UNSPECIFIED") { unspecified += amt; continue; }
     tourExpenses += amt;
   }
   const reviewReward = (args.operatorExpenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);

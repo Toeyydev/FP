@@ -18,7 +18,13 @@
 import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import {
-  canonicalPaidBy, guidePayoutTotal, resolveExpenseAccount, whtNote, type PeakAccount, type PeakAccountMap,
+  canonicalPaidBy,
+  guidePayoutTotal,
+  resolveExpenseAccount,
+  whtNote,
+  type PeakAccount,
+  type PeakAccountMap,
+  tourCostBreakdown,
 } from "@/lib/peak-sync";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -273,6 +279,31 @@ export function buildGuidePaymentDocument(input: {
     // document would book a different amount from the transfer — refuse instead.
     reasons.add(`The document total ${total.toFixed(2)} does not match the jobs' payout ${expected.toFixed(2)}`);
   }
+  // ── The invariant, checked against the result rather than trusted ───────────
+  //
+  // Money the company already spent on the guide's behalf — a ticket bought from an
+  // advance, an invoice paid direct to a vendor — is a cost of the tour and must not
+  // be in this document: PEAK books it once already, through the advance ledger or
+  // the supplier invoice, and booking it here pays for it twice.
+  //
+  // The loop above skips those rows. This checks that it did, by adding the lines back
+  // up and comparing them with what the payer split says the job owes. A future edit
+  // that drops the skip fails here instead of quietly paying an advance a second time.
+  for (const j of input.jobs) {
+    const where = j.ref || `${j.date} slot ${j.slotIdx + 1}`;
+    const split = tourCostBreakdown(j.expenses ?? [], j.guideFee);
+    const mine = traces.filter((t) => t.date === j.date && t.slotIdx === j.slotIdx);
+    const booked = round2(mine.reduce((sum, t) => sum + (Number(t.price) || 0), 0));
+    if (booked !== split.grossPayable) {
+      const notOwed = round2(split.fundedByAdvance + split.fundedByCompany);
+      reasons.add(
+        `${where} would book ${thb(booked)} but only ${thb(split.grossPayable)} is owed to the guide` +
+        (notOwed > 0 ? ` — ${thb(notOwed)} of this job was already paid by the company (advance or direct) and must not be transferred again` : "") +
+        ". Nothing was created.",
+      );
+    }
+  }
+
   if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories);
 
   const issuedDate = compact(latest);
