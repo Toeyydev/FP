@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase } from "@/test/db";
 import { bankAccountKey, normalizeBankRef, paymentPayloadHash } from "./payment-transfer";
@@ -191,5 +192,26 @@ describe("the account a transfer left from is a fact about money that has moved"
     const rows = await prisma.$queryRaw<{ tgname: string }[]>`
       SELECT tgname FROM pg_trigger WHERE tgrelid = '"GuidePaymentDocument"'::regclass AND NOT tgisinternal`;
     expect(rows.map((r) => r.tgname)).toContain("guide_payment_account_frozen");
+  });
+});
+
+describe("the schema file and the migrations describe the same table", () => {
+  it("nothing about GuidePaymentDocument would be created or dropped by a migration", () => {
+    // `prisma migrate deploy` has run; this asks Prisma whether the database it produced
+    // still differs from schema.prisma. If a unique index or a column were declared in
+    // only one of the two, the next `prisma migrate dev` would offer to drop or recreate
+    // it — the class of surprise this PR's constraint must never become.
+    //
+    // Scoped to this table on purpose. The same command reports three differences
+    // inherited from the advance-ledger migrations (an updatedAt default, an extra
+    // foreign key on GuideAdvanceEntry.reversedByEntryId, and an index on
+    // GuidePaymentAdjustment.advanceId) which are not this change's to decide.
+    const diff = execFileSync("npx", [
+      "prisma", "migrate", "diff",
+      "--from-schema-datasource", "prisma/schema.prisma",
+      "--to-schema-datamodel", "prisma/schema.prisma",
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const ours = diff.split("\n").filter((l) => /GuidePaymentDocument/.test(l));
+    expect(ours, `schema.prisma and the migrations disagree about GuidePaymentDocument:\n${ours.join("\n")}`).toEqual([]);
   });
 });

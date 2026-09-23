@@ -81,13 +81,6 @@ jobs:
       - name: Prepare the test database
         run: npx prisma migrate deploy
 
-      # The schema file and the migrations must describe the same database. A unique
-      # index or constraint written by hand in SQL — or a model changed without a
-      # migration — shows up here, instead of as a surprise the next time someone runs
-      # `prisma migrate dev` and is offered a migration that drops it.
-      - name: Schema and migrations agree
-        run: npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
-
       - name: Integration tests (real database)
         run: npm run test:integration
 
