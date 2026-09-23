@@ -24,6 +24,8 @@ import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
 import { payerRuleReasons, stampPayerActor, type PayerRuleRow } from "@/lib/payer-rules";
+import { claimsServerOwned, mergeServerOwned, stripServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
+import type { Prisma } from "@prisma/client";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -399,12 +401,22 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // Read the body once, before zod sees it. zod strips the server-owned fields as part
+  // of parsing, so by the time `parsed.data` exists there is no way to tell whether the
+  // sender tried to set one — and a request that tried is worth recording.
+  const raw: unknown = await req.json().catch(() => null);
+  const rawExpenses = (raw as { expenses?: unknown })?.expenses;
+  const forged = claimsServerOwned(Array.isArray(rawExpenses) ? (rawExpenses as object[]) : []);
   const parsed = z.object({
     guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0),
     tourId: z.string().default(""), status: z.string().max(40).default("Confirmed"),
     bookings: z.array(bookingZ).max(20), expenses: z.array(expenseZ).max(40), guideFee: guideFeeZ,
     operatorNote: z.string().max(2000).optional().default(""),
-  }).safeParse(await req.json().catch(() => null));
+    // The version of the sheet the browser was editing. Optional — an older client that
+    // does not send it still saves — but when it is there, a save that would overwrite
+    // somebody else's edit is refused instead of silently winning.
+    baseUpdatedAt: z.string().datetime().optional(),
+  }).safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: "bad-body", detail: parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : undefined }, { status: 400 });
   const d = parsed.data;
 
@@ -415,9 +427,11 @@ export async function PUT(req: NextRequest) {
   if (payerProblems.length) {
     return NextResponse.json({ error: "payer-rule", reasons: payerProblems, detail: payerProblems.join("\n") }, { status: 409 });
   }
-  // Who chose each payer, and when — recorded as the choice is made, so a meal's payer
-  // can be relied on later by more than a label. Existing stamps are never rewritten.
-  d.expenses = stampPayerActor(d.expenses as PayerRuleRow[], session.user.id ?? null) as typeof d.expenses;
+  // Anything the server owns on a row is dropped here, before the row is looked at
+  // again. A waiver or a payer stamp that arrived in the request body is one the sender
+  // wrote for themselves; the real ones are read from the database further down and
+  // carried across (lib/protected-expense-fields).
+  d.expenses = stripServerOwned(d.expenses as ProtectedRow[]) as typeof d.expenses;
 
   const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
 
@@ -441,11 +455,39 @@ export async function PUT(req: NextRequest) {
     guidesAtSlot, tourId: d.tourId || null, otherSheetRefs: sheetRefs(otherSheets),
   });
 
-  let sheet = await prisma.jobSheet.upsert({
-    where: key,
-    create: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null },
-    update: { tourId: d.tourId, status: d.status, bookings, expenses: d.expenses, guideFee: d.guideFee, operatorNote },
+  // The save itself, in one transaction: read the row as it stands, carry the server's
+  // own fields onto what is being written, and refuse if either the sheet moved under
+  // this request or a signed-for row is not the row it was signed for.
+  const written = await prisma.$transaction(async (tx) => {
+    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, updatedAt: true } });
+    if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
+      return { kind: "stale" as const };
+    }
+    const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet");
+    if (merged.conflicts.length) return { kind: "conflicts" as const, conflicts: merged.conflicts };
+    // Stamped AFTER the merge, so a carried stamp is seen and left alone. Stamping the
+    // request body instead would have put whoever pressed Save over the person who
+    // actually recorded the payer.
+    const expenses = stampPayerActor(merged.rows as PayerRuleRow[], session.user.id ?? null) as unknown as Prisma.InputJsonValue;
+    if (!current) {
+      return { kind: "ok" as const, sheet: await tx.jobSheet.create({ data: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null } }) };
+    }
+    // updatedAt in the WHERE: if another save landed between the read above and here,
+    // this matches nothing and the request is told to reload rather than overwrite it.
+    const hit = await tx.jobSheet.updateMany({
+      where: { id: current.id, updatedAt: current.updatedAt },
+      data: { tourId: d.tourId, status: d.status, bookings, expenses, guideFee: d.guideFee, operatorNote },
+    });
+    if (hit.count === 0) return { kind: "stale" as const };
+    return { kind: "ok" as const, sheet: (await tx.jobSheet.findUnique({ where: { id: current.id } }))! };
   });
+  if (written.kind === "stale") {
+    return NextResponse.json({ error: "stale", reasons: ["This job sheet was saved by someone else while you had it open. Reload it and make the change again — saving now would quietly undo theirs."] }, { status: 409 });
+  }
+  if (written.kind === "conflicts") {
+    return NextResponse.json({ error: "protected-row", reasons: written.conflicts, detail: written.conflicts.join("\n") }, { status: 409 });
+  }
+  let sheet = written.sheet;
   sheet.ref = await ensureJobRef(sheet.id, d.date);
   ref = sheet.ref;
   // Certification timestamp — the FIRST successful save stamps the document (the
@@ -464,7 +506,7 @@ export async function PUT(req: NextRequest) {
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}) } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}) } });
   return NextResponse.json({ ok: true, sheet, restoredNoShows, noShowMismatches });
 }
 
