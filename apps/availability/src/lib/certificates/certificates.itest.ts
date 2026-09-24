@@ -23,7 +23,7 @@ import { DuplicateCertificateFile, type CertificateDrive, type PutAttemptInput }
 import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
 import { checkFiledDocument } from "@/lib/certificates/service";
 import { GET as certificateList, POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
-import { GET as jobSheetGet } from "@/app/api/jobsheet/route";
+import { GET as jobSheetGet, PUT as jobSheetPut } from "@/app/api/jobsheet/route";
 import { GET as rendererGet, POST as rendererPost } from "@/app/api/certificates/renderer/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
@@ -1367,5 +1367,48 @@ describe("the attester allowlist narrows certifying and nothing else", () => {
     // A session claiming the authorised person's name, on the other admin's id.
     const why = await refusal(() => attestCertificate(c.id, { id: "u_other_admin", name: "authorised@example.test", role: "ADMIN" }, deps()));
     expect(why[0]).toContain("not one of the people authorised");
+  });
+});
+
+// ── the round trip, which is where redaction could destroy evidence ─────────
+//
+// An operator opens a job sheet and saves it. What they were SENT has the waiver
+// redacted; what they send back is that same redacted body. If the save path took the
+// client's word for the rows, saving would quietly erase the evidence behind a
+// reimbursement — the exact failure PR #260 was written for, reachable again through a
+// feature meant to protect the same rows.
+
+describe("an operator saving a redacted sheet does not erase the waiver", () => {
+  it("round trips: read as an operator, save that body back, evidence survives", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+    await linkCertificate(c.id, ADMIN, deps());
+    const cert = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+
+    // What an operator is sent.
+    authMock.auth.mockResolvedValue({ user: { id: "u_ops", name: "Ops", role: "OPERATOR" } });
+    const read = await jobSheetGet(new NextRequest(`https://ops.example.test/api/jobsheet?guideId=${GUIDE}&date=${DATE}&slotIdx=0`));
+    const body = await read.json();
+    expect(JSON.stringify(body)).not.toContain(cert.certificateNo);
+    const sent = body.sheet;
+    expect(sent.expenses[0].evidenceWaiver).toEqual({ waived: true, status: "being checked by accounts", statusTh: "อยู่ระหว่างตรวจสอบโดยฝ่ายบัญชี" });
+
+    // Saved back exactly as received, which is what a browser does.
+    const put = await jobSheetPut(new NextRequest("https://ops.example.test/api/jobsheet", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: GUIDE, date: DATE, slotIdx: 0, expenses: sent.expenses, bookings: sent.bookings, guideFee: sent.guideFee }),
+    }));
+    expect(put.status).toBe(200);
+
+    // The waiver in the database is untouched, certificate and all.
+    const after = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
+    const rows = after.expenses as unknown as ExpenseWithEvidence[];
+    expect(rows[0].evidenceWaiver!.certificateId).toBe(cert.id);
+    expect(rows[0].evidenceWaiver!.certificateNo).toBe(cert.certificateNo);
+    expect(rows[0].evidenceWaiver!.by).toBe(ADMIN.id);
+    // And the row still counts as evidenced.
+    expect(evidenceState(rows[0], await certificateStatuses([[rows[0] as Expense]])).state).toBe("WAIVED");
   });
 });
