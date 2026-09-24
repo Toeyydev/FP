@@ -2,7 +2,8 @@ import type { Prisma, PrismaClient, AttesterSignature } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { folkpathsDriveToken } from "@/lib/google-drive";
-import { driveAllowedEmails, folderPathString, folderPermissionProblems, permissionProblems, SIGNATURE_FOLDER } from "@/lib/certificates/access";
+import { folderPathString, folderPermissionProblems, permissionProblems, SIGNATURE_FOLDER } from "@/lib/certificates/access";
+import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
 import { certificateEnvironment } from "@/lib/certificates/drive";
 import { DuplicateSignatureFile, googleSignatureDrive, type SignatureDrive } from "@/lib/certificates/signature-drive";
 import { MAX_SIGNATURE_BYTES, MAX_DIMENSION, MIN_DIMENSION, pngDimensions, sha256 } from "@/lib/certificates/signature";
@@ -140,11 +141,12 @@ export async function replacementImpact(userId: string, deps: ServiceDeps = {}):
 }
 
 /** Everything wrong with who can see this folder or file. Every unclear answer is a no. */
-async function privacyProblems(drive: SignatureDrive, folderPath: string[], fileId: string | null): Promise<string[]> {
+async function privacyProblems(drive: SignatureDrive, folderPath: string[], fileId: string | null, db: Db = prisma): Promise<string[]> {
   const account = await drive.accountEmail().catch(() => null);
   if (!account) return ["Which Google account holds these images could not be read, so who can see them cannot be checked."];
-  const allowed = [account, ...driveAllowedEmails()];
-  const out: string[] = [];
+  const list = await checkedDriveAllowlist(account, db);
+  const allowed = list.allowed;
+  const out: string[] = [...list.problems];
   const folderId = await drive.folderId({ folderPath }).catch(() => null);
   if (!folderId) out.push(`The folder ${folderPathString(folderPath)} could not be found in Drive, so who can see it cannot be checked.`);
   else out.push(...folderPermissionProblems(await drive.permissions({ fileId: folderId }).catch(() => null), allowed, folderPath));
@@ -253,7 +255,7 @@ export async function registerSignature(
   try {
   // Before a byte is written. An image in a folder somebody shared has already leaked by
   // the time anyone checks it, and moving it afterwards does not unsee it.
-  const folderPrivacy = await privacyProblems(drive, folderPath, null);
+  const folderPrivacy = await privacyProblems(drive, folderPath, null, db);
   if (folderPrivacy.length) {
     await clean("folder not private");
     await audit({ actorId: actor.id, actorRole: actor.role, action: "signature.drive_not_private", entityType: "AttesterSignature",
@@ -295,7 +297,7 @@ export async function registerSignature(
     refuse(["The image filed in Drive did not read back as the one that was uploaded. It has been moved aside and nothing was registered — try again."], 502);
   }
 
-  const filePrivacy = await privacyProblems(drive, folderPath, file.id);
+  const filePrivacy = await privacyProblems(drive, folderPath, file.id, db);
   if (filePrivacy.length) {
     await drive.quarantine({ fileId: file.id, reason: "the filed image was not private to the admins", signatureId: row!.id, at: now().toISOString() }).catch(() => {});
     await clean("file not private");

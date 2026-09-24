@@ -12,6 +12,7 @@ import {
 } from "@/lib/certificates/signature-service";
 import { DuplicateSignatureFile } from "@/lib/certificates/signature-drive";
 import { attesterListInForce, attesterRefusal } from "@/lib/certificates/attester";
+import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +57,12 @@ export async function GET(req: NextRequest) {
   const me = session?.user?.id ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { email: true, role: true } }) : null;
   const cannotChange = attesterRefusal({ role: me?.role ?? session?.user?.role, email: me?.email });
 
+  // Whether the Drive allowlist names people this company recognises. Checked without
+  // calling Drive — the question is about the configured entries, and a misconfiguration
+  // should be visible on the settings page rather than first appearing as a refusal
+  // halfway through filing a document.
+  const allowlist = await checkedDriveAllowlist(null, prisma);
+
   const [versions, impact, person, admins] = await Promise.all([
     signatureHistory(userId),
     replacementImpact(userId),
@@ -75,6 +82,7 @@ export async function GET(req: NextRequest) {
     mayChange: cannotChange === null,
     cannotChangeReason: cannotChange,
     attesterListInForce: attesterListInForce(),
+    driveAllowlist: { verified: allowlist.verified, problems: allowlist.problems },
     limits: { maxBytes: MAX_SIGNATURE_BYTES, minDimension: MIN_DIMENSION, maxDimension: MAX_DIMENSION },
   });
 }

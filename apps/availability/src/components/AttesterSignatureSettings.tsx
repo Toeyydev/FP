@@ -30,6 +30,8 @@ type Info = {
   mayChange: boolean;
   cannotChangeReason: string | null;
   attesterListInForce: boolean;
+  /** Configured Google accounts allowed to hold the files, and any that did not check out. */
+  driveAllowlist: { verified: string[]; problems: string[] };
 };
 
 const when = (iso: string | null) =>
@@ -175,6 +177,19 @@ export default function AttesterSignatureSettings() {
       </section>
 
       {/* Upload, preview, confirm. */}
+      {(info.driveAllowlist?.problems?.length ?? 0) > 0 && (
+        <section className="card" style={{ marginTop: 12, borderColor: "#fca5a5", background: "#fef2f2" }}>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            <b>ตั้งค่าบัญชีที่ถือไฟล์ไม่ถูกต้อง</b><br />
+            มีอีเมลใน CERTIFICATE_DRIVE_ALLOWED_EMAILS ที่ตรวจสอบกับบัญชีในระบบไม่ผ่าน ระบบจะไม่ยอมรับอีเมลเหล่านี้
+            และจะปฏิเสธการจัดเก็บไฟล์ที่ถูกแชร์ให้บัญชีนั้น
+          </p>
+          <ul style={{ fontSize: 12.5, marginTop: 6, marginBottom: 0 }}>
+            {info.driveAllowlist.problems.map((p) => <li key={p}>{p}</li>)}
+          </ul>
+        </section>
+      )}
+
       {info.mayChange === false && (
         <section className="card" style={{ marginTop: 12, borderColor: "#fcd34d", background: "#fffbeb" }}>
           <p style={{ margin: 0, fontSize: 13 }}>

@@ -8,7 +8,8 @@ import { type EvidenceWaiver } from "@/lib/reimbursement-evidence";
 import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { certificateFileName, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
-import { certificateFolder, driveAllowedEmails, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
+import { certificateFolder, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
+import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
@@ -69,13 +70,17 @@ function facts(sheet: JobSheet, guideName: string): SheetFacts {
  * Everything it cannot determine is a problem. There is no path through this that turns
  * a failed lookup into a pass.
  */
-async function privacyProblems(drive: CertificateDrive, folderPath: string[], fileId: string | null): Promise<string[]> {
+async function privacyProblems(drive: CertificateDrive, folderPath: string[], fileId: string | null, db: PrismaClient = prisma): Promise<string[]> {
   const account = await drive.accountEmail().catch(() => null);
   if (!account) {
     return ["Which Google account files these documents could not be read, so who can see them cannot be checked."];
   }
-  const allowed = [account, ...driveAllowedEmails()];
-  const out: string[] = [];
+  // The configured allowlist is checked against real accounts before it is believed. An
+  // address nobody here recognises is dropped, not trusted — see lib/certificates/
+  // drive-allowlist — so a mistyped entry costs a refusal rather than a wider circle.
+  const list = await checkedDriveAllowlist(account, db);
+  const allowed = list.allowed;
+  const out: string[] = [...list.problems];
 
   const folderId = await drive.folderId({ folderPath }).catch(() => null);
   if (!folderId) {
@@ -403,7 +408,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     // Asked before a single byte is written, not after. A document put into a folder the
     // guides can open has already leaked by the time anyone checks it, and moving it
     // afterwards does not unsee it.
-    const folderPrivacy = await privacyProblems(drive, folderPath, null);
+    const folderPrivacy = await privacyProblems(drive, folderPath, null, db);
     if (folderPrivacy.length) {
       await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_not_private", entityType: "ExpenseCertificate", entityId: id,
         detail: { certificateNo: cert!.certificateNo, stage: "folder", folder: folderPathString(folderPath), problems: folderPrivacy } });
@@ -492,7 +497,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     // is the file that will actually be linked, and it is the file's own answer that
     // decides. A document that is not private is quarantined rather than recorded —
     // there is no state in which a readable-by-guides certificate is filed and usable.
-    const filePrivacy = await privacyProblems(drive, folderPath, active.id);
+    const filePrivacy = await privacyProblems(drive, folderPath, active.id, db);
     if (filePrivacy.length) {
       await drive.quarantine({ fileId: active.id, reason: "the filed document was not private to the admins", certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
       await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_not_private", entityType: "ExpenseCertificate", entityId: id,
@@ -595,7 +600,7 @@ export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = 
   // Privacy is asked here too, and not only when the file was created. Sharing is
   // something a person does later, to a folder, months after the document was filed —
   // which is precisely the case a check that only ran at upload would never see.
-  const privacy = await privacyProblems(drive, folderPath, file.id);
+  const privacy = await privacyProblems(drive, folderPath, file.id, (deps.db ?? prisma) as PrismaClient);
   if (privacy.length) return { ok: false, action: "drive_not_private", reasons: privacy };
   return { ok: true, reasons: [] };
 }
