@@ -707,11 +707,16 @@ export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = 
 
 // ── 4. Link it to the rows ───────────────────────────────────────────────────
 //
-// One transaction, and the last chance to notice the sheet has moved. The waiver written
-// on each row names the certificate, so the row's evidence is only as good as the
-// document — withdraw the document later and the row stops counting without anybody
-// having to edit it, which matters because the save path refuses to edit a signed-for
-// row at all.
+// Drive is checked before the transaction. A remote read can take seconds and must not
+// hold a database transaction open while it waits. The transaction then re-reads the
+// certificate and accepts the check only if the exact filed-document snapshot is still
+// current. Its final conditional update is the fence: if anything changes after that
+// re-read, every row write is rolled back with it.
+//
+// The waiver written on each row names the certificate, so the row's evidence is only as
+// good as the document — withdraw the document later and the row stops counting without
+// anybody having to edit it, which matters because the save path refuses to edit a
+// signed-for row at all.
 //
 // Rows are found by `financialIdentity`, the same function the save path uses. Neither
 // can decide a row is "the same row" that the other would not.
@@ -719,23 +724,37 @@ export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = 
 export async function linkCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
+
+  const checked = await db.expenseCertificate.findUnique({ where: { id } });
+  if (!checked) refuse(["No such certificate"], 404);
+  const bad = moveRefusal(checked.status as CertificateState, "LINKED");
+  if (bad) refuse([bad]);
+  if (!checked.driveFileId || !checked.pdfHash) refuse(["This certificate has not been filed in Drive yet, so there is no document for the rows to point at."]);
+
+  // This is deliberately outside the transaction: it downloads and hashes the Drive
+  // file and checks its permissions. The conditional write below proves that the result
+  // is applied only to the same certificate snapshot that was checked here.
+  const check = await checkFiledDocument(checked, deps, actor.id);
+  if (!check.ok) {
+    if (check.action) {
+      await audit({ actorId: actor.id, actorRole: actor.role, action: `certificate.${check.action}`, entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: checked.certificateNo, driveFileId: checked.driveFileId, expectedAttempt: checked.driveAttemptToken, expectedPdfHash: checked.pdfHash, reasons: check.reasons } });
+    }
+    refuse(check.reasons, 409);
+  }
+
   const linked = await db.$transaction(async (tx) => {
     const cert = await tx.expenseCertificate.findUnique({ where: { id } });
     if (!cert) refuse(["No such certificate"], 404);
-    const bad = moveRefusal(cert!.status as CertificateState, "LINKED");
-    if (bad) refuse([bad]);
-    if (!cert!.driveFileId || !cert!.pdfHash) refuse(["This certificate has not been filed in Drive yet, so there is no document for the rows to point at."]);
-
-    // The document is checked here, not taken on trust from the upload step — this is
-    // the last moment before it starts standing in for a receipt.
-    const check = await checkFiledDocument(cert!, deps, actor.id);
-    if (!check.ok) {
-      if (check.action) {
-        await audit({ actorId: actor.id, actorRole: actor.role, action: `certificate.${check.action}`, entityType: "ExpenseCertificate", entityId: id,
-          detail: { certificateNo: cert!.certificateNo, driveFileId: cert!.driveFileId, expectedAttempt: cert!.driveAttemptToken, expectedPdfHash: cert!.pdfHash, reasons: check.reasons } });
-      }
-      refuse(check.reasons, 409);
-    }
+    const snapshotMoved = cert!.updatedAt.getTime() !== checked.updatedAt.getTime()
+      || cert!.status !== checked.status
+      || cert!.driveFileId !== checked.driveFileId
+      || cert!.pdfHash !== checked.pdfHash
+      || cert!.driveAttemptToken !== checked.driveAttemptToken
+      || cert!.driveRevisionId !== checked.driveRevisionId
+      || cert!.driveEnvironment !== checked.driveEnvironment
+      || cert!.driveFolderPath !== checked.driveFolderPath;
+    if (snapshotMoved) refuse(["This certificate changed while its Drive document was being checked. Reload it and try linking again."]);
 
     const sheet = await tx.jobSheet.findUnique({ where: { id: cert!.jobSheetId } });
     if (!sheet) refuse(["The job sheet this certificate belongs to is gone"], 404);
@@ -769,7 +788,22 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
       next[at[0]].evidenceWaiver = waiver;
     }
     await tx.jobSheet.update({ where: { id: sheet!.id }, data: { expenses: next as unknown as Prisma.InputJsonValue } });
-    return tx.expenseCertificate.update({ where: { id, status: cert!.status }, data: { status: "LINKED" satisfies CertificateState, linkedAt: now() } });
+    const moved = await tx.expenseCertificate.updateMany({
+      where: {
+        id,
+        status: checked.status,
+        updatedAt: checked.updatedAt,
+        driveFileId: checked.driveFileId,
+        pdfHash: checked.pdfHash,
+        driveAttemptToken: checked.driveAttemptToken,
+        driveRevisionId: checked.driveRevisionId,
+        driveEnvironment: checked.driveEnvironment,
+        driveFolderPath: checked.driveFolderPath,
+      },
+      data: { status: "LINKED" satisfies CertificateState, linkedAt: now() },
+    });
+    if (moved.count !== 1) refuse(["This certificate changed while its Drive document was being checked. Reload it and try linking again."]);
+    return tx.expenseCertificate.findUniqueOrThrow({ where: { id } });
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.linked", entityType: "ExpenseCertificate", entityId: id,
     detail: { certificateNo: linked.certificateNo, jobRef: linked.jobRef, rows: (linked.coveredRows as unknown as CertifiableRow[]).length, totalSatang: linked.totalSatang, pdfHash: linked.pdfHash, driveFileId: linked.driveFileId } });
