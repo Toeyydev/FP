@@ -326,9 +326,21 @@ describe("repository invariant — the image itself is smoke tested", () => {
     expect(smoke()).toContain("does not reap orphaned children");
     const nix = readFileSync(join(process.cwd(), "nixpacks.toml"), "utf8");
     expect(nix).toContain('"tini"');
-    expect(nix).toMatch(/\[start\][\s\S]*tini --/);
+    // -g, so a signal reaches the whole process group. Without it `docker stop` asks npm
+    // to stop and nothing else hears about it.
+    expect(nix).toMatch(/\[start\][\s\S]*tini -g --/);
     const railway = JSON.parse(readFileSync(join(process.cwd(), "railway.json"), "utf8"));
-    expect(railway.deploy.startCommand, "Railway overrides the image CMD, so it needs tini too").toContain("tini --");
+    expect(railway.deploy.startCommand, "Railway overrides the image CMD, so it needs tini too").toContain("tini -g --");
+  });
+
+  it("shutdown is checked through the image's real CMD, and must not need SIGKILL", () => {
+    // `docker stop` is what a deploy does: SIGTERM to PID 1, then wait. `docker rm -f`
+    // is SIGKILL and would prove nothing.
+    const s = smoke();
+    expect(s).toMatch(/docker stop -t/);
+    expect(s).toContain("137");                        // 128+9, the SIGKILL exit code
+    expect(s).toContain("grace period");
+    expect(s).toContain("outlived the container");     // nothing escapes the cgroup
   });
 
   it("cleanup is checked on the paths that are not the happy one", () => {

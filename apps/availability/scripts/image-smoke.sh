@@ -297,6 +297,43 @@ NEW_TOTAL=$(( LIVE + ZOMBIE ))
 echo "  PID 1 is still: $(docker exec "$NAME" ps -eo pid,comm 2>/dev/null | awk '$1==1 {print $2}')"
 [ "$NEW_TOTAL" -eq 0 ] || fail "$LIVE live and $ZOMBIE zombie process(es) left over from rendering"
 
+say "shutting it down the way a deploy does"
+# `docker stop`, not `docker rm -f`: stop sends SIGTERM to PID 1 through the image's real
+# CMD and waits, which is what Railway does when it replaces a container. `rm -f` sends
+# SIGKILL and would prove nothing about whether anything shuts down gracefully.
+#
+# A container that has to be killed is one that was still holding something when the
+# platform gave up on it — a half-written render, a browser mid-launch. The test is
+# therefore not "did it stop" but "did it stop BY ITSELF, before the grace period ran
+# out, without needing SIGKILL".
+GRACE=20
+echo "  zombies just before the stop: $(docker exec "$NAME" sh -c 'ps -eo stat 2>/dev/null | grep -c "^Z" || true')"
+STOP_START=$(date +%s)
+docker stop -t "$GRACE" "$NAME" >/dev/null
+STOP_SECONDS=$(( $(date +%s) - STOP_START ))
+
+EXIT_CODE=$(docker inspect "$NAME" --format '{{.State.ExitCode}}')
+OOM=$(docker inspect "$NAME" --format '{{.State.OOMKilled}}')
+echo "  stopped in ${STOP_SECONDS}s (grace period ${GRACE}s) · exit code $EXIT_CODE · OOMKilled=$OOM"
+
+# 137 is 128+9: SIGKILL. Docker only sends that after the grace period has elapsed, so
+# seeing it means nothing inside answered SIGTERM.
+[ "$EXIT_CODE" != "137" ] || fail "the container had to be SIGKILLed — nothing inside answered SIGTERM"
+[ "$OOM" != "true" ] || fail "the container was killed for memory during shutdown"
+[ "$STOP_SECONDS" -lt "$GRACE" ] || fail "it took the whole ${GRACE}s grace period to stop, which means it was killed rather than exiting"
+# 143 is 128+15, a clean SIGTERM exit; 0 is a clean exit of its own accord.
+case "$EXIT_CODE" in
+  0|143) echo "  exited on SIGTERM, of its own accord" ;;
+  *) echo "  note: exit code $EXIT_CODE — not SIGKILL, so it exited itself, but check the logs" ;;
+esac
+
+# Nothing may outlive the container. A Chrome helper that escaped its cgroup would show
+# up on the host, and no test above this line would have seen it.
+sleep 2
+HOST_LEFT=$(pgrep -fc "chrome-headless-shell" || true)
+echo "  chrome-headless-shell processes on the host after the container is gone: ${HOST_LEFT:-0}"
+[ "${HOST_LEFT:-0}" -eq 0 ] || fail "${HOST_LEFT} browser process(es) outlived the container"
+
 say "image smoke passed"
 printf 'image_size_mb=%.0f\n' "$(awk -v b="$SIZE_BYTES" 'BEGIN{print b/1024/1024}')"
 printf 'build_id=%s\n' "$EXPECTED_BUILD_ID"

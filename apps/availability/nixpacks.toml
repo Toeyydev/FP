@@ -45,4 +45,11 @@ dependsOn = ["browser"]
 [start]
 # tini is PID 1, npm is its child. Without this the container's PID 1 is npm, and an
 # orphaned Chrome helper has nobody to reap it.
-cmd = "/usr/bin/tini -- npm run start"
+#
+# `-g` sends signals to the whole process GROUP, not just the direct child. On shutdown
+# that is the difference between npm being asked to stop and everything under it being
+# asked to stop: `docker stop` signals PID 1 only, npm does not reliably pass SIGTERM on
+# to the next-server it spawned through a shell, and a Chrome helper that outlives its
+# parent would never hear about it at all. With -g they all get it, and the container
+# exits on its own instead of waiting out the grace period and being killed.
+cmd = "/usr/bin/tini -g -- npm run start"
