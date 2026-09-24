@@ -81,8 +81,9 @@ const dbOf = (...rows: AttesterSignature[]) =>
     },
   }) as never;
 
-const deps = (rows: AttesterSignature[], bytes: Buffer | null) =>
-  ({ db: dbOf(...rows), fetchAsset: async () => bytes });
+/** Private by default, because that is the state everything else is tested against. */
+const deps = (rows: AttesterSignature[], bytes: Buffer | null, privacy: string[] = []) =>
+  ({ db: dbOf(...rows), fetchAsset: async () => bytes, privacy: async () => privacy });
 
 // ── reading the image itself ─────────────────────────────────────────────────
 
@@ -142,7 +143,7 @@ describe("a signature belongs to one person", () => {
 describe("every refusal is a refusal", () => {
   it("having none registered is the one case that is not an error", () => {
     expect(blocksDocument("not-registered")).toBe(false);
-    for (const code of ["unreadable", "not-a-png", "too-large", "bad-dimensions", "hash-mismatch"] as const) {
+    for (const code of ["unreadable", "not-a-png", "too-large", "bad-dimensions", "hash-mismatch", "not-private"] as const) {
       expect(blocksDocument(code)).toBe(true);
     }
   });
@@ -192,6 +193,20 @@ describe("every refusal is a refusal", () => {
     const r = await resolveSignature("u_attester_a", deps([registered()], swapped));
     expect(r.ok === false && r.code).toBe("hash-mismatch");
     expect(r.ok === false && r.reasons[0]).toContain("not the one that was registered");
+  });
+
+  it("an image somebody else can open stops the document", async () => {
+    const r = await resolveSignature("u_attester_a", deps([registered()], SAMPLE, ["The signature image is shared with anyone who has the link."]));
+    expect(r.ok === false && r.code).toBe("not-private");
+    expect(r.ok === false && r.reasons[0]).toContain("anyone who has the link");
+  });
+
+  it("a privacy check that throws is a refusal, not a pass", async () => {
+    const r = await resolveSignature("u_attester_a", {
+      db: dbOf(registered()), fetchAsset: async () => SAMPLE,
+      privacy: async () => { throw new Error("drive is having a day"); },
+    });
+    expect(r.ok === false && r.code).toBe("not-private");
   });
 
   it("the hash is taken from the bytes that came back, not from the row", async () => {

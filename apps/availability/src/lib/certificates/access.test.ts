@@ -226,3 +226,67 @@ describe("being turned away is written down without writing down the document", 
     expect(code("src/lib/certificates/denied.ts")).not.toContain("entityId");
   });
 });
+
+// ── the four places, as the repository ───────────────────────────────────────
+//
+// Scanning source is a blunt instrument, and these are here for one reason: the leak
+// that happened was not a rule anybody disagreed with. It was a response somebody added
+// without thinking about certificates at all. A rule that only lives in a review is a
+// rule until the next hurried afternoon.
+
+describe("every place the rule has to hold, holds", () => {
+  it("every certificate endpoint checks ADMIN on the server", () => {
+    for (const route of [
+      "src/app/api/jobsheet/certificate/route.ts",
+      "src/app/api/jobsheet/certificate/[id]/route.ts",
+      "src/app/api/certificates/renderer/route.ts",
+    ]) {
+      const src = code(route);
+      expect(src, `${route} does not check isAdmin`).toContain("isAdmin(session?.user?.role)");
+      // canViewFinance lets an operator and an accountant through. It was the hole.
+      expect(src, `${route} still uses canViewFinance`).not.toContain("canViewFinance");
+      expect(src, `${route} does not audit refusals`).toContain("denied(session");
+    }
+  });
+
+  it("every response that carries expense rows to a non-admin redacts them", () => {
+    for (const route of ["src/app/api/jobsheet/route.ts", "src/app/api/jobsheet/receipt/route.ts"]) {
+      expect(code(route), `${route} returns rows unredacted`).toContain("redactRowsForNonAdmin");
+    }
+    for (const route of [
+      "src/app/api/pay/peak-document/route.ts",
+      "src/app/api/pay/peak-document/preview/route.ts",
+      "src/app/api/pay/peak-document/pay/route.ts",
+    ]) {
+      const src = code(route);
+      expect(src, `${route} does not filter its body`).toContain("redactBodyForNonAdmin");
+      // Every answer goes through the filter, not a chosen few. The only response these
+      // handlers are allowed to build directly is the 403 that decides who is reading.
+      const direct = src.slice(src.indexOf("export async function")).match(/NextResponse\.json\([^\n]*/g) ?? [];
+      for (const call of direct) {
+        expect(call, `${route} answers directly: ${call.trim()}`).toContain('{ error: "forbidden" }');
+      }
+    }
+  });
+
+  it("the panel draws nothing at all for a non-admin", () => {
+    const src = code("src/components/ExpenseCertificatePanel.tsx");
+    expect(src).toContain("if (!isAdmin) return null;");
+    expect(code("src/components/JobSheetEditor.tsx")).toContain("{isAdmin && sheet.ref && (");
+  });
+
+  it("nothing sent to a guide is built from a certificate", () => {
+    // The senders. If a certificate number ever reaches a guide, it comes through one of
+    // these, and none of them may so much as import the certificate code.
+    for (const sender of [
+      "src/lib/jobsheet-send.ts", "src/lib/expense-reminders.ts", "src/lib/tour-reminders.ts",
+      "src/lib/offers.ts", "src/lib/jobsheet-drive.ts",
+    ]) {
+      const src = code(sender);
+      expect(src, `${sender} imports certificate code`).not.toContain("lib/certificates");
+      for (const field of ["certificateNo", "certificateId", "evidenceWaiver", "CERT-"]) {
+        expect(src, `${sender} mentions ${field}`).not.toContain(field);
+      }
+    }
+  });
+});

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient, AttesterSignature } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { downloadDriveFile, folkpathsDriveToken } from "@/lib/google-drive";
+import { configuredAdminEmails, permissionProblems } from "@/lib/certificates/access";
+import { googleCertificateDrive } from "@/lib/certificates/drive";
 
 // The image of an attester's handwritten signature, and the rules about whose it is.
 //
@@ -30,7 +32,8 @@ export type SignatureRefusal =
   | "not-a-png"
   | "too-large"
   | "bad-dimensions"
-  | "hash-mismatch";     // what is in Drive is not what was registered
+  | "hash-mismatch"      // what is in Drive is not what was registered
+  | "not-private";       // somebody other than the admins can open it
 
 export type ResolvedSignature = {
   userId: string;
@@ -59,6 +62,8 @@ export type SignatureDeps = {
   db?: PrismaClient | Prisma.TransactionClient;
   /** Fetch the registered image. Supplied by tests; Drive otherwise. */
   fetchAsset?: (row: AttesterSignature) => Promise<Buffer | null>;
+  /** Everything wrong with who can open the image. Supplied by tests; Drive otherwise. */
+  privacy?: (row: AttesterSignature) => Promise<string[]>;
 };
 
 /** The live signature row for a person, or nothing. Never anybody else's. */
@@ -101,6 +106,22 @@ export async function resolveSignature(userId: string, deps: SignatureDeps = {},
   if (dims.width < MIN_DIMENSION || dims.height < MIN_DIMENSION || dims.width > MAX_DIMENSION || dims.height > MAX_DIMENSION) {
     return { ok: false, code: "bad-dimensions", reasons: [`The signature image is ${dims.width}×${dims.height}, outside ${MIN_DIMENSION}–${MAX_DIMENSION} in each direction.`] };
   }
+  // Who can open it, asked of Drive. A signature image is the one thing on a certificate
+  // that is worth copying and the only one that is reusable — whoever holds it can put a
+  // person's hand on anything. An image anybody can reach is not usable as one, so the
+  // document is refused rather than printed with it.
+  const checkPrivacy = deps.privacy ?? (async (r: AttesterSignature) => {
+    const token = await folkpathsDriveToken(actorId);
+    if (!token) return ["Google Drive is not connected, so who can open the signature image cannot be checked."];
+    const account = await googleCertificateDrive(token).accountEmail().catch(() => null);
+    if (!account) return ["Which Google account holds the signature image could not be read, so who can open it cannot be checked."];
+    const perms = await googleCertificateDrive(token).permissions({ fileId: r.driveFileId }).catch(() => null);
+    return permissionProblems(perms, [account, ...configuredAdminEmails()])
+      .map((p) => p.replace("This file", "The signature image"));
+  });
+  const privacy = await checkPrivacy(row).catch(() => ["Who can open the signature image could not be checked."]);
+  if (privacy.length) return { ok: false, code: "not-private", reasons: privacy };
+
   const got = sha256(bytes);
   if (got !== row.sha256) {
     // The registered bytes changed without going through a new version. Whatever is
