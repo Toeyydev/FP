@@ -46,7 +46,13 @@ const e = (description: string, price: number, pax = 5, over: Row = {}): Row =>
 type FakeFile = { id: string; name: string; folder: string; certificateId: string; environment: string; attemptToken: string | null; state: "TEMP" | "ACTIVE" | "RETIRED" | "QUARANTINED" | null; bytes: Buffer; revisionId: string; readOnly?: boolean };
 const drive = {
   files: [] as FakeFile[], revisions: 0, calls: 0, down: false,
-  reset() { this.files = []; this.revisions = 0; this.calls = 0; this.down = false; },
+  // `down` is about the file operations. Who can see a folder is still answerable when
+  // uploading is not, which is what keeps this suite about the state machine.
+  account: "folkpaths-drive@example.test" as string | null,
+  folderPermissions: null as null | Record<string, unknown>[],
+  filePermissions: null as null | Record<string, unknown>[],
+  unreadablePermissions: false,
+  reset() { this.files = []; this.revisions = 0; this.calls = 0; this.down = false; this.folderPermissions = null; this.filePermissions = null; this.unreadablePermissions = false; },
   active() { return this.files.filter((f) => f.state === "ACTIVE"); },
   shape(f: FakeFile) { return { id: f.id, name: f.name, link: `https://drive.example.test/file/${f.id}`, attemptToken: f.attemptToken, state: f.state, revisionId: f.revisionId, md5: null, readOnly: f.readOnly }; },
 };
@@ -74,6 +80,14 @@ const fakeDrive = (): CertificateDrive => {
     },
     async createActive(o) { touch(); return drive.shape(make(o, "ACTIVE")); },
     async retire({ fileId }) { touch(); const f = drive.files.find((x) => x.id === fileId); if (f) { f.state = "RETIRED"; f.certificateId = ""; f.attemptToken = null; } },
+    async permissions({ fileId }) {
+      if (drive.unreadablePermissions) return null;
+      const owner = [{ id: "p_owner", type: "user", role: "owner", emailAddress: drive.account ?? "" }];
+      if (fileId.startsWith("folder_")) return (drive.folderPermissions ?? owner) as never;
+      return (drive.filePermissions ?? owner) as never;
+    },
+    async folderId({ folderPath }) { return `folder_${key(folderPath)}`; },
+    async accountEmail() { return drive.account; },
     async read({ fileId }) { touch(); return drive.files.find((x) => x.id === fileId)?.bytes ?? null; },
     async quarantine({ fileId }) { touch(); const f = drive.files.find((x) => x.id === fileId); if (f) { f.state = "QUARANTINED"; f.certificateId = ""; f.attemptToken = null; } },
   };

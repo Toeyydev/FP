@@ -7,7 +7,8 @@ import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fi
 import { type EvidenceWaiver } from "@/lib/reimbursement-evidence";
 import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
-import { certificateFileName, certificateFolder, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
+import { certificateFileName, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
+import { certificateFolder, configuredAdminEmails, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
@@ -54,6 +55,36 @@ function facts(sheet: JobSheet, guideName: string): SheetFacts {
     guideId: sheet.guideId, guideName,
     guideReportedAt: sheet.guideExpensesAt ?? null,
   };
+}
+
+/**
+ * Is this folder, and this file, private to the admins?
+ *
+ * Asked of Drive rather than of our own record of Drive. The folder is asked about as
+ * well as the file, because a file inherits whatever the folder above it was shared
+ * with, and a file that was never shared with anybody sitting in a folder the guides can
+ * open is not private in any sense that matters.
+ *
+ * Everything it cannot determine is a problem. There is no path through this that turns
+ * a failed lookup into a pass.
+ */
+async function privacyProblems(drive: CertificateDrive, folderPath: string[], fileId: string | null): Promise<string[]> {
+  const account = await drive.accountEmail().catch(() => null);
+  if (!account) {
+    return ["Which Google account files these documents could not be read, so who can see them cannot be checked."];
+  }
+  const allowed = [account, ...configuredAdminEmails()];
+  const out: string[] = [];
+
+  const folderId = await drive.folderId({ folderPath }).catch(() => null);
+  if (!folderId) {
+    out.push(`The folder ${folderPathString(folderPath)} could not be found in Drive, so who can see it cannot be checked.`);
+  } else {
+    out.push(...folderPermissionProblems(await drive.permissions({ fileId: folderId }).catch(() => null), allowed, folderPath));
+  }
+
+  if (fileId) out.push(...permissionProblems(await drive.permissions({ fileId }).catch(() => null), allowed));
+  return out;
 }
 
 /** Everything that must be true before a certificate may exist for this sheet. */
@@ -288,7 +319,9 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
   const beat = setInterval(() => { void renew().catch(() => {}); }, heartbeatMs);
   (beat as unknown as { unref?: () => void }).unref?.();
 
+  // New documents always go to the private folder, whatever an older one did.
   const folderPath = certificateFolder(cert!.tourDate);
+  const priorPath = folderPathOf(cert!);
   let drive = deps.drive;
   let mine: { id: string; temp: string } | null = null;
 
@@ -344,6 +377,17 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
       const dToken = await folkpathsDriveToken(actor.id);
       if (!dToken) refuse(["Google Drive is not connected, so the certificate cannot be filed. The attestation is recorded and filing can be retried."], 503);
       drive = googleCertificateDrive(dToken!);
+    }
+
+    // Asked before a single byte is written, not after. A document put into a folder the
+    // guides can open has already leaked by the time anyone checks it, and moving it
+    // afterwards does not unsee it.
+    const folderPrivacy = await privacyProblems(drive, folderPath, null);
+    if (folderPrivacy.length) {
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_not_private", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, stage: "folder", folder: folderPathString(folderPath), problems: folderPrivacy } });
+      await db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null } }).catch(() => {});
+      refuse(["The folder these documents are filed in is not private to the admins, so nothing was filed:", ...folderPrivacy], 409);
     }
 
     await hold("writing this attempt's candidate");
@@ -423,6 +467,18 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
       refuse(["The document created in Drive did not read back as what it was created from. It has been moved to Quarantine and nothing was recorded against it — try filing again."], 502);
     }
 
+    // And asked again of the document itself. The folder was private a moment ago; this
+    // is the file that will actually be linked, and it is the file's own answer that
+    // decides. A document that is not private is quarantined rather than recorded —
+    // there is no state in which a readable-by-guides certificate is filed and usable.
+    const filePrivacy = await privacyProblems(drive, folderPath, active.id);
+    if (filePrivacy.length) {
+      await drive.quarantine({ fileId: active.id, reason: "the filed document was not private to the admins", certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_not_private", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, stage: "file", driveFileId: active.id, folder: folderPathString(folderPath), problems: filePrivacy } });
+      refuse(["The document filed in Drive is not private to the admins, so it has been quarantined and nothing was recorded against it:", ...filePrivacy], 409);
+    }
+
     // Only now does the database point at anything. Until this write, no row names this
     // file, so a crash before it leaves a document nobody relies on.
     const wrote = await db.expenseCertificate.updateMany({
@@ -431,6 +487,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
         status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: active.id, driveUrl: active.link,
         uploadedAt: now(), uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null,
         lastUploadError: null, driveEnvironment: environment, driveAttemptToken: token,
+        driveFolderPath: folderPathString(folderPath),
         driveRevisionId: active.revisionId ?? null, driveMd5: active.md5 ?? null,
       },
     });
@@ -440,7 +497,13 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     // this certificate — including a document this certificate settled on before — is
     // put away, so exactly one ACTIVE remains.
     await drive.retire({ fileId: temp.id, certificateId: cert!.id, attemptToken: token, at: now().toISOString(), reason: `bytes became document ${active.id}` }).catch(() => {});
-    const others = (await drive.findAll({ certificateId: cert!.id, environment, folderPath })).filter((f) => f.id !== active.id);
+    // Both folders: a certificate filed before this feature has its document in the old
+    // place, and leaving it there would leave two documents answering to one certificate.
+    const everywhere = [...await drive.findAll({ certificateId: cert!.id, environment, folderPath })];
+    if (folderPathString(priorPath) !== folderPathString(folderPath)) {
+      everywhere.push(...await drive.findAll({ certificateId: cert!.id, environment, folderPath: priorPath }).catch(() => []));
+    }
+    const others = everywhere.filter((f) => f.id !== active.id);
     for (const f of others) {
       await drive.quarantine({ fileId: f.id, reason: `superseded by attempt ${token}`, certificateId: cert!.id, attemptToken: f.attemptToken ?? "", at: now().toISOString() }).catch(() => {});
     }
@@ -479,11 +542,11 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
  * moves. Everything it looks at is a fact about the file as it is now: exactly one
  * ACTIVE file, the attempt on record, and bytes that hash to what was recorded.
  */
-export type DocumentCheck = { ok: boolean; reasons: string[]; action?: "drive_overwritten" | "drive_changed" | "drive_missing" | "drive_duplicate" };
+export type DocumentCheck = { ok: boolean; reasons: string[]; action?: "drive_overwritten" | "drive_changed" | "drive_missing" | "drive_duplicate" | "drive_not_private" };
 
 export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = {}, actorId?: string): Promise<DocumentCheck> {
   const environment = deps.environment ?? cert.driveEnvironment ?? certificateEnvironment();
-  const folderPath = certificateFolder(cert.tourDate);
+  const folderPath = folderPathOf(cert);
   let drive = deps.drive;
   if (!drive) {
     const t = await folkpathsDriveToken(actorId);
@@ -508,6 +571,11 @@ export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = 
   if (bytes && cert.pdfHash && fileHash(bytes) !== cert.pdfHash) {
     return { ok: false, action: "drive_changed", reasons: ["The document in Drive is not the one that was filed — its contents have changed since. File it again before relying on it."] };
   }
+  // Privacy is asked here too, and not only when the file was created. Sharing is
+  // something a person does later, to a folder, months after the document was filed —
+  // which is precisely the case a check that only ran at upload would never see.
+  const privacy = await privacyProblems(drive, folderPath, file.id);
+  if (privacy.length) return { ok: false, action: "drive_not_private", reasons: privacy };
   return { ok: true, reasons: [] };
 }
 

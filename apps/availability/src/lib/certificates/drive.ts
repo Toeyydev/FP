@@ -1,4 +1,5 @@
 import { googleAccessToken } from "@/lib/google-calendar";
+import type { DrivePermission } from "@/lib/certificates/access";
 
 // Filing a certificate in Drive: one file per attempt, and the winner is never written
 // to again.
@@ -103,6 +104,16 @@ export type CertificateDrive = {
   /** Move a TEMP aside once its bytes have become the document. */
   retire(o: { fileId: string; certificateId: string; attemptToken: string; at: string; reason: string }): Promise<void>;
   read(o: { fileId: string }): Promise<Buffer | null>;
+  /**
+   * Who can see this file, straight from Drive. `null` when the list could not be read —
+   * which the caller must treat as a refusal, not as an empty list. "Nobody else can see
+   * it" and "we could not find out" are different answers.
+   */
+  permissions(o: { fileId: string }): Promise<DrivePermission[] | null>;
+  /** The folder itself, so the question can be asked of the tree and not only the leaf. */
+  folderId(o: { folderPath: string[] }): Promise<string | null>;
+  /** The account these calls are made as. It owns what it creates, so it is allowed. */
+  accountEmail(): Promise<string | null>;
   quarantine(o: { fileId: string; reason: string; certificateId: string; attemptToken: string; at: string }): Promise<void>;
 };
 
@@ -261,6 +272,32 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
           },
         }),
       });
+    },
+
+    async permissions({ fileId }) {
+      const token = await bearer(refreshToken);
+      // Inherited grants are asked for explicitly: a file is exactly as private as the
+      // folder above it, and a list that showed only what was set on the file itself
+      // would call a file in a shared folder private.
+      const r = await fetch(`${api}/files/${fileId}/permissions?fields=permissions(id,type,role,emailAddress,domain,allowFileDiscovery,deleted,permissionDetails)&supportsAllDrives=true&pageSize=100`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) return null;
+      const j = (await r.json().catch(() => null)) as { permissions?: DrivePermission[] } | null;
+      return j?.permissions ?? null;
+    },
+
+    async folderId({ folderPath }) {
+      const token = await bearer(refreshToken);
+      return (await folder(token, folderPath)) ?? null;
+    },
+
+    async accountEmail() {
+      const token = await bearer(refreshToken);
+      const r = await fetch(`${api}/about?fields=user(emailAddress)`, { headers: { authorization: `Bearer ${token}` } });
+      if (!r.ok) return null;
+      const j = (await r.json().catch(() => null)) as { user?: { emailAddress?: string } } | null;
+      return j?.user?.emailAddress ?? null;
     },
 
     async read({ fileId }) {

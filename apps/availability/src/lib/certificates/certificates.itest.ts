@@ -46,9 +46,14 @@ type FakeFile = {
 const drive = {
   files: [] as FakeFile[],
   revisions: 0,
-  reset() { this.files = []; this.revisions = 0; this.failPut = null; this.corruptOnRead = false; },
+  reset() { this.files = []; this.revisions = 0; this.failPut = null; this.corruptOnRead = false; this.folderPermissions = null; this.filePermissions = null; this.unreadablePermissions = false; this.account = "folkpaths-drive@example.test"; },
   failPut: null as null | string,
   corruptOnRead: false,
+  /** Who can see things. The account that files them, and nobody else, unless a test says so. */
+  account: "folkpaths-drive@example.test" as string | null,
+  folderPermissions: null as null | Record<string, unknown>[],
+  filePermissions: null as null | Record<string, unknown>[],
+  unreadablePermissions: false,
   live() { return this.files.filter((f) => f.state === "TEMP" || f.state === "ACTIVE"); },
   active() { return this.files.filter((f) => f.state === "ACTIVE"); },
   shape(f: FakeFile) { return { id: f.id, name: f.name, link: `https://drive.example.test/file/${f.id}`, attemptToken: f.attemptToken, state: f.state, revisionId: f.revisionId, md5: null, readOnly: f.readOnly }; },
@@ -91,6 +96,14 @@ const fakeDrive = (): CertificateDrive => {
       f.state = "RETIRED"; f.certificateId = ""; f.attemptToken = null; f.name = `RETIRED ${f.name}`;
       f.forensic = { certificateId, attemptToken, at, reason };
     },
+    async permissions({ fileId }) {
+      if (drive.unreadablePermissions) return null;
+      const owner = [{ id: "p_owner", type: "user", role: "owner", emailAddress: drive.account ?? "" }];
+      if (fileId.startsWith("folder_")) return (drive.folderPermissions ?? owner) as never;
+      return (drive.filePermissions ?? owner) as never;
+    },
+    async folderId({ folderPath }) { return `folder_${key(folderPath)}`; },
+    async accountEmail() { return drive.account; },
     async read({ fileId }) {
       const f = drive.files.find((x) => x.id === fileId);
       if (!f) return null;

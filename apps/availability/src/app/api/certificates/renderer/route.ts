@@ -4,6 +4,7 @@ import { isAdmin } from "@/lib/roles";
 import { audit } from "@/lib/audit";
 import { CHROME_BUILD_ID, findExecutable } from "@/lib/certificates/browser";
 import { cachedProbe, probeRenderer, PROBE_TIMEOUT_MS } from "@/lib/certificates/probe";
+import { denied } from "@/lib/certificates/denied";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,10 @@ let forcing: Promise<unknown> | null = null;
 
 export async function GET() {
   const session = await auth();
-  if (!isAdmin(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!isAdmin(session?.user?.role)) {
+    await denied(session, "certificate.renderer_get");
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   const exe = findExecutable();
   const last = cachedProbe();
   return NextResponse.json({
@@ -40,7 +44,10 @@ export async function GET() {
 
 export async function POST() {
   const session = await auth();
-  if (!isAdmin(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!isAdmin(session?.user?.role)) {
+    await denied(session, "certificate.renderer_probe");
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
 
   const since = Date.now() - lastForced;
   if (forcing) return NextResponse.json({ error: "in-progress", reasons: ["A renderer check is already running."] }, { status: 429 });

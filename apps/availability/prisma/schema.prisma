@@ -700,6 +700,13 @@ model ExpenseCertificate {
   /// Which deployment filed it. Part of the file's marker in Drive, so a staging run
   /// and production pointed at one account never find each other's documents.
   driveEnvironment      String?
+  /// Which folder in Drive the document is actually in, slash-joined.
+  ///
+  /// Certificates used to be filed beside the job sheets, in a tree the guides can read.
+  /// They are now filed in a private finance folder, and this records which — so a
+  /// document filed under the old arrangement can still be found and checked instead of
+  /// being looked for where it never was.
+  driveFolderPath       String?
   uploadedAt            DateTime?
   linkedAt              DateTime?
   voidedAt              DateTime?

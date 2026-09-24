@@ -6,7 +6,8 @@ import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evi
 import { buildPayload, canonicalString, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml, thaiDate, thaiDateTime } from "@/lib/certificates/document";
 import { canMove, CERTIFICATE_STATES, FORBIDDEN_TERM_TH, isEvidence, moveRefusal, type CertificateState } from "@/lib/certificates/state";
-import { certificateFileName, certificateFolder } from "@/lib/certificates/pdf";
+import { certificateFileName } from "@/lib/certificates/pdf";
+import { certificateFolder, legacyCertificateFolder } from "@/lib/certificates/access";
 
 // A certificate is the company's own record that an unreceipted expense happened, signed
 // off by a named person who was logged in at the time. It is not a signature and not a
@@ -286,7 +287,10 @@ describe("where the file goes", () => {
     expect(certificateFileName("CERT-X-01")).toBe("CERT-X-01.pdf");
   });
   it("filed beside the job sheets it belongs to", () => {
-    expect(certificateFolder("2099-04-01")).toEqual(["Folkpaths Job Sheets", "2099-04 April", "Expense Certificates"]);
+    // Not under "Folkpaths Job Sheets" — that tree is shared with guides.
+    expect(certificateFolder("2099-04-01")).toEqual(["Folkpaths Finance", "Private Expense Certificates", "2099-04"]);
+    expect(certificateFolder("2099-04-01")[0]).not.toBe("Folkpaths Job Sheets");
+    expect(legacyCertificateFolder("2099-04-01")).toEqual(["Folkpaths Job Sheets", "2099-04 April", "Expense Certificates"]);
   });
 });
 
