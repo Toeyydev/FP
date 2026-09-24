@@ -180,7 +180,12 @@ export function checkDrift(
     payloadHash: string; coveredRows: CertifiableRow[];
     signature?: CertificatePayload["signature"];
     /** The origin this certificate was issued under. Fixed, so it is carried, not rebuilt. */
-    origin?: { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"] };
+    origin?: {
+      source: ExpenseSource;
+      recordedBy: CertificatePayload["recordedBy"];
+      /** The guide-report fact AS AT ISSUE, for a document that does not stand on it. */
+      guideReportedAt?: string | null;
+    };
   },
   sheetNow: { facts: SheetFacts; expenses: Expense[] },
 ): DriftResult {
@@ -191,7 +196,23 @@ export function checkDrift(
   // rebuild differ and report the sheet as changed when nothing on it had. Whether the
   // image is still the attested one is a different question, asked where it is answerable
   // — against what is registered now, at the moment the image goes on the page.
-  const now = buildPayload(sheetNow.facts, nowRows, stored.signature ?? null, stored.origin ?? { source: "GUIDE_REPORTED", recordedBy: null });
+  // Whether the guide has since filed a report is only this document's business if the
+  // document claims they did.
+  //
+  //   GUIDE_REPORTED   the page says "the guide reported at X". If X moves, the document
+  //                    is wrong about the thing it asserts, and that is drift.
+  //
+  //   ADMIN_RECORDED   the page says an admin entered the rows. The guide filing a week
+  //                    later changes nothing about that — those are still the admin's
+  //                    figures, recorded at the time stated — so comparing against the
+  //                    sheet's current value would report a change in a fact this
+  //                    document never depended on, and refuse to link a certificate that
+  //                    is entirely correct. The snapshot is compared with itself.
+  const origin = stored.origin ?? { source: "GUIDE_REPORTED" as ExpenseSource, recordedBy: null };
+  const facts: SheetFacts = origin.source === "ADMIN_RECORDED"
+    ? { ...sheetNow.facts, guideReportedAt: origin.guideReportedAt ? new Date(origin.guideReportedAt) : null }
+    : sheetNow.facts;
+  const now = buildPayload(facts, nowRows, stored.signature ?? null, origin);
   if (payloadHash(now) === stored.payloadHash) return { drifted: false, reasons };
 
   const was = new Map(stored.coveredRows.map((r) => [r.identity, r]));

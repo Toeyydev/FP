@@ -93,12 +93,29 @@ async function privacyProblems(drive: CertificateDrive, folderPath: string[], fi
 
 /** Everything that must be true before a certificate may exist for this sheet. */
 /** The origin a certificate was issued under, read back from what it stored. */
-function originOf(cert: ExpenseCertificate): { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"] } {
+/**
+ * The sheet as this document describes it.
+ *
+ * For an admin-recorded certificate the guide-report fact is the one it was ISSUED with,
+ * not the one the sheet carries now — the document never claimed anything about a report
+ * that arrived later, and reading today's value here would silently reword it.
+ */
+function factsFor(cert: ExpenseCertificate, sheet: JobSheet, guideName: string): SheetFacts {
+  const base = facts(sheet, guideName);
+  return (cert.source as ExpenseSource) === "ADMIN_RECORDED"
+    ? { ...base, guideReportedAt: cert.sourceGuideReportedAt }
+    : base;
+}
+
+function originOf(cert: ExpenseCertificate): { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"]; guideReportedAt: string | null } {
   return {
     source: (cert.source as ExpenseSource) ?? "GUIDE_REPORTED",
     recordedBy: cert.recordedById
       ? { id: cert.recordedById, name: cert.recordedByName ?? "", role: cert.recordedByRole ?? "", at: (cert.recordedAt ?? new Date(0)).toISOString() }
       : null,
+    // What was true when it was issued, so an admin-recorded document is compared with
+    // the world it was issued into rather than with today's.
+    guideReportedAt: cert.sourceGuideReportedAt ? cert.sourceGuideReportedAt.toISOString() : null,
   };
 }
 
@@ -281,7 +298,7 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
         signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
         origin: originOf(cert!) },
-      { facts: facts(sheet!, name), expenses },
+      { facts: factsFor(cert!, sheet!, name), expenses },
     );
     if (drift.drifted) {
       refuse(["This job sheet has changed since the certificate was prepared, so it no longer describes the sheet:", ...drift.reasons, "Withdraw this certificate and issue a new one."]);
@@ -305,7 +322,7 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
     // of having one.
     // The origin is what it was issued as. Attesting does not get to change who the
     // document says entered the figures.
-    const payload = buildPayload(facts(sheet!, name), rows, stamp, originOf(cert!));
+    const payload = buildPayload(factsFor(cert!, sheet!, name), rows, stamp, originOf(cert!));
 
     return tx.expenseCertificate.update({
       where: { id, status: cert!.status },
@@ -315,7 +332,10 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
         payload: payload as unknown as Prisma.InputJsonValue,
         payloadHash: payloadHash(payload),
         signatureUserId: stamp?.userId ?? null, signatureVersion: stamp?.version ?? null, signatureSha256: stamp?.sha256 ?? null,
-        sourceSheetUpdatedAt: sheet!.updatedAt, sourceGuideReportedAt: sheet!.guideExpensesAt,
+        sourceSheetUpdatedAt: sheet!.updatedAt,
+        // NOT refreshed. It is the fact the document was issued against, and for an
+        // admin-recorded one a guide filing in between changes nothing it claims.
+        sourceGuideReportedAt: cert!.sourceGuideReportedAt,
       },
     });
   });
@@ -725,7 +745,7 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
         signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
         origin: originOf(cert!) },
-      { facts: facts(sheet!, name), expenses },
+      { facts: factsFor(cert!, sheet!, name), expenses },
     );
     if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);
 

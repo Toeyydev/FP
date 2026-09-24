@@ -1632,3 +1632,91 @@ describe("a client cannot forge who did what", () => {
     expect(c.source).toBe("ADMIN_RECORDED");
   });
 });
+
+// ── a guide filing later is not a change to an admin-recorded document ──────
+//
+// The sequence that must not break anything:
+//
+//   1. the guide has filed nothing
+//   2. an admin checks the expenses and records the rows
+//   3. an ADMIN_RECORDED certificate is issued, attested, filed and linked
+//   4. the guide then files their report
+//
+// Step 4 says nothing about step 2. Those are still the admin's figures, recorded at the
+// time stated, and the document never claimed otherwise. Treating it as drift would
+// refuse to link — or force a void and reissue — over a fact the document does not rest
+// on.
+
+describe("a later guide report leaves an admin-recorded certificate alone", () => {
+  const fileLate = () =>
+    prisma.jobSheet.update({
+      where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } },
+      data: { guideExpensesAt: new Date("2099-05-01T09:00:00.000Z") },
+    });
+
+  it("attesting still works after the guide files", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    await fileLate();
+    const signed = await attestCertificate(c.id, ADMIN, deps());
+    expect(signed.status).toBe("ATTESTED");
+    // The snapshot did not move, so the document still reads as it was issued.
+    expect(signed.sourceGuideReportedAt).toBeNull();
+    expect((signed.payload as unknown as { guideReportedAt: string | null }).guideReportedAt).toBeNull();
+  });
+
+  it("linking still works after the guide files", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+    await fileLate();
+    const linked = await linkCertificate(c.id, ADMIN, deps());
+    expect(linked.status).toBe("LINKED");
+  });
+
+  it("the whole sequence, and the row is still evidenced afterwards", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+    await linkCertificate(c.id, ADMIN, deps());
+    await fileLate();
+
+    const after = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    expect(after.status).toBe("LINKED");
+    const sheet = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
+    const rows = sheet.expenses as unknown as ExpenseWithEvidence[];
+    expect(evidenceState(rows[0], await certificateStatuses([[rows[0] as Expense]])).state).toBe("WAIVED");
+
+    // And the payment gate still accepts it — nothing was marked STALE.
+    const gate = await checkEvidenceBeforePaying([rows as Expense[]], { actorId: ADMIN.id, actorRole: ADMIN.role }, deps(), "payment");
+    expect(gate.ok).toBe(true);
+    expect(gate.stale).toEqual([]);
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("LINKED");
+  });
+
+  it("the document's wording does not change when the guide files", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    const signedBefore = await attestCertificate(c.id, ADMIN, deps());
+    const hashBefore = signedBefore.payloadHash;
+    await fileLate();
+    // Re-reading the certificate gives the same fingerprint and the same sentence.
+    const after = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    expect(after.payloadHash).toBe(hashBefore);
+    expect((after.payload as unknown as { guideReportedAt: string | null }).guideReportedAt).toBeNull();
+  });
+
+  it("but a GUIDE_REPORTED certificate DOES drift if the filing time moves", async () => {
+    // That document asserts when the guide reported, so a change there makes it wrong.
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "GUIDE_REPORTED");
+    await prisma.jobSheet.update({
+      where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } },
+      data: { guideExpensesAt: new Date("2099-05-02T09:00:00.000Z") },
+    });
+    const why = await refusal(() => attestCertificate(c.id, ADMIN, deps()));
+    expect(why[0]).toContain("has changed since the certificate was prepared");
+  });
+});
