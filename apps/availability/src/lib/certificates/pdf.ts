@@ -11,19 +11,26 @@
 // wrongly and the document would be quietly incorrect in a way nobody reviewing English
 // test output would notice.
 //
-// Chromium is not bundled. The deployment provides one and names it in an environment
-// variable; without it this throws and the caller keeps the certificate at ATTESTED, which
-// is a state the workflow can recover from.
+// The browser is downloaded by build id into a directory inside the project (see
+// lib/certificates/browser) and found by computing where that download put it — never by
+// searching the machine for something that looks like Chrome. Without it this throws and
+// the caller keeps the certificate at ATTESTED, which the workflow can recover from.
 
 import type { Browser } from "puppeteer-core";
+import { findExecutable } from "@/lib/certificates/browser";
 
 export const PDF_UNAVAILABLE = "pdf-renderer-unavailable";
 
-/** Where the deployment put its Chromium. Set in Railway; absent in tests. */
-const chromiumPath = () =>
-  (process.env.CHROMIUM_PATH ?? process.env.PUPPETEER_EXECUTABLE_PATH ?? "").trim();
-
-export const pdfRendererAvailable = () => Boolean(chromiumPath());
+/**
+ * Is there a browser to render with?
+ *
+ * This is a FILE question and nothing more — the file exists, is a file, and may be run.
+ * It is not the same as "the renderer works": a browser missing a shared library passes
+ * this and dies on launch. Whether it works is `lib/certificates/probe`, which finds out
+ * by rendering something. Health reports that one; this one only decides whether it is
+ * worth trying.
+ */
+export const pdfRendererAvailable = () => findExecutable().ok;
 
 export type RenderPdf = (html: string) => Promise<Buffer>;
 
@@ -64,9 +71,18 @@ function queued<T>(fn: () => Promise<T>): Promise<T> {
 
 export const renderPdf: RenderPdf = (html) => queued(() => renderOnce(html));
 
+/** The error a caller sees when there is nothing to render with. Carries no path. */
+export class RendererUnavailable extends Error {
+  constructor(public code: string) {
+    super(`${PDF_UNAVAILABLE}: ${code}`);
+    this.name = "RendererUnavailable";
+  }
+}
+
 const renderOnce: RenderPdf = async (html) => {
-  const executablePath = chromiumPath();
-  if (!executablePath) throw new Error(PDF_UNAVAILABLE);
+  const exe = findExecutable();
+  if (!exe.ok) throw new RendererUnavailable(exe.code);
+  const executablePath = exe.path;
 
   const puppeteer = (await import("puppeteer-core")).default;
   let browser: Browser | null = null;

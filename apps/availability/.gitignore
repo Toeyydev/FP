@@ -7,3 +7,6 @@ build/
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
+
+# The browser the renderer uses, downloaded by a build step.
+.browser-cache/

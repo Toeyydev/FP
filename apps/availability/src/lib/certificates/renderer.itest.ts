@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import { buildPayload, certifiableRows, fileHash, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { pdfRendererAvailable, renderPdf } from "@/lib/certificates/pdf";
+import { CHROME_BUILD_ID, findExecutable } from "@/lib/certificates/browser";
+import { probeRenderer, resetProbe } from "@/lib/certificates/probe";
 import type { Expense } from "@/lib/jobsheet";
 
 // The renderer, against the Chromium the DEPLOYMENT provides.
@@ -13,10 +15,12 @@ import type { Expense } from "@/lib/jobsheet";
 // Chromium at all, whether it has a font that can draw Thai, and whether the process it
 // starts ever goes away again.
 //
-// It deliberately does NOT fall back to a developer's own Chrome. A Mac with Google
-// Chrome and the system Thai fonts installed will render this beautifully and tell you
-// nothing about a Linux container with neither. CHROMIUM_PATH is set by CI and by
-// Railway, and where it is unset the test says so rather than passing quietly.
+// It deliberately does NOT fall back to a browser that happens to be on the machine. A
+// Mac with Google Chrome and the system Thai fonts installed will render this
+// beautifully and tell you nothing about a Linux container with neither. The browser is
+// the one `npm run browser:install` put inside the project, at the build this
+// puppeteer-core expects, and CI blanks every override so the runner's own Chrome cannot
+// stand in for it.
 //
 // All data invented — this repo is public.
 
@@ -44,12 +48,20 @@ const ready = pdfRendererAvailable();
 // tick over the one thing nobody else checks.
 const describeRenderer = ready || process.env.CI ? describe : describe.skip;
 
-describe("the renderer is configured where it is supposed to be", () => {
-  it("CI and the deployment name a Chromium; a developer's laptop need not", () => {
-    // CI sets it. If this fails there, the deployment would have shipped a feature that
-    // cannot produce its own document.
-    if (process.env.CI) expect(ready, "CI must provide CHROMIUM_PATH — see .github/workflows/ci.yml").toBe(true);
-    else if (!ready) console.warn("[renderer] CHROMIUM_PATH unset — the real render is skipped here and runs in CI");
+describe("the browser is the project's own", () => {
+  it("CI has installed it; a developer's laptop need not have", () => {
+    if (process.env.CI) expect(ready, "run `npm run browser:install` — see .github/workflows/ci.yml").toBe(true);
+    else if (!ready) console.warn("[renderer] no browser installed — run `npm run browser:install`; CI always does");
+  });
+
+  it("comes from the project's managed cache, not from something found on the machine", () => {
+    if (!ready) return;
+    const exe = findExecutable();
+    expect(exe.ok).toBe(true);
+    // In CI every override is blanked, so a managed answer is the only possible one.
+    if (process.env.CI) expect(exe.ok && exe.source, "CI must use the browser the build installed").toBe("managed");
+    expect(exe.ok && exe.path).toContain(CHROME_BUILD_ID);
+    expect(exe.ok && exe.path).toContain("chrome-headless-shell");
   });
 });
 
@@ -99,6 +111,14 @@ describeRenderer("rendering a Thai certificate with the deployment's own browser
     const results = await Promise.all([renderPdf(html()), renderPdf(html()), renderPdf(html())]);
     for (const b of results) expect(b.subarray(0, 5).toString("latin1")).toBe("%PDF-");
   }, 180_000);
+
+  it("the probe agrees, and says ready for the right reason", async () => {
+    resetProbe();
+    const p = await probeRenderer({ force: true });
+    expect(p.status).toBe("ready");
+    expect(p.code).toBe("ok");
+    expect(p.ms).toBeGreaterThan(0);
+  }, 60_000);
 
   it("fetches nothing — a page that tries to reach out still renders, without it", async () => {
     const withRemote = html().replace("</body>", `<img src="https://127.0.0.1:9/should-never-load.png"><link rel="stylesheet" href="file:///etc/hosts"></body>`);

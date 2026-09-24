@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { pdfRendererAvailable } from "@/lib/certificates/pdf";
+import { rendererStatusForHealth } from "@/lib/certificates/probe";
 import { prisma } from "@/lib/db";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 import { ADVANCE_BUILD, DB_APPLICATION_NAME } from "@/lib/advances/build";
@@ -34,11 +34,10 @@ export async function GET() {
       ok: true, dbMs,
       loop,
       channels: { line: lineEnabled, push: pushEnabled, email: emailEnabled },
-      // Whether this deployment can turn a certificate into a PDF. Reported as a word,
-
-      // never as a path — where a binary lives is not something to publish.
-
-      certificateRenderer: pdfRendererAvailable() ? "ready" : "unavailable",
+      // Whether this deployment can turn a certificate into a PDF — the answer from the
+      // last time it was ASKED TO RENDER one, not from an environment variable. A word
+      // and a short code, never a path, an environment or a stack.
+      certificateRenderer: rendererStatusForHealth(),
 
       advances: { build: ADVANCE_BUILD, dbApplicationName: DB_APPLICATION_NAME, writes: advanceWritesFrozen() ? "frozen" : "open", switch: advanceWritesFrozen() ? "on" : "off" },
     });

@@ -18,7 +18,8 @@
     "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
     "build:worker": "esbuild src/workers/payment-worker.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/worker/payment-worker.js --external:@prisma/client --external:.prisma/client --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\" --tsconfig=tsconfig.worker.json",
     "worker": "node dist/worker/payment-worker.js",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "browser:install": "node scripts/install-browser.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -47,6 +48,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@puppeteer/browsers": "^2.6.0",
     "@types/web-push": "^3.6.4",
     "esbuild": "^0.28.0",
     "vitest": "^4.1.8"

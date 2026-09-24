@@ -1,25 +1,55 @@
-# Chromium, for rendering a certificate in lieu of a receipt to PDF on the server.
+# The browser that renders a certificate, and the fonts it needs to draw Thai.
 #
-# Every other PDF in FolkOPS is made in the operator's browser and posted back as
-# base64. That is fine for a page somebody printed; it is not fine for an accounting
-# document whose file hash is supposed to mean something, because bytes that arrive from
-# a browser are bytes the browser chose.
+# The first version of this asked apt for `chromium-browser` and pointed an environment
+# variable at a path in /nix. Both were wrong. Ubuntu's `chromium-browser` deb is a snap
+# shim: it installs a stub and expects snapd to fetch the real browser, which a container
+# does not have — the build logged "System doesn't have a working snapd, skipping" and
+# carried on, and the deployment then reported a renderer that was not there.
 #
-# Chromium rather than a PDF library because of Thai. Thai stacks vowels above and below
-# consonants and shifts tone marks depending on what sits underneath — that is text
-# shaping, and the Node PDF libraries do not do it. They would place the marks wrongly
-# and the document would be quietly incorrect in a way an English-reading reviewer would
-# never catch.
+# So the browser is downloaded by Puppeteer's own tooling, at the build id THIS version of
+# puppeteer-core expects, into a directory inside the app that is copied into the runtime
+# image. Nothing is pinned by hand here: the version comes from the package, so an upgrade
+# cannot leave the two disagreeing. Only chrome-headless-shell is fetched — the full
+# Chrome would be a few hundred megabytes for a headless render that never needs it.
 #
-# puppeteer-core is the client only; it downloads nothing. If CHROMIUM_PATH is unset the
-# renderer refuses and the certificate stays at SIGNED, which the workflow can retry
-# from — filing is never silently skipped.
+# The apt list is what that binary links against, plus fontconfig and a font with Thai
+# coverage. Thai stacks vowels above and below consonants and moves tone marks depending
+# on what is underneath; with no such font the browser lays out boxes and the document is
+# confidently wrong in a way an English-reading reviewer would never catch.
 
 [phases.setup]
-# noto-fonts carries the Thai block. Without a font that can draw it, Chromium lays out
-# boxes where the Thai should be and the PDF is confidently wrong.
-nixPkgs = ["...", "chromium", "noto-fonts", "fontconfig"]
+aptPkgs = [
+  "...",
+  # chrome-headless-shell's shared libraries
+  "libnss3", "libnspr4", "libatk1.0-0t64", "libatk-bridge2.0-0t64", "libcups2t64",
+  "libdrm2", "libxkbcommon0", "libxcomposite1", "libxdamage1", "libxfixes3",
+  "libxrandr2", "libgbm1", "libasound2t64", "libpango-1.0-0", "libcairo2",
+  # Thai text, and the machinery that finds it
+  "fontconfig", "fonts-noto-core", "fonts-thai-tlwg",
+  # An init that reaps. Chrome forks a zygote and helpers; when the browser closes they
+  # are re-parented to PID 1, and PID 1 here is npm, which does not wait on children it
+  # did not start. They stayed as zombies — four of them, measured at 0s, 5s and 15s,
+  # never collected. tini's whole job is to collect them.
+  "tini",
+]
 
-[variables]
-PUPPETEER_SKIP_DOWNLOAD = "1"
-CHROMIUM_PATH = "/nix/var/nix/profiles/default/bin/chromium"
+[phases.browser]
+# Explicit, not a postinstall: a package manager may skip lifecycle scripts, and a
+# renderer that silently did not install is the failure this whole change is about.
+dependsOn = ["install"]
+cmds = ["npm run browser:install"]
+
+[phases.build]
+dependsOn = ["browser"]
+
+[start]
+# tini is PID 1, npm is its child. Without this the container's PID 1 is npm, and an
+# orphaned Chrome helper has nobody to reap it.
+#
+# `-g` sends signals to the whole process GROUP, not just the direct child. On shutdown
+# that is the difference between npm being asked to stop and everything under it being
+# asked to stop: `docker stop` signals PID 1 only, npm does not reliably pass SIGTERM on
+# to the next-server it spawned through a shell, and a Chrome helper that outlives its
+# parent would never hear about it at all. With -g they all get it, and the container
+# exits on its own instead of waiting out the grace period and being killed.
+cmd = "/usr/bin/tini -g -- npm run start"

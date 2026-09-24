@@ -96,43 +96,46 @@ jobs:
           npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script
           npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
 
-      # Chromium and a Thai font, so the certificate renderer is exercised against a
-      # Linux container rather than whatever a developer happens to have installed. A
-      # Mac with Chrome and the system Thai fonts renders the page beautifully and says
-      # nothing about what ships.
-      - name: Install Chromium and Thai fonts (for the certificate renderer)
+      # The browser the deployment will actually use, installed the way the deployment
+      # installs it. Not the runner's Chrome, and not apt's `chromium-browser` — that
+      # one is a snap shim whose real binary never arrives in a container, which is the
+      # failure this step exists to catch.
+      - name: System libraries and Thai fonts (as nixpacks.toml installs them)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq chromium-browser fonts-thai-tlwg fonts-noto-core || \
-          sudo apt-get install -y -qq chromium fonts-thai-tlwg fonts-noto-core
+          sudo apt-get install -y -qq \
+            libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+            libxrandr2 libgbm1 libasound2t64 libpango-1.0-0 libcairo2 \
+            fontconfig fonts-noto-core fonts-thai-tlwg \
+            poppler-utils
           fc-cache -f >/dev/null 2>&1 || true
-          echo "CHROMIUM_PATH=$(command -v chromium-browser || command -v chromium)" >> "$GITHUB_ENV"
-
-      - name: The certificate renderer works in a container like the deployment's
-        run: |
-          # Resolved, never printed: where a binary lives is not something to publish in
-          # a public build log.
-          if [ -n "$CHROMIUM_PATH" ] && [ -x "$CHROMIUM_PATH" ]; then
-            echo "chromium: resolved ($("$CHROMIUM_PATH" --version 2>/dev/null | head -1 | cut -d' ' -f1-2))"
-          else
-            echo "chromium: NOT resolved"; exit 1
-          fi
           fc-list | grep -qiE 'thai|noto' \
             && echo "thai font: present ($(fc-list | grep -icE 'thai|noto') faces)" \
             || { echo "thai font: MISSING"; exit 1; }
+
+      - name: Install the pinned browser (the same build step Railway runs)
+        run: npm run browser:install
+
+      - name: The certificate renderer works, using the project's own browser
+        env:
+          # Deliberately blanked: an override would let the runner's Chrome stand in for
+          # the one the deployment ships, and the test would prove nothing.
+          CHROME_HEADLESS_SHELL_PATH: ""
+          PUPPETEER_EXECUTABLE_PATH: ""
+          CHROMIUM_PATH: ""
+        run: |
           npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts \
             --reporter=json --outputFile=/tmp/renderer.json
           node -e '
             const r = require("/tmp/renderer.json");
             const skipped = r.numPendingTests + r.numTodoTests;
-            const passed = r.numPassedTests;
-            console.log(`renderer suite: ${passed} passed, ${skipped} skipped`);
+            console.log(`renderer suite: ${r.numPassedTests} passed, ${skipped} skipped`);
             if (skipped > 0) { console.error("the renderer suite must not skip in CI"); process.exit(1); }
-            if (passed < 6) { console.error("the renderer suite did not run"); process.exit(1); }
+            if (r.numPassedTests < 6) { console.error("the renderer suite did not run"); process.exit(1); }
           '
-          # Nothing may be left running once the suite is done.
           sleep 2
-          leftover=$(pgrep -fc "chrome|chromium" || true)
+          leftover=$(pgrep -fc "chrome|chromium|headless_shell" || true)
           [ "${leftover:-0}" -eq 0 ] && echo "browser processes: none left" || { echo "browser processes left behind: $leftover"; exit 1; }
 
       - name: Integration tests (real database)
@@ -143,6 +146,46 @@ jobs:
 
       # The app itself was never built here — only the worker — so a page that fails
       # to compile or prerender passed CI and reached production.
+      # The image, not the checkout. Everything above this line runs against a source
+      # tree and the runner's own node_modules; none of that is what ships. The failure
+      # this change exists to fix was an image with no browser in it while every check
+      # around it was green.
+      - name: Install Nixpacks
+        # Pinned to the version Railway's builder reports, not whatever the install
+        # script hands out today. A smoke test that builds the image with a DIFFERENT
+        # builder than production is testing something production does not do — and the
+        # first run proved it: a newer CLI emitted a cache mount for
+        # `tsconfig.tsbuildinfo` that BuildKit could not bind (a directory onto a file),
+        # which Railway's own build never hits.
+        env:
+          NIXPACKS_VERSION: "1.41.0"
+        run: |
+          curl -fsSL "https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nixpacks
+          sudo chmod +x /usr/local/bin/nixpacks
+          echo "nixpacks: $(nixpacks --version)"
+
+      # Reported as a difference, not a total: a Next.js image with node_modules is most
+      # of the number with no browser in it at all.
+      #
+      # NOT continue-on-error. It was, and the first run failed behind it without anybody
+      # noticing — the baseline commit is not in a depth-1 checkout, and the step went
+      # green while measuring nothing. The delta is a number a decision rests on, so a
+      # run that cannot produce it has not passed.
+      #
+      # Runs before the smoke test so the numbers exist even when the smoke test fails.
+      - name: Image size, this branch against what production runs
+        env:
+          # The FULL sha. A shallow checkout cannot resolve an abbreviation for a commit
+          # it does not have, which is exactly how this failed the first time.
+          BASELINE_REF: badaf97631026585a108e87dcbef9507223b6a1a
+        run: bash scripts/image-size-delta.sh
+
+      - name: Runtime image smoke test (builds the image, runs it, renders inside it)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
+        run: bash scripts/image-smoke.sh
+
       - name: Build app
         run: npx next build
         env:
