@@ -19,6 +19,7 @@ import {
   type TransferStage,
 } from "@/lib/payment-transfer";
 import { guidePayoutTotal } from "@/lib/peak-sync";
+import { linkCertificatesForPayment } from "@/lib/certificates/peak-link";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import {
   attachmentFileType, documentStatus, paymentDocumentLock, paymentRefFor, peakPaymentPlan,
@@ -374,6 +375,12 @@ export function prismaCreateDeps(opts: { guideId: string; actor: Actor; alreadyP
       });
       if (moved.count !== 1) throw new Error(`${p.paymentRef} is no longer waiting for its PEAK document`);
       await audit({ ...actor, action: "pay.peak_document_created", entityType: "GuidePaymentDocument", detail: { paymentRef: p.paymentRef, guideId, documentNo: p.documentNo, documentId: p.documentId } });
+      // Every certificate for a job in this document now knows which EXP it accompanies.
+      // This creates and changes nothing in PEAK — it writes down a relationship the
+      // payment just established. Best effort on purpose: a payment must never fail
+      // because a certificate could not be stamped, and until it is, the certificate
+      // panel follows the same chain live and shows the same answer.
+      await linkCertificatesForPayment(p.paymentRef, actor).catch(() => {});
     },
 
     async recordCreateFailed({ paymentRef, reason, uncertain }) {
@@ -807,6 +814,8 @@ async function markDocumentPaid(p: {
     if (stamped.count !== expected) throw new Error(`expected ${expected} locked job(s) for ${p.paymentRef}, found ${stamped.count}`);
   });
   for (const a of audits) await audit(a);
+  // The document is paid, so its certificates can now carry the date the money moved.
+  await linkCertificatesForPayment(p.paymentRef, p.actor).catch(() => {});
   await audit({
     ...p.actor, action: "pay.peak_payment_recorded", entityType: "GuidePaymentDocument",
     detail: {

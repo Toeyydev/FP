@@ -66,6 +66,24 @@ export type CertificateView = {
   signatureVersion?: number | null;
 };
 
+/**
+ * What this document does NOT cover.
+ *
+ * PEAK will print its own "ใบรับรองแทนใบเสร็จรับเงิน" from a whole EXP, and that page
+ * adds up every line on it — the guide's fee, the review reward, the withholding and the
+ * net transfer — because an EXP for a combined payment holds all of them. As evidence
+ * for unreceipted expenses it is therefore useless: it certifies a number that is mostly
+ * wages.
+ *
+ * This document is the opposite thing on purpose. It shows the covered reimbursement
+ * rows and their total, and nothing else, so the sentence below is not a disclaimer
+ * bolted onto a page that contradicts it — it is a description of what the page already
+ * is. Anyone reconciling against PEAK needs both documents and should be told so here,
+ * rather than discovering the totals differ and assuming one of them is wrong.
+ */
+export const SCOPE_NOTICE_TH =
+  "เอกสารฉบับนี้ครอบคลุมเฉพาะรายการค่าใช้จ่ายที่ระบุด้านล่าง และไม่ครอบคลุมค่าจ้าง ค่าตอบแทน หรือรายการอื่นในเอกสาร PEAK ที่อ้างอิง";
+
 export function renderCertificateHtml(v: CertificateView): string {
   const p = v.payload;
   const rows = p.rows.map((r, i) => `<tr>
@@ -84,30 +102,31 @@ export function renderCertificateHtml(v: CertificateView): string {
  @page { size: A4; margin: 16mm 15mm; }
  * { box-sizing: border-box; }
  body { font-family: "Sarabun", "Noto Sans Thai", "Leelawadee UI", sans-serif; color: #1c1917; font-size: 11pt; line-height: 1.5; margin: 0; }
- .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #b45309; padding-bottom: 9px; margin-bottom: 16px; }
+ .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #b45309; padding-bottom: 7px; margin-bottom: 12px; }
  .org { font-size: 14pt; font-weight: 700; color: #b45309; }
  .org small { display: block; font-size: 8.5pt; color: #57534e; font-weight: 400; }
  .no { text-align: right; font-size: 9pt; color: #57534e; }
  .no b { display: block; font-size: 11pt; color: #1c1917; }
  h1 { font-size: 14pt; text-align: center; margin: 0 0 3px; }
- .kind { text-align: center; font-size: 9pt; color: #78716c; margin-bottom: 16px; }
- .notice { border: 1px solid #fcd34d; background: #fffbeb; padding: 7px 10px; font-size: 9.5pt; margin-bottom: 14px; }
+ .kind { text-align: center; font-size: 9pt; color: #78716c; margin-bottom: 10px; }
+ .notice { border: 1px solid #fcd34d; background: #fffbeb; padding: 6px 10px; font-size: 9.5pt; margin-bottom: 10px; }
+ .scope { display: block; margin-top: 3px; font-weight: 600; color: #92400e; }
  .notice b { color: #92400e; }
- table.facts { width: 100%; border-collapse: collapse; font-size: 10pt; margin-bottom: 14px; }
+ table.facts { width: 100%; border-collapse: collapse; font-size: 10pt; margin-bottom: 10px; }
  table.facts th { text-align: left; width: 30%; font-weight: 600; color: #57534e; padding: 2px 0; vertical-align: top; }
  table.facts td { padding: 2px 0; }
- p { margin: 0 0 9px; text-indent: 2em; text-align: justify; }
- table.items { width: 100%; border-collapse: collapse; margin: 4px 0 8px; font-size: 10pt; }
+ p { margin: 0 0 7px; text-indent: 2em; text-align: justify; }
+ table.items { width: 100%; border-collapse: collapse; margin: 3px 0 6px; font-size: 10pt; }
  table.items th { background: #fef3c7; border: 1px solid #d6d3d1; padding: 5px 7px; font-weight: 600; text-align: left; }
  table.items td { border: 1px solid #e7e5e4; padding: 5px 7px; }
  .c { text-align: center; } .r { text-align: right; }
  tr.sum td { background: #fafaf9; font-weight: 700; border-top: 2px solid #b45309; }
- .words { font-size: 9.5pt; color: #57534e; font-style: italic; margin-bottom: 8px; }
+ .words { font-size: 9.5pt; color: #57534e; font-style: italic; margin-bottom: 6px; }
  /* Never split across a page. An attestation broken in half — the name on one page and
     the signature on the next — is what a tampered document looks like, and a reader
     cannot tell the difference between that and a page that merely ran out of room. */
- .approve { border: 1px solid #d6d3d1; padding: 8px 11px; margin-top: 6px; break-inside: avoid; page-break-inside: avoid; }
- .approve h2 { font-size: 10.5pt; margin: 0 0 6px; color: #b45309; }
+ .approve { border: 1px solid #d6d3d1; padding: 8px 11px; margin-top: 4px; break-inside: avoid; page-break-inside: avoid; }
+ .approve h2 { font-size: 10.5pt; margin: 0 0 4px; color: #b45309; }
  .approve table { width: 100%; border-collapse: collapse; font-size: 9pt; }
  .approve th { text-align: left; width: 32%; font-weight: 600; color: #57534e; padding: 1px 0; vertical-align: top; }
  .hash { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 8.5pt; }
@@ -133,7 +152,8 @@ export function renderCertificateHtml(v: CertificateView): string {
 
 <div class="notice">
   <b>ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน · ไม่ใช่ใบกำกับภาษี</b><br>
-  เอกสารนี้ออกโดยบริษัทเพื่อบันทึกค่าใช้จ่ายที่ไม่มีใบเสร็จรับเงินจากผู้ให้บริการ ไม่ใช่เอกสารทางภาษีและใช้เครดิตภาษีซื้อไม่ได้
+  เอกสารนี้ออกโดยบริษัทเพื่อบันทึกค่าใช้จ่ายที่ไม่มีใบเสร็จรับเงินจากผู้ให้บริการ ไม่ใช่เอกสารทางภาษีและใช้เครดิตภาษีซื้อไม่ได้<br>
+  <span class="scope">${esc(SCOPE_NOTICE_TH)}</span>
 </div>
 
 <table class="facts">
