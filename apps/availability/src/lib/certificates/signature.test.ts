@@ -300,7 +300,11 @@ describe("the signature on the page", () => {
     expect(html).toContain("data:image/png;base64,");
     expect(html).toContain("ภาพลายมือชื่อของ Anong Testsuite");
     expect(html).toContain("(ฉบับที่ 1)");
+    // Inside the attester's own table, after their name — so no arrangement of this page
+    // reads as somebody else's hand, and adding one does not cost a second page.
     expect(html.indexOf("Anong Testsuite")).toBeLessThan(html.indexOf("ภาพลายมือชื่อประกอบการรับรอง"));
+    expect(html).toContain('<tr class="sig">');
+    expect(html.slice(html.indexOf('<div class="approve">'))).toContain("</table>\n</div>");
   });
 
   it("without one, the document still says who attested it and shows no empty frame", () => {
