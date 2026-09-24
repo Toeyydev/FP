@@ -9,10 +9,17 @@
 //                    operator's first save, and an operator pressing Save is not a guide
 //                    reporting anything.
 //
-//   ADMIN_RECORDED   the guide never filed one. An admin entered the rows from
-//                    information they checked, and the document says so in as many
-//                    words. It does not hint, and it does not leave the reader to infer
-//                    a report that never happened.
+//   ADMIN_RECORDED   an admin entered the rows from information they checked, and the
+//                    document says so in as many words. Two situations wear this label
+//                    and they must not be described alike:
+//
+//                      the guide never filed    the absence is the point, and leaving it
+//                                               unsaid invites a reader to assume a
+//                                               report exists somewhere
+//                      the guide DID file       and the admin used their own checked
+//                                               figures instead. Saying "the guide did
+//                                               not report" here would be false about a
+//                                               person who did.
 //
 // Chosen once, at issue, and never afterwards. Editing one into the other would rewrite
 // what a document already signed claims about a person. Getting it wrong means
@@ -38,6 +45,14 @@ export const SOURCE_LABEL_TH: Record<ExpenseSource, string> = {
  */
 export function sourceSentenceTh(input: {
   source: ExpenseSource;
+  /**
+   * Whether the guide filed a report, AS IT WAS when the certificate was issued.
+   *
+   * A snapshot, never re-read from the job sheet at render time. A guide who files a
+   * week later does not retroactively change what a signed document said about them —
+   * and a document whose words could change without its fingerprint changing would not
+   * be worth fingerprinting.
+   */
   guideReportedAt: string | null;
   recordedByName: string | null;
   recordedAt: string | null;
@@ -49,12 +64,24 @@ export function sourceSentenceTh(input: {
       ? `ไกด์ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนเมื่อ ${when(input.guideReportedAt)}`
       : "ไม่มีบันทึกการส่งรายงานจากบัญชีของไกด์";
   }
+
   const who = (input.recordedByName ?? "").trim() || "ผู้ดูแลระบบ";
   // A draft has no recording time, and inventing one would be the document's first lie.
-  if (input.draft || !input.recordedAt) {
-    return `ผู้ดูแลระบบ ${who} จะเป็นผู้บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อยืนยัน โดยไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้`;
-  }
-  return `ผู้ดูแลระบบ ${who} บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อ ${when(input.recordedAt)} โดยไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้`;
+  const clause = input.draft || !input.recordedAt
+    ? `ผู้ดูแลระบบ ${who} จะเป็นผู้บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อยืนยัน`
+    : `ผู้ดูแลระบบ ${who} บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อ ${when(input.recordedAt)}`;
+
+  // Two different situations, and saying the wrong one is not a wording problem.
+  //
+  // The guide DID file, and an admin recorded their own checked figures instead. Saying
+  // "the guide did not report" there would be false about a person who did — the document
+  // says which figures it stands on, and stops.
+  //
+  // The guide did NOT file. Then the absence is the point, and leaving it unsaid would
+  // invite a reader to assume a report exists somewhere.
+  return input.guideReportedAt
+    ? `${clause} โดยเอกสารฉบับนี้ยึดรายการที่ผู้ดูแลระบบบันทึกไว้`
+    : `${clause} โดยไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้`;
 }
 
 export type SourceAvailability = {
@@ -96,6 +123,15 @@ export function sourceRefusal(source: ExpenseSource, sheet: { guideExpensesAt: D
   return found.available ? null : found.reason;
 }
 
-/** Said on screen where an admin is about to issue one without a guide report. */
-export const ADMIN_RECORDED_EXPLAINER_TH =
-  "ไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้ ผู้ดูแลระบบยังออกใบรับรองได้จากรายการค่าใช้จ่ายที่ตรวจสอบและบันทึกไว้ในใบงานแล้ว โดยเอกสารจะระบุชัดเจนว่าผู้ดูแลระบบเป็นผู้บันทึกรายการ ไม่ใช่ไกด์";
+/**
+ * What an admin is told before choosing to record the rows themselves.
+ *
+ * Two situations, and the screen must not describe the wrong one — an admin who is told
+ * "the guide did not file" about a guide who did has been misled by their own tooling
+ * before they put a name to anything.
+ */
+export function adminRecordedExplainerTh(sheet: { guideExpensesAt: Date | null }): string {
+  return sheet.guideExpensesAt
+    ? "ไกด์ส่งรายงานผ่านบัญชีของตนแล้ว แต่ผู้ดูแลระบบเลือกใช้รายการที่ตนตรวจสอบและบันทึกไว้ เอกสารจะระบุว่าผู้ดูแลระบบเป็นผู้บันทึกรายการ และยึดรายการที่บันทึกไว้นั้น โดยจะไม่เขียนว่าไกด์ไม่ได้รายงาน"
+    : "ไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้ ผู้ดูแลระบบยังออกใบรับรองได้จากรายการค่าใช้จ่ายที่ตรวจสอบและบันทึกไว้ในใบงานแล้ว โดยเอกสารจะระบุชัดเจนว่าผู้ดูแลระบบเป็นผู้บันทึกรายการ ไม่ใช่ไกด์";
+}

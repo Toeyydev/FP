@@ -90,7 +90,9 @@ export async function GET(req: NextRequest) {
   const payload = buildPayload(
     { jobRef: sheet.ref, tourDate: sheet.date, slotIdx: sheet.slotIdx, guideId: sheet.guideId,
       guideName: (guide?.fullName || guide?.displayName || sheet.guideId).trim(),
-      guideReportedAt: source === "GUIDE_REPORTED" ? sheet.guideExpensesAt : null },
+      // The fact, not a function of the chosen source: it is what decides which
+      // admin-recorded sentence is true.
+      guideReportedAt: sheet.guideExpensesAt },
     rows, null, { source, recordedBy },
   );
 

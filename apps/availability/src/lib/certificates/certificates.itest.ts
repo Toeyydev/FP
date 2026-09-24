@@ -1540,3 +1540,95 @@ describe("a certificate records where its rows came from", () => {
     expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.source).toBe("ADMIN_RECORDED");
   });
 });
+
+// ── what a request is allowed to say ────────────────────────────────────────
+//
+// The body may carry the natural key of the job sheet and ONE of two words. Everything
+// else — who recorded the rows, who certified them, under what name, with what role, at
+// what time, with which signature — is read from the authenticated session and the
+// server's own data. A request that supplies any of it is not partially honoured; it is
+// ignored, because each of those fields is a claim about a person.
+
+describe("a client cannot forge who did what", () => {
+  const FORGERIES = {
+    recordedById: "u_someone_important", recordedByName: "Someone Else", recordedByRole: "OWNER",
+    recordedAt: "2000-01-01T00:00:00.000Z",
+    attestedByUserId: "u_someone_important", attestedByName: "Someone Else", attestedByRole: "OWNER",
+    attestedAt: "2000-01-01T00:00:00.000Z",
+    signatureUserId: "u_someone_important", signatureVersion: 99, signatureSha256: "f".repeat(64),
+    createdById: "u_someone_important", certificateNo: "CERT-I-CHOSE-THIS",
+    payloadHash: "0".repeat(64), status: "LINKED", source: "ADMIN_RECORDED",
+  };
+
+  const post = (body: object) =>
+    certificatePost(new Request("https://ops.example.test/api/jobsheet/certificate", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }) as unknown as Parameters<typeof certificatePost>[0]);
+
+  it("every forged field is ignored; the session decides", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    const res = await post({ guideId: GUIDE, date: DATE, slotIdx: 0, ...FORGERIES });
+    expect(res.status).toBe(200);
+
+    const c = (await prisma.expenseCertificate.findFirst())!;
+    // The recorder is the signed-in admin, at a time the server chose.
+    expect(c.recordedById).toBe(ADMIN.id);
+    expect(c.recordedByName).toBe(ADMIN.name);
+    expect(c.recordedByRole).toBe("ADMIN");
+    expect(c.recordedAt!.getFullYear()).toBeGreaterThan(2000);
+    // Nothing was attested, signed, or given a number of the client's choosing.
+    expect(c.attestedByUserId).toBeNull();
+    expect(c.attestedByName).toBeNull();
+    expect(c.attestedAt).toBeNull();
+    expect(c.signatureUserId).toBeNull();
+    expect(c.signatureVersion).toBeNull();
+    expect(c.signatureSha256).toBeNull();
+    expect(c.createdById).toBe(ADMIN.id);
+    expect(c.certificateNo).not.toBe("CERT-I-CHOSE-THIS");
+    expect(c.payloadHash).not.toBe("0".repeat(64));
+    expect(c.status).toBe("READY_TO_ATTEST");
+    // The one field it WAS allowed to choose took effect.
+    expect(c.source).toBe("ADMIN_RECORDED");
+  });
+
+  it("the payload carries the session's recorder, not the body's", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    await post({ guideId: GUIDE, date: DATE, slotIdx: 0, ...FORGERIES });
+    const c = (await prisma.expenseCertificate.findFirst())!;
+    const payload = JSON.stringify(c.payload);
+    expect(payload).toContain(ADMIN.id);
+    expect(payload).not.toContain("u_someone_important");
+    expect(payload).not.toContain("Someone Else");
+    expect(payload).not.toContain("2000-01-01");
+  });
+
+  it("a source that is not one of the two words is refused outright", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    for (const bad of ["", "guide", "ADMIN", "admin_recorded", 1, null, {}]) {
+      const res = await post({ guideId: GUIDE, date: DATE, slotIdx: 0, source: bad });
+      expect(res.status, `source=${JSON.stringify(bad)}`).toBe(400);
+    }
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("forging the attester at attestation time changes nothing either", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    await post({ guideId: GUIDE, date: DATE, slotIdx: 0, source: "ADMIN_RECORDED" });
+    const id = (await prisma.expenseCertificate.findFirst())!.id;
+    const res = await certificateAction(
+      new Request("https://ops.example.test/x", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "attest", ...FORGERIES }),
+      }) as unknown as Parameters<typeof certificateAction>[0],
+      { params: Promise.resolve({ id }) },
+    );
+    expect(res.status).toBe(200);
+    const c = (await prisma.expenseCertificate.findUnique({ where: { id } }))!;
+    expect(c.attestedByUserId).toBe(ADMIN.id);
+    expect(c.attestedByName).toBe(ADMIN.name);
+    expect(c.attestedByRole).toBe("ADMIN");
+    expect(c.attestedAt!.getFullYear()).toBeGreaterThan(2000);
+    // And the source it was issued under is untouched by an attest call.
+    expect(c.source).toBe("ADMIN_RECORDED");
+  });
+});

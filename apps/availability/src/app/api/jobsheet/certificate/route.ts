@@ -7,7 +7,7 @@ import type { Expense } from "@/lib/jobsheet";
 import { certifiableRows, duplicateIdentities, ineligibleRows } from "@/lib/certificates/payload";
 import { LABEL, LABEL_TH, type CertificateState } from "@/lib/certificates/state";
 import { CertificateRefused, createCertificate, type Actor } from "@/lib/certificates/service";
-import { ADMIN_RECORDED_EXPLAINER_TH, availableSources, defaultSource, isExpenseSource, SOURCE_LABEL_TH } from "@/lib/certificates/source";
+import { adminRecordedExplainerTh, availableSources, defaultSource, isExpenseSource, SOURCE_LABEL_TH } from "@/lib/certificates/source";
 import { denied } from "@/lib/certificates/denied";
 import { certificatePeakView } from "@/lib/certificates/peak-link";
 import { attachEnabled } from "@/lib/certificates/peak-attach";
@@ -59,6 +59,9 @@ export async function GET(req: NextRequest) {
     select: {
       id: true, certificateNo: true, status: true, totalSatang: true, payloadHash: true, pdfHash: true,
       source: true, recordedByName: true, recordedByRole: true, recordedAt: true,
+      // The snapshot the document was issued against, so the screen reads from the same
+      // fact the PDF does rather than from the job sheet as it stands now.
+      sourceGuideReportedAt: true,
       driveUrl: true, attestedByName: true, attestedByRole: true, attestedAt: true, uploadedAt: true, linkedAt: true,
       voidedAt: true, voidReason: true, coveredRows: true, createdAt: true,
       guideId: true, tourDate: true, slotIdx: true,
@@ -94,7 +97,7 @@ export async function GET(req: NextRequest) {
     // about to become, it does not get to say.
     sources: availableSources(sheet).map((s) => ({ ...s, label: SOURCE_LABEL_TH[s.source] })),
     defaultSource: defaultSource(sheet),
-    adminRecordedExplainer: ADMIN_RECORDED_EXPLAINER_TH,
+    adminRecordedExplainer: adminRecordedExplainerTh(sheet),
     wouldRecordAs: (session?.user?.name || (session?.user as { displayName?: string })?.displayName || session?.user?.id || "").toString(),
     certificates: certificates.map((c, i) => ({
       ...c,

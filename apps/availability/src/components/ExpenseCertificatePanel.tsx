@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { sourceSentenceTh } from "@/lib/certificates/source";
 
 // Issuing and certifying a certificate in lieu of a receipt, from the job sheet.
 //
@@ -23,6 +24,8 @@ type Certificate = {
   recordedByName?: string | null;
   recordedByRole?: string | null;
   recordedAt?: string | null;
+  /** The guide-report fact AS AT ISSUE. Never the job sheet as it stands now. */
+  sourceGuideReportedAt?: string | null;
   peak: PeakView;
   attachments: Attachment[];
 };
@@ -175,12 +178,17 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
             <b>{live.certificateNo}</b>
             <span style={{ color: TONE[live.status] ?? "#78716c", fontWeight: 700 }}>{live.labelTh}</span>
           </div>
-          {live.source === "ADMIN_RECORDED" && (
-            <div style={{ marginTop: 4 }}>
-              ที่มาของรายการ: ผู้ดูแลระบบ <b>{live.recordedByName}</b> บันทึกแทน
-              {live.recordedAt ? ` เมื่อ ${when(live.recordedAt)}` : ""} — ไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตน
-            </div>
-          )}
+          {/* The same function the draft PDF and the filed PDF use, on the snapshot the
+              certificate stored — so the screen cannot say something the document does
+              not, and a later guide report cannot reword either of them. */}
+          <div style={{ marginTop: 4 }}>
+            ที่มาของรายการ: {sourceSentenceTh({
+              source: live.source ?? "GUIDE_REPORTED",
+              guideReportedAt: live.sourceGuideReportedAt ?? null,
+              recordedByName: live.recordedByName ?? null,
+              recordedAt: live.recordedAt ?? null,
+            }, when)}
+          </div>
           {live.attestedAt && (
             <div style={{ marginTop: 4 }}>
               รับรองโดย <b>{live.attestedByName}</b> ({live.attestedByRole}) เมื่อ {when(live.attestedAt)}

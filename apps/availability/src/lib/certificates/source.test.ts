@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ADMIN_RECORDED_EXPLAINER_TH, availableSources, defaultSource, EXPENSE_SOURCES,
+  adminRecordedExplainerTh, availableSources, defaultSource, EXPENSE_SOURCES,
   isExpenseSource, sourceRefusal, sourceSentenceTh,
 } from "@/lib/certificates/source";
 import { buildPayload, canonicalString, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
@@ -66,15 +66,36 @@ describe("what the document says about where the figures came from", () => {
     expect(s).toBe("ไกด์ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนเมื่อ [2099-04-02T06:30:00.000Z]");
   });
 
-  it("an admin recording says so, names them, and says the guide did not file", () => {
+  // 1 — admin recorded, and the guide genuinely never filed.
+  it("admin-recorded with NO guide report says the guide did not file", () => {
     const s = sourceSentenceTh({ source: "ADMIN_RECORDED", guideReportedAt: null, recordedByName: "Anong Testsuite", recordedAt: ADMIN_AT }, when);
     expect(s).toContain("ผู้ดูแลระบบ Anong Testsuite บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อ");
     expect(s).toContain("ไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้");
   });
 
+  // 2 — admin recorded, but the guide DID file. Saying otherwise is false about a person.
+  it("admin-recorded WITH a guide report never says the guide did not file", () => {
+    const s = sourceSentenceTh({ source: "ADMIN_RECORDED", guideReportedAt: "2099-04-02T06:30:00.000Z", recordedByName: "Anong Testsuite", recordedAt: ADMIN_AT }, when);
+    expect(s).toContain("ผู้ดูแลระบบ Anong Testsuite บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อ");
+    expect(s).toContain("เอกสารฉบับนี้ยึดรายการที่ผู้ดูแลระบบบันทึกไว้");
+    expect(s).not.toContain("ไกด์ไม่ได้ส่งรายงาน");
+    expect(s).not.toContain("ไม่ได้ส่งรายงาน");
+  });
+
+  // 4 — neither case leaks the other's wording.
+  it("the two admin-recorded sentences never contain each other", () => {
+    const without = sourceSentenceTh({ source: "ADMIN_RECORDED", guideReportedAt: null, recordedByName: "A", recordedAt: ADMIN_AT }, when);
+    const withReport = sourceSentenceTh({ source: "ADMIN_RECORDED", guideReportedAt: "2099-04-02T06:30:00.000Z", recordedByName: "A", recordedAt: ADMIN_AT }, when);
+    expect(without).not.toContain("ยึดรายการที่ผู้ดูแลระบบบันทึกไว้");
+    expect(withReport).not.toContain("ไกด์ไม่ได้ส่งรายงาน");
+    expect(without).not.toBe(withReport);
+  });
+
   it("an admin-recorded document never claims the guide reported anything", () => {
-    const s = sourceSentenceTh({ source: "ADMIN_RECORDED", guideReportedAt: null, recordedByName: "Anong", recordedAt: ADMIN_AT }, when);
-    expect(s).not.toContain("ไกด์ส่งรายงาน");
+    for (const at of [null, "2099-04-02T06:30:00.000Z"]) {
+      const s = sourceSentenceTh({ source: "ADMIN_RECORDED", guideReportedAt: at, recordedByName: "Anong", recordedAt: ADMIN_AT }, when);
+      expect(s).not.toContain("ไกด์ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนเมื่อ");
+    }
   });
 
   it("a draft says what WILL be recorded and invents no time", () => {
@@ -97,6 +118,16 @@ describe("the source is part of what the fingerprint covers", () => {
   it("who recorded it is in the fingerprint, so swapping the person changes it", () => {
     const other = buildPayload(FACTS, ROWS, null, { source: "ADMIN_RECORDED", recordedBy: { ...RECORDED, id: "u_someone_else" } });
     expect(payloadHash(other)).not.toBe(payloadHash(admin));
+  });
+
+  it("whether the guide had reported is in the hash, so wording cannot move silently", () => {
+    // Same source, same rows, same recorder — only the fact differs, and the fact is
+    // what decides which sentence is printed.
+    const withReport = buildPayload({ ...FACTS, guideReportedAt: new Date("2099-04-02T06:30:00Z") }, ROWS, null, { source: "ADMIN_RECORDED", recordedBy: RECORDED });
+    const without = buildPayload(FACTS, ROWS, null, { source: "ADMIN_RECORDED", recordedBy: RECORDED });
+    expect(payloadHash(withReport)).not.toBe(payloadHash(without));
+    expect(canonicalString(withReport)).toContain("reported=2099-04-02T06:30:00.000Z");
+    expect(canonicalString(without)).toContain("reported=;");
   });
 
   it("a guide-reported payload carries no recorder", () => {
@@ -203,6 +234,61 @@ describe("the draft endpoint changes nothing", () => {
   });
 });
 
-it("the explainer tells an admin what the document will say about them", () => {
-  expect(ADMIN_RECORDED_EXPLAINER_TH).toContain("ผู้ดูแลระบบเป็นผู้บันทึกรายการ ไม่ใช่ไกด์");
+describe("the screen describes the situation the admin is actually in", () => {
+  it("no guide report: says so", () => {
+    expect(adminRecordedExplainerTh({ guideExpensesAt: null })).toContain("ไกด์ไม่ได้ส่งรายงาน");
+  });
+
+  it("a guide report exists: never claims otherwise", () => {
+    const t = adminRecordedExplainerTh({ guideExpensesAt: new Date() });
+    expect(t).not.toContain("ไกด์ไม่ได้ส่งรายงาน");
+    expect(t).toContain("ยึดรายการที่บันทึกไว้");
+  });
+});
+
+describe("the rendered document carries one case's wording and not the other's", () => {
+  const render = (over: Record<string, unknown>, origin: Record<string, unknown>) =>
+    renderCertificateHtml({
+      certificateNo: "CERT-X-01",
+      payload: buildPayload(
+        { ...FACTS, guideReportedAt: (origin.guideReportedAt as Date | null) ?? null },
+        ROWS, null,
+        { source: origin.source as "GUIDE_REPORTED" | "ADMIN_RECORDED", recordedBy: (origin.recordedBy ?? null) as never },
+      ),
+      payloadHash: "a".repeat(64),
+      attestedByName: "Anong Testsuite", attestedByRole: "ADMIN",
+      attestedAt: "2099-04-06T04:00:00.000Z", auditRef: "cert_test_1",
+      ...over,
+    } as never);
+
+  it("admin-recorded, no guide report", () => {
+    const html = render({}, { source: "ADMIN_RECORDED", guideReportedAt: null, recordedBy: RECORDED });
+    expect(html).toContain("ไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้");
+    expect(html).not.toContain("ยึดรายการที่ผู้ดูแลระบบบันทึกไว้");
+  });
+
+  it("admin-recorded, guide DID report", () => {
+    const html = render({}, { source: "ADMIN_RECORDED", guideReportedAt: new Date("2099-04-02T06:30:00Z"), recordedBy: RECORDED });
+    expect(html).toContain("ยึดรายการที่ผู้ดูแลระบบบันทึกไว้");
+    expect(html).not.toContain("ไกด์ไม่ได้ส่งรายงาน");
+  });
+
+  // 3 — a guide-reported document uses the guide's filing time and no other.
+  it("guide-reported uses guideExpensesAt and names no recorder", () => {
+    const html = render({}, { source: "GUIDE_REPORTED", guideReportedAt: new Date("2099-04-02T06:30:00Z"), recordedBy: null });
+    expect(html).toContain("ไกด์ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนเมื่อ");
+    expect(html).not.toContain("ผู้ดูแลระบบ Anong Testsuite บันทึกรายการ");
+    expect(html).not.toContain("ยึดรายการที่ผู้ดูแลระบบบันทึกไว้");
+  });
+
+  it("the wording comes from the payload snapshot, not from anything read at render time", () => {
+    const src = readFileSync(join(process.cwd(), "src/lib/certificates/document.ts"), "utf8");
+    // The template asks the shared function, and feeds it the payload — there is no
+    // job-sheet lookup in a renderer.
+    expect(src).toContain("sourceSentenceTh({");
+    expect(src).toContain("source: p.source");
+    expect(src).toContain("guideReportedAt: p.guideReportedAt");
+    expect(src).not.toContain("prisma");
+    expect(src).not.toContain("guideExpensesAt");
+  });
 });
