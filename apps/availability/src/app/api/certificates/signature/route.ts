@@ -12,7 +12,7 @@ import {
 } from "@/lib/certificates/signature-service";
 import { DuplicateSignatureFile } from "@/lib/certificates/signature-drive";
 import { attesterListInForce, attesterRefusal } from "@/lib/certificates/attester";
-import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
+import { validateDriveAllowlist } from "@/lib/certificates/drive-allowlist";
 
 export const dynamic = "force-dynamic";
 
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
   // calling Drive — the question is about the configured entries, and a misconfiguration
   // should be visible on the settings page rather than first appearing as a refusal
   // halfway through filing a document.
-  const allowlist = await checkedDriveAllowlist(null, prisma);
+  const allowlist = await validateDriveAllowlist(prisma);
 
   const [versions, impact, person, admins] = await Promise.all([
     signatureHistory(userId),
@@ -82,7 +82,11 @@ export async function GET(req: NextRequest) {
     mayChange: cannotChange === null,
     cannotChangeReason: cannotChange,
     attesterListInForce: attesterListInForce(),
-    driveAllowlist: { verified: allowlist.verified, problems: allowlist.problems },
+    // Only ever sent to an admin — this endpoint returns 403 to everybody else before
+    // reaching here, so the addresses go no further than the person who must fix them.
+    driveAllowlist: allowlist.ok
+      ? { ok: true, verified: allowlist.verified, problems: [] }
+      : { ok: false, verified: [], problems: [allowlist.reason, ...allowlist.detail] },
     limits: { maxBytes: MAX_SIGNATURE_BYTES, minDimension: MIN_DIMENSION, maxDimension: MAX_DIMENSION },
   });
 }

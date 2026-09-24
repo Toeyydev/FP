@@ -137,3 +137,34 @@ describe("the signature image response promises only what it can keep", () => {
     expect(s).not.toContain("drive.google.com");
   });
 });
+
+describe("configuration never reaches a place that is not admin-only", () => {
+  const strip = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
+
+  it("the health endpoint prints no address and no Drive identity", () => {
+    const src = strip("src/app/api/health/route.ts");
+    for (const forbidden of ["ALLOWED_EMAILS", "ATTESTER_EMAILS", "driveAllowedEmails", "configuredAttesters", "driveFileId", "driveUrl", "accountEmail"]) {
+      expect(src, `health leaks ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("the allowlist validator reads configuration and the database, never a request", () => {
+    const src = strip("src/lib/certificates/drive-allowlist.ts")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    for (const forbidden of ["req", "request", "session", "body", "searchParams", "headers"]) {
+      expect(src, `the validator takes ${forbidden} from somewhere it should not`).not.toContain(forbidden);
+    }
+    // And it asks isAdmin rather than inventing its own idea of one.
+    expect(src).toContain("isAdmin(");
+  });
+
+  it("an audit of a bad configuration carries counts, never addresses", () => {
+    const src = strip("src/lib/certificates/drive-allowlist.ts");
+    const shape = src.slice(src.indexOf("sanitisedConfigAudit"));
+    expect(shape).toContain("invalidEntries");
+    const fields = shape.split("note:")[0];
+    for (const leak of ["detail", "verified", "allowed"]) {
+      expect(fields, `the audit shape includes ${leak}`).not.toContain(`${leak}:`);
+    }
+  });
+});

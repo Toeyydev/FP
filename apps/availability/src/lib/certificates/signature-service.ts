@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { folderPathString, folderPermissionProblems, permissionProblems, SIGNATURE_FOLDER } from "@/lib/certificates/access";
-import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
+import { allowedHolders, CONFIG_INVALID_TH, sanitisedConfigAudit, validateDriveAllowlist, type AllowlistResult } from "@/lib/certificates/drive-allowlist";
 import { certificateEnvironment } from "@/lib/certificates/drive";
 import { DuplicateSignatureFile, googleSignatureDrive, type SignatureDrive } from "@/lib/certificates/signature-drive";
 import { MAX_SIGNATURE_BYTES, MAX_DIMENSION, MIN_DIMENSION, pngDimensions, sha256 } from "@/lib/certificates/signature";
@@ -35,7 +35,10 @@ export class SignatureRefused extends Error {
     this.name = "SignatureRefused";
   }
 }
-const refuse = (reasons: string[], status = 409): never => { throw new SignatureRefused(reasons, status); };
+// A function declaration, not a const arrow: TypeScript narrows after a call to a
+// declared function returning `never`, which is what lets the code below treat a
+// validated allowlist as validated instead of casting it.
+function refuse(reasons: string[], status = 409): never { throw new SignatureRefused(reasons, status); }
 
 export type Actor = { id: string; name: string; role: string };
 
@@ -141,12 +144,11 @@ export async function replacementImpact(userId: string, deps: ServiceDeps = {}):
 }
 
 /** Everything wrong with who can see this folder or file. Every unclear answer is a no. */
-async function privacyProblems(drive: SignatureDrive, folderPath: string[], fileId: string | null, db: Db = prisma): Promise<string[]> {
+async function privacyProblems(drive: SignatureDrive, folderPath: string[], fileId: string | null, list: Extract<AllowlistResult, { ok: true }>): Promise<string[]> {
   const account = await drive.accountEmail().catch(() => null);
   if (!account) return ["Which Google account holds these images could not be read, so who can see them cannot be checked."];
-  const list = await checkedDriveAllowlist(account, db);
-  const allowed = list.allowed;
-  const out: string[] = [...list.problems];
+  const allowed = allowedHolders(account, list);
+  const out: string[] = [];
   const folderId = await drive.folderId({ folderPath }).catch(() => null);
   if (!folderId) out.push(`The folder ${folderPathString(folderPath)} could not be found in Drive, so who can see it cannot be checked.`);
   else out.push(...folderPermissionProblems(await drive.permissions({ fileId: folderId }).catch(() => null), allowed, folderPath));
@@ -196,6 +198,20 @@ export async function registerSignature(
 
   const problems = checkImage(bytes);
   if (problems.length) refuse(problems, 400);
+
+  // Before the reservation and before Drive is touched at all.
+  //
+  // Not merely "before the upload": resolving a folder path CREATES the folders it does
+  // not find, so a check that ran after it would already have changed somebody's Drive
+  // on the strength of a configuration it then refused. And a reservation taken before
+  // this would have to be given back, which is a rollback that can itself fail. The
+  // cheapest correct order is to find out first.
+  const allowlist = await validateDriveAllowlist(db);
+  if (!allowlist.ok) {
+    await audit({ actorId: actor.id, actorRole: actor.role, action: "signature.config_invalid", entityType: "AttesterSignature",
+      detail: sanitisedConfigAudit(allowlist) });
+    refuse([CONFIG_INVALID_TH, allowlist.reason, ...allowlist.detail]);
+  }
   const dims = pngDimensions(bytes)!;
   const hash = sha256(bytes);
 
@@ -255,7 +271,7 @@ export async function registerSignature(
   try {
   // Before a byte is written. An image in a folder somebody shared has already leaked by
   // the time anyone checks it, and moving it afterwards does not unsee it.
-  const folderPrivacy = await privacyProblems(drive, folderPath, null, db);
+  const folderPrivacy = await privacyProblems(drive, folderPath, null, allowlist);
   if (folderPrivacy.length) {
     await clean("folder not private");
     await audit({ actorId: actor.id, actorRole: actor.role, action: "signature.drive_not_private", entityType: "AttesterSignature",
@@ -297,7 +313,7 @@ export async function registerSignature(
     refuse(["The image filed in Drive did not read back as the one that was uploaded. It has been moved aside and nothing was registered — try again."], 502);
   }
 
-  const filePrivacy = await privacyProblems(drive, folderPath, file.id, db);
+  const filePrivacy = await privacyProblems(drive, folderPath, file.id, allowlist);
   if (filePrivacy.length) {
     await drive.quarantine({ fileId: file.id, reason: "the filed image was not private to the admins", signatureId: row!.id, at: now().toISOString() }).catch(() => {});
     await clean("file not private");
@@ -349,6 +365,11 @@ export async function retireSignature(userId: string, reason: string, actor: Act
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
   await requireAttester(db, actor);
+  const cfg = await validateDriveAllowlist(db);
+  if (!cfg.ok) {
+    await audit({ actorId: actor.id, actorRole: actor.role, action: "signature.config_invalid", entityType: "AttesterSignature", detail: sanitisedConfigAudit(cfg) });
+    refuse([CONFIG_INVALID_TH, cfg.reason, ...cfg.detail]);
+  }
   if ((reason ?? "").trim().length < 10) {
     refuse(["Say why this signature is being stood down — at least 10 characters, and it is kept with the record."], 400);
   }
@@ -377,6 +398,7 @@ export async function retireSignature(userId: string, reason: string, actor: Act
  */
 export async function activeSignatureBytes(userId: string, actorId: string, deps: ServiceDeps = {}): Promise<{ bytes: Buffer; sha256: string } | null> {
   const db = deps.db ?? prisma;
+  if (!(await validateDriveAllowlist(db)).ok) return null;
   const row = await db.attesterSignature.findUnique({ where: { activeUserId: userId } });
   if (!row?.driveFileId) return null;
   let drive = deps.drive;

@@ -31,7 +31,7 @@ type Info = {
   cannotChangeReason: string | null;
   attesterListInForce: boolean;
   /** Configured Google accounts allowed to hold the files, and any that did not check out. */
-  driveAllowlist: { verified: string[]; problems: string[] };
+  driveAllowlist: { ok: boolean; verified: string[]; problems: string[] };
 };
 
 const when = (iso: string | null) =>
@@ -122,6 +122,9 @@ export default function AttesterSignatureSettings() {
   }
 
   const lim = info.limits;
+  // A misconfigured allowlist is refused by the server before it touches Drive, so
+  // offering the buttons would only produce a refusal after somebody picked a file.
+  const configBroken = info.driveAllowlist?.ok === false;
   return (
     <main className="page" style={{ maxWidth: 820 }}>
       <h1 style={{ fontSize: 20, marginBottom: 2 }}>ลายเซ็นผู้รับรอง</h1>
@@ -156,7 +159,7 @@ export default function AttesterSignatureSettings() {
               <button type="button" className="btn sm" onClick={() => setShowLive((v) => !v)}>
                 {showLive ? "ซ่อนภาพ" : "ดูภาพลายเซ็น"}
               </button>
-              <button type="button" className="btn sm ghost" disabled={busy || info.mayChange === false} onClick={() => void retire()}>
+              <button type="button" className="btn sm ghost" disabled={busy || info.mayChange === false || configBroken} onClick={() => void retire()}>
                 ยกเลิกการใช้งานลายเซ็นนี้
               </button>
             </div>
@@ -205,7 +208,7 @@ export default function AttesterSignatureSettings() {
           ไฟล์ PNG ขนาดไม่เกิน {kb(lim.maxBytes)} และด้านละ {lim.minDimension}–{lim.maxDimension} พิกเซล
           การเปลี่ยนจะสร้างเป็นฉบับใหม่ ไม่เขียนทับของเดิม
         </p>
-        <input ref={fileInput} type="file" accept="image/png" disabled={busy || info.mayChange === false} onChange={(e) => choose(e.target.files?.[0] ?? null)} />
+        <input ref={fileInput} type="file" accept="image/png" disabled={busy || info.mayChange === false || configBroken} onChange={(e) => choose(e.target.files?.[0] ?? null)} />
 
         {problems.length > 0 && (
           <ul style={{ color: "#b45309", fontSize: 12.5, marginTop: 8 }}>{problems.map((p) => <li key={p}>{p}</li>)}</ul>
@@ -238,7 +241,7 @@ export default function AttesterSignatureSettings() {
               ยืนยันว่านี่คือลายมือชื่อของ {info.userName} และอนุญาตให้ใช้บนใบรับรองแทนใบเสร็จ
             </label>
             <div style={{ marginTop: 8 }}>
-              <button type="button" className="btn" disabled={busy || !confirmed} onClick={() => void submit()}>
+              <button type="button" className="btn" disabled={busy || !confirmed || configBroken} onClick={() => void submit()}>
                 {busy ? "กำลังบันทึก…" : "ยืนยันและลงทะเบียน"}
               </button>
             </div>

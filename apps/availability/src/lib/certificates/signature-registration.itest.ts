@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 
 // Registering an attester's signature, against a real database.
 //
@@ -19,7 +19,7 @@ import { requireTestDatabase, resetDatabase } from "@/test/db";
 import { registerSignature, replacementImpact, retireSignature, signatureHistory, SignatureRefused, type Actor } from "@/lib/certificates/signature-service";
 import { DuplicateSignatureFile, type SignatureDrive, type PutSignatureInput } from "@/lib/certificates/signature-drive";
 import { resolveSignature } from "@/lib/certificates/signature";
-import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
+import { validateDriveAllowlist } from "@/lib/certificates/drive-allowlist";
 import { GET as sigGet, POST as sigPost, DELETE as sigDelete } from "@/app/api/certificates/signature/route";
 import { GET as imgGet } from "@/app/api/certificates/signature/image/route";
 import { NextRequest } from "next/server";
@@ -384,97 +384,166 @@ describe("reading the settings page is not the same as being able to act on it",
 // ── the Drive allowlist is not believed just because it was typed ───────────
 //
 // CERTIFICATE_DRIVE_ALLOWED_EMAILS decides which Google accounts may hold a certificate
-// or a signature without the privacy check refusing. Left unchecked, that is a
-// permission granted by editing an environment variable — so every entry is matched
-// against a live ADMIN account here, and one that does not match is dropped rather than
-// trusted.
+// or a signature file. Someone on that list opens the document in Drive directly,
+// whatever FolkOPS answers — so an unchecked entry breaks "only an admin sees a
+// certificate" silently, from a text field, while every endpoint still returns 403.
+//
+// Every address here is invented.
 
-describe("every address on the Drive allowlist is checked against a real account", () => {
-  const DRIVE_LIST = process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS;
+describe("the Drive allowlist is validated against real ADMIN accounts", () => {
+  const LIST = process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS;
+  const ATTESTERS = process.env.CERTIFICATE_ATTESTER_EMAILS;
+  const set = (v?: string) => { if (v === undefined) delete process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS; else process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = v; };
   const restore = () => {
-    if (DRIVE_LIST === undefined) delete process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS;
-    else process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = DRIVE_LIST;
+    if (LIST === undefined) delete process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS; else process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = LIST;
+    if (ATTESTERS === undefined) delete process.env.CERTIFICATE_ATTESTER_EMAILS; else process.env.CERTIFICATE_ATTESTER_EMAILS = ATTESTERS;
   };
-  const ACCOUNT = "folkpaths-drive@example.test";
-  const shareWith = (email: string) => {
-    drive.filePermissions = [
-      { id: "p_owner", type: "user", role: "owner", emailAddress: ACCOUNT },
-      { id: "p_other", type: "user", role: "reader", emailAddress: email },
-    ];
+  afterEach(restore);
+
+  const user = (over: Record<string, unknown>) =>
+    prisma.user.create({ data: { displayName: "Fixture", state: "ACTIVE", ...over } as never });
+
+  /** A Drive that screams if anything touches it. Proves validation came first. */
+  const noDrive = (): SignatureDrive => {
+    const boom = (what: string) => async (): Promise<never> => { throw new Error(`Drive was called (${what}) before the configuration was checked`); };
+    return {
+      find: boom("find"), create: boom("create"), read: boom("read"),
+      permissions: boom("permissions"), folderId: boom("folderId"),
+      accountEmail: boom("accountEmail"), quarantine: boom("quarantine"),
+    } as unknown as SignatureDrive;
   };
 
-  it("a live admin is honoured, and may hold the file", async () => {
-    await prisma.user.create({ data: { id: "u_finance", email: "finance-admin@example.test", role: "ADMIN", state: "ACTIVE", displayName: "Finance" } });
-    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = "finance-admin@example.test";
-    try {
-      const l = await checkedDriveAllowlist(ACCOUNT, prisma);
-      expect(l.problems).toEqual([]);
-      expect(l.allowed).toContain("finance-admin@example.test");
-      shareWith("finance-admin@example.test");
-      const out = await registerSignature(ADMIN.id, V1, ADMIN, deps());
-      expect(out.created).toBe(true);
-    } finally { restore(); }
+  // 1
+  it("an empty allowlist works, and shares the file with nobody", async () => {
+    set(undefined);
+    const r = await validateDriveAllowlist(prisma);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.allowed).toEqual([]);
+
+    const out = await registerSignature(ADMIN.id, V1, ADMIN, deps());
+    expect(out.created).toBe(true);
+    // The only permission on the file is the filing account's own. Nothing was shared.
+    expect(drive.filePermissions).toBeNull();
   });
 
-  it("an address that is nobody here is ignored, and filing refuses", async () => {
-    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = "stranger@example.test";
-    try {
-      const l = await checkedDriveAllowlist(ACCOUNT, prisma);
-      expect(l.allowed).toEqual([ACCOUNT]);
-      expect(l.problems[0]).toContain("is not an account in FolkOPS");
-      shareWith("stranger@example.test");
-      await expect(registerSignature(ADMIN.id, V1, ADMIN, deps())).rejects.toThrow(/not private/);
-      expect(await prisma.attesterSignature.count()).toBe(0);
-    } finally { restore(); }
+  // 14
+  it("the filing account needs no User record and no entry", async () => {
+    set(undefined);
+    expect(await prisma.user.findFirst({ where: { email: "folkpaths-drive@example.test" } })).toBeNull();
+    const out = await registerSignature(ADMIN.id, V1, ADMIN, deps());
+    expect(out.created).toBe(true);
   });
 
-  it("a non-admin account is ignored however it got into the list", async () => {
-    await prisma.user.create({ data: { id: "u_ops2", email: "ops@example.test", role: "OPERATOR", state: "ACTIVE", displayName: "Ops" } });
-    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = "ops@example.test";
-    try {
-      const l = await checkedDriveAllowlist(ACCOUNT, prisma);
-      expect(l.allowed).toEqual([ACCOUNT]);
-      expect(l.problems[0]).toContain("is a operator here, not an admin");
-      shareWith("ops@example.test");
-      await expect(registerSignature(ADMIN.id, V1, ADMIN, deps())).rejects.toThrow(/not private/);
-    } finally { restore(); }
+  // 2
+  it("an address that is an ADMIN here is accepted", async () => {
+    await user({ id: "u_fin", email: "finance-admin@example.test", role: "ADMIN" });
+    set("finance-admin@example.test");
+    const r = await validateDriveAllowlist(prisma);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.allowed).toEqual(["finance-admin@example.test"]);
   });
 
-  it("a suspended admin is not a current admin", async () => {
-    await prisma.user.create({ data: { id: "u_gone", email: "gone@example.test", role: "ADMIN", state: "SUSPENDED", displayName: "Gone" } });
-    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = "gone@example.test";
-    try {
-      const l = await checkedDriveAllowlist(ACCOUNT, prisma);
-      expect(l.allowed).toEqual([ACCOUNT]);
-      expect(l.problems[0]).toContain("suspended");
-    } finally { restore(); }
+  // 3
+  it("case and spacing do not matter when it is the same admin", async () => {
+    await user({ id: "u_fin", email: "Finance-Admin@Example.Test", role: "ADMIN" });
+    set("   FINANCE-ADMIN@EXAMPLE.TEST  ");
+    const r = await validateDriveAllowlist(prisma);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.allowed).toEqual(["finance-admin@example.test"]);
   });
 
-  it("the filing account needs no entry and is always allowed", async () => {
-    delete process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS;
-    const l = await checkedDriveAllowlist(ACCOUNT, prisma);
-    expect(l.allowed).toEqual([ACCOUNT]);
-    expect(l.problems).toEqual([]);
+  // 4, 15
+  it("an address that is nobody here fails, before any Drive call", async () => {
+    set("stranger@example.test");
+    const r = await validateDriveAllowlist(prisma);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.detail[0]).toContain("is not an account in FolkOPS");
+
+    await expect(registerSignature(ADMIN.id, V1, ADMIN, { drive: noDrive(), environment: ENV }))
+      .rejects.toThrow(/ADMIN/);
   });
 
-  it("the settings page shows a bad entry rather than waiting for a refusal", async () => {
-    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = "stranger@example.test";
-    try {
-      authMock.auth.mockResolvedValue({ user: { id: ADMIN.id, name: ADMIN.name, role: "ADMIN" } });
-      const res = await sigGet(new NextRequest(`https://ops.example.test/api/certificates/signature?userId=${ADMIN.id}`));
-      const d = await res.json();
-      expect(d.driveAllowlist.problems[0]).toContain("stranger@example.test");
-      expect(d.driveAllowlist.verified).toEqual([]);
-    } finally { restore(); }
+  // 5, 6, 7
+  it("a guide, an operator and an accountant are all refused", async () => {
+    for (const [id, role] of [["u_g", "GUIDE"], ["u_o", "OPERATOR"], ["u_a", "ACCOUNTANT"]] as const) {
+      await user({ id, email: `${role.toLowerCase()}@example.test`, role, ...(role === "GUIDE" ? { guideId: `G-90${id.length}` } : {}) });
+      set(`${role.toLowerCase()}@example.test`);
+      const r = await validateDriveAllowlist(prisma);
+      expect(r.ok, `${role} must not be allowed to hold the file`).toBe(false);
+      if (!r.ok) expect(r.detail[0]).toContain(`is a ${role.toLowerCase()} in FolkOPS, not an admin`);
+    }
   });
 
-  it("case and spacing in the configured list do not matter", async () => {
-    await prisma.user.create({ data: { id: "u_fin2", email: "Finance-Admin@Example.Test", role: "ADMIN", state: "ACTIVE", displayName: "Finance" } });
-    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = "  FINANCE-ADMIN@EXAMPLE.TEST  ";
-    try {
-      const l = await checkedDriveAllowlist(ACCOUNT, prisma);
-      expect(l.problems).toEqual([]);
-      expect(l.allowed).toContain("finance-admin@example.test");
-    } finally { restore(); }
+  // 8
+  it("being on the attester allowlist does not make somebody an admin", async () => {
+    await user({ id: "u_ops3", email: "ops-attester@example.test", role: "OPERATOR" });
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "ops-attester@example.test";
+    set("ops-attester@example.test");
+    const r = await validateDriveAllowlist(prisma);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail[0]).toContain("not an admin");
+  });
+
+  // 9
+  it("the same address twice, however it is spelled, is an invalid configuration", async () => {
+    await user({ id: "u_fin", email: "finance-admin@example.test", role: "ADMIN" });
+    set("finance-admin@example.test, FINANCE-ADMIN@EXAMPLE.TEST");
+    const r = await validateDriveAllowlist(prisma);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail[0]).toContain("appears more than once");
+  });
+
+  // 10
+  it("a database that cannot be read fails closed", async () => {
+    set("finance-admin@example.test");
+    const broken = { user: { findMany: async () => { throw new Error("connection lost"); } } } as never;
+    const r = await validateDriveAllowlist(broken);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail[0]).toContain("could not be checked");
+  });
+
+  // 12
+  it("an invalid configuration leaves no reservation, no row and no file", async () => {
+    set("stranger@example.test");
+    await expect(registerSignature(ADMIN.id, V1, ADMIN, { drive: noDrive(), environment: ENV })).rejects.toThrow();
+    expect(await prisma.attesterSignature.count()).toBe(0);
+    expect(drive.files).toHaveLength(0);
+  });
+
+  // 13
+  it("the audit says the configuration is invalid and names no address", async () => {
+    set("stranger@example.test");
+    await expect(registerSignature(ADMIN.id, V1, ADMIN, { drive: noDrive(), environment: ENV })).rejects.toThrow();
+    const log = (await prisma.auditLog.findFirst({ where: { action: "signature.config_invalid" } }))!;
+    expect(log).toBeTruthy();
+    const written = JSON.stringify(log.detail);
+    expect(written).toContain("invalid");
+    expect(written).not.toContain("stranger@example.test");
+    expect(written).not.toContain("@");
+    expect(written).not.toContain("sig_file_");
+    expect(written).not.toContain(sha(V1));
+  });
+
+  // 11
+  it("another role gets 403 and is told nothing about the configuration", async () => {
+    await user({ id: "u_ops4", email: "ops4@example.test", role: "OPERATOR" });
+    set("stranger@example.test");
+    authMock.auth.mockResolvedValue({ user: { id: "u_ops4", name: "Ops", role: "OPERATOR" } });
+    const res = await sigGet(new NextRequest(`https://ops.example.test/api/certificates/signature?userId=${ADMIN.id}`));
+    expect(res.status).toBe(403);
+    const body = JSON.stringify(await res.json());
+    expect(body).not.toContain("stranger@example.test");
+    expect(body).not.toContain("ADMIN user in FolkOPS");
+    expect(body).not.toContain("driveAllowlist");
+  });
+
+  it("an admin IS told, because they are the one who has to fix it", async () => {
+    set("stranger@example.test");
+    authMock.auth.mockResolvedValue({ user: { id: ADMIN.id, name: ADMIN.name, role: "ADMIN" } });
+    const d = await (await sigGet(new NextRequest(`https://ops.example.test/api/certificates/signature?userId=${ADMIN.id}`))).json();
+    expect(d.driveAllowlist.ok).toBe(false);
+    expect(d.driveAllowlist.problems.join(" ")).toContain("stranger@example.test");
   });
 });

@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient, AttesterSignature } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { downloadDriveFile, folkpathsDriveToken } from "@/lib/google-drive";
 import { permissionProblems } from "@/lib/certificates/access";
-import { checkedDriveAllowlist } from "@/lib/certificates/drive-allowlist";
+import { allowedHolders, CONFIG_INVALID_EN, validateDriveAllowlist } from "@/lib/certificates/drive-allowlist";
 import { googleCertificateDrive } from "@/lib/certificates/drive";
 
 // The image of an attester's handwritten signature, and the rules about whose it is.
@@ -142,9 +142,10 @@ export async function resolveSignature(userId: string, deps: SignatureDeps = {},
     if (!token) return ["Google Drive is not connected, so who can open the signature image cannot be checked."];
     const account = await googleCertificateDrive(token).accountEmail().catch(() => null);
     if (!account) return ["Which Google account holds the signature image could not be read, so who can open it cannot be checked."];
-    const list = await checkedDriveAllowlist(account, deps.db ?? prisma);
+    const list = await validateDriveAllowlist(deps.db ?? prisma);
+    if (!list.ok) return [CONFIG_INVALID_EN];
     const perms = await googleCertificateDrive(token).permissions({ fileId: r.driveFileId ?? "" }).catch(() => null);
-    return [...list.problems, ...permissionProblems(perms, list.allowed).map((p) => p.replace("This file", "The signature image"))];
+    return permissionProblems(perms, allowedHolders(account, list)).map((p) => p.replace("This file", "The signature image"));
   });
   const privacy = await checkPrivacy(row).catch(() => ["Who can open the signature image could not be checked."]);
   if (privacy.length) return { ok: false, code: "not-private", reasons: privacy };
