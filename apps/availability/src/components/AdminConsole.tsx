@@ -116,6 +116,12 @@ export default function AdminConsole() {
           <button className={`subtab ${tab === "requests" ? "active" : ""}`} onClick={() => setTab("requests")}>{t("tabRequests")} ({data.requests.length})</button>
           <button className={`subtab ${tab === "line" ? "active" : ""}`} onClick={() => setTab("line")}>LINE ({guides.filter((g) => g.lineLinked).length}/{guides.length})</button>
         </div>
+        {/* ADMIN only. This console admits operators too, and a signature image is the
+            one asset here worth stealing — so the link is not shown to them and the page
+            behind it checks the role again on the server. */}
+        {data.isAdmin && (
+          <a className="btn sm ghost" href="/admin/signature" title="ภาพลายมือชื่อที่ปรากฏบนใบรับรองแทนใบเสร็จ">ลายเซ็นผู้รับรอง</a>
+        )}
       </div>
 
       {flash && (

@@ -337,27 +337,34 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     const payload = cert!.payload as unknown as CertificatePayload;
 
     // The image is fetched here, where it goes on the page — not carried across from the
-    // attestation. Between the two, the registered image can be replaced, retired, or
-    // rewritten in Drive without a new version, and any of those would put a picture on
-    // this document that nobody attested with. So it is resolved again and compared to
-    // what the certificate recorded, and a document is only rendered when they agree.
+    // attestation, because bytes held in memory across two requests prove nothing about
+    // what is on file.
     //
-    // At this point "not registered" is a refusal like any other: the certificate says a
-    // signature was attested with, so its absence now is a change, not an empty slot.
+    // The VERSION the certificate recorded, not whatever is live now. Registering a new
+    // signature must not reach back and change what somebody already put their name to:
+    // a certificate attested in March and filed in June carries March's hand. A retired
+    // version is still the right answer — it was live when it was used.
+    //
+    // What is still checked is that version's bytes: if they have changed in Drive since
+    // they were registered, the image on file is not the one that was approved. And at
+    // this point "not on file" is a refusal like any other, because the certificate says
+    // a signature was attested with, so its absence is a change and not an empty slot.
     let signatureDataUri: string | null = null;
     if (cert!.signatureSha256 && cert!.signatureUserId) {
-      const again = await resolveSignature(cert!.signatureUserId, { db, ...(deps.signature ?? {}) }, actor.id);
+      const again = await resolveSignature(cert!.signatureUserId, { db, ...(deps.signature ?? {}) }, actor.id, cert!.signatureVersion);
       const release = () => db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null } }).catch(() => {});
       if (!again.ok) {
         await release();
         refuse([`The signature image this certificate was attested with cannot be used: ${again.reasons[0]}`]);
       } else if (again.signature.version !== cert!.signatureVersion || again.signature.sha256 !== cert!.signatureSha256) {
+        // Same version, different bytes: the file was rewritten in place. Nothing in this
+        // system does that, which is exactly why it is worth refusing over.
         await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.signature_changed", entityType: "ExpenseCertificate", entityId: id,
           detail: { certificateNo: cert!.certificateNo, signatureUserId: cert!.signatureUserId,
             attestedVersion: cert!.signatureVersion, attestedSha256: cert!.signatureSha256,
             registeredVersion: again.signature.version, registeredSha256: again.signature.sha256 } });
         await release();
-        refuse(["The signature image registered for the attester has changed since this certificate was attested, so filing it would put a different signature on the document. Withdraw this certificate and issue a new one."]);
+        refuse(["The signature image this certificate was attested with is not the one on file under that version any more, so filing it would put a different signature on the document. Withdraw this certificate and issue a new one."]);
       } else {
         signatureDataUri = again.signature.dataUri;
       }

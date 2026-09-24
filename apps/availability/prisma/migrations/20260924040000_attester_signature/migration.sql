@@ -1,13 +1,3 @@
--- The image of an attester's handwritten signature, kept per person and per version.
---
--- Additive: one new table, and three nullable columns on ExpenseCertificate recording
--- which signature was on a document. No existing row is read, written or moved.
---
--- The unique index on "activeUserId" keeps one live signature per person. It holds the
--- user id while current and NULL once retired, and Postgres does not compare NULLs in a
--- unique index — so retiring one frees that person for a replacement without a partial
--- index, which Prisma cannot declare and the schema-drift gate would delete.
-
 -- AlterTable
 ALTER TABLE "ExpenseCertificate" ADD COLUMN     "signatureSha256" TEXT,
 ADD COLUMN     "signatureUserId" TEXT,
@@ -19,8 +9,9 @@ CREATE TABLE "AttesterSignature" (
     "userId" TEXT NOT NULL,
     "version" INTEGER NOT NULL,
     "activeUserId" TEXT,
-    "driveFileId" TEXT NOT NULL,
+    "driveFileId" TEXT,
     "driveUrl" TEXT,
+    "driveEnvironment" TEXT,
     "sha256" TEXT NOT NULL,
     "bytes" INTEGER NOT NULL,
     "width" INTEGER NOT NULL,

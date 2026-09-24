@@ -75,6 +75,23 @@ export async function registeredSignature(userId: string, deps: SignatureDeps = 
 }
 
 /**
+ * One particular version of a person's signature, retired or not.
+ *
+ * This is what a certificate needs. A certificate records the version it was attested
+ * with, and that is the image it keeps — registering a new signature does not reach back
+ * and change what somebody already put their name to. Asking for the ACTIVE one here
+ * would mean a certificate attested in March and filed in June carried June's hand.
+ *
+ * Retired on purpose is not a reason to refuse: the version was live when it was used,
+ * which is the whole question.
+ */
+export async function registeredSignatureVersion(userId: string, version: number, deps: SignatureDeps = {}): Promise<AttesterSignature | null> {
+  const db = deps.db ?? prisma;
+  if (!userId.trim() || !Number.isInteger(version) || version < 1) return null;
+  return db.attesterSignature.findUnique({ where: { userId_version: { userId, version } } });
+}
+
+/**
  * The image to put on this person's document, checked on the way.
  *
  * Every refusal is a refusal. A signature that cannot be fetched, is not a PNG, is the
@@ -83,14 +100,23 @@ export async function registeredSignature(userId: string, deps: SignatureDeps = 
  * was approved. The one case that is not an error is having no signature registered at
  * all, which is an ordinary state of affairs and says so.
  */
-export async function resolveSignature(userId: string, deps: SignatureDeps = {}, actorId?: string): Promise<SignatureResult> {
-  const row = await registeredSignature(userId, deps);
-  if (!row) return { ok: false, code: "not-registered", reasons: ["No signature image is registered for this person."] };
+export async function resolveSignature(userId: string, deps: SignatureDeps = {}, actorId?: string, version?: number | null): Promise<SignatureResult> {
+  // A version means "the one this document was attested with"; no version means "whatever
+  // is live now", which is only ever asked at the moment of attesting.
+  const row = version == null ? await registeredSignature(userId, deps) : await registeredSignatureVersion(userId, version, deps);
+  if (!row) {
+    return { ok: false, code: "not-registered", reasons: [version == null
+      ? "No signature image is registered for this person."
+      : `Version ${version} of this person's signature is not on file, so the image this certificate was attested with cannot be found.`] };
+  }
+  if (!row.driveFileId) {
+    return { ok: false, code: "unreadable", reasons: [`Version ${row.version} of this signature was reserved but its image was never filed, so there is nothing to put on a document.`] };
+  }
 
   const fetchAsset = deps.fetchAsset ?? (async (r: AttesterSignature) => {
     const token = await folkpathsDriveToken(actorId);
     if (!token) return null;
-    const got = await downloadDriveFile(token, r.driveUrl ?? `https://drive.google.com/file/d/${r.driveFileId}/view`);
+    const got = await downloadDriveFile(token, r.driveUrl ?? `https://drive.google.com/file/d/${r.driveFileId ?? ""}/view`);
     return got ? Buffer.from(got.base64, "base64") : null;
   });
 
@@ -115,7 +141,7 @@ export async function resolveSignature(userId: string, deps: SignatureDeps = {},
     if (!token) return ["Google Drive is not connected, so who can open the signature image cannot be checked."];
     const account = await googleCertificateDrive(token).accountEmail().catch(() => null);
     if (!account) return ["Which Google account holds the signature image could not be read, so who can open it cannot be checked."];
-    const perms = await googleCertificateDrive(token).permissions({ fileId: r.driveFileId }).catch(() => null);
+    const perms = await googleCertificateDrive(token).permissions({ fileId: r.driveFileId ?? "" }).catch(() => null);
     return permissionProblems(perms, [account, ...configuredAdminEmails()])
       .map((p) => p.replace("This file", "The signature image"));
   });

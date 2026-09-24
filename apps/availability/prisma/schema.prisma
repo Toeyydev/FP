@@ -610,8 +610,18 @@ model AttesterSignature {
   /// somebody could forget. Holds the user id while current and NULL once retired, and
   /// Postgres does not compare NULLs in a unique index.
   activeUserId String?   @unique
-  driveFileId  String    @unique
+  /// Null until the image is in Drive.
+  ///
+  /// The row is written FIRST, because the file's identity has to include the row it
+  /// belongs to — a file that names no record cannot be matched back to one, and
+  /// matching by filename is how two people's signatures get mixed up. So: reserve the
+  /// row, put its id on the file, then record the file. A row with no file is visibly
+  /// half-finished and is never anybody's live signature.
+  driveFileId  String?   @unique
   driveUrl     String?
+  /// Which deployment filed it, part of the file's marker, so staging and production
+  /// pointed at one Drive account never find each other's images.
+  driveEnvironment String?
   /// SHA-256 of the PNG bytes. Checked again every time the image is used: an image that
   /// has changed since it was registered is not the image anybody approved.
   sha256       String
