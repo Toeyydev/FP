@@ -1303,3 +1303,69 @@ describe("certificate metadata does not travel in other responses", () => {
     expect(evidenceState(rows[0], await certificateStatuses([[rows[0] as Expense]])).state).toBe("WAIVED");
   });
 });
+
+// ── authorised to certify, versus allowed to read ───────────────────────────
+//
+// Two permissions that a single "certificate admins" list would have run together, with
+// the failure falling on the wrong side: an admin left off it quietly losing the ability
+// to open documents they are entitled to read.
+
+describe("the attester allowlist narrows certifying and nothing else", () => {
+  const ATTESTERS = process.env.CERTIFICATE_ATTESTER_EMAILS;
+  afterEach(() => {
+    if (ATTESTERS === undefined) delete process.env.CERTIFICATE_ATTESTER_EMAILS;
+    else process.env.CERTIFICATE_ATTESTER_EMAILS = ATTESTERS;
+  });
+
+  const twoAdmins = async () => {
+    await prisma.user.create({ data: { id: "u_attester", email: "authorised@example.test", role: "ADMIN", displayName: "Authorised" } });
+    await prisma.user.create({ data: { id: "u_other_admin", email: "other-admin@example.test", role: "ADMIN", displayName: "Other" } });
+    await seedSheet([e("Ferry", 11)]);
+  };
+
+  it("an admin who is not on the list may still read certificates", async () => {
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "authorised@example.test";
+    await twoAdmins();
+    authMock.auth.mockResolvedValue({ user: { id: "u_other_admin", name: "Other", role: "ADMIN" } });
+    const res = await certificateList(new NextRequest(`https://ops.example.test/api/jobsheet/certificate?guideId=${GUIDE}&date=${DATE}&slotIdx=0`));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+  });
+
+  it("but may not certify, and is told reading is unaffected", async () => {
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "authorised@example.test";
+    await twoAdmins();
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, { id: "u_attester", name: "Authorised", role: "ADMIN" }, deps());
+    const why = await refusal(() => attestCertificate(c.id, { id: "u_other_admin", name: "Other", role: "ADMIN" }, deps()));
+    expect(why[0]).toContain("not one of the people authorised");
+    expect(why[0]).toContain("Reading certificates is unaffected");
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("READY_TO_ATTEST");
+  });
+
+  it("the authorised person may prepare AND certify the same one", async () => {
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "authorised@example.test";
+    await twoAdmins();
+    const her = { id: "u_attester", name: "Authorised", role: "ADMIN" };
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, her, deps());
+    const signed = await attestCertificate(c.id, her, deps());
+    expect(signed.status).toBe("ATTESTED");
+    expect(signed.attestedByUserId).toBe(signed.createdById);
+  });
+
+  it("with no list set, any admin certifies exactly as before", async () => {
+    delete process.env.CERTIFICATE_ATTESTER_EMAILS;
+    await twoAdmins();
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, { id: "u_other_admin", name: "Other", role: "ADMIN" }, deps());
+    const signed = await attestCertificate(c.id, { id: "u_other_admin", name: "Other", role: "ADMIN" }, deps());
+    expect(signed.status).toBe("ATTESTED");
+  });
+
+  it("the address is read from the database, not from whatever the session claims", async () => {
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "authorised@example.test";
+    await twoAdmins();
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, { id: "u_attester", name: "Authorised", role: "ADMIN" }, deps());
+    // A session claiming the authorised person's name, on the other admin's id.
+    const why = await refusal(() => attestCertificate(c.id, { id: "u_other_admin", name: "authorised@example.test", role: "ADMIN" }, deps()));
+    expect(why[0]).toContain("not one of the people authorised");
+  });
+});

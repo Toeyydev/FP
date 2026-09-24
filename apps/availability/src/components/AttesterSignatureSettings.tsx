@@ -9,8 +9,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // clean up, and a change of mind costs nothing. The server validates the bytes again on
 // submit regardless: what the browser shows is a courtesy, never the check.
 //
-// The live image comes back through this server rather than as a Drive link. A link can
-// be forwarded; a response cannot.
+// The live image comes back through this server rather than as a Drive link, so looking
+// at it does not hand anyone the means to pass on access to the file. It does not stop an
+// admin keeping a copy of what they are shown — nothing could — and it is not embedded in
+// the page source or in any JSON, so it stays out of anything that logs responses.
 
 type Version = {
   id: string; userId: string; userName: string | null; version: number; active: boolean;

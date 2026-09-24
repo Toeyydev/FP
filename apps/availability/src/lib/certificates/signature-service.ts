@@ -2,10 +2,11 @@ import type { Prisma, PrismaClient, AttesterSignature } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { folkpathsDriveToken } from "@/lib/google-drive";
-import { configuredAdminEmails, folderPathString, folderPermissionProblems, permissionProblems, SIGNATURE_FOLDER } from "@/lib/certificates/access";
+import { driveAllowedEmails, folderPathString, folderPermissionProblems, permissionProblems, SIGNATURE_FOLDER } from "@/lib/certificates/access";
 import { certificateEnvironment } from "@/lib/certificates/drive";
 import { DuplicateSignatureFile, googleSignatureDrive, type SignatureDrive } from "@/lib/certificates/signature-drive";
 import { MAX_SIGNATURE_BYTES, MAX_DIMENSION, MIN_DIMENSION, pngDimensions, sha256 } from "@/lib/certificates/signature";
+import { attesterRefusal } from "@/lib/certificates/attester";
 
 // Registering and replacing an attester's signature.
 //
@@ -95,6 +96,21 @@ async function summarise(db: Db, rows: AttesterSignature[]): Promise<SignatureSu
   })));
 }
 
+/**
+ * May this person change a signature — their own or anybody's?
+ *
+ * The same authority that attests. Registering the image that will appear above a name
+ * and certifying documents with it are one permission, not two: whoever can do the
+ * second can effectively do the first by attesting with whatever is on file.
+ *
+ * Read from the database, never from the session, so an edited session cannot widen it.
+ */
+async function requireAttester(db: Db, actor: Actor): Promise<void> {
+  const me = actor.id ? await db.user.findUnique({ where: { id: actor.id }, select: { email: true, role: true } }) : null;
+  const no = attesterRefusal({ role: me?.role ?? actor.role, email: me?.email });
+  if (no) refuse([no], 403);
+}
+
 /** Every version this person has ever had, newest first. History is never deleted. */
 export async function signatureHistory(userId: string, deps: ServiceDeps = {}): Promise<SignatureSummary[]> {
   const db = deps.db ?? prisma;
@@ -127,7 +143,7 @@ export async function replacementImpact(userId: string, deps: ServiceDeps = {}):
 async function privacyProblems(drive: SignatureDrive, folderPath: string[], fileId: string | null): Promise<string[]> {
   const account = await drive.accountEmail().catch(() => null);
   if (!account) return ["Which Google account holds these images could not be read, so who can see them cannot be checked."];
-  const allowed = [account, ...configuredAdminEmails()];
+  const allowed = [account, ...driveAllowedEmails()];
   const out: string[] = [];
   const folderId = await drive.folderId({ folderPath }).catch(() => null);
   if (!folderId) out.push(`The folder ${folderPathString(folderPath)} could not be found in Drive, so who can see it cannot be checked.`);
@@ -173,6 +189,8 @@ export async function registerSignature(
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
   const environment = deps.environment ?? certificateEnvironment();
+
+  await requireAttester(db, actor);
 
   const problems = checkImage(bytes);
   if (problems.length) refuse(problems, 400);
@@ -328,6 +346,7 @@ export async function registerSignature(
 export async function retireSignature(userId: string, reason: string, actor: Actor, deps: ServiceDeps = {}): Promise<SignatureSummary | null> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
+  await requireAttester(db, actor);
   if ((reason ?? "").trim().length < 10) {
     refuse(["Say why this signature is being stood down — at least 10 characters, and it is kept with the record."], 400);
   }
@@ -349,9 +368,10 @@ export async function retireSignature(userId: string, reason: string, actor: Act
 /**
  * The live image bytes, for an admin to look at before they trust it.
  *
- * Read server-side from the private file and handed to the browser directly. There is no
- * link to Drive in the answer, because a link is a thing that can be forwarded and a
- * response cannot.
+ * Read server-side from the private file and handed straight to the caller. The answer
+ * carries no Drive link, no file id and no folder — so seeing the image does not come
+ * with the ability to pass on access to where it is kept. It plainly does not stop
+ * whoever is shown the image from keeping a copy of it; nothing could.
  */
 export async function activeSignatureBytes(userId: string, actorId: string, deps: ServiceDeps = {}): Promise<{ bytes: Buffer; sha256: string } | null> {
   const db = deps.db ?? prisma;

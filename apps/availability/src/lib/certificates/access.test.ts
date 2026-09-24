@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  certificateFolder, configuredAdminEmails, folderPathOf, folderPathString,
+  certificateFolder, driveAllowedEmails, folderPathOf, folderPathString,
   folderPermissionProblems, legacyCertificateFolder, namesCertificate, NON_ADMIN_STATUS_TH,
   permissionProblems, redactForNonAdmin, redactMessagesForNonAdmin, redactRowsForNonAdmin,
   SIGNATURE_FOLDER, type DrivePermission,
@@ -111,15 +111,18 @@ describe("who can see it is asked of Drive, and every unclear answer is a no", (
     expect(permissionProblems([perm({ id: "pa", emailAddress: ADMIN })], [ACCOUNT])).toHaveLength(1);
   });
 
-  it("the allow-list is read from configuration and is case-insensitive", () => {
-    const before = process.env.CERTIFICATE_ADMIN_EMAILS;
-    process.env.CERTIFICATE_ADMIN_EMAILS = " Accounts-Admin@Example.Test , second@example.test ";
+  it("the Drive allow-list is read from configuration and is case-insensitive", () => {
+    // Note what this list is NOT: it says which GOOGLE accounts may appear on the file,
+    // and decides nothing about who may use FolkOPS. Reading a certificate in the app is
+    // the ADMIN role — see lib/certificates/attester.
+    const before = process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS;
+    process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = " Accounts-Admin@Example.Test , second@example.test ";
     try {
-      expect(configuredAdminEmails()).toEqual(["accounts-admin@example.test", "second@example.test"]);
-      expect(permissionProblems([perm({ emailAddress: "ACCOUNTS-ADMIN@EXAMPLE.TEST" })], [ACCOUNT, ...configuredAdminEmails()])).toEqual([]);
+      expect(driveAllowedEmails()).toEqual(["accounts-admin@example.test", "second@example.test"]);
+      expect(permissionProblems([perm({ emailAddress: "ACCOUNTS-ADMIN@EXAMPLE.TEST" })], [ACCOUNT, ...driveAllowedEmails()])).toEqual([]);
     } finally {
-      if (before === undefined) delete process.env.CERTIFICATE_ADMIN_EMAILS;
-      else process.env.CERTIFICATE_ADMIN_EMAILS = before;
+      if (before === undefined) delete process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS;
+      else process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS = before;
     }
   });
 

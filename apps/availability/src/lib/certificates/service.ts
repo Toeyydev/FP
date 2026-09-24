@@ -8,11 +8,12 @@ import { type EvidenceWaiver } from "@/lib/reimbursement-evidence";
 import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { certificateFileName, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
-import { certificateFolder, configuredAdminEmails, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
+import { certificateFolder, driveAllowedEmails, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
 import { blocksDocument, registeredSignature, resolveSignature, stampOf, type SignatureDeps, type SignatureStamp } from "@/lib/certificates/signature";
+import { attesterRefusal } from "@/lib/certificates/attester";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -73,7 +74,7 @@ async function privacyProblems(drive: CertificateDrive, folderPath: string[], fi
   if (!account) {
     return ["Which Google account files these documents could not be read, so who can see them cannot be checked."];
   }
-  const allowed = [account, ...configuredAdminEmails()];
+  const allowed = [account, ...driveAllowedEmails()];
   const out: string[] = [];
 
   const folderId = await drive.folderId({ folderPath }).catch(() => null);
@@ -171,6 +172,19 @@ export async function createCertificate(key: { guideId: string; date: string; sl
 export async function attestCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
+
+  // May this person certify at all?
+  //
+  // Checked here and not only at the route, because this is the function that puts a
+  // name on a document and a route is one of several ways to reach it. The address comes
+  // from the database rather than from the session, so a session that carries a stale or
+  // edited email cannot widen it.
+  //
+  // This narrows ADMIN; it is not segregation of duties and must not become it. The same
+  // authorised person may prepare and attest the same certificate.
+  const me = actor.id ? await db.user.findUnique({ where: { id: actor.id }, select: { email: true, role: true } }) : null;
+  const notAllowed = attesterRefusal({ role: me?.role ?? actor.role, email: me?.email });
+  if (notAllowed) refuse([notAllowed], 403);
 
   // The attester's own signature image, and nobody else's: the id comes from `actor`,
   // which every caller builds from the session. Resolved out here because it fetches from

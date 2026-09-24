@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient, AttesterSignature } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { downloadDriveFile, folkpathsDriveToken } from "@/lib/google-drive";
-import { configuredAdminEmails, permissionProblems } from "@/lib/certificates/access";
+import { driveAllowedEmails, permissionProblems } from "@/lib/certificates/access";
 import { googleCertificateDrive } from "@/lib/certificates/drive";
 
 // The image of an attester's handwritten signature, and the rules about whose it is.
@@ -142,7 +142,7 @@ export async function resolveSignature(userId: string, deps: SignatureDeps = {},
     const account = await googleCertificateDrive(token).accountEmail().catch(() => null);
     if (!account) return ["Which Google account holds the signature image could not be read, so who can open it cannot be checked."];
     const perms = await googleCertificateDrive(token).permissions({ fileId: r.driveFileId ?? "" }).catch(() => null);
-    return permissionProblems(perms, [account, ...configuredAdminEmails()])
+    return permissionProblems(perms, [account, ...driveAllowedEmails()])
       .map((p) => p.replace("This file", "The signature image"));
   });
   const privacy = await checkPrivacy(row).catch(() => ["Who can open the signature image could not be checked."]);

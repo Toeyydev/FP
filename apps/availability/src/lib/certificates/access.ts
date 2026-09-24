@@ -76,9 +76,21 @@ export type DrivePermission = {
   deleted?: boolean;
 };
 
-/** Admin accounts allowed to see certificate files, beside the account that files them. */
-export function configuredAdminEmails(): string[] {
-  return (process.env.CERTIFICATE_ADMIN_EMAILS ?? "")
+/**
+ * GOOGLE accounts permitted to appear on these private Drive files, beside the account
+ * that files them.
+ *
+ * This is not an application permission and decides nothing about who may use FolkOPS.
+ * Who may SEE a certificate in the app is the ADMIN role and nothing else — leaving this
+ * unset does not lock an admin out of anything, and adding somebody here does not let
+ * them in. It answers one question only: when Drive is asked who can open this file, is
+ * the answer a list we expected?
+ *
+ * The earlier name for this said "admin emails", which invited exactly the wrong reading
+ * — that an admin missing from it would stop being able to open documents.
+ */
+export function driveAllowedEmails(): string[] {
+  return (process.env.CERTIFICATE_DRIVE_ALLOWED_EMAILS ?? "")
     .split(/[,\s;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean);
 }
 
@@ -95,10 +107,10 @@ const shownAs = (p: DrivePermission) =>
  * Drive can add kinds of sharing faster than this file can learn about them, and the
  * failure this guards against is a guide opening an admin's signature.
  *
- * `allowed` is the account doing the filing plus whatever admin addresses are
- * configured. Anything else — a domain, a group whose membership nothing here can see,
- * a link that works for anyone — is broader than "the admins", including when it happens
- * to contain only admins today.
+ * `allowed` is the account doing the filing plus whatever Google addresses are
+ * configured for these folders. Anything else — a domain, a group whose membership nothing here can see,
+ * a link that works for anyone — is broader than the accounts named, including when it
+ * happens to contain only the right people today.
  */
 export function permissionProblems(
   permissions: readonly DrivePermission[] | null | undefined,
@@ -127,7 +139,7 @@ export function permissionProblems(
       case "user": {
         const email = (p.emailAddress ?? "").trim().toLowerCase();
         if (!email) problems.push("This file is shared with an account whose address Drive did not give back, so it cannot be checked.");
-        else if (!ok.has(email)) problems.push(`This file is shared with ${p.emailAddress}, who is not one of the admin accounts allowed to see certificates.`);
+        else if (!ok.has(email)) problems.push(`This file is shared with ${p.emailAddress}, which is not one of the Google accounts these files are meant to be open to.`);
         break;
       }
       default:

@@ -8,13 +8,21 @@ export const dynamic = "force-dynamic";
 
 // The registered signature image itself, for an admin to look at.
 //
-// Served by this server from the private file, rather than by handing out a Drive link.
-// A link is a thing that can be forwarded, pasted into a chat and opened by whoever ends
-// up with it; a response is not. So an admin sees the image and never learns where it
-// lives, which is also why there is no file id or hash anywhere in this answer.
+// Be exact about what this buys, because it is easy to overclaim. Once these bytes reach
+// a browser they can be saved, forwarded, screenshotted or printed — nothing here
+// prevents any of that, and no arrangement of HTTP could. An authorised person who wants
+// a copy of the image has one the moment they are shown it.
 //
-// Not cached by anything in between. The image is the one asset here worth stealing, and
-// a proxy holding a copy of it is a copy nobody is watching.
+// What it does buy is narrower and still worth having:
+//
+//   the Drive location is never disclosed  — no file id, no folder, no shareable URL, so
+//                                            access cannot be passed on by pasting a link
+//   the endpoint is closed                 — a non-admin gets 403 and no bytes at all
+//   nothing keeps a copy on the way        — private, no-store, so it does not settle in
+//                                            a shared cache or a proxy nobody is watching
+//
+// The bytes are also never embedded in HTML or JSON. An <img> pointing here keeps the
+// image out of page source, out of API responses, and out of anything that logs bodies.
 
 export async function GET(req: NextRequest) {
   const session = await auth();
@@ -37,7 +45,10 @@ export async function GET(req: NextRequest) {
     headers: {
       "content-type": "image/png",
       "content-length": String(found.bytes.length),
-      "cache-control": "no-store, private",
+      // private: never a shared cache. no-store: not written to disk by the browser
+      // either, so it does not outlive the tab in someone's profile directory.
+      "cache-control": "private, no-store",
+      pragma: "no-cache",
       "content-disposition": "inline",
       // It is an image and nothing else, whatever the bytes might be mistaken for.
       "x-content-type-options": "nosniff",
