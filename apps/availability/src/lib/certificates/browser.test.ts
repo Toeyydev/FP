@@ -341,6 +341,11 @@ describe("repository invariant — the image itself is smoke tested", () => {
     expect(s).toContain("137");                        // 128+9, the SIGKILL exit code
     expect(s).toContain("grace period");
     expect(s).toContain("outlived the container");     // nothing escapes the cgroup
+    // Compared against a baseline of the runner's own processes, not "the host must be
+    // empty" — the renderer suite ran a browser a few steps earlier, and other tooling
+    // may keep one around. Neither is evidence of anything.
+    expect(s).toContain("HOST_CHROME_BEFORE");
+    expect(s).toMatch(/comm -13/);
   });
 
   it("cleanup is checked on the paths that are not the happy one", () => {

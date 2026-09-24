@@ -84,6 +84,13 @@ docker run --rm --entrypoint sh "$IMAGE" -c \
   "test -x /app/.browser-cache/chrome-headless-shell/linux-$EXPECTED_BUILD_ID/chrome-headless-shell-linux64/chrome-headless-shell" \
   || fail "the browser in the image is not executable"
 
+# Whatever Chrome the RUNNER already has is not this test's business — the renderer
+# suite ran one a few steps ago, and other tooling may keep one around. What matters is
+# that nothing the CONTAINER started is still here afterwards, so the question is which
+# pids are new, not whether the count is zero.
+HOST_CHROME_BEFORE="$(pgrep -f 'chrome-headless-shell|chrome|chromium' 2>/dev/null | sort || true)"
+echo "  chrome-ish processes already on the runner: $(printf '%s\n' "$HOST_CHROME_BEFORE" | grep -c . || true)"
+
 say "starting a container — nothing mounted from the host"
 # No -v anywhere on purpose: the source tree, the runner's node_modules and any browser
 # on the host are all invisible to it. The three override variables are blanked so the
@@ -327,12 +334,23 @@ case "$EXIT_CODE" in
   *) echo "  note: exit code $EXIT_CODE — not SIGKILL, so it exited itself, but check the logs" ;;
 esac
 
-# Nothing may outlive the container. A Chrome helper that escaped its cgroup would show
-# up on the host, and no test above this line would have seen it.
+# Nothing the container started may outlive it. A Chrome helper that escaped its cgroup
+# would show up on the host, and no check above this line would have seen it — but the
+# runner's own processes are not evidence of anything, so this compares pids against the
+# baseline rather than demanding the host be empty.
 sleep 2
-HOST_LEFT=$(pgrep -fc "chrome-headless-shell" || true)
-echo "  chrome-headless-shell processes on the host after the container is gone: ${HOST_LEFT:-0}"
-[ "${HOST_LEFT:-0}" -eq 0 ] || fail "${HOST_LEFT} browser process(es) outlived the container"
+# Sorted the way `comm` compares — lexicographically, not numerically. Mixing the two
+# makes comm quietly report the wrong difference.
+HOST_CHROME_AFTER="$(pgrep -f 'chrome-headless-shell|chrome|chromium' 2>/dev/null | sort || true)"
+NEW_HOST_PIDS="$(comm -13 <(printf '%s\n' "$HOST_CHROME_BEFORE") <(printf '%s\n' "$HOST_CHROME_AFTER") 2>/dev/null || true)"
+NEW_HOST_COUNT="$(printf '%s\n' "$NEW_HOST_PIDS" | grep -c . || true)"
+echo "  chrome-ish processes new on the runner since the container started: ${NEW_HOST_COUNT:-0}"
+if [ "${NEW_HOST_COUNT:-0}" -ne 0 ]; then
+  printf '%s\n' "$NEW_HOST_PIDS" | while read -r pid; do
+    [ -n "$pid" ] && printf '    pid=%s %s\n' "$pid" "$(ps -o comm= -p "$pid" 2>/dev/null || echo gone)"
+  done
+  fail "${NEW_HOST_COUNT} browser process(es) started during this test outlived the container"
+fi
 
 say "image smoke passed"
 printf 'image_size_mb=%.0f\n' "$(awk -v b="$SIZE_BYTES" 'BEGIN{print b/1024/1024}')"
