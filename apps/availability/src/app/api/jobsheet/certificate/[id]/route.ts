@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { isAdmin } from "@/lib/roles";
 import { CertificateRefused, linkCertificate, attestCertificate, uploadCertificate, voidCertificate, type Actor } from "@/lib/certificates/service";
+import { denied } from "@/lib/certificates/denied";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,7 @@ const actorOf = (s: { user?: { id?: string | null; name?: string | null; display
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!isAdmin(session?.user?.role)) {
+    await denied(session, "certificate.action");
     return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can certify or withdraw a certificate in lieu of a receipt"] }, { status: 403 });
   }
   const { id } = await ctx.params;

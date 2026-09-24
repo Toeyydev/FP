@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { isAdmin, canViewFinance } from "@/lib/roles";
+import { isAdmin } from "@/lib/roles";
 import type { Expense } from "@/lib/jobsheet";
 import { certifiableRows, duplicateIdentities, ineligibleRows } from "@/lib/certificates/payload";
 import { LABEL, LABEL_TH, type CertificateState } from "@/lib/certificates/state";
 import { CertificateRefused, createCertificate, type Actor } from "@/lib/certificates/service";
+import { denied } from "@/lib/certificates/denied";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,13 @@ const actorOf = (s: { user?: { id?: string | null; name?: string | null; display
 
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // ADMIN, not canViewFinance. This response carries certificate numbers, hashes, Drive
+  // links and the attester's name — the whole of what the rule says only an admin sees.
+  // An operator who can edit the sheet still gets 403 here.
+  if (!isAdmin(session?.user?.role)) {
+    await denied(session, "certificate.list", { guideId: req.nextUrl.searchParams.get("guideId") });
+    return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can see certificates in lieu of receipts"] }, { status: 403 });
+  }
   const parsed = key.safeParse(Object.fromEntries(req.nextUrl.searchParams));
   if (!parsed.success) return NextResponse.json({ error: "bad-query" }, { status: 400 });
 
@@ -77,6 +84,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isAdmin(session?.user?.role)) {
+    await denied(session, "certificate.issue", {});
     return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can issue a certificate in lieu of a receipt"] }, { status: 403 });
   }
   const parsed = key.safeParse(await req.json().catch(() => null));

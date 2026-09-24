@@ -52,6 +52,18 @@ export type CertificateView = {
   /** ISO. The moment the approval was recorded. */
   attestedAt: string;
   auditRef: string;
+  /**
+   * The attester's own signature image, already fetched, checked and inlined by
+   * `lib/certificates/signature`. A `data:` URI, so the page fetches nothing while it
+   * renders — the browser has the network switched off.
+   *
+   * Absent when that person has no signature registered, and the document is complete
+   * without one: the name, the role, the time and the audit reference say who attested
+   * it. What must never happen is somebody else's image appearing here, which is why it
+   * arrives resolved rather than as a user id to look up.
+   */
+  signatureDataUri?: string | null;
+  signatureVersion?: number | null;
 };
 
 export function renderCertificateHtml(v: CertificateView): string {
@@ -71,7 +83,7 @@ export function renderCertificateHtml(v: CertificateView): string {
 <style>
  @page { size: A4; margin: 16mm 15mm; }
  * { box-sizing: border-box; }
- body { font-family: "Sarabun", "Noto Sans Thai", "Leelawadee UI", sans-serif; color: #1c1917; font-size: 11pt; line-height: 1.6; margin: 0; }
+ body { font-family: "Sarabun", "Noto Sans Thai", "Leelawadee UI", sans-serif; color: #1c1917; font-size: 11pt; line-height: 1.5; margin: 0; }
  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #b45309; padding-bottom: 9px; margin-bottom: 16px; }
  .org { font-size: 14pt; font-weight: 700; color: #b45309; }
  .org small { display: block; font-size: 8.5pt; color: #57534e; font-weight: 400; }
@@ -85,18 +97,30 @@ export function renderCertificateHtml(v: CertificateView): string {
  table.facts th { text-align: left; width: 30%; font-weight: 600; color: #57534e; padding: 2px 0; vertical-align: top; }
  table.facts td { padding: 2px 0; }
  p { margin: 0 0 9px; text-indent: 2em; text-align: justify; }
- table.items { width: 100%; border-collapse: collapse; margin: 4px 0 12px; font-size: 10pt; }
+ table.items { width: 100%; border-collapse: collapse; margin: 4px 0 8px; font-size: 10pt; }
  table.items th { background: #fef3c7; border: 1px solid #d6d3d1; padding: 5px 7px; font-weight: 600; text-align: left; }
  table.items td { border: 1px solid #e7e5e4; padding: 5px 7px; }
  .c { text-align: center; } .r { text-align: right; }
  tr.sum td { background: #fafaf9; font-weight: 700; border-top: 2px solid #b45309; }
- .words { font-size: 9.5pt; color: #57534e; font-style: italic; margin-bottom: 14px; }
- .approve { border: 1px solid #d6d3d1; padding: 10px 12px; margin-top: 6px; }
+ .words { font-size: 9.5pt; color: #57534e; font-style: italic; margin-bottom: 8px; }
+ /* Never split across a page. An attestation broken in half — the name on one page and
+    the signature on the next — is what a tampered document looks like, and a reader
+    cannot tell the difference between that and a page that merely ran out of room. */
+ .approve { border: 1px solid #d6d3d1; padding: 8px 11px; margin-top: 6px; break-inside: avoid; page-break-inside: avoid; }
  .approve h2 { font-size: 10.5pt; margin: 0 0 6px; color: #b45309; }
- .approve table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
- .approve th { text-align: left; width: 32%; font-weight: 600; color: #57534e; padding: 2px 0; vertical-align: top; }
+ .approve table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+ .approve th { text-align: left; width: 32%; font-weight: 600; color: #57534e; padding: 1px 0; vertical-align: top; }
  .hash { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 8.5pt; }
- .foot { margin-top: 14px; border-top: 1px solid #e7e5e4; padding-top: 7px; font-size: 8pt; color: #78716c; line-height: 1.5; }
+ /* A row in the attester's own table, rather than a panel underneath it. Two reasons,
+    and they point the same way: it is bound to the name in the same table, so there is
+    no arrangement of this page on which it reads as somebody else's — and it costs the
+    height of the image alone, so adding a signature does not turn a one-page
+    certificate into two. Capped in both directions, so an oddly proportioned scan
+    cannot stretch the page either. */
+ .sig td { padding-top: 2px; }
+ .sig img { max-width: 150px; max-height: 34px; width: auto; height: auto; display: block; }
+ .sig-ver { font-size: 8pt; color: #78716c; }
+ .foot { margin-top: 6px; border-top: 1px solid #e7e5e4; padding-top: 5px; font-size: 8pt; color: #78716c; line-height: 1.35; }
 </style></head>
 <body>
 <div class="head">
@@ -142,6 +166,10 @@ ${rows}
     <tr><th>รับรองเมื่อ</th><td>${esc(thaiDateTime(v.attestedAt))}</td></tr>
     <tr><th>อ้างอิง audit</th><td class="hash">${esc(v.auditRef)}</td></tr>
     <tr><th>ลายนิ้วมือข้อมูลต้นทาง</th><td class="hash">${esc(shortHash(v.payloadHash))}…</td></tr>
+${v.signatureDataUri ? `    <tr class="sig"><th>ภาพลายมือชื่อประกอบการรับรองทางอิเล็กทรอนิกส์</th><td>
+      <img src="${esc(v.signatureDataUri)}" alt="ภาพลายมือชื่อของ ${esc(v.attestedByName)}">
+      ${v.signatureVersion ? `<span class="sig-ver">(ฉบับที่ ${int(v.signatureVersion)})</span>` : ""}
+    </td></tr>` : ""}
   </table>
 </div>
 

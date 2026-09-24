@@ -7,10 +7,14 @@ import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fi
 import { type EvidenceWaiver } from "@/lib/reimbursement-evidence";
 import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
-import { certificateFileName, certificateFolder, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
+import { certificateFileName, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
+import { certificateFolder, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
+import { allowedHolders, CONFIG_INVALID_EN, CONFIG_INVALID_TH, sanitisedConfigAudit, validateDriveAllowlist, type AllowlistResult } from "@/lib/certificates/drive-allowlist";
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
+import { blocksDocument, registeredSignature, resolveSignature, stampOf, type SignatureDeps, type SignatureStamp } from "@/lib/certificates/signature";
+import { attesterRefusal } from "@/lib/certificates/attester";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -32,6 +36,8 @@ export type Deps = {
   heartbeatMs?: number;
   newToken?: () => string;
   now?: () => Date;
+  /** Where the attester's signature image comes from. Supplied by tests; Drive otherwise. */
+  signature?: SignatureDeps;
 };
 
 export type Actor = { id: string; name: string; role: string };
@@ -43,7 +49,8 @@ export class CertificateRefused extends Error {
   }
 }
 
-const refuse = (reasons: string[], status = 409): never => { throw new CertificateRefused(reasons, status); };
+// A function declaration rather than a const arrow, so TypeScript narrows after it.
+function refuse(reasons: string[], status = 409): never { throw new CertificateRefused(reasons, status); }
 
 function facts(sheet: JobSheet, guideName: string): SheetFacts {
   return {
@@ -51,6 +58,36 @@ function facts(sheet: JobSheet, guideName: string): SheetFacts {
     guideId: sheet.guideId, guideName,
     guideReportedAt: sheet.guideExpensesAt ?? null,
   };
+}
+
+/**
+ * Is this folder, and this file, private to the admins?
+ *
+ * Asked of Drive rather than of our own record of Drive. The folder is asked about as
+ * well as the file, because a file inherits whatever the folder above it was shared
+ * with, and a file that was never shared with anybody sitting in a folder the guides can
+ * open is not private in any sense that matters.
+ *
+ * Everything it cannot determine is a problem. There is no path through this that turns
+ * a failed lookup into a pass.
+ */
+async function privacyProblems(drive: CertificateDrive, folderPath: string[], fileId: string | null, list: Extract<AllowlistResult, { ok: true }>): Promise<string[]> {
+  const account = await drive.accountEmail().catch(() => null);
+  if (!account) {
+    return ["Which Google account files these documents could not be read, so who can see them cannot be checked."];
+  }
+  const allowed = allowedHolders(account, list);
+  const out: string[] = [];
+
+  const folderId = await drive.folderId({ folderPath }).catch(() => null);
+  if (!folderId) {
+    out.push(`The folder ${folderPathString(folderPath)} could not be found in Drive, so who can see it cannot be checked.`);
+  } else {
+    out.push(...folderPermissionProblems(await drive.permissions({ fileId: folderId }).catch(() => null), allowed, folderPath));
+  }
+
+  if (fileId) out.push(...permissionProblems(await drive.permissions({ fileId }).catch(() => null), allowed));
+  return out;
 }
 
 /** Everything that must be true before a certificate may exist for this sheet. */
@@ -137,6 +174,32 @@ export async function createCertificate(key: { guideId: string; date: string; sl
 export async function attestCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
+
+  // May this person certify at all?
+  //
+  // Checked here and not only at the route, because this is the function that puts a
+  // name on a document and a route is one of several ways to reach it. The address comes
+  // from the database rather than from the session, so a session that carries a stale or
+  // edited email cannot widen it.
+  //
+  // This narrows ADMIN; it is not segregation of duties and must not become it. The same
+  // authorised person may prepare and attest the same certificate.
+  const me = actor.id ? await db.user.findUnique({ where: { id: actor.id }, select: { email: true, role: true } }) : null;
+  const notAllowed = attesterRefusal({ role: me?.role ?? actor.role, email: me?.email });
+  if (notAllowed) refuse([notAllowed], 403);
+
+  // The attester's own signature image, and nobody else's: the id comes from `actor`,
+  // which every caller builds from the session. Resolved out here because it fetches from
+  // Drive, and a transaction held open across a network call is a transaction held open
+  // for as long as somebody else's server feels like taking.
+  //
+  // Having none is not a failure — the document is complete without a picture. Every other
+  // refusal stops the attestation, because each one means what is on file is not what was
+  // approved, and a document is not the place to find that out.
+  const resolved = await resolveSignature(actor.id, { db, ...(deps.signature ?? {}) }, actor.id);
+  if (!resolved.ok && blocksDocument(resolved.code)) refuse(resolved.reasons);
+  const stamp: SignatureStamp | null = resolved.ok ? stampOf(resolved.signature) : null;
+
   const signed = await db.$transaction(async (tx) => {
     const cert = await tx.expenseCertificate.findUnique({ where: { id } });
     if (!cert) refuse(["No such certificate"], 404);
@@ -152,27 +215,51 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
 
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
-      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[] },
+      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
+        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null },
       { facts: facts(sheet!, name), expenses },
     );
     if (drift.drifted) {
       refuse(["This job sheet has changed since the certificate was prepared, so it no longer describes the sheet:", ...drift.reasons, "Withdraw this certificate and issue a new one."]);
     }
+
+    // Read again, in the transaction, against the version that was fetched. Closes the
+    // gap the Drive call opened: a signature replaced in between would otherwise be
+    // stamped as the one that was checked.
+    if (stamp) {
+      const live = await registeredSignature(actor.id, { db: tx });
+      if (!live || live.version !== stamp.version || live.sha256 !== stamp.sha256) {
+        refuse(["The signature image registered for you changed while this certificate was being prepared. Try again, so what the document carries is what is on file."]);
+      }
+    }
     // The amounts on the document have to be the amounts on the sheet.
     const total = rows.reduce((t, r) => t + r.amountSatang, 0);
     if (total !== cert!.totalSatang) refuse([`The total has changed from ${(cert!.totalSatang / 100).toFixed(2)} to ${(total / 100).toFixed(2)}. Withdraw this certificate and issue a new one.`]);
+
+    // The payload is rebuilt so the fingerprint covers which signature was attested with.
+    // Swap the image afterwards and the hash no longer matches, which is the whole point
+    // of having one.
+    const payload = buildPayload(facts(sheet!, name), rows, stamp);
 
     return tx.expenseCertificate.update({
       where: { id, status: cert!.status },
       data: {
         status: "ATTESTED" satisfies CertificateState,
         attestedByUserId: actor.id, attestedByName: actor.name, attestedByRole: actor.role, attestedAt: now(),
+        payload: payload as unknown as Prisma.InputJsonValue,
+        payloadHash: payloadHash(payload),
+        signatureUserId: stamp?.userId ?? null, signatureVersion: stamp?.version ?? null, signatureSha256: stamp?.sha256 ?? null,
         sourceSheetUpdatedAt: sheet!.updatedAt, sourceGuideReportedAt: sheet!.guideExpensesAt,
       },
     });
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.attested", entityType: "ExpenseCertificate", entityId: signed.id,
     detail: { certificateNo: signed.certificateNo, jobRef: signed.jobRef, totalSatang: signed.totalSatang, payloadHash: signed.payloadHash,
+      // Which image, never the image. An audit row is read by people and kept forever.
+      signature: stamp ? { userId: stamp.userId, version: stamp.version, sha256: stamp.sha256 } : null,
+      signatureNote: stamp
+        ? "an image of this person's handwriting, registered to them in advance; it is not a cryptographic signature and proves nothing on its own"
+        : "no signature image is registered for this person — the document carries their name, role and time",
       approval: "electronic certification by an authenticated user — session identity, role and this audit row; no cryptographic signature" } });
   return signed;
 }
@@ -229,6 +316,16 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     refuse(["This deployment has no PDF renderer configured, so the certificate cannot be filed. The attestation is recorded and filing can be retried once it is."], 503);
   }
 
+  // Before the claim and before Drive is touched. Resolving a folder path CREATES the
+  // folders it does not find, so a check that ran later would already have changed
+  // somebody's Drive on the strength of a configuration it then refused.
+  const allowlist = await validateDriveAllowlist(db);
+  if (!allowlist.ok) {
+    await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.config_invalid", entityType: "ExpenseCertificate", entityId: id,
+      detail: sanitisedConfigAudit(allowlist) });
+    refuse([CONFIG_INVALID_TH, allowlist.reason, ...allowlist.detail]);
+  }
+
   // A new token on every claim and reclaim. This is what makes a previous holder's
   // writes fail, and what keeps its file separate from this one's.
   const token = deps.newToken ? deps.newToken() : randomUUID();
@@ -248,7 +345,9 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
   const beat = setInterval(() => { void renew().catch(() => {}); }, heartbeatMs);
   (beat as unknown as { unref?: () => void }).unref?.();
 
+  // New documents always go to the private folder, whatever an older one did.
   const folderPath = certificateFolder(cert!.tourDate);
+  const priorPath = folderPathOf(cert!);
   let drive = deps.drive;
   let mine: { id: string; temp: string } | null = null;
 
@@ -262,10 +361,46 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
 
   try {
     const payload = cert!.payload as unknown as CertificatePayload;
+
+    // The image is fetched here, where it goes on the page — not carried across from the
+    // attestation, because bytes held in memory across two requests prove nothing about
+    // what is on file.
+    //
+    // The VERSION the certificate recorded, not whatever is live now. Registering a new
+    // signature must not reach back and change what somebody already put their name to:
+    // a certificate attested in March and filed in June carries March's hand. A retired
+    // version is still the right answer — it was live when it was used.
+    //
+    // What is still checked is that version's bytes: if they have changed in Drive since
+    // they were registered, the image on file is not the one that was approved. And at
+    // this point "not on file" is a refusal like any other, because the certificate says
+    // a signature was attested with, so its absence is a change and not an empty slot.
+    let signatureDataUri: string | null = null;
+    if (cert!.signatureSha256 && cert!.signatureUserId) {
+      const again = await resolveSignature(cert!.signatureUserId, { db, ...(deps.signature ?? {}) }, actor.id, cert!.signatureVersion);
+      const release = () => db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null } }).catch(() => {});
+      if (!again.ok) {
+        await release();
+        refuse([`The signature image this certificate was attested with cannot be used: ${again.reasons[0]}`]);
+      } else if (again.signature.version !== cert!.signatureVersion || again.signature.sha256 !== cert!.signatureSha256) {
+        // Same version, different bytes: the file was rewritten in place. Nothing in this
+        // system does that, which is exactly why it is worth refusing over.
+        await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.signature_changed", entityType: "ExpenseCertificate", entityId: id,
+          detail: { certificateNo: cert!.certificateNo, signatureUserId: cert!.signatureUserId,
+            attestedVersion: cert!.signatureVersion, attestedSha256: cert!.signatureSha256,
+            registeredVersion: again.signature.version, registeredSha256: again.signature.sha256 } });
+        await release();
+        refuse(["The signature image this certificate was attested with is not the one on file under that version any more, so filing it would put a different signature on the document. Withdraw this certificate and issue a new one."]);
+      } else {
+        signatureDataUri = again.signature.dataUri;
+      }
+    }
+
     const html = renderCertificateHtml({
       certificateNo: cert!.certificateNo, payload, payloadHash: cert!.payloadHash,
       attestedByName: cert!.attestedByName ?? "", attestedByRole: cert!.attestedByRole ?? "",
       attestedAt: (cert!.attestedAt ?? new Date(0)).toISOString(), auditRef: cert!.id,
+      signatureDataUri, signatureVersion: cert!.signatureVersion,
     });
     const bytes = await render(html);
     const pdfHash = fileHash(bytes);
@@ -275,6 +410,17 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
       const dToken = await folkpathsDriveToken(actor.id);
       if (!dToken) refuse(["Google Drive is not connected, so the certificate cannot be filed. The attestation is recorded and filing can be retried."], 503);
       drive = googleCertificateDrive(dToken!);
+    }
+
+    // Asked before a single byte is written, not after. A document put into a folder the
+    // guides can open has already leaked by the time anyone checks it, and moving it
+    // afterwards does not unsee it.
+    const folderPrivacy = await privacyProblems(drive, folderPath, null, allowlist);
+    if (folderPrivacy.length) {
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_not_private", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, stage: "folder", folder: folderPathString(folderPath), problems: folderPrivacy } });
+      await db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null } }).catch(() => {});
+      refuse(["The folder these documents are filed in is not private to the admins, so nothing was filed:", ...folderPrivacy], 409);
     }
 
     await hold("writing this attempt's candidate");
@@ -354,6 +500,18 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
       refuse(["The document created in Drive did not read back as what it was created from. It has been moved to Quarantine and nothing was recorded against it — try filing again."], 502);
     }
 
+    // And asked again of the document itself. The folder was private a moment ago; this
+    // is the file that will actually be linked, and it is the file's own answer that
+    // decides. A document that is not private is quarantined rather than recorded —
+    // there is no state in which a readable-by-guides certificate is filed and usable.
+    const filePrivacy = await privacyProblems(drive, folderPath, active.id, allowlist);
+    if (filePrivacy.length) {
+      await drive.quarantine({ fileId: active.id, reason: "the filed document was not private to the admins", certificateId: cert!.id, attemptToken: token, at: now().toISOString() }).catch(() => {});
+      await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.drive_not_private", entityType: "ExpenseCertificate", entityId: id,
+        detail: { certificateNo: cert!.certificateNo, stage: "file", driveFileId: active.id, folder: folderPathString(folderPath), problems: filePrivacy } });
+      refuse(["The document filed in Drive is not private to the admins, so it has been quarantined and nothing was recorded against it:", ...filePrivacy], 409);
+    }
+
     // Only now does the database point at anything. Until this write, no row names this
     // file, so a crash before it leaves a document nobody relies on.
     const wrote = await db.expenseCertificate.updateMany({
@@ -362,6 +520,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
         status: "UPLOADED" satisfies CertificateState, pdfHash, driveFileId: active.id, driveUrl: active.link,
         uploadedAt: now(), uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null,
         lastUploadError: null, driveEnvironment: environment, driveAttemptToken: token,
+        driveFolderPath: folderPathString(folderPath),
         driveRevisionId: active.revisionId ?? null, driveMd5: active.md5 ?? null,
       },
     });
@@ -371,7 +530,13 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     // this certificate — including a document this certificate settled on before — is
     // put away, so exactly one ACTIVE remains.
     await drive.retire({ fileId: temp.id, certificateId: cert!.id, attemptToken: token, at: now().toISOString(), reason: `bytes became document ${active.id}` }).catch(() => {});
-    const others = (await drive.findAll({ certificateId: cert!.id, environment, folderPath })).filter((f) => f.id !== active.id);
+    // Both folders: a certificate filed before this feature has its document in the old
+    // place, and leaving it there would leave two documents answering to one certificate.
+    const everywhere = [...await drive.findAll({ certificateId: cert!.id, environment, folderPath })];
+    if (folderPathString(priorPath) !== folderPathString(folderPath)) {
+      everywhere.push(...await drive.findAll({ certificateId: cert!.id, environment, folderPath: priorPath }).catch(() => []));
+    }
+    const others = everywhere.filter((f) => f.id !== active.id);
     for (const f of others) {
       await drive.quarantine({ fileId: f.id, reason: `superseded by attempt ${token}`, certificateId: cert!.id, attemptToken: f.attemptToken ?? "", at: now().toISOString() }).catch(() => {});
     }
@@ -380,6 +545,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
       detail: { certificateNo: done.certificateNo, driveFileId: active.id, retiredTempFileId: temp.id, pdfHash, bytes: bytes.length, environment,
         readBackVerified: true, attempt: done.uploadAttempts, attemptToken: token,
+        signature: cert!.signatureSha256 ? { userId: cert!.signatureUserId, version: cert!.signatureVersion, sha256: cert!.signatureSha256 } : null,
         revisionId: active.revisionId ?? null, readOnly: active.readOnly ?? false,
         reusedExistingDocument: Boolean(existing[0]) || undefined,
         supersededFiles: others.length ? others.map((f) => f.id) : undefined } });
@@ -409,11 +575,11 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
  * moves. Everything it looks at is a fact about the file as it is now: exactly one
  * ACTIVE file, the attempt on record, and bytes that hash to what was recorded.
  */
-export type DocumentCheck = { ok: boolean; reasons: string[]; action?: "drive_overwritten" | "drive_changed" | "drive_missing" | "drive_duplicate" };
+export type DocumentCheck = { ok: boolean; reasons: string[]; action?: "drive_overwritten" | "drive_changed" | "drive_missing" | "drive_duplicate" | "drive_not_private" };
 
 export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = {}, actorId?: string): Promise<DocumentCheck> {
   const environment = deps.environment ?? cert.driveEnvironment ?? certificateEnvironment();
-  const folderPath = certificateFolder(cert.tourDate);
+  const folderPath = folderPathOf(cert);
   let drive = deps.drive;
   if (!drive) {
     const t = await folkpathsDriveToken(actorId);
@@ -438,6 +604,18 @@ export async function checkFiledDocument(cert: ExpenseCertificate, deps: Deps = 
   if (bytes && cert.pdfHash && fileHash(bytes) !== cert.pdfHash) {
     return { ok: false, action: "drive_changed", reasons: ["The document in Drive is not the one that was filed — its contents have changed since. File it again before relying on it."] };
   }
+  // Privacy is asked here too, and not only when the file was created. Sharing is
+  // something a person does later, to a folder, months after the document was filed —
+  // which is precisely the case a check that only ran at upload would never see.
+  //
+  // A configuration that cannot be validated makes this unanswerable rather than fine:
+  // who is allowed to hold the file is exactly what is in doubt. The reason given here
+  // is the one sentence, without the addresses — this result travels to screens the
+  // configuration detail has no business reaching.
+  const cfg = await validateDriveAllowlist((deps.db ?? prisma) as PrismaClient);
+  if (!cfg.ok) return { ok: false, action: "drive_not_private", reasons: [CONFIG_INVALID_EN] };
+  const privacy = await privacyProblems(drive, folderPath, file.id, cfg);
+  if (privacy.length) return { ok: false, action: "drive_not_private", reasons: privacy };
   return { ok: true, reasons: [] };
 }
 
@@ -478,7 +656,8 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
     const expenses = (sheet!.expenses as unknown as Expense[]) ?? [];
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
-      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[] },
+      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
+        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null },
       { facts: facts(sheet!, name), expenses },
     );
     if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);

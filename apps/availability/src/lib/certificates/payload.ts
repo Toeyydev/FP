@@ -43,6 +43,16 @@ export type CertificatePayload = {
   rows: CertifiableRow[];
   totalSatang: number;
   reason: string;
+  /**
+   * Which signature image was on the document — whose it is, which version, and its
+   * fingerprint. Never the image itself: a payload is a thing to hash and compare, and
+   * half a megabyte of base64 in it would make the hash about the picture rather than
+   * about the expenses.
+   *
+   * Hashed on purpose. Swapping the image under a certificate changes what the document
+   * shows, and a fingerprint that ignored it would say nothing had changed.
+   */
+  signature: { userId: string; version: number; sha256: string } | null;
 };
 
 /** The reason these rows have no receipt. One sentence, kept with the document. */
@@ -86,7 +96,11 @@ export type SheetFacts = {
   guideReportedAt: Date | null;
 };
 
-export function buildPayload(sheet: SheetFacts, rows: readonly CertifiableRow[]): CertificatePayload {
+export function buildPayload(
+  sheet: SheetFacts,
+  rows: readonly CertifiableRow[],
+  signature: { userId: string; version: number; sha256: string } | null = null,
+): CertificatePayload {
   return {
     v: 1,
     jobRef: sheet.jobRef ?? "",
@@ -98,6 +112,7 @@ export function buildPayload(sheet: SheetFacts, rows: readonly CertifiableRow[])
     rows: rows.map((r) => ({ ...r })),
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
     reason: NO_RECEIPT_REASON_TH,
+    signature: signature ? { ...signature } : null,
   };
 }
 
@@ -116,6 +131,7 @@ export function canonicalString(p: CertificatePayload): string {
     `rows=${p.rows.map(row).join("|")}`,
     `total=${p.totalSatang}`,
     `reason=${p.reason}`,
+    `sig=${p.signature ? `${p.signature.userId}:${p.signature.version}:${p.signature.sha256}` : ""}`,
   ].join(";");
 }
 
@@ -143,10 +159,18 @@ export type DriftResult = { drifted: boolean; reasons: string[] };
  * the sheet. It is not repaired and the PDF is never edited: it is voided and a new one
  * issued, so the old document keeps saying what it said when it was approved.
  */
-export function checkDrift(stored: { payloadHash: string; coveredRows: CertifiableRow[] }, sheetNow: { facts: SheetFacts; expenses: Expense[] }): DriftResult {
+export function checkDrift(
+  stored: { payloadHash: string; coveredRows: CertifiableRow[]; signature?: CertificatePayload["signature"] },
+  sheetNow: { facts: SheetFacts; expenses: Expense[] },
+): DriftResult {
   const reasons: string[] = [];
   const nowRows = certifiableRows(sheetNow.expenses);
-  const now = buildPayload(sheetNow.facts, nowRows);
+  // Rebuilt with the signature the certificate already carries, because this asks one
+  // question only: has the JOB SHEET moved? A signature replaced since would make every
+  // rebuild differ and report the sheet as changed when nothing on it had. Whether the
+  // image is still the attested one is a different question, asked where it is answerable
+  // — against what is registered now, at the moment the image goes on the page.
+  const now = buildPayload(sheetNow.facts, nowRows, stored.signature ?? null);
   if (payloadHash(now) === stored.payloadHash) return { drifted: false, reasons };
 
   const was = new Map(stored.coveredRows.map((r) => [r.identity, r]));

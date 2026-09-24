@@ -29,7 +29,7 @@ const peakApi = vi.hoisted(() => ({ createExpenseAllInOne: vi.fn(), insertExpens
 
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
-vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
+vi.mock("@/lib/roles", () => ({ isAdmin: (r?: string) => r === "ADMIN", isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
 vi.mock("@/lib/peak-api", () => peakApi);
 
 import { POST } from "./route";

@@ -588,6 +588,56 @@ model JobSheet {
 // The two hashes answer two different questions, and neither identifies the approver:
 //   payloadHash  did the job sheet change after this was approved?
 //   pdfHash      is the file in Drive the file that was uploaded?
+// The image of an attester's handwritten signature, kept per person and per version.
+//
+// A signature belongs to one human being. The whole point of printing one is that a
+// reader recognises whose hand it is, so the one thing this must never do is show one
+// person's signature under another person's name. It is keyed on the user it belongs
+// to, the server decides which image that is, and nothing in a request can influence
+// the answer.
+//
+// The bytes live in a private Drive folder; only their fingerprint lives here. That is
+// what makes a replacement visible: a new signature is a new VERSION with a new hash,
+// the old row is retired rather than edited, and a certificate attested against version
+// 1 can still say so years later.
+model AttesterSignature {
+  id           String    @id @default(cuid())
+  /// User.id of the person whose hand this is. Never a role, never a job title.
+  userId       String
+  /// 1, 2, 3… A replacement never overwrites; it supersedes.
+  version      Int
+  /// One LIVE signature per person, enforced by the database rather than by a check
+  /// somebody could forget. Holds the user id while current and NULL once retired, and
+  /// Postgres does not compare NULLs in a unique index.
+  activeUserId String?   @unique
+  /// Null until the image is in Drive.
+  ///
+  /// The row is written FIRST, because the file's identity has to include the row it
+  /// belongs to — a file that names no record cannot be matched back to one, and
+  /// matching by filename is how two people's signatures get mixed up. So: reserve the
+  /// row, put its id on the file, then record the file. A row with no file is visibly
+  /// half-finished and is never anybody's live signature.
+  driveFileId  String?   @unique
+  driveUrl     String?
+  /// Which deployment filed it, part of the file's marker, so staging and production
+  /// pointed at one Drive account never find each other's images.
+  driveEnvironment String?
+  /// SHA-256 of the PNG bytes. Checked again every time the image is used: an image that
+  /// has changed since it was registered is not the image anybody approved.
+  sha256       String
+  bytes        Int
+  width        Int
+  height       Int
+  uploadedById String?
+  uploadedAt   DateTime  @default(now())
+  retiredAt    DateTime?
+  retiredById  String?
+  retireReason String?
+
+  @@unique([userId, version])
+  @@index([userId])
+}
+
 model ExpenseCertificate {
   id                    String    @id @default(cuid())
   certificateNo         String    @unique // CERT-<job ref>-NN
@@ -622,6 +672,12 @@ model ExpenseCertificate {
   attestedByName            String?
   attestedByRole            String?
   attestedAt              DateTime?
+  /// Which signature image was on the document, if one was. Recorded at attestation and
+  /// checked again before the PDF is made: if the registered image has changed in
+  /// between, this certificate is not the one that was approved.
+  signatureUserId       String?
+  signatureVersion      Int?
+  signatureSha256       String?
   // The file. uploadStartedAt is written BEFORE the upload is attempted, so an upload
   // that succeeded while the database write failed can be found and finished.
   pdfHash               String?
@@ -654,6 +710,13 @@ model ExpenseCertificate {
   /// Which deployment filed it. Part of the file's marker in Drive, so a staging run
   /// and production pointed at one account never find each other's documents.
   driveEnvironment      String?
+  /// Which folder in Drive the document is actually in, slash-joined.
+  ///
+  /// Certificates used to be filed beside the job sheets, in a tree the guides can read.
+  /// They are now filed in a private finance folder, and this records which — so a
+  /// document filed under the old arrangement can still be found and checked instead of
+  /// being looked for where it never was.
+  driveFolderPath       String?
   uploadedAt            DateTime?
   linkedAt              DateTime?
   voidedAt              DateTime?

@@ -44,13 +44,23 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
   const [confirmed, setConfirmed] = useState(false);
   const [preview, setPreview] = useState(false);
 
+  // Nothing is even asked for unless the reader is an admin. The endpoint refuses anyone
+  // else and the panel is not mounted for them, but a component that fetches on mount is
+  // one prop away from being mounted somewhere it should not be, and a 403 in the network
+  // tab of a guide's browser still says a certificate exists.
   const load = useCallback(async () => {
+    if (!isAdmin) { setInfo(null); return; }
     const r = await fetch(`/api/jobsheet/certificate?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`);
     if (!r.ok) { setInfo(null); return; }
     setInfo(await r.json());
-  }, [guideId, date, slotIdx]);
+  }, [guideId, date, slotIdx, isAdmin]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Whatever was passed in, this panel draws nothing for a non-admin. The number, the
+  // hashes, the Drive link and the attester's name are all admin-only, so there is no
+  // partial view of it worth rendering.
+  if (!isAdmin) return null;
 
   const act = async (url: string, body: object, ok: string) => {
     setBusy(true); setMsg("");

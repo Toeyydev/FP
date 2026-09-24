@@ -15,7 +15,9 @@ const TABLES = [
   // which a recorded payment points back at.
   "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
   // Certificates in lieu of receipts hang off JobSheet, so they truncate before it.
-  "ExpenseCertificate",
+  // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it
+  // makes the NEXT test collide on a file id its own fake Drive just reissued.
+  "ExpenseCertificate", "AttesterSignature",
   "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   "Availability", "RefreshToken", "User", "Tour",
 ];

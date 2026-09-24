@@ -13,7 +13,7 @@ const createExpenseMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
-vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
+vi.mock("@/lib/roles", () => ({ isAdmin: (r?: string) => r === "ADMIN", isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN" }));
 vi.mock("@/lib/peak-api", () => ({
   createExpenseAllInOne: createExpenseMock,
   peakEnabled: true,

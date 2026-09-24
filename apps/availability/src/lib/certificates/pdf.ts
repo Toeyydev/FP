@@ -121,9 +121,5 @@ export function certificateFileName(certificateNo: string): string {
   return `${certificateNo}.pdf`;
 }
 
-/** Where it is filed. Beside the job sheets it belongs to, in its own folder. */
-export function certificateFolder(tourDate: string): string[] {
-  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const month = `${tourDate.slice(0, 7)} ${MONTHS[Number(tourDate.slice(5, 7)) - 1] ?? ""}`.trim();
-  return ["Folkpaths Job Sheets", month, "Expense Certificates"];
-}
+// Where it is filed lives in lib/certificates/access, with the rules about who may see
+// it — the folder and the permission check answer one question and belong together.

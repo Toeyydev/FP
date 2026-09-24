@@ -1787,8 +1787,12 @@ export default function JobSheetEditor() {
 
        {/* Certificates in lieu of receipts — the rows a guide fronted that no supplier
            issues paper for. Shown here, next to the expenses they are about, and never
-           on the printed sheet. */}
-       {canEdit && sheet.ref && (
+           on the printed sheet.
+
+           ADMIN, not canEdit. An operator can edit this sheet and must not learn that a
+           certificate exists, where its file is, or whose handwriting is on it. The
+           server refuses them too — this only keeps the screen honest about it. */}
+       {isAdmin && sheet.ref && (
          <div className="no-print">
            <ExpenseCertificatePanel guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} isAdmin={isAdmin} onChanged={() => void load()} />
          </div>

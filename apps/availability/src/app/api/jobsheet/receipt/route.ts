@@ -2,9 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { isOps } from "@/lib/roles";
+import { isAdmin, isOps } from "@/lib/roles";
+import { redactRowsForNonAdmin } from "@/lib/certificates/access";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { receiptDriveName, type Expense } from "@/lib/jobsheet";
+
+/**
+ * The saved sheet on its way back, with certificate metadata removed for anyone but an
+ * admin. Attaching a receipt returns the whole row set, which includes rows a
+ * certificate stands behind and the reason sentence that names it.
+ */
+const forCaller = (sheet: { expenses?: unknown }, role: string | null | undefined) =>
+  isAdmin(role) ? sheet : { ...sheet, expenses: redactRowsForNonAdmin(sheet.expenses as Record<string, unknown>[]) };
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
@@ -65,7 +74,7 @@ export async function POST(req: NextRequest) {
     action: "jobsheet.receipt_uploaded", entityType: "JobSheet", entityId: sheet.id,
     detail: { guideId, date, slotIdx, ref: sheet.ref, expenseIndex, description: expenses[expenseIndex]?.description ?? "", name: file.name ?? name },
   });
-  return NextResponse.json({ ok: true, link: up.link, sheet: updated });
+  return NextResponse.json({ ok: true, link: up.link, sheet: forCaller(updated, session?.user?.role) });
 }
 
 // DELETE { guideId, date, slotIdx, expenseIndex } — detach a receipt from an expense
@@ -98,5 +107,5 @@ export async function DELETE(req: NextRequest) {
     action: "jobsheet.receipt_removed", entityType: "JobSheet", entityId: sheet.id,
     detail: { guideId, date, slotIdx, ref: sheet.ref, expenseIndex },
   });
-  return NextResponse.json({ ok: true, sheet: updated });
+  return NextResponse.json({ ok: true, sheet: forCaller(updated, session?.user?.role) });
 }
