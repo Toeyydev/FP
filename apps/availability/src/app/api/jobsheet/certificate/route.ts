@@ -8,6 +8,10 @@ import { certifiableRows, duplicateIdentities, ineligibleRows } from "@/lib/cert
 import { LABEL, LABEL_TH, type CertificateState } from "@/lib/certificates/state";
 import { CertificateRefused, createCertificate, type Actor } from "@/lib/certificates/service";
 import { denied } from "@/lib/certificates/denied";
+import { certificatePeakView } from "@/lib/certificates/peak-link";
+import { attachEnabled } from "@/lib/certificates/peak-attach";
+import { computeTotals, DEFAULT_GUIDE_FEE, type GuideFee } from "@/lib/jobsheet";
+import { guidePayoutTotal } from "@/lib/peak-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -55,8 +59,20 @@ export async function GET(req: NextRequest) {
       id: true, certificateNo: true, status: true, totalSatang: true, payloadHash: true, pdfHash: true,
       driveUrl: true, attestedByName: true, attestedByRole: true, attestedAt: true, uploadedAt: true, linkedAt: true,
       voidedAt: true, voidReason: true, coveredRows: true, createdAt: true,
+      guideId: true, tourDate: true, slotIdx: true,
+      peakPaymentRef: true, peakDocumentNo: true, peakDocumentId: true, peakDocumentLink: true,
+      peakDocumentSource: true, peakPaidDate: true, peakLinkedAt: true,
+      attachments: {
+        select: { id: true, state: true, requestEncoding: true, peakResCode: true, peakResDesc: true,
+          attemptedAt: true, resolvedById: true, resolvedAt: true, resolutionNote: true, peakDocumentNo: true, fileName: true },
+        orderBy: { createdAt: "desc" },
+      },
     },
   });
+
+  // Which PEAK document each certificate accompanies. Recorded when the EXP was created;
+  // resolved live in the meantime, so a certificate issued first still reads correctly.
+  const peak = await Promise.all(certificates.map((c) => certificatePeakView(c)));
 
   // Why a new one could not be issued right now, in the operator's words.
   const blockers: string[] = [];
@@ -72,12 +88,35 @@ export async function GET(req: NextRequest) {
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
     canIssue: rows.length > 0 && blockers.length === 0,
     blockers,
-    certificates: certificates.map((c) => ({
+    certificates: certificates.map((c, i) => ({
       ...c,
       label: LABEL[c.status as CertificateState] ?? c.status,
       labelTh: LABEL_TH[c.status as CertificateState] ?? c.status,
       isEvidence: c.status === "LINKED",
+      peak: peak[i],
     })),
+    attachEnabled: attachEnabled(),
+    // What the whole job is worth, so an admin can reconcile the certificate against the
+    // EXP without leaving the page.
+    //
+    // Deliberately NOT part of the certificate and labelled as such on screen. The
+    // certificate covers unreceipted reimbursement only; these are the fee, the review
+    // reward and the withholding that share its EXP and must never appear on its PDF.
+    reconciliation: (() => {
+      const fee = (sheet.guideFee as unknown as GuideFee) ?? DEFAULT_GUIDE_FEE;
+      const t = computeTotals(expenses, fee);
+      return {
+        guideFeeGross: t.gross,
+        reviewReward: t.reviewReward,
+        whtBase: t.whtBase,
+        whtOnFee: t.whtOnFee,
+        whtOnReview: t.whtOnReview,
+        wht: t.wht,
+        reimbursementTotal: t.totalExpenses - t.reviewReward,
+        netTransfer: guidePayoutTotal(expenses, fee).payout,
+        certificateCoversSatang: rows.reduce((s, r) => s + r.amountSatang, 0),
+      };
+    })(),
   });
 }
 
