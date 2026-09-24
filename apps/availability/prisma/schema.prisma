@@ -717,6 +717,33 @@ model ExpenseCertificate {
   /// document filed under the old arrangement can still be found and checked instead of
   /// being looked for where it never was.
   driveFolderPath       String?
+  /// The PEAK expense document this job sheet's accounting lives in, recorded when that
+  /// document is created and again when it is paid.
+  ///
+  /// A certificate NEVER creates a PEAK document and never adds an amount to one. The
+  /// EXP holds the whole job — the fee, the review reward and the reimbursement — and
+  /// this certificate stands beside it covering only the unreceipted reimbursement rows.
+  ///
+  /// The relationship is many certificates to one EXP, on purpose: a combined payment
+  /// pays several job sheets in one transfer under one EXP, and each of those sheets may
+  /// have its own certificate. What is limited to one is the other direction — one job
+  /// sheet has at most one EXP and at most one active certificate.
+  ///
+  /// Resolved through recorded identity only: jobSheetId → (guideId, date, slotIdx) →
+  /// TourPayment.peakPaymentRef → GuidePaymentDocument.paymentRef, or the job sheet's own
+  /// peakDocumentNo when it was synced by itself. Never a guide's name, never a nearby
+  /// date, never a position in a list.
+  peakPaymentRef        String?   // FOLK-PAY-YYYYMM-NN, when the EXP came from a combined payment
+  peakDocumentNo        String?   // EXP-…
+  peakDocumentId        String?
+  peakDocumentLink      String?
+  peakDocumentSource    String?   // COMBINED_PAYMENT | JOB_SHEET_SYNC
+  peakPaidDate          String?   // "YYYY-MM-DD" — when the money actually moved
+  peakLinkedAt          DateTime?
+  /// Attempts to attach this certificate's PDF to that EXP. A ledger of its own, because
+  /// "did the file land" is a question this system cannot answer by looking, and a column
+  /// would force one answer where there are three.
+  attachments           PeakAttachment[]
   uploadedAt            DateTime?
   linkedAt              DateTime?
   voidedAt              DateTime?
@@ -729,6 +756,73 @@ model ExpenseCertificate {
   @@index([jobSheetId, status])
   @@index([guideId])
   @@index([status])
+  // Every certificate on one EXP, for the reconciliation view. Not unique: a combined
+  // payment's EXP covers several job sheets and may carry several certificates.
+  @@index([peakDocumentNo])
+  @@index([peakPaymentRef])
+}
+
+/// One attempt to attach one certificate's PDF to one PEAK expense document.
+///
+/// A ledger rather than a few columns, because attaching has an outcome this system
+/// cannot see. PEAK has no endpoint that lists or reads back a document's files, so
+/// "PEAK answered 200" and "the file is in PEAK" are different claims, and only the
+/// first is ever observed here. The states keep them apart on purpose.
+///
+/// Identity is (certificateId, peakDocumentId) — never a filename. Filenames are
+/// unique today (CERT-<job ref>-NN.pdf) and would still be the wrong key: PEAK could
+/// hold two files of the same name, and a name proves nothing about which document a
+/// file belongs to.
+///
+/// The unique constraint is what makes a retry safe. A second request, a double click
+/// or a retried timeout loses on the index and never sends a second POST. A retry is an
+/// explicit admin action on THIS row, not a new row.
+model PeakAttachment {
+  id             String             @id @default(cuid())
+  certificateId  String
+  certificate    ExpenseCertificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  /// PEAK's internal id for the expense document. With certificateId, this is the identity.
+  peakDocumentId String
+  peakDocumentNo String? // EXP-… , for people to read
+  peakPaymentRef String? // FOLK-PAY-… , when the EXP came from a combined payment
+  /// The bytes this row is about. A certificate's filed PDF never changes — reissuing
+  /// means voiding and a NEW certificate with a new id — so a different hash against the
+  /// same certificateId is a contradiction, and this is what notices it.
+  pdfHash        String
+  fileName       String
+  /// CLAIMED           the row exists, nothing has been sent
+  /// PEAK_ACCEPTED     PEAK answered resCode exactly "200". NOT proof the file is stored.
+  /// REFUSED           PEAK refused in a way that proves nothing was stored — retryable
+  /// ATTACHMENT_UNCERTAIN  timeout, transport failure, or an answer not on the refusal
+  ///                   allowlist. The file may or may not be there. Never retried
+  ///                   automatically: a person looks in PEAK and says what they saw.
+  /// ATTACHED_CONFIRMED an admin saw the file on the document in PEAK, or a read-back
+  ///                   proved it. The only state that means the file is there.
+  /// NOT_FOUND_IN_PEAK an admin looked and it was not there.
+  state          String             @default("CLAIMED")
+  /// DATA_URI_BASE64 | PLAIN_BASE64 — which encoding was SENT, recorded rather than
+  /// inferred. The slip path had to establish its encoding by elimination across two
+  /// production attempts because nothing wrote down which one went; a column costs
+  /// nothing beside having to guess again.
+  requestEncoding String?
+  /// PEAK's answer, verbatim enough to argue with and sanitised of anything sensitive.
+  peakResCode    String?
+  peakResDesc    String?
+  attemptedAt    DateTime?
+  attemptedById  String?
+  /// Who looked in PEAK, when, and what they found.
+  resolvedById   String?
+  resolvedAt     DateTime?
+  resolutionNote String?
+  claimToken     String?
+  leaseUntil     DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  /// One certificate is attached to one PEAK document once. This is the idempotency.
+  @@unique([certificateId, peakDocumentId])
+  @@index([peakDocumentId])
+  @@index([state])
 }
 
 // Tour lifecycle proof-of-work: a guide's check-in / start / complete events for
