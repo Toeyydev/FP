@@ -11,6 +11,7 @@ import { certificateFileName, certificateFolder, pdfRendererAvailable, renderPdf
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
+import { blocksDocument, registeredSignature, resolveSignature, stampOf, type SignatureDeps, type SignatureStamp } from "@/lib/certificates/signature";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -32,6 +33,8 @@ export type Deps = {
   heartbeatMs?: number;
   newToken?: () => string;
   now?: () => Date;
+  /** Where the attester's signature image comes from. Supplied by tests; Drive otherwise. */
+  signature?: SignatureDeps;
 };
 
 export type Actor = { id: string; name: string; role: string };
@@ -137,6 +140,19 @@ export async function createCertificate(key: { guideId: string; date: string; sl
 export async function attestCertificate(id: string, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
+
+  // The attester's own signature image, and nobody else's: the id comes from `actor`,
+  // which every caller builds from the session. Resolved out here because it fetches from
+  // Drive, and a transaction held open across a network call is a transaction held open
+  // for as long as somebody else's server feels like taking.
+  //
+  // Having none is not a failure — the document is complete without a picture. Every other
+  // refusal stops the attestation, because each one means what is on file is not what was
+  // approved, and a document is not the place to find that out.
+  const resolved = await resolveSignature(actor.id, { db, ...(deps.signature ?? {}) }, actor.id);
+  if (!resolved.ok && blocksDocument(resolved.code)) refuse(resolved.reasons);
+  const stamp: SignatureStamp | null = resolved.ok ? stampOf(resolved.signature) : null;
+
   const signed = await db.$transaction(async (tx) => {
     const cert = await tx.expenseCertificate.findUnique({ where: { id } });
     if (!cert) refuse(["No such certificate"], 404);
@@ -152,27 +168,51 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
 
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
-      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[] },
+      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
+        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null },
       { facts: facts(sheet!, name), expenses },
     );
     if (drift.drifted) {
       refuse(["This job sheet has changed since the certificate was prepared, so it no longer describes the sheet:", ...drift.reasons, "Withdraw this certificate and issue a new one."]);
     }
+
+    // Read again, in the transaction, against the version that was fetched. Closes the
+    // gap the Drive call opened: a signature replaced in between would otherwise be
+    // stamped as the one that was checked.
+    if (stamp) {
+      const live = await registeredSignature(actor.id, { db: tx });
+      if (!live || live.version !== stamp.version || live.sha256 !== stamp.sha256) {
+        refuse(["The signature image registered for you changed while this certificate was being prepared. Try again, so what the document carries is what is on file."]);
+      }
+    }
     // The amounts on the document have to be the amounts on the sheet.
     const total = rows.reduce((t, r) => t + r.amountSatang, 0);
     if (total !== cert!.totalSatang) refuse([`The total has changed from ${(cert!.totalSatang / 100).toFixed(2)} to ${(total / 100).toFixed(2)}. Withdraw this certificate and issue a new one.`]);
+
+    // The payload is rebuilt so the fingerprint covers which signature was attested with.
+    // Swap the image afterwards and the hash no longer matches, which is the whole point
+    // of having one.
+    const payload = buildPayload(facts(sheet!, name), rows, stamp);
 
     return tx.expenseCertificate.update({
       where: { id, status: cert!.status },
       data: {
         status: "ATTESTED" satisfies CertificateState,
         attestedByUserId: actor.id, attestedByName: actor.name, attestedByRole: actor.role, attestedAt: now(),
+        payload: payload as unknown as Prisma.InputJsonValue,
+        payloadHash: payloadHash(payload),
+        signatureUserId: stamp?.userId ?? null, signatureVersion: stamp?.version ?? null, signatureSha256: stamp?.sha256 ?? null,
         sourceSheetUpdatedAt: sheet!.updatedAt, sourceGuideReportedAt: sheet!.guideExpensesAt,
       },
     });
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.attested", entityType: "ExpenseCertificate", entityId: signed.id,
     detail: { certificateNo: signed.certificateNo, jobRef: signed.jobRef, totalSatang: signed.totalSatang, payloadHash: signed.payloadHash,
+      // Which image, never the image. An audit row is read by people and kept forever.
+      signature: stamp ? { userId: stamp.userId, version: stamp.version, sha256: stamp.sha256 } : null,
+      signatureNote: stamp
+        ? "an image of this person's handwriting, registered to them in advance; it is not a cryptographic signature and proves nothing on its own"
+        : "no signature image is registered for this person — the document carries their name, role and time",
       approval: "electronic certification by an authenticated user — session identity, role and this audit row; no cryptographic signature" } });
   return signed;
 }
@@ -262,10 +302,39 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
 
   try {
     const payload = cert!.payload as unknown as CertificatePayload;
+
+    // The image is fetched here, where it goes on the page — not carried across from the
+    // attestation. Between the two, the registered image can be replaced, retired, or
+    // rewritten in Drive without a new version, and any of those would put a picture on
+    // this document that nobody attested with. So it is resolved again and compared to
+    // what the certificate recorded, and a document is only rendered when they agree.
+    //
+    // At this point "not registered" is a refusal like any other: the certificate says a
+    // signature was attested with, so its absence now is a change, not an empty slot.
+    let signatureDataUri: string | null = null;
+    if (cert!.signatureSha256 && cert!.signatureUserId) {
+      const again = await resolveSignature(cert!.signatureUserId, { db, ...(deps.signature ?? {}) }, actor.id);
+      const release = () => db.expenseCertificate.updateMany({ where: { id, uploadClaimToken: token }, data: { uploadStartedAt: null, uploadClaimToken: null, uploadLeaseUntil: null } }).catch(() => {});
+      if (!again.ok) {
+        await release();
+        refuse([`The signature image this certificate was attested with cannot be used: ${again.reasons[0]}`]);
+      } else if (again.signature.version !== cert!.signatureVersion || again.signature.sha256 !== cert!.signatureSha256) {
+        await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.signature_changed", entityType: "ExpenseCertificate", entityId: id,
+          detail: { certificateNo: cert!.certificateNo, signatureUserId: cert!.signatureUserId,
+            attestedVersion: cert!.signatureVersion, attestedSha256: cert!.signatureSha256,
+            registeredVersion: again.signature.version, registeredSha256: again.signature.sha256 } });
+        await release();
+        refuse(["The signature image registered for the attester has changed since this certificate was attested, so filing it would put a different signature on the document. Withdraw this certificate and issue a new one."]);
+      } else {
+        signatureDataUri = again.signature.dataUri;
+      }
+    }
+
     const html = renderCertificateHtml({
       certificateNo: cert!.certificateNo, payload, payloadHash: cert!.payloadHash,
       attestedByName: cert!.attestedByName ?? "", attestedByRole: cert!.attestedByRole ?? "",
       attestedAt: (cert!.attestedAt ?? new Date(0)).toISOString(), auditRef: cert!.id,
+      signatureDataUri, signatureVersion: cert!.signatureVersion,
     });
     const bytes = await render(html);
     const pdfHash = fileHash(bytes);
@@ -380,6 +449,7 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
     await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.uploaded", entityType: "ExpenseCertificate", entityId: id,
       detail: { certificateNo: done.certificateNo, driveFileId: active.id, retiredTempFileId: temp.id, pdfHash, bytes: bytes.length, environment,
         readBackVerified: true, attempt: done.uploadAttempts, attemptToken: token,
+        signature: cert!.signatureSha256 ? { userId: cert!.signatureUserId, version: cert!.signatureVersion, sha256: cert!.signatureSha256 } : null,
         revisionId: active.revisionId ?? null, readOnly: active.readOnly ?? false,
         reusedExistingDocument: Boolean(existing[0]) || undefined,
         supersededFiles: others.length ? others.map((f) => f.id) : undefined } });
@@ -478,7 +548,8 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
     const expenses = (sheet!.expenses as unknown as Expense[]) ?? [];
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
-      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[] },
+      { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
+        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null },
       { facts: facts(sheet!, name), expenses },
     );
     if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);

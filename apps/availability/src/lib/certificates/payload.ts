@@ -159,10 +159,18 @@ export type DriftResult = { drifted: boolean; reasons: string[] };
  * the sheet. It is not repaired and the PDF is never edited: it is voided and a new one
  * issued, so the old document keeps saying what it said when it was approved.
  */
-export function checkDrift(stored: { payloadHash: string; coveredRows: CertifiableRow[] }, sheetNow: { facts: SheetFacts; expenses: Expense[] }): DriftResult {
+export function checkDrift(
+  stored: { payloadHash: string; coveredRows: CertifiableRow[]; signature?: CertificatePayload["signature"] },
+  sheetNow: { facts: SheetFacts; expenses: Expense[] },
+): DriftResult {
   const reasons: string[] = [];
   const nowRows = certifiableRows(sheetNow.expenses);
-  const now = buildPayload(sheetNow.facts, nowRows);
+  // Rebuilt with the signature the certificate already carries, because this asks one
+  // question only: has the JOB SHEET moved? A signature replaced since would make every
+  // rebuild differ and report the sheet as changed when nothing on it had. Whether the
+  // image is still the attested one is a different question, asked where it is answerable
+  // — against what is registered now, at the moment the image goes on the page.
+  const now = buildPayload(sheetNow.facts, nowRows, stored.signature ?? null);
   if (payloadHash(now) === stored.payloadHash) return { drifted: false, reasons };
 
   const was = new Map(stored.coveredRows.map((r) => [r.identity, r]));
