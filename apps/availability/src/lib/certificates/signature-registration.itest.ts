@@ -13,6 +13,8 @@ const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase } from "@/test/db";
@@ -423,8 +425,21 @@ describe("the Drive allowlist is validated against real ADMIN accounts", () => {
 
     const out = await registerSignature(ADMIN.id, V1, ADMIN, deps());
     expect(out.created).toBe(true);
-    // The only permission on the file is the filing account's own. Nothing was shared.
-    expect(drive.filePermissions).toBeNull();
+    // Nothing was shared with anybody — and not by luck. There is no way to share from
+    // here: the Drive interface this code is given can find, create, read, check
+    // permissions and quarantine, and has no method that GRANTS one. Sharing a signature
+    // image is not a thing this feature can do, correctly or otherwise.
+    const canDo = Object.keys(fakeDrive());
+    expect(canDo.sort()).toEqual(["accountEmail", "create", "find", "folderId", "permissions", "quarantine", "read"]);
+    const src = readFileSync(join(process.cwd(), "src/lib/certificates/signature-drive.ts"), "utf8");
+    // The permissions collection is READ (a plain GET) and never written to: a call that
+    // granted access would carry a method. This is the check, not the mere absence of
+    // the word, because reading who can see a file is exactly what the privacy check does.
+    for (const call of src.split("/permissions").slice(1)) {
+      expect(call.slice(0, 220), "a call writes to the permissions collection").not.toContain("method:");
+    }
+    expect(src).not.toContain("anyoneWithLink");
+    expect(src).not.toContain('type: "anyone"');
   });
 
   // 14
