@@ -26,6 +26,10 @@ type Info = {
   active: Version | null; versions: Version[]; impact: Impact;
   admins: { id: string; name: string }[];
   limits: { maxBytes: number; minDimension: number; maxDimension: number };
+  /** Reading is the ADMIN role; changing is narrowed to the authorised attesters. */
+  mayChange: boolean;
+  cannotChangeReason: string | null;
+  attesterListInForce: boolean;
 };
 
 const when = (iso: string | null) =>
@@ -150,7 +154,7 @@ export default function AttesterSignatureSettings() {
               <button type="button" className="btn sm" onClick={() => setShowLive((v) => !v)}>
                 {showLive ? "ซ่อนภาพ" : "ดูภาพลายเซ็น"}
               </button>
-              <button type="button" className="btn sm ghost" disabled={busy} onClick={() => void retire()}>
+              <button type="button" className="btn sm ghost" disabled={busy || info.mayChange === false} onClick={() => void retire()}>
                 ยกเลิกการใช้งานลายเซ็นนี้
               </button>
             </div>
@@ -171,13 +175,22 @@ export default function AttesterSignatureSettings() {
       </section>
 
       {/* Upload, preview, confirm. */}
+      {info.mayChange === false && (
+        <section className="card" style={{ marginTop: 12, borderColor: "#fcd34d", background: "#fffbeb" }}>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            <b>บัญชีนี้ดูได้แต่แก้ไขไม่ได้</b><br />
+            {info.cannotChangeReason}
+          </p>
+        </section>
+      )}
+
       <section className="card" style={{ marginTop: 12 }}>
         <h2 style={{ fontSize: 15, marginTop: 0 }}>{info.active ? "เปลี่ยนลายเซ็น" : "ลงทะเบียนลายเซ็น"}</h2>
         <p style={{ fontSize: 12.5, color: "var(--ink-soft,#78716c)", marginTop: 0 }}>
           ไฟล์ PNG ขนาดไม่เกิน {kb(lim.maxBytes)} และด้านละ {lim.minDimension}–{lim.maxDimension} พิกเซล
           การเปลี่ยนจะสร้างเป็นฉบับใหม่ ไม่เขียนทับของเดิม
         </p>
-        <input ref={fileInput} type="file" accept="image/png" disabled={busy} onChange={(e) => choose(e.target.files?.[0] ?? null)} />
+        <input ref={fileInput} type="file" accept="image/png" disabled={busy || info.mayChange === false} onChange={(e) => choose(e.target.files?.[0] ?? null)} />
 
         {problems.length > 0 && (
           <ul style={{ color: "#b45309", fontSize: 12.5, marginTop: 8 }}>{problems.map((p) => <li key={p}>{p}</li>)}</ul>

@@ -11,6 +11,7 @@ import {
   SignatureRefused, type Actor,
 } from "@/lib/certificates/signature-service";
 import { DuplicateSignatureFile } from "@/lib/certificates/signature-drive";
+import { attesterListInForce, attesterRefusal } from "@/lib/certificates/attester";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,13 @@ export async function GET(req: NextRequest) {
   const userId = subjectOf(req, session);
   if (!userId) return NextResponse.json({ error: "bad-query", reasons: ["Whose signature?"] }, { status: 400 });
 
+  // Whether the person reading may also change it. Reading is the ADMIN role; changing
+  // is narrowed by the attester list, so an admin can legitimately be able to see this
+  // page and not to act on it. Saying so up front is better than a refusal after they
+  // have chosen a file.
+  const me = session?.user?.id ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { email: true, role: true } }) : null;
+  const cannotChange = attesterRefusal({ role: me?.role ?? session?.user?.role, email: me?.email });
+
   const [versions, impact, person, admins] = await Promise.all([
     signatureHistory(userId),
     replacementImpact(userId),
@@ -64,6 +72,9 @@ export async function GET(req: NextRequest) {
     versions,
     impact,
     admins: admins.map((a) => ({ id: a.id, name: (a.fullName || a.displayName || a.email || a.id).trim() })),
+    mayChange: cannotChange === null,
+    cannotChangeReason: cannotChange,
+    attesterListInForce: attesterListInForce(),
     limits: { maxBytes: MAX_SIGNATURE_BYTES, minDimension: MIN_DIMENSION, maxDimension: MAX_DIMENSION },
   });
 }

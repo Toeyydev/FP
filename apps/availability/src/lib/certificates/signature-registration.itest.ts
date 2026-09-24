@@ -332,3 +332,50 @@ describe("only an admin, checked on the server", () => {
     expect(JSON.stringify(d)).not.toContain("driveFileId");
   });
 });
+
+describe("reading the settings page is not the same as being able to act on it", () => {
+  const ATTESTERS = process.env.CERTIFICATE_ATTESTER_EMAILS;
+  const restore = () => {
+    if (ATTESTERS === undefined) delete process.env.CERTIFICATE_ATTESTER_EMAILS;
+    else process.env.CERTIFICATE_ATTESTER_EMAILS = ATTESTERS;
+  };
+
+  it("an admin off the attester list sees the page, and is told up front", async () => {
+    await prisma.user.create({ data: { id: "u_other_admin", email: "other-admin@example.test", role: "ADMIN", displayName: "Other" } });
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "admin@example.test";
+    try {
+      authMock.auth.mockResolvedValue({ user: { id: "u_other_admin", name: "Other", role: "ADMIN" } });
+      const res = await sigGet(new NextRequest(`https://ops.example.test/api/certificates/signature?userId=${ADMIN.id}`));
+      expect(res.status).toBe(200);
+      const d = await res.json();
+      expect(d.mayChange).toBe(false);
+      expect(d.cannotChangeReason).toContain("Reading certificates is unaffected");
+      expect(d.attesterListInForce).toBe(true);
+    } finally { restore(); }
+  });
+
+  it("and cannot register or stand one down however they ask", async () => {
+    await prisma.user.create({ data: { id: "u_other_admin", email: "other-admin@example.test", role: "ADMIN", displayName: "Other" } });
+    await registerSignature(ADMIN.id, V1, ADMIN, deps());
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "admin@example.test";
+    try {
+      const them: Actor = { id: "u_other_admin", name: "Other", role: "ADMIN" };
+      await expect(registerSignature(ADMIN.id, V2, them, deps())).rejects.toThrow(/not one of the people authorised/);
+      await expect(retireSignature(ADMIN.id, "trying it on from another account", them)).rejects.toThrow(/not one of the people authorised/);
+      // Untouched: still version 1, still live.
+      const rows = await prisma.attesterSignature.findMany();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].activeUserId).toBe(ADMIN.id);
+    } finally { restore(); }
+  });
+
+  it("the authorised attester may do both", async () => {
+    process.env.CERTIFICATE_ATTESTER_EMAILS = "admin@example.test";
+    try {
+      const out = await registerSignature(ADMIN.id, V1, ADMIN, deps());
+      expect(out.created).toBe(true);
+      const stood = await retireSignature(ADMIN.id, "she has re-signed on new paper", ADMIN);
+      expect(stood!.active).toBe(false);
+    } finally { restore(); }
+  });
+});
