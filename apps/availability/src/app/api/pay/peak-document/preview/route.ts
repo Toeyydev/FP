@@ -4,13 +4,29 @@ import type { Expense as SheetExpense } from "@/lib/jobsheet";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
-import { isOps } from "@/lib/roles";
+import { isAdmin, isOps } from "@/lib/roles";
+import { redactBodyForNonAdmin } from "@/lib/certificates/access";
 import { peakEnabled } from "@/lib/peak-api";
 import { buildGuidePaymentDocument, PaymentDocumentNotPostable, type MissingCategoryRow } from "@/lib/peak-payment-document";
 import { loadPaymentContext } from "@/lib/peak-payment-server";
 import { transferFigures } from "@/lib/payment-transfer";
 
+
 export const dynamic = "force-dynamic";
+
+/**
+ * Every answer this route gives, with certificate metadata removed unless the reader is
+ * an admin.
+ *
+ * These endpoints are open to operators, which is right — they do the paying. What they
+ * must not learn from a refusal is that a certificate in lieu of a receipt exists, which
+ * job it belongs to, or its number. The gate's own messages quote all three, so the
+ * filter is applied to the whole body at the door rather than to the handful of fields
+ * anybody happened to think of.
+ */
+const reply = (role: string | null | undefined, body: unknown, init?: ResponseInit) =>
+  NextResponse.json(isAdmin(role) ? body : redactBodyForNonAdmin(body), init);
+
 
 const bodyZ = z.object({
   guideId: z.string().min(1),
@@ -28,7 +44,7 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = bodyZ.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  if (!parsed.success) return reply(session?.user?.role, { error: "bad-body" }, { status: 400 });
   const { guideId, jobs } = parsed.data;
   const alreadyPaid = !!parsed.data.alreadyPaid;
 
@@ -46,7 +62,7 @@ export async function POST(req: NextRequest) {
   let missingCategories: MissingCategoryRow[] = [];
   let evidenceGaps: MissingCategoryRow[] = [];
   try {
-    if (!candidates.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps });
+    if (!candidates.length) return reply(session?.user?.role, { ok: false, reasons, missingCategories, evidenceGaps });
     const doc = buildGuidePaymentDocument({
       guideId, peakContactId: ctx.peakContactId,
       // The number is assigned when the document is created. It changes no line.
@@ -69,10 +85,10 @@ export async function POST(req: NextRequest) {
     // is about a document a row ALREADY names, which the system has just found is not
     // what it was. Rows with no certificate are reported through evidenceGaps as before.
     if (!evidence.ok) {
-      return NextResponse.json({ ok: false, reasons: [...reasons, ...evidence.reasons], missingCategories, evidenceGaps: doc.evidenceGaps, staleCertificates: evidence.stale });
+      return reply(session?.user?.role, { ok: false, reasons: [...reasons, ...evidence.reasons], missingCategories, evidenceGaps: doc.evidenceGaps, staleCertificates: evidence.stale });
     }
-    if (reasons.length) return NextResponse.json({ ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
-    return NextResponse.json({
+    if (reasons.length) return reply(session?.user?.role, { ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
+    return reply(session?.user?.role, {
       ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
       // What the operator checks before pressing Create: the whole figure, the part
       // withholding is taken on, the tax, the guide's own money coming back, and what
@@ -98,6 +114,6 @@ export async function POST(req: NextRequest) {
     if (!(e instanceof PaymentDocumentNotPostable)) throw e;
     missingCategories = e.missingCategories;
     evidenceGaps = e.evidenceGaps;
-    return NextResponse.json({ ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories, evidenceGaps });
+    return reply(session?.user?.role, { ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories, evidenceGaps });
   }
 }

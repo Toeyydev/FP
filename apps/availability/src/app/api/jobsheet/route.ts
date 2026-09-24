@@ -12,6 +12,7 @@ import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense,
 import { ensureJobRef } from "@/lib/jobref";
 import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
 import { canViewFinance, isAdmin } from "@/lib/roles";
+import { redactRowsForNonAdmin } from "@/lib/certificates/access";
 import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expenseRowsReady, guidePayoutTotal, peakSyncEligibility } from "@/lib/peak-sync";
 import { peakJobStatus } from "@/lib/peak-job-status";
 import { peakAccountMap } from "@/lib/peak-account-map";
@@ -188,11 +189,25 @@ export async function GET(req: NextRequest) {
   const defaultExpenses = catalogue;
   // Never show an empty expense table / blank fee for a real tour — fall back to the
   // standard template + guide fee when the saved sheet has none.
-  const fill = <T extends { expenses?: unknown; guideFee?: unknown }>(sheet: T) => ({
-    ...sheet,
-    expenses: Array.isArray(sheet.expenses) && sheet.expenses.length > 0 ? sheet.expenses : defaultExpenses,
-    guideFee: sheet.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? sheet.guideFee : DEFAULT_GUIDE_FEE,
-  });
+  //
+  // Expense rows go out redacted unless the reader is an admin. A row that a certificate
+  // stands behind carries the certificate's id, its number and a reason sentence that
+  // names it — and this response goes to the GUIDE for their own sheet. Closing the
+  // certificate endpoints does nothing about that: the document's number travels here,
+  // in the row, on a screen the guide is meant to see.
+  //
+  // Done inside `fill` because every saved-sheet answer on this route goes through it,
+  // and a redaction applied at each return is a redaction somebody adds a fourth return
+  // without.
+  const seesCertificates = isAdmin(session.user.role);
+  const fill = <T extends { expenses?: unknown; guideFee?: unknown }>(sheet: T) => {
+    const expenses = Array.isArray(sheet.expenses) && sheet.expenses.length > 0 ? sheet.expenses : defaultExpenses;
+    return {
+      ...sheet,
+      expenses: seesCertificates ? expenses : redactRowsForNonAdmin(expenses as Record<string, unknown>[]),
+      guideFee: sheet.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? sheet.guideFee : DEFAULT_GUIDE_FEE,
+    };
+  };
 
   // ── Job meta + timeline ────────────────────────────────────────────────────
   // Everything below is READ-ONLY presentation assembled from records that already
@@ -507,7 +522,12 @@ export async function PUT(req: NextRequest) {
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}) } });
-  return NextResponse.json({ ok: true, sheet, restoredNoShows, noShowMismatches });
+  // The saved sheet goes back to whoever saved it — an operator, usually — so the rows
+  // that a certificate stands behind are stripped on the way out for anyone but an admin.
+  // The row they just saved is unchanged in the database; what they are not told is that
+  // a certificate is what is holding it up.
+  const out = isAdmin(session!.user!.role) ? sheet : { ...sheet, expenses: redactRowsForNonAdmin(sheet.expenses as Record<string, unknown>[]) };
+  return NextResponse.json({ ok: true, sheet: out, restoredNoShows, noShowMismatches });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.

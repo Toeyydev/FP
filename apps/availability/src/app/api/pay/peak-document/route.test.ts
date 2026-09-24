@@ -91,7 +91,7 @@ vi.mock("@prisma/client", () => ({ Prisma: { PrismaClientKnownRequestError: clas
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/auth", () => ({ auth: authMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => {}) }));
-vi.mock("@/lib/roles", () => ({ isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN", canViewFinance: (r?: string) => ["OPERATOR", "ADMIN", "ACCOUNTANT"].includes(r ?? "") }));
+vi.mock("@/lib/roles", () => ({ isAdmin: (r?: string) => r === "ADMIN", isOps: (r?: string) => r === "OPERATOR" || r === "ADMIN", canViewFinance: (r?: string) => ["OPERATOR", "ADMIN", "ACCOUNTANT"].includes(r ?? "") }));
 vi.mock("@/lib/jobsheet-send", () => ({ sendPaymentNotice: vi.fn(async () => {}) }));
 vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveBufferToDrive: drive.save }));
 vi.mock("@/lib/peak-api", () => ({

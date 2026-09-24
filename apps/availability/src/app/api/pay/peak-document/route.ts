@@ -5,7 +5,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { isOps } from "@/lib/roles";
+import { isAdmin, isOps } from "@/lib/roles";
+import { redactBodyForNonAdmin } from "@/lib/certificates/access";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import { peakEnabled } from "@/lib/peak-api";
 import {
@@ -13,10 +14,25 @@ import {
   type CreateDocumentResult, type GuidePaymentDocument,
 } from "@/lib/peak-payment-document";
 import {
+
   bangkokToday, documentFigures, documentJobs, loadPaymentContext, nextPaymentRef, PaymentClaimRefused, PaymentRefTaken, prismaCreateDeps, resolvePaymentDocument,
 } from "@/lib/peak-payment-server";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Every answer this route gives, with certificate metadata removed unless the reader is
+ * an admin.
+ *
+ * These endpoints are open to operators, which is right — they do the paying. What they
+ * must not learn from a refusal is that a certificate in lieu of a receipt exists, which
+ * job it belongs to, or its number. The gate's own messages quote all three, so the
+ * filter is applied to the whole body at the door rather than to the handful of fields
+ * anybody happened to think of.
+ */
+const reply = (role: string | null | undefined, body: unknown, init?: ResponseInit) =>
+  NextResponse.json(isAdmin(role) ? body : redactBodyForNonAdmin(body), init);
+
 
 const bodyZ = z.object({
   guideId: z.string().min(1),
@@ -38,16 +54,16 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };
-  if (!peakEnabled) return NextResponse.json({ error: "peak-not-connected", reasons: ["PEAK is not connected"] }, { status: 503 });
+  if (!peakEnabled) return reply(session?.user?.role, { error: "peak-not-connected", reasons: ["PEAK is not connected"] }, { status: 503 });
 
   const parsed = bodyZ.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  if (!parsed.success) return reply(session?.user?.role, { error: "bad-body" }, { status: 400 });
   const { guideId, jobs } = parsed.data;
   const alreadyPaid = !!parsed.data.alreadyPaid;
 
   // Asked again for exactly the jobs a live document already holds (a double click, a
   // retry after a dropped connection): answer with that document. Never a second one.
-  const existing = await existingDocumentFor(guideId, jobs);
+  const existing = await existingDocumentFor(session?.user?.role, guideId, jobs);
   if (existing) return existing;
 
   // One transfer, one document. While this guide already has a document for the same
@@ -62,7 +78,7 @@ export async function POST(req: NextRequest) {
     });
     const sameMonth = open.filter((d) => documentJobs(d).some((j) => months.includes(String(j.date).slice(0, 7))));
     if (sameMonth.length) {
-      return NextResponse.json({
+      return reply(session?.user?.role, {
         error: "open-document-this-month",
         reasons: sameMonth.map((d) => `${guideId} already has ${d.peakDocumentNo ?? d.paymentRef} (${d.paymentRef}) for ${months.join(", ")}, not paid yet — record its payment first, or void it in PEAK and mark it voided on Payments, then create ONE document with every job`),
       }, { status: 409 });
@@ -70,7 +86,7 @@ export async function POST(req: NextRequest) {
   }
 
   const loaded = await loadPaymentContext(guideId, jobs, { alreadyPaid });
-  if (!loaded.ok) return NextResponse.json({ error: "not-payable", reasons: loaded.reasons }, { status: 409 });
+  if (!loaded.ok) return reply(session?.user?.role, { error: "not-payable", reasons: loaded.reasons }, { status: 409 });
   const { ctx } = loaded;
 
   let doc: GuidePaymentDocument | null = null;
@@ -86,7 +102,7 @@ export async function POST(req: NextRequest) {
     {}, "document",
   );
   if (!evidence.ok) {
-    return NextResponse.json({ error: "evidence-stale", reasons: evidence.reasons, staleCertificates: evidence.stale }, { status: 409 });
+    return reply(session?.user?.role, { error: "evidence-stale", reasons: evidence.reasons, staleCertificates: evidence.stale }, { status: 409 });
   }
   const deps = prismaCreateDeps({ guideId, actor, alreadyPaid });
   // The FOLK-PAY number is a count + 1, so two documents in the same second can pick the
@@ -96,24 +112,24 @@ export async function POST(req: NextRequest) {
     try {
       doc = buildGuidePaymentDocument({ guideId, peakContactId: ctx.peakContactId, paymentRef, jobs: ctx.jobs, accounts: ctx.accounts, createdOn: bangkokToday(), certificates: certs });
     } catch (e) {
-      if (e instanceof PaymentDocumentNotPostable) return NextResponse.json({ error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories, evidenceGaps: e.evidenceGaps }, { status: 409 });
+      if (e instanceof PaymentDocumentNotPostable) return reply(session?.user?.role, { error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories, evidenceGaps: e.evidenceGaps }, { status: 409 });
       throw e;
     }
     try {
       result = await createCombinedDocument(deps, doc);
     } catch (e) {
       if (e instanceof PaymentRefTaken) continue;
-      if (e instanceof PaymentClaimRefused) return NextResponse.json({ error: "not-payable", reasons: [e.message] }, { status: 409 });
+      if (e instanceof PaymentClaimRefused) return reply(session?.user?.role, { error: "not-payable", reasons: [e.message] }, { status: 409 });
       throw e;
     }
   }
-  if (!result || !doc) return NextResponse.json({ error: "busy", reasons: ["Could not reserve a payment number — try again"] }, { status: 503 });
+  if (!result || !doc) return reply(session?.user?.role, { error: "busy", reasons: ["Could not reserve a payment number — try again"] }, { status: 503 });
 
   if (result.status === "FAILED") {
-    return NextResponse.json({ error: "peak-refused", paymentRef: result.paymentRef, reasons: [result.reason] }, { status: 502 });
+    return reply(session?.user?.role, { error: "peak-refused", paymentRef: result.paymentRef, reasons: [result.reason] }, { status: 502 });
   }
   if (result.status === "UNCERTAIN") {
-    return NextResponse.json({
+    return reply(session?.user?.role, {
       error: "peak-uncertain", paymentRef: result.paymentRef,
       reasons: [
         `PEAK did not confirm document ${result.paymentRef}: ${result.reason}`,
@@ -121,7 +137,7 @@ export async function POST(req: NextRequest) {
       ],
     }, { status: 502 });
   }
-  return NextResponse.json({
+  return reply(session?.user?.role, {
     ok: true, status: "AWAITING_PAYMENT",
     paymentRef: result.paymentRef, documentNo: result.documentNo, documentId: result.documentId, documentLink: result.documentLink,
     gross: result.gross, wht: result.wht, total: result.total, lineCount: result.lines, issuedDate: doc.issuedDate,
@@ -131,7 +147,7 @@ export async function POST(req: NextRequest) {
 }
 
 /** The live document that already holds exactly these jobs, as a stage-1 answer. */
-async function existingDocumentFor(guideId: string, jobs: { date: string; slotIdx: number }[]) {
+async function existingDocumentFor(role: string | null | undefined, guideId: string, jobs: { date: string; slotIdx: number }[]) {
   const pays = await prisma.tourPayment.findMany({ where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) }, select: { date: true, slotIdx: true, peakPaymentRef: true } });
   const refs = [...new Set(pays.map((p) => p.peakPaymentRef).filter((r): r is string => !!r))];
   if (refs.length !== 1 || pays.filter((p) => p.peakPaymentRef === refs[0]).length !== jobs.length) return null;
@@ -142,7 +158,7 @@ async function existingDocumentFor(guideId: string, jobs: { date: string; slotId
   if (!same) return null;
   const f = documentFigures(doc);
   const st = documentStatus(doc.status);
-  return NextResponse.json({
+  return reply(role, {
     ok: st === "AWAITING_PAYMENT" || st === "PAID", existing: true, status: st,
     paymentRef: doc.paymentRef, documentNo: doc.peakDocumentNo, documentId: doc.peakDocumentId, documentLink: doc.peakDocumentLink,
     gross: f.gross, wht: f.wht, total: f.net, lineCount: f.lines, jobs: held, alreadyPaid: doc.alreadyPaid,
@@ -163,13 +179,13 @@ const resolveZ = z.discriminatedUnion("resolution", [
 // Operator/admin only, audited. See resolvePaymentDocument.
 export async function PATCH(req: NextRequest) {
   const session = await auth();
-  if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!isOps(session?.user?.role)) return reply(session?.user?.role, { error: "forbidden" }, { status: 403 });
   const parsed = resolveZ.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+  if (!parsed.success) return reply(session?.user?.role, { error: "bad-body" }, { status: 400 });
   const { paymentRef, ...resolution } = parsed.data;
   const r = await resolvePaymentDocument(paymentRef, resolution, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null });
-  if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
+  if (!r.ok) return reply(session?.user?.role, { error: r.error }, { status: r.status });
   // A payment confirmed by hand is still a payment the guide should hear about — once.
   if (r.notify) { try { await sendPaymentNotice(r.notify.guideId, r.notify.jobs, undefined, r.notify.slipUrl ?? undefined); } catch { /* best-effort */ } }
-  return NextResponse.json({ ok: true });
+  return reply(session?.user?.role, { ok: true });
 }

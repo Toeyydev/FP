@@ -11,6 +11,7 @@ import { vi, describe, it, expect, beforeAll, beforeEach, afterEach } from "vite
 const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import type { Expense } from "@/lib/jobsheet";
@@ -21,7 +22,9 @@ import { CertificateRefused, createCertificate, linkCertificate, attestCertifica
 import { DuplicateCertificateFile, type CertificateDrive, type PutAttemptInput } from "@/lib/certificates/drive";
 import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
 import { checkFiledDocument } from "@/lib/certificates/service";
-import { POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
+import { GET as certificateList, POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
+import { GET as jobSheetGet } from "@/app/api/jobsheet/route";
+import { GET as rendererGet, POST as rendererPost } from "@/app/api/certificates/renderer/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
 const GUIDE = "G-900";
@@ -120,6 +123,9 @@ const fakeDrive = (): CertificateDrive => {
 };
 
 const ENV = "test-env";
+/** Where documents are filed now: a private finance folder, not the guides' tree. */
+const PRIVATE_FOLDER = "Folkpaths Finance/Private Expense Certificates/2099-04";
+const LEGACY_FOLDER = "Folkpaths Job Sheets/2099-04 April/Expense Certificates";
 const deps = (over: Deps = {}): Deps => ({
   renderPdf: async (html: string) => Buffer.from(`%PDF-1.4 ${html.length}`),
   drive: fakeDrive(),
@@ -277,7 +283,7 @@ describe("filing it, and Drive's actual behaviour", () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    const decoy = { id: "drive_decoy", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: "some_other_certificate", environment: ENV, bytes: Buffer.from("SOMEBODY ELSE'S DOCUMENT"), attemptToken: "someone-elses-attempt", state: "ACTIVE" as const, revisionId: "rev_x" };
+    const decoy = { id: "drive_decoy", name: `${c.certificateNo}.pdf`, folder: PRIVATE_FOLDER, certificateId: "some_other_certificate", environment: ENV, bytes: Buffer.from("SOMEBODY ELSE'S DOCUMENT"), attemptToken: "someone-elses-attempt", state: "ACTIVE" as const, revisionId: "rev_x" };
     drive.files.push(decoy);
     await uploadCertificate(c.id, ADMIN, deps());
     expect(decoy.bytes.toString()).toBe("SOMEBODY ELSE'S DOCUMENT");
@@ -288,7 +294,7 @@ describe("filing it, and Drive's actual behaviour", () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    const other = { id: "drive_prod", name: `${c.certificateNo}.pdf`, folder: "Folkpaths Job Sheets/2099-04 April/Expense Certificates", certificateId: c.id, environment: "production", bytes: Buffer.from("PRODUCTION COPY"), attemptToken: "prod-attempt", state: "ACTIVE" as const, revisionId: "rev_p" };
+    const other = { id: "drive_prod", name: `${c.certificateNo}.pdf`, folder: PRIVATE_FOLDER, certificateId: c.id, environment: "production", bytes: Buffer.from("PRODUCTION COPY"), attemptToken: "prod-attempt", state: "ACTIVE" as const, revisionId: "rev_p" };
     drive.files.push(other);
     await uploadCertificate(c.id, ADMIN, deps());
     expect(other.bytes.toString()).toBe("PRODUCTION COPY");
@@ -298,7 +304,7 @@ describe("filing it, and Drive's actual behaviour", () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
     await attestCertificate(c.id, ADMIN, deps());
-    const folder = "Folkpaths Job Sheets/2099-04 April/Expense Certificates";
+    const folder = PRIVATE_FOLDER;
     drive.files.push(
       { id: "dup_a", name: "a.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("A"), attemptToken: "dup-token", state: "TEMP" as const, revisionId: "rev_a" },
       { id: "dup_b", name: "b.pdf", folder, certificateId: c.id, environment: ENV, bytes: Buffer.from("B"), attemptToken: "dup-token", state: "TEMP" as const, revisionId: "rev_b" },
@@ -1061,5 +1067,239 @@ describe("what survives a failure after the document is settled", () => {
     expect(why[0]).toContain("did not read back");
     expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.driveFileId).toBeNull();
     expect(drive.files.find((f) => f.id === orphan.id)!.state).toBe("QUARANTINED");
+  });
+});
+
+// ── only an admin sees it, and only the admins can open the file ─────────────
+//
+// Four places have to agree: the screen, the endpoint, what is in the response, and the
+// folder. These are the last three — the screen has no server to be caught by.
+
+describe("a certificate is private to admins", () => {
+  const ANYONE = [{ id: "p_owner", type: "user", role: "owner", emailAddress: "folkpaths-drive@example.test" }, { id: "p_link", type: "anyone", role: "reader" }];
+  const filed = async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+    return c;
+  };
+
+  it("files go to the private finance folder, not the tree the guides read", async () => {
+    const c = await filed();
+    const row = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    expect(row.driveFolderPath).toBe(PRIVATE_FOLDER);
+    expect(row.driveFolderPath).not.toContain("Folkpaths Job Sheets");
+    expect(drive.files.find((f) => f.id === row.driveFileId)!.folder).toBe(PRIVATE_FOLDER);
+  });
+
+  it("a folder anyone can open refuses the upload before a byte is written", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    drive.folderPermissions = ANYONE;
+
+    const why = await refusal(() => uploadCertificate(c.id, ADMIN, deps()));
+    expect(why[0]).toContain("not private to the admins");
+    expect(why.join(" ")).toContain("anyone who has the link");
+    // Nothing was written at all — not a candidate, not a document.
+    expect(drive.files).toHaveLength(0);
+    const after = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    expect(after.status).toBe("ATTESTED");
+    expect(after.driveFileId).toBeNull();
+    expect(after.uploadClaimToken).toBeNull();
+    expect(await prisma.auditLog.findFirst({ where: { action: "certificate.drive_not_private" } })).toBeTruthy();
+  });
+
+  it("a document that turns out to be shared is quarantined, not recorded", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    drive.filePermissions = ANYONE; // the folder is fine; the file itself is not
+
+    const why = await refusal(() => uploadCertificate(c.id, ADMIN, deps()));
+    expect(why[0]).toContain("not private to the admins");
+    const after = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    expect(after.status).toBe("ATTESTED");
+    expect(after.driveFileId).toBeNull();
+    expect(drive.active()).toHaveLength(0);
+    expect(drive.files.some((f) => f.state === "QUARANTINED")).toBe(true);
+  });
+
+  it("sharing the folder AFTER it was filed stops it being used as evidence", async () => {
+    const c = await filed();
+    // Linking is the moment it starts standing in for a receipt, and it is checked again.
+    drive.folderPermissions = ANYONE;
+    const why = await refusal(() => linkCertificate(c.id, ADMIN, deps()));
+    expect(why.join(" ")).toContain("anyone who has the link");
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.status).toBe("UPLOADED");
+
+    // And the same answer comes back from the verifier the payment path uses.
+    drive.folderPermissions = null;
+    await linkCertificate(c.id, ADMIN, deps());
+    drive.folderPermissions = ANYONE;
+    const check = await checkFiledDocument((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!, deps());
+    expect(check.ok).toBe(false);
+    expect(check.action).toBe("drive_not_private");
+  });
+
+  it("a permission list Drive will not give back is a refusal, not a pass", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    drive.unreadablePermissions = true;
+    expect((await refusal(() => uploadCertificate(c.id, ADMIN, deps()))).join(" ")).toContain("could not be read");
+    expect(drive.files).toHaveLength(0);
+  });
+
+  it("the payment verifier still works when everything is private", async () => {
+    const c = await filed();
+    await linkCertificate(c.id, ADMIN, deps());
+    const sheet = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
+    const gate = await checkEvidenceBeforePaying([(sheet.expenses as unknown as Expense[])], { actorId: ADMIN.id, actorRole: ADMIN.role }, deps(), "payment");
+    expect(gate.ok).toBe(true);
+    expect(gate.checked).toBe(1);
+    expect(gate.stale).toEqual([]);
+  });
+
+  it("a document filed under the old arrangement is still found where it is", async () => {
+    const c = await filed();
+    const row = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    // Rewrite history: a certificate from before the private folder existed.
+    drive.files.find((f) => f.id === row.driveFileId)!.folder = LEGACY_FOLDER;
+    await prisma.expenseCertificate.update({ where: { id: c.id }, data: { driveFolderPath: null } });
+    const check = await checkFiledDocument((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!, deps());
+    expect(check.ok).toBe(true);
+  });
+
+  it("an operator and a guide are refused by every certificate endpoint", async () => {
+    const c = await filed();
+    const url = `https://ops.example.test/api/jobsheet/certificate?guideId=${GUIDE}&date=${DATE}&slotIdx=0`;
+    for (const role of ["OPERATOR", "GUIDE", "ACCOUNTANT"]) {
+      authMock.auth.mockResolvedValue({ user: { id: `u_${role}`, name: role, role } });
+
+      const list = await certificateList(new NextRequest(url));
+      expect(list.status, `${role} listing certificates`).toBe(403);
+      expect(JSON.stringify(await list.json())).not.toContain("CERT-");
+
+      const issue = await certificatePost(new Request("https://ops.example.test/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: GUIDE, date: DATE, slotIdx: 0 }) }) as unknown as Parameters<typeof certificatePost>[0]);
+      expect(issue.status, `${role} issuing`).toBe(403);
+
+      for (const action of ["attest", "upload", "link", "void"]) {
+        const res = await certificateAction(
+          new Request("https://ops.example.test/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, reason: "a reason long enough to pass" }) }) as unknown as Parameters<typeof certificateAction>[0],
+          { params: Promise.resolve({ id: c.id }) },
+        );
+        expect(res.status, `${role} doing ${action}`).toBe(403);
+      }
+
+      expect((await rendererGet()).status, `${role} reading the renderer diagnostic`).toBe(403);
+      expect((await rendererPost()).status, `${role} probing the renderer`).toBe(403);
+    }
+    // Refused at every door, and the certificate is exactly as it was.
+    const after = (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+    expect(after.status).toBe("UPLOADED");
+    expect(after.voidedAt).toBeNull();
+  });
+
+  it("an admin can still read the list, with the document on it", async () => {
+    const c = await filed();
+    authMock.auth.mockResolvedValue({ user: { id: ADMIN.id, name: ADMIN.name, role: "ADMIN" } });
+    const res = await certificateList(new NextRequest(`https://ops.example.test/api/jobsheet/certificate?guideId=${GUIDE}&date=${DATE}&slotIdx=0`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const row = body.certificates.find((x: { id: string }) => x.id === c.id);
+    expect(row.certificateNo).toBe(c.certificateNo);
+    expect(row.driveUrl).toBeTruthy();
+    expect(row.pdfHash).toBeTruthy();
+  });
+
+  it("a refused caller is written down without writing down the document", async () => {
+    const c = await filed();
+    authMock.auth.mockResolvedValue({ user: { id: "u_ops", name: "Ops", role: "OPERATOR" } });
+    await certificateAction(
+      new Request("https://ops.example.test/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "void", reason: "trying it on" }) }) as unknown as Parameters<typeof certificateAction>[0],
+      { params: Promise.resolve({ id: c.id }) },
+    );
+    const log = (await prisma.auditLog.findFirst({ where: { action: "certificate.access_denied" }, orderBy: { createdAt: "desc" } }))!;
+    expect(log.actorId).toBe("u_ops");
+    expect(log.actorRole).toBe("OPERATOR");
+    expect(log.entityId).toBeNull();
+    const written = JSON.stringify(log.detail);
+    expect(written).not.toContain(c.certificateNo);
+    expect(written).not.toContain(c.id);
+    expect(written).not.toContain("drive.example.test");
+    expect(written).not.toContain("trying it on");
+  });
+});
+
+// ── the leg that is not a door: what travels in somebody else's response ─────
+//
+// Closing the certificate endpoints does nothing about this. `linkCertificate` writes
+// the certificate's id, its number and a sentence naming it onto the EXPENSE ROW, and
+// the job sheet is a screen the guide is meant to see.
+
+describe("certificate metadata does not travel in other responses", () => {
+  const linked = async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+    await linkCertificate(c.id, ADMIN, deps());
+    return (await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!;
+  };
+  const sheetAs = async (user: Record<string, unknown>) => {
+    authMock.auth.mockResolvedValue({ user });
+    const res = await jobSheetGet(new NextRequest(`https://ops.example.test/api/jobsheet?guideId=${GUIDE}&date=${DATE}&slotIdx=0`));
+    expect(res.status).toBe(200);
+    return res.json();
+  };
+
+  it("the row a certificate stands behind really does carry its number in the database", async () => {
+    const cert = await linked();
+    const sheet = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
+    // If this stops being true the tests below stop meaning anything.
+    expect(JSON.stringify(sheet.expenses)).toContain(cert.certificateNo);
+  });
+
+  it("a guide reading their own job sheet is told nothing about it", async () => {
+    const cert = await linked();
+    const body = await sheetAs({ id: "u_guide", name: "Guide", role: "GUIDE", guideId: GUIDE });
+    const json = JSON.stringify(body);
+    for (const leak of [cert.certificateNo, cert.id, "ใบรับรองแทนใบเสร็จ", cert.payloadHash, cert.pdfHash!, cert.driveUrl!, ADMIN.id]) {
+      expect(json, `leaked ${leak}`).not.toContain(leak);
+    }
+    // But they can still see their own expense, and that somebody is dealing with it.
+    const row = body.sheet.expenses.find((r: { description: string }) => r.description === "Ferry");
+    expect(row.price).toBe(11);
+    expect(row.evidenceWaiver).toEqual({ waived: true, status: "being checked by accounts", statusTh: "อยู่ระหว่างตรวจสอบโดยฝ่ายบัญชี" });
+  });
+
+  it("an operator and an accountant are told nothing either", async () => {
+    const cert = await linked();
+    for (const role of ["OPERATOR", "ACCOUNTANT"]) {
+      const json = JSON.stringify(await sheetAs({ id: `u_${role}`, name: role, role }));
+      expect(json, `${role} saw the number`).not.toContain(cert.certificateNo);
+      expect(json, `${role} saw the id`).not.toContain(cert.id);
+      expect(json, `${role} saw the link`).not.toContain(cert.driveUrl!);
+    }
+  });
+
+  it("an admin reading the same sheet still sees it — this is redaction, not deletion", async () => {
+    const cert = await linked();
+    const json = JSON.stringify(await sheetAs({ id: ADMIN.id, name: ADMIN.name, role: "ADMIN" }));
+    expect(json).toContain(cert.certificateNo);
+    expect(json).toContain(cert.id);
+  });
+
+  it("the row itself is untouched — nothing was redacted in the database", async () => {
+    const cert = await linked();
+    await sheetAs({ id: "u_guide", name: "Guide", role: "GUIDE", guideId: GUIDE });
+    const sheet = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
+    expect(JSON.stringify(sheet.expenses)).toContain(cert.certificateNo);
+    const rows = sheet.expenses as unknown as ExpenseWithEvidence[];
+    expect(rows[0].evidenceWaiver!.certificateId).toBe(cert.id);
+    // And the evidence rule still reads it, because the rule runs on the server.
+    expect(evidenceState(rows[0], await certificateStatuses([[rows[0] as Expense]])).state).toBe("WAIVED");
   });
 });

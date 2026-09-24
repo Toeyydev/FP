@@ -233,3 +233,53 @@ export function redactMessagesForNonAdmin(messages: readonly string[] | null | u
   }
   return out;
 }
+
+/**
+ * A whole response body, with every trace of a certificate taken out of it.
+ *
+ * A deep walk rather than a list of fields, because the leak that actually happens is
+ * not a field somebody forgot to strip — it is a SENTENCE. `linkCertificate` writes the
+ * certificate number into a row's waiver reason, and the payment gate builds refusals
+ * that quote it. By the time either reaches a response it is an ordinary string in an
+ * ordinary `reasons` array, indistinguishable from "the guide has not filed yet" unless
+ * something reads it.
+ *
+ * A non-admin gets the general status in its place, once per array: enough to know
+ * somebody is dealing with it, and nothing about what.
+ */
+export function redactBodyForNonAdmin<T>(body: T): T {
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return namesCertificate(v) ? NON_ADMIN_STATUS_TH : v;
+    if (Array.isArray(v)) {
+      const out: unknown[] = [];
+      let said = false;
+      for (const item of v) {
+        const w = walk(item);
+        if (w === NON_ADMIN_STATUS_TH && typeof item === "string") {
+          if (said) continue;
+          said = true;
+        }
+        out.push(w);
+      }
+      return out;
+    }
+    if (v && typeof v === "object") {
+      if (v instanceof Date) return v;
+      const out: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+        if (DROP_WHOLESALE.has(k)) continue;
+        if (k === "evidenceWaiver" && val && typeof val === "object") {
+          out[k] = { waived: true, status: NON_ADMIN_STATUS_EN, statusTh: NON_ADMIN_STATUS_TH } satisfies PublicWaiver;
+          continue;
+        }
+        out[k] = walk(val);
+      }
+      return out;
+    }
+    return v;
+  };
+  return walk(body) as T;
+}
+
+/** Keys removed entirely rather than emptied, because their name alone is the answer. */
+const DROP_WHOLESALE = new Set<string>([...CERTIFICATE_METADATA_FIELDS, "staleCertificates", "certificate", "certificates"]);
