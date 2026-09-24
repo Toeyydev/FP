@@ -11,6 +11,8 @@ import { vi, describe, it, expect, beforeAll, beforeEach, afterEach } from "vite
 const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
@@ -1410,5 +1412,49 @@ describe("an operator saving a redacted sheet does not erase the waiver", () => 
     expect(rows[0].evidenceWaiver!.by).toBe(ADMIN.id);
     // And the row still counts as evidenced.
     expect(evidenceState(rows[0], await certificateStatuses([[rows[0] as Expense]])).state).toBe("WAIVED");
+  });
+});
+
+// ── one person may do the whole thing ────────────────────────────────────────
+//
+// Folkpaths is three people. The person authorised to prepare a certificate is the same
+// person authorised to attest it, and that is the arrangement the company actually has —
+// not a gap someone forgot to close. A four-eyes rule added here would not improve any
+// control; it would stop the only person who can sign from signing.
+//
+// This test exists so that nobody adds one later believing it to be an obvious
+// improvement. If it starts failing, the question to ask is whether a second authorised
+// person now exists, not how to satisfy the rule.
+
+describe("the same admin may prepare and attest", () => {
+  it("issues, certifies, files and links a certificate end to end as one person", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    expect(c.createdById).toBe(ADMIN.id);
+
+    const signed = await attestCertificate(c.id, ADMIN, deps());
+    expect(signed.attestedByUserId).toBe(ADMIN.id);
+    expect(signed.attestedByUserId).toBe(signed.createdById);
+
+    await uploadCertificate(c.id, ADMIN, deps());
+    const linked = await linkCertificate(c.id, ADMIN, deps());
+    expect(linked.status).toBe("LINKED");
+
+    // And the row it covers counts as evidenced — the point of the whole exercise.
+    const sheet = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
+    const rows = sheet.expenses as unknown as ExpenseWithEvidence[];
+    expect(evidenceState(rows[0], await certificateStatuses([[rows[0] as Expense]])).state).toBe("WAIVED");
+  });
+
+  it("nothing in the certificate code compares the preparer with the attester", () => {
+    const src = readFileSync(join(process.cwd(), "src/lib/certificates/service.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // The two fields exist and are both written. What must not exist is a rule that
+    // reads one to refuse the other.
+    expect(src).toContain("createdById");
+    expect(src).toContain("attestedByUserId");
+    for (const shape of ["createdById !==", "createdById ===", "!== cert!.createdById", "=== cert!.createdById"]) {
+      expect(src, `a segregation-of-duties check has appeared: ${shape}`).not.toContain(shape);
+    }
   });
 });
