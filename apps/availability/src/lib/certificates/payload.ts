@@ -43,6 +43,16 @@ export type CertificatePayload = {
   rows: CertifiableRow[];
   totalSatang: number;
   reason: string;
+  /**
+   * Which signature image was on the document — whose it is, which version, and its
+   * fingerprint. Never the image itself: a payload is a thing to hash and compare, and
+   * half a megabyte of base64 in it would make the hash about the picture rather than
+   * about the expenses.
+   *
+   * Hashed on purpose. Swapping the image under a certificate changes what the document
+   * shows, and a fingerprint that ignored it would say nothing had changed.
+   */
+  signature: { userId: string; version: number; sha256: string } | null;
 };
 
 /** The reason these rows have no receipt. One sentence, kept with the document. */
@@ -86,7 +96,11 @@ export type SheetFacts = {
   guideReportedAt: Date | null;
 };
 
-export function buildPayload(sheet: SheetFacts, rows: readonly CertifiableRow[]): CertificatePayload {
+export function buildPayload(
+  sheet: SheetFacts,
+  rows: readonly CertifiableRow[],
+  signature: { userId: string; version: number; sha256: string } | null = null,
+): CertificatePayload {
   return {
     v: 1,
     jobRef: sheet.jobRef ?? "",
@@ -98,6 +112,7 @@ export function buildPayload(sheet: SheetFacts, rows: readonly CertifiableRow[])
     rows: rows.map((r) => ({ ...r })),
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
     reason: NO_RECEIPT_REASON_TH,
+    signature: signature ? { ...signature } : null,
   };
 }
 
@@ -116,6 +131,7 @@ export function canonicalString(p: CertificatePayload): string {
     `rows=${p.rows.map(row).join("|")}`,
     `total=${p.totalSatang}`,
     `reason=${p.reason}`,
+    `sig=${p.signature ? `${p.signature.userId}:${p.signature.version}:${p.signature.sha256}` : ""}`,
   ].join(";");
 }
 

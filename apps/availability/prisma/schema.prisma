@@ -588,6 +588,46 @@ model JobSheet {
 // The two hashes answer two different questions, and neither identifies the approver:
 //   payloadHash  did the job sheet change after this was approved?
 //   pdfHash      is the file in Drive the file that was uploaded?
+// The image of an attester's handwritten signature, kept per person and per version.
+//
+// A signature belongs to one human being. The whole point of printing one is that a
+// reader recognises whose hand it is, so the one thing this must never do is show one
+// person's signature under another person's name. It is keyed on the user it belongs
+// to, the server decides which image that is, and nothing in a request can influence
+// the answer.
+//
+// The bytes live in a private Drive folder; only their fingerprint lives here. That is
+// what makes a replacement visible: a new signature is a new VERSION with a new hash,
+// the old row is retired rather than edited, and a certificate attested against version
+// 1 can still say so years later.
+model AttesterSignature {
+  id           String    @id @default(cuid())
+  /// User.id of the person whose hand this is. Never a role, never a job title.
+  userId       String
+  /// 1, 2, 3… A replacement never overwrites; it supersedes.
+  version      Int
+  /// One LIVE signature per person, enforced by the database rather than by a check
+  /// somebody could forget. Holds the user id while current and NULL once retired, and
+  /// Postgres does not compare NULLs in a unique index.
+  activeUserId String?   @unique
+  driveFileId  String    @unique
+  driveUrl     String?
+  /// SHA-256 of the PNG bytes. Checked again every time the image is used: an image that
+  /// has changed since it was registered is not the image anybody approved.
+  sha256       String
+  bytes        Int
+  width        Int
+  height       Int
+  uploadedById String?
+  uploadedAt   DateTime  @default(now())
+  retiredAt    DateTime?
+  retiredById  String?
+  retireReason String?
+
+  @@unique([userId, version])
+  @@index([userId])
+}
+
 model ExpenseCertificate {
   id                    String    @id @default(cuid())
   certificateNo         String    @unique // CERT-<job ref>-NN
@@ -622,6 +662,12 @@ model ExpenseCertificate {
   attestedByName            String?
   attestedByRole            String?
   attestedAt              DateTime?
+  /// Which signature image was on the document, if one was. Recorded at attestation and
+  /// checked again before the PDF is made: if the registered image has changed in
+  /// between, this certificate is not the one that was approved.
+  signatureUserId       String?
+  signatureVersion      Int?
+  signatureSha256       String?
   // The file. uploadStartedAt is written BEFORE the upload is attempted, so an upload
   // that succeeded while the database write failed can be found and finished.
   pdfHash               String?

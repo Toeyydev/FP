@@ -52,6 +52,18 @@ export type CertificateView = {
   /** ISO. The moment the approval was recorded. */
   attestedAt: string;
   auditRef: string;
+  /**
+   * The attester's own signature image, already fetched, checked and inlined by
+   * `lib/certificates/signature`. A `data:` URI, so the page fetches nothing while it
+   * renders — the browser has the network switched off.
+   *
+   * Absent when that person has no signature registered, and the document is complete
+   * without one: the name, the role, the time and the audit reference say who attested
+   * it. What must never happen is somebody else's image appearing here, which is why it
+   * arrives resolved rather than as a user id to look up.
+   */
+  signatureDataUri?: string | null;
+  signatureVersion?: number | null;
 };
 
 export function renderCertificateHtml(v: CertificateView): string {
@@ -96,6 +108,12 @@ export function renderCertificateHtml(v: CertificateView): string {
  .approve table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
  .approve th { text-align: left; width: 32%; font-weight: 600; color: #57534e; padding: 2px 0; vertical-align: top; }
  .hash { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 8.5pt; }
+ /* Under the name it belongs to, never floating beside it, so there is no arrangement
+    of this page on which it reads as somebody else's. */
+ .sig { margin-top: 10px; padding-top: 8px; border-top: 1px dotted #d6d3d1; text-align: center; }
+ .sig img { max-width: 190px; max-height: 70px; width: auto; height: auto; display: block; margin: 0 auto 2px; }
+ .sig-name { font-size: 10pt; }
+ .sig-note { font-size: 8.5pt; color: #78716c; margin-top: 2px; }
  .foot { margin-top: 14px; border-top: 1px solid #e7e5e4; padding-top: 7px; font-size: 8pt; color: #78716c; line-height: 1.5; }
 </style></head>
 <body>
@@ -143,6 +161,11 @@ ${rows}
     <tr><th>อ้างอิง audit</th><td class="hash">${esc(v.auditRef)}</td></tr>
     <tr><th>ลายนิ้วมือข้อมูลต้นทาง</th><td class="hash">${esc(shortHash(v.payloadHash))}…</td></tr>
   </table>
+${v.signatureDataUri ? `  <div class="sig">
+    <img src="${esc(v.signatureDataUri)}" alt="ภาพลายมือชื่อของ ${esc(v.attestedByName)}">
+    <div class="sig-name">${esc(v.attestedByName)}</div>
+    <div class="sig-note">ภาพลายมือชื่อประกอบการรับรองทางอิเล็กทรอนิกส์${v.signatureVersion ? ` (ฉบับที่ ${int(v.signatureVersion)})` : ""}</div>
+  </div>` : ""}
 </div>
 
 <div class="foot">
