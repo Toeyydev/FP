@@ -16,6 +16,7 @@ import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDriv
 import { blocksDocument, registeredSignature, resolveSignature, stampOf, type SignatureDeps, type SignatureStamp } from "@/lib/certificates/signature";
 import { attesterRefusal } from "@/lib/certificates/attester";
 import { defaultSource, sourceRefusal, type ExpenseSource } from "@/lib/certificates/source";
+import { peakDocumentForJob, stampPeakLink } from "@/lib/certificates/peak-link";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -727,6 +728,18 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
 
   const checked = await db.expenseCertificate.findUnique({ where: { id } });
   if (!checked) refuse(["No such certificate"], 404);
+  // The row link and the PEAK reference are separately useful facts. A request may have
+  // completed the first and failed before recording the second, or the EXP may have
+  // existed before this certificate did. Retrying "link" is therefore idempotent: it
+  // never rewrites the rows, but it does fill the missing, identity-resolved EXP stamp.
+  if (checked.status === "LINKED") {
+    const found = await peakDocumentForJob({ guideId: checked.guideId, date: checked.tourDate, slotIdx: checked.slotIdx }, db);
+    if (found.found) {
+      await stampPeakLink(checked, found.link, { actorId: actor.id, actorRole: actor.role }, db);
+      return db.expenseCertificate.findUniqueOrThrow({ where: { id } });
+    }
+    return checked;
+  }
   const bad = moveRefusal(checked.status as CertificateState, "LINKED");
   if (bad) refuse([bad]);
   if (!checked.driveFileId || !checked.pdfHash) refuse(["This certificate has not been filed in Drive yet, so there is no document for the rows to point at."]);
@@ -807,6 +820,11 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.linked", entityType: "ExpenseCertificate", entityId: id,
     detail: { certificateNo: linked.certificateNo, jobRef: linked.jobRef, rows: (linked.coveredRows as unknown as CertifiableRow[]).length, totalSatang: linked.totalSatang, pdfHash: linked.pdfHash, driveFileId: linked.driveFileId } });
+  const found = await peakDocumentForJob({ guideId: linked.guideId, date: linked.tourDate, slotIdx: linked.slotIdx }, db);
+  if (found.found) {
+    await stampPeakLink(linked, found.link, { actorId: actor.id, actorRole: actor.role }, db);
+    return db.expenseCertificate.findUniqueOrThrow({ where: { id } });
+  }
   return linked;
 }
 

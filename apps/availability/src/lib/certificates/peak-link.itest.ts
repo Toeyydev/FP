@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { certificatePeakView, linkCertificatesForPayment, peakDocumentForJob } from "@/lib/certificates/peak-link";
+import { linkCertificate, type Actor } from "@/lib/certificates/service";
 import {
   AttachRefused, claimAttachment, classifyPeakReply, recordAttempt, reclaimRefused, resolveAttachment,
 } from "@/lib/certificates/peak-attach";
@@ -17,6 +18,7 @@ import {
 
 const GUIDE = "G-900";
 const ADMIN = { actorId: "u_admin", actorRole: "ADMIN" };
+const ADMIN_ACTOR: Actor = { id: ADMIN.actorId, name: "Malee Testsuite", role: ADMIN.actorRole };
 const EXP = "EXP-TEST-20990400001";
 const DOC_ID = "peak-doc-id-test-0001";
 const PAY_REF = "FOLK-PAY-209904-01";
@@ -118,6 +120,25 @@ describe("one EXP covers many job sheets, so it carries many certificates", () =
 // ── identity, not resemblance ────────────────────────────────────────────────
 
 describe("the document is found through recorded identity", () => {
+  it("stamps an EXP that already existed when an already-linked certificate is retried", async () => {
+    const s = await seedSheet(1);
+    await seedCombined([1]);
+    const cert = await seedCertificate(s.id, 1);
+
+    // This is the production-pilot order: the job was already paid under an EXP,
+    // then its certificate was issued and linked to its rows. Retrying the same action
+    // must fill the durable EXP reference without rewriting a row or calling PEAK.
+    const linked = await linkCertificate(cert.id, ADMIN_ACTOR, { db: prisma });
+    expect(linked.status).toBe("LINKED");
+    expect(linked.peakPaymentRef).toBe(PAY_REF);
+    expect(linked.peakDocumentNo).toBe(EXP);
+    expect(linked.peakDocumentId).toBe(DOC_ID);
+    expect(await prisma.auditLog.count({ where: { action: "certificate.peak_linked", entityId: cert.id } })).toBe(1);
+
+    await linkCertificate(cert.id, ADMIN_ACTOR, { db: prisma });
+    expect(await prisma.auditLog.count({ where: { action: "certificate.peak_linked", entityId: cert.id } })).toBe(1);
+  });
+
   it("a certificate issued before the EXP exists reads correctly, then links when it does", async () => {
     const s = await seedSheet(1);
     await prisma.tourPayment.create({ data: { ...job(1), tourId: "T-900", status: "APPROVED", peakPaymentRef: PAY_REF } });
