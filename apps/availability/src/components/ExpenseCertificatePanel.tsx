@@ -19,6 +19,10 @@ type Certificate = {
   attestedByName: string | null; attestedByRole: string | null; attestedAt: string | null;
   uploadedAt: string | null; linkedAt: string | null; voidedAt: string | null; voidReason: string | null;
   coveredRows: Covered[];
+  source?: "GUIDE_REPORTED" | "ADMIN_RECORDED";
+  recordedByName?: string | null;
+  recordedByRole?: string | null;
+  recordedAt?: string | null;
   peak: PeakView;
   attachments: Attachment[];
 };
@@ -38,12 +42,18 @@ type Reconciliation = {
   guideFeeGross: number; reviewReward: number; whtBase: number; whtOnFee: number; whtOnReview: number;
   wht: number; reimbursementTotal: number; netTransfer: number; certificateCoversSatang: number;
 };
+type SourceOption = { source: "GUIDE_REPORTED" | "ADMIN_RECORDED"; available: boolean; reason: string | null; label: string };
 type Info = {
   ok: true; jobRef: string | null; guideReportedAt: string | null;
   rowsNeedingCertificate: Covered[]; totalSatang: number; canIssue: boolean; blockers: string[];
   certificates: Certificate[];
   attachEnabled: boolean;
   reconciliation: Reconciliation;
+  sources: SourceOption[];
+  defaultSource: "GUIDE_REPORTED" | "ADMIN_RECORDED";
+  adminRecordedExplainer: string;
+  /** The admin the document would name, as the SERVER knows them. */
+  wouldRecordAs: string;
 };
 
 const thb = (satang: number) => `฿${(satang / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -75,6 +85,8 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
   const [msg, setMsg] = useState<string>("");
   const [confirmed, setConfirmed] = useState(false);
   const [preview, setPreview] = useState(false);
+  /** Which source a new certificate would be issued under. Null until the data arrives. */
+  const [source, setSource] = useState<"GUIDE_REPORTED" | "ADMIN_RECORDED" | null>(null);
 
   // Nothing is even asked for unless the reader is an admin. The endpoint refuses anyone
   // else and the panel is not mounted for them, but a component that fetches on mount is
@@ -84,7 +96,10 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
     if (!isAdmin) { setInfo(null); return; }
     const r = await fetch(`/api/jobsheet/certificate?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`);
     if (!r.ok) { setInfo(null); return; }
-    setInfo(await r.json());
+    const d = (await r.json()) as Info;
+    setInfo(d);
+    // Offer the guide's own report when there is one; otherwise the only truthful option.
+    setSource((cur) => cur ?? d.defaultSource);
   }, [guideId, date, slotIdx, isAdmin]);
 
   useEffect(() => { void load(); }, [load]);
@@ -160,6 +175,12 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
             <b>{live.certificateNo}</b>
             <span style={{ color: TONE[live.status] ?? "#78716c", fontWeight: 700 }}>{live.labelTh}</span>
           </div>
+          {live.source === "ADMIN_RECORDED" && (
+            <div style={{ marginTop: 4 }}>
+              ที่มาของรายการ: ผู้ดูแลระบบ <b>{live.recordedByName}</b> บันทึกแทน
+              {live.recordedAt ? ` เมื่อ ${when(live.recordedAt)}` : ""} — ไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตน
+            </div>
+          )}
           {live.attestedAt && (
             <div style={{ marginTop: 4 }}>
               รับรองโดย <b>{live.attestedByName}</b> ({live.attestedByRole}) เมื่อ {when(live.attestedAt)}
@@ -172,6 +193,35 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
           {!live.isEvidence && (
             <div style={{ marginTop: 6, color: "#b45309" }}>
               ยังใช้เป็นหลักฐานไม่ได้จนกว่าจะผูกกับรายการในใบงานเรียบร้อย
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Where the rows came from. Chosen once: the two say different things about who
+          stands behind the figures, so it cannot be edited afterwards — a wrong choice is
+          withdrawn and reissued. */}
+      {isAdmin && !live && rows.length > 0 && (
+        <div style={{ marginTop: 10, border: "1px solid var(--line,#e7e5e4)", borderRadius: 6, padding: "8px 10px", fontSize: 12.5 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>ที่มาของรายการ</div>
+          {info.sources.map((o) => (
+            <label key={o.source} style={{ display: "block", marginTop: 3, opacity: o.available ? 1 : 0.55 }}>
+              <input
+                type="radio" name="cert-source" value={o.source}
+                checked={source === o.source}
+                disabled={busy || !o.available}
+                onChange={() => setSource(o.source)}
+              />{" "}
+              {o.label}
+              {!o.available && o.reason && <div style={{ color: "var(--muted,#78716c)", marginLeft: 20 }}>{o.reason}</div>}
+            </label>
+          ))}
+          {source === "ADMIN_RECORDED" && (
+            <div style={{ marginTop: 6, background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 4, padding: "6px 8px" }}>
+              {info.adminRecordedExplainer}
+              <div style={{ marginTop: 4 }}>
+                เอกสารจะระบุว่าผู้บันทึกคือ <b>{info.wouldRecordAs}</b>
+              </div>
             </div>
           )}
         </div>
@@ -280,8 +330,21 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
 
       {isAdmin && (
         <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          {/* Read the document before putting a name to it. A draft opens in a new tab,
+              watermarked on every page, and creates nothing. */}
+          {!live && rows.length > 0 && (
+            <a
+              className="btn sm" target="_blank" rel="noopener noreferrer"
+              href={`/api/jobsheet/certificate/draft?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}${source ? `&source=${source}` : ""}`}
+            >ดู PDF ร่าง</a>
+          )}
+          {live?.pdfHash && (
+            <a className="btn sm" target="_blank" rel="noopener noreferrer" href={`/api/jobsheet/certificate/${live.id}/pdf`}>
+              ดูใบรับรอง PDF
+            </a>
+          )}
           {!live && info.canIssue && (
-            <button type="button" className="btn" disabled={busy} onClick={() => act("/api/jobsheet/certificate", { guideId, date, slotIdx }, "สร้างใบรับรองแล้ว")}>
+            <button type="button" className="btn" disabled={busy} onClick={() => act("/api/jobsheet/certificate", { guideId, date, slotIdx, source }, "สร้างใบรับรองแล้ว")}>
               สร้างใบรับรองแทนใบเสร็จ
             </button>
           )}

@@ -15,6 +15,7 @@ import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
 import { blocksDocument, registeredSignature, resolveSignature, stampOf, type SignatureDeps, type SignatureStamp } from "@/lib/certificates/signature";
 import { attesterRefusal } from "@/lib/certificates/attester";
+import { defaultSource, sourceRefusal, type ExpenseSource } from "@/lib/certificates/source";
 
 // Issuing, approving, filing and linking a certificate.
 //
@@ -91,13 +92,26 @@ async function privacyProblems(drive: CertificateDrive, folderPath: string[], fi
 }
 
 /** Everything that must be true before a certificate may exist for this sheet. */
-function eligibility(sheet: JobSheet, rows: CertifiableRow[]): string[] {
+/** The origin a certificate was issued under, read back from what it stored. */
+function originOf(cert: ExpenseCertificate): { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"] } {
+  return {
+    source: (cert.source as ExpenseSource) ?? "GUIDE_REPORTED",
+    recordedBy: cert.recordedById
+      ? { id: cert.recordedById, name: cert.recordedByName ?? "", role: cert.recordedByRole ?? "", at: (cert.recordedAt ?? new Date(0)).toISOString() }
+      : null,
+  };
+}
+
+function eligibility(sheet: JobSheet, rows: CertifiableRow[], source: ExpenseSource = "GUIDE_REPORTED"): string[] {
   const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
   const out: string[] = [];
-  // The guide's own act. Not certifiedAt — that is the operator's first save and says
-  // nothing about the guide (lib/certifier).
-  if (!sheet.guideExpensesAt) {
-    out.push("This job sheet has no expense report from the guide. A certificate stands on the guide having filed their expenses from their own account, so there is nothing to certify yet.");
+  // Only a GUIDE_REPORTED document needs the guide to have filed — that claim cannot be
+  // made on their behalf. An ADMIN_RECORDED one exists precisely for the case where they
+  // did not: the expenses still happened and the company still has to account for them.
+  // Not certifiedAt in either case — that is the operator's first save and says nothing
+  // about the guide (lib/certifier).
+  if (source === "GUIDE_REPORTED" && !sheet.guideExpensesAt) {
+    out.push("This job sheet has no expense report from the guide. A certificate that says the guide reported these expenses cannot be issued until they have — record the rows as an admin instead if that is what happened.");
   }
   out.push(...ineligibleRows(expenses));
   out.push(...duplicateIdentities(rows, expenses));
@@ -123,27 +137,60 @@ async function loadSheet(db: PrismaClient | Prisma.TransactionClient, key: { gui
 // certificate existing for the same sheet, so two people pressing the button at once
 // produce one certificate and one refusal, not two documents.
 
-export async function createCertificate(key: { guideId: string; date: string; slotIdx: number }, actor: Actor, deps: Deps = {}): Promise<ExpenseCertificate> {
+export async function createCertificate(
+  key: { guideId: string; date: string; slotIdx: number },
+  actor: Actor,
+  deps: Deps = {},
+  /** Where the rows came from. Decided here, once, and never edited afterwards. */
+  source?: ExpenseSource,
+): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
   const made = await db.$transaction(async (tx) => {
     const sheet = await loadSheet(tx, key);
+    // No source given and no guide report: REFUSE rather than default.
+    //
+    // Defaulting here would name whoever made the call as the person who entered the
+    // figures, on the strength of a missing field. A claim about somebody should never
+    // be the consequence of an omission — a caller that has not said where the rows came
+    // from has not decided, and deciding for them is how a script or an old client ends
+    // up putting an admin's name on a document nobody meant to issue.
+    //
+    // The screen always sends one, so this is felt only by something that did not.
+    const chosen: ExpenseSource | undefined = source ?? (sheet.guideExpensesAt ? "GUIDE_REPORTED" : undefined);
+    if (!chosen) {
+      refuse([
+        "This job sheet has no expense report from the guide, so a certificate cannot simply be issued: say where the rows came from.",
+        "ไกด์ไม่ได้ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนสำหรับใบงานนี้ — ให้เลือกที่มาของรายการก่อนออกใบรับรอง",
+      ]);
+    }
+    const badSource = sourceRefusal(chosen, sheet);
+    if (badSource) refuse([badSource]);
     const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
     const rows = certifiableRows(expenses);
-    const problems = eligibility(sheet, rows);
+    const problems = eligibility(sheet, rows, chosen);
     if (problems.length) refuse(problems);
 
     const existing = await tx.expenseCertificate.findUnique({ where: { activeJobSheetId: sheet.id } });
     if (existing) refuse([`This job sheet already has certificate ${existing.certificateNo}. Withdraw it first, with a reason, if it needs replacing.`]);
 
     const name = await guideNameOf(tx, sheet.guideId);
-    const payload = buildPayload(facts(sheet, name), rows);
+    // An admin recording rows is an act by a named person at a known time, so it is
+    // stamped now rather than at attestation — the two are different events even when
+    // the same person performs both, and an audit that merged them could not answer
+    // which one is being questioned.
+    const recordedBy = chosen === "ADMIN_RECORDED"
+      ? { id: actor.id, name: actor.name, role: actor.role, at: now().toISOString() }
+      : null;
+    const payload = buildPayload(facts(sheet, name), rows, null, { source: chosen, recordedBy });
     const issued = await tx.expenseCertificate.count({ where: { jobSheetId: sheet.id } });
     const certificateNo = `CERT-${sheet.ref ?? `${sheet.date}-${sheet.slotIdx}`}-${String(issued + 1).padStart(2, "0")}`;
 
     return tx.expenseCertificate.create({
       data: {
         certificateNo, jobSheetId: sheet.id, activeJobSheetId: sheet.id,
+        source: chosen,
+        ...(recordedBy ? { recordedById: recordedBy.id, recordedByName: recordedBy.name, recordedByRole: recordedBy.role, recordedAt: new Date(recordedBy.at) } : {}),
         guideId: sheet.guideId, jobRef: sheet.ref, tourDate: sheet.date, slotIdx: sheet.slotIdx,
         status: "READY_TO_ATTEST" satisfies CertificateState,
         payload: payload as unknown as Prisma.InputJsonValue,
@@ -158,7 +205,23 @@ export async function createCertificate(key: { guideId: string; date: string; sl
     });
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.created", entityType: "ExpenseCertificate", entityId: made.id,
-    detail: { certificateNo: made.certificateNo, jobRef: made.jobRef, rows: (made.coveredRows as unknown as CertifiableRow[]).length, totalSatang: made.totalSatang, payloadHash: made.payloadHash } });
+    detail: { certificateNo: made.certificateNo, jobRef: made.jobRef, rows: (made.coveredRows as unknown as CertifiableRow[]).length, totalSatang: made.totalSatang, payloadHash: made.payloadHash, source: made.source } });
+
+  // Recording the rows is its own event, written separately even when the same person
+  // goes on to attest. Merging them would leave an audit that cannot say whether what is
+  // being questioned is the figures or the certification of them.
+  if (made.source === "ADMIN_RECORDED") {
+    await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.rows_recorded_by_admin", entityType: "ExpenseCertificate", entityId: made.id,
+      detail: {
+        certificateNo: made.certificateNo, jobRef: made.jobRef,
+        jobSheet: { guideId: made.guideId, date: made.tourDate, slotIdx: made.slotIdx },
+        recordedById: made.recordedById, recordedByName: made.recordedByName, recordedByRole: made.recordedByRole,
+        recordedAt: made.recordedAt?.toISOString() ?? null,
+        rows: (made.coveredRows as unknown as CertifiableRow[]).map((r) => ({ index: r.index, description: r.description, amountSatang: r.amountSatang })),
+        totalSatang: made.totalSatang,
+        note: "the guide did not file an expense report from their own account for this job; an admin entered these rows from information they checked. This is not a report by the guide and not a certification of the document.",
+      } });
+  }
   return made;
 }
 
@@ -210,13 +273,14 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
     if (!sheet) refuse(["The job sheet this certificate belongs to is gone"], 404);
     const expenses = (sheet!.expenses as unknown as Expense[]) ?? [];
     const rows = certifiableRows(expenses);
-    const problems = eligibility(sheet!, rows);
+    const problems = eligibility(sheet!, rows, (cert!.source as ExpenseSource) ?? "GUIDE_REPORTED");
     if (problems.length) refuse(problems);
 
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
-        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null },
+        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
+        origin: originOf(cert!) },
       { facts: facts(sheet!, name), expenses },
     );
     if (drift.drifted) {
@@ -239,7 +303,9 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
     // The payload is rebuilt so the fingerprint covers which signature was attested with.
     // Swap the image afterwards and the hash no longer matches, which is the whole point
     // of having one.
-    const payload = buildPayload(facts(sheet!, name), rows, stamp);
+    // The origin is what it was issued as. Attesting does not get to change who the
+    // document says entered the figures.
+    const payload = buildPayload(facts(sheet!, name), rows, stamp, originOf(cert!));
 
     return tx.expenseCertificate.update({
       where: { id, status: cert!.status },
@@ -657,7 +723,8 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
-        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null },
+        signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
+        origin: originOf(cert!) },
       { facts: facts(sheet!, name), expenses },
     );
     if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);

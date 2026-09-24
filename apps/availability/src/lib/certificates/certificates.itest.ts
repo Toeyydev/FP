@@ -183,10 +183,14 @@ describe("issuing one", () => {
     expect(c.certificateNo).toBe(`CERT-${REF}-01`);
   });
 
-  it("refuses when the guide has filed no expense report of their own", async () => {
+  it("refuses when the guide filed nothing and the caller did not say where the rows came from", async () => {
+    // Defaulting would put the caller's name on the document as the person who entered
+    // the figures, because a field was missing. A claim about somebody is never the
+    // consequence of an omission.
     await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
     expect((await refusal(() => createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps())))[0])
-      .toContain("no expense report from the guide");
+      .toContain("say where the rows came from");
+    expect(await prisma.expenseCertificate.count()).toBe(0);
   });
 
   it("refuses two rows that read the same — nothing can say which one it covers", async () => {
@@ -1456,5 +1460,83 @@ describe("the same admin may prepare and attest", () => {
     for (const shape of ["createdById !==", "createdById ===", "!== cert!.createdById", "=== cert!.createdById"]) {
       expect(src, `a segregation-of-duties check has appeared: ${shape}`).not.toContain(shape);
     }
+  });
+});
+
+// ── where the figures came from ─────────────────────────────────────────────
+//
+// A certificate that says the guide reported something and one that says an admin did
+// are different claims about different people. The option exists because the guide often
+// does not file and the expenses happened anyway — so the document has to be able to say
+// that, plainly, instead of implying a report that never existed.
+
+describe("a certificate records where its rows came from", () => {
+  const noReport = async () =>
+    prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } }, data: { guideExpensesAt: null } });
+
+  it("an admin may issue one when the guide never filed", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    await noReport();
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    expect(c.source).toBe("ADMIN_RECORDED");
+    expect(c.recordedById).toBe(ADMIN.id);
+    expect(c.recordedByName).toBe(ADMIN.name);
+    expect(c.recordedAt).toBeTruthy();
+    // No guide-report time is kept, because there was no such act to record.
+    expect(c.sourceGuideReportedAt).toBeNull();
+  });
+
+  it("but may not claim the guide reported it", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    await noReport();
+    const why = await refusal(() => createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "GUIDE_REPORTED"));
+    expect(why[0]).toContain("ไกด์ยังไม่ได้ส่งรายงาน");
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("recording the rows is audited as its own event, naming the sheet and the rows", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    await noReport();
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    const log = (await prisma.auditLog.findFirst({ where: { action: "certificate.rows_recorded_by_admin", entityId: c.id } }))!;
+    expect(log).toBeTruthy();
+    const d = log.detail as Record<string, unknown>;
+    expect(d.recordedById).toBe(ADMIN.id);
+    expect((d.jobSheet as Record<string, unknown>).date).toBe(DATE);
+    expect((d.rows as unknown[]).length).toBe(1);
+    expect(String(d.note)).toContain("not a report by the guide");
+
+    // Attesting is a SEPARATE event, even though the same person does it.
+    await attestCertificate(c.id, ADMIN, deps());
+    const attested = await prisma.auditLog.findFirst({ where: { action: "certificate.attested", entityId: c.id } });
+    expect(attested).toBeTruthy();
+    expect(attested!.id).not.toBe(log.id);
+  });
+
+  it("a guide-reported certificate is dated from the guide's own filing", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "GUIDE_REPORTED");
+    expect(c.source).toBe("GUIDE_REPORTED");
+    expect(c.recordedById).toBeNull();
+    expect(c.sourceGuideReportedAt).toBeTruthy();
+    expect(await prisma.auditLog.count({ where: { action: "certificate.rows_recorded_by_admin" } })).toBe(0);
+  });
+
+  it("the source survives attestation unchanged, and nothing can edit it", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    await noReport();
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps(), "ADMIN_RECORDED");
+    const signed = await attestCertificate(c.id, ADMIN, deps());
+    expect(signed.source).toBe("ADMIN_RECORDED");
+    expect((signed.payload as unknown as { source: string }).source).toBe("ADMIN_RECORDED");
+
+    // The action endpoint takes attest/upload/link/void and nothing else — there is no
+    // way in to change what the document says about who produced the figures.
+    const res = await certificateAction(
+      new Request("https://ops.example.test/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "setSource", source: "GUIDE_REPORTED" }) }) as unknown as Parameters<typeof certificateAction>[0],
+      { params: Promise.resolve({ id: c.id }) },
+    );
+    expect(res.status).toBe(400);
+    expect((await prisma.expenseCertificate.findUnique({ where: { id: c.id } }))!.source).toBe("ADMIN_RECORDED");
   });
 });

@@ -7,6 +7,7 @@ import type { Expense } from "@/lib/jobsheet";
 import { certifiableRows, duplicateIdentities, ineligibleRows } from "@/lib/certificates/payload";
 import { LABEL, LABEL_TH, type CertificateState } from "@/lib/certificates/state";
 import { CertificateRefused, createCertificate, type Actor } from "@/lib/certificates/service";
+import { ADMIN_RECORDED_EXPLAINER_TH, availableSources, defaultSource, isExpenseSource, SOURCE_LABEL_TH } from "@/lib/certificates/source";
 import { denied } from "@/lib/certificates/denied";
 import { certificatePeakView } from "@/lib/certificates/peak-link";
 import { attachEnabled } from "@/lib/certificates/peak-attach";
@@ -57,6 +58,7 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
     select: {
       id: true, certificateNo: true, status: true, totalSatang: true, payloadHash: true, pdfHash: true,
+      source: true, recordedByName: true, recordedByRole: true, recordedAt: true,
       driveUrl: true, attestedByName: true, attestedByRole: true, attestedAt: true, uploadedAt: true, linkedAt: true,
       voidedAt: true, voidReason: true, coveredRows: true, createdAt: true,
       guideId: true, tourDate: true, slotIdx: true,
@@ -76,7 +78,6 @@ export async function GET(req: NextRequest) {
 
   // Why a new one could not be issued right now, in the operator's words.
   const blockers: string[] = [];
-  if (!sheet.guideExpensesAt) blockers.push("The guide has not filed an expense report from their own account for this job yet.");
   blockers.push(...ineligibleRows(expenses), ...duplicateIdentities(rows, expenses));
   if (certificates.some((c) => c.status !== "VOID")) blockers.push("This job sheet already has a certificate. Withdraw it first if it needs replacing.");
 
@@ -88,6 +89,13 @@ export async function GET(req: NextRequest) {
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
     canIssue: rows.length > 0 && blockers.length === 0,
     blockers,
+    // Where the rows may be said to have come from, and which to offer first. The admin
+    // who would be recorded is named from the SESSION — the browser is told who it is
+    // about to become, it does not get to say.
+    sources: availableSources(sheet).map((s) => ({ ...s, label: SOURCE_LABEL_TH[s.source] })),
+    defaultSource: defaultSource(sheet),
+    adminRecordedExplainer: ADMIN_RECORDED_EXPLAINER_TH,
+    wouldRecordAs: (session?.user?.name || (session?.user as { displayName?: string })?.displayName || session?.user?.id || "").toString(),
     certificates: certificates.map((c, i) => ({
       ...c,
       label: LABEL[c.status as CertificateState] ?? c.status,
@@ -126,12 +134,21 @@ export async function POST(req: NextRequest) {
     await denied(session, "certificate.issue", {});
     return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can issue a certificate in lieu of a receipt"] }, { status: 403 });
   }
-  const parsed = key.safeParse(await req.json().catch(() => null));
+  const raw = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  const parsed = key.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => i.message) }, { status: 400 });
 
+  // The ONLY thing the request may say about where the rows came from is which of two
+  // words it is. Who recorded them, under what name and at what time, is read from the
+  // session — those are claims about a person, and a request is not a person.
+  const askedSource = raw?.source;
+  if (askedSource !== undefined && !isExpenseSource(askedSource)) {
+    return NextResponse.json({ error: "bad-body", reasons: ["ที่มาของรายการไม่ถูกต้อง"] }, { status: 400 });
+  }
+
   try {
-    const cert = await createCertificate(parsed.data, actorOf(session));
-    return NextResponse.json({ ok: true, certificate: { id: cert.id, certificateNo: cert.certificateNo, status: cert.status, totalSatang: cert.totalSatang, payloadHash: cert.payloadHash } });
+    const cert = await createCertificate(parsed.data, actorOf(session), {}, askedSource);
+    return NextResponse.json({ ok: true, certificate: { id: cert.id, certificateNo: cert.certificateNo, status: cert.status, totalSatang: cert.totalSatang, payloadHash: cert.payloadHash, source: cert.source } });
   } catch (e) {
     if (e instanceof CertificateRefused) return NextResponse.json({ error: "not-allowed", reasons: e.reasons, detail: e.reasons.join("\n") }, { status: e.status });
     throw e;

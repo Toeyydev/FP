@@ -662,9 +662,28 @@ model ExpenseCertificate {
   payloadHash           String
   coveredRows           Json // [{ index, identity, description, pax, price, amountSatang }]
   totalSatang           Int
+  /// Where the expense rows on this document came from, and it is decided once.
+  ///
+  ///   GUIDE_REPORTED   the guide filed the report from their own account
+  ///   ADMIN_RECORDED   an admin entered the rows from information they checked
+  ///
+  /// Never changed after the certificate is issued. The two say different things about
+  /// who stands behind the figures, so editing one into the other would rewrite what a
+  /// signed document claims. A certificate issued under the wrong one is withdrawn and
+  /// a new one issued, which is what withdrawal is for.
+  source                String    @default("GUIDE_REPORTED")
+  /// Who entered the rows, when ADMIN_RECORDED. Read from the session, never a request
+  /// body, and kept separately from the attester even when they are the same person:
+  /// recording what somebody told you and certifying it are two acts, and an audit that
+  /// merges them cannot answer which one is being questioned later.
+  recordedById          String?
+  recordedByName        String?
+  recordedByRole        String?
+  recordedAt            DateTime?
   // The guide's own act: they filed the expense report from their own account at this
   // time. NOT certifiedAt — that is the operator's first save and says nothing about
-  // the guide (lib/certifier).
+  // the guide (lib/certifier). Null on an ADMIN_RECORDED document, because there was no
+  // such act and a document must not imply one.
   sourceGuideReportedAt DateTime?
   sourceSheetUpdatedAt  DateTime
   // Who approved it, read from their session and never from a request body.

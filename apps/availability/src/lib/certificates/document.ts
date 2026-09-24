@@ -1,5 +1,6 @@
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { bahtText } from "@/lib/baht-text";
+import { sourceSentenceTh } from "@/lib/certificates/source";
 import { APPROVAL_TERM_TH } from "@/lib/certificates/state";
 import { shortHash, type CertificatePayload } from "@/lib/certificates/payload";
 
@@ -52,6 +53,15 @@ export type CertificateView = {
   /** ISO. The moment the approval was recorded. */
   attestedAt: string;
   auditRef: string;
+  /**
+   * A draft: what this document WOULD say, shown before anything exists.
+   *
+   * It is not a lesser version of the certificate, it is a different document. There is
+   * no attester, no audit reference and no signature, because none of those has happened
+   * — and every page carries a watermark, because the failure this guards against is a
+   * printed draft being filed as though it were the real thing.
+   */
+  draft?: boolean;
   /**
    * The attester's own signature image, already fetched, checked and inlined by
    * `lib/certificates/signature`. A `data:` URI, so the page fetches nothing while it
@@ -139,9 +149,18 @@ export function renderCertificateHtml(v: CertificateView): string {
  .sig td { padding-top: 2px; }
  .sig img { max-width: 150px; max-height: 34px; width: auto; height: auto; display: block; }
  .sig-ver { font-size: 8pt; color: #78716c; }
+ /* Every page, not the first. A watermark that only marks page one is a watermark a
+    two-page draft gets round by being stapled in a different order. A fixed position
+    inside a paged medium repeats on each sheet, which is exactly what is wanted here. */
+ .draft-mark { position: fixed; top: 44%; left: 0; right: 0; text-align: center; z-index: 9;
+   font-size: 26pt; font-weight: 800; color: rgba(185, 28, 28, 0.16); letter-spacing: 0.04em;
+   transform: rotate(-24deg); pointer-events: none; }
+ .draft-banner { border: 1.5px solid #b91c1c; background: #fef2f2; color: #b91c1c;
+   padding: 7px 10px; font-size: 10.5pt; font-weight: 700; text-align: center; margin-bottom: 10px; }
  .foot { margin-top: 6px; border-top: 1px solid #e7e5e4; padding-top: 5px; font-size: 8pt; color: #78716c; line-height: 1.35; }
 </style></head>
 <body>
+${v.draft ? `<div class="draft-mark">ร่าง — ยังไม่รับรอง · ยังไม่ใช่หลักฐานบัญชี</div>` : ""}
 <div class="head">
   <div class="org">${esc(CO.brandName)}<small>${esc(CO.legalNameTh)} · เลขประจำตัวผู้เสียภาษี ${esc(CO.taxId)}</small></div>
   <div class="no">เลขที่<b>${esc(v.certificateNo)}</b>${esc(thaiDate(p.tourDate))}</div>
@@ -150,6 +169,7 @@ export function renderCertificateHtml(v: CertificateView): string {
 <h1>ใบรับรองแทนใบเสร็จรับเงิน</h1>
 <div class="kind">Certificate in lieu of receipt · ใบงานเลขที่ ${esc(p.jobRef)}</div>
 
+${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รับรอง · ยังไม่ใช่หลักฐานบัญชี</div>` : ""}
 <div class="notice">
   <b>ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน · ไม่ใช่ใบกำกับภาษี</b><br>
   เอกสารนี้ออกโดยบริษัทเพื่อบันทึกค่าใช้จ่ายที่ไม่มีใบเสร็จรับเงินจากผู้ให้บริการ ไม่ใช่เอกสารทางภาษีและใช้เครดิตภาษีซื้อไม่ได้<br>
@@ -160,7 +180,13 @@ export function renderCertificateHtml(v: CertificateView): string {
   <tr><th>ใบงานเลขที่</th><td>${esc(p.jobRef)}</td></tr>
   <tr><th>วันที่ปฏิบัติงาน</th><td>${esc(thaiDate(p.tourDate))} (รอบที่ ${int(p.slotIdx)})</td></tr>
   <tr><th>ไกด์ผู้สำรองจ่าย</th><td>${esc(p.guideName)} (รหัส ${esc(p.guideId)})</td></tr>
-  <tr><th>ไกด์ส่งรายงานค่าใช้จ่าย</th><td>${p.guideReportedAt ? `ไกด์ส่งรายงานค่าใช้จ่ายผ่านบัญชีของตนเมื่อ ${esc(thaiDateTime(p.guideReportedAt))}` : "ไม่มีบันทึกการส่งรายงานจากบัญชีของไกด์"}</td></tr>
+  <tr><th>ที่มาของรายการ</th><td>${esc(sourceSentenceTh({
+    source: p.source ?? "GUIDE_REPORTED",
+    guideReportedAt: p.guideReportedAt,
+    recordedByName: p.recordedBy?.name ?? null,
+    recordedAt: p.recordedBy?.at ?? null,
+    draft: v.draft,
+  }, thaiDateTime))}</td></tr>
   <tr><th>จำนวนรายการ</th><td>${int(p.rows.length)} รายการ รวม ${money(p.totalSatang)} บาท</td></tr>
 </table>
 
@@ -178,7 +204,9 @@ ${rows}
 
 <p>รายการข้างต้นเป็นการจ่ายคืนเงินที่ไกด์สำรองจ่าย ไม่ถือเป็นค่าตอบแทนของไกด์ จึงไม่อยู่ในฐานคำนวณภาษีเงินได้หัก ณ ที่จ่าย</p>
 
-<div class="approve">
+${v.draft ? `<div class="notice" style="border-color:#fca5a5;background:#fef2f2">
+  เอกสารนี้เป็นเพียงตัวอย่างสำหรับตรวจทานก่อนออกใบรับรอง ยังไม่มีผู้รับรอง ยังไม่มีเลขอ้างอิง audit และยังใช้เป็นหลักฐานประกอบการบันทึกบัญชีไม่ได้
+</div>` : `<div class="approve">
   <h2>${esc(APPROVAL_TERM_TH)}</h2>
   <table>
     <tr><th>ผู้รับรอง</th><td>${esc(v.attestedByName)}</td></tr>
@@ -191,7 +219,7 @@ ${v.signatureDataUri ? `    <tr class="sig"><th>ภาพลายมือช�
       ${v.signatureVersion ? `<span class="sig-ver">(ฉบับที่ ${int(v.signatureVersion)})</span>` : ""}
     </td></tr>` : ""}
   </table>
-</div>
+</div>`}
 
 <div class="foot">
   ผู้รับรองยืนยันตัวตนผ่านการเข้าสู่ระบบของ FolkOPS และระบบบันทึกชื่อ สิทธิ์ และเวลาไว้ใน audit log — เอกสารนี้ไม่ได้ลงลายมือชื่ออิเล็กทรอนิกส์แบบเข้ารหัส (ไม่มีใบรับรองอิเล็กทรอนิกส์หรือกุญแจส่วนตัว)<br>

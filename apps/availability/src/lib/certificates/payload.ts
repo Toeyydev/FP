@@ -3,6 +3,7 @@ import { expenseAmount, isReviewExpense, type Expense } from "@/lib/jobsheet";
 import { canonicalPaidBy } from "@/lib/peak-sync";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
+import type { ExpenseSource } from "@/lib/certificates/source";
 
 // What a certificate says, reduced to one string that always comes out the same way.
 //
@@ -40,6 +41,16 @@ export type CertificatePayload = {
   guideName: string;
   /** When the guide filed their expense report from their own account. Never certifiedAt. */
   guideReportedAt: string | null;
+  /**
+   * Where the rows came from — the guide's own report, or an admin recording them.
+   *
+   * In the fingerprint because it is a claim about a person. A document saying an admin
+   * entered the figures and one saying the guide reported them are different documents,
+   * and a hash that could not tell them apart would let one be presented as the other.
+   */
+  source: ExpenseSource;
+  /** Who entered the rows, when an admin did. Never a name from a request. */
+  recordedBy: { id: string; name: string; role: string; at: string } | null;
   rows: CertifiableRow[];
   totalSatang: number;
   reason: string;
@@ -100,6 +111,7 @@ export function buildPayload(
   sheet: SheetFacts,
   rows: readonly CertifiableRow[],
   signature: { userId: string; version: number; sha256: string } | null = null,
+  origin: { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"] } = { source: "GUIDE_REPORTED", recordedBy: null },
 ): CertificatePayload {
   return {
     v: 1,
@@ -109,6 +121,8 @@ export function buildPayload(
     guideId: sheet.guideId,
     guideName: sheet.guideName,
     guideReportedAt: sheet.guideReportedAt ? sheet.guideReportedAt.toISOString() : null,
+    source: origin.source,
+    recordedBy: origin.recordedBy ? { ...origin.recordedBy } : null,
     rows: rows.map((r) => ({ ...r })),
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
     reason: NO_RECEIPT_REASON_TH,
@@ -128,6 +142,8 @@ export function canonicalString(p: CertificatePayload): string {
     `guide=${p.guideId}`,
     `guideName=${p.guideName}`,
     `reported=${p.guideReportedAt ?? ""}`,
+    `source=${p.source}`,
+    `recordedBy=${p.recordedBy ? `${p.recordedBy.id}:${p.recordedBy.at}` : ""}`,
     `rows=${p.rows.map(row).join("|")}`,
     `total=${p.totalSatang}`,
     `reason=${p.reason}`,
@@ -160,7 +176,12 @@ export type DriftResult = { drifted: boolean; reasons: string[] };
  * issued, so the old document keeps saying what it said when it was approved.
  */
 export function checkDrift(
-  stored: { payloadHash: string; coveredRows: CertifiableRow[]; signature?: CertificatePayload["signature"] },
+  stored: {
+    payloadHash: string; coveredRows: CertifiableRow[];
+    signature?: CertificatePayload["signature"];
+    /** The origin this certificate was issued under. Fixed, so it is carried, not rebuilt. */
+    origin?: { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"] };
+  },
   sheetNow: { facts: SheetFacts; expenses: Expense[] },
 ): DriftResult {
   const reasons: string[] = [];
@@ -170,7 +191,7 @@ export function checkDrift(
   // rebuild differ and report the sheet as changed when nothing on it had. Whether the
   // image is still the attested one is a different question, asked where it is answerable
   // — against what is registered now, at the moment the image goes on the page.
-  const now = buildPayload(sheetNow.facts, nowRows, stored.signature ?? null);
+  const now = buildPayload(sheetNow.facts, nowRows, stored.signature ?? null, stored.origin ?? { source: "GUIDE_REPORTED", recordedBy: null });
   if (payloadHash(now) === stored.payloadHash) return { drifted: false, reasons };
 
   const was = new Map(stored.coveredRows.map((r) => [r.identity, r]));
