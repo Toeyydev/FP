@@ -344,4 +344,23 @@ describe("repository invariant — the image itself is smoke tested", () => {
     expect(delta).toContain("delta_mb");
     expect(ci()).toContain("image-size-delta.sh");
   });
+
+  it("the baseline is named by a full sha and fetched before it is used", () => {
+    // A workflow checkout is depth 1. `git archive badaf97` on it fails with "not a
+    // valid object name", which is not the same thing as the baseline lacking a config
+    // file — and the first version of this script said the latter.
+    const delta = readFileSync(join(process.cwd(), "scripts/image-size-delta.sh"), "utf8");
+    expect(delta).toContain("cat-file -e");
+    expect(delta).toContain("fetch --no-tags");
+    expect(delta).toMatch(/full 40-character SHA/);
+    const y = ci();
+    expect(y).toMatch(/BASELINE_REF:\s*[0-9a-f]{40}/);
+  });
+
+  it("a run that cannot measure the delta has not passed", () => {
+    // It used to be continue-on-error, and the first failure went green behind it while
+    // measuring nothing at all.
+    const lines = ci().split("\n").filter((l) => !l.trim().startsWith("#"));
+    expect(lines.filter((l) => l.includes("continue-on-error"))).toEqual([]);
+  });
 });

@@ -166,14 +166,19 @@ jobs:
           echo "nixpacks: $(nixpacks --version)"
 
       # Reported as a difference, not a total: a Next.js image with node_modules is most
-      # of the number with no browser in it at all. `continue-on-error` because this is a
-      # measurement, not a gate. It runs BEFORE the smoke test so the numbers exist even
-      # on a run where the smoke test fails — a failing gate should not take the
-      # measurement down with it.
+      # of the number with no browser in it at all.
+      #
+      # NOT continue-on-error. It was, and the first run failed behind it without anybody
+      # noticing — the baseline commit is not in a depth-1 checkout, and the step went
+      # green while measuring nothing. The delta is a number a decision rests on, so a
+      # run that cannot produce it has not passed.
+      #
+      # Runs before the smoke test so the numbers exist even when the smoke test fails.
       - name: Image size, this branch against what production runs
-        continue-on-error: true
         env:
-          BASELINE_REF: badaf97
+          # The FULL sha. A shallow checkout cannot resolve an abbreviation for a commit
+          # it does not have, which is exactly how this failed the first time.
+          BASELINE_REF: badaf97631026585a108e87dcbef9507223b6a1a
         run: bash scripts/image-size-delta.sh
 
       - name: Runtime image smoke test (builds the image, runs it, renders inside it)
