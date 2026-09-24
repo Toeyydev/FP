@@ -442,6 +442,58 @@ describe("putting it to use", () => {
     expect(evidenceState(rows[0], await certificateStatuses([rows as Expense[]])).state).toBe("WAIVED");
   });
 
+  it("does not keep a database transaction open while a slow Drive check runs", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+
+    const base = fakeDrive();
+    const slow: CertificateDrive = {
+      ...base,
+      async findActive(input) {
+        // Prisma's interactive transaction limit is five seconds. This is the real
+        // failure mode: Drive may be healthy but slower than that, and linking must not
+        // expire merely because the remote integrity check took time.
+        await new Promise((resolve) => setTimeout(resolve, 5_200));
+        return base.findActive(input);
+      },
+    };
+    const linked = await linkCertificate(c.id, ADMIN, deps({ drive: slow }));
+    expect(linked.status).toBe("LINKED");
+    expect((await rowsNow())[0].evidenceWaiver?.certificateId).toBe(c.id);
+  }, 15_000);
+
+  it("refuses the checked Drive result if the certificate changes while that check is in flight", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    await uploadCertificate(c.id, ADMIN, deps());
+
+    const base = fakeDrive();
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => { started = resolve; });
+    const continueCheck = new Promise<void>((resolve) => { release = resolve; });
+    const paused: CertificateDrive = {
+      ...base,
+      async findActive(input) {
+        started();
+        await continueCheck;
+        return base.findActive(input);
+      },
+    };
+
+    const linking = linkCertificate(c.id, ADMIN, deps({ drive: paused }));
+    await waiting;
+    await prisma.expenseCertificate.update({ where: { id: c.id }, data: { driveRevisionId: "a-newer-revision" } });
+    release();
+
+    expect((await refusal(() => linking)).join(" ")).toContain("changed while its Drive document was being checked");
+    expect((await prisma.expenseCertificate.findUniqueOrThrow({ where: { id: c.id } })).status).toBe("UPLOADED");
+    expect((await rowsNow())[0].evidenceWaiver).toBeUndefined();
+  });
+
   it("refuses if the sheet moved between filing and linking", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
