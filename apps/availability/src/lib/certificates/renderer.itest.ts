@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildPayload, certifiableRows, fileHash, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { pdfRendererAvailable, renderPdf } from "@/lib/certificates/pdf";
 import { CHROME_BUILD_ID, findExecutable } from "@/lib/certificates/browser";
 import { probeRenderer, resetProbe } from "@/lib/certificates/probe";
 import type { Expense } from "@/lib/jobsheet";
-import { unmappedGlyphCount } from "@/lib/certificates/text-layer";
+import { readBackCount, unmappedGlyphCount } from "@/lib/certificates/text-layer";
 
 // The renderer, against the Chromium the DEPLOYMENT provides.
 //
@@ -256,5 +257,73 @@ describeRenderer("the text layer reads back as the page reads", () => {
     const both = one + two;
     for (const r of LONG_ROWS) expect(count(both, squash(r.description)), r.description).toBe(1);
     for (const w of ["ค่าอาหารและเครื่องดื่ม", "ค่าพาหนะ"]) expect(count(both, w)).toBe(count(squash(visibleText(html)), w));
+  }, 60_000);
+});
+
+// The owner's own example, read back by both engines that matter.
+//
+// poppler (pdftotext) trusts /ActualText and so can read right while Chrome reads wrong;
+// PDFium is Chrome's — and Google Drive's — PDF engine, the text its search and copy use.
+// Both must give every phrase back exactly as often as the page shows it.
+
+const hasPdfium = commandWorks("python3", ["-c", "import pypdfium2"]);
+const PDFIUM_SCRIPT = fileURLToPath(new URL("../../../scripts/pdfium-text.py", import.meta.url));
+const pdfiumText = (bytes: Buffer) => execFileSync("python3", [PDFIUM_SCRIPT], { input: bytes, encoding: "utf8" });
+const EXAMPLE_LINES = ["ใบงานเลขที่ FOLK-BKK-20260925-01", "วันที่ปฏิบัติงาน 25 กันยายน 2569 (รอบที่ 1)"];
+const EXAMPLE_PHRASES = [
+  "ใบงานเลขที่", "วันที่ปฏิบัติงาน", "25 กันยายน 2569", "รอบที่ 1", "ค่าอาหารและเครื่องดื่ม", "ค่าพาหนะ",
+  "ใบรับรองแทนใบเสร็จรับเงิน", "บริษัท", "น้ำดื่ม", "ก๋วยเตี๋ยว", "ค่ารถตุ๊กตุ๊ก",
+];
+const exampleHtml = () => {
+  // slotIdx 2: were anything to read the slot, the page would say รอบที่ 2 or 3.
+  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-BKK-20260925-01", tourDate: "2026-09-25", slotIdx: 2 }, certifiableRows(THAI_ROWS));
+  return renderCertificateHtml({
+    certificateNo: "CERT-FOLK-BKK-TEST-01",
+    payload, payloadHash: payloadHash(payload),
+    attestedByName: "มาลี ทดสอบ", attestedByRole: "ADMIN",
+    attestedAt: "2099-04-03T09:15:00.000Z", auditRef: "cert_test",
+  });
+};
+/** The same page drawn only in the face production used when Chrome read it wrong. */
+const inNotoOnly = (html: string) => html.replace(/body \{ font-family: [^;]+;/, `body { font-family: "Noto Sans Thai";`);
+const readsBack = (engine: string, text: string, html: string) => {
+  const page = visibleText(html);
+  for (const line of EXAMPLE_LINES) expect(readBackCount(text, line), `${engine}: "${line}"`).toBe(1);
+  for (const p of EXAMPLE_PHRASES) {
+    expect(readBackCount(page, p), `"${p}" is on the page`).toBeGreaterThan(0);
+    expect(readBackCount(text, p), `${engine}: "${p}"`).toBe(readBackCount(page, p));
+  }
+  expect(readBackCount(text, "รอบที่ 0"), engine).toBe(0);
+  expect(readBackCount(text, "รอบที่ 2"), engine).toBe(0);
+};
+const needTools = (pdfium = false) => {
+  const missing = [!hasLoma() && "Loma", !hasPdftotext && "pdftotext", pdfium && !hasPdfium && "pypdfium2"].filter(Boolean);
+  if (!missing.length) return true;
+  if (process.env.CI) throw new Error(`CI installs these, and here they are missing: ${missing.join(", ")}`);
+  console.warn(`[renderer] ${missing.join(", ")} missing here — runs in CI`);
+  return false;
+};
+
+describeRenderer("FOLK-BKK-20260925-01, read back as a person reads it", () => {
+  it("pdftotext and PDFium both give back both lines and every phrase, once each", async () => {
+    if (!needTools(true)) return;
+    const html = exampleHtml();
+    const bytes = await renderPdf(html);
+    keepSample("certificate-FOLK-BKK-20260925-01.pdf", bytes);
+    expectWholePdf(bytes);
+    expect(unmappedGlyphCount(bytes), "glyphs that map to U+0000").toBe(0);
+    readsBack("pdftotext", pdftotext(bytes), html);
+    readsBack("PDFium", pdfiumText(bytes), html);
+  }, 60_000);
+
+  it("and the check can fail: the same page in Noto Sans Thai does not read back in PDFium", async () => {
+    // The control. Were readsBack() unable to fail, the test above would prove nothing.
+    // Noto lifts a tone mark over an upper vowel with a glyph mapped to U+0000; PDFium
+    // prints /ActualText and the glyphs both — "วันวั ที่ปฏิบัติบั ติงาน".
+    if (!needTools(true)) return;
+    const bytes = await renderPdf(inNotoOnly(exampleHtml()));
+    keepSample("control-noto-sans-thai.pdf", bytes);
+    expect(unmappedGlyphCount(bytes), "Noto should leave glyphs unmapped").toBeGreaterThan(0);
+    expect(() => readsBack("PDFium", pdfiumText(bytes), exampleHtml())).toThrow();
   }, 60_000);
 });

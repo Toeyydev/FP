@@ -51,3 +51,17 @@ export function toUnicodeCMaps(pdf: Buffer): string[] {
   }
   return out;
 }
+
+/**
+ * How many times `phrase` reads back from extracted text — spacing ignored, because a
+ * line break can fall between any two Thai letters.
+ *
+ * The fault this exists for is a cluster read twice: PDFium printed "วันวั ที่ปฏิบัติบั ติงาน"
+ * for วันที่ปฏิบัติงาน. That text does not contain the phrase, so it counts 0 — and a phrase
+ * read out twice counts 2. Compare with how many times the page itself shows it.
+ */
+export function readBackCount(extracted: string, phrase: string): number {
+  const squash = (s: string) => s.replace(/\s+/g, "");
+  const hay = squash(extracted), needle = squash(phrase);
+  return needle ? hay.split(needle).length - 1 : 0;
+}
