@@ -113,6 +113,11 @@ jobs:
           fc-list | grep -qiE 'thai|noto' \
             && echo "thai font: present ($(fc-list | grep -icE 'thai|noto') faces)" \
             || { echo "thai font: MISSING"; exit 1; }
+          # The certificate draws Thai in Loma (fonts-thai-tlwg) because its glyphs all map
+          # back to characters — see FONT_STACK in lib/certificates/document.ts.
+          fc-list : family | grep -qi loma \
+            && echo "certificate face: Loma present" \
+            || { echo "certificate face: Loma MISSING"; exit 1; }
 
       - name: Install the pinned browser (the same build step Railway runs)
         run: npm run browser:install

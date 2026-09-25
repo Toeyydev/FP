@@ -319,6 +319,12 @@ export function expenseCategoryLabel(e: Pick<Expense, "expenseType">): string {
   const k = expenseCategory(e);
   return EXPENSE_CATEGORIES.find((c) => c.key === k)?.label ?? "Uncategorised";
 }
+// The Thai name of a stored expenseType, or null when it is not one of ours. Wording
+// only — the stored key is what identifies and books the row, never this label.
+export function expenseCategoryLabelTh(e: Pick<Expense, "expenseType">): string | null {
+  const k = expenseCategory(e);
+  return EXPENSE_CATEGORIES.find((c) => c.key === k)?.th ?? null;
+}
 
 // Is this row's category settled enough to go to accounting unattended?
 // OTHER_TOUR_COST is deliberately NOT auto-approved (it is the catch-all — what

@@ -3,6 +3,7 @@ import { bahtText } from "@/lib/baht-text";
 import { sourceSentenceTh } from "@/lib/certificates/source";
 import { APPROVAL_TERM_TH } from "@/lib/certificates/state";
 import { shortHash, type CertificatePayload } from "@/lib/certificates/payload";
+import { expenseCategoryLabelTh } from "@/lib/jobsheet";
 
 // The certificate itself, as one deterministic HTML page.
 //
@@ -43,6 +44,36 @@ const money = (satang: number) => (satang / 100).toLocaleString("en-US", { minim
 // rather than trusting it.
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" })[c]!);
 const int = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : 0);
+
+/**
+ * Which round of the day this was — the number the job reference already carries.
+ *
+ * FOLK-BKK-20990401-01 is the day's round 01, and the page should say the same thing
+ * its own reference says: "รอบที่ 1". It used to print `slotIdx` raw, which is not a
+ * round at all but a position in the departure grid counted from zero — "รอบที่ 0" on a
+ * signed document, and "รอบที่ 2" for a 13:30 that was the day's first job. A reference
+ * without a round number prints nothing rather than a guess. Wording only: the payload
+ * and its hash are untouched, and nothing matches a job sheet by this.
+ */
+export function roundLabelTh(jobRef: unknown): string | null {
+  const m = /-(\d{2,})$/.exec(String(jobRef ?? "").trim());
+  const n = m ? Number(m[1]) : 0;
+  return Number.isSafeInteger(n) && n > 0 ? `รอบที่ ${n}` : null;
+}
+
+/**
+ * The expense type in Thai, from the one mapping FolkOPS keeps (EXPENSE_CATEGORIES).
+ *
+ * The payload stores the key ("meal", "transport") and hashes it; only the page
+ * translates. A key that mapping does not know is printed as it came, escaped by the
+ * caller — shown rather than hidden, because a row whose type nobody recognises is
+ * something the reader should see.
+ */
+export function categoryLabelTh(raw: unknown): string {
+  const key = String(raw ?? "").trim();
+  if (!key) return "—";
+  return expenseCategoryLabelTh({ expenseType: key }) ?? key;
+}
 
 export type CertificateView = {
   certificateNo: string;
@@ -94,12 +125,29 @@ export type CertificateView = {
 export const SCOPE_NOTICE_TH =
   "เอกสารฉบับนี้ครอบคลุมเฉพาะรายการค่าใช้จ่ายที่ระบุด้านล่าง และไม่ครอบคลุมค่าจ้าง ค่าตอบแทน หรือรายการอื่นในเอกสาร PEAK ที่อ้างอิง";
 
+/**
+ * Loma first, and not for looks: for the text layer.
+ *
+ * Chromium writes each Thai cluster twice — the glyphs, each mapped back to a character,
+ * and an /ActualText span with the real text. Noto Sans Thai (what production drew with
+ * before) and Sarabun both lift a tone mark over an upper vowel by swapping in a glyph
+ * that has no character of its own, so those glyphs map to U+0000. Readers that trust
+ * /ActualText (poppler, Acrobat) cope; PDFium — Chrome's viewer, and so Drive's — prints
+ * the span AND the glyphs ("บริษัริ ษัท"), and PDFKit drops the marks, so the document
+ * could not be searched for its own company name.
+ *
+ * Every TLWG face maps every glyph it draws; Loma read back best of them. It comes from
+ * `fonts-thai-tlwg`, which nixpacks.toml and CI already install. The renderer test holds
+ * the rule itself — no glyph in the text layer may map to nothing — not the font name.
+ */
+const FONT_STACK = `"Loma", "Sarabun", "Noto Sans Thai", "Leelawadee UI", sans-serif`;
+
 export function renderCertificateHtml(v: CertificateView): string {
   const p = v.payload;
   const rows = p.rows.map((r, i) => `<tr>
       <td class="c">${i + 1}</td>
       <td>${esc(r.description)}</td>
-      <td class="c">${esc(r.category)}</td>
+      <td class="c">${esc(categoryLabelTh(r.category))}</td>
       <td class="c">${int(r.pax)}</td>
       <td class="r">${money(Math.round(int(r.price * 100)))}</td>
       <td class="r">${money(r.amountSatang)}</td>
@@ -111,7 +159,7 @@ export function renderCertificateHtml(v: CertificateView): string {
 <style>
  @page { size: A4; margin: 16mm 15mm; }
  * { box-sizing: border-box; }
- body { font-family: "Sarabun", "Noto Sans Thai", "Leelawadee UI", sans-serif; color: #1c1917; font-size: 11pt; line-height: 1.5; margin: 0; }
+ body { font-family: ${FONT_STACK}; color: #1c1917; font-size: 11pt; line-height: 1.5; margin: 0; }
  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #b45309; padding-bottom: 7px; margin-bottom: 12px; }
  .org { font-size: 14pt; font-weight: 700; color: #b45309; }
  .org small { display: block; font-size: 8.5pt; color: #57534e; font-weight: 400; }
@@ -178,7 +226,7 @@ ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รั
 
 <table class="facts">
   <tr><th>ใบงานเลขที่</th><td>${esc(p.jobRef)}</td></tr>
-  <tr><th>วันที่ปฏิบัติงาน</th><td>${esc(thaiDate(p.tourDate))} (รอบที่ ${int(p.slotIdx)})</td></tr>
+  <tr><th>วันที่ปฏิบัติงาน</th><td>${esc(thaiDate(p.tourDate))}${roundLabelTh(p.jobRef) ? ` (${esc(roundLabelTh(p.jobRef))})` : ""}</td></tr>
   <tr><th>ไกด์ผู้สำรองจ่าย</th><td>${esc(p.guideName)} (รหัส ${esc(p.guideId)})</td></tr>
   <tr><th>ที่มาของรายการ</th><td>${esc(sourceSentenceTh({
     source: p.source ?? "GUIDE_REPORTED",
@@ -194,7 +242,7 @@ ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รั
 <p>เหตุที่ไม่มีใบเสร็จรับเงินประกอบ: ${esc(p.reason)} อัตราที่เบิกเป็นราคาคงที่ที่บริษัทใช้เป็นมาตรฐานเดียวกันทุกงาน และจำนวนคนตรงกับจำนวนผู้เดินทางจริงรวมไกด์</p>
 
 <table class="items">
-  <thead><tr><th style="width:5%" class="c">ที่</th><th>รายการ</th><th style="width:13%" class="c">ประเภท</th><th style="width:9%" class="c">จำนวน</th><th style="width:15%" class="r">ราคา/หน่วย</th><th style="width:17%" class="r">จำนวนเงิน</th></tr></thead>
+  <thead><tr><th style="width:5%" class="c">ที่</th><th>รายการ</th><th style="width:22%" class="c">ประเภท</th><th style="width:9%" class="c">จำนวน</th><th style="width:15%" class="r">ราคา/หน่วย</th><th style="width:17%" class="r">จำนวนเงิน</th></tr></thead>
   <tbody>
 ${rows}
     <tr class="sum"><td colspan="5" class="r">รวมเป็นเงินที่ต้องจ่ายคืนไกด์</td><td class="r">${money(p.totalSatang)}</td></tr>

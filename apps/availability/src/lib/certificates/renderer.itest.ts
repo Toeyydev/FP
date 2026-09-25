@@ -6,6 +6,7 @@ import { pdfRendererAvailable, renderPdf } from "@/lib/certificates/pdf";
 import { CHROME_BUILD_ID, findExecutable } from "@/lib/certificates/browser";
 import { probeRenderer, resetProbe } from "@/lib/certificates/probe";
 import type { Expense } from "@/lib/jobsheet";
+import { unmappedGlyphCount } from "@/lib/certificates/text-layer";
 
 // The renderer, against the Chromium the DEPLOYMENT provides.
 //
@@ -124,5 +125,90 @@ describeRenderer("rendering a Thai certificate with the deployment's own browser
     const withRemote = html().replace("</body>", `<img src="https://127.0.0.1:9/should-never-load.png"><link rel="stylesheet" href="file:///etc/hosts"></body>`);
     const bytes = await renderPdf(withRemote);
     expect(bytes.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  }, 60_000);
+});
+
+// The text layer — what a viewer searches and copies, not what it draws.
+//
+// The first real Thai certificate looked right and read "บริษัริ ษัท" in Chrome's viewer:
+// Noto Sans Thai lifts a tone mark over an upper vowel with a glyph that maps to no
+// character, and PDFium prints the /ActualText span and the glyphs both. These run where
+// the deployment's fonts are — CI installs them exactly as nixpacks.toml does.
+
+const commandWorks = (cmd: string, args: string[]) => {
+  try { execFileSync(cmd, args, { stdio: "ignore" }); return true; } catch { return false; }
+};
+const hasLoma = () => {
+  try { return /loma/i.test(execFileSync("fc-list", [":", "family"], { encoding: "utf8" })); } catch { return false; }
+};
+const hasPdftotext = commandWorks("pdftotext", ["-v"]);
+
+// Every mark position Thai has: upper vowels, lower vowels, tone marks stacked on both,
+// thanthakhat, and sara am (which the shaper splits into two glyphs).
+const THAI_ROWS: Expense[] = [
+  { description: "น้ำดื่ม", price: 10, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" } as Expense,
+  { description: "ก๋วยเตี๋ยว", price: 50, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" } as Expense,
+  { description: "ค่ารถตุ๊กตุ๊ก", price: 15, pax: 2, expenseType: "transport", paidBy: "guide", paidBySource: "operator" } as Expense,
+];
+const thaiHtml = () => {
+  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-TEST-20990401-02", guideName: "ศรีสุดา ผู้ทดสอบ" }, certifiableRows(THAI_ROWS));
+  return renderCertificateHtml({
+    certificateNo: "CERT-FOLK-TEST-20990401-02-01",
+    payload, payloadHash: payloadHash(payload),
+    attestedByName: "มาลี ทดสอบ", attestedByRole: "ADMIN",
+    attestedAt: "2099-04-03T09:15:00.000Z", auditRef: "cert_test",
+  });
+};
+/** Visible text of the HTML, as a reader should get it back. Tags and style dropped, entities decoded. */
+const visibleText = (html: string) => html
+  .replace(/<style[\s\S]*?<\/style>/g, "").replace(/<title>[\s\S]*?<\/title>/g, "").replace(/<[^>]+>/g, " ")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#96;/g, "`").replace(/&amp;/g, "&");
+// Line breaks land between any two Thai letters (Thai has no spaces between words), so
+// compare with all whitespace removed.
+const squash = (s: string) => s.replace(/\s+/g, "");
+const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+
+describeRenderer("the text layer reads back as the page reads", () => {
+  it("every glyph maps to a character — nothing left for a viewer to guess at", async () => {
+    if (!hasLoma()) {
+      if (process.env.CI) throw new Error("Loma (fonts-thai-tlwg) is not installed — the certificate's Thai face");
+      return void console.warn("[renderer] Loma not installed here — the text-layer check runs in CI");
+    }
+    const bytes = await renderPdf(thaiHtml());
+    const raw = bytes.toString("latin1");
+    // /BaseFont for a TrueType or CID font, /FontName in the descriptor of a Type 3 one —
+    // which is how Chromium on macOS embeds an OpenType (CFF) face.
+    expect(raw, "the certificate's Thai face").toMatch(/\/(BaseFont|FontName)\s*\/[A-Z]{6}\+Loma/);
+    expect(unmappedGlyphCount(bytes), "glyphs that map to U+0000").toBe(0);
+  }, 60_000);
+
+  it("pdftotext gets every Thai phrase back once, in order — none doubled, none missing", async () => {
+    if (!hasPdftotext || !hasLoma()) {
+      if (process.env.CI) throw new Error("pdftotext (poppler-utils) and Loma are both installed in CI");
+      return void console.warn("[renderer] pdftotext or Loma missing here — runs in CI");
+    }
+    const html = thaiHtml();
+    const bytes = await renderPdf(html);
+    const text = execFileSync("pdftotext", ["-enc", "UTF-8", "-", "-"], { input: bytes, encoding: "utf8" });
+    expect(text).not.toContain("\u0000");
+    const got = squash(text);
+    const want = squash(visibleText(html));
+
+    for (const phrase of [
+      "บริษัท", "ผู้สำรองจ่าย", "น้ำดื่ม", "ก๋วยเตี๋ยว", "ค่ารถตุ๊กตุ๊ก", "ศรีสุดาผู้ทดสอบ",
+      "ใบกำกับภาษี", "เครดิตภาษีซื้อ", "สิทธิ์", "อิเล็กทรอนิกส์", "กุญแจส่วนตัว", "ลายนิ้วมือข้อมูลต้นทาง",
+      "หนึ่งร้อยห้าสิบบาทถ้วน", "(รอบที่2)", "ค่าอาหารและเครื่องดื่ม", "ค่าพาหนะ",
+    ]) {
+      expect(count(want, phrase), `"${phrase}" is on the page`).toBeGreaterThan(0);
+      expect(count(got, phrase), `"${phrase}" read back`).toBe(count(want, phrase));
+    }
+    // Whole sentences, so a cluster that came back twice or not at all cannot hide
+    // between the phrases above.
+    for (const sentence of [
+      "บริษัทขอรับรองว่าค่าใช้จ่ายตามรายการข้างล่างนี้เกิดขึ้นจริงในการปฏิบัติงานนำเที่ยวตามใบงานที่อ้างถึงโดยไกด์เป็นผู้สำรองจ่ายไปก่อนและบริษัทมีหน้าที่ต้องจ่ายคืน",
+      "ไกด์ไม่ต้องลงนามในเอกสารนี้",
+    ]) expect(count(got, sentence), sentence).toBe(1);
+    expect(got).not.toContain("รอบที่0");
+    expect(got).not.toMatch(/(^|[^a-z])(meal|transport)([^a-z]|$)/);
   }, 60_000);
 });
