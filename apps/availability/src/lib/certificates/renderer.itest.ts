@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPayload, certifiableRows, fileHash, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
-import { renderCertificateHtml } from "@/lib/certificates/document";
+import { FONT_STACK, renderCertificateHtml } from "@/lib/certificates/document";
 import { pdfRendererAvailable, renderPdf } from "@/lib/certificates/pdf";
 import { CHROME_BUILD_ID, findExecutable } from "@/lib/certificates/browser";
 import { probeRenderer, resetProbe } from "@/lib/certificates/probe";
@@ -141,10 +141,13 @@ describeRenderer("rendering a Thai certificate with the deployment's own browser
 const commandWorks = (cmd: string, args: string[]) => {
   try { execFileSync(cmd, args, { stdio: "ignore" }); return true; } catch { return false; }
 };
-const hasLoma = () => {
-  try { return /loma/i.test(execFileSync("fc-list", [":", "family"], { encoding: "utf8" })); } catch { return false; }
+const hasUmpush = () => {
+  try { return /umpush/i.test(execFileSync("fc-list", [":", "family"], { encoding: "utf8" })); } catch { return false; }
 };
 const hasPdftotext = commandWorks("pdftotext", ["-v"]);
+const hasNoto = () => {
+  try { return /Noto Sans Thai/i.test(execFileSync("fc-list", [":", "family"], { encoding: "utf8" })); } catch { return false; }
+};
 
 // Every mark position Thai has: upper vowels, lower vowels, tone marks stacked on both,
 // thanthakhat, and sara am (which the shaper splits into two glyphs).
@@ -169,8 +172,8 @@ const visibleText = (html: string) => html
 // Line breaks land between any two Thai letters (Thai has no spaces between words), so
 // compare with all whitespace removed.
 const squash = (s: string) => s.replace(/\s+/g, "");
-const pdftotext = (bytes: Buffer, page?: number) =>
-  execFileSync("pdftotext", ["-enc", "UTF-8", ...(page ? ["-f", String(page), "-l", String(page)] : []), "-", "-"], { input: bytes, encoding: "utf8" });
+const pdftotext = (bytes: Buffer, page?: number, layout = false) =>
+  execFileSync("pdftotext", ["-enc", "UTF-8", ...(layout ? ["-layout"] : []), ...(page ? ["-f", String(page), "-l", String(page)] : []), "-", "-"], { input: bytes, encoding: "utf8" });
 const pageCount = (bytes: Buffer) => Number(/Pages:\s+(\d+)/.exec(execFileSync("pdfinfo", ["-"], { input: bytes, encoding: "utf8" }))?.[1] ?? 0);
 // Enough rows to push the attestation onto a second page.
 const LONG_ROWS: Expense[] = Array.from({ length: 30 }, (_, i) =>
@@ -181,7 +184,7 @@ const expectWholePdf = (bytes: Buffer) => {
   expect(bytes.subarray(-1024).toString("latin1")).toContain("%%EOF");
   // /BaseFont for a TrueType or CID font, /FontName in the descriptor of a Type 3 one —
   // which is how Chromium on macOS embeds an OpenType (CFF) face.
-  expect(bytes.toString("latin1"), "the certificate's Thai face").toMatch(/\/(BaseFont|FontName)\s*\/[A-Z]{6}\+Loma/);
+  expect(bytes.toString("latin1"), "the certificate's Thai face").toMatch(/\/(BaseFont|FontName)\s*\/[A-Z]{6}\+Umpush/);
 };
 /** CI keeps the bytes it rendered, so the PDF can be looked at in real viewers. */
 const keepSample = (name: string, bytes: Buffer) => {
@@ -194,9 +197,9 @@ const count = (hay: string, needle: string) => hay.split(needle).length - 1;
 
 describeRenderer("the text layer reads back as the page reads", () => {
   it("every glyph maps to a character — nothing left for a viewer to guess at", async () => {
-    if (!hasLoma()) {
-      if (process.env.CI) throw new Error("Loma (fonts-thai-tlwg) is not installed — the certificate's Thai face");
-      return void console.warn("[renderer] Loma not installed here — the text-layer check runs in CI");
+    if (!hasUmpush()) {
+      if (process.env.CI) throw new Error("Umpush (fonts-thai-tlwg) is not installed — the certificate's Thai face");
+      return void console.warn("[renderer] Umpush not installed here — the text-layer check runs in CI");
     }
     const bytes = await renderPdf(thaiHtml());
     keepSample("certificate-1-page.pdf", bytes);
@@ -205,9 +208,9 @@ describeRenderer("the text layer reads back as the page reads", () => {
   }, 60_000);
 
   it("pdftotext gets every Thai phrase back once, in order — none doubled, none missing", async () => {
-    if (!hasPdftotext || !hasLoma()) {
-      if (process.env.CI) throw new Error("pdftotext (poppler-utils) and Loma are both installed in CI");
-      return void console.warn("[renderer] pdftotext or Loma missing here — runs in CI");
+    if (!hasPdftotext || !hasUmpush()) {
+      if (process.env.CI) throw new Error("pdftotext (poppler-utils) and Umpush are both installed in CI");
+      return void console.warn("[renderer] pdftotext or Umpush missing here — runs in CI");
     }
     const html = thaiHtml();
     const bytes = await renderPdf(html);
@@ -235,9 +238,9 @@ describeRenderer("the text layer reads back as the page reads", () => {
   }, 60_000);
 
   it("a two-page certificate is right on both pages — each read back on its own", async () => {
-    if (!hasPdftotext || !hasLoma()) {
-      if (process.env.CI) throw new Error("pdftotext (poppler-utils) and Loma are both installed in CI");
-      return void console.warn("[renderer] pdftotext or Loma missing here — runs in CI");
+    if (!hasPdftotext || !hasUmpush()) {
+      if (process.env.CI) throw new Error("pdftotext (poppler-utils) and Umpush are both installed in CI");
+      return void console.warn("[renderer] pdftotext or Umpush missing here — runs in CI");
     }
     const html = thaiHtml(LONG_ROWS);
     const bytes = await renderPdf(html);
@@ -286,9 +289,15 @@ const exampleHtml = () => {
 };
 /** The same page drawn only in the face production used when Chrome read it wrong. */
 const inNotoOnly = (html: string) => html.replace(/body \{ font-family: [^;]+;/, `body { font-family: "Noto Sans Thai";`);
-const readsBack = (engine: string, text: string, html: string) => {
+// `lines` is the text read in page order: poppler's plain mode reads a two-column table
+// column by column (every label, then every value), so a label and its value only sit
+// together in -layout mode. PDFium reads in page order already.
+const readsBack = (engine: string, text: string, html: string, lines = text) => {
   const page = visibleText(html);
-  for (const line of EXAMPLE_LINES) expect(readBackCount(text, line), `${engine}: "${line}"`).toBe(1);
+  for (const line of EXAMPLE_LINES) {
+    expect(readBackCount(page, line), `"${line}" is on the page`).toBeGreaterThan(0);
+    expect(readBackCount(lines, line), `${engine}: "${line}"`).toBe(readBackCount(page, line));
+  }
   for (const p of EXAMPLE_PHRASES) {
     expect(readBackCount(page, p), `"${p}" is on the page`).toBeGreaterThan(0);
     expect(readBackCount(text, p), `${engine}: "${p}"`).toBe(readBackCount(page, p));
@@ -297,7 +306,7 @@ const readsBack = (engine: string, text: string, html: string) => {
   expect(readBackCount(text, "รอบที่ 2"), engine).toBe(0);
 };
 const needTools = (pdfium = false) => {
-  const missing = [!hasLoma() && "Loma", !hasPdftotext && "pdftotext", pdfium && !hasPdfium && "pypdfium2"].filter(Boolean);
+  const missing = [!hasUmpush() && "Umpush", !hasPdftotext && "pdftotext", pdfium && !hasPdfium && "pypdfium2"].filter(Boolean);
   if (!missing.length) return true;
   if (process.env.CI) throw new Error(`CI installs these, and here they are missing: ${missing.join(", ")}`);
   console.warn(`[renderer] ${missing.join(", ")} missing here — runs in CI`);
@@ -312,7 +321,7 @@ describeRenderer("FOLK-BKK-20260925-01, read back as a person reads it", () => {
     keepSample("certificate-FOLK-BKK-20260925-01.pdf", bytes);
     expectWholePdf(bytes);
     expect(unmappedGlyphCount(bytes), "glyphs that map to U+0000").toBe(0);
-    readsBack("pdftotext", pdftotext(bytes), html);
+    readsBack("pdftotext", pdftotext(bytes), html, pdftotext(bytes, undefined, true));
     readsBack("PDFium", pdfiumText(bytes), html);
   }, 60_000);
 
@@ -321,9 +330,53 @@ describeRenderer("FOLK-BKK-20260925-01, read back as a person reads it", () => {
     // Noto lifts a tone mark over an upper vowel with a glyph mapped to U+0000; PDFium
     // prints /ActualText and the glyphs both — "วันวั ที่ปฏิบัติบั ติงาน".
     if (!needTools(true)) return;
+    if (!hasNoto()) {
+      if (process.env.CI) throw new Error("fonts-noto-core is installed in CI — the control needs Noto Sans Thai");
+      return void console.warn("[renderer] Noto Sans Thai missing here — the control runs in CI");
+    }
     const bytes = await renderPdf(inNotoOnly(exampleHtml()));
+    expect(bytes.toString("latin1"), "the control is drawn in Noto").toMatch(/\/BaseFont\s*\/[A-Z]{6}\+NotoSansThai/);
     keepSample("control-noto-sans-thai.pdf", bytes);
     expect(unmappedGlyphCount(bytes), "Noto should leave glyphs unmapped").toBeGreaterThan(0);
     expect(() => readsBack("PDFium", pdfiumText(bytes), exampleHtml())).toThrow();
   }, 60_000);
+});
+
+// Every Thai cluster, not just the words on one sample page.
+//
+// Which clusters a face doubles depends on its mark positioning, so a handful of words
+// proves little: Laksaman passed every cluster alone and still doubled วันที่ปฏิบัติงาน in a
+// sentence; Loma passed this file's words and lost 560 clusters. So: every consonant with
+// every upper and lower vowel, every tone mark, ์ and ำ, each between two letters, in the
+// certificate's own face stack at the weights and styles the page uses.
+
+const CONSONANTS = [..."กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ"];
+const CLUSTERS = (() => {
+  const up = ["ิ", "ี", "ึ", "ื", "ั", "็"], lo = ["ุ", "ู"], tone = ["่", "้", "๊", "๋"];
+  const out: string[] = [];
+  for (const c of CONSONANTS) {
+    for (const u of up) { out.push(c + u); if (u !== "็") for (const t of tone) out.push(c + u + t); }
+    for (const l of lo) { out.push(c + l); for (const t of tone) out.push(c + l + t); }
+    for (const t of tone) out.push(c + t, c + t + "ำ", c + t + "า");
+    out.push(c + "ำ", c + "์", c + "ิ์", c + "ุ์");
+  }
+  return [...new Set(out.map((x) => "ก" + x + "ว"))];
+})();
+const clusterPage = (style: string) => `<!doctype html><html lang="th"><head><meta charset="utf-8"><style>
+body { font-family: ${FONT_STACK}; font-size: 11pt; line-height: 1.5; ${style} }</style></head>
+<body>${CLUSTERS.map((w, i) => w + (i % 12 === 11 ? "<br>" : " ")).join("")}</body></html>`;
+
+describeRenderer("every Thai cluster reads back in Chrome's engine", () => {
+  for (const [name, style] of [["regular", ""], ["bold", "font-weight: 700;"], ["italic", "font-style: italic; font-size: 9.5pt;"]] as const) {
+    it(`${CLUSTERS.length} clusters, ${name}: each read back by PDFium and poppler, none mapped to nothing`, async () => {
+      if (!needTools(true)) return;
+      const bytes = await renderPdf(clusterPage(style));
+      keepSample(`clusters-${name}.pdf`, bytes);
+      expect(bytes.toString("latin1"), "drawn in Umpush").toMatch(/\/BaseFont\s*\/[A-Z]{6}\+Umpush/);
+      expect(unmappedGlyphCount(bytes), "glyphs that map to U+0000").toBe(0);
+      const [a, p] = [pdfiumText(bytes), pdftotext(bytes)];
+      expect(CLUSTERS.filter((w) => readBackCount(a, w) !== 1), "PDFium").toEqual([]);
+      expect(CLUSTERS.filter((w) => readBackCount(p, w) !== 1), "pdftotext").toEqual([]);
+    }, 120_000);
+  }
 });

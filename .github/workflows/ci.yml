@@ -113,11 +113,11 @@ jobs:
           fc-list | grep -qiE 'thai|noto' \
             && echo "thai font: present ($(fc-list | grep -icE 'thai|noto') faces)" \
             || { echo "thai font: MISSING"; exit 1; }
-          # The certificate draws Thai in Loma (fonts-thai-tlwg) because its glyphs all map
-          # back to characters — see FONT_STACK in lib/certificates/document.ts.
-          fc-list : family | grep -qi loma \
-            && echo "certificate face: Loma present" \
-            || { echo "certificate face: Loma MISSING"; exit 1; }
+          # The certificate draws Thai in Umpush (fonts-thai-tlwg): the one face whose every
+          # cluster reads back in Chrome's PDF engine — see FONT_STACK in lib/certificates/document.ts.
+          fc-list : family | grep -qi umpush \
+            && echo "certificate face: Umpush present" \
+            || { echo "certificate face: Umpush MISSING"; exit 1; }
 
       # PDFium is Chrome's (and Google Drive's) PDF engine; the renderer test reads the
       # certificate back through it, because poppler alone read right while Chrome read
@@ -145,8 +145,11 @@ jobs:
             const r = require("/tmp/renderer.json");
             const skipped = r.numPendingTests + r.numTodoTests;
             console.log(`renderer suite: ${r.numPassedTests} passed, ${skipped} skipped`);
+            for (const f of r.testResults) for (const a of f.assertionResults)
+              if (a.status === "failed") console.error(`FAILED: ${a.fullName}\n${(a.failureMessages || []).join("\n").slice(0, 1500)}`);
+            if (r.numFailedTests > 0) { console.error(`${r.numFailedTests} renderer test(s) failed`); process.exit(1); }
             if (skipped > 0) { console.error("the renderer suite must not skip in CI"); process.exit(1); }
-            if (r.numPassedTests < 14) { console.error("the renderer suite did not run in full"); process.exit(1); }
+            if (r.numPassedTests < 17) { console.error("the renderer suite did not run in full"); process.exit(1); }
           '
           sleep 2
           leftover=$(pgrep -fc "chrome|chromium|headless_shell" || true)

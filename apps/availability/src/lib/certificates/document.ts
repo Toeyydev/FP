@@ -129,28 +129,33 @@ export const SCOPE_NOTICE_TH =
   "เอกสารฉบับนี้ครอบคลุมเฉพาะรายการค่าใช้จ่ายที่ระบุด้านล่าง และไม่ครอบคลุมค่าจ้าง ค่าตอบแทน หรือรายการอื่นในเอกสาร PEAK ที่อ้างอิง";
 
 /**
- * Loma first, and not for looks: for the text layer.
+ * Umpush first, and not for looks: for the text layer.
  *
- * Chromium writes each Thai cluster twice — the glyphs, each mapped back to a character,
- * and an /ActualText span with the real text. Noto Sans Thai (what production drew with
- * before) and Sarabun both lift a tone mark over an upper vowel by swapping in a glyph
- * that has no character of its own, so those glyphs map to U+0000. Readers that trust
- * /ActualText (poppler, Acrobat) cope; PDFium — Chrome's viewer, and so Drive's — prints
- * the span AND the glyphs ("บริษัริ ษัท"), and PDFKit drops the marks, so the document
- * could not be searched for its own company name.
+ * Chromium writes Thai as glyphs, each mapped back to a character, plus /ActualText spans
+ * for clusters whose marks were repositioned. poppler (pdftotext) and Acrobat read the
+ * spans and cope. PDFium — Chrome's viewer, and so Drive's, and what Chrome's search and
+ * copy work on — can print a span AND its glyphs: Noto Sans Thai gave "วันวั ที่ปฏิบัติบั ติงาน"
+ * for วันที่ปฏิบัติงาน and "บริษัริ ษัท" for บริษัท.
  *
- * Every TLWG face maps every glyph it draws; Loma read back best of them. It comes from
- * `fonts-thai-tlwg`, which nixpacks.toml and CI already install. The renderer test holds
- * the rule itself — no glyph in the text layer may map to nothing — not the font name.
+ * Face by face, read back through PDFium (a sample of every consonant with every upper
+ * and lower vowel, tone mark, ์ and ำ — 2,288 clusters — in regular, bold and oblique, at
+ * 8.5–14pt): Umpush got every one back, once, with every glyph mapped to a character.
+ * Loma, the face before this one, lost 560 — a tone mark over an upper vowel, ก๋วยเตี๋ยว
+ * read as "ก๋วยเตี๋ยตี๋ ว". Noto, Sarabun, Waree, Laksaman, Norasi and Kinnari each failed
+ * too. Umpush comes from `fonts-thai-tlwg`, which nixpacks.toml and CI already install.
+ *
+ * The renderer test holds the rule, not the name: every cluster reads back in PDFium,
+ * and no glyph maps to nothing. Loma stays behind it only so a box missing Umpush
+ * still draws Thai — CI fails if the certificate is not drawn in Umpush.
  */
-const FONT_STACK = `"Loma", "Sarabun", "Noto Sans Thai", "Leelawadee UI", sans-serif`;
+export const FONT_STACK = `"Umpush", "Loma", "Noto Sans Thai", "Leelawadee UI", sans-serif`;
 
 export function renderCertificateHtml(v: CertificateView): string {
   const p = v.payload;
   const rows = p.rows.map((r, i) => `<tr>
       <td class="c">${i + 1}</td>
       <td>${esc(r.description)}</td>
-      <td class="c">${esc(categoryLabelTh(r.category))}</td>
+      <td class="c nw">${esc(categoryLabelTh(r.category))}</td>
       <td class="c">${int(r.pax)}</td>
       <td class="r">${money(Math.round(int(r.price * 100)))}</td>
       <td class="r">${money(r.amountSatang)}</td>
@@ -181,6 +186,7 @@ export function renderCertificateHtml(v: CertificateView): string {
  table.items th { background: #fef3c7; border: 1px solid #d6d3d1; padding: 5px 7px; font-weight: 600; text-align: left; }
  table.items td { border: 1px solid #e7e5e4; padding: 5px 7px; }
  .c { text-align: center; } .r { text-align: right; }
+ .nw { white-space: nowrap; } /* an expense type is one term — never broken across lines */
  tr.sum td { background: #fafaf9; font-weight: 700; border-top: 2px solid #b45309; }
  .words { font-size: 9.5pt; color: #57534e; font-style: italic; margin-bottom: 6px; }
  /* Never split across a page. An attestation broken in half — the name on one page and
@@ -245,7 +251,7 @@ ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รั
 <p>เหตุที่ไม่มีใบเสร็จรับเงินประกอบ: ${esc(p.reason)} อัตราที่เบิกเป็นราคาคงที่ที่บริษัทใช้เป็นมาตรฐานเดียวกันทุกงาน และจำนวนคนตรงกับจำนวนผู้เดินทางจริงรวมไกด์</p>
 
 <table class="items">
-  <thead><tr><th style="width:5%" class="c">ที่</th><th>รายการ</th><th style="width:22%" class="c">ประเภท</th><th style="width:9%" class="c">จำนวน</th><th style="width:15%" class="r">ราคา/หน่วย</th><th style="width:17%" class="r">จำนวนเงิน</th></tr></thead>
+  <thead><tr><th style="width:5%" class="c">ที่</th><th>รายการ</th><th style="width:25%" class="c">ประเภท</th><th style="width:9%" class="c">จำนวน</th><th style="width:15%" class="r">ราคา/หน่วย</th><th style="width:17%" class="r">จำนวนเงิน</th></tr></thead>
   <tbody>
 ${rows}
     <tr class="sum"><td colspan="5" class="r">รวมเป็นเงินที่ต้องจ่ายคืนไกด์</td><td class="r">${money(p.totalSatang)}</td></tr>

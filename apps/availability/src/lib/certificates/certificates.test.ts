@@ -318,9 +318,9 @@ describe("the words a person reads — round and expense type", () => {
 
   it("names expense types in Thai, from the one mapping FolkOPS keeps", () => {
     const h = html();
-    expect(h).toContain(`<td class="c">ค่าพาหนะ</td>`);
-    expect(h).toContain(`<td class="c">ค่าอาหารและเครื่องดื่ม</td>`);
-    expect(h).not.toMatch(/<td class="c">(meal|transport)<\/td>/);
+    expect(h).toContain(`<td class="c nw">ค่าพาหนะ</td>`);
+    expect(h).toContain(`<td class="c nw">ค่าอาหารและเครื่องดื่ม</td>`);
+    expect(h).not.toMatch(/<td class="c nw">(meal|transport)<\/td>/);
     for (const c of EXPENSE_CATEGORIES) expect(categoryLabelTh(c.key)).toBe(c.th);
     expect(code("src/lib/certificates/document.ts")).not.toMatch(/ค่าอาหาร|ค่าพาหนะ/); // no second copy of the mapping
   });
