@@ -129,6 +129,9 @@ jobs:
           CHROME_HEADLESS_SHELL_PATH: ""
           PUPPETEER_EXECUTABLE_PATH: ""
           CHROMIUM_PATH: ""
+          # The renderer test writes the PDFs it made here, so the bytes this Linux image
+          # produces can be opened in real viewers — not a laptop's re-render of them.
+          CERT_SAMPLE_DIR: ${{ runner.temp }}/certificate-samples
         run: |
           npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts \
             --reporter=json --outputFile=/tmp/renderer.json
@@ -142,6 +145,15 @@ jobs:
           sleep 2
           leftover=$(pgrep -fc "chrome|chromium|headless_shell" || true)
           [ "${leftover:-0}" -eq 0 ] && echo "browser processes: none left" || { echo "browser processes left behind: $leftover"; exit 1; }
+
+      - name: Keep the sample certificates this runner rendered
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificate-samples
+          path: ${{ runner.temp }}/certificate-samples
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Integration tests (real database)
         run: npm run test:integration

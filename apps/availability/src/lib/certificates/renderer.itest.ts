@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildPayload, certifiableRows, fileHash, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { pdfRendererAvailable, renderPdf } from "@/lib/certificates/pdf";
@@ -150,8 +152,8 @@ const THAI_ROWS: Expense[] = [
   { description: "ก๋วยเตี๋ยว", price: 50, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" } as Expense,
   { description: "ค่ารถตุ๊กตุ๊ก", price: 15, pax: 2, expenseType: "transport", paidBy: "guide", paidBySource: "operator" } as Expense,
 ];
-const thaiHtml = () => {
-  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-TEST-20990401-02", guideName: "ศรีสุดา ผู้ทดสอบ" }, certifiableRows(THAI_ROWS));
+const thaiHtml = (rows: Expense[] = THAI_ROWS) => {
+  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-TEST-20990401-02", guideName: "ศรีสุดา ผู้ทดสอบ" }, certifiableRows(rows));
   return renderCertificateHtml({
     certificateNo: "CERT-FOLK-TEST-20990401-02-01",
     payload, payloadHash: payloadHash(payload),
@@ -166,6 +168,27 @@ const visibleText = (html: string) => html
 // Line breaks land between any two Thai letters (Thai has no spaces between words), so
 // compare with all whitespace removed.
 const squash = (s: string) => s.replace(/\s+/g, "");
+const pdftotext = (bytes: Buffer, page?: number) =>
+  execFileSync("pdftotext", ["-enc", "UTF-8", ...(page ? ["-f", String(page), "-l", String(page)] : []), "-", "-"], { input: bytes, encoding: "utf8" });
+const pageCount = (bytes: Buffer) => Number(/Pages:\s+(\d+)/.exec(execFileSync("pdfinfo", ["-"], { input: bytes, encoding: "utf8" }))?.[1] ?? 0);
+// Enough rows to push the attestation onto a second page.
+const LONG_ROWS: Expense[] = Array.from({ length: 30 }, (_, i) =>
+  ({ description: `${["น้ำดื่ม", "ก๋วยเตี๋ยว", "ค่ารถตุ๊กตุ๊ก"][i % 3]} ชุดที่ ${String(i + 1).padStart(2, "0")}`, price: 10 + i, pax: 2, expenseType: i % 3 === 2 ? "transport" : "meal", paidBy: "guide", paidBySource: "operator" } as Expense));
+/** A well-formed PDF with the certificate's Thai face inside it. */
+const expectWholePdf = (bytes: Buffer) => {
+  expect(bytes.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  expect(bytes.subarray(-1024).toString("latin1")).toContain("%%EOF");
+  // /BaseFont for a TrueType or CID font, /FontName in the descriptor of a Type 3 one —
+  // which is how Chromium on macOS embeds an OpenType (CFF) face.
+  expect(bytes.toString("latin1"), "the certificate's Thai face").toMatch(/\/(BaseFont|FontName)\s*\/[A-Z]{6}\+Loma/);
+};
+/** CI keeps the bytes it rendered, so the PDF can be looked at in real viewers. */
+const keepSample = (name: string, bytes: Buffer) => {
+  const dir = (process.env.CERT_SAMPLE_DIR ?? "").trim();
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), bytes);
+};
 const count = (hay: string, needle: string) => hay.split(needle).length - 1;
 
 describeRenderer("the text layer reads back as the page reads", () => {
@@ -175,10 +198,8 @@ describeRenderer("the text layer reads back as the page reads", () => {
       return void console.warn("[renderer] Loma not installed here — the text-layer check runs in CI");
     }
     const bytes = await renderPdf(thaiHtml());
-    const raw = bytes.toString("latin1");
-    // /BaseFont for a TrueType or CID font, /FontName in the descriptor of a Type 3 one —
-    // which is how Chromium on macOS embeds an OpenType (CFF) face.
-    expect(raw, "the certificate's Thai face").toMatch(/\/(BaseFont|FontName)\s*\/[A-Z]{6}\+Loma/);
+    keepSample("certificate-1-page.pdf", bytes);
+    expectWholePdf(bytes);
     expect(unmappedGlyphCount(bytes), "glyphs that map to U+0000").toBe(0);
   }, 60_000);
 
@@ -189,13 +210,13 @@ describeRenderer("the text layer reads back as the page reads", () => {
     }
     const html = thaiHtml();
     const bytes = await renderPdf(html);
-    const text = execFileSync("pdftotext", ["-enc", "UTF-8", "-", "-"], { input: bytes, encoding: "utf8" });
+    const text = pdftotext(bytes);
     expect(text).not.toContain("\u0000");
     const got = squash(text);
     const want = squash(visibleText(html));
 
     for (const phrase of [
-      "บริษัท", "ผู้สำรองจ่าย", "น้ำดื่ม", "ก๋วยเตี๋ยว", "ค่ารถตุ๊กตุ๊ก", "ศรีสุดาผู้ทดสอบ",
+      "บริษัท", "ใบรับรองแทนใบเสร็จรับเงิน", "ผู้สำรองจ่าย", "น้ำดื่ม", "ก๋วยเตี๋ยว", "ค่ารถตุ๊กตุ๊ก", "ศรีสุดาผู้ทดสอบ",
       "ใบกำกับภาษี", "เครดิตภาษีซื้อ", "สิทธิ์", "อิเล็กทรอนิกส์", "กุญแจส่วนตัว", "ลายนิ้วมือข้อมูลต้นทาง",
       "หนึ่งร้อยห้าสิบบาทถ้วน", "(รอบที่2)", "ค่าอาหารและเครื่องดื่ม", "ค่าพาหนะ",
     ]) {
@@ -210,5 +231,30 @@ describeRenderer("the text layer reads back as the page reads", () => {
     ]) expect(count(got, sentence), sentence).toBe(1);
     expect(got).not.toContain("รอบที่0");
     expect(got).not.toMatch(/(^|[^a-z])(meal|transport)([^a-z]|$)/);
+  }, 60_000);
+
+  it("a two-page certificate is right on both pages — each read back on its own", async () => {
+    if (!hasPdftotext || !hasLoma()) {
+      if (process.env.CI) throw new Error("pdftotext (poppler-utils) and Loma are both installed in CI");
+      return void console.warn("[renderer] pdftotext or Loma missing here — runs in CI");
+    }
+    const html = thaiHtml(LONG_ROWS);
+    const bytes = await renderPdf(html);
+    keepSample("certificate-2-pages.pdf", bytes);
+    expectWholePdf(bytes);
+    expect(pageCount(bytes)).toBe(2);
+    expect(unmappedGlyphCount(bytes), "glyphs that map to U+0000").toBe(0);
+
+    const [one, two] = [squash(pdftotext(bytes, 1)), squash(pdftotext(bytes, 2))];
+    expect(one).toContain("ใบรับรองแทนใบเสร็จรับเงิน");
+    expect(one).toContain("(รอบที่2)");
+    // The attestation never splits, and here it is pushed whole onto page two.
+    expect(two).toContain("รับรองเอกสารทางอิเล็กทรอนิกส์");
+    expect(two).toContain("ไกด์ไม่ต้องลงนามในเอกสารนี้");
+    // Every row comes back exactly once across the two pages — none lost at the break,
+    // none printed on both sides of it.
+    const both = one + two;
+    for (const r of LONG_ROWS) expect(count(both, squash(r.description)), r.description).toBe(1);
+    for (const w of ["ค่าอาหารและเครื่องดื่ม", "ค่าพาหนะ"]) expect(count(both, w)).toBe(count(squash(visibleText(html)), w));
   }, 60_000);
 });
