@@ -307,7 +307,7 @@ describe("the words a person reads — round and expense type", () => {
   });
 
   it("prints no round at all when the reference has none — never a guess, never a 0", () => {
-    for (const jobRef of ["", "FOLK-TEST", "FOLK-TEST-20990401-00", "FOLK-TEST-20990401-1"]) {
+    for (const jobRef of ["", "FOLK-TEST", "FOLK-BKK-20990401", "FOLK-TEST-20990401-00", "FOLK-TEST-20990401-1"]) {
       const h = html({ jobRef });
       expect(factsRow(h)).toBe("1 เมษายน 2642");
       expect(h).not.toContain("รอบที่");

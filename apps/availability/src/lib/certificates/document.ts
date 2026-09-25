@@ -56,7 +56,10 @@ const int = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.
  * and its hash are untouched, and nothing matches a job sheet by this.
  */
 export function roundLabelTh(jobRef: unknown): string | null {
-  const m = /-(\d{2,})$/.exec(String(jobRef ?? "").trim());
+  // The round follows the eight-digit date (lib/jobref.ts). A reference that stops at
+  // the date — jobsheet-drive.ts builds one when a sheet has no ref — has no round, and
+  // its date must not be read as one.
+  const m = /-\d{8}-(\d{2,})$/.exec(String(jobRef ?? "").trim());
   const n = m ? Number(m[1]) : 0;
   return Number.isSafeInteger(n) && n > 0 ? `รอบที่ ${n}` : null;
 }
