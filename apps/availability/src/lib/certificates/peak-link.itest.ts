@@ -139,6 +139,53 @@ describe("the document is found through recorded identity", () => {
     expect(await prisma.auditLog.count({ where: { action: "certificate.peak_linked", entityId: cert.id } })).toBe(1);
   });
 
+  // The two things the retry must NOT do. Stamping a reference is a fact about
+  // accounting; it is not licence to touch the money rows or to overwrite a document
+  // number somebody already recorded.
+
+  it("retrying leaves the expense rows exactly as they were, byte for byte", async () => {
+    const rows = [
+      { description: "ค่าเรือข้ามฟาก", price: 11, pax: 5, expenseType: "transport", paidBy: "guide", paidBySource: "operator",
+        evidenceWaiver: { waived: true, certificateId: "seeded", certificateNo: "CERT-FOLK-TEST-20990401-01-01", by: ADMIN.actorId } },
+      { description: "ค่ารถสองแถว", price: 15, pax: 5, expenseType: "transport", paidBy: "guide", paidBySource: "operator" },
+    ];
+    const s = await prisma.jobSheet.create({
+      data: { ...job(1), ref: "FOLK-TEST-20990401-01", tourId: "T-900", status: "Confirmed", expenses: rows as never, guideFee: {} },
+    });
+    await seedCombined([1]);
+    const cert = await seedCertificate(s.id, 1);
+
+    const read = async () => {
+      const sheet = (await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: job(1) } }));
+      return { expenses: JSON.stringify(sheet.expenses), updatedAt: sheet.updatedAt.toISOString() };
+    };
+    const before = await read();
+
+    await linkCertificate(cert.id, ADMIN_ACTOR, { db: prisma });
+    await linkCertificate(cert.id, ADMIN_ACTOR, { db: prisma });
+
+    // Not "the waiver survived" — the whole column, including updatedAt, is unmoved.
+    expect(await read()).toEqual(before);
+    expect(await prisma.auditLog.count({ where: { action: "certificate.peak_linked", entityId: cert.id } })).toBe(1);
+  });
+
+  it("a certificate already naming a different EXP is not overwritten by a retry", async () => {
+    const s = await seedSheet(1);
+    await seedCombined([1]);
+    const cert = await seedCertificate(s.id, 1, {
+      peakDocumentNo: "EXP-TEST-20990400999", peakDocumentId: "peak-doc-id-test-0999", peakLinkedAt: new Date(),
+    });
+
+    const out = await linkCertificate(cert.id, ADMIN_ACTOR, { db: prisma });
+    // The one on record stands; the disagreement is recorded rather than resolved.
+    expect(out.peakDocumentNo).toBe("EXP-TEST-20990400999");
+    expect(out.peakDocumentId).toBe("peak-doc-id-test-0999");
+    expect(await prisma.auditLog.count({ where: { action: "certificate.peak_linked", entityId: cert.id } })).toBe(0);
+    const clash = await prisma.auditLog.findFirst({ where: { action: "certificate.peak_link_conflict", entityId: cert.id } });
+    expect(clash).toBeTruthy();
+    expect(JSON.stringify(clash!.detail)).toContain(EXP);
+  });
+
   it("a certificate issued before the EXP exists reads correctly, then links when it does", async () => {
     const s = await seedSheet(1);
     await prisma.tourPayment.create({ data: { ...job(1), tourId: "T-900", status: "APPROVED", peakPaymentRef: PAY_REF } });
