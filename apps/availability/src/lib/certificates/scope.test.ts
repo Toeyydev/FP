@@ -100,10 +100,46 @@ describe("the figures that must never be printed on it", () => {
   });
 
   it("says in as many words what it does not cover", () => {
-    expect(html()).toContain(SCOPE_NOTICE_TH);
-    expect(SCOPE_NOTICE_TH).toBe(
-      "เอกสารฉบับนี้ครอบคลุมเฉพาะรายการค่าใช้จ่ายที่ระบุด้านล่าง และไม่ครอบคลุมค่าจ้าง ค่าตอบแทน หรือรายการอื่นในเอกสาร PEAK ที่อ้างอิง",
-    );
+    const out = html();
+    expect(out).toContain(SCOPE_NOTICE_TH);
+    // The substance, rather than the exact sentence: naming the excluded kinds of money,
+    // and saying that this page alone does not reconcile the job.
+    for (const must of ["ค่าจ้าง", "ค่าตอบแทน", "เอกสารฉบับนี้ร่วมกับเอกสารประกอบของรายการอื่น"]) expect(SCOPE_NOTICE_TH).toContain(must);
+    // "ทั้งสองฉบับ" (both documents) would point at a second document the page never names.
+    expect(SCOPE_NOTICE_TH).not.toContain("ทั้งสองฉบับ");
+  });
+
+  it("does not send the reader to a PEAK document it never names", () => {
+    const out = html();
+    // The page carries no EXP: it is rendered and filed before the certificate is
+    // linked, so at this moment there is usually no PEAK document to name. A notice that
+    // says "the referenced PEAK document" is therefore pointing at nothing.
+    //
+    // Written as a rule rather than a string so it stays true either way: the day the
+    // page does print an EXP, the notice may refer to it again.
+    const namesOne = /EXP-\w/.test(out);
+    expect(namesOne, "the page now prints an EXP — this rule can be relaxed").toBe(false);
+    expect(SCOPE_NOTICE_TH).not.toContain("เอกสาร PEAK");
+  });
+
+  it("leaves the round alone — it is the job reference's, and this change is only the notice", () => {
+    // The round line belongs to the certificate's facts, not to its scope. Changing the
+    // notice must not move it: -01 is รอบที่ 1, whatever departure slot the job ran in.
+    const cell = (slotIdx: number, jobRef = FACTS.jobRef) => renderCertificateHtml({
+      certificateNo: "CERT-FOLK-TEST-20990401-01-01",
+      payload: buildPayload({ ...FACTS, slotIdx, jobRef }, certifiableRows(SHEET)),
+      payloadHash: "0".repeat(64),
+      attestedByName: "Anong Testsuite", attestedByRole: "ADMIN",
+      attestedAt: "2099-04-03T04:00:00.000Z", auditRef: "cert_test_1",
+    } as never).match(/วันที่ปฏิบัติงาน<\/th><td>(.*?)<\/td>/)?.[1] ?? "";
+    expect(cell(0)).toBe("1 เมษายน 2642 (รอบที่ 1)");
+    expect(cell(2)).toBe("1 เมษายน 2642 (รอบที่ 1)");
+    expect(cell(0, "FOLK-TEST-20990401-05")).toBe("1 เมษายน 2642 (รอบที่ 5)");
+    expect(cell(0, "FOLK-BKK-20990401")).toBe("1 เมษายน 2642"); // no round in the ref, no round on the page
+    for (const c of [cell(0), cell(2)]) {
+      expect(c).not.toContain("รอบที่ 0");
+      expect(c).not.toMatch(/\d\d:\d\d/); // never a departure time
+    }
   });
 
   it("the notice stands above the rows it is talking about", () => {
