@@ -52,6 +52,14 @@ describe("the document never looks as if it was made on the tour date", () => {
     expect(h).toContain("บันทึกรายการย้อนหลังจากข้อมูลที่ตรวจสอบแล้ว");
   });
 
+  it("no real certification time — empty, unparseable or the epoch placeholder — never prints a date", () => {
+    for (const attestedAt of ["", "not-a-date", new Date(0).toISOString()]) {
+      const h = renderCertificateHtml({ certificateNo: "CERT-X-01", payload, payloadHash: payloadHash(payload), attestedByName: "A", attestedByRole: "ADMIN", attestedAt, auditRef: "a1" });
+      expect(head(h), attestedAt).toContain("ยังไม่รับรอง");
+      expect(head(h), attestedAt).not.toContain("2513");
+    }
+  });
+
   it("a draft carries no certification date at all", () => {
     const h = renderCertificateHtml({ certificateNo: "CERT-X-01", payload, payloadHash: payloadHash(payload), attestedByName: "", attestedByRole: "", attestedAt: "", auditRef: "", draft: true });
     expect(head(h)).toContain("ยังไม่รับรอง");

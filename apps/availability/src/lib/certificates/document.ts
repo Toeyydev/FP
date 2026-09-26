@@ -238,7 +238,7 @@ export function renderCertificateHtml(v: CertificateView): string {
 ${v.draft ? `<div class="draft-mark">ร่าง — ยังไม่รับรอง · ยังไม่ใช่หลักฐานบัญชี</div>` : ""}
 <div class="head">
   <div class="org">${esc(CO.brandName)}<small>${esc(CO.legalNameTh)} · เลขประจำตัวผู้เสียภาษี ${esc(CO.taxId)}</small></div>
-  <div class="no">เลขที่<b>${esc(v.certificateNo)}</b>${v.draft || !v.attestedAt ? "ยังไม่รับรอง" : `วันที่รับรอง ${esc(thaiDate(bangkokDay(v.attestedAt)))}`}</div>
+  <div class="no">เลขที่<b>${esc(v.certificateNo)}</b>${v.draft || !(Date.parse(v.attestedAt) > 0) ? "ยังไม่รับรอง" : `วันที่รับรอง ${esc(thaiDate(bangkokDay(v.attestedAt)))}`}</div>
 </div>
 
 <h1>ใบรับรองแทนใบเสร็จรับเงิน</h1>
