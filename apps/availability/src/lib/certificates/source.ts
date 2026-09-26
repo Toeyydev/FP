@@ -58,6 +58,15 @@ export function sourceSentenceTh(input: {
   recordedAt: string | null;
   /** A draft has not been recorded yet, so it says what WILL be recorded. */
   draft?: boolean;
+  /**
+   * The day the tour ran ("YYYY-MM-DD"). When the rows are recorded on a later day —
+   * every job in the historical evidence campaign — the sentence says in as many words
+   * that they were recorded AFTER the event. A document that left it to the reader to
+   * compare two dates would let a record made weeks later read as one made on the day.
+   */
+  tourDate?: string | null;
+  /** Today in Bangkok, for a draft. Supplied by tests; the real clock otherwise. */
+  today?: string;
 }, when: (iso: string) => string): string {
   if (input.source === "GUIDE_REPORTED") {
     return input.guideReportedAt
@@ -66,10 +75,16 @@ export function sourceSentenceTh(input: {
   }
 
   const who = (input.recordedByName ?? "").trim() || "ผู้ดูแลระบบ";
+  // Recorded after the tour? Compared as Bangkok civil dates — the day the rows were
+  // entered against the day the work was done.
+  const tour = (input.tourDate ?? "").trim();
+  const recordedDay = input.draft || !input.recordedAt ? (input.today ?? bangkokDay(new Date())) : bangkokDay(new Date(input.recordedAt));
+  const late = /^\d{4}-\d{2}-\d{2}$/.test(tour) && recordedDay > tour;
+  const what = late ? "บันทึกรายการย้อนหลังจากข้อมูลที่ตรวจสอบแล้ว" : "บันทึกรายการจากข้อมูลที่ตรวจสอบแล้ว";
   // A draft has no recording time, and inventing one would be the document's first lie.
   const clause = input.draft || !input.recordedAt
-    ? `ผู้ดูแลระบบ ${who} จะเป็นผู้บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อยืนยัน`
-    : `ผู้ดูแลระบบ ${who} บันทึกรายการจากข้อมูลที่ตรวจสอบแล้วเมื่อ ${when(input.recordedAt)}`;
+    ? `ผู้ดูแลระบบ ${who} จะเป็นผู้${what}เมื่อยืนยัน`
+    : `ผู้ดูแลระบบ ${who} ${what}เมื่อ ${when(input.recordedAt)}${late ? " ซึ่งเป็นวันหลังวันปฏิบัติงาน" : ""}`;
 
   // Two different situations, and saying the wrong one is not a wording problem.
   //
@@ -82,6 +97,11 @@ export function sourceSentenceTh(input: {
   return input.guideReportedAt
     ? `${clause} โดยเอกสารฉบับนี้ยึดรายการที่ผู้ดูแลระบบบันทึกไว้`
     : `${clause} โดยไกด์ไม่ได้ส่งรายงานผ่านบัญชีของตนสำหรับใบงานนี้`;
+}
+
+/** "YYYY-MM-DD" in Asia/Bangkok. */
+function bangkokDay(d: Date): string {
+  return new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
 }
 
 export type SourceAvailability = {

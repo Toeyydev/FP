@@ -17,7 +17,7 @@ const TABLES = [
   // Certificates in lieu of receipts hang off JobSheet, so they truncate before it.
   // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it
   // makes the NEXT test collide on a file id its own fake Drive just reissued.
-  "ExpenseCertificate", "AttesterSignature",
+  "ExpenseCertificate", "AttesterSignature", "HistoricalEvidenceReview",
   "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   "Availability", "RefreshToken", "User", "Tour",
 ];

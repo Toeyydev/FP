@@ -15,7 +15,7 @@ import { sourceSentenceTh } from "@/lib/certificates/source";
 
 type Covered = { index: number; description: string; pax: number; price: number; amountSatang: number };
 type Certificate = {
-  id: string; certificateNo: string; status: string; label: string; labelTh: string; isEvidence: boolean;
+  id: string; certificateNo: string; status: string; tourDate?: string | null; label: string; labelTh: string; isEvidence: boolean;
   totalSatang: number; payloadHash: string; pdfHash: string | null; driveUrl: string | null;
   attestedByName: string | null; attestedByRole: string | null; attestedAt: string | null;
   uploadedAt: string | null; linkedAt: string | null; voidedAt: string | null; voidReason: string | null;
@@ -187,6 +187,7 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
               guideReportedAt: live.sourceGuideReportedAt ?? null,
               recordedByName: live.recordedByName ?? null,
               recordedAt: live.recordedAt ?? null,
+              tourDate: live.tourDate ?? null,
             }, when)}
           </div>
           {live.attestedAt && (

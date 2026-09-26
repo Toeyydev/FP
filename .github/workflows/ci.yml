@@ -217,3 +217,23 @@ jobs:
         env:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
+
+      # The historical evidence page in a real browser against the app just built: opening
+      # it writes nothing and calls neither PEAK nor Google, a suggested Paid By stays off
+      # the sheet until confirmed, GUIDE/OPERATOR/ACCOUNTANT are refused, and a NOT REQUIRED
+      # stops counting once the sheet changes. It truncates its own tables, so it runs last.
+      - name: Historical evidence in a real browser
+        run: node scripts/e2e/historical-evidence.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens
+
+      - name: Keep the historical evidence screenshots (invented data)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-evidence-screens
+          path: ${{ runner.temp }}/historical-evidence-screens
+          if-no-files-found: warn
+          retention-days: 14
