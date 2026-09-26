@@ -4,7 +4,9 @@ import { join } from "node:path";
 import type { Expense } from "@/lib/jobsheet";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { buildPayload, canonicalString, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
-import { renderCertificateHtml, thaiDate, thaiDateTime } from "@/lib/certificates/document";
+import { categoryLabelTh, renderCertificateHtml, roundLabelTh, thaiDate, thaiDateTime } from "@/lib/certificates/document";
+import { EXPENSE_CATEGORIES } from "@/lib/jobsheet";
+import { readBackCount } from "@/lib/certificates/text-layer";
 import { canMove, CERTIFICATE_STATES, FORBIDDEN_TERM_TH, isEvidence, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { certificateFileName } from "@/lib/certificates/pdf";
 import { certificateFolder, legacyCertificateFolder } from "@/lib/certificates/access";
@@ -279,6 +281,95 @@ describe("the document itself", () => {
     expect(thaiDate("2099-04-01")).toBe("1 เมษายน 2642");
     expect(thaiDateTime("2099-04-01T17:30:00.000Z")).toContain("2 เมษายน 2642"); // +07:00 rolls over
     expect(thaiDateTime(null)).toBe("—");
+  });
+});
+
+describe("the words a person reads — round and expense type", () => {
+  const html = (facts: Partial<SheetFacts> = {}, rows: Expense[] = [row(), row({ description: "Water", price: 10, expenseType: "meal" })]) => {
+    const payload = buildPayload({ ...FACTS, ...facts }, certifiableRows(rows));
+    return renderCertificateHtml({
+      certificateNo: "CERT-TEST-01", payload, payloadHash: payloadHash(payload),
+      attestedByName: "Malee Testsuite", attestedByRole: "ADMIN", attestedAt: "2099-04-03T09:15:00.000Z", auditRef: "cert_test_id",
+    });
+  };
+  const factsRow = (h: string) => /<th>วันที่ปฏิบัติงาน<\/th><td>([^<]*)<\/td>/.exec(h)?.[1] ?? "";
+
+  it("prints the round the job reference carries — -01 is รอบที่ 1, never รอบที่ 0", () => {
+    const h = html();
+    expect(factsRow(h)).toBe("1 เมษายน 2642 (รอบที่ 1)");
+    expect(h).not.toContain("รอบที่ 0");
+  });
+
+  it("takes the round from the reference, not from the departure slot", () => {
+    // The day's first job can leave at 13:30 (slot 2); its reference still ends -01.
+    expect(factsRow(html({ slotIdx: 2 }))).toBe("1 เมษายน 2642 (รอบที่ 1)");
+    expect(factsRow(html({ jobRef: "FOLK-TEST-20990401-05", slotIdx: 0 }))).toBe("1 เมษายน 2642 (รอบที่ 5)");
+    expect(roundLabelTh("FOLK-BKK-20990401-12")).toBe("รอบที่ 12");
+  });
+
+  it("prints no round at all when the reference has none — never a guess, never a 0", () => {
+    for (const jobRef of ["", "FOLK-TEST", "FOLK-BKK-20990401", "FOLK-TEST-20990401-00", "FOLK-TEST-20990401-1"]) {
+      const h = html({ jobRef });
+      expect(factsRow(h)).toBe("1 เมษายน 2642");
+      expect(h).not.toContain("รอบที่");
+    }
+    expect(roundLabelTh(null)).toBeNull();
+  });
+
+  it("names expense types in Thai, from the one mapping FolkOPS keeps", () => {
+    const h = html();
+    expect(h).toContain(`<td class="c nw">ค่าพาหนะ</td>`);
+    expect(h).toContain(`<td class="c nw">ค่าอาหารและเครื่องดื่ม</td>`);
+    expect(h).not.toMatch(/<td class="c nw">(meal|transport)<\/td>/);
+    for (const c of EXPENSE_CATEGORIES) expect(categoryLabelTh(c.key)).toBe(c.th);
+    expect(code("src/lib/certificates/document.ts")).not.toMatch(/ค่าอาหาร|ค่าพาหนะ/); // no second copy of the mapping
+  });
+
+  it("shows a type it does not know as the text it is, escaped — and still renders", () => {
+    const h = html({}, [row({ expenseType: `<img src=x onerror="alert(1)">` })]);
+    expect(h).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    expect(h).not.toContain("<img src=x");
+    expect(categoryLabelTh(undefined)).toBe("—");
+    expect(categoryLabelTh("fuel")).toBe("fuel");
+  });
+
+  it("FOLK-BKK-20260925-01 reads, line for line, as the job sheet says it", () => {
+    // The two lines exactly as the owner specified them. slotIdx is set to a value that
+    // would print a different round (or a 0) if anything read it, and the tour left at
+    // 13:30 — neither may show.
+    const h = html({ jobRef: "FOLK-BKK-20260925-01", tourDate: "2026-09-25", slotIdx: 2 });
+    const line = (th: string) => {
+      const m = new RegExp(`<th>${th}</th><td>([^<]*)</td>`).exec(h);
+      return m ? `${th} ${m[1]}` : "";
+    };
+    expect(line("ใบงานเลขที่")).toBe("ใบงานเลขที่ FOLK-BKK-20260925-01");
+    expect(line("วันที่ปฏิบัติงาน")).toBe("วันที่ปฏิบัติงาน 25 กันยายน 2569 (รอบที่ 1)");
+    for (const [ref, want] of [["FOLK-BKK-20260925-02", "รอบที่ 2"], ["FOLK-BKK-20260925-05", "รอบที่ 5"]] as const) {
+      expect(roundLabelTh(ref)).toBe(want);
+      expect(factsRow(html({ jobRef: ref, tourDate: "2026-09-25", slotIdx: 0 }))).toBe(`25 กันยายน 2569 (${want})`);
+    }
+    expect(line("วันที่ปฏิบัติงาน")).not.toMatch(/เวลา|\d\d:\d\d/); // never a departure time
+  });
+
+  it("changes words only — the certified facts and their hash still carry the stored key and slot", () => {
+    const payload = buildPayload(FACTS, certifiableRows([row({ expenseType: "meal" })]));
+    expect(payload.rows[0].category).toBe("meal");
+    expect(canonicalString(payload)).toContain("meal");
+    expect(canonicalString(payload)).not.toContain("ค่าอาหาร");
+    expect(canonicalString(payload)).not.toContain("รอบที่");
+  });
+});
+
+describe("reading a phrase back out of a PDF's text", () => {
+  it("a cluster read twice is not the phrase — the fault Chrome's viewer showed", () => {
+    // Verbatim what PDFium extracted from the Noto Sans Thai certificate.
+    expect(readBackCount("วันวั ที่ปฏิบัติบั ติงาน", "วันที่ปฏิบัติงาน")).toBe(0);
+    expect(readBackCount("บริษัริ ษัท", "บริษัท")).toBe(0);
+  });
+  it("finds it once however the lines broke, and counts a doubled phrase as two", () => {
+    expect(readBackCount("วันที่ปฏิ\nบัติงาน 25 กันยายน\n2569 (รอบที่ 1)", "วันที่ปฏิบัติงาน 25 กันยายน 2569 (รอบที่ 1)")).toBe(1);
+    expect(readBackCount("ค่าพาหนะ ค่าพาหนะ", "ค่าพาหนะ")).toBe(2);
+    expect(readBackCount("anything", "")).toBe(0);
   });
 });
 

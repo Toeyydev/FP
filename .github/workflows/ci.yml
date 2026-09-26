@@ -113,6 +113,17 @@ jobs:
           fc-list | grep -qiE 'thai|noto' \
             && echo "thai font: present ($(fc-list | grep -icE 'thai|noto') faces)" \
             || { echo "thai font: MISSING"; exit 1; }
+          # The certificate draws Thai in Umpush (fonts-thai-tlwg): the one face whose every
+          # cluster reads back in Chrome's PDF engine — see FONT_STACK in lib/certificates/document.ts.
+          fc-list : family | grep -qi umpush \
+            && echo "certificate face: Umpush present" \
+            || { echo "certificate face: Umpush MISSING"; exit 1; }
+
+      # PDFium is Chrome's (and Google Drive's) PDF engine; the renderer test reads the
+      # certificate back through it, because poppler alone read right while Chrome read
+      # "วันวั ที่ปฏิบัติบั ติงาน". Pinned, so a new engine build cannot move the result silently.
+      - name: PDFium, to read certificates back as Chrome does
+        run: python3 -m pip install --quiet pypdfium2==5.13.0 && python3 -c "import pypdfium2.version as v; print('pdfium', v.PDFIUM_INFO)"
 
       - name: Install the pinned browser (the same build step Railway runs)
         run: npm run browser:install
@@ -124,6 +135,9 @@ jobs:
           CHROME_HEADLESS_SHELL_PATH: ""
           PUPPETEER_EXECUTABLE_PATH: ""
           CHROMIUM_PATH: ""
+          # The renderer test writes the PDFs it made here, so the bytes this Linux image
+          # produces can be opened in real viewers — not a laptop's re-render of them.
+          CERT_SAMPLE_DIR: ${{ runner.temp }}/certificate-samples
         run: |
           npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts \
             --reporter=json --outputFile=/tmp/renderer.json
@@ -131,12 +145,24 @@ jobs:
             const r = require("/tmp/renderer.json");
             const skipped = r.numPendingTests + r.numTodoTests;
             console.log(`renderer suite: ${r.numPassedTests} passed, ${skipped} skipped`);
+            for (const f of r.testResults) for (const a of f.assertionResults)
+              if (a.status === "failed") console.error(`FAILED: ${a.fullName}\n${(a.failureMessages || []).join("\n").slice(0, 1500)}`);
+            if (r.numFailedTests > 0) { console.error(`${r.numFailedTests} renderer test(s) failed`); process.exit(1); }
             if (skipped > 0) { console.error("the renderer suite must not skip in CI"); process.exit(1); }
-            if (r.numPassedTests < 6) { console.error("the renderer suite did not run"); process.exit(1); }
+            if (r.numPassedTests < 17) { console.error("the renderer suite did not run in full"); process.exit(1); }
           '
           sleep 2
           leftover=$(pgrep -fc "chrome|chromium|headless_shell" || true)
           [ "${leftover:-0}" -eq 0 ] && echo "browser processes: none left" || { echo "browser processes left behind: $leftover"; exit 1; }
+
+      - name: Keep the sample certificates this runner rendered
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificate-samples
+          path: ${{ runner.temp }}/certificate-samples
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Integration tests (real database)
         run: npm run test:integration
