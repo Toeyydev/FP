@@ -8,6 +8,8 @@
 //   3. GUIDE, OPERATOR and ACCOUNTANT are turned away from the page and from its API
 //   4. a NOT REQUIRED decision stops counting the moment the job sheet changes, and an
 //      action quoting the old version of the sheet is refused
+//   5. a NOT REQUIRED job resting on an older waiver can be taken on to a certificate:
+//      the path is shown, the row is ticked and saved by the admin, and the job is READY
 //
 // Run after `next build`:  node scripts/e2e/historical-evidence.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser
@@ -83,8 +85,10 @@ async function seed() {
   const progress = await sheet("G-902", "2026-08-22", [e("Bus (Inc. Guide)", 15, 7)]);
   await prisma.expenseCertificate.create({ data: { certificateNo: `CERT-${progress.ref}-01`, jobSheetId: progress.id, activeJobSheetId: progress.id, guideId: "G-902", jobRef: progress.ref, tourDate: progress.date, slotIdx: progress.slotIdx,
     status: "READY_TO_ATTEST", payload: {}, payloadHash: "c".repeat(64), coveredRows: [], totalSatang: 10500, source: "ADMIN_RECORDED", sourceSheetUpdatedAt: progress.updatedAt } });
+  const waived = await sheet("G-901", "2026-08-24", [e("Water (Inc. Guide)", 10, 3, { paidByBy: users.ADMIN.id, paidByAt: "2026-08-25T02:00:00Z",
+    evidenceWaiver: { by: users.ADMIN.id, at: "2026-08-25T02:00:00Z", reason: "ร้านริมทางไม่ออกใบเสร็จ (ตัวอย่าง)" } })]);
   await sheet("G-901", "2026-09-30", [e("Ferry (Inc. Guide)", 16, 2)]); // after the cutoff: must not appear
-  return { users, empty, unpaid };
+  return { users, empty, unpaid, waived };
 }
 
 async function counts() {
@@ -164,7 +168,7 @@ try {
   await page.select("select", "");
   await pause(300);
   const listed = await page.$$eval(`${QUEUE} tbody tr`, (rows) => rows.map((r) => r.innerText));
-  check("the queue lists the ten campaign jobs and not the one after the cutoff", listed.length === 10 && !listed.some((t) => t.includes("20260930")), `${listed.length} rows`);
+  check("the queue lists the eleven campaign jobs and not the one after the cutoff", listed.length === 11 && !listed.some((t) => t.includes("20260930")), `${listed.length} rows`);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "01-queue.png"), fullPage: true });
 
   const refOn = (date) => page.evaluate((d, sel) => [...document.querySelectorAll(`${sel} tbody tr`)].find((r) => r.innerText.includes(d))?.querySelector(".mono")?.textContent, date, QUEUE);
@@ -230,6 +234,28 @@ try {
     body: JSON.stringify({ action: "not_required", snapshotHash: hash, reviewVersion: version, reasonCode: "NO_EXPENSES" }) })).status, data.empty.id, detail.snapshotHash, 1);
   check("an action quoting the old version of the sheet is refused", stale === 409, String(stale));
   if (SHOTS) await (await page.$(PANEL)).screenshot({ path: join(SHOTS, "05-detail-reopened-after-edit.png") });
+
+  // ── 5. NOT REQUIRED is not a dead end ────────────────────────────────────
+  const waivedRef = await refOn("2026-08-24");
+  await open(waivedRef);
+  const nr = await page.$eval(PANEL, (a) => a.innerText);
+  check("a NOT REQUIRED job on an older waiver shows the path to a certificate", nr.includes("เส้นทางสู่ใบรับรองแทนใบเสร็จ") && nr.includes("ให้ใบรับรองครอบคลุม"));
+  if (SHOTS) await (await page.$(PANEL)).screenshot({ path: join(SHOTS, "06-not-required-path.png") });
+  const untouched = JSON.stringify((await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.waived.id } })).expenses);
+  await page.click(`${PANEL} input[aria-label="ให้ใบรับรองครอบคลุมแถว 1"]`);
+  await pause(200);
+  check("ticking a row writes nothing until it is saved", JSON.stringify((await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.waived.id } })).expenses) === untouched);
+  page.once("dialog", (d) => void d.accept());
+  await page.evaluate((sel) => [...document.querySelectorAll(`${sel} button`)].find((b) => b.textContent.startsWith("บันทึกรายการที่จะรับรอง")).click(), PANEL);
+  await pause(1500);
+  const saved = (await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.waived.id } })).expenses;
+  const nowStatus = await page.evaluate(async (id) => (await (await fetch(`/api/admin/historical-evidence/${id}`)).json()).job.classification.status, data.waived.id);
+  check("saving the tick stamps the row with the admin and the job becomes READY TO ISSUE",
+    saved[0].certificateRequest?.by === data.users.ADMIN.id && saved[0].evidenceWaiver?.reason?.includes("ตัวอย่าง") && nowStatus === "READY_TO_ISSUE", nowStatus);
+  const shownNow = await page.$eval(PANEL, (a) => a.innerText);
+  check("the panel now offers the draft and says who chose the row", shownNow.includes("สร้างร่างใบรับรอง") && shownNow.includes("เลือกโดย Malee Testsuite"));
+  check("no certificate was created by choosing rows", (await prisma.expenseCertificate.count({ where: { jobSheetId: data.waived.id } })) === 0);
+  if (SHOTS) await (await page.$(PANEL)).screenshot({ path: join(SHOTS, "07-ready-after-selecting.png") });
 } finally {
   await browser.close();
   server.kill();

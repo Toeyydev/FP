@@ -4,6 +4,7 @@ import { canonicalPaidBy } from "@/lib/peak-sync";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import type { ExpenseSource } from "@/lib/certificates/source";
+import { requestedForCertificate, type RequestableRow } from "@/lib/certificates/request";
 
 // What a certificate says, reduced to one string that always comes out the same way.
 //
@@ -77,14 +78,17 @@ const satang = (n: number) => Math.round(n * 100);
  * no waiver already on them.
  *
  * A row the company paid needs no certificate — its evidence is on the company's side.
- * A row with a receipt needs none either. `evidenceState` already draws that line, and
+ * A row with a receipt, or an older admin waiver, needs none either — unless an admin
+ * has asked for one on it (lib/certificates/request). `evidenceState` already draws that line, and
  * this uses it rather than drawing a second one that could drift from it.
  */
 export function certifiableRows(expenses: readonly Expense[] | null | undefined): CertifiableRow[] {
   const out: CertifiableRow[] = [];
   (expenses ?? []).forEach((e, index) => {
     if (isReviewExpense(e)) return;
-    if (evidenceState(e as ExpenseWithEvidence).state !== "BLOCKED") return;
+    // Needed on its own (the guide's money, nothing behind it), or asked for by an admin
+    // on a row whose older waiver or receipt would otherwise keep it off (lib/certificates/request).
+    if (evidenceState(e as ExpenseWithEvidence).state !== "BLOCKED" && !requestedForCertificate(e as RequestableRow)) return;
     out.push({
       index,
       identity: financialIdentity(e as ProtectedRow),

@@ -32,6 +32,8 @@ export async function GET() {
         certifiable: c.certifiable,
         certificate: c.activeCertificate,
         rowsNeedingPayer: c.rows.filter((r) => r.needsPayerConfirmation).length,
+        optInCount: c.optInCount,
+        firstStep: c.certificatePath[0] ?? null,
         // What any action on this job must quote back, so it is taken against the version
         // shown here and nothing newer.
         snapshotHash: c.snapshotHash,

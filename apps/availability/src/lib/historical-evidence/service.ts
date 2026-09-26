@@ -7,6 +7,7 @@ import { effectivePayer, expenseKind, isOverride, MIN_PAYER_REASON, PAID_BY_VALU
 import { financialIdentity, mergeServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { createCertificate, voidCertificate, CertificateRefused, type Actor, type Deps } from "@/lib/certificates/service";
 import type { ExpenseSource } from "@/lib/certificates/source";
+import { liveRequest, optInFor, type CertificateRequest, type RequestableRow } from "@/lib/certificates/request";
 import { CAMPAIGN_CUTOFF, campaignWhere, inCampaign } from "@/lib/historical-evidence/campaign";
 import { classifyJob, isNotRequiredReason, type CampaignCertificate, type CampaignReview, type Classification, type NotRequiredReason } from "@/lib/historical-evidence/classify";
 
@@ -23,6 +24,9 @@ import { classifyJob, isNotRequiredReason, type CampaignCertificate, type Campai
 //   decide          NOT_REQUIRED (with a reason), REVIEWED (a note), or reopen
 //   confirmPayers   say who paid, on rows nobody has confirmed — through the same
 //                   protected merge the Job Sheet save uses, stamped server-side
+//   selectRows      choose which guide-paid rows under an older waiver or a receipt a
+//                   certificate should cover (or take a row back out) — stamped on the row,
+//                   server-side, so the certificate service sees the same rows unchanged
 //   issue           prepare a certificate through lib/certificates/service, unchanged
 //
 // Each carries the sheet's evidence fingerprint as the admin saw it. If the sheet has
@@ -334,7 +338,108 @@ export async function confirmPayers(id: string, actor: Actor, input: { snapshotH
   return result.changed;
 }
 
-// ── 3. prepare a certificate ────────────────────────────────────────────────
+// ── 3. choose the rows a certificate covers ─────────────────────────────────
+
+export type RowSelection = { identity: string; certify: boolean; acknowledgeReceipt?: boolean };
+
+export const RECEIPT_WARNING = "รายการนี้มีใบเสร็จแนบอยู่แล้ว ใบรับรองแทนใบเสร็จจะซ้ำกับหลักฐานที่มีอยู่ — ยืนยันเฉพาะเมื่อใบเสร็จใช้ไม่ได้หรือไม่ครบ";
+
+/**
+ * Say which rows a certificate should cover, on a job whose data alone would not offer one.
+ *
+ * Rows that need a certificate by themselves (the guide's money, nothing behind it) are
+ * always covered and are not chosen here. What is chosen is the opt-in kind: a guide-paid
+ * row resting on an older admin waiver with no document, or one with a receipt — the
+ * latter only with the receipt acknowledged in the request, because a certificate "in lieu
+ * of a receipt" beside a receipt is a second piece of evidence somebody has to mean.
+ *
+ * Nothing is guessed. The row must already be the guide's own money, with an amount, and
+ * with a payer a PERSON recorded; a payer the rules filled in is confirmed first, on its own
+ * action, with its own audit. Rows are found by what they say, never by position. The
+ * stamp names this admin and this moment and is written server-side; the sheet moves only
+ * if it is still the version the admin saw (snapshot + updatedAt), and nothing else on the
+ * row changes. Withdrawing a request is the same action with certify: false.
+ */
+export async function selectRows(id: string, actor: Actor, input: { snapshotHash: string; rows: RowSelection[] }, db: Db = prisma, now: () => Date = () => new Date()) {
+  if (!input.rows.length) refuse(["ไม่มีรายการให้เลือก"], 400);
+  if (new Set(input.rows.map((r) => r.identity)).size !== input.rows.length) refuse(["ส่งรายการเดียวกันมาซ้ำ"], 400);
+  const at = now().toISOString();
+
+  const result = await db.$transaction(async (tx) => {
+    const { sheet, certs, review } = await readForWrite(tx, id);
+    const current = classify(sheet, certs, reviewOf(review));
+    if (current.snapshotHash !== input.snapshotHash) refuse([STALE]);
+    const active = certs.find((c) => c.status !== "VOID");
+    if (active) refuse([`ใบงานนี้มีใบรับรอง ${active.certificateNo} (${active.status}) อยู่แล้ว — ไม่สร้างซ้ำ ถ้าต้องเปลี่ยนรายการ ให้ยกเลิกใบรับรองนั้นใน Job Sheet ก่อน`]);
+
+    const stored = ((sheet.expenses as unknown as RequestableRow[]) ?? []);
+    const next = stored.map((e) => ({ ...e })) as (RequestableRow & ProtectedRow)[];
+    const changed: { row: number; description: string; amountSatang: number; certify: boolean; optIn: string | null; receiptAcknowledged: boolean; supersedesWaiver: unknown }[] = [];
+
+    for (const want of input.rows) {
+      const hits = stored.map((e, i) => ({ e, i })).filter(({ e }) => !isReviewExpense(e) && financialIdentity(e as ProtectedRow) === want.identity);
+      if (hits.length === 0) refuse(["ไม่พบรายการที่เลือกในใบงาน (ใบงานอาจเปลี่ยนไปแล้ว)"]);
+      if (hits.length > 1) refuse([`"${hits[0].e.description}" มี ${hits.length} แถวที่เหมือนกัน แยกไม่ได้ว่าจะเลือกแถวไหน — แก้ให้แต่ละแถวต่างกันใน Job Sheet ก่อน`]);
+      const { e, i } = hits[0];
+      const what = (e.description ?? "").trim() || `แถว ${i + 1}`;
+      const row = current.rows.find((r) => r.index === i);
+
+      if (!want.certify) {
+        if (!liveRequest(e) && !e.certificateRequest) refuse([`"${what}" ไม่ได้ถูกเลือกไว้`], 400);
+        delete next[i].certificateRequest;
+        changed.push({ row: i + 1, description: what, amountSatang: Math.round(expenseAmount(e) * 100), certify: false, optIn: null, receiptAcknowledged: false, supersedesWaiver: null });
+        continue;
+      }
+
+      if (expenseAmount(e) <= 0) refuse([`"${what}" ไม่มียอดเงิน ออกใบรับรองยอดศูนย์ไม่ได้ — บันทึกจำนวนใน Job Sheet ก่อน`], 400);
+      if (canonicalPaidBy(e) === "UNSPECIFIED") refuse([`"${what}" ยังไม่มี Paid By — เลือกและยืนยัน Paid By ก่อน`], 400);
+      if (canonicalPaidBy(e) !== "GUIDE_PERSONAL") refuse([`"${what}" บันทึกว่าไม่ใช่เงินไกด์ ใบรับรองแทนใบเสร็จใช้กับเงินที่ไกด์สำรองจ่ายเท่านั้น — ถ้า Paid By ผิด แก้ใน Job Sheet ก่อน`], 400);
+      if (!row || row.needsPayerConfirmation) refuse([`"${what}": Paid By ยังไม่มีคนยืนยัน — กดยืนยัน Paid By ก่อนเลือกรายการ`], 400);
+      if (row.issues.length) refuse([`"${what}": ${row.issues[0]}`], 400);
+      const opt = optInFor(e);
+      if (!opt) {
+        refuse([row.evidence === "NEEDS_CERTIFICATE"
+          ? `"${what}" ต้องใช้ใบรับรองอยู่แล้ว ไม่ต้องเลือก`
+          : `"${what}" เลือกให้ใบรับรองครอบคลุมไม่ได้ (${row.evidence})`], 400);
+      }
+      if (opt === "HAS_RECEIPT" && want.acknowledgeReceipt !== true) refuse([`"${what}": ${RECEIPT_WARNING}`], 400);
+      if (liveRequest(e)) refuse([`"${what}" ถูกเลือกไว้แล้ว`], 409);
+
+      const request: CertificateRequest = {
+        by: actor.id, byName: actor.name, at,
+        identity: financialIdentity(e as ProtectedRow),
+        receiptAcknowledged: opt === "HAS_RECEIPT",
+        supersedesWaiver: e.evidenceWaiver ?? null,
+      };
+      next[i].certificateRequest = request;
+      changed.push({ row: i + 1, description: what, amountSatang: Math.round(expenseAmount(e) * 100), certify: true, optIn: opt, receiptAcknowledged: request.receiptAcknowledged, supersedesWaiver: request.supersedesWaiver });
+    }
+
+    // `next` is the stored rows with only certificateRequest set or removed — no figure,
+    // payer, waiver or stamp is touched, so each row keeps its financial identity.
+    const hit = await tx.jobSheet.updateMany({ where: { id: sheet.id, updatedAt: sheet.updatedAt }, data: { expenses: next as unknown as Prisma.InputJsonValue } });
+    if (hit.count !== 1) refuse([STALE]);
+    const after = classify({ ...sheet, expenses: next as unknown as Prisma.JsonValue }, certs, reviewOf(review));
+    return { sheet, changed, statusBefore: current.status, statusAfter: after.status };
+  });
+
+  for (const certify of [true, false]) {
+    const rows = result.changed.filter((c) => c.certify === certify);
+    if (!rows.length) continue;
+    await audit({ actorId: actor.id, actorRole: actor.role,
+      action: certify ? "historical_evidence.certificate_rows_selected" : "historical_evidence.certificate_rows_withdrawn",
+      entityType: "JobSheet", entityId: result.sheet.id,
+      detail: { jobSheetId: result.sheet.id, jobRef: result.sheet.ref, campaign: CAMPAIGN_CUTOFF, recordedAt: at,
+        statusBefore: result.statusBefore, statusAfter: result.statusAfter,
+        rows: rows.map(({ certify: _c, ...r }) => r),
+        note: certify
+          ? "an admin chose these guide-paid rows for a certificate in lieu of receipt; no certificate is created by this, and no payer or amount changed"
+          : "an admin took these rows back out of a certificate that had not been created yet" } });
+  }
+  return { changed: result.changed, statusBefore: result.statusBefore, statusAfter: result.statusAfter };
+}
+
+// ── 4. prepare a certificate ────────────────────────────────────────────────
 
 /**
  * Hand a READY job to the certificate service, unchanged.
