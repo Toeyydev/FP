@@ -20,13 +20,16 @@ import type { Expense } from "@/lib/jobsheet";
 // accepted from the wire at all. They are read from the stored row and carried across,
 // here, where the server can see both sides.
 
-export const SERVER_OWNED_ROW_FIELDS = ["evidenceWaiver", "paidByBy", "paidByAt"] as const;
+//
+//   certificateRequest  an admin asking a certificate to cover this row (lib/certificates/request)
+export const SERVER_OWNED_ROW_FIELDS = ["evidenceWaiver", "paidByBy", "paidByAt", "certificateRequest"] as const;
 export type ServerOwnedField = (typeof SERVER_OWNED_ROW_FIELDS)[number];
 
 export type ProtectedRow = Expense & {
   evidenceWaiver?: unknown;
   paidByBy?: string | null;
   paidByAt?: string | null;
+  certificateRequest?: unknown;
 };
 
 /** Drop every server-owned field from rows that arrived over the wire. */
@@ -47,6 +50,7 @@ export function claimsServerOwned(rows: readonly object[] | null | undefined): b
 export function isProtected(row: ProtectedRow | null | undefined): boolean {
   if (!row) return false;
   if (row.evidenceWaiver && typeof row.evidenceWaiver === "object") return true;
+  if (row.certificateRequest && typeof row.certificateRequest === "object") return true;
   return Boolean((row.paidByBy ?? "").trim() || (row.paidByAt ?? "").trim());
 }
 
@@ -110,7 +114,9 @@ export function mergeServerOwned(
     if (!isProtected(old)) return;
     const id = financialIdentity(old);
     const what = (old.description ?? "").trim() || `row ${i + 1}`;
-    const carries = old.evidenceWaiver ? "an accepted receipt waiver" : "a recorded payer";
+    const carries = old.certificateRequest ? "an admin's request for a certificate (withdraw it on the historical evidence page first)"
+      : old.evidenceWaiver ? "an accepted receipt waiver"
+      : "a recorded payer";
 
     // Ambiguous on either side: two rows that read the same cannot be told apart, and the
     // records on them need not match. Reported once per identity, not once per row.

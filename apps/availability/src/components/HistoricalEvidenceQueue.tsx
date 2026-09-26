@@ -11,6 +11,11 @@ import { AuthHeader } from "@/components/AuthHeader";
 //
 // A payer the rules would suggest is shown pre-selected and labelled as a suggestion. It
 // is not written to the job sheet until the admin presses "ยืนยัน Paid By".
+//
+// A NOT REQUIRED job is not a dead end. Its panel says what a certificate would need, and
+// guide-paid rows under an older waiver (or, with a warning, a receipt) can be ticked for a
+// certificate; saving the ticks is its own action, and moves the job to READY TO ISSUE when
+// every payer and figure is confirmed.
 
 type Status = "LINKED" | "NOT_REQUIRED" | "READY_TO_ISSUE" | "IN_PROGRESS" | "NEEDS_REVIEW";
 type Payer = "GUIDE_PERSONAL" | "GUIDE_ADVANCE" | "COMPANY_DIRECT";
@@ -24,6 +29,7 @@ type Job = {
   certifiable: { count: number; totalSatang: number };
   certificate: { id: string; certificateNo: string; status: string } | null;
   rowsNeedingPayer: number;
+  optInCount: number; firstStep: string | null;
   snapshotHash: string; reviewVersion: number; reviewDecision: string | null; suggestedSource: Source;
 };
 type Bucket = { jobs: number; rows: number; totalSatang: number };
@@ -39,6 +45,8 @@ type Row = {
   price: number | null; pax: number | null; amountSatang: number;
   storedPayer: string; payer: string; basis: string; suggestion: Payer | null; needsPayerConfirmation: boolean;
   evidence: string; certificateId: string | null; inGuideReport: boolean | null; issues: string[];
+  hasReceipt: boolean; optIn: "WAIVED" | "HAS_RECEIPT" | null;
+  requested: { byName: string; at: string; receiptAcknowledged: boolean } | null;
 };
 type Detail = {
   id: string; ref: string | null; date: string; slotIdx: number; guideName: string; guideId: string;
@@ -52,6 +60,7 @@ type Detail = {
     snapshotHash: string;
     review: { decision: string; current: boolean; reasonCode: string | null; note: string | null; decidedByName: string | null; decidedAt: string | null; version: number } | null;
     suggestedNotRequiredReason: string | null;
+    certificatePath: string[]; optInCount: number;
     source: { guideReportedAt: string | null; guideReportMatches: boolean; guideReportedAvailable: boolean; guideReportedReason: string | null; suggested: Source };
   };
 };
@@ -245,7 +254,11 @@ export default function HistoricalEvidenceQueue() {
                     {j.reopened && <div style={{ fontSize: 11, color: "var(--danger)" }}>เปิดใหม่: ใบงานเปลี่ยน</div>}
                     {j.reviewed && !j.completed && <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>ตรวจแล้ว</div>}
                   </td>
-                  <td style={{ fontSize: 12, maxWidth: 360 }}>{j.firstReason ?? (j.certificate ? j.certificate.certificateNo : "")}{j.reasonCount > 1 ? ` (+${j.reasonCount - 1})` : ""}</td>
+                  <td style={{ fontSize: 12, maxWidth: 360 }}>{j.firstReason ?? (j.certificate ? j.certificate.certificateNo : "")}{j.reasonCount > 1 ? ` (+${j.reasonCount - 1})` : ""}
+                    {j.status === "NOT_REQUIRED" && (j.optInCount > 0
+                      ? <div style={{ color: "#3730A3" }}>เลือกให้ใบรับรองครอบคลุมได้ {j.optInCount} แถว</div>
+                      : j.firstStep && <div style={{ color: "var(--ink-soft)" }}>{j.firstStep}</div>)}
+                  </td>
                   <td className="r num">{j.certifiable.count ? `${j.certifiable.count} แถว · ${baht(j.certifiable.totalSatang)}` : "—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button type="button" className="btn sm" onClick={() => setOpenId(j.id)}>ตรวจ</button>{" "}
@@ -279,6 +292,8 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
   const [reasonCode, setReasonCode] = useState("");
   const [note, setNote] = useState("");
   const [source, setSource] = useState<Source>("ADMIN_RECORDED");
+  /** Certificate ticks on screen: identity → wanted / receipt acknowledged. NOT saved until pressed. */
+  const [tick, setTick] = useState<Record<string, { on: boolean; ack: boolean }>>({});
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/admin/historical-evidence/${encodeURIComponent(id)}`, { cache: "no-store" });
@@ -288,6 +303,9 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
     const c: Record<string, { payer: Payer | ""; reason: string }> = {};
     for (const row of d.job.classification.rows) if (row.needsPayerConfirmation) c[row.identity] = { payer: row.suggestion ?? "", reason: "" };
     setChoice(c);
+    const t: Record<string, { on: boolean; ack: boolean }> = {};
+    for (const row of d.job.classification.rows) if (row.optIn || row.requested) t[row.identity] = { on: Boolean(row.requested), ack: Boolean(row.requested?.receiptAcknowledged) };
+    setTick(t);
     setReasonCode(d.job.classification.suggestedNotRequiredReason ?? "");
     setSource(d.job.classification.source.suggested);
   }, [id]);
@@ -308,6 +326,11 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
   const version = c.review?.version ?? 0;
   const pending = c.rows.filter((r) => r.needsPayerConfirmation);
   const toConfirm = pending.filter((r) => choice[r.identity]?.payer);
+  // What the ticks would change, compared with what is saved.
+  const tickable = c.rows.filter((r) => r.optIn || r.requested);
+  const tickChanges = tickable.filter((r) => (tick[r.identity]?.on ?? false) !== Boolean(r.requested));
+  const unackedReceipts = tickChanges.filter((r) => tick[r.identity]?.on && r.optIn === "HAS_RECEIPT" && !tick[r.identity]?.ack);
+  const blockedTick = (r: Row) => r.needsPayerConfirmation || r.issues.length > 0;
 
   return (
     <aside className="card" style={{ padding: 16, marginTop: 14, borderColor: TONE[c.status].line }} aria-label="รายละเอียดงาน">
@@ -339,7 +362,7 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
       <h3 style={{ fontSize: 14, margin: "8px 0 4px" }}>รายการในใบงาน (operator)</h3>
       <div className="grid-scroll">
         <table className="acct-table" aria-label="รายการในใบงาน">
-          <thead><tr><th>ที่</th><th>รายการ</th><th>ประเภท</th><th className="r">ราคา</th><th className="r">จำนวน</th><th className="r">ยอด</th><th>Paid By</th><th>หลักฐาน</th><th>ในรายงานไกด์</th></tr></thead>
+          <thead><tr><th>ที่</th><th>รายการ</th><th>ประเภท</th><th className="r">ราคา</th><th className="r">จำนวน</th><th className="r">ยอด</th><th>Paid By</th><th>หลักฐาน</th><th>ในรายงานไกด์</th><th>ใบรับรอง</th></tr></thead>
           <tbody>
             {c.rows.filter((r) => r.evidence !== "UNUSED").map((r) => (
               <tr key={`${r.index}-${r.identity}`}>
@@ -367,6 +390,33 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
                 </td>
                 <td>{EVIDENCE_TH[r.evidence] ?? r.evidence}</td>
                 <td>{r.inGuideReport == null ? "—" : r.inGuideReport ? "ตรง" : <b style={{ color: "var(--danger)" }}>ไม่ตรง</b>}</td>
+                <td style={{ minWidth: 170, fontSize: 12 }}>
+                  {r.evidence === "NEEDS_CERTIFICATE" && !r.requested && <span>ต้องรวม (ไม่มีหลักฐาน)</span>}
+                  {r.evidence === "CERTIFIED" && <span>มีใบรับรองแล้ว</span>}
+                  {(r.optIn || r.requested) && !c.activeCertificate && (
+                    <div>
+                      <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <input type="checkbox" aria-label={`ให้ใบรับรองครอบคลุมแถว ${r.index + 1}`} checked={tick[r.identity]?.on ?? false}
+                          disabled={busy || (blockedTick(r) && !r.requested)}
+                          onChange={(e) => setTick({ ...tick, [r.identity]: { on: e.target.checked, ack: tick[r.identity]?.ack ?? false } })} />
+                        ให้ใบรับรองครอบคลุม
+                      </label>
+                      {r.optIn === "WAIVED" && <div style={{ color: "var(--ink-soft)" }}>ตอนนี้มีเพียงการยกเว้นของ ADMIN แบบเดิม ไม่มีเอกสาร</div>}
+                      {r.hasReceipt && (tick[r.identity]?.on ?? false) && (
+                        <div style={{ color: "var(--danger)", marginTop: 2 }}>
+                          มีใบเสร็จแนบอยู่แล้ว ใบรับรองจะซ้ำกับหลักฐานที่มีอยู่
+                          <label style={{ display: "flex", gap: 4, alignItems: "center", color: "inherit" }}>
+                            <input type="checkbox" aria-label={`ยืนยันใบเสร็จแถว ${r.index + 1}`} checked={tick[r.identity]?.ack ?? false} disabled={busy || Boolean(r.requested)}
+                              onChange={(e) => setTick({ ...tick, [r.identity]: { on: true, ack: e.target.checked } })} />
+                            ยืนยันว่าต้องการใบรับรองแม้มีใบเสร็จ
+                          </label>
+                        </div>
+                      )}
+                      {blockedTick(r) && !r.requested && <div style={{ color: "var(--ink-soft)" }}>ยืนยัน Paid By / ตัวเลขก่อน</div>}
+                      {r.requested && <div style={{ color: "var(--ink-soft)" }}>เลือกโดย {r.requested.byName} {when(r.requested.at)}</div>}
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -379,6 +429,26 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
             rows: toConfirm.map((r) => ({ identity: r.identity, payer: choice[r.identity]!.payer, ...(choice[r.identity]!.reason.trim() ? { reason: choice[r.identity]!.reason.trim() } : {}) })),
           }, `ยืนยัน Paid By ${toConfirm.length} แถวแล้ว`)}>ยืนยัน Paid By ({toConfirm.length} แถว)</button>
           <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>บันทึกลงใบงานในชื่อของคุณพร้อมเวลา แยกจากการรับรองใบรับรอง</span>
+        </div>
+      )}
+
+      {tickChanges.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button type="button" className="btn primary" disabled={busy || unackedReceipts.length > 0} onClick={() => {
+            const adding = tickChanges.filter((r) => tick[r.identity]?.on);
+            const amount = adding.reduce((t, r) => t + r.amountSatang, 0);
+            const receipts = adding.filter((r) => r.hasReceipt).length;
+            const text = [
+              adding.length ? `ให้ใบรับรองครอบคลุม ${adding.length} แถว รวม ${baht(amount)} บาท` : "",
+              tickChanges.length - adding.length ? `นำออก ${tickChanges.length - adding.length} แถว` : "",
+              receipts ? `\n⚠ ${receipts} แถวมีใบเสร็จอยู่แล้ว` : "",
+              "\n\nบันทึกในชื่อของคุณพร้อมเวลา ยังไม่สร้างใบรับรอง — ไม่เปลี่ยน Paid By หรือยอดเงิน",
+            ].filter(Boolean).join(" · ");
+            if (!window.confirm(text)) return;
+            void act({ action: "select_rows", rows: tickChanges.map((r) => ({ identity: r.identity, certify: tick[r.identity]?.on ?? false, ...(tick[r.identity]?.on && r.hasReceipt ? { acknowledgeReceipt: tick[r.identity]?.ack === true } : {}) })) },
+              "บันทึกรายการที่ใบรับรองจะครอบคลุมแล้ว");
+          }}>บันทึกรายการที่จะรับรอง ({tickChanges.length})</button>
+          {unackedReceipts.length > 0 && <span style={{ fontSize: 12, color: "var(--danger)" }}>ต้องยืนยันใบเสร็จ {unackedReceipts.length} แถวก่อน</span>}
         </div>
       )}
 
@@ -397,14 +467,21 @@ function JobPanel({ id, reasons, labels, onClose, onNext, onChanged }: {
 
       <h3 style={{ fontSize: 14, margin: "14px 0 6px" }}>ผลของงานนี้</h3>
       <div style={{ display: "grid", gap: 10 }}>
+        {c.status === "NOT_REQUIRED" && c.certificatePath.length > 0 && (
+          <div style={{ fontSize: 13, background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 10px" }}>
+            <b>เส้นทางสู่ใบรับรองแทนใบเสร็จ</b>
+            <ol style={{ margin: "4px 0 0", paddingLeft: 18 }}>{c.certificatePath.map((t, i) => <li key={i}>{t}</li>)}</ol>
+          </div>
+        )}
         {c.status === "NOT_REQUIRED" && !c.confirmed && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>หรือ ถ้าตรวจแล้วว่าไม่มีเงินไกด์ที่ต้องรับรองจริง:</span>
             <select aria-label="เหตุผลที่ไม่ต้องใช้ใบรับรอง" value={reasonCode} onChange={(e) => setReasonCode(e.target.value)}>
               <option value="">— เหตุผล —</option>
               {Object.entries(reasons).map(([k, v]) => <option key={k} value={k}>{v}{k === c.suggestedNotRequiredReason ? " · ตามข้อมูล" : ""}</option>)}
             </select>
             <input placeholder={reasonCode === "OTHER" ? "หมายเหตุ (จำเป็น)" : "หมายเหตุ (ถ้ามี)"} value={note} onChange={(e) => setNote(e.target.value)} style={{ minWidth: 240 }} />
-            <button type="button" className="btn primary" disabled={busy || !reasonCode} onClick={() => act({ action: "not_required", reviewVersion: version, reasonCode, ...(note.trim() ? { note: note.trim() } : {}) }, "บันทึก NOT REQUIRED แล้ว")}>ยืนยัน NOT REQUIRED</button>
+            <button type="button" className="btn" disabled={busy || !reasonCode} onClick={() => act({ action: "not_required", reviewVersion: version, reasonCode, ...(note.trim() ? { note: note.trim() } : {}) }, "บันทึก NOT REQUIRED แล้ว")}>ยืนยัน NOT REQUIRED</button>
           </div>
         )}
         {c.status === "NOT_REQUIRED" && c.confirmed && (

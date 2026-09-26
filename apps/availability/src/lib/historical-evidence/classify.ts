@@ -5,6 +5,7 @@ import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evi
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import type { ExpenseSource } from "@/lib/certificates/source";
 import { evidenceSnapshotHash, type SnapshotSheet } from "@/lib/historical-evidence/snapshot";
+import { liveRequest, optInFor, type OptIn, type RequestableRow } from "@/lib/certificates/request";
 
 // Where one historical job stands on evidence, read from the data and nothing else.
 //
@@ -25,6 +26,10 @@ import { evidenceSnapshotHash, type SnapshotSheet } from "@/lib/historical-evide
 //   NOT_REQUIRED    nothing on the sheet needs a certificate. Done only once an admin has
 //                   confirmed it against the sheet as it is now (`confirmed`); until then
 //                   it is a candidate the data suggests, never a verdict the system gave.
+//                   It is never a dead end: `certificatePath` says what would have to be
+//                   true for a certificate, and guide-paid rows under an older waiver or a
+//                   receipt can be opted in (lib/certificates/request), which moves the job
+//                   on to READY_TO_ISSUE once every figure and payer is confirmed.
 //   READY_TO_ISSUE  guide-paid rows with no receipt, every figure and payer confirmed,
 //                   approved, and no certificate yet. Not evidence of anything — work.
 //   IN_PROGRESS     a certificate exists and is on its way (drafted, attested, filed) but
@@ -96,7 +101,7 @@ export type RowEvidence =
   | "HAS_RECEIPT"
   | "WAIVED"            // an admin's waiver with no certificate behind it (older practice)
   | "CERTIFIED"         // a waiver naming a LINKED certificate
-  | "NEEDS_CERTIFICATE" // the guide's own money, nothing behind it
+  | "NEEDS_CERTIFICATE" // the guide's own money, nothing behind it — or an admin asked for one on it
   | "BROKEN";           // names a certificate that is not evidence (changed in Drive, or not found)
 
 export type RowAnalysis = {
@@ -118,6 +123,12 @@ export type RowAnalysis = {
   certificateId: string | null;
   /** Whether the guide's own report has a line saying the same thing. Null: no report. */
   inGuideReport: boolean | null;
+  /** A receipt is attached to this row. */
+  hasReceipt: boolean;
+  /** This row can be opted in to a certificate, and on what footing. Null: it cannot. */
+  optIn: OptIn | null;
+  /** An admin asked a certificate to cover this row, and the request still describes it. */
+  requested: { byName: string; at: string; receiptAcknowledged: boolean } | null;
   issues: string[];
 };
 
@@ -136,6 +147,13 @@ export type Classification = {
   snapshotHash: string;
   review: { decision: string; current: boolean; reasonCode: string | null; note: string | null; decidedByName: string | null; decidedAt: string | null; version: number } | null;
   suggestedNotRequiredReason: NotRequiredReason | null;
+  /**
+   * NOT_REQUIRED only: what would have to be true for this job to carry a certificate.
+   * Steps for a person, never applied by anything.
+   */
+  certificatePath: string[];
+  /** Rows an admin could opt in to a certificate now. */
+  optInCount: number;
   source: {
     guideReportedAt: string | null;
     /** Every row the certificate would cover appears in the guide's own report. */
@@ -151,6 +169,7 @@ const PERSON_CHOSE: PayerBasis[] = ["OPERATOR", "GUIDE"];
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const satang = (n: number) => Math.round(n * 100);
 const text = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+const bahtText = (satangAmount: number) => (satangAmount / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * A row whose amount cannot be worked out, as opposed to one that was simply not used.
@@ -197,7 +216,10 @@ export function classifyJob(input: {
     const issues: string[] = [];
     let evidence: RowEvidence;
     let certificateId: string | null = null;
+    let hasReceipt = false;
     const waiverCert = (e.evidenceWaiver?.certificateId ?? "").trim() || null;
+    const request = liveRequest(e as RequestableRow);
+    const optIn = optInFor(e as RequestableRow);
 
     if (!broken && amount <= 0) {
       evidence = "UNUSED";
@@ -207,7 +229,17 @@ export function classifyJob(input: {
       evidence = "NOT_GUIDE_MONEY";
     } else {
       const s = evidenceState(e, statusOf);
-      if (s.state === "HAS_RECEIPT") evidence = "HAS_RECEIPT";
+      // Asked for, on terms that still hold: the same test certifiableRows applies, so the
+      // campaign and the certificate service agree on which rows a certificate covers.
+      const asked = Boolean(request) && (optIn === "WAIVED" || (optIn === "HAS_RECEIPT" && request!.receiptAcknowledged === true));
+      if (s.state === "HAS_RECEIPT") {
+        hasReceipt = true;
+        if (waiverCert && statusOf[waiverCert] === "LINKED") { evidence = "CERTIFIED"; certificateId = waiverCert; }
+        else if (asked) evidence = "NEEDS_CERTIFICATE";
+        else evidence = "HAS_RECEIPT";
+        if (waiverCert && !certificateId && statusOf[waiverCert] && statusOf[waiverCert] !== "VOID") certificateId = waiverCert;
+      }
+      else if (s.state === "WAIVED" && !waiverCert && asked) evidence = "NEEDS_CERTIFICATE";
       else if (s.state === "WAIVED") { evidence = waiverCert ? "CERTIFIED" : "WAIVED"; certificateId = waiverCert; }
       else if (s.state === "NOT_REQUIRED") evidence = "NOT_GUIDE_MONEY";
       else if (waiverCert && statusOf[waiverCert] !== "VOID") { evidence = "BROKEN"; certificateId = waiverCert; }
@@ -266,6 +298,9 @@ export function classifyJob(input: {
       suggestion, needsPayerConfirmation,
       evidence, certificateId,
       inGuideReport: evidence === "UNUSED" ? null : reportHas(report, e),
+      hasReceipt,
+      optIn: evidence === "NEEDS_CERTIFICATE" && !request ? null : optIn,
+      requested: request ? { byName: request.byName, at: request.at, receiptAcknowledged: request.receiptAcknowledged === true } : null,
       issues,
     });
   });
@@ -320,6 +355,8 @@ export function classifyJob(input: {
       version: review.version ?? 0,
     } : null,
     suggestedNotRequiredReason: null,
+    certificatePath: [],
+    optInCount: live.filter((r) => r.optIn && !r.requested && r.issues.length === 0).length,
     source,
     ...extra,
   });
@@ -363,8 +400,16 @@ export function classifyJob(input: {
   if (reasons.length) return out("NEEDS_REVIEW");
 
   if (needCert.length === 0) {
+    // The guide said they spent money the sheet does not carry. Nothing on the sheet
+    // needs a certificate only because nobody wrote the figures down — that is missing
+    // data, not a job that needs no evidence.
+    const unrecorded = unrecordedReportLines(report, live);
+    if (unrecorded.length) {
+      for (const g of unrecorded) reasons.push(`ไกด์รายงาน "${g.description}" ${g.pax ?? "?"}×${g.price ?? "?"} = ${bahtText(g.amountSatang)} บาท แต่ใบงานไม่มียอดของรายการนี้ — บันทึกจำนวนและ Paid By ใน Job Sheet ก่อน`);
+      return out("NEEDS_REVIEW");
+    }
     const confirmed = Boolean(review && review.decision === "NOT_REQUIRED" && current);
-    return out("NOT_REQUIRED", { confirmed, completed: confirmed, suggestedNotRequiredReason: suggestReason(live) });
+    return out("NOT_REQUIRED", { confirmed, completed: confirmed, suggestedNotRequiredReason: suggestReason(live), certificatePath: pathToCertificate(live, sheet) });
   }
 
   if ((sheet.approvalStatus ?? "") !== "APPROVED") {
@@ -372,6 +417,38 @@ export function classifyJob(input: {
     return out("NEEDS_REVIEW");
   }
   return out("READY_TO_ISSUE");
+}
+
+/** Lines in the guide's own report, with an amount, that no used row on the sheet describes. */
+function unrecordedReportLines(report: Expense[] | null, live: RowAnalysis[]) {
+  if (!report) return [];
+  const onSheet = new Set(live.map((r) => text(r.description)));
+  return report
+    .filter((g) => !isReviewExpense(g) && expenseAmount(g) > 0 && !onSheet.has(text(g.description)))
+    .map((g) => ({ description: (g.description ?? "").trim(), price: num(g.price), pax: num(g.pax), amountSatang: satang(expenseAmount(g)) }));
+}
+
+/**
+ * What would make a NOT_REQUIRED job one that carries a certificate — for a person to act
+ * on. A certificate covers the guide's own money with an amount; it is never issued for
+ * zero or for nothing, so a sheet with no such row says where the figures have to come from.
+ */
+function pathToCertificate(live: RowAnalysis[], sheet: CampaignSheet): string[] {
+  const steps: string[] = [];
+  const optable = live.filter((r) => r.optIn && !r.requested);
+  if (optable.length) {
+    const waived = optable.filter((r) => r.optIn === "WAIVED"), receipted = optable.filter((r) => r.optIn === "HAS_RECEIPT");
+    if (waived.length) steps.push(`${waived.length} รายการเป็นเงินที่ไกด์จ่ายเองและมีเพียงการยกเว้นของ ADMIN แบบเดิม (ไม่มีใบรับรอง) — เลือกรายการที่จะให้ใบรับรองครอบคลุมด้านล่าง`);
+    if (receipted.length) steps.push(`${receipted.length} รายการมีใบเสร็จแนบอยู่แล้ว — เลือกได้ แต่ต้องยืนยันว่าต้องการใบรับรองซ้ำกับใบเสร็จ`);
+  } else if (!live.length) {
+    steps.push("ใบงานนี้ไม่มียอดค่าใช้จ่าย (ทุกแถวไม่มีจำนวน) จึงออกใบรับรองไม่ได้ — ห้ามออกใบรับรองยอดศูนย์");
+    steps.push("ถ้าไกด์จ่ายเงินจริง ให้ถามไกด์แล้วบันทึกจำนวนและ Paid By = ไกด์จ่ายเอง ใน Job Sheet จากนั้นกลับมาที่หน้านี้");
+  } else if (live.every((r) => r.storedPayer !== "GUIDE_PERSONAL")) {
+    steps.push("ทุกรายการที่มียอดบันทึกว่าไม่ใช่เงินไกด์ (บริษัทจ่ายตรงหรือเงินทดรอง) ใบรับรองแทนใบเสร็จใช้กับเงินที่ไกด์สำรองจ่ายเท่านั้น");
+    steps.push("ถ้า Paid By ไม่ถูกต้อง แก้ใน Job Sheet พร้อมเหตุผล แล้วกลับมาที่หน้านี้");
+  }
+  if (steps.length && (sheet.approvalStatus ?? "") !== "APPROVED") steps.push("ใบงานยังไม่ได้อนุมัติ — ต้องอนุมัติใน Job Sheet ก่อนสร้างร่างใบรับรอง");
+  return steps;
 }
 
 /** The reason the data points at, for an admin to accept or change. Never applied by itself. */

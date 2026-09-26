@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { actingAdmin, confirmPayers, decide, HistoricalEvidenceRefused, loadJob, prepareCertificate } from "@/lib/historical-evidence/service";
+import { actingAdmin, confirmPayers, decide, HistoricalEvidenceRefused, loadJob, prepareCertificate, selectRows } from "@/lib/historical-evidence/service";
 import { NOT_REQUIRED_REASONS } from "@/lib/historical-evidence/classify";
 import { requireAdmin, deniedWrite } from "../access";
 
@@ -30,6 +30,14 @@ const bodyZ = z.discriminatedUnion("action", [
       identity: z.string().min(1).max(600),
       payer: z.enum(["GUIDE_PERSONAL", "GUIDE_ADVANCE", "COMPANY_DIRECT"]),
       reason: z.string().max(300).optional(),
+    }).strict()).min(1).max(40),
+  }).strict(),
+  z.object({
+    action: z.literal("select_rows"), snapshotHash: hash,
+    rows: z.array(z.object({
+      identity: z.string().min(1).max(600),
+      certify: z.boolean(),
+      acknowledgeReceipt: z.boolean().optional(),
     }).strict()).min(1).max(40),
   }).strict(),
   z.object({ action: z.literal("prepare_certificate"), snapshotHash: hash, source: z.enum(["GUIDE_REPORTED", "ADMIN_RECORDED"]) }).strict(),
@@ -73,6 +81,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         return NextResponse.json({ ok: true, review: await decide(id, actor, { kind: "REOPEN", snapshotHash: b.snapshotHash, reviewVersion: b.reviewVersion, note: b.note }) });
       case "confirm_payers":
         return NextResponse.json({ ok: true, confirmed: await confirmPayers(id, actor, { snapshotHash: b.snapshotHash, rows: b.rows }) });
+      case "select_rows":
+        return NextResponse.json({ ok: true, ...(await selectRows(id, actor, { snapshotHash: b.snapshotHash, rows: b.rows })) });
       case "prepare_certificate": {
         const cert = await prepareCertificate(id, actor, { snapshotHash: b.snapshotHash, source: b.source });
         return NextResponse.json({ ok: true, certificate: { id: cert.id, certificateNo: cert.certificateNo, status: cert.status, source: cert.source } });
