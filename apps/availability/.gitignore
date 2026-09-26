@@ -11,3 +11,4 @@ next-env.d.ts
 # The browser the renderer uses, downloaded by a build step.
 .browser-cache/
 .e2e-outbound.log
+.e2e-drive.log

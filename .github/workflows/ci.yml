@@ -229,6 +229,17 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens
 
+      # The slip-correction page in a real browser, Google faked at the network layer only:
+      # non-admins are refused, opening it writes nothing, the button needs a reason and a
+      # confirmation, one row and one notice change, the rightful row does not, and a failed
+      # Drive rename is retried on the same file id. It truncates its own tables.
+      - name: Slip correction in a real browser
+        run: node scripts/e2e/slip-correction.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/slip-correction
+
       - name: Keep the historical evidence screenshots (invented data)
         if: always()
         uses: actions/upload-artifact@v4
