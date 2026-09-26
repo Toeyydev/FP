@@ -125,8 +125,20 @@ export type CertificateView = {
  * is. Anyone reconciling against PEAK needs both documents and should be told so here,
  * rather than discovering the totals differ and assuming one of them is wrong.
  */
+/*
+ * It said "รายการอื่นในเอกสาร PEAK ที่อ้างอิง" — other lines in THE REFERENCED PEAK
+ * document — and this page references none. It never has: the PDF is rendered and filed
+ * before the certificate is linked, so at the moment these bytes are written the EXP
+ * usually does not exist yet, and nowhere on the page is one named.
+ *
+ * So the reader was sent to a document with no number, no name, and sometimes no
+ * existence. The point of the sentence survives without that: what it has to say is that
+ * this page is not the whole of the job's accounting, and reconciling needs this page
+ * together with the documents for everything else — named as such, not as "both",
+ * because the page names only one document.
+ */
 export const SCOPE_NOTICE_TH =
-  "เอกสารฉบับนี้ครอบคลุมเฉพาะรายการค่าใช้จ่ายที่ระบุด้านล่าง และไม่ครอบคลุมค่าจ้าง ค่าตอบแทน หรือรายการอื่นในเอกสาร PEAK ที่อ้างอิง";
+  "เอกสารฉบับนี้ครอบคลุมเฉพาะรายการค่าใช้จ่ายที่ระบุด้านล่าง ไม่ครอบคลุมค่าจ้าง ค่าตอบแทน หรือรายการอื่นของใบงานนี้ การกระทบยอดกับบันทึกบัญชีของงานนี้ให้ใช้เอกสารฉบับนี้ร่วมกับเอกสารประกอบของรายการอื่นดังกล่าว";
 
 /**
  * Umpush first, and not for looks: for the text layer.
