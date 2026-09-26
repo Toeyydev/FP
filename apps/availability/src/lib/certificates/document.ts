@@ -27,6 +27,12 @@ export function thaiDate(iso: string): string {
   return `${Number(m[3])} ${TH_MONTH[Number(m[2]) - 1] ?? ""} ${Number(m[1]) + 543}`;
 }
 
+/** An instant's civil date in Bangkok, "YYYY-MM-DD". */
+function bangkokDay(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? "" : new Date(t + 7 * 3_600_000).toISOString().slice(0, 10);
+}
+
 /** An instant, in Bangkok, to the minute. Fixed offset — the country has no DST. */
 export function thaiDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -232,7 +238,7 @@ export function renderCertificateHtml(v: CertificateView): string {
 ${v.draft ? `<div class="draft-mark">ร่าง — ยังไม่รับรอง · ยังไม่ใช่หลักฐานบัญชี</div>` : ""}
 <div class="head">
   <div class="org">${esc(CO.brandName)}<small>${esc(CO.legalNameTh)} · เลขประจำตัวผู้เสียภาษี ${esc(CO.taxId)}</small></div>
-  <div class="no">เลขที่<b>${esc(v.certificateNo)}</b>${esc(thaiDate(p.tourDate))}</div>
+  <div class="no">เลขที่<b>${esc(v.certificateNo)}</b>${v.draft || !v.attestedAt ? "ยังไม่รับรอง" : `วันที่รับรอง ${esc(thaiDate(bangkokDay(v.attestedAt)))}`}</div>
 </div>
 
 <h1>ใบรับรองแทนใบเสร็จรับเงิน</h1>
@@ -255,6 +261,7 @@ ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รั
     recordedByName: p.recordedBy?.name ?? null,
     recordedAt: p.recordedBy?.at ?? null,
     draft: v.draft,
+    tourDate: p.tourDate,
   }, thaiDateTime))}</td></tr>
   <tr><th>จำนวนรายการ</th><td>${int(p.rows.length)} รายการ รวม ${money(p.totalSatang)} บาท</td></tr>
 </table>
