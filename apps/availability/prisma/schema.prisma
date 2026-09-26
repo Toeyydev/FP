@@ -523,6 +523,7 @@ model JobSheet {
   origin             JobSheetOrigin       @default(NORMAL)
   reconstructionNote String? // written once at reconstruction; never edited
   historicalReview   HistoricalJobReview?
+  evidenceReview     HistoricalEvidenceReview?
   ref                String? // FOLK-BKK-YYYYMMDD-NN
   guideId            String
   date               String // "YYYY-MM-DD"
@@ -1650,4 +1651,43 @@ model AdvancePeakDocumentLink {
   @@unique([kind, sourceId])
   @@unique([documentType, documentNo])
   @@index([documentNo])
+}
+
+/// An admin's decision about a historical job's evidence, for the campaign that closes out
+/// every job before the certificate process existed (lib/historical-evidence).
+///
+/// One row per job sheet, and only ever written by an admin action — never by a
+/// migration, a seed, a cron job or a page load. The classification itself is computed
+/// from the data every time; this holds only what a person decided, what they were
+/// looking at when they decided it, and who they were.
+///
+///   NOT_REQUIRED   "nothing on this sheet needs a certificate", with a reason code.
+///                  Only valid while `snapshotHash` matches the sheet: a sheet that has
+///                  changed since reads as needing review again, whatever this says.
+///   REVIEWED       an admin looked at the job and recorded a note, without concluding
+///                  it. Progress, not a verdict.
+///   REOPENED       a NOT_REQUIRED that an admin took back.
+///
+/// Who decided is read from the session. `version` fences concurrent decisions: a write
+/// that did not see the latest version changes nothing.
+model HistoricalEvidenceReview {
+  id            String   @id @default(cuid())
+  jobSheetId    String   @unique
+  jobSheet      JobSheet @relation(fields: [jobSheetId], references: [id], onDelete: Cascade)
+  /// The campaign cutoff this decision belongs to, "YYYY-MM-DD".
+  campaign      String
+  decision      String
+  reasonCode    String?
+  note          String?
+  /// lib/historical-evidence/snapshot — the evidence-relevant content of the sheet.
+  snapshotHash  String
+  decidedById   String
+  decidedByName String
+  decidedByRole String
+  decidedAt     DateTime
+  version       Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([decision])
 }
