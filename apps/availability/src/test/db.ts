@@ -18,7 +18,7 @@ const TABLES = [
   // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it
   // makes the NEXT test collide on a file id its own fake Drive just reissued.
   "ExpenseCertificate", "AttesterSignature", "HistoricalEvidenceReview",
-  "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
+  "PaymentTransaction", "PaymentEvidence", "PaymentBatchItem", "PaymentBatch", "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   "Availability", "RefreshToken", "User", "Tour",
 ];
 

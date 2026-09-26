@@ -63,6 +63,9 @@ describe("repository invariant — only payments-v2 can make a job PAID", () => 
       "app/api/peak/status/route.ts",
       // Skips cancelling a job that was already paid (a filter).
       "lib/booking-import.ts",
+      // Takes a wrongly attached slip off a legacy PAID row: PAID only in the guard
+      // (`where`), and the write sets PENDING. It can un-pay, never pay.
+      "lib/payment-slip-correction.ts",
       // The canonical writer.
       "lib/payments-v2/service.ts",
       // The two-stage PEAK document's own status, not a job's.
