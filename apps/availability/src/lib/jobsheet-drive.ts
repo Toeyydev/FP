@@ -5,11 +5,8 @@ import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, gu
 import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
 import { jobSheetTotals } from "@/lib/peak-sync";
 import { paidByDocLabel } from "@/lib/paid-by-label";
-import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { approvalHtml, approvalView, approverNameOf } from "@/lib/jobsheet-approval";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { PUBLIC_BASE_URL } from "@/lib/site";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -75,22 +72,9 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
         </tbody>
       </table>` : "";
 
-    // Certification footer — same certifier + first-save date as the app/PDF; the
-    // PNG is inlined base64 so the Doc conversion never depends on a live fetch.
-    const certDate = certificationDate(sheet);
-    let sigSrc = `${PUBLIC_BASE_URL}${JOB_SHEET_CERTIFIER.signatureUrl}`;
-    try { sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`; } catch { /* fall back to the public URL */ }
-    const certHtml = `
-      <div style="margin-top:26px;border-top:1px dashed #cdd3cf;padding-top:12px">
-        <div style="font-size:10px;color:#5c655f;line-height:1.6;text-align:left;margin-bottom:8px">${esc(CERT_STATEMENT_TH)}</div>
-        <table style="margin-left:auto;border-collapse:collapse"><tbody>
-          <tr><td align="center" style="color:#777;font-size:11px;letter-spacing:1px">CERTIFIED BY</td></tr>
-          <tr><td align="center"><img src="${sigSrc}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" width="170" /></td></tr>
-          <tr><td align="center" style="font-weight:700">(${esc(JOB_SHEET_CERTIFIER.nameFullTh)})</td></tr>
-          <tr><td align="center" style="color:#6b746f;font-size:11px">${esc(JOB_SHEET_CERTIFIER.roleLabelTh)}</td></tr>
-          <tr><td align="center" style="color:#666;font-size:12px">${certDate ? `วันที่ ${esc(fmtCertDate(certDate))}` : "—"}</td></tr>
-        </tbody></table>
-      </div>`;
+    // Approval, not certification — who approved the expenses and when. The certificate in
+    // lieu of receipt is a separate document with its own file (lib/jobsheet-approval).
+    const approvalBlock = approvalHtml(approvalView(sheet, await approverNameOf(prisma, sheet.approvedBy)), esc);
 
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Sarabun,Arial,sans-serif;color:#111;font-size:13px">
       <div style="font-size:12px;font-weight:600;letter-spacing:1px">${esc(CO.brandName)}</div>
@@ -133,7 +117,7 @@ ${advanceHtml}
         ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
         <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Net Pay to Guide <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนที่ต้องชำระให้มัคคุเทศก์</span></b></td><td align="right"><b>${esc(thb(money.netPayToGuide))}</b></td></tr>
       </tbody></table>
-      ${certHtml}
+      ${approvalBlock}
     </body></html>`;
 
     const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });

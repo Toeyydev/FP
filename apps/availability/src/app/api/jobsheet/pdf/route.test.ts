@@ -62,3 +62,28 @@ describe("the printable job sheet names who paid each expense", () => {
     expect(paidByCell(html, "Row advance")).toBe("Advance");
   });
 });
+
+// The job sheet records approval; the certificate in lieu of receipt is a separate document.
+const LEGACY = [/ข้าพเจ้าขอรับรอง/, /CERTIFIED BY/i, /approver-signature/, /data:image\/png/, /ผู้จัดทำ \/ ผู้รับรอง/, /sigimg|sigfail|signame|sigdate/];
+
+describe("the printable job sheet carries approval, not a certification", () => {
+  it("an approved sheet shows status, approver and approval time — and no statement, signature or signature date", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: ROWS, guideFee: { price: 1200, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"),
+      approvalStatus: "APPROVED", approvedBy: "u_approver", approvedAt: new Date("2030-05-07T07:05:00Z"), certifiedAt: new Date("2030-05-06T10:00:00Z") });
+    prismaMock.user.findUnique.mockImplementation(async (a: { where: { id?: string } }) =>
+      a.where.id === "u_approver" ? { fullName: "Approver Example", displayName: "Approver Example", email: "approver@example.test" } : { guideId: "G-TEST", fullName: "Guide A", displayName: "Guide A" });
+    const html = await render();
+    expect(html).toContain("อนุมัติแล้ว");
+    expect(html).toContain("Approver Example");
+    expect(html).toContain("7 May 2030 14:05"); // Bangkok time
+    expect(html).toContain("ไม่ใช่ใบรับรองแทนใบเสร็จรับเงิน");
+    for (const re of LEGACY) expect(html).not.toMatch(re);
+  });
+
+  it("an unapproved sheet says so and names nobody", async () => {
+    const html = await render();
+    expect(html).toContain("ยังไม่อนุมัติ");
+    expect(html).not.toContain("ผู้อนุมัติ</small>");
+    for (const re of LEGACY) expect(html).not.toMatch(re);
+  });
+});

@@ -240,6 +240,16 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/slip-correction
 
+      # The job sheet page itself: approval (status, approver, time) instead of the old
+      # certification statement and signature; the certificate in lieu of receipt shown by
+      # number to an admin only, never printed, never created by opening the page.
+      - name: Job sheet approval in a real browser
+        run: node scripts/e2e/jobsheet-approval.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-approval
+
       - name: Keep the historical evidence screenshots (invented data)
         if: always()
         uses: actions/upload-artifact@v4

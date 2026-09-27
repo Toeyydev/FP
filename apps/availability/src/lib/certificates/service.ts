@@ -127,7 +127,7 @@ function eligibility(sheet: JobSheet, rows: CertifiableRow[], source: ExpenseSou
   // made on their behalf. An ADMIN_RECORDED one exists precisely for the case where they
   // did not: the expenses still happened and the company still has to account for them.
   // Not certifiedAt in either case — that is the operator's first save and says nothing
-  // about the guide (lib/certifier).
+  // about the guide (JobSheet.certifiedAt).
   if (source === "GUIDE_REPORTED" && !sheet.guideExpensesAt) {
     out.push("This job sheet has no expense report from the guide. A certificate that says the guide reported these expenses cannot be issued until they have — record the rows as an admin instead if that is what happened.");
   }

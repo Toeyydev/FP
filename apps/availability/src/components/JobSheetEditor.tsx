@@ -8,7 +8,8 @@ import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGO
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
-import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { approvalView, JOB_SHEET_ROLE_NOTE_TH } from "@/lib/jobsheet-approval";
+import CertificateReference from "@/components/CertificateReference";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
@@ -86,6 +87,7 @@ export default function JobSheetEditor() {
   const [saved, setSaved] = useState(false);
   const [canEdit, setCanEdit] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [approvedByName, setApprovedByName] = useState<string | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
@@ -136,7 +138,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setIsAdmin(d.isAdmin === true); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setIsAdmin(d.isAdmin === true); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -1798,27 +1800,29 @@ export default function JobSheetEditor() {
          </div>
        )}
 
-       {/* Certified by — the document sign-off. Fixed authorized certifier (see
-           lib/certifier); the date is the sheet's FIRST successful save, stamped
-           server-side — never the tour date, never changed by reopening. Printable,
-           and kept together on one page. */}
-       <div className="js-certify" style={{ marginTop: 26, borderTop: "1px dashed var(--line,#d9d9d9)", paddingTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
-         <div style={{ textAlign: "center", width: "100%" }}>
-           <div style={{ fontSize: 10.5, color: "var(--ink-soft,#777)", lineHeight: 1.6, textAlign: "left", marginBottom: 12 }}>{CERT_STATEMENT_TH}</div>
-           <div style={{ fontSize: 11, color: "var(--ink-soft,#888)", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600 }}>Certified by</div>
-           {/* eslint-disable-next-line @next/next/no-img-element */}
-           <img
-             src={JOB_SHEET_CERTIFIER.signatureUrl}
-             alt={`Signature of ${JOB_SHEET_CERTIFIER.nameTh}`}
-             style={{ maxWidth: "min(180px, 100%)", width: "auto", height: "auto", objectFit: "contain", display: "block", margin: "6px auto -4px", userSelect: "none", pointerEvents: "none" }}
-             draggable={false}
-             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; console.warn("Job-sheet certifier signature failed to load:", JOB_SHEET_CERTIFIER.signatureUrl); }}
-           />
-           <div style={{ fontWeight: 600, marginTop: 8 }}>({JOB_SHEET_CERTIFIER.nameFullTh})</div>
-           <div style={{ fontSize: 11, color: "var(--ink-soft,#777)" }}>{JOB_SHEET_CERTIFIER.roleLabelTh}</div>
-           <div style={{ fontSize: 12.5, color: "var(--ink-soft,#666)", marginTop: 4 }}>{(() => { const d = fmtCertDate(certificationDate(sheet)); return d ? `วันที่ ${d}` : canEdit ? "date set on first save" : "\u2014"; })()}</div>
+       {/* Approval — who approved the expenses, and when. A job sheet is the operating
+           record and the expense approval; the certificate in lieu of receipt is a separate
+           accounting document, so there is no certification statement or signature here
+           (lib/jobsheet-approval). Printable. */}
+       {(() => {
+         const a = approvalView(sheet, approvedByName);
+         return (
+           <div className="js-approval" aria-label="การอนุมัติค่าใช้จ่าย" style={{ marginTop: 26, borderTop: "1px dashed var(--line,#d9d9d9)", paddingTop: 12, breakInside: "avoid", pageBreakInside: "avoid" }}>
+             <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 4 }}>Approval <span style={{ fontSize: 10.5, fontWeight: 400, color: "var(--ink-soft,#8a8f8b)" }}>การอนุมัติค่าใช้จ่าย</span></div>
+             <table style={{ borderCollapse: "collapse", fontSize: 12.5 }}><tbody>
+               <tr><td style={{ color: "var(--ink-soft,#555)", paddingRight: 12 }}>สถานะ</td><td><b style={{ color: a.approved ? "var(--green,#1b7a3e)" : "inherit" }}>{a.statusTh}</b> · {a.statusEn}</td></tr>
+               {a.approved && <tr><td style={{ color: "var(--ink-soft,#555)", paddingRight: 12 }}>ผู้อนุมัติ</td><td>{a.approverName ?? "—"}</td></tr>}
+               {a.approved && <tr><td style={{ color: "var(--ink-soft,#555)", paddingRight: 12 }}>วันเวลาที่อนุมัติ</td><td>{a.approvedAt ?? "—"}</td></tr>}
+             </tbody></table>
+             <div style={{ fontSize: 10.5, color: "var(--ink-soft,#6b746f)", marginTop: 6, lineHeight: 1.5 }}>{JOB_SHEET_ROLE_NOTE_TH}</div>
+           </div>
+         );
+       })()}
+       {isAdmin && sheet.ref && (
+         <div className="no-print">
+           <CertificateReference guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />
          </div>
-       </div>
+       )}
        {/* HISTORY & FILES — everything here is a record that already exists:
            timeline events come from the sheet/assignment/check-in/report/payment
            timestamps and the audit log (assembled in /api/jobsheet); files are the
