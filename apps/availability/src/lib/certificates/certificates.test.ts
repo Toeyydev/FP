@@ -421,7 +421,7 @@ describe("repository invariant — this feature does not claim to be a signature
   });
 
   it("certifiedAt is never used as evidence from the guide", () => {
-    // It is the operator's first save (lib/certifier). The guide's own act is
+    // It is the operator's first save (JobSheet.certifiedAt). The guide's own act is
     // guideExpensesAt, and only that may stand for them.
     for (const f of ["src/lib/certificates/payload.ts", "src/lib/certificates/service.ts", "src/lib/certificates/document.ts"]) {
       expect(code(f), `${f} must not read certifiedAt`).not.toContain("certifiedAt");

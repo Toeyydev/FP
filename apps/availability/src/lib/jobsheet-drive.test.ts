@@ -60,3 +60,19 @@ describe("the Google Doc in Drive names who paid each expense", () => {
     expect(html).toMatch(/Reimbursement Due[\s\S]*?฿30\.00/);
   });
 });
+
+describe("the Google Doc carries approval, not a certification", () => {
+  const LEGACY = [/ข้าพเจ้าขอรับรอง/, /CERTIFIED BY/i, /approver-signature/, /data:image\/png/, /ผู้จัดทำ \/ ผู้รับรอง/];
+  it("shows who approved and when, with no statement, signature or signature date", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: ROWS, guideFee: { price: 1200, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"),
+      approvalStatus: "APPROVED", approvedBy: "u_approver", approvedAt: new Date("2030-05-07T07:05:00Z"), certifiedAt: new Date("2030-05-06T10:00:00Z") });
+    prismaMock.user.findUnique.mockImplementation(async (a: { where: { id?: string } }) =>
+      a.where.id === "u_approver" ? { fullName: "Approver Example", displayName: "Approver Example", email: null } : { fullName: "Guide A", displayName: "Guide A" });
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    const { html } = saveHtml.mock.calls[0][0];
+    expect(html).toContain("อนุมัติแล้ว");
+    expect(html).toContain("Approver Example");
+    expect(html).toContain("7 May 2030 14:05");
+    for (const re of LEGACY) expect(html).not.toMatch(re);
+  });
+});

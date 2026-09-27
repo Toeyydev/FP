@@ -8,11 +8,9 @@ import { canViewFinance } from "@/lib/roles";
 import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
-import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { approvalHtml, approvalView, approverNameOf } from "@/lib/jobsheet-approval";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -50,29 +48,14 @@ export async function GET(req: NextRequest) {
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
   const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, updatedAt: null as Date | null };
-  // Certification: date = the sheet's first successful save (fallback: approval
-  // time for historical sheets; blank dots when neither exists — never tour date).
-  // The signature PNG is inlined as base64 so print / html2pdf can never race an
-  // async image load and silently drop it; if it can't be read, say so on the
-  // document instead of quietly producing an uncertified-looking sheet.
-  const certDate = existing ? certificationDate(existing) : null;
+  // Approval, not certification: a job sheet records who approved its expenses and when.
+  // A certificate in lieu of receipt is a separate document (lib/certificates), so this
+  // PDF carries no certification statement and no signature (lib/jobsheet-approval).
+  const approval = approvalView(existing ?? {}, await approverNameOf(prisma, existing?.approvedBy));
   // Advance / settlement ledger for the accountant: only rendered when an advance
   // exists. Cash movements — never added into the expense or payable totals.
   // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
   const advView = guideId ? await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (existing?.expenses as unknown as Expense[]) ?? [] }) : null;
-  let sigSrc: string | null = null;
-  try {
-    sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`;
-  } catch { /* fs layout differs on the deployed container — try HTTP next */ }
-  // The app can always reach its own public URL even when the fs path can't be
-  // found (e.g. a different working directory in production) — self-fetch and
-  // inline. Base64 keeps print/html2pdf immune to image-load races.
-  if (!sigSrc) {
-    try {
-      const res = await fetch(new URL("/approver-signature.png", req.nextUrl.origin), { cache: "no-store" });
-      if (res.ok) sigSrc = `data:image/png;base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
-    } catch { /* fall back to the plain URL <img> + client-side warning */ }
-  }
   let bookings = (sheet.bookings as Booking[]) ?? [];
   // No saved sheet yet → pull the slot's live bookings so the prep PDF still
   // lists every guest (name + OTA ref + pax) for the operator to work from.
@@ -208,15 +191,6 @@ export async function GET(req: NextRequest) {
   .summary span small { display:block; margin-left:0; }
   .keep { break-inside:avoid; page-break-inside:avoid; }
   h3 { break-after:avoid-page; page-break-after:avoid; }
-  .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
-  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.6; max-width:none; text-align:left; }
-  .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
-  .approve .sigbox { text-align:center; width:290px; }
-  .approve .sigimg { height:52px; display:block; margin:0 auto -8px; user-select:none; -webkit-user-select:none; pointer-events:none; }
-  .approve .sigline { margin-top:2px; }
-  .approve .signame { font-weight:600; margin-top:2px; }
-  .approve .sigdate { color:#6b746f; margin-top:4px; font-size:11px; }
-  @media print { .approve .sigimg { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
   .strike { display:inline-block; width:60%; height:0; border-top:1.4px solid #333; vertical-align:middle; }
 </style></head>
 <body>
@@ -343,18 +317,7 @@ export async function GET(req: NextRequest) {
         ${money.settledByCompany > 0 ? `<div class="note">${thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it.<br><small>ค่าใช้จ่ายส่วนนี้บริษัทชำระให้ผู้ขายโดยตรงแล้ว</small></div>` : ""}
       </div>
     </div>
-    <div class="approve">
-      <div class="certnote">${esc(CERT_STATEMENT_TH)}</div>
-      <div class="sigwrap">
-        <div class="sigbox">
-          <img class="sigimg" src="${sigSrc ?? JOB_SHEET_CERTIFIER.signatureUrl}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" draggable="false" onerror="this.style.display='none';var w=document.getElementById('sigfail');if(w)w.style.display='block'" />
-          <div id="sigfail" style="display:none;color:#b00020;font-size:11px;font-weight:600;padding:14px 0">⚠ ลายเซ็นผู้รับรองโหลดไม่สำเร็จ — เอกสารนี้ยังไม่สมบูรณ์ / certifier signature failed to load</div>
-          <div class="signame">(${esc(JOB_SHEET_CERTIFIER.nameFullTh)})</div>
-          <div class="sigline" style="color:#6b746f;font-size:11px">${esc(JOB_SHEET_CERTIFIER.roleLabelTh)}</div>
-          <div class="sigdate">${certDate ? `วันที่ ${esc(fmtCertDate(certDate))}` : "วันที่ ......../......../........"}</div>
-        </div>
-      </div>
-    </div>
+    ${approvalHtml(approval, esc)}
   </div>
   <script>
     var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0}, REVIEW=${Number(cost.reviewOwn) || 0};

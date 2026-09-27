@@ -10,6 +10,7 @@ import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
+import { approverNameOf } from "@/lib/jobsheet-approval";
 import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
 import { canViewFinance, isAdmin } from "@/lib/roles";
 import { redactRowsForNonAdmin } from "@/lib/certificates/access";
@@ -267,6 +268,8 @@ export async function GET(req: NextRequest) {
   // no PEAK call, nothing posted. `accounts` is config, `peak` is the verdict the
   // sidebar renders and the Sync action would gate on.
   const accounts = await peakAccountMap();
+  // Who approved the expenses, by name — the sheet shows approval, not a certification.
+  const approvedByName = await approverNameOf(prisma, existing?.approvedBy);
   const peak = !isOps ? null : (() => {
     const exps = ((existing?.expenses as Expense[]) ?? defaultExpenses) as Expense[];
     const gf = ((existing?.guideFee && Object.keys(existing.guideFee as object).length ? existing.guideFee : DEFAULT_GUIDE_FEE) as unknown) as GuideFee;
@@ -323,7 +326,7 @@ export async function GET(req: NextRequest) {
     // those bookings belong to the original guide at this slot, and reconciling would
     // take every one of them off again. Kept exactly as saved, like a past tour.
     if (date < todayBKK || handover?.role === "to") {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -397,7 +400,7 @@ export async function GET(req: NextRequest) {
       .map(toSheetBooking);
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
