@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
   const guideId = isOps ? (req.nextUrl.searchParams.get("guideId") || session.user.guideId || "") : (session.user.guideId || "");
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
 
-  const details = await guideTourDetails(guideId, date, slotIdx);
+  // A guide gets phone numbers for their own guests only; an operator sees them all.
+  const details = await guideTourDetails(guideId, date, slotIdx, { everyPhone: isOps });
   if (!details) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
   return NextResponse.json(details);
 }

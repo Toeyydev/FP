@@ -136,7 +136,7 @@ export function guestPhone(r: Any, ab: Any = obj(arr(r.activityBookings)[0])): {
   const sources = [cust, obj(cust.contactDetails), obj(r.contactDetails), passenger, obj(passenger.contactDetails), recipient];
   // contactDetailsHidden is the channel telling us the guest's details are withheld; on
   // the customer or the passenger it covers the guest, so no fallback may reveal them.
-  const hidden = [cust, obj(cust.contactDetails), passenger].some((o) => o.contactDetailsHidden === true);
+  const hidden = [cust, obj(cust.contactDetails), obj(r.contactDetails), passenger, obj(passenger.contactDetails)].some((o) => o.contactDetailsHidden === true);
   if (hidden) return { phone: undefined, hidden: true };
   const clean = (v: unknown) => (typeof v === "string" || typeof v === "number") && String(v).trim() ? String(v).trim().slice(0, 40) : undefined;
   for (const o of sources) {

@@ -77,6 +77,13 @@ describe("every import path stores the guest's phone", () => {
     expect(await phoneOf({ id: kept.id })).toBe("+61 400 010 555");
   });
 
+  it("an exact duplicate that arrives with hidden details clears the number on the row that stays", async () => {
+    const kept = await prisma.booking.create({ data: { source: "GetYourGuide", externalId: "0997", externalRef: "GYGTEST7", confirmationCode: "CODE-GYGTEST7", customerName: "Anna Example", date: DATE, slotIdx: 0, status: "PENDING", phone: "+61 400 010 700" } });
+    await importRawBooking(payload({ id: 1007, ref: "GYGTEST7", customer: { phoneNumber: "+61 400 010 700", contactDetailsHidden: true } }));
+    expect((await prisma.booking.findFirstOrThrow({ where: { externalId: "1007" } })).status).toBe("IGNORED");
+    expect(await phoneOf({ id: kept.id })).toBeNull();
+  });
+
   it("an exact duplicate never overwrites a number the kept row already has", async () => {
     const kept = await prisma.booking.create({ data: { source: "GetYourGuide", externalId: "0998", externalRef: "GYGTEST6", confirmationCode: "CODE-GYGTEST6", customerName: "Anna Example", date: DATE, slotIdx: 0, status: "PENDING", phone: "+61 400 010 600" } });
     await importRawBooking(payload({ id: 1006, ref: "GYGTEST6", customer: { phoneNumber: "+61 400 010 666" } }));
@@ -137,6 +144,14 @@ describe("who gets a WhatsApp link", () => {
     const byRef = Object.fromEntries(d.bookings.map((b) => [b.externalRef, b.phone]));
     expect(byRef.GYGMINE).toBe("081-010-0777");
     expect(byRef.GYGOTHER).toBeNull();
+  });
+
+  it("an operator viewing the guide's tour details still sees every guest's number, as before", async () => {
+    await departure();
+    const d = (await guideTourDetails("G-901", DATE, 0, { everyPhone: true }))!;
+    const byRef = Object.fromEntries(d.bookings.map((b) => [b.externalRef, b.phone]));
+    expect(byRef.GYGMINE).toBe("081-010-0777");
+    expect(byRef.GYGOTHER).toBe("+49 151 0100 888");
   });
 
   it("looking up contacts writes nothing — no phone lands on the job sheet", async () => {

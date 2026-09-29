@@ -237,6 +237,15 @@ describe("guest phone — every place a channel may put it, and none it may not"
     expect(nested.phoneHidden).toBe(true);
   });
 
+  it("the hidden flag counts wherever the guest's details sit — top-level or passenger contactDetails too", () => {
+    const top = parseBokun({ customer: { phoneNumber: "+39333111222" }, contactDetails: { contactDetailsHidden: true } });
+    expect(top.phone).toBeUndefined();
+    expect(top.phoneHidden).toBe(true);
+    const pax = parseBokun({ customer: { phoneNumber: "+39333111222" }, activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { contactDetails: { contactDetailsHidden: true } } }] }] });
+    expect(pax.phone).toBeUndefined();
+    expect(pax.phoneHidden).toBe(true);
+  });
+
   it("a shown number carries no phoneHidden flag", () => {
     expect(parseBokun({ customer: { phoneNumber: "+39333111222", contactDetailsHidden: false } }).phoneHidden).toBeUndefined();
   });

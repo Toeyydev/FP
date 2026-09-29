@@ -7,6 +7,7 @@
 //   3. on a split departure a guide gets buttons only for their own guests, never the
 //      other guide's; a cancelled booking gets none
 //   4. the button is not printed, and opening the pages writes no phone onto the sheet
+//   5. an operator viewing a guide's tour details still sees every guest's button
 //
 // Run after `next build`:  node scripts/e2e/guest-whatsapp.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and
@@ -61,6 +62,7 @@ async function seed() {
     users[key] = await prisma.user.create({ data: { email: `${guideId.toLowerCase()}@example.test`, displayName: name, fullName: name, guideId, role: "GUIDE", state: "ACTIVE", passwordHash: hash } });
     await prisma.assignment.create({ data: { guideId, date: DATE, slotIdx: 0, tourId: "T-900", pax: 4 } });
   }
+  users.OP = await prisma.user.create({ data: { email: "op@example.test", displayName: "Op Example", fullName: "Op Example", role: "OPERATOR", state: "ACTIVE", passwordHash: hash } });
   const mk = (ref, name, over) => prisma.booking.create({ data: { source: "GetYourGuide", externalRef: ref, customerName: name, date: DATE, slotIdx: 0, tourId: "T-900", pax: 2, status: "ASSIGNED", ...over } });
   await mk("GYGTHAI", "Thai Local", { assignedGuideId: "G-901", phone: "081-010-0777" });
   await mk("GYGINTL", "Intl Guest", { assignedGuideId: "G-901", phone: "US+1 555 010 0123" });
@@ -134,6 +136,16 @@ try {
     check(`${label}: the button is not printed`, printed === 0, String(printed));
     await page.emulateMediaType("screen");
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `${label.replace(/ /g, "-")}-mobile.png`), fullPage: true });
+    await page.close();
+  }
+  // An operator keeps seeing every guest's button on a guide's tour details.
+  {
+    const page = await browser.newPage();
+    await page.setCookie(await sessionCookie(data.users.OP.email));
+    await page.goto(`${BASE}/tour-details?date=${DATE}&slotIdx=0&guideId=G-901`, { waitUntil: "networkidle0" });
+    await pause(1200);
+    const hrefs = (await buttons(page)).map((x) => x.href).sort();
+    check("an operator still sees every guest's button, including the other guide's", JSON.stringify(hrefs) === JSON.stringify(["https://wa.me/15550100123", "https://wa.me/491510100888", "https://wa.me/66810100777"]), hrefs.join(","));
     await page.close();
   }
   // Guide B opening guide A's job sheet gets nothing.
