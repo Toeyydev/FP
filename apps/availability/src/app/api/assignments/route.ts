@@ -16,6 +16,8 @@ import { handoverLock } from "@/lib/tour-handover-server";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 import { manualAssignBlockers } from "@/lib/manual-assign";
 import { sendTourCalendarInvite } from "@/lib/calendar";
+import { notifyGuide } from "@/lib/booking-import";
+import { directAssignmentNotice } from "@/lib/assignment-notice";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -165,12 +167,14 @@ export async function POST(req: NextRequest) {
     // Tell the guide it is in their schedule, as an accepted offer does. Best-effort.
     try { await sendTourCalendarInvite(guideId, date, slotIdx); } catch { /* never block on email */ }
     try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, date, slotIdx); } catch { /* never block on calendar */ }
-    if (lineEnabled && g?.lineUserId) {
-      const dateLabel = new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-      try {
-        await linePush(g.lineUserId, [`📌 You're booked${g.displayName ? `, ${g.displayName.trim().split(/\s+/)[0]}` : ""}.`, "", tour?.name ?? tourId, `${dateLabel} · ${SLOT_TIMES[slotIdx] ?? ""}${pax != null ? ` · ${pax} pax` : ""}`, ...(tour?.meetingPoint ? [`📍 ${tour.meetingPoint}`] : []), "", "It's in your schedule in the Folkpaths app."].join("\n"));
-      } catch { /* never block on LINE */ }
-    }
+    // Every channel the guide can be reached on: in the app (the bell), a push to the
+    // phone or browser where the app is installed, and LINE when linked. Email is left to
+    // the calendar invite above. (A slot the guide already holds is refused above, so this
+    // is always news to them.)
+    const n = directAssignmentNotice({ guideName: g?.displayName ?? null, tourName: tour?.name ?? tourId, meetingPoint: tour?.meetingPoint ?? null, date, slotIdx, pax: pax ?? null });
+    try {
+      await notifyGuide(guideId, n.message, n.title, n.body, undefined, { url: `/tour-details?date=${date}&slotIdx=${slotIdx}`, email: false });
+    } catch { /* never block the assignment on a notice */ }
     return NextResponse.json({ ok: true, assigned: true, direct: true, bookings: booked.count, offersClosed: open.length });
   }
 
