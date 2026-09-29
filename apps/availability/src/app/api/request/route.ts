@@ -92,8 +92,8 @@ export async function POST(req: NextRequest) {
 
 // A generous window: a real applicant submits once, maybe twice after fixing a
 // field. Anything past this from one address is not a person filling in a form.
-const SIGNUP_LIMIT = 5;
-const SIGNUP_WINDOW_MS = 60 * 60_000;
+const SIGNUP_LIMIT = 10;
+const SIGNUP_WINDOW_MS = 10 * 60_000;
 
 async function postApplication(req: NextRequest) {
   const rl = rateLimit(callerKey(req.headers, "signup"), SIGNUP_LIMIT, SIGNUP_WINDOW_MS);

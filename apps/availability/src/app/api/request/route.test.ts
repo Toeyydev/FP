@@ -192,7 +192,7 @@ describe("POST /api/request — mobile application", () => {
   });
 
   it("rate-limits a caller hammering the form", async () => {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       expect((await POST(req(application(), "9.9.9.9"))).status).toBe(200);
     }
     const res = await POST(req(application(), "9.9.9.9"));
