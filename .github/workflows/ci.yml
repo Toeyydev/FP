@@ -259,6 +259,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guest-whatsapp
 
+      # A direct assignment reaches the guide: the operator assigns, the guide's bell shows
+      # it — a "You're booked" card with the tour — and a guide cannot assign.
+      - name: Direct-assignment notice in a real browser
+        run: node scripts/e2e/direct-assign-notice.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/direct-assign-notice
+
       - name: Keep the historical evidence screenshots (invented data)
         if: always()
         uses: actions/upload-artifact@v4

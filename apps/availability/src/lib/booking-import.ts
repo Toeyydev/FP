@@ -36,19 +36,22 @@ export async function notifyOps(message: string, title: string, body: string, op
   } catch { /* alerts are best-effort; never block import */ }
 }
 
-export async function notifyGuide(guideId: string, message: string, title: string, body: string, lineFlex?: { altText: string; contents: Record<string, unknown> }) {
+// `opts.url` is where a tap on the push lands (default: the app home). `opts.email: false`
+// skips the email copy — for a caller that already emails the guide something better
+// (the direct-assignment calendar invite), so they do not get two.
+export async function notifyGuide(guideId: string, message: string, title: string, body: string, lineFlex?: { altText: string; contents: Record<string, unknown> }, opts: { url?: string; email?: boolean } = {}) {
   try {
     const u = await prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true, email: true } });
     if (!u) return;
     await prisma.notification.create({ data: { userId: u.id, kind: "job-change", message } });
-    await sendPushToUser(u.id, { title, body, url: "/", tag: "job-change" });
+    await sendPushToUser(u.id, { title, body, url: opts.url ?? "/", tag: "job-change" });
     // On LINE, send the rich Flex card when one is supplied (e.g. the payment
     // breakdown table); otherwise fall back to the plain-text message.
     if (lineEnabled && u.lineUserId) await (lineFlex ? linePushFlex(u.lineUserId, lineFlex.altText, lineFlex.contents) : linePush(u.lineUserId, message));
     // Email is the catch-all: most guides have no push or LINE, so without this a
     // cancellation / group-change notice would never reach them. Skip placeholders.
     const realEmail = u.email && !/@(?:guides\.)?folkpath\.local$/i.test(u.email);
-    if (realEmail) await sendEmail({ to: u.email!, subject: title, text: message, html: `<p>${message}</p><p style="font-size:13px;color:#888"><a href="${siteUrl()}">Open Folkpaths</a></p>` }).catch(() => {});
+    if (realEmail && opts.email !== false) await sendEmail({ to: u.email!, subject: title, text: message, html: `<p>${message}</p><p style="font-size:13px;color:#888"><a href="${siteUrl()}">Open Folkpaths</a></p>` }).catch(() => {});
   } catch { /* best-effort */ }
 }
 
