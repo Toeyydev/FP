@@ -128,7 +128,11 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     if (row?.bookingNo) ticketsByRef.set(row.bookingNo, row.tickets ?? "");
   }
 
-  const shown = opts.ownShareOnly ? guideShare(bookings, guideId) : bookings;
+  const own = guideShare(bookings, guideId);
+  const shown = opts.ownShareOnly ? own : bookings;
+  // A split departure lists every guest on the web view, but a guest's phone goes only to
+  // the guide they are assigned to. The other guide sees the name, never the number.
+  const mine = new Set(own.map((b) => b.id));
   return {
     date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
     pax: assignment.pax, note: assignment.note, checkinState: lastCheckin?.type ?? null,
@@ -136,6 +140,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: b.phone, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
   };
 }
