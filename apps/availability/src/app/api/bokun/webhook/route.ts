@@ -30,16 +30,16 @@ export async function POST(req: NextRequest) {
     const p = parseBokun(raw);
     await audit({ action: "booking.received", entityType: "Booking", detail: { source: detectChannel(raw), code: p.confirmationCode, date: p.date, slotIdx: p.slotIdx } });
   } catch (e) {
-    console.error("[bokun:webhook] store failed", (e as Error).message);
+    console.error("[bokun:webhook] store failed", errorKind(e));
     // Don't lose the booking: store the raw payload as a "needs attention" row so
     // it surfaces in the operator inbox (under Connect tour) instead of vanishing.
     try {
       await prisma.booking.create({
         data: { source: detectChannel(raw) || "bokun", status: "PENDING", raw, productName: "⚠ Unparsed booking — needs attention" },
       });
-      await audit({ action: "booking.import_failed", entityType: "Booking", detail: { error: (e as Error).message } });
+      await audit({ action: "booking.import_failed", entityType: "Booking", detail: { error: errorKind(e) } });
     } catch (e2) {
-      console.error("[bokun:webhook] fallback store also failed", (e2 as Error).message);
+      console.error("[bokun:webhook] fallback store also failed", errorKind(e2));
     }
   }
 
@@ -50,4 +50,11 @@ export async function POST(req: NextRequest) {
 // Some providers ping with GET to verify the URL is reachable.
 export function GET() {
   return NextResponse.json({ ok: true, endpoint: "bokun-webhook" });
+}
+
+// What went wrong, without what was in it. A Prisma error message can quote the whole
+// write — guest name, phone and all — so only the error's kind and code are recorded.
+function errorKind(e: unknown): string {
+  const x = e as { name?: string; code?: string } | null;
+  return [x?.name || "Error", x?.code].filter(Boolean).join(" ");
 }

@@ -60,14 +60,14 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
       .catch(() => setAccountsError("Could not reach the server to load PEAK accounts."));
   }, []);
 
-  const dirty = !!rows?.some((c) => c.scope === "FIXED" && (draft[c.key] ?? "") !== (c.peakAccountCode ?? ""));
+  const dirty = !!rows?.some((c) => (draft[c.key] ?? "") !== (c.peakAccountCode ?? ""));
 
   async function save() {
     if (!rows) return;
     setBusy(true); setMsg("");
-    // Per-job categories are never sent — there is nothing to save and the server
-    // rejects them.
-    const mappings = rows.filter((c) => c.scope === "FIXED").map((c) => {
+    // Every category is sent, Other Tour Cost included: its default is optional,
+    // so an empty box is a real choice (no default) rather than nothing to save.
+    const mappings = rows.map((c) => {
       const code = (draft[c.key] ?? "").trim();
       // Send the name that belongs to the chosen code, so the stored snapshot can
       // never drift from the code it labels.
@@ -142,21 +142,17 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
                   const code = draft[c.key] ?? "";
                   // Live status from the DRAFT, so choosing an account flips the
                   // pill before saving rather than after a round trip.
-                  const status: Row["status"] = c.scope === "PER_JOB" ? "REVIEW_PER_JOB" : code.trim() ? "MAPPED" : "NOT_MAPPED";
+                  const status: Row["status"] = code.trim() ? "MAPPED" : c.scope === "PER_JOB" ? "REVIEW_PER_JOB" : "NOT_MAPPED";
                   return (
                     <tr key={c.key}>
                       <td>
                         <div style={{ fontWeight: 600 }}>{c.label}</div>
                         <div className="acct-sub">{c.th}</div>
-                        {c.scope === "PER_JOB" && <div className="acct-code">Manual review required</div>}
+                        {c.scope === "PER_JOB" && <div className="acct-code">Default optional</div>}
                       </td>
                       <td className="acct-sub">{c.example}</td>
                       <td>
-                        {c.scope === "PER_JOB" ? (
-                          // A standing account here would be applied to every one-off
-                          // cost this category exists to hold, so there is no control.
-                          <div className="acct-sub">{c.note ?? "Select the PEAK account on the Job Sheet when this category is used."}</div>
-                        ) : canEdit ? (
+                        {canEdit ? (
                           <>
                             <input
                               className="acct-input" list={`peak-accounts-${c.key}`} value={code} placeholder="Search code or name…"
@@ -166,11 +162,14 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
                             <datalist id={`peak-accounts-${c.key}`}>
                               {accounts.map((a) => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
                             </datalist>
-                            <div className="acct-code">{code ? (nameFor(code) || c.peakAccountName || (accounts.length ? "account not in the PEAK list" : "typed manually — PEAK list unavailable")) : "Not mapped"}</div>
+                            <div className="acct-code">{code ? (nameFor(code) || c.peakAccountName || (accounts.length ? "account not in the PEAK list" : "typed manually — PEAK list unavailable")) : c.scope === "PER_JOB" ? "No default set" : "Not mapped"}</div>
                           </>
                         ) : (
                           <div>{c.peakAccountCode ? `${c.peakAccountCode} — ${c.peakAccountName ?? ""}` : "—"}</div>
                         )}
+                        {/* An optional default still needs saying so: an empty box here
+                            is a valid choice, not an unfinished one. */}
+                        {c.scope === "PER_JOB" && c.note && <div className="acct-sub" style={{ marginTop: 4 }}>{c.note}</div>}
                       </td>
                       <td>
                         <span className={`acct-pill ${status === "MAPPED" ? "ok" : "warn"}`}>{STATUS_LABEL[status]}</span>
@@ -185,7 +184,8 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
           <div className="acct-foot">
             <span className="acct-sub">
               Choose each account once here and every future Job Sheet uses it automatically. Other Tour Cost is the one
-              exception — it covers too many different things to share a single account, so it is chosen on the Job Sheet.
+              option — give it a default for the usual case if you like, and a Job Sheet row can still name a different
+              account when it needs one. Left empty, it is chosen on the Job Sheet.
             </span>
             {msg && <span className="acct-msg">{msg}</span>}
             {canEdit && <button className="btn primary" disabled={busy || !dirty} onClick={save}>{busy ? "Saving…" : "Save mappings"}</button>}

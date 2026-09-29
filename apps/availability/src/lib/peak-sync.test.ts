@@ -4,6 +4,7 @@ import {
   createsReimbursement,
   expenseMappingStatus,
   expenseDisposition,
+  resolveExpenseAccount,
   syncableExpenses,
   expenseRowsReady,
   jobSheetTotals,
@@ -26,7 +27,7 @@ const FEE: GuideFee = { price: 1500, time: 1, whtPct: 3 };
 const EXAMPLE: Expense[] = [
   { description: "Grand Palace ticket", price: 500, pax: 1, expenseType: "entrance", paidBy: "company" },
   { description: "Chao Phraya Express Boat to Wat Arun", price: 100, pax: 2, expenseType: "transport", paidBy: "guide" },
-  { description: "Drinking water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide" },
+  { description: "Drinking water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
   { description: "Temple offering set", price: 40, pax: 2, expenseType: "other", paidBy: "company" },
   { description: "Review reward", price: 100, pax: 1 },
 ];
@@ -68,10 +69,14 @@ describe("§12 Summary — the spec's worked example", () => {
     expect(t.totalTourExpenses).toBe(840);
     expect(t.guideFeeGross).toBe(1500);
     expect(t.additionalGuidePayment).toBe(100);
-    expect(t.wht).toBe(45);
+    // Withholding runs on fee + review incentive (1,500 + 100) since 2026-09-23.
+    expect(t.whtBase).toBe(1600);
+    expect(t.wht).toBe(48);
+    expect(t.whtOnFee).toBe(45);
+    expect(t.whtOnReview).toBe(3);
     expect(t.reimbursementDue).toBe(260);
     expect(t.totalCompanyCost).toBe(2340);   // 840 + 1,500 — reward excluded
-    expect(t.netPayToGuide).toBe(1815);     // …but the guide is still paid it
+    expect(t.netPayToGuide).toBe(1812);     // …but the guide is still paid it, less its tax
   });
 
   it("Net Pay excludes Company Direct expenses — the bug this update fixes", () => {
@@ -126,7 +131,7 @@ describe("§12 Summary — the spec's worked example", () => {
     expect(withAdvance.totalTourExpenses).toBe(840);   // still a cost of the tour
     expect(withAdvance.totalCompanyCost).toBe(2340);   // still the company's money
     expect(withAdvance.reimbursementDue).toBe(200);    // …but not owed to the guide
-    expect(withAdvance.netPayToGuide).toBe(1755);
+    expect(withAdvance.netPayToGuide).toBe(1752);   // ฿3 withheld on the review incentive
   });
 
   it("an untagged row is counted as cost but never paid out", () => {
@@ -154,13 +159,22 @@ describe("§2 account mapping", () => {
     expect(expenseMappingStatus(EXAMPLE[0], {})).toBe("UNMAPPED");
   });
 
-  it("Other Tour Cost stays NEEDS_REVIEW until an operator records the account", () => {
+  it("Other Tour Cost needs a choice only when no default is saved", () => {
     const other = EXAMPLE[3];
+    // Nothing on the row and no default: the account is never guessed.
     expect(expenseMappingStatus(other, ACCOUNTS)).toBe("NEEDS_REVIEW");
-    // Configuring an account for the catch-all category must NOT clear it.
-    expect(expenseMappingStatus(other, { ...ACCOUNTS, other: { code: "5010" } })).toBe("NEEDS_REVIEW");
-    // Only an explicit choice recorded on the row itself does.
+    // A default saved for the catch-all category clears it — the owner chose to
+    // book every tour cost that is not the guide fee to one account.
+    expect(expenseMappingStatus(other, { ...ACCOUNTS, other: { code: "5010" } })).toBe("READY");
+    // A choice recorded on the row itself still clears it without any default.
     expect(expenseMappingStatus({ ...other, peakAccountCode: "5010" }, ACCOUNTS)).toBe("READY");
+  });
+
+  it("the row's own account wins over the category default", () => {
+    // The default is a convenience, never an override: a row that names an account
+    // must book to that account.
+    const other = { ...EXAMPLE[3], peakAccountCode: "5020" };
+    expect(resolveExpenseAccount(other, { ...ACCOUNTS, other: { code: "5010" } })?.code).toBe("5020");
   });
 
   it("an untagged Paid By blocks the row even when the category is mapped", () => {
@@ -230,7 +244,13 @@ describe("§9 sync eligibility", () => {
     // is fixed in settings. Different places, so different messages.
     const e = peakSyncEligibility({ ...ready(), expenses: EXAMPLE }); // Other Tour Cost unresolved
     expect(e.status).toBe("NOT_READY");
-    expect(e.reasons).toContain("1 Other Tour Cost requires account review");
+    expect(e.reasons).toContain("1 Other Tour Cost has no PEAK account — choose one on the row, or set a default under PEAK sync");
+  });
+
+  it("a saved Other Tour Cost default resolves the row without touching it", () => {
+    const e = peakSyncEligibility({ ...ready(), expenses: EXAMPLE, accounts: { ...ACCOUNTS, other: { code: "5010" } } });
+    expect(e.reasons).toEqual([]);
+    expect(e.canSync).toBe(true);
   });
 
   it("a category with no saved chart mapping is named", () => {
@@ -340,7 +360,7 @@ describe("expense-table readiness is narrower than sheet eligibility", () => {
     const t = jobSheetTotals(clean, FEE, null, []);
     expect(t.totalTourExpenses).toBe(760);
     expect(t.reimbursementDue).toBe(260);   // unchanged — that row was company-paid
-    expect(t.netPayToGuide).toBe(1815);     // unchanged — never included company-direct
+    expect(t.netPayToGuide).toBe(1812);     // unchanged — never included company-direct
     expect(t.totalCompanyCost).toBe(2260);  // 760 + 1,500 — reward excluded
   });
 });
@@ -356,16 +376,18 @@ describe("figures that need rechecking are named, not implied", () => {
     expect(hit!.amount).toBe(60);
   });
 
-  it("a divergent Payments figure is called out — only when it really diverges", () => {
-    // Untagged money is still paid by Payments but excluded from Net Pay, so the
-    // two genuinely differ and the operator must be told.
+  it("Net Pay and what Payments transfers can no longer disagree", () => {
+    // They once did: Net Pay excluded untagged rows and Payments paid them. Both now
+    // follow the same payer rule, so the warning that existed to reconcile them has
+    // nothing left to report — on a sheet with untagged rows or without.
     const untagged: Expense[] = [{ description: "Legacy row", price: 300, pax: 1 }];
     const t2 = jobSheetTotals(untagged, FEE, null, []);
-    const hit = figuresNeedRecheck(untagged, t2, ACCOUNTS).find((x) => x.field === "netPayToGuide");
-    expect(hit).toBeTruthy();
-    expect(hit!.amount).toBe(300);
+    expect(t2.legacyPayout).toBe(t2.netPayToGuide);
+    expect(t2.payoutDiffersFromPayments).toBe(false);
+    expect(figuresNeedRecheck(untagged, t2, ACCOUNTS).some((x) => x.field === "netPayToGuide")).toBe(false);
+    // …and the untagged row is still reported, under the field it actually affects.
+    expect(figuresNeedRecheck(untagged, t2, ACCOUNTS).find((x) => x.field === "reimbursementDue")!.amount).toBe(300);
 
-    // …and stays quiet on a fully tagged sheet, where they now agree.
     const t3 = jobSheetTotals(EXAMPLE, FEE, null, []);
     expect(figuresNeedRecheck(EXAMPLE, t3, ACCOUNTS).some((x) => x.field === "netPayToGuide")).toBe(false);
   });
@@ -379,7 +401,7 @@ describe("figures that need rechecking are named, not implied", () => {
   it("a fully tagged, fully mapped, non-divergent sheet has nothing to recheck", () => {
     const clean: Expense[] = [
       { description: "Boat", price: 100, pax: 2, expenseType: "transport", paidBy: "guide" },
-      { description: "Water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide" },
+      { description: "Water", price: 20, pax: 3, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
     ];
     const t = jobSheetTotals(clean, FEE, null, []);
     expect(t.payoutDiffersFromPayments).toBe(false);
@@ -393,7 +415,7 @@ describe("Total Company Cost excludes withholding tax", () => {
   // Revenue Department. Reimbursement Due is likewise a SUBSET of tour expenses,
   // not an extra line — adding either would overstate what the job cost.
   const fee: GuideFee = { price: 1000, time: 1, whtPct: 3 };
-  const rows: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "company" }];
+  const rows: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "company", paidBySource: "operator" }];
 
   it("reproduces the live sheet: 50 + 1,000 = 1,050, WHT of 30 excluded", () => {
     const t = jobSheetTotals(rows, fee, null, []);
@@ -410,7 +432,7 @@ describe("Total Company Cost excludes withholding tax", () => {
   });
 
   it("Reimbursement Due is inside Total Tour Expenses, not added to it", () => {
-    const guidePaid: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "guide" }];
+    const guidePaid: Expense[] = [{ description: "Water", price: 25, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }];
     const t = jobSheetTotals(guidePaid, fee, null, []);
     expect(t.reimbursementDue).toBe(50);
     expect(t.totalTourExpenses).toBe(50);   // the same 50, not 100
@@ -499,12 +521,18 @@ describe("what Payments transfers", () => {
     expect(guidePayoutTotal(rows, fee).payout).toBe(1655);
   });
 
-  it("UNTAGGED rows keep the old payout — never a guess about someone's wages", () => {
+  it("a row with no payer is in the cost and in nothing else — it is never guessed at", () => {
+    // Until 2026-09-23 an untagged row was PAID, on the reasoning that dropping it
+    // might swallow money a guide had fronted. But paying it might equally reimburse
+    // money they never spent, and the payment now stops instead of choosing: the row
+    // shows in the tour's cost, is left out of the transfer, and blocks it until a
+    // person records who paid.
     const rows: Expense[] = [{ description: "Legacy row", price: 300, pax: 1 }];
     const r = guidePayoutTotal(rows, fee);
-    expect(r.untaggedIncluded).toBe(300);
-    expect(r.payout).toBe(1755);                                   // unchanged
-    expect(r.payout).toBe(computeTotals(rows, fee).grandTotal);     // identical to before
+    expect(r.unresolved).toBe(300);
+    expect(r.payoutExpenses).toBe(0);
+    expect(r.payout).toBe(1455);                                   // the fee after WHT, nothing else
+    expect(r.payout).toBeLessThan(computeTotals(rows, fee).grandTotal);
   });
 
   it("review rewards are always paid", () => {
@@ -512,7 +540,8 @@ describe("what Payments transfers", () => {
       { description: "Review reward", price: 100, pax: 1 },
       { description: "Tickets", price: 500, pax: 1, paidBy: "company" },
     ];
-    expect(guidePayoutTotal(rows, fee).payout).toBe(1555);
+    // 1,500 fee + 100 reward − 3% of 1,600 = 1,552
+    expect(guidePayoutTotal(rows, fee).payout).toBe(1552);
   });
 
   it("a fully tagged sheet makes the two screens agree exactly", () => {

@@ -32,6 +32,8 @@ export default function ForgotPage() {
               <h2>{t("forgotDoneTitle")}</h2>
               <p className="sub">{t("forgotDoneBody")}</p>
               {devLink && <div className="devbox">DEV — reset link (no real email in prototype):<br /><Link className="glink" href={devLink}>{devLink}</Link></div>}
+              <p className="sub" style={{ marginTop: 14 }}>{t("forgotClaimHint")}</p>
+              <Link className="glink" href="/claim">{t("forgotClaimCta")}</Link>
               <Link className="glink" href="/start">{t("toLogin")}</Link>
             </>
           ) : (

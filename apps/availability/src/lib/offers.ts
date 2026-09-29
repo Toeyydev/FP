@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
 import { sendTourCalendarInvite } from "@/lib/calendar";
 import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
@@ -6,6 +7,7 @@ import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
 import { signOfferAction } from "@/lib/offer-token";
 import { PUBLIC_BASE_URL, siteUrl } from "@/lib/site";
+import { hasHistoricalJobSheet } from "@/lib/historical-guard";
 
 // Create and broadcast a job offer to every available guide (in-app + push +
 // LINE buttons). Reused by the operator endpoint and by auto re-offer on cancel.
@@ -19,6 +21,14 @@ async function cleanupPreppedSheet(guideId: string, date: string, slotIdx: numbe
       prisma.checkin.count({ where: { guideId, date, slotIdx } }),
     ]);
     if (assigned || checked > 0) return;
+    // A reconstructed historical sheet is never "prepped" work — it is a record an
+    // operator built by hand. Checked explicitly rather than left to the FK: the
+    // catch below would swallow that error, and relying on an exception to protect
+    // evidence is not a guarantee. Nothing else here changes, so no offer status
+    // and no payment state moves because the delete was declined.
+    if (await hasHistoricalJobSheet({ guideId, date, slotIdx })) return;
+    // Nor anything with payment, slip, PEAK or advance history.
+    if ((await financialHistoryBlockers(prisma, [{ guideId, date, slotIdx }])).length) return;
     await prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } });
   } catch { /* best-effort cleanup */ }
 }
@@ -129,7 +139,7 @@ export async function availableGuides(date: string, slotIdx: number) {
 
   const [guides, avail, assigned, leaves] = await Promise.all([
     prisma.user.findMany({
-      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null }, offerBlocked: false },
+      where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null }, offerBlocked: false, external: false },
       select: { id: true, guideId: true, displayName: true, lineUserId: true, email: true },
     }),
     prisma.availability.findMany({ where: { date }, select: { guideId: true, slots: true } }),

@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isOps } from "@/lib/roles";
 import { audit } from "@/lib/audit";
+import { decrypt } from "@/lib/crypto";
 
 // POST { guideId, peakContactId, peakContactCode?, peakContactName? }
 //
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest) {
     peakContactId: z.string().max(60),
     peakContactCode: z.string().max(60).optional(),
     peakContactName: z.string().max(120).optional(),
+    // Set only when an admin has seen the conflict and chosen to proceed.
+    resolveConflict: z.boolean().optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
@@ -37,8 +40,55 @@ export async function POST(req: NextRequest) {
   const peakContactCode = peakContactId ? (parsed.data.peakContactCode?.trim() || null) : null;
   const peakContactName = peakContactId ? (parsed.data.peakContactName?.trim() || null) : null;
 
-  const guide = await prisma.user.findUnique({ where: { guideId }, select: { id: true, peakContactId: true } });
+  const guide = await prisma.user.findUnique({ where: { guideId }, select: { id: true, peakContactId: true, taxId: true } });
   if (!guide) return NextResponse.json({ error: "no-guide" }, { status: 404 });
+
+  // One PEAK contact belongs to one guide. Two guides pointing at the same
+  // supplier would merge two people's payouts into one ledger in PEAK, and the
+  // resulting statement cannot be untangled afterwards — so this is refused by
+  // default. An ADMIN who has looked at both guides can override deliberately;
+  // an operator cannot, because the honest fix is usually that one of the two
+  // mappings was simply wrong.
+  if (peakContactId) {
+    const clash = await prisma.user.findFirst({
+      where: { peakContactId, guideId: { not: guideId } },
+      select: { guideId: true, displayName: true, taxId: true },
+    });
+    if (clash && !(parsed.data.resolveConflict && session!.user!.role === "ADMIN")) {
+      return NextResponse.json({
+        // Asked to override without being an admin: say so, rather than repeat the conflict.
+        error: parsed.data.resolveConflict ? "admin-only" : "contact-already-linked",
+        conflict: { guideId: clash.guideId, displayName: clash.displayName },
+        resolvableByAdmin: true,
+      }, { status: 409 });
+    }
+    // "The same person" is checked, not taken on trust: one person has one tax ID. Two
+    // guide records that share a PEAK supplier must carry the same 13 digits.
+    if (clash) {
+      const digits = (v: string | null | undefined) => (v ?? "").replace(/\D/g, "");
+      const mine = digits(decrypt(guide.taxId)), theirs = digits(decrypt(clash.taxId));
+      if (mine.length !== 13 || mine !== theirs) {
+        return NextResponse.json({
+          error: "not-same-person",
+          conflict: { guideId: clash.guideId, displayName: clash.displayName },
+          reason: mine.length !== 13 || theirs.length !== 13
+            ? `${guideId} and ${clash.guideId} must both have a 13-digit tax ID on their profile before they can share a PEAK contact`
+            : `${guideId} and ${clash.guideId} have different tax IDs — they are not the same person`,
+        }, { status: 409 });
+      }
+    }
+    if (clash) {
+      // Overridden: record who did it and what it collided with, before the write.
+      await audit({
+        actorId: session!.user!.id ?? null,
+        actorRole: session!.user!.role ?? null,
+        action: "peak.contact_conflict_overridden",
+        entityType: "User",
+        entityId: guide.id,
+        detail: { guideId, peakContactId, alsoLinkedTo: clash.guideId },
+      });
+    }
+  }
 
   await prisma.user.updateMany({ where: { guideId }, data: { peakContactId, peakContactCode, peakContactName } });
   await audit({

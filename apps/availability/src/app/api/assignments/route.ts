@@ -3,13 +3,19 @@ import { paxIndex } from "@/lib/assigned-pax";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
+import { SLOT_COUNT, SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
 import { sweepExpiredOffers, createOffer, untagGuideSlotBookings } from "@/lib/offers";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
+import { handoverLock } from "@/lib/tour-handover-server";
+import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
+import { manualAssignBlockers } from "@/lib/manual-assign";
+import { sendTourCalendarInvite } from "@/lib/calendar";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -62,6 +68,9 @@ const postSchema = z.object({
   tourId: z.string().min(1),
   pax: z.number().int().min(0).nullable().optional(),
   note: z.string().max(500).nullable().optional(),
+  // Put the guide on a tour still to come WITHOUT an offer to accept (agreed by phone,
+  // or the LINE accept not reaching us). See lib/manual-assign.
+  direct: z.boolean().optional(),
 });
 
 function isOps(role?: string) {
@@ -75,7 +84,7 @@ export async function POST(req: NextRequest) {
   }
   const parsed = postSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
-  const { guideId, date, slotIdx, tourId, pax, note } = parsed.data;
+  const { guideId, date, slotIdx, tourId, pax, note, direct } = parsed.data;
 
   // RECORDING A TOUR THAT ALREADY RAN.
   //
@@ -93,17 +102,76 @@ export async function POST(req: NextRequest) {
   // its own action — it is a record of fact, not a dispatch decision.
   const todayBkk = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   if (date < todayBkk) {
+    const [pastGuide, pastTour] = await Promise.all([
+      prisma.user.findUnique({ where: { guideId }, select: { role: true } }),
+      prisma.tour.findUnique({ where: { id: tourId }, select: { id: true } }),
+    ]);
+    if (!pastGuide || pastGuide.role !== "GUIDE") return NextResponse.json({ error: "unknown guide" }, { status: 400 });
+    if (!pastTour) return NextResponse.json({ error: "unknown tour" }, { status: 400 });
     const a = await prisma.assignment.upsert({
       where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
       create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
       update: { tourId, pax: pax ?? null, note: note ?? null },
     });
+    // The only guide on the slot guided all of its guests: their bookings are no longer
+    // waiting for anyone. With two guides on it the operator places guests with Split.
+    const onSlot = await prisma.assignment.count({ where: { date, slotIdx } });
+    const settled = onSlot === 1
+      ? await prisma.booking.updateMany({ where: { date, slotIdx, status: { in: ["PENDING", "OFFERED"] }, assignedGuideId: null }, data: { status: "ASSIGNED" } })
+      : { count: 0 };
     await audit({
       actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
       action: "assign.recorded_past", entityType: "Assignment", entityId: a.id,
-      detail: { guideId, date, slotIdx, tourId, reason: "tour already ran — recorded by operator" },
+      detail: { guideId, date, slotIdx, tourId, bookingsAssigned: settled.count, reason: "tour already ran — recorded by operator" },
     });
-    return NextResponse.json({ ok: true, recorded: true, past: true });
+    forgetCached(DASHBOARD_CACHE_KEY);
+    return NextResponse.json({ ok: true, recorded: true, past: true, bookingsAssigned: settled.count });
+  }
+
+  if (direct) {
+    const [g, tour, blocked, leave, staffed, clash] = await Promise.all([
+      prisma.user.findUnique({ where: { guideId }, select: { role: true, state: true, external: true, displayName: true, lineUserId: true } }),
+      prisma.tour.findUnique({ where: { id: tourId }, select: { name: true, meetingPoint: true } }),
+      prisma.blockedDate.findUnique({ where: { date } }),
+      prisma.leaveRequest.findFirst({ where: { guideId, status: "APPROVED", fromDate: { lte: date }, toDate: { gte: date } }, select: { id: true } }),
+      prisma.assignment.findMany({ where: { date, slotIdx }, select: { guideId: true } }),
+      prisma.assignment.findFirst({ where: { guideId, date, slotIdx: { in: clashingSlotIdxs(slotIdx).filter((i) => i !== slotIdx) } }, select: { slotIdx: true } }),
+    ]);
+    const reasons = manualAssignBlockers({
+      guideId, date, today: todayBkk, guide: g ? { role: g.role, state: g.state, external: !!g.external } : null, tourExists: !!tour,
+      dateBlocked: !!blocked, onLeave: !!leave, staffedBy: staffed.map((a) => a.guideId), clashSlotIdx: clash?.slotIdx ?? null,
+    });
+    if (reasons.length) return NextResponse.json({ error: "not-assignable", reasons }, { status: 409 });
+
+    const a = await prisma.assignment.upsert({
+      where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
+      create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
+      update: { tourId, pax: pax ?? null, note: note ?? null },
+    });
+    // The slot's guests are on this guide's job now — the same state an accepted offer
+    // leaves them in — and any offer still asking other guides is over.
+    const booked = await prisma.booking.updateMany({ where: { date, slotIdx, status: "PENDING", assignedGuideId: null }, data: { status: "OFFERED" } });
+    const open = await prisma.jobOffer.findMany({ where: { date, slotIdx, status: "OPEN" }, select: { id: true } });
+    if (open.length) {
+      await prisma.jobOffer.updateMany({ where: { id: { in: open.map((o) => o.id) }, status: "OPEN" }, data: { status: "EXPIRED" } });
+      await prisma.notification.deleteMany({ where: { offerId: { in: open.map((o) => o.id) } } });
+    }
+    await audit({
+      actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
+      action: "assign.manual", entityType: "Assignment", entityId: a.id,
+      detail: { guideId, date, slotIdx, tourId, bookings: booked.count, offersClosed: open.length },
+    });
+    forgetCached(DASHBOARD_CACHE_KEY);
+    // Tell the guide it is in their schedule, as an accepted offer does. Best-effort.
+    try { await sendTourCalendarInvite(guideId, date, slotIdx); } catch { /* never block on email */ }
+    try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, date, slotIdx); } catch { /* never block on calendar */ }
+    if (lineEnabled && g?.lineUserId) {
+      const dateLabel = new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+      try {
+        await linePush(g.lineUserId, [`📌 You're booked${g.displayName ? `, ${g.displayName.trim().split(/\s+/)[0]}` : ""}.`, "", tour?.name ?? tourId, `${dateLabel} · ${SLOT_TIMES[slotIdx] ?? ""}${pax != null ? ` · ${pax} pax` : ""}`, ...(tour?.meetingPoint ? [`📍 ${tour.meetingPoint}`] : []), "", "It's in your schedule in the Folkpaths app."].join("\n"));
+      } catch { /* never block on LINE */ }
+    }
+    return NextResponse.json({ ok: true, assigned: true, direct: true, bookings: booked.count, offersClosed: open.length });
   }
 
   if (await prisma.blockedDate.findUnique({ where: { date } })) {
@@ -160,6 +228,8 @@ export async function DELETE(req: NextRequest) {
   // started/completed tour, remove it from the Tour Log instead.
   const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
   if (started > 0) return NextResponse.json({ error: "tour-in-progress" }, { status: 409 });
+  const handover = await handoverLock(date, slotIdx, guideId);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
 
   // Clean up the Google Calendar events first (guide + operator master) so a
   // removed/re-offered tour doesn't linger as a ghost event. Never blocks delete.
@@ -173,6 +243,15 @@ export async function DELETE(req: NextRequest) {
   // offer this guide had accepted for the slot. (Completed tours are removed from
   // the Tour Log instead, which keeps the sheet for the payment record.)
   if (existing) {
+    // A reconstructed historical sheet must not be swept away by un-assigning a
+    // guide. Refuse before anything is deleted, so the operator is told what to
+    // do rather than losing the record.
+    if (await hasHistoricalJobSheet({ guideId, date, slotIdx })) {
+      const c = historicalDeleteConflict();
+      return NextResponse.json(c.body, { status: c.status });
+    }
+    const history = await financialHistoryBlockers(prisma, [{ guideId, date, slotIdx }]);
+    if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId, date, slotIdx } }),

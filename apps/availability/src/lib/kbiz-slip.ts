@@ -16,6 +16,7 @@ export type PaymentReferenceType =
   | "PAYOUT_ITEM_NO"
   | "PAYMENT_BATCH_NO"
   | "PEAK_EXPENSE_NO"
+  | "GUIDE_PAYMENT_NO"
   | "OTHER"
   | "NOT_FOUND";
 
@@ -58,11 +59,13 @@ export type KBizSlip = {
 // Job No.        FOLK-BKK-YYYYMMDD-NN
 // Payout item    FP-PAY-YYYYMMDD-<GUIDEID>
 // Payment batch  FP-BATCH-YYYYMMDD-NNN
-// PEAK expense   EXP-YYYYMM-NNNNN
+// PEAK expense   EXP-YYYYMMNNNNN (hyphenated form accepted too)
+// Guide payment  FOLK-PAY-YYYYMM-NN
 const RE_JOB_NO = /\bFOLK-BKK-\d{8}-\d{2,}\b/i;
 const RE_PAYOUT_ITEM = /\bFP-PAY-\d{8}-[A-Z]?-?\d{1,}\b/i;
 const RE_PAYMENT_BATCH = /\bFP-BATCH-\d{8}-\d{1,}\b/i;
-const RE_PEAK_EXPENSE = /\bEXP-\d{6}-\d{1,}\b/i;
+const RE_PEAK_EXPENSE = /\bEXP-\d{6}-?\d{2,}\b/i;
+const RE_GUIDE_PAYMENT = /\bFOLK-PAY-\d{6}-\d{1,}\b/i;
 
 /** Trim, collapse whitespace, tidy spaces around hyphens, uppercase. Never stored over the raw memo. */
 export function normalizeMemo(memo: string): string {
@@ -73,7 +76,7 @@ export function normalizeMemo(memo: string): string {
     .toUpperCase();
 }
 
-/** Classify a memo into a reference type + the exact matched value. Priority: Job -> Payout -> Batch -> PEAK. */
+/** Classify a memo into a reference type + the exact matched value. Priority: Job -> Payout -> Batch -> PEAK -> guide payment. */
 export function classifyReference(memo: string | null | undefined): {
   type: PaymentReferenceType;
   value: string | null;
@@ -85,6 +88,7 @@ export function classifyReference(memo: string | null | undefined): {
   if ((m = norm.match(RE_PAYOUT_ITEM))) return { type: "PAYOUT_ITEM_NO", value: m[0] };
   if ((m = norm.match(RE_PAYMENT_BATCH))) return { type: "PAYMENT_BATCH_NO", value: m[0] };
   if ((m = norm.match(RE_PEAK_EXPENSE))) return { type: "PEAK_EXPENSE_NO", value: m[0] };
+  if ((m = norm.match(RE_GUIDE_PAYMENT))) return { type: "GUIDE_PAYMENT_NO", value: m[0] };
   return { type: "OTHER", value: memo.trim() };
 }
 

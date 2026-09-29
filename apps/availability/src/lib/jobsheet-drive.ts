@@ -1,14 +1,12 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/google-drive";
-import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
-import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
+import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, jobSheetDriveName, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
 import { jobSheetTotals } from "@/lib/peak-sync";
-import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { paidByDocLabel } from "@/lib/paid-by-label";
+import { approvalHtml, approvalView, approverNameOf } from "@/lib/jobsheet-approval";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { PUBLIC_BASE_URL } from "@/lib/site";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -49,48 +47,34 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
       const actual = ns ? `<span style="color:#c0392b;font-weight:700">NO-SHOW</span>` : `${b.actualPax ?? ""}`;
       return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`;
     }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
-    const SRC: Record<string, string> = { advance: "Guide Advance / ชำระจากเงินทดรองจ่าย", guide: "Guide Personal / มัคคุเทศก์สำรองจ่าย" };
     const nsStats = noShowStats(bookings);
     // An uncategorised row prints "—" — the document shows what is stored, never a guess.
-    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(SRC[e.paidBy ?? ""] ?? "Company Direct / บริษัทชำระโดยตรง")}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
+    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(paidByDocLabel(e.paidBy))}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
 
     // Advance / settlement ledger — the accountant's cash story (never in expense totals).
-    const [advRows, retRows] = await Promise.all([
-      prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
-      prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
-    ]);
-    const at = advanceTotals(advRows, retRows, expenses);
-    const dtBKK = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
-    const advanceHtml = advRows.length || retRows.length ? `
+    // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
+    const adv = await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses });
+    const small = (t: string) => `<span style="font-size:10px;color:#8a8f8b">${t}</span>`;
+    const waiting = adv.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);
+    const advanceHtml = adv.advances.length || adv.returns.length ? `
       <h3 style="margin:14px 0 4px;border:0">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">การเคลียร์เงินทดรองจ่าย</span></h3>
       <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Description <span style="font-size:9px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Date · Time <span style="font-size:9px;color:#8a8f8b;font-weight:400">วันเวลาทำรายการ</span></th><th align="right">Amount <span style="font-size:9px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
+        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Description</th><th>Date</th><th align="right">Amount</th></tr></thead>
         <tbody>
-          ${advRows.map((a) => `<tr><td>Advance Paid <span style="font-size:10px;color:#8a8f8b">เงินทดรองจ่ายให้มัคคุเทศก์</span>${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(dtBKK(a.paidAt))} · ${esc(a.method)}</td><td align="right">${esc(thb(a.amount))}</td></tr>`).join("")}
-          <tr><td style="padding-left:18px">Expenses Paid from Advance <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายที่ชำระจากเงินทดรอง</span></td><td></td><td align="right">− ${esc(thb(at.usedFromAdvance))}</td></tr>
-          ${expenses.filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0).map((e) => `<tr style="color:#6b746f"><td style="padding-left:32px">${esc(e.description)}</td><td></td><td align="right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("")}
-          ${retRows.map((a) => `<tr><td style="padding-left:18px">Advance Returned <span style="font-size:10px;color:#8a8f8b">เงินทดรองคงเหลือส่งคืน</span>${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(dtBKK(a.returnedAt))} · ${esc(a.method)}</td><td align="right">− ${esc(thb(a.amount))}</td></tr>`).join("")}
-          <tr style="background:#f7f7f7"><td align="right" colspan="2"><b>Outstanding Advance <span style="font-size:10px;color:#8a8f8b;font-weight:400">เงินทดรองจ่ายคงค้าง</span></b></td><td align="right"><b>${esc(thb(at.outstanding))}</b></td></tr>
-          <tr><td colspan="3"><b>Settlement Status <span style="font-size:10px;color:#8a8f8b;font-weight:400">สถานะการเคลียร์เงินทดรอง</span>:</b> ${esc(ADVANCE_STATUS_LABEL[advanceStatus(at, true)])}</td></tr>
+          ${adv.advances.map((a) => `<tr><td>Advance Paid ${small("เงินทดรองจ่ายให้มัคคุเทศก์")} · ${esc(a.advanceNo)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}${a.status === "REVERSED" ? " · reversed" : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(a.advanceDate)} · ${esc(a.method)}</td><td align="right">${esc(thb(a.amount))}</td></tr>`).join("")}
+          <tr><td style="padding-left:18px">Expenses settled from Advance ${small("ค่าใช้จ่ายที่เคลียร์กับเงินทดรองแล้ว")}</td><td></td><td align="right">− ${esc(thb(adv.totals.usedFromAdvance))}</td></tr>
+          ${adv.totals.tagsNotYetSettled > 0 ? `<tr style="color:#6b746f"><td style="padding-left:32px">Marked “from advance”, not yet settled ${small("ระบุว่าใช้เงินทดรอง แต่ยังไม่ได้เคลียร์")}</td><td></td><td align="right">(${esc(thb(adv.totals.tagsNotYetSettled))})</td></tr>` : ""}
+          ${adv.returns.filter((r) => r.allocatedHere > 0).map((r) => `<tr><td style="padding-left:18px">Advance Returned ${small("เงินทดรองคงเหลือส่งคืน")} · ${esc(r.receiptNo)}${r.slipUrl ? ` · <a href="${esc(r.slipUrl)}">slip</a>` : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(r.receivedDate)} · ${esc(r.method)}</td><td align="right">− ${esc(thb(r.allocatedHere))}</td></tr>`).join("")}
+          ${adv.totals.deductedFromPayments > 0 ? `<tr><td style="padding-left:18px">Deducted from a guide payment ${small("หักจากการจ่ายค่าตอบแทน")}</td><td></td><td align="right">− ${esc(thb(adv.totals.deductedFromPayments))}</td></tr>` : ""}
+          <tr style="background:#f7f7f7"><td align="right" colspan="2"><b>Outstanding Advance ${small("เงินทดรองจ่ายคงค้าง")}</b></td><td align="right"><b>${esc(thb(adv.totals.outstanding))}</b></td></tr>
+          ${waiting.length ? `<tr style="color:#6b746f"><td colspan="3">Returns not yet counted ${small("เงินคืนที่ยังไม่นับ")}: ${waiting.map((r) => `${esc(r.receiptNo)} ${esc(thb(r.status === "CLAIMED" ? r.amount : r.unallocated))}${r.status === "CLAIMED" ? " — waiting to be checked" : " — not yet allocated"}`).join(" · ")}</td></tr>` : ""}
+          <tr><td colspan="3"><b>Settlement Status ${small("สถานะการเคลียร์เงินทดรอง")}:</b> ${esc(JOB_ADVANCE_STATUS_LABEL[adv.status] ?? adv.status)}</td></tr>
         </tbody>
       </table>` : "";
 
-    // Certification footer — same certifier + first-save date as the app/PDF; the
-    // PNG is inlined base64 so the Doc conversion never depends on a live fetch.
-    const certDate = certificationDate(sheet);
-    let sigSrc = `${PUBLIC_BASE_URL}${JOB_SHEET_CERTIFIER.signatureUrl}`;
-    try { sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`; } catch { /* fall back to the public URL */ }
-    const certHtml = `
-      <div style="margin-top:26px;border-top:1px dashed #cdd3cf;padding-top:12px">
-        <div style="font-size:10px;color:#5c655f;line-height:1.6;text-align:left;margin-bottom:8px">${esc(CERT_STATEMENT_TH)}</div>
-        <table style="margin-left:auto;border-collapse:collapse"><tbody>
-          <tr><td align="center" style="color:#777;font-size:11px;letter-spacing:1px">CERTIFIED BY</td></tr>
-          <tr><td align="center"><img src="${sigSrc}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" width="170" /></td></tr>
-          <tr><td align="center" style="font-weight:700">(${esc(JOB_SHEET_CERTIFIER.nameFullTh)})</td></tr>
-          <tr><td align="center" style="color:#6b746f;font-size:11px">${esc(JOB_SHEET_CERTIFIER.roleLabelTh)}</td></tr>
-          <tr><td align="center" style="color:#666;font-size:12px">${certDate ? `วันที่ ${esc(fmtCertDate(certDate))}` : "—"}</td></tr>
-        </tbody></table>
-      </div>`;
+    // Approval, not certification — who approved the expenses and when. The certificate in
+    // lieu of receipt is a separate document with its own file (lib/jobsheet-approval).
+    const approvalBlock = approvalHtml(approvalView(sheet, await approverNameOf(prisma, sheet.approvedBy)), esc);
 
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Sarabun,Arial,sans-serif;color:#111;font-size:13px">
       <div style="font-size:12px;font-weight:600;letter-spacing:1px">${esc(CO.brandName)}</div>
@@ -133,10 +117,10 @@ ${advanceHtml}
         ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
         <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Net Pay to Guide <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนที่ต้องชำระให้มัคคุเทศก์</span></b></td><td align="right"><b>${esc(thb(money.netPayToGuide))}</b></td></tr>
       </tbody></table>
-      ${certHtml}
+      ${approvalBlock}
     </body></html>`;
 
-    const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
     return link;
   } catch {
     return null;

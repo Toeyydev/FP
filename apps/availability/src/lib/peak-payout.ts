@@ -1,14 +1,18 @@
 import { prisma } from "@/lib/db";
-import { decrypt } from "@/lib/crypto";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { createExpenseAllInOne, peakEnabled } from "@/lib/peak-api";
+
+/** Thrown rather than returned, so a caller cannot ignore it by reading `.ok`. */
+export class HistoricalSheetNotPostable extends Error {
+  readonly code = "historical-sheet-not-postable";
+  constructor(message: string) { super(message); this.name = "HistoricalSheetNotPostable"; }
+}
 
 // Account-chart values are business-specific — set in Railway, never hard-coded.
 // Until they're set the payload is still built (for logging) but the codes are
 // blank, so we'd never post a real expense with wrong accounts.
 const ACC_FEE = process.env.PEAK_ACCT_GUIDE_FEE || "";      // expense account for guide fees
 const ACC_EXP = process.env.PEAK_ACCT_EXPENSES || "";       // account for reimbursable expenses
-const CONTACT_TYPE = process.env.PEAK_CONTACT_TYPE || "";   // individual-vendor contact type code
 const PAY_METHOD = process.env.PEAK_PAYMENT_METHOD || "";   // bank-transfer payment method id
 const VAT_TYPE = process.env.PEAK_VAT_TYPE || "";           // e.g. a "no VAT" code (tune on sandbox)
 
@@ -18,13 +22,28 @@ const ymd = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
 // Build the PEAK expense payload for a guide's transfer (1+ tours paid together).
 // Pure/testable — no network. Returns the payload + the computed net paid amount.
 export async function buildPayoutExpense(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string) {
-  const u = await prisma.user.findFirst({ where: { guideId }, select: { displayName: true, fullName: true, taxId: true, peakContactId: true } });
-  const name = u?.fullName || u?.displayName || guideId;
-  const taxNumber = decrypt(u?.taxId) || "";
+  // Only the contact id is read. The guide's name and tax id used to be fetched
+  // for the name fallback; with that gone, decrypting a tax number on every payout
+  // would be handling sensitive data for no purpose.
+  const u = await prisma.user.findFirst({ where: { guideId }, select: { peakContactId: true } });
   const sheets = await prisma.jobSheet.findMany({
     where: { guideId, OR: jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })) },
-    select: { ref: true, expenses: true, guideFee: true },
+    select: { ref: true, expenses: true, guideFee: true, origin: true },
   });
+  // The guard that actually blocks posting. peakSyncEligibility is only consulted
+  // by the job-sheet screen for display — postGuidePayout never calls it — so a
+  // reason added there would change a label and nothing else. Every posting path
+  // (single e-slip, batch e-slip, the manual test route) reaches PEAK through
+  // this function, so refusing here refuses everywhere.
+  //
+  // A reconstructed sheet has no guide-submitted expenses and no verified figures;
+  // posting one would book invented numbers into the ledger.
+  const historical = sheets.filter((x) => x.origin === "HISTORICAL_BACKFILL");
+  if (historical.length) {
+    throw new HistoricalSheetNotPostable(
+      `${historical.length} job sheet(s) in this payout were reconstructed from historical records and cannot be posted to PEAK`,
+    );
+  }
   let gross = 0, wht = 0, totalExp = 0;
   const refs: string[] = [];
   for (const s of sheets) {
@@ -41,14 +60,17 @@ export async function buildPayoutExpense(guideId: string, jobs: { date: string; 
   const expense: Record<string, unknown> = {
     issuedDate: dt,
     dueDate: dt,
-    // Prefer the guide's stored PEAK Contact id. Sending a NAME asks PEAK to match
-    // or create a contact, so the first time a nickname is edited the payout would
-    // land on a second contact and split that guide's ledger. The id is the
-    // identity; name/type is only a fallback for a guide not yet mapped, and
-    // postGuidePayout refuses that path unless CONTACT_TYPE is configured.
-    contact: u?.peakContactId
-      ? { id: u.peakContactId }
-      : { name, type: CONTACT_TYPE, taxNumber },
+    // ONLY the stored PEAK Contact id. There is no name fallback, by design.
+    //
+    // Sending a name asks PEAK to match-or-create a contact, and the names cannot
+    // match: FolkOPS holds the guide's legal name in English while the PEAK
+    // contact is in Thai. So the fallback would never find the existing supplier —
+    // it would create a NEW one on every payout and split the guide's ledger
+    // across duplicates that then have to be merged by hand in PEAK.
+    //
+    // An unmapped guide is refused in postGuidePayout instead. Mapping is a
+    // deliberate one-time act by an operator; it is not something to infer.
+    contact: u?.peakContactId ? { id: u.peakContactId } : undefined,
     products,
     reference: refs.join(", "),
     remark: `Folkpaths payout · ${guideId}`,
@@ -57,22 +79,68 @@ export async function buildPayoutExpense(guideId: string, jobs: { date: string; 
   return { expense, netPaid, tours: sheets.length, refs };
 }
 
-// Whether the posting config is present (in addition to PEAK creds). CONTACT_TYPE
-// is no longer required here: a mapped guide is posted by contact id, and the
-// name+type fallback is checked per guide in postGuidePayout instead of blocking
-// every payout on a value most jobs never need.
+// Whether the posting config is present (in addition to PEAK creds). No contact
+// type is needed: every payout goes to a mapped contact id, and an unmapped guide
+// is refused rather than posted under a name.
 export const peakPayoutReady = !!(ACC_FEE && PAY_METHOD);
+
+/**
+ * What a posting attempt must leave behind — separated from the network call so the
+ * decision is testable on its own.
+ *
+ * The bug this exists to prevent: a refusal that produces no ref, no log and no
+ * message, leaving a PAID tour with no accounting document and nobody able to say
+ * why. `ok` without a code counts as a failure, because there is still nothing to
+ * record against the payment.
+ */
+export type PeakPostOutcome = { code: string; failure: null } | { code: null; failure: string };
+
+export function peakPostOutcome(r: { ok: boolean; code?: string; desc?: string }): PeakPostOutcome {
+  if (r.ok && (r.code ?? "").trim()) return { code: r.code!.trim(), failure: null };
+  return { code: null, failure: (r.desc ?? "").trim() || "PEAK returned no document number and no reason" };
+}
+
+/**
+ * Whether these jobs are already in PEAK from their own job sheets — in which case
+ * the TRANSFER must not book them a second time.
+ *
+ * Two routes reach the ledger: a job sheet posts its own expense document
+ * (api/jobsheet/peak-sync), and a payment posts the transfer. For one job they are
+ * the same cost. PEAK cannot merge two documents, so a duplicate has to be voided by
+ * hand in the ledger — which is why this refuses rather than trying to be clever
+ * about posting only the remainder: the payout payload is ONE document covering
+ * every job in the transfer, so a partial post would not match the money that moved.
+ *
+ * Returns the message to record, or null when nothing has been posted yet.
+ */
+export function peakAlreadyBooked(
+  sheets: { date: string; slotIdx: number; peakDocumentNo?: string | null; peakDocumentId?: string | null }[],
+): string | null {
+  const booked = (sheets ?? []).filter((s) => (s.peakDocumentId ?? "") || (s.peakDocumentNo ?? "").trim());
+  if (!booked.length) return null;
+  const where = booked
+    .map((s) => `${s.date} slot${s.slotIdx}${(s.peakDocumentNo ?? "").trim() ? ` (${s.peakDocumentNo!.trim()})` : ""}`)
+    .join(", ");
+  return `Already in PEAK from the job sheet: ${where}. The transfer was not posted again.`;
+}
 
 // Post the payout to PEAK. Dormant until PEAK creds + account-chart config are set.
 export async function postGuidePayout(guideId: string, jobs: { date: string; slotIdx: number }[], paymentDate: string): Promise<{ ok: boolean; code?: string; desc?: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not connected (env not set)" };
   if (!peakPayoutReady) return { ok: false, desc: "PEAK posting config not set (PEAK_ACCT_GUIDE_FEE / PEAK_PAYMENT_METHOD)" };
-  const { expense } = await buildPayoutExpense(guideId, jobs, paymentDate);
-  // Refuse rather than let PEAK create a contact from a name: an unmapped guide
-  // with no CONTACT_TYPE fallback would silently produce a duplicate supplier.
+  let expense: Record<string, unknown>;
+  try {
+    ({ expense } = await buildPayoutExpense(guideId, jobs, paymentDate));
+  } catch (e) {
+    if (e instanceof HistoricalSheetNotPostable) return { ok: false, code: e.code, desc: e.message };
+    throw e;
+  }
+  // Refuse an unmapped guide outright. Posting without a contact id would make
+  // PEAK match or create one from whatever we sent — and with English names here
+  // against Thai names there, that means a duplicate supplier every time.
   const contact = expense.contact as { id?: string } | undefined;
-  if (!contact?.id && !CONTACT_TYPE) {
-    return { ok: false, desc: `Guide ${guideId} is not mapped to a PEAK Contact (and no PEAK_CONTACT_TYPE fallback is set)` };
+  if (!contact?.id) {
+    return { ok: false, desc: `Guide ${guideId} is not mapped to a PEAK Contact. Map them on the job sheet first — payouts are never posted by name.` };
   }
   const r = await createExpenseAllInOne(expense);
   return { ok: r.ok, code: r.code, desc: r.desc };

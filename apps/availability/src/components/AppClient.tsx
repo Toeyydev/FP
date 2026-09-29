@@ -9,6 +9,7 @@ import InstallPrompt from "@/components/InstallPrompt";
 import { GuideTabs } from "@/components/GuideTabs";
 import { OperatorNav } from "@/components/OperatorNav";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
+import { availabilitySaveError, type AvailabilitySaveError } from "@/lib/availability-errors";
 import { SLOTS } from "@/lib/slots";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import { gcalUrl } from "@/lib/gcal";
@@ -80,6 +81,10 @@ export default function AppClient({
   const [notif, setNotif] = useState<{ unread: number; items: { id: string; message: string; kind?: string; readAt: string | null; createdAt: string }[] }>({ unread: 0, items: [] });
   const [offers, setOffers] = useState<{ id: string; tourName: string; date: string; time: string; pax: number | null; note: string | null; meetingPoint: string | null }[]>([]);
   const [schedule, setSchedule] = useState<{ date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; meetingPoint: string | null; durationMin: number | null; checkinState: string | null }[]>([]);
+  // Finished tours that still owe an expense report. The schedule hides past tours,
+  // so without this a guide had no way to see what they still owed — and the LINE
+  // chase never reaches the guides who did not link LINE.
+  const [expensesDue, setExpensesDue] = useState<{ date: string; slotIdx: number; time: string; tour: string; href: string }[]>([]);
   const [reportFor, setReportFor] = useState<{ date: string; slotIdx: number; tourName: string; pax: number | null } | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [lFrom, setLFrom] = useState(""); const [lTo, setLTo] = useState(""); const [lReason, setLReason] = useState("");
@@ -91,7 +96,13 @@ export default function AppClient({
   const [rComment, setRComment] = useState("");
   const [reportBookings, setReportBookings] = useState<{ id: string; name: string; ref: string; pax: number; noShow: boolean; noShowPax?: number }[]>([]);
   const [noShowCounts, setNoShowCounts] = useState<Record<string, number>>({}); // booking id → absent pax
-  const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[] }>({ complete: true, missing: [] });
+  // The expense report the completion carries. A tour is not finished until the guide
+  // has said what it cost — or that it cost them nothing (see /api/report).
+  const [rExp, setRExp] = useState<{ description: string; price: string; pax: string }[]>([]);
+  const [rNoExp, setRNoExp] = useState(false);
+  const [rExpNote, setRExpNote] = useState("");
+  const [rBusy, setRBusy] = useState(false);
+  const [profileGate, setProfileGate] = useState<{ complete: boolean; missing: string[]; lineLinked?: boolean; lineLoginEnabled?: boolean }>({ complete: true, missing: [] });
   const [alertsOn, setAlertsOn] = useState(true); // hide banner until we know
   const [installed, setInstalled] = useState(true); // home-screen install state
   const [showNotif, setShowNotif] = useState(false);
@@ -226,7 +237,7 @@ export default function AppClient({
   // Guide: load their upcoming confirmed tours (schedule).
   useEffect(() => {
     if (role !== "guide") return;
-    const f = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
+    const f = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => { setSchedule(d.items ?? []); setExpensesDue(d.expensesDue ?? []); }).catch(() => {});
     f();
     const id = window.setInterval(f, 15000);
     return () => window.clearInterval(id);
@@ -334,18 +345,49 @@ export default function AppClient({
 
   // ---- mutations ----
   // Availability auto-saves on every tap; saveState drives the Save bar so the
-  // guide always sees that their changes are stored.
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-  async function putAvail(d: Date, slots: boolean[]) {
-    if (!profileGate.complete) { toast(t("completeProfileFirst")); return; }
+  // guide always sees whether the change actually reached the server. A save that
+  // fails quietly is indistinguishable from an app that forgets — which is exactly
+  // how a guide lost two weeks of availability after the site changed domain.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  // Writes that did not land, keyed by date so the Save bar can send every one of
+  // them again — a week bulk edit is seven writes, and retrying only the last would
+  // lose the other six just as quietly.
+  const pendingWrites = useRef(new Map<string, { date: Date; slots: boolean[]; reason: AvailabilitySaveError }>());
+  /** Saves one day. Returns whether it landed; `quiet` leaves the talking to the caller. */
+  async function putAvail(d: Date, slots: boolean[], opts?: { quiet?: boolean }): Promise<boolean> {
+    if (!profileGate.complete) { if (!opts?.quiet) toast(t("completeProfileFirst")); return false; }
+    const key = ymd(d);
     setSaveState("saving");
     try {
-      await fetch("/api/availability", {
-        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: ymd(d), slots }),
+      const res = await fetch("/api/availability", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: key, slots }),
       });
-      await load();
-      setSaveState("saved");
-    } catch { setSaveState("idle"); }
+      // fetch() resolves on 4xx/5xx — without this check a refusal passes for a save.
+      // It also FOLLOWS redirects, so a save answered with a bounce to a page ends up
+      // reading that page's 200 as success. Treat any redirect as a lost write.
+      if (res.redirected || !res.ok) {
+        const body = res.redirected ? null : await res.json().catch(() => null);
+        const reason: AvailabilitySaveError = res.redirected
+          ? "saveFailedSignedOut"
+          : availabilitySaveError(res.status, body?.error);
+        pendingWrites.current.set(key, { date: d, slots, reason });
+        setSaveState("error");
+        if (!opts?.quiet) toast(t(reason));
+        return false;
+      }
+      pendingWrites.current.delete(key);
+      if (!opts?.quiet) await load();
+      // Anything still unsaved keeps the bar red, even though this one write worked.
+      setSaveState(pendingWrites.current.size ? "error" : "saved");
+      return true;
+    } catch {
+      // The request never reached the server: offline, or an installed PWA still
+      // opening from its cache against a host that no longer resolves.
+      pendingWrites.current.set(key, { date: d, slots, reason: "saveFailedOffline" });
+      setSaveState("error");
+      if (!opts?.quiet) toast(t("saveFailedOffline"));
+      return false;
+    }
   }
   const toggleSlot = (d: Date, idx: number) => {
     const cur = (getAvail(guideId!, d) ?? EMPTY).slice();
@@ -358,17 +400,21 @@ export default function AppClient({
     return putAvail(d, SLOTS.map((s) => (asg[s.idx] ? cur[s.idx] : val)));
   };
   async function weekBulk(val: boolean) {
+    if (!profileGate.complete) { toast(t("completeProfileFirst")); return; }
     const ws = weekStart(anchor);
+    // These seven writes used to be fired off without reading a single response,
+    // so a week that saved nothing still reported success. They go through
+    // putAvail now, and the week is only called done if every day landed.
+    let failed: AvailabilitySaveError | null = null;
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i);
       const asg = getAssign(guideId!, d);
       const cur = getAvail(guideId!, d) ?? EMPTY;
-      await fetch("/api/availability", {
-        method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ date: ymd(d), slots: SLOTS.map((s) => (asg[s.idx] ? cur[s.idx] : val)) }),
-      });
+      const ok = await putAvail(d, SLOTS.map((s) => (asg[s.idx] ? cur[s.idx] : val)), { quiet: true });
+      if (!ok && !failed) failed = pendingWrites.current.get(ymd(d))?.reason ?? "saveFailed";
     }
     await load();
+    if (failed) { toast(t(failed)); return; }
     toast(val ? t("weekAllFree") : t("weekCleared"));
   }
   // Assigning sends the guide a 2-hour job offer (not an instant booking). The
@@ -598,7 +644,7 @@ export default function AppClient({
   }
   // Capture GPS (best-effort) and record a lifecycle check-in for a tour.
   async function doCheckin(s: { date: string; slotIdx: number }, type: "ARRIVE" | "START" | "COMPLETE") {
-    const refresh = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => setSchedule(d.items ?? [])).catch(() => {});
+    const refresh = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => { setSchedule(d.items ?? []); setExpensesDue(d.expensesDue ?? []); }).catch(() => {});
     const post = (lat?: number, lng?: number, accuracyM?: number) =>
       fetch("/api/checkin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: s.date, slotIdx: s.slotIdx, type, lat, lng, accuracyM }) })
         .then((r) => r.ok ? refresh() : toast(t("errGeneric")));
@@ -615,30 +661,57 @@ export default function AppClient({
     START: { type: "COMPLETE", label: t("completeTour") },
     COMPLETE: null,
   };
-  // Check-in opens 90 min before the tour (prevents starting/completing days early).
+  // Check-in opens 45 min before the tour (prevents starting/completing days early).
+  // Keep in step with lib/guide-lifecycle.CHECKIN_OPENS_BEFORE_MS, or the button
+  // shows before the server will accept it.
   const tourStartMs = (date: string, time: string) => {
     const [y, mo, d] = date.split("-").map(Number); const [h, m] = (time || "00:00").split(":").map(Number);
     return Date.UTC(y, mo - 1, d, h, m) - 7 * 3600 * 1000;
   };
-  const checkInOpen = (date: string, time: string) => Date.now() >= tourStartMs(date, time) - 90 * 60 * 1000;
+  const checkInOpen = (date: string, time: string) => Date.now() >= tourStartMs(date, time) - 45 * 60 * 1000;
   // Whether to show the lifecycle action: ARRIVE is time-gated; once started, always.
   const showAction = (s: { date: string; time: string; checkinState: string | null }, next: { type: string } | null) =>
     !!next && (next.type !== "ARRIVE" || checkInOpen(s.date, s.time));
+  // A line counts only once it names something AND carries an amount — the same rule
+  // the server applies (lib/guide-expenses.isReportedLine), so the button and the
+  // server can never disagree about whether the report has been given.
+  const expenseLines = rExp
+    .map((e) => ({ description: e.description.trim(), price: e.price.trim() === "" ? null : Number(e.price), pax: e.pax.trim() === "" ? null : Number(e.pax) }))
+    .filter((e) => e.description !== "" && (e.price ?? 0) * (e.pax ?? 0) > 0);
+  const expenseTotal = expenseLines.reduce((sum, e) => sum + (e.price ?? 0) * (e.pax ?? 0), 0);
+  const expenseDeclared = rNoExp || expenseLines.length > 0;
+  const setExp = (i: number, patch: Partial<{ description: string; price: string; pax: string }>) =>
+    setRExp((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
-    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({}); setReportFor(s);
+    setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({});
+    // One blank line to start, with the pax count prefilled — most lines are a
+    // per-head ticket, and retyping the group size on every row is the tedious part.
+    setRExp([{ description: "", price: "", pax: String(s.pax ?? "") }]); setRNoExp(false); setRExpNote(""); setRBusy(false);
+    setReportFor(s);
     fetch(`/api/report?date=${s.date}&slotIdx=${s.slotIdx}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { const bs = d?.bookings ?? []; setReportBookings(bs); setNoShowCounts(Object.fromEntries(bs.map((b: { id: string; pax: number; noShow: boolean; noShowPax?: number }) => [b.id, b.noShowPax ?? (b.noShow ? b.pax : 0)]))); })
       .catch(() => {});
   }
   async function submitReport() {
-    if (!reportFor) return;
-    const r = await fetch("/api/report", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowCounts: reportBookings.map((b) => ({ id: b.id, pax: noShowCounts[b.id] ?? 0 })) } : {}) }),
-    });
-    if (r.ok) { setReportFor(null); toast(t("reportSubmitted")); fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d) => setSchedule(d.items ?? [])); }
-    else toast(t("errGeneric"));
+    if (!reportFor || rBusy) return;
+    if (!expenseDeclared) { toast(t("expensesRequired")); return; }
+    setRBusy(true);
+    try {
+      const r = await fetch("/api/report", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ date: reportFor.date, slotIdx: reportFor.slotIdx, bookedPax: reportFor.pax ?? undefined, noShow: Number(rNoShow) || 0, leftEarly: Number(rLeft) || 0, comments: rComment.trim() || undefined, ...(reportBookings.length ? { noShowCounts: reportBookings.map((b) => ({ id: b.id, pax: noShowCounts[b.id] ?? 0 })) } : {}), expenses: rNoExp ? [] : expenseLines, noExpenses: rNoExp, expensesNote: rExpNote.trim() || undefined }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { toast(d?.error === "expenses-required" ? t("expensesRequired") : t("errGeneric")); return; }
+      setReportFor(null);
+      // The tour completed either way; the expense write is reported separately so a
+      // guide is never told "submitted" when their reimbursement did not save.
+      toast(d?.expenses === "failed" ? t("expensesSaveFailed") : d?.expenses === "not-accepted" ? t("expensesNotAccepted") : t("reportSubmitted"));
+      fetch("/api/schedule", { cache: "no-store" }).then((x) => x.json()).then((d2) => { setSchedule(d2.items ?? []); setExpensesDue(d2.expensesDue ?? []); });
+    } catch { toast(t("errGeneric")); }
+    finally { setRBusy(false); }
   }
 
   const loadLeaves = useCallback(() => {
@@ -680,6 +753,31 @@ export default function AppClient({
             ? <><b>{todayCount}</b> <span>{t("heroToursToday")}</span></>
             : <span>{t("heroNoTours")}</span>}
         </div>
+        {expensesDue.length > 0 && (
+          <div style={{ marginTop: 12, background: "#fff8c4", border: "1px solid #ecd9bf", borderRadius: 10, padding: "10px 12px", textAlign: "left" }}>
+            <div style={{ fontWeight: 800, fontSize: 13.5, color: "#7a5b12" }}>
+              {expensesDue.length === 1 ? t("expDueOne") : t("expDueMany").replace("{n}", String(expensesDue.length))}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#7a5b12", opacity: 0.85, margin: "2px 0 8px" }}>{t("expDueHint")}</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {expensesDue.slice(0, 4).map((e) => (
+                <a key={`${e.date}|${e.slotIdx}`} href={e.href}
+                   style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#fff", border: "1px solid #f0e6cf", borderRadius: 8, padding: "8px 10px", textDecoration: "none", color: "var(--ink)" }}>
+                  <span style={{ minWidth: 0 }}>
+                    <b style={{ fontSize: 13 }}>{e.tour}</b>
+                    <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-soft)" }}>
+                      {new Date(`${e.date}T00:00:00`).toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "short", day: "numeric", month: "short" })}{e.time ? ` \u00b7 ${e.time}` : ""}
+                    </span>
+                  </span>
+                  <span style={{ fontWeight: 800, color: "var(--primary)", whiteSpace: "nowrap", fontSize: 12.5 }}>{t("expDueAction")} ›</span>
+                </a>
+              ))}
+              {expensesDue.length > 4 && (
+                <span style={{ fontSize: 11.5, color: "#7a5b12" }}>{t("expDueMore").replace("{n}", String(expensesDue.length - 4))}</span>
+              )}
+            </div>
+          </div>
+        )}
       </section>
     );
   }
@@ -784,12 +882,33 @@ export default function AppClient({
           })}
         </div>
         <div className="savebar">
-          <span className="savebar-status">
-            {saveState === "saving" ? t("saving") : `${t("allSaved")} ✓`}
+          <span className={`savebar-status${saveState === "error" ? " err" : ""}`}>
+            {saveState === "saving" ? t("saving") : saveState === "error" ? t("notSaved") : `${t("allSaved")} ✓`}
           </span>
           <button className="btn primary" disabled={saveState === "saving"}
-            onClick={async () => { setSaveState("saving"); await load(); setSaveState("saved"); toast(t("saved")); }}>
-            {t("saveChanges")}
+            onClick={async () => {
+              // Every tap saves itself, so this button exists to send failed writes
+              // again and to re-check against the server — never to report a save
+              // that did not happen.
+              const pending = [...pendingWrites.current.values()];
+              if (pending.length) {
+                setSaveState("saving");
+                for (const w of pending) await putAvail(w.date, w.slots, { quiet: true });
+                await load();
+                const stuck = pendingWrites.current.values().next().value;
+                // Set this here rather than trusting the loop: putAvail returns early
+                // when the profile gate is shut, and a saveState left on "saving"
+                // disables this button for good.
+                setSaveState(stuck ? "error" : "saved");
+                toast(stuck ? t(stuck.reason) : t("allSaved"));
+                return;
+              }
+              setSaveState("saving");
+              await load();
+              setSaveState("saved");
+              toast(t("allSaved"));
+            }}>
+            {saveState === "error" ? t("retry") : t("saveChanges")}
           </button>
         </div>
       </>
@@ -1267,6 +1386,21 @@ export default function AppClient({
         </section>
       )}
 
+      {/* Connect LINE — one tap, on the screen the guide already opens.
+          The button existed only inside My details, which a guide has to know to go
+          looking for, so most never found it: five of the seven guides who owed
+          expense reports had no LINE at all. Signed in already, so no code and no
+          token — the route links LINE to this session (api/line/login/start). */}
+      {role === "guide" && profileGate.lineLoginEnabled && profileGate.lineLinked === false && (
+        <section className="setup-card">
+          <div className="setup-head"><b>{t("lineCardTitle")}</b><span>{t("lineCardBody")}</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "4px 2px 2px" }}>
+            <span style={{ fontSize: 12.5, color: "var(--ink-soft)", flex: "1 1 180px" }}>{t("lineCardHow")}</span>
+            <a className="btn primary sm" href="/api/line/login/start" style={{ whiteSpace: "nowrap" }}>{t("lineCardBtn")}</a>
+          </div>
+        </section>
+      )}
+
       {/* Dedicated "add to home screen" nudge — only once alerts are on (so the
           2-step setup card above isn't already covering install) and the app
           isn't installed yet. Self-hides on desktop / in-app browsers / standalone. */}
@@ -1387,10 +1521,46 @@ export default function AppClient({
               <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("incidentsLabel")}</span>
                 <input value={rComment} onChange={(e) => setRComment(e.target.value)} placeholder={t("incidentsHint")} /></label>
               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 10 }}>✓ {t("completedShown")}: <b style={{ color: "var(--ink)" }}>{Math.max(0, (reportFor.pax ?? 0) - (reportBookings.length ? reportBookings.reduce((s2, b) => s2 + (noShowCounts[b.id] ?? 0), 0) : (Number(rNoShow) || 0)) - (Number(rLeft) || 0))}</b> · {t("payNotAffected")}</div>
+
+              {/* Expenses — required to finish. The tour is not closed until the guide
+                  has said what it cost them, so the money is claimed while they still
+                  remember it rather than chased days later. "Nothing" is one tap. */}
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+                <h4 style={{ margin: "0 0 2px", fontSize: 15 }}>{t("expensesTitle")}</h4>
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>{t("expensesHint")}</div>
+
+                <label style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 11px", border: "1.5px solid", borderColor: rNoExp ? "var(--primary)" : "var(--line)", background: rNoExp ? "var(--ok-bg, #eef7f0)" : "transparent", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13.5 }}>
+                  <input type="checkbox" checked={rNoExp} onChange={(e) => setRNoExp(e.target.checked)} style={{ width: 17, height: 17, flex: "none", accentColor: "var(--primary)" }} />
+                  {t("noExpensesLabel")}
+                </label>
+
+                {!rNoExp && (
+                  <>
+                    <div style={{ display: "grid", gap: 6, margin: "10px 0 0", maxHeight: 240, overflowY: "auto" }}>
+                      {rExp.map((e, i) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 76px 58px 26px", gap: 6, alignItems: "center" }}>
+                          <input value={e.description} placeholder={t("expItemHint")} aria-label={t("expItem")} onChange={(ev) => setExp(i, { description: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px" }} />
+                          <input type="number" inputMode="decimal" min={0} value={e.price} placeholder={t("expPrice")} aria-label={t("expPrice")} onChange={(ev) => setExp(i, { price: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
+                          <input type="number" inputMode="numeric" min={0} value={e.pax} placeholder={t("expPax")} aria-label={t("expPax")} onChange={(ev) => setExp(i, { pax: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
+                          <button type="button" aria-label={t("expRemove")} title={t("expRemove")} onClick={() => setRExp((rows) => (rows.length > 1 ? rows.filter((_, j) => j !== i) : [{ description: "", price: "", pax: "" }]))} style={{ border: "none", background: "none", color: "var(--ink-soft)", cursor: "pointer", fontSize: 15, padding: 0 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+                      <button type="button" className="btn sm" onClick={() => setRExp((rows) => [...rows, { description: "", price: "", pax: String(reportFor.pax ?? "") }])}>{t("expAdd")}</button>
+                      <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "var(--primary)" }}>{t("expTotal")} ฿{Math.round(expenseTotal).toLocaleString("en-US")}</span>
+                    </div>
+                    <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("expNoteLabel")}</span>
+                      <input value={rExpNote} maxLength={500} onChange={(ev) => setRExpNote(ev.target.value)} placeholder={t("expNoteHint")} /></label>
+                  </>
+                )}
+
+                {!expenseDeclared && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 8 }}>{t("expensesRequired")}</div>}
+              </div>
             </div>
             <div className="mfoot">
               <button className="btn" onClick={() => setReportFor(null)}>{t("cancel")}</button>
-              <button className="btn primary" onClick={submitReport}>{t("submitComplete")}</button>
+              <button className="btn primary" disabled={rBusy || !expenseDeclared} title={expenseDeclared ? undefined : t("expensesRequired")} onClick={submitReport}>{rBusy ? "…" : t("submitComplete")}</button>
             </div>
           </div>
         </div>

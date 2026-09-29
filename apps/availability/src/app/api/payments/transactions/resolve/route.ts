@@ -17,12 +17,16 @@ export async function POST(req: NextRequest) {
   const id = String(body?.id || "").trim();
   const action = body?.action as ReviewAction;
   const jobNo = body?.jobNo ? String(body.jobNo).trim().slice(0, 64) : null;
+  const guideId = body?.guideId ? String(body.guideId).trim().slice(0, 64) : null;
+  const slotIdx = body?.slotIdx == null ? null : Number(body.slotIdx);
+  if (slotIdx != null && (!Number.isInteger(slotIdx) || slotIdx < 0)) return NextResponse.json({ error: "bad-slot" }, { status: 400 });
   const note = body?.note ? String(body.note).slice(0, 500) : null;
   if (!id || (action !== "confirm" && action !== "dismiss")) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 
-  const res = await resolveReview(prisma, { id, action, jobNo, note, actorId: session!.user!.id ?? null });
+  const res = await resolveReview(prisma, { id, action, jobNo, guideId, slotIdx, note, actorId: session!.user!.id ?? null });
   if (!res.ok) {
-    return NextResponse.json({ error: res.error }, { status: res.error === "not-found" ? 404 : 400 });
+    const reasons = res.error === "payment-refused" ? res.reasons : undefined;
+    return NextResponse.json({ error: res.error, ...(reasons ? { reasons, detail: reasons.join("\n") } : {}) }, { status: res.error === "not-found" ? 404 : res.error === "payment-refused" ? 409 : 400 });
   }
 
   await audit({
@@ -31,8 +35,8 @@ export async function POST(req: NextRequest) {
     action: `payment.review_${action}`,
     entityType: "PaymentTransaction",
     entityId: id,
-    detail: { action, note, markedPaid: res.markedPaid, status: res.status },
+    detail: { action, jobNo, guideId, slotIdx, note, markedPaid: res.markedPaid, status: res.status, paymentNo: res.paymentNo ?? null },
   });
 
-  return NextResponse.json({ ok: true, status: res.status, markedPaid: res.markedPaid });
+  return NextResponse.json({ ok: true, status: res.status, markedPaid: res.markedPaid, paymentNo: res.paymentNo ?? null });
 }

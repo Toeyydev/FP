@@ -4,8 +4,8 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
-import { notifyGuide } from "@/lib/booking-import";
-import { computeTotals, expenseAmount, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, jobSheetDriveName, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -48,6 +48,8 @@ export async function POST(req: NextRequest) {
   const expenses = (sheet.expenses as Expense[]) ?? [];
   const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
   const t = computeTotals(expenses, guideFee);
+  // The payer split: what the job cost, and — separately — what to transfer.
+  const b = tourCostBreakdown(expenses, guideFee);
   const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
   const guideName = u?.fullName || u?.displayName || guideId;
   const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
@@ -61,33 +63,19 @@ export async function POST(req: NextRequest) {
   if (pdfBase64 || eslipBase64) {
     const eslipMime = typeof body?.eslipMime === "string" ? body.eslipMime : "image/jpeg";
     const eslipExt = eslipMime.includes("png") ? "png" : eslipMime.includes("pdf") ? "pdf" : eslipMime.includes("webp") ? "webp" : "jpg";
-    // Mark the tour PAID first, independently of Drive. Attaching this tour's
-    // e-slip IS the proof of (daily) payment — that business fact must land
-    // even if the Drive copy hiccups (PDF e-slips, token refresh, large files).
-    let paid = false;
-    if (eslipBase64) {
-      try {
-        const now = new Date();
-        await prisma.tourPayment.upsert({
-          where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-          create: { guideId, date, slotIdx, tourId, status: "PAID", paidAt: now },
-          update: { status: "PAID", paidAt: now },
-        });
-        paid = true;
-        try {
-          await notifyGuide(guideId, `Your payment for the ${date} tour (${tour?.name ?? tourId}) has been transferred — ${thb(t.grandTotal)}. Thank you!`, "Payment transferred 💸", `${date} · ${thb(t.grandTotal)}`);
-        } catch { /* best-effort */ }
-      } catch { /* if this throws, paid stays false and is reported back */ }
-    }
+    // Payments v2: saving a slip here does NOT pay the tour. A transfer is recorded on
+    // Payments (date, amount, jobs, reconciliation, this slip) — that is what pays a job.
+    // The copy still goes to Drive, so the evidence is filed either way.
+    const paid = false;
 
-    // Save the job-sheet PDF + e-slip to Drive (best effort — must not block paid).
+    // Save the job-sheet PDF + e-slip to Drive (best effort).
     let link: string | undefined;
     let eslipLink: string | undefined;
     let driveError: string | undefined;
     if (!refreshToken && (pdfBase64 || eslipBase64)) driveError = "Google Drive isn't connected, so the copy wasn't saved.";
     if (pdfBase64 && refreshToken) {
       try {
-        const r = await saveBufferToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}.pdf`, base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const r = await saveBufferToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
         link = r.link;
       } catch (e) { driveError = (e as Error).message.slice(0, 200); }
     }
@@ -96,15 +84,15 @@ export async function POST(req: NextRequest) {
         // Slip evidence leads with the PEAK expense ref (EXP-xxxxx) when this
         // tour's payment has one, matching the saved PEAK entry name.
         const tpRef = (await prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { peakRef: true } }))?.peakRef;
-        const e = await saveBufferToDrive({ refreshToken, name: `${tpRef ? `${tpRef} — ` : ""}${ref} — ${guideName} — ${date} — e-slip.${eslipExt}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const e = await saveBufferToDrive({ refreshToken, name: `${tpRef ? `${tpRef} — ` : ""}${jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ` — e-slip.${eslipExt}`)}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         eslipLink = e.link;
       } catch (e) { driveError = driveError || (e as Error).message.slice(0, 200); }
     }
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved_pdf", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, eslip: !!eslipBase64, paid, drive: !!link } });
     // Only a hard failure (nothing saved AND payment didn't land) is an error.
-    if (!link && !eslipLink && !paid) return NextResponse.json({ error: "drive-failed", detail: driveError ?? "Drive save failed." }, { status: 502 });
-    // paid landed: that's success even if Drive was skipped/failed (reported in driveError).
-    return NextResponse.json({ ok: true, link, eslipLink, paid, driveError });
+    if (!link && !eslipLink) return NextResponse.json({ error: "drive-failed", detail: driveError ?? "Drive save failed." }, { status: 502 });
+    // The slip is filed, not paid: Payments records the transfer that pays this job.
+    return NextResponse.json({ ok: true, link, eslipLink, paid, driveError, recordPayment: !!eslipBase64 });
   }
   if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
@@ -144,14 +132,24 @@ export async function POST(req: NextRequest) {
       <tbody>${expenseRows}</tbody>
     </table>
     <table style="margin-top:12px;border-collapse:collapse"><tbody>
-      <tr><td style="padding:2px 16px 2px 0;color:#555">Guide fee (net)</td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
-      <tr><td style="padding:2px 16px 2px 0;color:#555">Expenses</td><td align="right"><b>${esc(thb(t.totalExpenses))}</b></td></tr>
-      <tr><td style="padding:2px 16px 2px 0"><b>Total payout</b></td><td align="right"><b>${esc(thb(t.grandTotal))}</b></td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ต้นทุนทัวร์ทั้งหมด<br><span style="font-size:11px">Total tour cost</span></td><td align="right">${esc(thb(b.tourCost))}</td></tr>
+      ${b.fundedByAdvance > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">จ่ายจากเงินทดรองบริษัท<br><span style="font-size:11px">Funded by a company advance — not transferred</span></td><td align="right">${esc(thb(b.fundedByAdvance))}</td></tr>` : ""}
+      ${b.fundedByCompany > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">บริษัทจ่ายตรง<br><span style="font-size:11px">Paid direct by the company — not transferred</span></td><td align="right">${esc(thb(b.fundedByCompany))}</td></tr>` : ""}
+      ${b.unresolved > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b91c1c"><b>ยังไม่ระบุผู้จ่าย — ต้องแก้ก่อนจ่ายเงิน</b><br><span style="font-size:11px">ยังไม่รวมในยอดโอน — กรุณาระบุว่าใครเป็นผู้จ่าย · Paid By not set, so this job cannot be paid yet</span></td><td align="right" style="color:#b91c1c"><b>${esc(thb(b.unresolved))}</b></td></tr>` : ""}
+      <tr><td colspan="2" style="padding:2px 0 8px;color:#777;font-size:11px">ยอดนี้ใช้วัดต้นทุนของงาน ไม่ใช่ยอดที่ต้องโอนให้ไกด์</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าจ้างไกด์<br><span style="font-size:11px">Guide fee</span></td><td align="right">${esc(thb(b.feeGross))}</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">หัก ภาษี — ค่าจ้าง<br><span style="font-size:11px">WHT on the fee</span></td><td align="right">−${esc(thb(b.whtOnFee))}</td></tr>
+      ${b.reviewReward > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">ค่าตอบแทนรีวิวไกด์<br><span style="font-size:11px">Review incentive</span></td><td align="right">${esc(thb(b.reviewReward))}</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555">หัก ภาษี — ค่าตอบแทนรีวิว<br><span style="font-size:11px">WHT on the review incentive</span></td><td align="right">−${esc(thb(b.whtOnReview))}</td></tr>` : ""}
+      <tr><td style="padding:2px 16px 2px 0;color:#555">ค่าใช้จ่ายที่ไกด์ออกเอง ต้องคืนให้ไกด์<br><span style="font-size:11px">Reimbursable to the guide</span></td><td align="right">${esc(thb(b.reimbursableToGuide))}</td></tr>
+      ${b.reviewReward > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555">หัก ภาษี ณ ที่จ่าย รวม<br><span style="font-size:11px">Withholding tax, total</span></td><td align="right">−${esc(thb(b.withholding))}</td></tr>` : ""}
+      <tr><td style="padding:4px 16px 2px 0;border-top:1px solid #999"><b>ยอดโอนสุทธิให้ไกด์</b><br><span style="font-size:11px">Net transfer to the guide</span></td><td align="right" style="border-top:1px solid #999"><b>${esc(thb(b.netTransfer))}</b></td></tr>
+      ${b.unresolved > 0 ? `<tr><td colspan="2" style="padding:4px 0 0;color:#b91c1c;font-size:11px">ยอดโอนนี้ยังไม่รวม ${esc(thb(b.unresolved))} ที่ยังไม่ระบุผู้จ่าย — ระบุ Paid By บนใบงานก่อน จึงจะจ่ายได้</td></tr>` : ""}
     </tbody></table>
   </body></html>`;
 
   try {
-    const { link } = await saveHtmlToDrive({ refreshToken, name: `${ref} — ${guideName} — ${date}`, html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {

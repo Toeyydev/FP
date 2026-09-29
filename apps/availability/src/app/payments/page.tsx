@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
-import { canViewFinance, isOps } from "@/lib/roles";
+import { canViewFinance, isAdmin, isOps } from "@/lib/roles";
 import Payments from "@/components/Payments";
 
 // Operator payroll — finance roles only. Operators/admin can edit (mark paid,
@@ -8,5 +8,5 @@ import Payments from "@/components/Payments";
 export default async function PaymentsPage() {
   const session = await auth();
   if (!canViewFinance(session?.user?.role)) redirect("/");
-  return <Payments canEdit={isOps(session!.user!.role)} />;
+  return <Payments canEdit={isOps(session!.user!.role)} isAdmin={isAdmin(session!.user!.role)} />;
 }

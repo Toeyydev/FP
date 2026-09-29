@@ -61,6 +61,14 @@ export async function cached<T>(key: string, ttlMs: number, produce: () => Promi
   return p;
 }
 
+/** The operator dashboard's shared board (api/dashboard). */
+export const DASHBOARD_CACHE_KEY = "dashboard:v1";
+
+/** Drop a cached value so the next read rebuilds it — after a write the board must show at once. */
+export function forgetCached(key: string): void {
+  store.delete(key);
+}
+
 /**
  * Resolve `p`, but give up waiting after `ms` and resolve to `fallback` instead.
  * The underlying promise keeps running in the background (best-effort side effects

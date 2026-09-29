@@ -18,12 +18,14 @@ import {
   expenseCategory,
   isReviewExpense,
   computeTotals,
+  thb,
   jobCostBreakdown,
   type Expense,
   type ExpenseCategoryKey,
   type GuideFee,
   type Booking,
 } from "@/lib/jobsheet";
+import { paymentPayer } from "@/lib/payer-rules";
 
 // ── Paid By ──────────────────────────────────────────────────────────────────
 // Who fronted the cash. Deliberately separate from the accounting CATEGORY: what
@@ -70,10 +72,10 @@ export function expenseMappingStatus(e: Expense, accounts: PeakAccountMap = {}):
   const cat = expenseCategory(e);
   if (!cat) return "UNMAPPED";                       // no category chosen yet
   if (canonicalPaidBy(e) === "UNSPECIFIED") return "NEEDS_REVIEW"; // who paid is unknown
-  // OTHER_TOUR_COST is the catch-all: what belongs in it can only be decided per
-  // job, so it is never auto-approved. An operator clears it by recording the
-  // account they chose on the row itself.
-  if (cat === "other") return e.peakAccountCode ? "READY" : "NEEDS_REVIEW";
+  // OTHER_TOUR_COST is the catch-all. It is ready when the row names its own
+  // account, or when the owner has saved a default for the category; with neither,
+  // it waits for a choice on the row rather than being guessed.
+  if (cat === "other") return (e.peakAccountCode || accounts.other?.code) ? "READY" : "NEEDS_REVIEW";
   // Any other category still needs a real account behind it before it can book.
   const acct = e.peakAccountCode || accounts[cat]?.code;
   return acct ? "READY" : "UNMAPPED";
@@ -90,12 +92,31 @@ export function resolveExpenseAccount(e: Expense, accounts: PeakAccountMap = {})
 // ── Duplicate protection ─────────────────────────────────────────────────────
 // A company-direct expense is often already in PEAK from its own supplier invoice
 // or receipt. Posting the job sheet must not book it a second time.
-export type SyncDisposition = "SYNC" | "ALREADY_RECORDED" | "BLOCKED";
+export type SyncDisposition = "SYNC" | "ALREADY_RECORDED" | "BLOCKED" | "NOT_GUIDE_PAYABLE";
+
+/**
+ * Phase 3 guard. A job-sheet expense document is raised against the GUIDE as the
+ * vendor: every line on it is money the company owes that guide. A row the company
+ * already settled — paid direct to the supplier, or paid with cash it had already
+ * advanced the guide — is a real company cost but it is NOT owed to the guide, so
+ * putting it on that document books a payable that does not exist. (It happened once:
+ * a document carried an advance-funded meal and had to be voided.)
+ *
+ * These rows are held back from the document and listed instead — see
+ * lib/advances/unbooked — so the cost is followed up rather than lost. The combined
+ * payment document has always skipped them (lib/peak-payment-document); this makes the
+ * two paths agree.
+ */
+export function notGuidePayable(e: Expense): boolean {
+  const paid = canonicalPaidBy(e);
+  return paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE";
+}
 
 export function expenseDisposition(e: Expense, accounts: PeakAccountMap = {}): SyncDisposition {
   // An expense already booked in PEAK stays in this job's cost reporting but is
   // never re-sent — regardless of how well it is mapped.
   if (e.alreadyRecordedInPeak) return "ALREADY_RECORDED";
+  if (notGuidePayable(e)) return "NOT_GUIDE_PAYABLE";
   return expenseMappingStatus(e, accounts) === "READY" ? "SYNC" : "BLOCKED";
 }
 
@@ -111,7 +132,11 @@ export function syncableExpenses(expenses: Expense[], accounts: PeakAccountMap =
 // review" for it sends the operator hunting through rows that are all fine.
 export function expenseRowsReady(expenses: Expense[], accounts: PeakAccountMap = {}): boolean {
   const billed = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
-  return billed.length > 0 && billed.every((e) => expenseDisposition(e, accounts) !== "BLOCKED");
+  // Whether a row will be posted on the GUIDE's document is a different question (see
+  // notGuidePayable): a company-settled row still needs its category and account, because
+  // the accountant books it from the unbooked-cost register.
+  return billed.length > 0 && billed.every((e) => e.alreadyRecordedInPeak || expenseMappingStatus(e, accounts) === "READY");
+
 }
 
 // ── Job-sheet money ──────────────────────────────────────────────────────────
@@ -120,8 +145,11 @@ export function expenseRowsReady(expenses: Expense[], accounts: PeakAccountMap =
 export type JobSheetTotals = {
   totalTourExpenses: number;        // every billed tour-expense row, whoever paid
   guideFeeGross: number;            // agreed fee before tax
-  wht: number;                      // withholding tax on the guide fee only
-  netGuideFee: number;              // fee after WHT
+  wht: number;                      // the whole withholding: fee + review incentive
+  whtOnFee: number;                 // …the part the fee bears
+  whtOnReview: number;              // …the part the review incentive bears
+  whtBase: number;                  // fee + review incentive — never reimbursements
+  netGuideFee: number;              // fee after the whole withholding
   additionalGuidePayment: number;   // review rewards paid out with this job
   additionalOwnedByJob: number;     // …the part earned on THIS job (a cost of it)
   reimbursementDue: number;         // GUIDE_PERSONAL rows only
@@ -163,6 +191,9 @@ export function jobSheetTotals(
     totalTourExpenses: cost.tourExpenses,
     guideFeeGross: t.gross,
     wht: t.wht,
+    whtOnFee: t.whtOnFee,
+    whtOnReview: t.whtOnReview,
+    whtBase: t.whtBase,
     netGuideFee: t.netGuideFee,
     additionalGuidePayment,
     additionalOwnedByJob: cost.reviewOwn,
@@ -239,17 +270,8 @@ export function figuresNeedRecheck(
     out.push({
       field: "reimbursementDue",
       short: untagged.length === 1 ? "1 expense has no Paid By" : `${untagged.length} expenses have no Paid By`,
-      detail: `Reimbursement Due and Net Pay exclude them, so both may be understated. Set Paid By on ${untagged.length === 1 ? "that row" : "those rows"} before paying.`,
+      detail: `They are counted in the tour's cost and in nothing else — not reimbursed, not transferred — and the payment is refused until someone says who paid. Set Paid By on ${untagged.length === 1 ? "that row" : "those rows"}.`,
       amount: totals.unspecifiedTotal,
-    });
-  }
-
-  if (totals.payoutDiffersFromPayments) {
-    out.push({
-      field: "netPayToGuide",
-      short: "Payments transfers a different amount",
-      detail: `The Payments screen still pays ${thbLike(totals.legacyPayout)} — it includes expenses the company paid directly. Confirm which figure is correct before transferring.`,
-      amount: Math.abs(totals.legacyPayout - totals.netPayToGuide),
     });
   }
 
@@ -301,22 +323,195 @@ export type GuidePayout = {
   payoutExpenses: number;   // expense rows that are still owed to the guide
   payout: number;           // + net guide fee — what to transfer
   excludedTagged: number;   // company/advance rows deliberately left out
-  untaggedIncluded: number; // rows still paid only because nobody said who paid
+  /** Rows whose payer nobody recorded. Not paid, not dropped — they block the payment. */
+  unresolved: number;
 };
 
-export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): GuidePayout {
-  const t = computeTotals(expenses, guideFee);
-  let payoutExpenses = 0, excludedTagged = 0, untaggedIncluded = 0;
-  for (const e of expenses ?? []) {
+/**
+ * What the job COST, and — separately — what the guide is OWED.
+ *
+ * These are two different questions and the screens kept answering the first when
+ * someone asked the second. A ticket bought with a company advance is a real cost of
+ * the tour and belongs in its total; it is not money the guide is owed, because the
+ * company already handed it over. Adding it to a transfer pays for the ticket twice.
+ *
+ * One function answers both, so a job sheet, a payment preview, a PEAK payload and a
+ * PDF cannot disagree about the same job.
+ *
+ *   tourCost            every operating row, whoever paid — the cost of the job
+ *     = fundedByAdvance + fundedByCompany + reimbursableToGuide + unresolved
+ *
+ *   grossPayable        feeGross + reviewReward + reimbursableToGuide
+ *   netTransfer         grossPayable − withholding        ← the only figure to transfer
+ *
+ * `unresolved` is in the cost and in nothing else. A row whose payer nobody recorded
+ * cannot be paid on a guess: paying it might reimburse money the guide never spent,
+ * and dropping it might swallow money they did. It is shown, and it blocks the
+ * payment until a person says who paid.
+ */
+export type TourCostBreakdown = {
+  tourCost: number;
+  fundedByAdvance: number;
+  fundedByCompany: number;
+  reimbursableToGuide: number;
+  unresolved: number;
+  reviewReward: number;
+  feeGross: number;
+  grossPayable: number;
+  withholding: number;
+  netTransfer: number;
+  /**
+   * The withholding, split by what it was taken ON.
+   *
+   * Both kinds of pay are withheld at the same rate, but they are different income to
+   * the guide and a screen that shows one tax against one of them is telling the guide
+   * their FEE was taxed at more than the rate. `feeNet` and `reviewNet` are each gross
+   * less its own tax, so every line reads gross − tax = net and the three add up.
+   */
+  whtOnFee: number;
+  whtOnReview: number;
+  feeNet: number;
+  reviewNet: number;
+};
+
+const r2c = (n: number) => Math.round(n * 100) / 100;
+
+export function tourCostBreakdown(expenses: Expense[] | null | undefined, guideFee: GuideFee): TourCostBreakdown {
+  const rows = expenses ?? [];
+  const t = computeTotals(rows, guideFee);
+  let fundedByAdvance = 0, fundedByCompany = 0, reimbursableToGuide = 0, unresolved = 0, reviewReward = 0;
+  for (const e of rows) {
     const amt = expenseAmount(e);
     if (!amt) continue;
-    if (isReviewExpense(e)) { payoutExpenses += amt; continue; }
-    const paid = canonicalPaidBy(e);
-    if (paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE") { excludedTagged += amt; continue; }
-    if (paid === "UNSPECIFIED") untaggedIncluded += amt;
-    payoutExpenses += amt;
+    // A review reward is earned, not spent: it is paid with the job, never a cost of it.
+    if (isReviewExpense(e)) { reviewReward += amt; continue; }
+    // paymentPayer, not canonicalPaidBy: a payer FolkOPS filled in after the tour is
+    // not one a transfer may rely on (lib/payer-rules).
+    switch (paymentPayer(e)) {
+      case "GUIDE_ADVANCE": fundedByAdvance += amt; break;
+      case "COMPANY_DIRECT": fundedByCompany += amt; break;
+      case "GUIDE_PERSONAL": reimbursableToGuide += amt; break;
+      default: unresolved += amt;
+    }
   }
-  return { payoutExpenses, payout: payoutExpenses + t.netGuideFee, excludedTagged, untaggedIncluded };
+  // Each part is rounded FIRST and the cost is the sum of the rounded parts, so the
+  // split adds up to the total exactly. Rounding the total separately would let a
+  // satang appear or vanish between the lines and the figure above them — on a screen
+  // whose whole purpose is that the parts explain the whole.
+  const advance = r2c(fundedByAdvance);
+  const company = r2c(fundedByCompany);
+  const reimbursable = r2c(reimbursableToGuide);
+  const unknown = r2c(unresolved);
+  const tourCost = r2c(advance + company + reimbursable + unknown);
+
+  const grossPayable = r2c(r2c(t.gross) + r2c(reviewReward) + reimbursable);
+  const whtOnFee = r2c(t.whtOnFee);
+  // The remainder rather than its own multiplication, so the two always add back to the
+  // whole and a satang cannot go missing between the lines and the total.
+  const whtOnReview = r2c(r2c(t.wht) - whtOnFee);
+  const split = {
+    tourCost,
+    fundedByAdvance: advance,
+    fundedByCompany: company,
+    reimbursableToGuide: reimbursable,
+    unresolved: unknown,
+    reviewReward: r2c(reviewReward),
+    feeGross: r2c(t.gross),
+    grossPayable,
+    withholding: r2c(t.wht),
+    netTransfer: r2c(grossPayable - t.wht),
+    whtOnFee,
+    whtOnReview,
+    feeNet: r2c(r2c(t.gross) - whtOnFee),
+    reviewNet: r2c(r2c(reviewReward) - whtOnReview),
+  };
+
+  // The identity the screens are built on. If it ever fails, a row has been counted
+  // twice or not at all, and every figure downstream is wrong — better to say so here
+  // than to render a total that does not match the lines under it.
+  const taxParts = r2c(split.whtOnFee + split.whtOnReview);
+  if (taxParts !== split.withholding) {
+    throw new Error(`withholding ${split.withholding} does not equal its parts ${taxParts} (fee ${split.whtOnFee}, review ${split.whtOnReview})`);
+  }
+  const payParts = r2c(split.feeNet + split.reviewNet + split.reimbursableToGuide);
+  if (payParts !== split.netTransfer) {
+    throw new Error(`net transfer ${split.netTransfer} does not equal its parts ${payParts} (fee net ${split.feeNet}, review net ${split.reviewNet}, reimbursed ${split.reimbursableToGuide})`);
+  }
+  const parts = r2c(split.fundedByAdvance + split.fundedByCompany + split.reimbursableToGuide + split.unresolved);
+  if (parts !== split.tourCost) {
+    throw new Error(`tour cost ${split.tourCost} does not equal its parts ${parts} (advance ${split.fundedByAdvance}, company ${split.fundedByCompany}, reimbursable ${split.reimbursableToGuide}, unresolved ${split.unresolved})`);
+  }
+  return split;
+}
+
+export function guidePayoutTotal(expenses: Expense[], guideFee: GuideFee): GuidePayout {
+  const b = tourCostBreakdown(expenses, guideFee);
+  return {
+    payoutExpenses: r2c(b.reimbursableToGuide + b.reviewReward),
+    payout: b.netTransfer,
+    excludedTagged: r2c(b.fundedByAdvance + b.fundedByCompany),
+    unresolved: b.unresolved,
+  };
+}
+
+// What the GUIDE is shown they will receive, on their own job page.
+//
+// Three rules this exists to hold together:
+//   * Tour expenses come from whichever list is authoritative right now — the
+//     guide's own report while it is open, the operator's record once the operator
+//     has approved the sheet or the job is paid.
+//   * Only money owed back to the guide is counted, by the SAME payer rule as the
+//     transfer (guidePayoutTotal): a row the company paid directly, or paid from a
+//     company advance, is shown as not reimbursed — never added to "You'll receive".
+//     A row with no payer recorded yet counts, as it does in Payments, and is called
+//     out so the guide knows it is still to be confirmed.
+//   * The review reward ALWAYS comes from the operator's record and is added once.
+//     It is compensation the operator awards, not something a guide reports, so it
+//     must not disappear when the guide files a report with no review lines in it —
+//     and must not be counted twice when the report was seeded from the operator's
+//     rows, which already contained them.
+// Until the operator approves the sheet (or it is paid) the figure is an estimate.
+export type GuidePayoutView = {
+  tourExpenses: number; // reimbursed to the guide: their own money + rows with no payer yet
+  reviewReward: number;
+  total: number;
+  notReimbursed: { company: number; advance: number };
+  unspecified: number; // the part of tourExpenses with no payer recorded yet
+  basis: "reported" | "official";
+  status: "estimate" | "confirmed" | "final";
+};
+
+export function guidePayoutView(args: {
+  operatorExpenses: Expense[];
+  reportedExpenses: Expense[];
+  netGuideFee: number;
+  /** true while the guide's own report window is open (tour done, not yet paid) */
+  useReported: boolean;
+  approved?: boolean;
+  paid?: boolean;
+}): GuidePayoutView {
+  const basis = args.useReported && !args.approved && !args.paid ? "reported" : "official";
+  const rows = (basis === "reported" ? args.reportedExpenses : args.operatorExpenses) ?? [];
+  let tourExpenses = 0, company = 0, advance = 0, unspecified = 0;
+  for (const e of rows) {
+    if (isReviewExpense(e)) continue;
+    const amt = expenseAmount(e);
+    if (!amt) continue;
+    const paid = canonicalPaidBy(e);
+    if (paid === "COMPANY_DIRECT") { company += amt; continue; }
+    if (paid === "GUIDE_ADVANCE") { advance += amt; continue; }
+    // A row nobody has assigned a payer to is not money we can say is owed. It is
+    // shown separately so the guide can see it is still being decided, and it is left
+    // out of the figure, exactly as the transfer leaves it out.
+    if (paid === "UNSPECIFIED") { unspecified += amt; continue; }
+    tourExpenses += amt;
+  }
+  const reviewReward = (args.operatorExpenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
+  return {
+    tourExpenses, reviewReward, total: args.netGuideFee + tourExpenses + reviewReward,
+    notReimbursed: { company, advance }, unspecified, basis,
+    status: args.paid ? "final" : args.approved ? "confirmed" : "estimate",
+  };
 }
 
 // ── Sync status ──────────────────────────────────────────────────────────────
@@ -341,6 +536,9 @@ export type SyncEligibilityInput = {
   jobRef?: string | null;
   bookings?: Booking[];
   state?: PeakSyncState;
+  /** "HISTORICAL_BACKFILL" for a reconstructed sheet. Display only — the block
+   *  that matters is in buildPayoutExpense, which every posting path goes through. */
+  origin?: string | null;
 };
 
 export type SyncEligibility = {
@@ -356,6 +554,8 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
   const { expenses, guideFee, approved, peakContactId, accountingDate, accounts = {}, jobRef, bookings, state } = input;
   const reasons: string[] = [];
 
+  if (input.origin === "HISTORICAL_BACKFILL")
+    reasons.push("Reconstructed from historical records — not eligible for PEAK sync");
   if (!approved) reasons.push("Job sheet is not approved");
   if (!peakContactId) reasons.push("Guide is not mapped to a PEAK Contact");
   if (!accountingDate) reasons.push("No accounting date set");
@@ -373,12 +573,14 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
   for (const e of needReview) {
     const cat = categoryForExpenseType(e.expenseType);
     if (!cat) { uncategorised++; continue; }
-    if (isPerJobCategory(cat)) { perJobUnresolved++; continue; }
+    // Paid By before the account: an Other Tour Cost that has an account but no
+    // Paid By must be told to set Paid By, not sent looking for an account.
     if (canonicalPaidBy(e) === "UNSPECIFIED") { uncategorised++; continue; }
+    if (isPerJobCategory(cat)) { perJobUnresolved++; continue; }
     unmappedCats.add(cat);
   }
   for (const cat of unmappedCats) reasons.push(`${categoryLabel(cat)} has no PEAK account mapping`);
-  if (perJobUnresolved) reasons.push(`${perJobUnresolved} ${categoryLabel("OTHER_TOUR_COST")} require${perJobUnresolved === 1 ? "s" : ""} account review`);
+  if (perJobUnresolved) reasons.push(`${perJobUnresolved} ${categoryLabel("OTHER_TOUR_COST")} ${perJobUnresolved === 1 ? "has" : "have"} no PEAK account — choose one on the row, or set a default under PEAK sync`);
   if (uncategorised) reasons.push(uncategorised === 1 ? "1 expense needs a category or Paid By" : `${uncategorised} expenses need a category or Paid By`);
 
   // A company-direct row claiming to be in PEAK already must say WHICH document,
@@ -409,6 +611,140 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
     return { status: blocking ? "BLOCKED" : "NOT_READY", canSync: false, reasons, changedSinceSync };
   }
   return { status: "READY", canSync: true, reasons: [], changedSinceSync };
+}
+
+// ── The document ─────────────────────────────────────────────────────────────
+// Turn an eligible job sheet into the PEAK expense payload.
+//
+// Pure, like the rest of this module: no env, no network. Every account comes from
+// the chart the operator configured in the app, so this path needs none of the
+// PEAK_ACCT_* variables the per-payment payout path reads.
+//
+// Two deliberate differences from lib/peak-payout.buildPayoutExpense:
+//
+//   1. ONE LINE PER EXPENSE ROW, each on its own resolved account — not two lump
+//      lines on two env accounts. "Grand Palace" and "Lotus (Inc. Guide)" are the
+//      accounting evidence the sheet already holds; collapsing them loses the
+//      category separation the operator configured and an accountant then has to
+//      reconstruct by hand. Rows in the same category merge naturally in PEAK's
+//      reporting because they share an account code.
+//   2. NO paidPayments. A job sheet is approved before the transfer happens, so
+//      the document is an expense that is not yet settled. Telling PEAK it was paid
+//      would be recording a payment that has not been made.
+export type PeakExpenseLine = {
+  description: string;
+  quantity: number;
+  price: number;
+  accountCode: string;
+  vatType?: string;
+  withHoldingTaxAmount: number;
+};
+
+export type JobSheetExpenseDoc = {
+  expense: Record<string, unknown>;
+  lines: PeakExpenseLine[];
+  total: number;
+};
+
+/** Thrown rather than returned: a cost silently dropped from the ledger is worse
+ *  than a refusal, and a caller must not be able to ignore it by reading a field. */
+export class JobSheetNotPostable extends Error {
+  readonly code = "jobsheet-not-postable";
+  constructor(message: string) { super(message); this.name = "JobSheetNotPostable"; }
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const compact = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628
+
+/**
+ * " · WHT 3% ฿45.00" — the tax withheld from a guide-fee line, written into the line's
+ * own description. PEAK stores the withholding on the line, but its printed expense
+ * form has no withholding column: the amount appears only as a total at the foot of
+ * the last page. Owner decision 2026-09-15: every guide-fee line shows its WHT.
+ * Empty when nothing is withheld. Text only — PEAK's withHoldingTaxAmount is unchanged.
+ */
+export function whtNote(whtPct: number | null | undefined, wht: number): string {
+  if (!(wht > 0)) return "";
+  const pct = Number(whtPct) || 0;
+  return ` · WHT ${pct > 0 ? `${Math.round(pct * 100) / 100}% ` : ""}${thb(wht)}`;
+}
+
+export function buildJobSheetExpense(input: {
+  guideId: string;
+  peakContactId: string;
+  expenses: Expense[];
+  guideFee: GuideFee;
+  accounts: PeakAccountMap;
+  /** The GUIDE_FEE account. Separate because PeakAccountMap only keys tour-expense
+   *  categories — the guide fee is not one of them. */
+  guideFeeAccount: PeakAccount | null;
+  accountingDate: string;
+  documentDate?: string | null;
+  jobRef?: string | null;
+  bookings?: Booking[];
+  vatType?: string;
+}): JobSheetExpenseDoc {
+  const { guideId, peakContactId, expenses, guideFee, accounts, guideFeeAccount, accountingDate, jobRef, bookings, vatType } = input;
+  if (!peakContactId) throw new JobSheetNotPostable("Guide is not mapped to a PEAK Contact");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(accountingDate ?? "")) throw new JobSheetNotPostable("No accounting date set");
+
+  const totals = jobSheetTotals(expenses, guideFee, jobRef, bookings);
+  const lines: PeakExpenseLine[] = [];
+
+  if (totals.guideFeeGross > 0) {
+    const code = (guideFeeAccount?.code ?? "").trim();
+    if (!code) throw new JobSheetNotPostable(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
+    lines.push({
+      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.whtOnFee))}`,
+      quantity: 1,
+      price: round2(totals.guideFeeGross),
+      accountCode: code,
+      vatType,
+      // The fee's own withholding, not the whole of it. A review incentive is also
+      // withheld on (2026-09-23) but never appears in THIS document — syncableExpenses
+      // leaves review rows out — and a document must not carry tax for a line it does
+      // not have. That withholding rides with the payment document, where the review
+      // line is.
+      withHoldingTaxAmount: round2(totals.whtOnFee),
+    });
+  }
+
+  for (const e of syncableExpenses(expenses, accounts)) {
+    const account = resolveExpenseAccount(e, accounts);
+    // syncableExpenses only returns rows whose disposition is SYNC, which requires a
+    // resolved account — so this cannot normally happen. Refuse loudly if it ever
+    // does rather than post a line with a blank account code.
+    if (!account?.code) {
+      throw new JobSheetNotPostable(`"${e.description}" passed the readiness check with no PEAK account — refusing to post it to a blank account`);
+    }
+    lines.push({
+      description: e.description,
+      quantity: 1,
+      price: round2(expenseAmount(e)),
+      accountCode: account.code,
+      vatType,
+      withHoldingTaxAmount: 0,
+    });
+  }
+
+  if (!lines.length) throw new JobSheetNotPostable("Nothing to post");
+
+  const issued = compact(input.documentDate || accountingDate);
+  return {
+    lines,
+    total: round2(lines.reduce((sum, l) => sum + l.price, 0)),
+    expense: {
+      issuedDate: issued,
+      dueDate: issued,
+      // Contact id only, never a name: PEAK would match-or-create from a name, and
+      // our English legal names cannot match the Thai contacts, so every post would
+      // fork the guide's ledger into a fresh duplicate supplier.
+      contact: { id: peakContactId },
+      products: lines,
+      reference: jobRef ?? "",
+      remark: `Folkpaths job sheet · ${guideId} · ${accountingDate}${totals.wht > 0 ? ` · WHT ${thb(round2(totals.wht))}` : ""}`,
+    },
+  };
 }
 
 // ── Idempotency ──────────────────────────────────────────────────────────────

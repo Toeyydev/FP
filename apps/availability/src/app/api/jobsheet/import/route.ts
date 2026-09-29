@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { parseJobSheetXlsx } from "@/lib/jobsheet-xlsx";
-import { nextJobRef } from "@/lib/jobref";
+import { ensureJobRef } from "@/lib/jobref";
 import { encrypt } from "@/lib/crypto";
 import { nameTokens, bestGuideByName } from "@/lib/guide-match";
 
@@ -131,18 +131,23 @@ export async function POST(req: NextRequest) {
       });
 
       // job sheet
-      const ref = p.ref || (await nextJobRef(date));
+      // A file's "No." is a printed snapshot, never identity: it may belong to another sheet or
+      // an edited copy, so it is neither copied onto a new sheet nor written over a saved number.
+      // It is kept in the audit and result so the paper can still be traced.
       const sheetBookings = p.bookings.map((b) => ({ ...b, status: "" })); // save schema requires a status field
       const guideFee = { price: p.guideFee.price ?? 1000, time: p.guideFee.time ?? 1, whtPct: p.guideFee.whtPct ?? 3 };
-      await prisma.jobSheet.upsert({
+      const importedSheet = await prisma.jobSheet.upsert({
         where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-        create: { guideId, date, slotIdx, tourId, ref, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee, createdById: session!.user!.id ?? null },
-        update: { tourId, ref, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee },
+        create: { guideId, date, slotIdx, tourId, ref: null, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee, createdById: session!.user!.id ?? null },
+        update: { tourId, status: p.status || "Confirmed", bookings: sheetBookings, expenses: p.expenses, guideFee },
       });
 
-      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, bookings: p.bookings.length, ...(remapped ? { remapped } : {}) } });
+      const ref = await ensureJobRef(importedSheet.id, date);
+      const fileRef = p.ref && p.ref !== ref ? p.ref : null;
+
+      await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.imported", entityType: "JobSheet", detail: { guideId, date, slotIdx, tourId, ref, ...(fileRef ? { fileRef } : {}), bookings: p.bookings.length, ...(remapped ? { remapped } : {}) } });
       const parsedGuide = [p.guideName && "name", p.taxId && "tax", p.address && "addr", p.tel && "tel"].filter(Boolean).join("+") || "none-found";
-      results.push({ file: fname, ok: true, guideId, date, slotIdx, ref, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${remapped ? ` · sheet says ${remapped.split("→")[0]} — matched by name to ${guideId} (${guide.displayName || guide.fullName})` : ""}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
+      results.push({ file: fname, ok: true, guideId, date, slotIdx, ref, detail: `${tourId} · ${guideId} · ${date} ${SLOT_TIMES[slotIdx]} · ${p.bookings.length} booking(s) · ref ${ref}${fileRef ? ` (file says ${fileRef})` : ""}${remapped ? ` · sheet says ${remapped.split("→")[0]} — matched by name to ${guideId} (${guide.displayName || guide.fullName})` : ""}${created.length ? ` · created ${created.join(" + ")}` : ""} · guide-parsed:[${parsedGuide}]` });
     } catch (e) {
       results.push({ file: file.name || "file", ok: false, detail: (e as Error).message.slice(0, 160) });
     }

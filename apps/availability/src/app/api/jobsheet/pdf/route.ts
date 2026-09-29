@@ -5,13 +5,12 @@ import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
-import { jobSheetTotals } from "@/lib/peak-sync";
+import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
+import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
-import { JOB_SHEET_CERTIFIER, CERT_STATEMENT_TH, certificationDate, fmtCertDate } from "@/lib/certifier";
+import { approvalHtml, approvalView, approverNameOf } from "@/lib/jobsheet-approval";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
-import { advanceTotals, advanceStatus, ADVANCE_STATUS_LABEL } from "@/lib/advance";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -49,33 +48,14 @@ export async function GET(req: NextRequest) {
   const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
 
   const sheet = existing ?? { ref: null as string | null, status: "Confirmed", bookings: [] as Booking[], expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, updatedAt: null as Date | null };
-  // Certification: date = the sheet's first successful save (fallback: approval
-  // time for historical sheets; blank dots when neither exists — never tour date).
-  // The signature PNG is inlined as base64 so print / html2pdf can never race an
-  // async image load and silently drop it; if it can't be read, say so on the
-  // document instead of quietly producing an uncertified-looking sheet.
-  const certDate = existing ? certificationDate(existing) : null;
+  // Approval, not certification: a job sheet records who approved its expenses and when.
+  // A certificate in lieu of receipt is a separate document (lib/certificates), so this
+  // PDF carries no certification statement and no signature (lib/jobsheet-approval).
+  const approval = approvalView(existing ?? {}, await approverNameOf(prisma, existing?.approvedBy));
   // Advance / settlement ledger for the accountant: only rendered when an advance
   // exists. Cash movements — never added into the expense or payable totals.
-  const [advRows, retRows] = guideId
-    ? await Promise.all([
-        prisma.guideAdvance.findMany({ where: { guideId, date, slotIdx }, orderBy: { paidAt: "asc" } }),
-        prisma.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, orderBy: { returnedAt: "asc" } }),
-      ])
-    : [[], []];
-  let sigSrc: string | null = null;
-  try {
-    sigSrc = `data:image/png;base64,${(await readFile(path.join(process.cwd(), "public", JOB_SHEET_CERTIFIER.signatureFile))).toString("base64")}`;
-  } catch { /* fs layout differs on the deployed container — try HTTP next */ }
-  // The app can always reach its own public URL even when the fs path can't be
-  // found (e.g. a different working directory in production) — self-fetch and
-  // inline. Base64 keeps print/html2pdf immune to image-load races.
-  if (!sigSrc) {
-    try {
-      const res = await fetch(new URL("/approver-signature.png", req.nextUrl.origin), { cache: "no-store" });
-      if (res.ok) sigSrc = `data:image/png;base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
-    } catch { /* fall back to the plain URL <img> + client-side warning */ }
-  }
+  // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
+  const advView = guideId ? await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (existing?.expenses as unknown as Expense[]) ?? [] }) : null;
   let bookings = (sheet.bookings as Booking[]) ?? [];
   // No saved sheet yet → pull the slot's live bookings so the prep PDF still
   // lists every guest (name + OTA ref + pax) for the operator to work from.
@@ -96,6 +76,8 @@ export async function GET(req: NextRequest) {
   const t = computeTotals(expenses, guideFee);
   const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
   const money = jobSheetTotals(expenses, guideFee, sheet.ref, bookings);
+  // The tax split by the pay it was taken on — the fee's tax is not the incentive's.
+  const payer = tourCostBreakdown(expenses, guideFee);
   // No saved sheet (e.g. exported from Incoming bookings before assignment) →
   // make the guest list, expenses and guide details fillable on the page so the
   // operator can complete the sheet by hand, with live totals, before Save-as-PDF.
@@ -120,8 +102,10 @@ export async function GET(req: NextRequest) {
   if (editable) for (let k = 0; k < 4; k++) bookingRows += `<tr><td>${bookings.length + k + 1}</td><td contenteditable="true"></td><td contenteditable="true"></td><td class="n" contenteditable="true" data-bpax></td><td class="n" contenteditable="true" data-apax></td><td contenteditable="true"></td></tr>`;
 
   // Paid-by (แหล่งเงินที่ใช้ชำระ): compact read-only labels — Company / Advance /
-  // Guide are the sanctioned short forms; never truncated composites.
-  const paidByShort = (v?: string) => (v === "advance" ? "Advance" : v === "guide" ? "Guide" : "Company");
+  // Guide are the sanctioned short forms; never truncated composites. A row with no
+  // recognised payer prints "ยังไม่ระบุผู้จ่าย", never a guessed "Company"
+  // (lib/paid-by-label — the same rule as the Drive document).
+  const paidByShort = (v?: string) => paidByShortLabel(v);
   const expRow = (cat: string, desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
     ? `<tr data-exp><td>${cat}</td><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
     : `<tr><td>${cat}</td><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
@@ -207,15 +191,6 @@ export async function GET(req: NextRequest) {
   .summary span small { display:block; margin-left:0; }
   .keep { break-inside:avoid; page-break-inside:avoid; }
   h3 { break-after:avoid-page; page-break-after:avoid; }
-  .approve { margin-top:26px; border-top:1px dashed #cdd3cf; padding-top:12px; break-inside:avoid; page-break-inside:avoid; }
-  .approve .certnote { font-size:10.5px; color:#5c655f; line-height:1.6; max-width:none; text-align:left; }
-  .approve .sigwrap { display:flex; justify-content:flex-end; margin-top:16px; }
-  .approve .sigbox { text-align:center; width:290px; }
-  .approve .sigimg { height:52px; display:block; margin:0 auto -8px; user-select:none; -webkit-user-select:none; pointer-events:none; }
-  .approve .sigline { margin-top:2px; }
-  .approve .signame { font-weight:600; margin-top:2px; }
-  .approve .sigdate { color:#6b746f; margin-top:4px; font-size:11px; }
-  @media print { .approve .sigimg { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
   .strike { display:inline-block; width:60%; height:0; border-top:1.4px solid #333; vertical-align:middle; }
 </style></head>
 <body>
@@ -289,20 +264,22 @@ export async function GET(req: NextRequest) {
     </div>
 
 
-    ${advRows.length || retRows.length ? (() => {
-      const at = advanceTotals(advRows, retRows, expenses);
-      const st = ADVANCE_STATUS_LABEL[advanceStatus(at, true)];
+    ${advView && (advView.advances.length || advView.returns.length) ? (() => {
+      const v = advView;
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+      const waiting = v.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);
       return `<div class="adv advance-settlement"><h3>Advance / Settlement <small>การเคลียร์เงินทดรองจ่าย</small></h3>
       <table>
         <thead><tr><th>Description<small>รายการ</small></th><th style="width:120px">Date · Time<small>วันเวลาทำรายการ</small></th><th class="n" style="width:100px">Amount<small>จำนวนเงิน</small></th></tr></thead>
         <tbody>
-        ${advRows.map((a) => `<tr><td>Advance Paid <small>เงินทดรองจ่ายให้มัคคุเทศก์</small>${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(dt(a.paidAt))} · ${esc(a.method)}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
-        <tr><td style="padding-left:16px">Expenses Paid from Advance <small>ค่าใช้จ่ายที่ชำระจากเงินทดรอง</small></td><td></td><td class="n">− ${thb(at.usedFromAdvance)}</td></tr>
-        ${expenses.filter((e) => e.paidBy === "advance" && expenseAmount(e) > 0).map((e) => `<tr style="color:#6b746f"><td style="padding-left:30px">${esc(e.description)}</td><td></td><td class="n">${thb(expenseAmount(e))}</td></tr>`).join("")}
-        ${retRows.map((a) => `<tr><td style="padding-left:16px">Advance Returned <small>เงินทดรองคงเหลือส่งคืน</small>${a.txRef ? ` · ${esc(a.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(dt(a.returnedAt))} · ${esc(a.method)}</td><td class="n">− ${thb(a.amount)}</td></tr>`).join("")}
-        <tr class="tot"><td colspan="2" style="text-align:right">Outstanding Advance <small>เงินทดรองจ่ายคงค้าง</small></td><td class="n">${thb(at.outstanding)}</td></tr>
-        <tr><td class="st" colspan="3">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(st)}</td></tr>
+        ${v.advances.map((a) => `<tr><td>Advance Paid <small>เงินทดรองจ่ายให้มัคคุเทศก์</small> · ${esc(a.advanceNo)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.status === "REVERSED" ? " · reversed" : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(a.advanceDate)} · ${esc(a.method)}</td><td class="n">${thb(a.amount)}</td></tr>`).join("")}
+        <tr><td style="padding-left:16px">Expenses settled from Advance <small>ค่าใช้จ่ายที่เคลียร์กับเงินทดรองแล้ว</small></td><td></td><td class="n">− ${thb(v.totals.usedFromAdvance)}</td></tr>
+        ${v.totals.tagsNotYetSettled > 0 ? `<tr style="color:#6b746f"><td style="padding-left:30px">Marked “from advance” on this sheet, not yet settled <small>ระบุว่าใช้เงินทดรอง แต่ยังไม่ได้เคลียร์</small></td><td></td><td class="n">(${thb(v.totals.tagsNotYetSettled)})</td></tr>` : ""}
+        ${v.returns.filter((r) => r.allocatedHere > 0).map((r) => `<tr><td style="padding-left:16px">Advance Returned <small>เงินทดรองคงเหลือส่งคืน</small> · ${esc(r.receiptNo)}${r.txRef ? ` · ${esc(r.txRef)}` : ""}</td><td style="white-space:nowrap;color:#6b746f">${esc(r.receivedDate)} · ${esc(r.method)}</td><td class="n">− ${thb(r.allocatedHere)}</td></tr>`).join("")}
+        ${v.totals.deductedFromPayments > 0 ? `<tr><td style="padding-left:16px">Deducted from a guide payment <small>หักจากการจ่ายค่าตอบแทน</small></td><td></td><td class="n">− ${thb(v.totals.deductedFromPayments)}</td></tr>` : ""}
+        <tr class="tot"><td colspan="2" style="text-align:right">Outstanding Advance <small>เงินทดรองจ่ายคงค้าง</small></td><td class="n">${thb(v.totals.outstanding)}</td></tr>
+        ${waiting.length ? `<tr style="color:#6b746f"><td colspan="3">Returns not yet counted <small>เงินคืนที่ยังไม่นับ (รอตรวจ/รอจัดสรร)</small>: ${waiting.map((r) => `${esc(r.receiptNo)} ${thb(r.status === "CLAIMED" ? r.amount : r.unallocated)}${r.status === "CLAIMED" ? " — waiting to be checked" : " — not yet allocated"}`).join(" · ")}</td></tr>` : ""}
+        <tr><td class="st" colspan="3">Settlement Status <small>สถานะการเคลียร์เงินทดรอง</small> : ${esc(JOB_ADVANCE_STATUS_LABEL[v.status] ?? v.status)}</td></tr>
       </tbody></table></div>`;
     })() : ""}
     <!-- Two blocks, side by side, matching the operator screen: what the job COST
@@ -318,7 +295,8 @@ export async function GET(req: NextRequest) {
         ${money.reimbursementDue > 0 ? `<div class="sub"><span>of which reimbursable to guide <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
         ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
         <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
-        <div class="sub"><span>of which withheld as tax (WHT) <small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>${thb(t.wht)}</b></div>
+        <div class="sub"><span>of which withheld as tax (WHT)${payer.reviewReward > 0 ? " — on the fee" : ""} <small>ภาษีหัก ณ ที่จ่าย — ค่าจ้าง</small></span><b>${thb(payer.whtOnFee)}</b></div>
+        ${payer.reviewReward > 0 ? `<div class="sub"><span>and on the review incentive <small>ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว</small></span><b>${thb(payer.whtOnReview)}</b></div>` : ""}
         <!-- id kept on the figure the fillable prep script actually recomputes
              (expenses + review + gross fee). It previously sat on "Net Pay to
              Guide", so typing into the prep sheet overwrote the payment figure
@@ -332,24 +310,14 @@ export async function GET(req: NextRequest) {
           <span>Transfer to guide <small>ยอดที่ต้องโอนให้มัคคุเทศก์</small></span>
           <b>${thb(money.netPayToGuide)}</b>
         </div>
-        <div><span>Guide fee after WHT <small>ค่าจ้างหลังหักภาษี</small></span><b>${thb(t.netGuideFee)}</b></div>
-        ${money.additionalGuidePayment > 0 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment)}</b></div>` : ""}
+        <div><span>Guide fee after WHT <small>ค่าจ้างหลังหักภาษี</small></span><b>${thb(payer.feeNet)}</b></div>
+        ${payer.reviewReward > 0 ? `<div><span>Review incentive after WHT <small>ค่าตอบแทนรีวิวหลังหักภาษี</small></span><b>${thb(payer.reviewNet)}</b></div>` : ""}
+        ${money.additionalGuidePayment - payer.reviewReward > 0.005 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment - payer.reviewReward)}</b></div>` : ""}
         ${money.reimbursementDue > 0 ? `<div><span>Reimbursement for expenses <small>คืนเงินสำรองจ่าย</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
         ${money.settledByCompany > 0 ? `<div class="note">${thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it.<br><small>ค่าใช้จ่ายส่วนนี้บริษัทชำระให้ผู้ขายโดยตรงแล้ว</small></div>` : ""}
       </div>
     </div>
-    <div class="approve">
-      <div class="certnote">${esc(CERT_STATEMENT_TH)}</div>
-      <div class="sigwrap">
-        <div class="sigbox">
-          <img class="sigimg" src="${sigSrc ?? JOB_SHEET_CERTIFIER.signatureUrl}" alt="Signature of ${esc(JOB_SHEET_CERTIFIER.nameTh)}" draggable="false" onerror="this.style.display='none';var w=document.getElementById('sigfail');if(w)w.style.display='block'" />
-          <div id="sigfail" style="display:none;color:#b00020;font-size:11px;font-weight:600;padding:14px 0">⚠ ลายเซ็นผู้รับรองโหลดไม่สำเร็จ — เอกสารนี้ยังไม่สมบูรณ์ / certifier signature failed to load</div>
-          <div class="signame">(${esc(JOB_SHEET_CERTIFIER.nameFullTh)})</div>
-          <div class="sigline" style="color:#6b746f;font-size:11px">${esc(JOB_SHEET_CERTIFIER.roleLabelTh)}</div>
-          <div class="sigdate">${certDate ? `วันที่ ${esc(fmtCertDate(certDate))}` : "วันที่ ......../......../........"}</div>
-        </div>
-      </div>
-    </div>
+    ${approvalHtml(approval, esc)}
   </div>
   <script>
     var GID=${JSON.stringify(guideId)}, DATE=${JSON.stringify(date)}, SLOT=${slotIdx}, NETFEE=${Number(t.netGuideFee) || 0}, GROSSFEE=${Number(t.gross) || 0}, REVIEW=${Number(cost.reviewOwn) || 0};

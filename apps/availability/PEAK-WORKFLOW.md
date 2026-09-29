@@ -163,3 +163,198 @@ POST /Expenses/allinone  {contact, fee+WHT, expenses, bank payment}
         ▼
 PEAK returns EXP-…  ──► save as peakRef · notify guide  ─► END
 ```
+
+---
+
+## The order a guide is paid in
+
+The flow above describes the original one-step posting, where the money moved and a PEAK
+document was made afterwards. That order is reversed. **The document comes first, and the
+transfer answers to it.**
+
+```
+Job sheets approved
+        │
+        ▼
+FolkOPS mints FOLK-PAY-YYYYMM-NN and shows the figures:
+   gross · withholding base · withholding · reimbursement · net
+        │
+        ▼
+Admin presses "Create PEAK document"          POST /api/pay/peak-document
+        │                                     → one unpaid EXP in PEAK
+        │                                     → peakDocumentId · peakDocumentNo
+        │                                     → peakDocumentStatus · peakPostedAt
+        │                                     → peakPayloadHash  (all in one transaction)
+        ▼
+"May this be transferred?"                    GET /api/pay/peak-document/ready
+   re-reads PEAK · recomputes every job        → Ready to transfer  → bank note + amount
+   → anything moved?                           → PEAK drift / PEAK voided → no bank note
+        ▼
+Bank note, copied from the screen:   <EXP number> <FOLK-PAY number>
+Admin transfers exactly the net
+        ▼
+Admin uploads the slip, types the bank reference and the amount on it
+        │                                     POST /api/pay/peak-document/pay
+        ▼
+Server checks again before anything is paid:
+   · the bank reference is present
+   · the slip's amount is this document's amount
+   · every job still approved, still locked, still unchanged
+   · PEAK still shows the EXP open, unpaid, owing exactly this
+        ▼
+PEAK records the payment ──► jobs marked PAID (payments-v2, FOLK-PMT-…)
+                        ──► slip filed as
+                            <EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext>
+```
+
+**The rules the server enforces, not the screen:**
+
+| | |
+|---|---|
+| No `peakDocumentNo` | the payment cannot be recorded at all |
+| The document is a draft, voided, or not in PEAK | refused, nothing paid |
+| A job's figures moved since the document was made | refused — void it in PEAK and create a new one |
+| Blank bank reference | refused |
+| No slip, or a slip for another amount | refused, and both figures are named |
+| "Create PEAK document" pressed twice | the same document is returned; never a second EXP |
+| The same bank reference on two documents | refused, naming the payment that already holds it — the account comes from PEAK, not from the page |
+| Moving a claimed or paid payment to another account | refused by the database |
+| An accountant made the document by hand | record it with **Record existing PEAK document**, never by creating another |
+
+Voiding and recreating keeps the old document's row and its audit trail. Nothing is
+overwritten: a voided document stays readable, with its EXP, its hash and who resolved it.
+
+**The slip's amount is typed, not read from the image.** Nothing in FolkOPS does OCR —
+`lib/kbiz-slip` parses text a bank gives us, not a photograph. Typing it is a second
+statement of the amount, made while looking at the slip, and it catches a transfer that
+went out at the wrong figure before the document is settled rather than at the next audit.
+
+---
+
+## Guide ticket advances, returns, and ticket settlement
+
+This workflow is only for money the company sends a guide to buy customer tickets.
+Transport, meals and other tour costs do not use this advance ledger. These records
+use **Daily Journals** because an advance is an asset balance, not an expense. FolkOPS creates one immutable outbox item in the same database transaction
+as each ledger event. The worker posts it once and stores PEAK's document number.
+
+| FolkOPS event | Daily journal |
+|---|---|
+| Company sends a ticket advance | Dr existing `เงินทดรองจ่าย - ไกด์` / Cr company bank |
+| Guide returns unused money | Dr company bank / Cr guide advance asset |
+| Approved ticket expense uses the advance | Dr ticket expense / Cr guide advance asset |
+
+Automatic posting requires a Job No., the guide's linked PEAK contact, the selected
+company bank account, a unique bank reference and a transfer slip. A guide-submitted
+return remains a claim until an operator confirms it against the company bank and
+allocates the full amount to advances.
+
+Set the following only after the accountant confirms the account and journal IDs:
+
+```json
+PEAK_ADVANCE_CONFIG={
+  "advanceAccountCode":"<account code of the existing เงินทดรองจ่าย - ไกด์ account>",
+  "advanceAccountSubId":"<optional subaccount>",
+  "bankName":"<name shown in FolkOPS>",
+  "bankAccountCode":"<bank ledger account>",
+  "bankAccountSubId":"<PEAK bank subaccount id>",
+  "journalTypeIds":{
+    "ADVANCE":"<payment journal type id>",
+    "RETURN":"<receipt journal type id>",
+    "EXPENSE":"<general journal type id>"
+  },
+  "expenseAccounts":{}
+}
+```
+
+**Environment variables for the advance ledger**
+
+| Variable | Set it on | Unset means | What it does |
+|---|---|---|---|
+| `PEAK_ADVANCE_CONFIG` | FP + payment-worker | nothing is sent | The accounts, the bank sub-account and the journal books, as JSON. The web app reads it for the screens; the worker reads it to send. |
+| `PEAK_ADVANCE_AUTO_SYNC` | FP + payment-worker | `0` — off | `1` lets the worker post queued movements to PEAK. The web app only reports it. |
+| `ADVANCE_WRITES_FROZEN` | FP (+ payment-worker to stop the sender) | `0` — writes allowed | `1` refuses every ordinary advance write: recording an advance or a return, confirming, allocating, settling, reversing. |
+| `ADVANCE_EXISTING_PEAK_LINKS_ENABLED` | FP **and** payment-worker | `0` — off | `1` lets an admin record a PEAK document that already exists, even while writes are frozen. On the worker it stands the sender down. Nothing else opens. |
+
+Both services read these through `lib/advances/freeze.ts`, so "on" means the same thing
+on either side. A flag set on only one of them is the dangerous case: set both.
+
+The worker says which of these it has at startup — `advancePeakConfig: ready|incomplete|unreadable|not-set` and `advanceAutoSync: true|false`. Status words only; it never logs a value.
+
+Only the active `ENTRANCE_TICKET` mapping fills `expenseAccounts` at runtime. Set
+`PEAK_ADVANCE_AUTO_SYNC=1` on the worker only after the configuration and
+`PEAK_USER_TOKEN` are present and one preview has been checked. Do not backfill the
+outbox automatically: older advances may already exist in PEAK and must be reconciled
+or recorded as an existing document first.
+
+Do not create a separate PEAK account named “เงินทดรองค่าตั๋วไกด์”. “Ticket only” is
+the FolkOPS usage rule; every advance, ticket settlement, and return clears through
+the existing PEAK account `เงินทดรองจ่าย - ไกด์` shown in its account activity.
+
+If a PEAK write times out, loses its response, or the local save fails after sending,
+the item becomes `UNCERTAIN`. The worker will not retry it. Check PEAK and reconcile
+the document number before taking any further action.
+
+### Money that is already in PEAK
+
+Some advances, returns and ticket costs were entered in PEAK by hand before FolkOPS
+tracked them. **Payments → Advances → PEAK doc…** (admin only) records that document
+number against the movement. It calls no PEAK write endpoint: it reads the document,
+checks that the accounts and the amount are the ones this movement would have used,
+and then closes the outbox item as `POSTED` against the existing number — so turning
+the sender on cannot produce a second document for money that moved once.
+
+- A return is confirmed, put against its advance, and linked in ONE transaction. If
+  any step fails, none of it happened.
+- A ticket settlement writes the ledger line and links it, again in one transaction,
+  and creates no journal — the cost is already in the document being linked.
+- One document number belongs to one movement, enforced by a unique index on
+  (document type, document number).
+- The reason typed into the box is kept with the link and in the audit log. A
+  document that names no contact — which is what PEAK's own transfers look like —
+  can still be linked, but only when the accounts and the amount match exactly.
+- Only ticket costs clear this way. A meal tagged "from company advance" is refused.
+
+**Reconciliation mode.** Matching the old records is itself a write, so it needs the
+freeze lifted for exactly one path and nothing else:
+
+```ini
+ADVANCE_WRITES_FROZEN=1                 # recording advances and returns stays refused
+ADVANCE_EXISTING_PEAK_LINKS_ENABLED=1   # an admin may record an EXISTING document
+PEAK_ADVANCE_AUTO_SYNC=0                # the sender stays off
+```
+
+While this is set, Payments → Advances shows a banner saying so, and the buttons that
+would write anything else are not offered — the server refuses them regardless. The
+link path refuses too if the sender is on (**409**), or if FolkOPS already has this
+movement in flight or posted, unless the same document is being recorded again. Turn
+`ADVANCE_EXISTING_PEAK_LINKS_ENABLED` back to `0` when the reconciliation is done; the
+sender will not run while it is `1`.
+
+## Review incentives are paid inside FOLK-PAY, and nowhere else
+
+A review incentive is extra pay for the guide's work, so **3% is withheld on it, exactly
+as on the guide fee** (owner decision, 2026-09-23):
+
+```
+WHT base = guide fee + review incentive
+```
+
+Reimbursements — meals, transport, tickets the guide paid for — are the guide's own money
+coming back and never join that base. Neither does a ticket bought with a company advance,
+which was never the guide's money at all.
+
+**One path, so the tax cannot be lost.** The incentive rides in the guide's payment
+document under its `FOLK-PAY-…` number, on account `510110`, with its own withholding
+beside it. The per-job-sheet expense document does not carry review rows at all, so it
+withholds on the fee alone — and a job can only ever be posted through one of those two
+paths, because each refuses a job the other already has.
+
+A standalone review payout (`FOLK-RR-…`, its own weekly run) was designed once and never
+merged. It must not be, until it carries withholding and reaches PEAK, because money paid
+that way leaves without its tax. `src/lib/no-separate-review-payout.test.ts` fails the
+build if such a path appears. The message to show anyone who tries:
+
+> ค่าตอบแทนรีวิวไกด์ต้องรวมในเอกสารจ่ายเงินไกด์ FOLK-PAY เพื่อคำนวณภาษีหัก ณ ที่จ่าย 3%
+
+Existing records stay readable — this is about creating, approving or paying a new one.

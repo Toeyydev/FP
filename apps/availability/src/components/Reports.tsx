@@ -8,6 +8,12 @@ type Sum = {
   bookings: number; cancelled: number; cancelRate: number; totalPax: number;
   toursAssigned: number; toursRan: number; guestsServed: number;
   noShows: number; noShowRate: number; checkins: number; onTimePct: number | null;
+  noShowsReported: number; noShowsCancelledBeforeTour: number; noShowsNeedReview: number;
+};
+type NoShowCheck = { date: string; time: string; guide: string; ref: string; absentPax: number; outcome: "needs-review"; reason: "cancelled-and-no-show" | "untagged-split" };
+const CHECK_TEXT: Record<NoShowCheck["reason"], string> = {
+  "cancelled-and-no-show": "No-show retained · source says Cancelled — needs review",
+  "untagged-split": "Needs review: not tagged to a guide on a split departure",
 };
 type Data = {
   from: string; to: string; summary: Sum;
@@ -17,6 +23,7 @@ type Data = {
   bySource: { source: string; count: number; pax: number }[];
   byTour: { tour: string; count: number; pax: number }[];
   byGuide: { guide: string; tours: number; guestsServed: number; onTimePct: number | null }[];
+  noShowChecks: NoShowCheck[];
 };
 
 const mLabel = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
@@ -93,9 +100,32 @@ export default function Reports() {
               <div className="kpi"><b>{s.toursRan}</b><span>Tours ran</span></div>
               <div className="kpi"><b>{s.toursAssigned}</b><span>Tours assigned</span></div>
               <div className="kpi"><b>{s.guestsServed}</b><span>Guests served</span></div>
-              <div className={`kpi ${s.noShowRate > 0 ? "warn" : ""}`}><b>{s.noShowRate}%</b><span>No-show rate ({s.noShows})</span></div>
+              <div className={`kpi ${s.noShowRate > 0 ? "warn" : ""}`}><b>{s.noShowRate}%</b><span>No-show rate ({s.noShows})</span>
+                {s.noShowsNeedReview > 0 && <small style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>{s.noShowsNeedReview} also cancelled · included in no-shows, needs review</small>}
+              </div>
               <div className={`kpi ${s.onTimePct != null && s.onTimePct < 90 ? "warn" : ""}`}><b>{pct(s.onTimePct)}</b><span>On-time check-in</span></div>
             </div>
+
+            {d.noShowChecks.length > 0 && (
+              <div className="grid-scroll" style={{ marginBottom: 16 }}>
+                <table className="rep-table" style={{ minWidth: 680 }}>
+                  <thead><tr><th>Reported absent</th><th>Guide</th><th>Booking</th><th className="n">Guests</th><th>In the no-show count</th></tr></thead>
+                  <tbody>
+                    {d.noShowChecks.map((c, i) => (
+                      <tr key={i}>
+                        <td>{c.date} {c.time}</td>
+                        <td>{c.guide}</td>
+                        <td>{c.ref || "—"}</td>
+                        <td className="n">{c.absentPax}</td>
+                        <td style={c.outcome === "needs-review" ? { color: "var(--danger)", fontWeight: 700 } : { color: "var(--ink-soft)" }}>
+                          {CHECK_TEXT[c.reason]}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div className="rep-grid">
               <Bars label="Bookings by month" value="bookings" rows={d.byMonth.map((m) => ({ k: mLabel(m.month), v: m.count }))} />
@@ -125,7 +155,7 @@ export default function Reports() {
 
             <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 12, lineHeight: 1.6 }}>
               <b>How these are counted:</b> a tour “ran” when it was assigned and the guide checked in or filed a report.
-              No-shows use the guide’s report where available, otherwise the guest-list flags. On-time = the first check-in within 5 min of the tour start. Revenue isn’t shown — booking prices aren’t stored.
+              No-shows use the guide’s report where available, otherwise the guest-list flags. Source cancellations remain recorded separately: a cancelled booking reported as a no-show stays in the count and is flagged for review, regardless of cancellation time. An untagged guest on a split departure is listed for review without counting the same guest for multiple guides. On-time = the first check-in within 5 min of the tour start. Revenue isn’t shown — booking prices aren’t stored.
             </div>
           </div>
         )}

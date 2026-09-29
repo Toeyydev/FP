@@ -1,5 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 import { returnTarget } from "@/lib/auth-redirect";
+import { canonicalHostFor } from "@/lib/retired-hosts";
+import { PUBLIC_HOST } from "@/lib/site";
 import { NextResponse } from "next/server";
 
 const ACCESS_TTL_SEC = 8 * 60 * 60; // keep in sync with lib/sessionTokens (edge can't import it — pulls prisma)
@@ -18,6 +20,19 @@ export const authConfig = {
   callbacks: {
     // Gate every route except the pre-login entry, sign-in, and provisioning flows.
     authorized({ auth, request }) {
+      // A retired domain lands on the live one before anything else is decided —
+      // public pages included, or a guide could sign in on the old host and end up
+      // with a session tied to the very origin we are emptying out. Webhooks from
+      // LINE/Bokun and the cron are the exception (lib/retired-hosts). Temporary
+      // (307) on purpose: a permanent redirect sticks in browser caches long after
+      // we might want the old host back for something.
+      const moved = canonicalHostFor(request.headers.get("x-forwarded-host") || request.headers.get("host"), PUBLIC_HOST, request.nextUrl.pathname);
+      if (moved) {
+        const movedTo = new URL(request.url);
+        movedTo.protocol = "https:";
+        movedTo.host = moved; // assigning a bare hostname drops any port with it
+        return NextResponse.redirect(movedTo, 307);
+      }
       const p = request.nextUrl.pathname;
       const isPublic =
         p === "/start" || p.startsWith("/signin") || p.startsWith("/claim") || p.startsWith("/request") ||
@@ -25,7 +40,10 @@ export const authConfig = {
         p.startsWith("/api/auth") || p.startsWith("/api/claim") || p.startsWith("/api/request") ||
         p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version") ||
         p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/google/health" ||
-        p.startsWith("/api/passkey") || p.startsWith("/api/offers/respond");
+        p.startsWith("/api/passkey") || p.startsWith("/api/offers/respond") ||
+        // FolkOPS Mobile sends a bearer token, not a cookie. Every /api/mobile route
+        // checks that token itself (lib/mobile-auth) and answers 401 without one.
+        p.startsWith("/api/mobile/");
       if (isPublic) return true;
       if (auth?.user) {
         // Accountant is a finance-only role: confine page navigation to the money
@@ -55,9 +73,18 @@ export const authConfig = {
       // (e.g. /bookings?date=…) comes back as a bare page and looks like the
       // link did nothing.
       const target = returnTarget(p, request.nextUrl.search);
-      if (request.cookies.get(REFRESH_COOKIE)) {
+      const isApi = p.startsWith("/api/");
+      // The silent re-mint only serves a GET: /api/session/refresh exports GET only,
+      // and a 307 preserves the method, so bouncing a PUT there lands on 405 and
+      // refreshes nothing. Pages keep bouncing on any method, exactly as before.
+      if (request.cookies.get(REFRESH_COOKIE) && (!isApi || request.method === "GET")) {
         return NextResponse.redirect(new URL(`/api/session/refresh?next=${encodeURIComponent(target)}&h=${encodeURIComponent(host)}`, base));
       }
+      // An API request gets a status code, not a login page. fetch() follows the
+      // redirect by default and /start answers 200, so redirecting an expired API
+      // call read as a SUCCESS at every client site that checks res.ok, and as a
+      // JSON parse error at the ones that do not — a save that silently did nothing.
+      if (isApi) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       // Otherwise send them to sign in — on the same domain.
       return NextResponse.redirect(new URL(`/start?callbackUrl=${encodeURIComponent(target)}`, base));
     },

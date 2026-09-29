@@ -196,6 +196,28 @@ table.grid tbody tr:hover td.gname{background:var(--grey-bg)}
 .modal select,.modal input{width:100%;border:1px solid var(--line-strong);border-radius:10px;padding:9px 12px;font-family:inherit;font-size:14px;background:var(--paper)}
 .modal select:focus,.modal input:focus{outline:none;border-color:var(--ink-soft)}
 .modal .mfoot{display:flex;gap:9px;justify-content:flex-end;padding:13px 20px;border-top:1px solid var(--line);background:var(--paper);position:sticky;bottom:0}
+/* Pay N jobs together — one PEAK document (PeakPaymentDialog) */
+.paydoc-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);font-weight:700;display:block;margin-bottom:5px;padding:0}
+.paydoc-job{display:flex;align-items:center;gap:10px;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:10px;background:var(--paper);cursor:pointer}
+.paydoc-job:has(input:checked){border-color:var(--line-strong);background:var(--card)}
+.modal .paydoc-job input[type=checkbox]{width:auto;margin:0;flex:none;accent-color:var(--primary)}
+.paydoc-ref{display:block;font-size:11px;color:var(--ink-soft);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.paydoc-fields{border:0;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.paydoc-fields label{display:block;min-width:0}
+.modal .paydoc-fields input[type=file]{padding:6px 8px;font-size:12.5px}
+.paydoc-table td,.paydoc-table th{font-size:12.5px}
+.paydoc-table .r{text-align:right}
+.paydoc-table .num,.paydoc-sum .num,.paydoc-job .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.paydoc-sum{display:grid;gap:4px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.paydoc-hint{font-size:12px;color:var(--ink-soft)}
+.paydoc-credit{font-size:12.5px;padding:7px 10px;border-radius:9px;background:var(--card);border:1px dashed var(--line-strong);color:var(--ink)}
+.pay-doc-note{font-size:11px;font-weight:700;color:var(--ink-soft);white-space:nowrap}
+.pay-doc-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;padding:8px 10px;border-radius:10px;font-size:12.5px;background:#fff8c4;border:1px solid #ecd9bf;color:var(--ink)}
+.pay-doc-bar.danger{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}
+/* The bar sits in a table row as wide as the table. On a phone the table scrolls sideways,
+   so keep the bar pinned to the visible width — the amount to pay must never be off-screen. */
+@media (max-width:720px){.pay-doc-bar{position:sticky;left:0;max-width:calc(100vw - 56px);box-sizing:border-box}}
+.pay-doc-tag{font-size:11px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-soft);white-space:nowrap}
 .dayedit{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .dayedit .pill{min-width:0;padding:9px 6px;font-size:12px}
 .assigned-note{background:var(--assign-bg);border:1px solid var(--assign-line);border-radius:11px;padding:11px 13px;font-size:13px}.assigned-note b{color:var(--assign)}
@@ -673,10 +695,12 @@ a.glink:hover{text-decoration:underline}
   letter-spacing:.02em; color:#2f343b; line-height:1; }
 .brand .th-name{ font-size:12.5px; font-weight:600; color:#2f343b; margin-top:4px; letter-spacing:.01em; }
 
-/* ---- Availability Save bar (auto-save status + explicit Save) ---- */
+/* ---- Availability Save bar (auto-save status, and what went wrong) ---- */
 .savebar{ position:sticky; bottom:0; display:flex; align-items:center; justify-content:space-between;
   gap:12px; padding:12px 16px; margin-top:4px; background:var(--card); border-top:1px solid var(--line); }
 .savebar-status{ font-size:13px; font-weight:600; color:var(--green); }
+/* A failed save must not keep wearing the colour of a saved one. */
+.savebar-status.err{ color:var(--danger); }
 
 /* ---- Guide setup card: 2 steps to receive job offers ---- */
 .setup-card{background:#fff;border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:12px;
@@ -744,6 +768,47 @@ a.dash-row:hover{background:var(--grey-bg)}
 .pay-table th.r,.pay-table td.r{text-align:right;font-variant-numeric:tabular-nums}
 .pay-table tfoot .pay-foot td{border-top:2px solid var(--line-strong);padding-top:10px;font-weight:600}
 .pay-table .gid{color:var(--grey);font-weight:600;font-size:11px;font-family:"Sarabun"}
+/* Grid lines between cells, so a figure is never read against the wrong column. */
+.pay-table th,.pay-table td{border:1px solid var(--line)}
+.pay-table thead th{border-bottom:1px solid var(--line-strong)}
+.pay-job-row{display:grid;grid-template-columns:130px minmax(150px,1fr) 170px 240px 290px;font-size:13px;border:1px solid var(--line);border-top:0;background:var(--card,#fff)}
+.pay-job-row.first{border-top:1px solid var(--line)}
+.pay-job-row>span{padding:6px 8px;border-left:1px solid var(--line);display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.pay-job-row>span:first-child{border-left:0}
+.pay-job-row>span:nth-child(2){flex-direction:column;align-items:flex-start;justify-content:center;gap:0}
+.pay-job-row>.pay-job-amt{flex-direction:column;justify-content:center;align-items:flex-end;text-align:right;gap:0}
+.pay-job-row .pay-doc-tag{white-space:normal;overflow-wrap:anywhere}
+.pay-job-row>.pay-job-amt span{white-space:normal!important}
+.pay-peak-missing{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--line-strong);color:var(--ink-soft);white-space:nowrap}
+.pay-peak-missing.paid{background:#fff8c4;border-color:#ecd9bf;color:#8a5a00}
+.pay-drift{display:grid;gap:6px;padding:8px 10px;border:1px solid #ecd9bf;border-left:4px solid var(--danger,#c0392b);border-radius:8px;background:#fff8f0;color:var(--ink);font-size:12.5px}
+.pay-drift-table{min-width:520px;font-size:12.5px}
+.pay-drift-table .pay-drift-delta td{font-weight:600;border-top:1px solid var(--line)}
+.pay-drift-badge{border-color:var(--danger,#c0392b)}
+.pay-adj-row{display:grid;grid-template-columns:170px 1fr 120px auto;gap:6px;align-items:center}
+.pay-adj-row input,.pay-adj-row select{border:1px solid var(--line-strong);border-radius:8px;padding:7px 9px;font:inherit;font-size:13px;background:var(--card);color:var(--ink);min-width:0}
+.pay-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pay-form-grid input{width:100%;border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;font:inherit;font-size:13.5px;background:var(--card);color:var(--ink)}
+.pay-recon{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--assign-line);background:var(--assign-bg);border-radius:9px}
+.pay-recon.ok{border-color:var(--green-line);background:var(--green-bg)}
+.pay-recon b{font-size:15px;font-variant-numeric:tabular-nums}
+.pay-pmt{font-size:11px;font-weight:700;color:var(--green);background:var(--green-bg);border:1px solid var(--green-line);border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pay-pmt.legacy{color:var(--assign);background:var(--assign-bg);border-color:var(--assign-line)}
+@media (max-width:560px){.pay-adj-row{grid-template-columns:1fr 1fr}.pay-form-grid{grid-template-columns:1fr}}
+.pay-cand tbody tr.pay-cand-blocked{color:var(--ink-soft);background:var(--grey-bg)}
+.chip-readiness{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--green-line);background:var(--green-bg);color:var(--green);white-space:nowrap}
+.chip-readiness.not-approved,.chip-readiness\.no-sheet{border-color:var(--assign-line);background:var(--assign-bg);color:var(--assign)}
+.chip-readiness.no-sheet{border-color:var(--line-strong);background:var(--grey-bg);color:var(--ink-soft)}
+.chip-pay{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--line-strong);white-space:nowrap}
+.chip-pay.unpaid{border-color:var(--assign-line);background:var(--assign-bg);color:var(--assign)}
+.chip-pay.blocked{border-color:var(--line-strong);background:var(--grey-bg);color:var(--ink-soft)}
+.chip-pay.recorded{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+.chip-pay.reversed{border-color:var(--danger-line);background:var(--danger-bg);color:var(--danger)}
+.pay-review{min-width:520px;font-size:13px}
+.pay-review tfoot td{font-weight:600;border-top:1px solid var(--line-strong)}
+.pay-review-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.pay-review-facts b{display:block;font-size:13.5px}
+.pay-peak-none{font-size:11px;color:var(--ink-soft);white-space:nowrap}
 
 /* ---- Reports ---- */
 .rep-kpi{display:flex;flex-wrap:wrap;gap:10px 28px;padding-bottom:14px;margin-bottom:6px;border-bottom:1px solid var(--line)}
@@ -1329,3 +1394,59 @@ body:has(.op-layout) .wrap{max-width:1440px}
    dispatching sooner — the work is done and somebody may be unpaid for it. */
 .att-row.att-past{border-left:3px solid var(--danger);background:var(--danger-bg)}
 .att-row.att-past .att-go{color:var(--danger);font-weight:700}
+
+/* Who is being mapped, above the PEAK contact picker. FolkOPS holds the guide's
+   legal name; PEAK holds its own. They are shown side by side so the operator
+   compares them, rather than being made to look already reconciled. */
+.js-contact-who{display:flex;gap:8px;align-items:baseline;margin-bottom:6px;font-size:12.5px}
+.js-contact-who b{font-variant-numeric:tabular-nums}
+.js-contact-who span{color:var(--ink-soft)}
+
+/* A suggested PEAK contact. Deliberately looks like a prompt, not a selection —
+   nothing is saved until the operator picks it and presses Save. */
+.js-contact-suggest{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;
+  padding:8px 10px;margin-bottom:6px;border:1px dashed var(--line);border-radius:8px;
+  background:var(--warn-bg,#fffbe9);font-size:12.5px}
+.js-contact-suggest .hint{margin:0}
+
+/* Historical backlog. A review queue, not a document: the totals lead, each row
+   carries its state as a tag, and the review panel opens under the table so the
+   operator keeps the list in view while deciding. */
+.hb-totals{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;flex-wrap:wrap}
+.hb-totals div{background:#fff;padding:10px 16px;display:flex;flex-direction:column;gap:1px;min-width:150px;flex:1}
+.hb-totals b{font-size:22px;line-height:1.1;font-variant-numeric:tabular-nums}
+.hb-totals span{font-size:11.5px;color:var(--ink-soft)}
+.hb-panel{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:#fbfcfb;
+  display:flex;flex-direction:column;gap:9px}
+.hb-panel-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.hb-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hb-row .fl{min-width:150px;font-size:12px;color:var(--ink-soft)}
+.hb-warn{font-size:12px;font-weight:700;color:var(--danger);background:var(--danger-bg);
+  border-radius:6px;padding:6px 10px}
+/* All bookings: a compact filter under each column header. */
+.acct-table .bk-filter-row th{padding:4px 6px 8px;text-transform:none;letter-spacing:0;font-weight:400}
+.acct-table .bk-filter{width:100%;min-width:90px;height:30px;padding:3px 8px;font-size:12.5px;box-sizing:border-box}
+
+
+/* The tour-expense table ends in several answers, not one: what the job cost, who
+   funded which part, and — the only figure anyone transfers — what is owed back to
+   the guide. The last of those is the loud one. */
+.js-total-sub td { font-weight: 500; color: var(--ink-soft, #8a8f8b); }
+/* Not a quieter shade of the same thing: money nobody has assigned a payer to stops
+   a payment, so it is coloured like a refusal rather than like a note. */
+.js-total-warn td { font-weight: 700; color: #b91c1c; background: rgba(185, 28, 28, 0.07); }
+.js-total-warn td small { color: #b91c1c; font-weight: 600; }
+.js-total-owed td { font-weight: 700; color: #b45309; background: rgba(180, 83, 9, 0.06); }
+.js-total-owed .js-amt b { font-size: 1.08em; }
+.js-cost-note { font-size: 10.5px; font-weight: 500; color: var(--ink-soft, #8a8f8b); text-align: right; padding: 0 0 6px; }
+/* A row the guide will not be paid for, said on the row itself rather than left to
+   be worked out from the Paid By column. */
+.js-not-owed {
+  font-size: 10.5px; margin-top: 2px; white-space: normal; line-height: 1.3;
+  color: var(--primary, #2f6f4e);
+}
+
+/* Compensation reads as lines that add up: each kind of pay with its own tax, then
+   the total. The sub-totals are quiet; the total is the one that carries. */
+.js-comp-sub td { font-weight: 600; }
+.js-comp-total td { border-top: 1.5px solid var(--ink, #1a1a1a); font-weight: 800; }

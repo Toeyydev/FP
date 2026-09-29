@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -160,14 +160,14 @@ describe("jobsheet — enriched expense fields don't change the payout math", ()
 
 describe("jobsheet — receiptDriveName", () => {
   it("is unique per expense row (ref + E<n>) even for identical descriptions", () => {
-    const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 0, description: "Grand Palace", ext: "jpg" });
-    const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", index: 1, description: "Grand Palace", ext: "jpg" });
-    expect(a).toBe("FOLK-BKK-20260808-01-E1 Grand Palace — receipt.jpg");
+    const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" });
+    const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 1, description: "Grand Palace", ext: "jpg" });
+    expect(a).toBe("FOLK-BKK-20260808-01 — G-001 — 2026-08-08 — slot 0-E1 Grand Palace — receipt.jpg");
     expect(a).not.toBe(b); // same description, different row → a different Drive file
   });
   it("falls back to guideId-date without a ref and sanitises the description", () => {
-    const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
-    expect(n).toBe("G-002-2026-08-08-E3 Taxi airport run — receipt.pdf");
+    const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", slotIdx: 0, index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
+    expect(n).toBe("Job — G-002 — 2026-08-08 — slot 0-E3 Taxi airport run — receipt.pdf");
   });
 });
 
@@ -271,6 +271,96 @@ describe("job-sheet document totals add up", () => {
 
   it("Net Pay to Guide still reimburses the reward — the split is presentation only", () => {
     const t = computeTotals(expenses, fee);
-    expect(t.grandTotal).toBe(860 + (1500 - 45)); // expenses incl. reward + net fee
+    // The reward is paid in full and withheld on: 3% of the fee AND of the ฿100
+    // reward, so the net fee carries ฿48, not ฿45 (owner decision 2026-09-23).
+    expect(t.whtBase).toBe(1600);
+    expect(t.wht).toBe(48);
+    expect(t.grandTotal).toBe(860 + (1500 - 48)); // expenses incl. reward + net fee
+  });
+});
+
+describe("receipt identity for legacy refs", () => {
+  it.each([null, "FOLK-BKK-20300513-01"])("separates guides and slots for ref %s", (ref) => {
+    const opts = { ref, guideId: "G-001", date: "2030-05-13", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" };
+    const names = [opts, { ...opts, guideId: "G-002" }, { ...opts, slotIdx: 1 }].map(receiptDriveName);
+    expect(new Set(names).size).toBe(3);
+    expect(receiptDriveName(opts)).toBe(names[0]);
+  });
+});
+
+describe("Drive names never collide for different jobs", () => {
+  const job = { ref: "FOLK-BKK-20300101-01", guideName: "Guide Same", date: "2030-01-01", guideId: "G-TEST1", slotIdx: 0 };
+  it("two sheets sharing a legacy ref get different document names — same display name or same guide on another slot", () => {
+    const names = [job, { ...job, guideId: "G-TEST2" }, { ...job, slotIdx: 2 }].map((j) => jobSheetDriveName(j));
+    expect(new Set(names).size).toBe(3);
+    expect(jobSheetDriveName(job, ".pdf")).toBe("FOLK-BKK-20300101-01 — Guide Same — 2030-01-01 — G-TEST1 — slot 0.pdf");
+    expect(jobSheetDriveName(job)).toBe(jobSheetDriveName({ ...job })); // the same job still replaces its own document
+  });
+  it("split-payment slips are one file per transfer", () => {
+    const o = { guideId: "G-TEST1", guideName: "Guide Same", date: "2030-01-01", slotIdx: 0, seq: 1, ext: "jpg" };
+    expect(splitSlipDriveName({ ...o, uniqueId: "a" })).not.toBe(splitSlipDriveName({ ...o, uniqueId: "b" }));
+    expect(splitSlipDriveName({ ...o, uniqueId: "a" })).not.toBe(splitSlipDriveName({ ...o, slotIdx: 2, uniqueId: "a" }));
+  });
+  it("a combined slip is named by its exact set of jobs, in any order", () => {
+    const hash = (s: string) => s; // identity keeps the test readable
+    const base = { guideId: "G-TEST1", guideName: "Guide Same", dateLabel: "1 Jan 2030", ext: "jpg" };
+    const ab = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 0 }, { date: "2030-01-01", slotIdx: 2 }] }, hash);
+    const ba = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 2 }, { date: "2030-01-01", slotIdx: 0 }] }, hash);
+    const other = combinedSlipDriveName({ ...base, jobs: [{ date: "2030-01-01", slotIdx: 0 }, { date: "2030-01-01", slotIdx: 3 }] }, hash);
+    expect(ab).toBe(ba);
+    expect(ab).not.toBe(other);
+  });
+});
+
+describe("jobsheet — adopting a guide's reported expenses", () => {
+  const official: Expense[] = [
+    { description: "Water (Inc. Guide)", price: 10, pax: 8, paidBy: "company" },
+    { description: "Bus (Inc. Guide)", price: 15, pax: 8 },
+  ];
+  it("takes the guide's figures and payer for a line the operator left without one", () => {
+    expect(adoptReportedLine(official[1], { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide" }))
+      .toEqual({ description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide" });
+  });
+  it("keeps a payer the operator already recorded", () => {
+    expect(adoptReportedLine(official[0], { description: "Water (Inc. Guide)", price: 10, pax: 5, paidBy: "guide" }))
+      .toEqual({ description: "Water (Inc. Guide)", price: 10, pax: 5, paidBy: "company" });
+  });
+  it("copies a blank from the guide verbatim", () => {
+    expect(adoptReportedLine(official[1], { description: "Bus (Inc. Guide)", price: null, pax: null })).toMatchObject({ price: null, pax: null });
+    expect(adoptReportedLine(official[1], { description: "Bus (Inc. Guide)", price: 15, pax: 0 }).paidBy).toBeUndefined();
+  });
+  it("adopting the whole report keeps recorded payers and takes the guide's elsewhere", () => {
+    const out = adoptReportedExpenses(official, [
+      { description: " water (inc. guide) ", price: 10, pax: 5, paidBy: "guide" },
+      { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide" },
+      { description: "Taxi", price: 100, pax: 1, paidBy: "guide" },
+    ]);
+    expect(out.map((e) => [e.pax, e.paidBy])).toEqual([[5, "company"], [5, "guide"], [1, "guide"]]);
+  });
+  it("adoption carries where the payer came from, so a default stays marked unconfirmed", () => {
+    const reported: Expense = { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" };
+    expect(adoptReportedLine(official[1], reported)).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(adoptReportedExpenses(official, [reported])[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    // The operator's own payer wins and is labelled as the operator's.
+    expect(adoptReportedExpenses(official, [{ ...reported, description: "Water (Inc. Guide)" }])[0]).toMatchObject({ paidBy: "company", paidBySource: "operator" });
+  });
+});
+
+describe("guideFeeOrStandard — an entered zero fee is a fee of zero", () => {
+  it("keeps ฿0 — a job run together with another pays no fee of its own", () => {
+    const zero = { price: 0, time: 1, whtPct: 0 };
+    expect(guideFeeOrStandard(zero)).toBe(zero);
+    expect(computeTotals([], guideFeeOrStandard(zero))).toMatchObject({ gross: 0, wht: 0, netGuideFee: 0 });
+  });
+  it("keeps 0 × no price as zero, not the standard fee", () => {
+    const none = { price: null, time: 0, whtPct: null };
+    expect(computeTotals([], guideFeeOrStandard(none)).gross).toBe(0);
+  });
+  it("gives the standard fee only when no fee was entered at all", () => {
+    expect(guideFeeOrStandard({})).toBe(DEFAULT_GUIDE_FEE);
+    expect(guideFeeOrStandard(null)).toBe(DEFAULT_GUIDE_FEE);
+    expect(guideFeeOrStandard({ price: null, time: 1, whtPct: 3 })).toBe(DEFAULT_GUIDE_FEE);
+    const entered = { price: 1300, time: 1, whtPct: 3 };
+    expect(guideFeeOrStandard(entered)).toBe(entered);
   });
 });

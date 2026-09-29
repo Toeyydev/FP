@@ -5,10 +5,11 @@ import { SLOT_TIMES } from "@/lib/slots";
 import { guidesNeeded } from "@/lib/capacity";
 import { reconcileAssignedBookings, autoSyncBokun } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
-import { cached, withTimeout } from "@/lib/api-cache";
+import { cached, DASHBOARD_CACHE_KEY, withTimeout } from "@/lib/api-cache";
 import { paxIndex } from "@/lib/assigned-pax";
 import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { money2 } from "@/lib/payment-batch";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -16,7 +17,7 @@ const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDa
 // The dashboard shows the SAME operational board to every operator/admin (it is not
 // per-user), so one shared cache entry is safe — no per-user data is mixed. Guides
 // never reach this route (403 below), so nothing sensitive is cross-served.
-const DASH_KEY = "dashboard:v1";
+const DASH_KEY = DASHBOARD_CACHE_KEY;
 const DASH_TTL_MS = 60_000; // serve a cached board for up to 60s
 const FRESHEN_TIMEOUT_MS = 5_000; // cap how long we wait on best-effort reconcile/sweep
 
@@ -112,13 +113,17 @@ async function buildDashboard() {
   //
   // These do not age out. A past tour with guests and no guide is either someone
   // owed money or a booking nobody honoured, and both need answering.
-  const pastFrom = bkk(-45);
+  // 120 days: long enough that a tour recorded late (an evening food tour whose booking
+  // came with no tour connected) is still here; older history is imported backfill.
+  const pastFrom = bkk(-120);
   const pastUnstaffed: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; daysAgo: number }[] = [];
   {
     const pastBookings = await prisma.booking.findMany({
       where: {
         date: { gte: pastFrom, lt: today },
-        tourId: { not: null }, slotIdx: { not: null },
+        // Including bookings with no tour connected (a channel sent no product name):
+        // they are real tours too, and would otherwise vanish from every screen.
+        slotIdx: { not: null },
         status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
       },
       select: { tourId: true, date: true, slotIdx: true, pax: true },
@@ -133,15 +138,15 @@ async function buildDashboard() {
       for (const b of pastBookings) {
         const k = `${b.date}|${b.slotIdx}`;
         if (staffed.has(k)) continue;                     // somebody is on it
-        (agg[`${k}|${b.tourId}`] ??= { date: b.date!, slotIdx: b.slotIdx!, tourId: b.tourId!, pax: 0, count: 0 });
-        agg[`${k}|${b.tourId}`].pax += b.pax ?? 0;
-        agg[`${k}|${b.tourId}`].count += 1;
+        (agg[`${k}|${b.tourId ?? ""}`] ??= { date: b.date!, slotIdx: b.slotIdx!, tourId: b.tourId ?? "", pax: 0, count: 0 });
+        agg[`${k}|${b.tourId ?? ""}`].pax += b.pax ?? 0;
+        agg[`${k}|${b.tourId ?? ""}`].count += 1;
       }
       const dayMs = 86400000;
       for (const i of Object.values(agg)) {
         pastUnstaffed.push({
           date: i.date, slotIdx: i.slotIdx, time: SLOT_TIMES[i.slotIdx] ?? "",
-          tour: tourName.get(i.tourId) ?? i.tourId, pax: i.pax, count: i.count,
+          tour: i.tourId ? tourName.get(i.tourId) ?? i.tourId : "Tour not connected", pax: i.pax, count: i.count,
           daysAgo: Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${i.date}T00:00:00Z`)) / dayMs)),
         });
       }
@@ -257,9 +262,10 @@ async function buildFinance(today: string, nowMin: number, startMin: (slot: numb
     if (paidKey.has(kk) || settledGuides.has(v.guideId)) continue;
     const sheet = sheetByKey.get(kk);
     const gf = sheet?.guideFee && typeof sheet.guideFee === "object" && Object.keys(sheet.guideFee as object).length ? (sheet.guideFee as unknown as GuideFee) : DEFAULT_GUIDE_FEE;
-    const t = computeTotals((sheet?.expenses as unknown as Expense[]) ?? [], gf);
-    if (t.grandTotal <= 0) continue;
-    payableTotal += t.grandTotal; payableGuides.add(v.guideId); payableTours += 1;
+    // What is payable is what would be transferred — not what the job cost.
+    const b = tourCostBreakdown((sheet?.expenses as unknown as Expense[]) ?? [], gf);
+    if (b.netTransfer <= 0) continue;
+    payableTotal += b.netTransfer; payableGuides.add(v.guideId); payableTours += 1;
   }
 
   // PEAK refs on this month's PAID tours: recorded vs still missing.

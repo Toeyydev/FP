@@ -8,6 +8,7 @@ import { peakPayoutReady } from "@/lib/peak-payout";
 import { accountChartReady, missingRequired } from "@/lib/peak-accounts";
 import { classifyPeakHost, endpointSource } from "@/lib/peak-env";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { tourCostBreakdown } from "@/lib/peak-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,10 @@ export async function GET(req: NextRequest) {
   const amountOf = (k: string) => {
     const s = sheetOf.get(k);
     const gf = s?.guideFee && typeof s.guideFee === "object" && Object.keys(s.guideFee as object).length ? (s.guideFee as unknown as GuideFee) : DEFAULT_GUIDE_FEE;
-    return Math.round(computeTotals((s?.expenses as unknown as Expense[]) ?? [], gf).grandTotal * 100) / 100;
+    // A PEAK expense document books the GROSS — the fee and the review incentive before
+    // withholding, plus what is reimbursed — and settles the withholding separately. So
+    // the figure compared here is grossPayable, not the net that leaves the bank.
+    return tourCostBreakdown((s?.expenses as unknown as Expense[]) ?? [], gf).grossPayable;
   };
 
   const rows = pays.map((p) => {

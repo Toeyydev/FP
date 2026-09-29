@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { canViewFinance } from "@/lib/roles";
+import { noShowOutcome, type NoShowOutcome } from "@/lib/no-show-count";
+import { handoverLock } from "@/lib/tour-handover-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -29,12 +31,12 @@ export async function GET(req: NextRequest) {
 
   // Which specific bookings the guide flagged as no-shows, so the operator sees WHO
   // (not just a count). Keyed by date|slot; matched to the guide for split slots.
-  const nsRows = await prisma.booking.findMany({ where: { date: { gte: from, lte: to }, noShow: true }, select: { date: true, slotIdx: true, assignedGuideId: true, customerName: true, externalRef: true, confirmationCode: true, pax: true, noShowPax: true } });
-  const nsMap = new Map<string, { name: string; ref: string; pax: number; noShowPax: number; g: string | null }[]>();
+  const nsRows = await prisma.booking.findMany({ where: { date: { gte: from, lte: to }, noShow: true }, select: { date: true, slotIdx: true, assignedGuideId: true, customerName: true, externalRef: true, confirmationCode: true, pax: true, noShowPax: true, status: true, cancelledAtSource: true } });
+  const nsMap = new Map<string, { name: string; ref: string; pax: number; noShowPax: number; g: string | null; countsInReports: NoShowOutcome }[]>();
   for (const b of nsRows) {
     if (b.slotIdx == null || !b.date) continue;
     const k = `${b.date}|${b.slotIdx}`;
-    const list = nsMap.get(k) ?? []; list.push({ name: b.customerName || b.externalRef || b.confirmationCode || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShowPax: b.noShowPax || (b.pax ?? 0), g: b.assignedGuideId ?? null });
+    const list = nsMap.get(k) ?? []; list.push({ name: b.customerName || b.externalRef || b.confirmationCode || "Guest", ref: b.externalRef || b.confirmationCode || "", pax: b.pax ?? 0, noShowPax: b.noShowPax || (b.pax ?? 0), g: b.assignedGuideId ?? null, countsInReports: noShowOutcome(b) });
     nsMap.set(k, list);
   }
 
@@ -59,7 +61,7 @@ export async function GET(req: NextRequest) {
       arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null, offSiteM: offSite[k] ?? null,
       stars: rate.get(k) ?? null, completed: !!t.COMPLETE,
       report: r ? { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments } : null,
-      noShows: (nsMap.get(`${a.date}|${a.slotIdx}`) ?? []).filter((n) => !n.g || n.g === a.guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax, noShowPax: n.noShowPax })),
+      noShows: (nsMap.get(`${a.date}|${a.slotIdx}`) ?? []).filter((n) => !n.g || n.g === a.guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax, noShowPax: n.noShowPax, countsInReports: n.countsInReports })),
     };
   });
   // Also surface tours that were reported / checked in but whose assignment was later
@@ -84,7 +86,7 @@ export async function GET(req: NextRequest) {
         arrive: t.ARRIVE ?? null, start: t.START ?? null, complete: t.COMPLETE ?? null, offSiteM: offSite[key] ?? null,
         stars: rate.get(key) ?? null, completed: !!t.COMPLETE,
         report: r ? { noShow: r.noShow, leftEarly: r.leftEarly, completedPax: r.completedPax, comments: r.comments } : null,
-        noShows: (nsMap.get(`${date}|${slotIdx}`) ?? []).filter((n) => !n.g || n.g === guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax, noShowPax: n.noShowPax })),
+        noShows: (nsMap.get(`${date}|${slotIdx}`) ?? []).filter((n) => !n.g || n.g === guideId).map((n) => ({ name: n.name, ref: n.ref, pax: n.pax, noShowPax: n.noShowPax, countsInReports: n.countsInReports })),
       });
     }
     rows.sort((a, b) => b.date.localeCompare(a.date) || a.slotIdx - b.slotIdx);
@@ -105,6 +107,8 @@ export async function DELETE(req: NextRequest) {
   const slotIdx = Number(body?.slotIdx);
   if (!guideId || !DATE.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const where = { guideId, date, slotIdx };
+  const handover = await handoverLock(date, slotIdx, guideId);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),

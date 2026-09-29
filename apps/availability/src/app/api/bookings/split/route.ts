@@ -4,12 +4,15 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { SLOT_TIMES } from "@/lib/slots";
 import { bookingRef } from "@/lib/booking-ref";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, lineEnabled } from "@/lib/line";
 import { pushTourToCalendars, removeTourEvents } from "@/lib/tour-calendar-sync";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
+import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
+import { handoverLock } from "@/lib/tour-handover-server";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const CAP = PAX_PER_GUIDE;
@@ -52,6 +55,10 @@ export async function POST(req: NextRequest) {
 
   // Guides already holding this slot before the split — any not in the new split are
   // being dropped from the tour and get cleaned up + notified below.
+  // A split re-cuts every guide on the slot and drops anyone left without guests —
+  // which would delete one half of a handover record.
+  const handover = await handoverLock(date, slotIdx);
+  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
   const priorAssignments = await prisma.assignment.findMany({ where: { date, slotIdx } });
   const newGuideIds = new Set(groups.map((g) => g.guideId));
 
@@ -91,6 +98,12 @@ export async function POST(req: NextRequest) {
     // Any guest still tagged to this dropped guide (not moved into a new group) is
     // freed back to the inbox, so it isn't left orphaned on a guide with no assignment.
     await prisma.booking.updateMany({ where: { date, slotIdx, assignedGuideId: a.guideId }, data: { assignedGuideId: null, status: "PENDING" } });
+    if (await hasHistoricalJobSheet({ guideId: a.guideId, date, slotIdx })) {
+      const c = historicalDeleteConflict();
+      return NextResponse.json(c.body, { status: c.status });
+    }
+    const history = await financialHistoryBlockers(prisma, [{ guideId: a.guideId, date, slotIdx }]);
+    if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
     await Promise.all([
       prisma.jobSheet.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),
       prisma.checkin.deleteMany({ where: { guideId: a.guideId, date, slotIdx } }),

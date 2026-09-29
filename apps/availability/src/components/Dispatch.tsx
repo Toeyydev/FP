@@ -5,6 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
+import HistoricalBacklog from "@/components/HistoricalBacklog";
 
 type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
@@ -24,7 +25,7 @@ function StateTag({ a }: { a: Assignment }) {
 
 export default function Dispatch() {
   const [data, setData] = useState<{ assignments: Assignment[]; offers: Offer[] } | null>(null);
-  const [tab, setTab] = useState<"assigned" | "offers">("assigned");
+  const [tab, setTab] = useState<"assigned" | "offers" | "historical">("assigned");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -108,7 +109,7 @@ export default function Dispatch() {
   async function removeAssignment(a: Assignment) {
     if (!confirm(`Remove this tour?\n${a.tourName} · ${a.date} ${a.time} · ${a.guideId} ${a.guideName}\n\nIts bookings go back to the inbox to re-dispatch.`)) return;
     const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(d.error === "tour-in-progress" ? "Can't remove — the guide already checked into this tour. Undo it from the Tour Log instead." : "Remove failed."); return; }
+    if (!r.ok) { const d = await r.json().catch(() => ({})); setMsg(d.error === "tour-in-progress" ? "Can't remove — the guide already checked into this tour. Undo it from the Tour Log instead." : d.error === "handover-on-slot" ? `Can't remove — ${d.reason}` : "Remove failed."); return; }
     await load();
   }
   // Reassign: unassign the current guide and re-offer to the others available.
@@ -119,7 +120,7 @@ export default function Dispatch() {
     setMsg("Returning to pending…");
     const r = await fetch("/api/assignments", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: a.guideId, date: a.date, slotIdx: a.slotIdx, release: true }) });
     const d = r.ok ? null : await r.json().catch(() => ({}));
-    setMsg(r.ok ? "↩ Returned to pending — offer it in Bookings." : (d?.error === "tour-in-progress" ? "Can't re-offer — the guide already checked into this tour." : "Failed"));
+    setMsg(r.ok ? "↩ Returned to pending — offer it in Bookings." : (d?.error === "tour-in-progress" ? "Can't re-offer — the guide already checked into this tour." : d?.error === "handover-on-slot" ? `Can't re-offer — ${d.reason}` : "Failed"));
     await load();
   }
 
@@ -170,7 +171,7 @@ export default function Dispatch() {
     const r = await fetch("/api/bookings/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: splitFor.a.date, slotIdx: splitFor.a.slotIdx, tourId: splitFor.a.tourId, groups }) });
     const d = await r.json().catch(() => ({}));
     setSplitBusy(false);
-    if (!r.ok) { setMsg(d.error === "over-cap" ? `A guide's group exceeds ${SPLIT_CAP} pax — rebalance.` : "Split failed."); return; }
+    if (!r.ok) { setMsg(d.error === "over-cap" ? `A guide's group exceeds ${SPLIT_CAP} pax — rebalance.` : d.error === "handover-on-slot" ? `Can't split — ${d.reason}` : "Split failed."); return; }
     setSplitFor(null);
     setMsg(`✅ Split into ${d.groups} guide job(s) — each guide notified with their own sheet.`);
     await load();
@@ -195,11 +196,14 @@ export default function Dispatch() {
       <div id="appBar"><div className="subtabs">
         <button className={`subtab ${tab === "assigned" ? "active" : ""}`} onClick={() => setTab("assigned")}>Assigned jobs ({data.assignments.length})</button>
         <button className={`subtab ${tab === "offers" ? "active" : ""}`} onClick={() => setTab("offers")}>Offers ({openOffers.length} waiting{unfilled.length ? `, ${unfilled.length} unfilled` : ""})</button>
+        <button className={`subtab ${tab === "historical" ? "active" : ""}`} onClick={() => setTab("historical")}>Historical backlog</button>
       </div>
         <div className="nav"><a className="btn sm" href="/tour-log">📋 Past tours</a><a className="btn sm" href="/dashboard">Dashboard</a></div>
       </div>
 
-      {tab === "assigned" ? (
+      {tab === "historical" ? (
+        <HistoricalBacklog />
+      ) : tab === "assigned" ? (
         <section className="panel">
           <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today only — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
@@ -226,6 +230,7 @@ export default function Dispatch() {
                       <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div><div style={{ marginTop: 4 }}><StateTag a={a} /></div></div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>Job sheet</a>
+                        <a className="btn sm" title="This guide fell sick or was injured and someone else is finishing the tour — record the handover and move the fee" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}&handover=1`}>🤒 Hand over…</a>
                         {!["ARRIVE", "START", "COMPLETE"].includes(a.state) && <button className="btn sm" title="Split this tour across a second guide — each keeps their own job sheet" onClick={() => openSplit(a)}>Split</button>}
                         <button className="btn sm" onClick={() => reoffer(a)}>Re-offer</button>
                         <button className="btn sm danger" onClick={() => removeAssignment(a)}>Remove</button>

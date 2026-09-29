@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { bookingRef } from "@/lib/booking-ref";
+import { whatsappDisplay, whatsappUrl } from "@/lib/contact-links";
+import WhatsAppButton from "@/components/WhatsAppButton";
 
 type Data = {
   date: string; slotIdx: number; time: string; pax: number | null; note: string | null;
   tour: { id: string; name: string; time: string; meetingPoint: string | null; itinerary: string | null; included: string | null; bring: string | null } | null;
-  bookings: { customerName: string | null; confirmationCode: string | null; externalRef: string | null; pax: number | null; source: string }[];
+  bookings: { customerName: string | null; confirmationCode: string | null; externalRef: string | null; pax: number | null; source: string; phone: string | null }[];
 };
 
 export default function TourDetails() {
@@ -61,9 +63,28 @@ export default function TourDetails() {
         <table className="js-table">
           <thead><tr><th>No.</th><th>Name</th><th>Booking ref</th><th>Pax</th><th>Channel</th></tr></thead>
           <tbody>
-            {d.bookings.length ? d.bookings.map((b, i) => (
-              <tr key={i}><td>{i + 1}</td><td>{b.customerName || "—"}</td><td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td></tr>
-            )) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
+            {d.bookings.length ? d.bookings.map((b, i) => {
+              const wa = whatsappUrl(b.phone);
+              const waShown = whatsappDisplay(b.phone);
+              return (
+                <tr key={i}>
+                  <td>{i + 1}</td>
+                  <td>
+                    {b.customerName || "—"}
+                    {/* WhatsApp rather than a call: the guests are overseas, and a
+                        message beats paying for an international call. Nothing at all
+                        when no number was passed — an always-empty line reads as broken
+                        data, not absent data. A number that cannot be read with a country
+                        code gets no button and stays readable text: wa.me would open a
+                        chat with whoever owns it in a guessed country (lib/contact-links). */}
+                    {wa && waShown
+                      ? <div style={{ marginTop: 6 }}><WhatsAppButton href={wa} display={waShown} name={b.customerName} /></div>
+                      : b.phone ? <><br /><span style={{ fontSize: 12, whiteSpace: "nowrap", color: "var(--ink-soft)" }}>{b.phone}</span></> : null}
+                  </td>
+                  <td>{bookingRef(b.externalRef, b.confirmationCode) || "—"}</td><td>{b.pax ?? "?"}</td><td>{b.source}</td>
+                </tr>
+              );
+            }) : <tr><td colSpan={5} style={{ color: "var(--ink-soft)", textAlign: "center" }}>No customer list attached to this job.</td></tr>}
           </tbody>
         </table>
         {d.note && <div style={{ marginTop: 10, fontSize: 13 }}>📝 <b>Note:</b> {d.note}</div>}

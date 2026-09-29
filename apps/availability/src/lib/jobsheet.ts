@@ -31,6 +31,15 @@ export type Expense = {
   unit?: string;
   expenseType?: ExpenseType | string; // operational category (mapped to a PEAK account in the backend, not here)
   paidBy?: string; // "guide" | "operator" | "company"
+  // Where the payer on this line came from — NOT a payment fact, a provenance label:
+  //   "operator"           recorded by an operator on the sheet
+  //   "guide"              the guide picked it (FolkOPS Mobile sends paidByChoice)
+  //   "category-default"   FolkOPS filled the default for the row's CATEGORY (lib/payer-rules)
+  //   "default-after-tour" legacy: FolkOPS filled "guide" on every unanswered line. Kept on
+  //                        old rows, never written again, and NOT eligible for a payout.
+  //   "unconfirmed"        a payer arrived without anyone saying who chose it (older app builds
+  //                        pre-selected "guide" on every line), and it is not the operator's
+  paidBySource?: PaidBySource;
   reimbursementRequired?: boolean;
   estimatedAmount?: number | null;
   actualAmount?: number | null;
@@ -68,6 +77,8 @@ export type Expense = {
   relatedBookingNo?: string;
   relatedJobRef?: string; // legacy job-ref form, still honoured when present
 };
+export const PAID_BY_SOURCES = ["operator", "guide", "category-default", "default-after-tour", "unconfirmed"] as const;
+export type PaidBySource = (typeof PAID_BY_SOURCES)[number];
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
 // The standard items that appear on every new sheet (prices editable per job).
@@ -83,6 +94,19 @@ export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Bus (Inc. Guide)", price: 15, pax: null, expenseType: "transport" },
 ];
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
+
+// The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
+// together with another (piggybacked) pays no fee of its own, and 0 × anything or ฿0 is
+// that decision, not a blank. Only a sheet with no fee entered at all — {} or no price
+// and no explicit zero count — takes the standard fee, so an auto-created sheet does not
+// show the guide ฿0 owed.
+export function guideFeeOrStandard(gf: unknown): GuideFee {
+  if (!gf || typeof gf !== "object") return DEFAULT_GUIDE_FEE;
+  const g = gf as GuideFee;
+  if (g.price != null) return g;
+  if (g.time != null && Number(g.time) === 0) return g;
+  return DEFAULT_GUIDE_FEE;
+}
 
 // The lotus offering (dok bua) is only bought on tours that visit Wat Pho & Wat Arun.
 // Grand-Palace-only, Wat Pho evening, and food tours never carry a lotus fee.
@@ -117,6 +141,29 @@ export function expenseAmount(e: Expense): number {
 // A "Review reward" expense line — the guide's reward for reviews, entered as a
 // normal expense (rate × count, e.g. 2 × ฿50) but surfaced on its own line on the
 // job sheet and the guide's Pay so they can see what a review earned them.
+// Adopting what a guide reported. The guide's figures are copied verbatim (a blank or
+// zero from the guide is the point, e.g. "we never bought those tickets"), and so is the
+// guide's Paid By, unless the operator already recorded a payer on the official line.
+// That payer decides whether the guide is reimbursed, so it is never silently replaced.
+const sameLine = (a: { description?: string | null }, b: { description?: string | null }) =>
+  (a.description || "").trim().toLowerCase() === (b.description || "").trim().toLowerCase();
+const hasPayer = (e?: { paidBy?: string } | null) => !!(e?.paidBy ?? "").trim();
+export function adoptReportedLine(official: Expense, reported: Expense): Expense {
+  return {
+    ...official,
+    price: reported.price ?? null,
+    pax: reported.pax ?? null,
+    ...(reported.unit ? { unit: reported.unit } : {}),
+    ...(!hasPayer(official) && hasPayer(reported) ? { paidBy: reported.paidBy, ...(reported.paidBySource ? { paidBySource: reported.paidBySource } : {}) } : {}),
+  };
+}
+export function adoptReportedExpenses(official: Expense[], reported: Expense[]): Expense[] {
+  return (reported ?? []).map((g) => {
+    const o = (official ?? []).find((e) => sameLine(e, g));
+    return hasPayer(o) ? { ...g, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g };
+  });
+}
+
 export function isReviewExpense(e: { description?: string | null }): boolean {
   const d = (e.description || "").trim().toLowerCase();
   // Thai counts too. Operators work in both languages, and a row typed
@@ -126,43 +173,41 @@ export function isReviewExpense(e: { description?: string | null }): boolean {
   // outcome for choosing the wrong keyboard.
   return d.startsWith("review") || d.includes("รีวิว");
 }
-// What the GUIDE is shown they will receive.
-//
-// Two rules this exists to hold together:
-//   * Tour expenses come from whichever list is authoritative right now — the
-//     guide's own report while it is open, the operator's record once it is not.
-//   * The review reward ALWAYS comes from the operator's record and is added
-//     once. It is compensation the operator awards, not something a guide reports,
-//     so it must not disappear when the guide files a report that has no review
-//     lines in it — and must not be counted twice when their report was seeded
-//     from the operator's rows, which already contained them.
-export type GuidePayoutView = { tourExpenses: number; reviewReward: number; total: number };
-
-export function guidePayoutView(args: {
-  operatorExpenses: Expense[];
-  reportedExpenses: Expense[];
-  netGuideFee: number;
-  /** true while the guide's own report is the live figure (tour done, not yet paid) */
-  useReported: boolean;
-}): GuidePayoutView {
-  const tourOnly = (rows: Expense[]) =>
-    (rows ?? []).filter((e) => !isReviewExpense(e)).reduce((sum, e) => sum + expenseAmount(e), 0);
-  const tourExpenses = tourOnly(args.useReported ? args.reportedExpenses : args.operatorExpenses);
-  const reviewReward = reviewRewardTotal(args.operatorExpenses);
-  return { tourExpenses, reviewReward, total: args.netGuideFee + tourExpenses + reviewReward };
-}
-
 export function reviewRewardTotal(expenses: Expense[]): number {
   return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
 }
 
+/**
+ * Every figure the job sheet, the payout and the PEAK documents are built from.
+ *
+ * WITHHOLDING BASE — owner decision 2026-09-23. A review incentive is extra pay for
+ * the guide's work, so it is withheld on exactly like the fee:
+ *
+ *     base = guide fee + review incentive          (NOT meals, transport, tickets)
+ *     wht  = base × whtPct
+ *
+ * Reimbursements are the guide's own money coming back and are never taxed, so
+ * nothing else in the expense table joins the base.
+ *
+ * `wht` is the WHOLE withholding, which is what the transfer and ภ.ง.ด.3 need, and
+ * `netGuideFee` stays `gross − wht` so every total built on it lands on the right
+ * amount without each caller having to learn the new rule. `whtOnFee` and
+ * `whtOnReview` split it for the documents, which must show the tax beside the line
+ * that bears it; they are derived by subtraction so rounding can never leak a satang
+ * between them.
+ */
 export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   const totalExpenses = (expenses ?? []).reduce((s, e) => s + expenseAmount(e), 0);
   const gross = n(guideFee?.price) * n(guideFee?.time);
-  const wht = gross * (n(guideFee?.whtPct) / 100);
+  const rate = n(guideFee?.whtPct) / 100;
+  const reviewReward = reviewRewardTotal(expenses);
+  const whtBase = gross + reviewReward;
+  const wht = whtBase * rate;
+  const whtOnFee = gross * rate;
+  const whtOnReview = wht - whtOnFee;
   const netGuideFee = gross - wht;
   const grandTotal = totalExpenses + netGuideFee;
-  return { totalExpenses, gross, wht, netGuideFee, grandTotal };
+  return { totalExpenses, gross, reviewReward, whtBase, wht, whtOnFee, whtOnReview, netGuideFee, grandTotal };
 }
 
 // A booking's true no-show pax: the recorded per-booking count when present,
@@ -202,8 +247,11 @@ export function tourOperatingExpenses(expenses: Expense[]): number {
 // ── Accounting presentation (Job Sheet / PDF / Drive) ────────────────────────
 // Total Job Expenses = actual tour expenses + GROSS guide fee. WHT reduces the
 // cash paid to the guide (Net Payable), never the gross fee expense — so this is
-// deliberately NOT computeTotals().grandTotal (which is the guide-payout figure:
-// expenses + NET fee, used by Payments and left untouched).
+// deliberately NOT computeTotals().grandTotal. That figure adds EVERY expense row to
+// the net fee, including money the company itself paid, so it is neither the job's
+// cost nor the guide's transfer — nothing reads it as money any more (2026-09-23).
+// What the job cost and what to transfer both come from lib/peak-sync
+// tourCostBreakdown: `tourCost` and `netTransfer`.
 export function totalJobExpenses(t: { totalExpenses: number; gross: number }): number {
   return t.totalExpenses + t.gross;
 }
@@ -271,6 +319,12 @@ export function expenseCategoryLabel(e: Pick<Expense, "expenseType">): string {
   const k = expenseCategory(e);
   return EXPENSE_CATEGORIES.find((c) => c.key === k)?.label ?? "Uncategorised";
 }
+// The Thai name of a stored expenseType, or null when it is not one of ours. Wording
+// only — the stored key is what identifies and books the row, never this label.
+export function expenseCategoryLabelTh(e: Pick<Expense, "expenseType">): string | null {
+  const k = expenseCategory(e);
+  return EXPENSE_CATEGORIES.find((c) => c.key === k)?.th ?? null;
+}
 
 // Is this row's category settled enough to go to accounting unattended?
 // OTHER_TOUR_COST is deliberately NOT auto-approved (it is the catch-all — what
@@ -315,12 +369,30 @@ export function toggleApproval(current?: string | null): ApprovalStatus {
   return isApproved(current) ? null : "APPROVED";
 }
 
-// Drive file name for an expense receipt. Unique per expense row (ref + E<n>) so a
-// re-upload replaces only that row's receipt and never another's. The description is
-// sanitised (Drive/query-safe) and clipped; falls back to guideId-date when a sheet
-// has no ref yet.
-export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; index: number; description?: string | null; ext: string }): string {
-  const base = (opts.ref || `${opts.guideId}-${opts.date}`).trim();
+// Drive file names for a job sheet's documents. Drive saves replace a file of the same name,
+// and a legacy ref can be shared by two sheets (or two guides can share a display name), so
+// the name carries the whole job key — guide id and slot as well as ref and date.
+export function jobSheetDriveName(o: { ref: string; guideName: string; date: string; guideId: string; slotIdx: number }, suffix = ""): string {
+  return `${o.ref} — ${o.guideName} — ${o.date} — ${o.guideId} — slot ${o.slotIdx}${suffix}`;
+}
+
+// A split-payment slip: one file per transfer (slot + a unique id), never replacing another.
+export function splitSlipDriveName(o: { guideId: string; guideName: string; date: string; slotIdx: number; seq: number; ext: string; uniqueId: string }): string {
+  return `${o.guideId} ${o.guideName} — ${o.date} — slot ${o.slotIdx} — e-slip ${o.seq} — ${o.uniqueId}.${o.ext}`;
+}
+
+// A slip paying several jobs at once: named by the exact set of jobs, so only a slip for the
+// same set replaces it.
+export function combinedSlipDriveName(o: { guideId: string; guideName: string; dateLabel: string; jobs: { date: string; slotIdx: number }[]; peakRef?: string | null; ext: string }, hash: (s: string) => string): string {
+  const jobKey = hash(JSON.stringify([o.guideId, o.jobs.map((j) => [j.date, j.slotIdx]).sort()]));
+  return `${o.guideId} ${o.guideName} — ${o.dateLabel} (${o.jobs.length} tour${o.jobs.length === 1 ? "" : "s"})${o.peakRef ? ` — ${o.peakRef}` : ""} — ${jobKey} — e-slip.${o.ext}`;
+}
+
+// Drive file name for an expense receipt. Unique per job and expense row, even when a legacy
+// ref is shared by two sheets or missing: the name carries guide, date and slot, so a re-upload
+// replaces only this job's receipt for this row, never another guide's or slot's.
+export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string }): string {
+  const base = `${(opts.ref || "Job").trim()} — ${opts.guideId} — ${opts.date} — slot ${opts.slotIdx}`;
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
   return `${base}-E${opts.index + 1}${desc ? ` ${desc}` : ""} — receipt.${opts.ext}`;
 }

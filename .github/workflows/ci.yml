@@ -6,8 +6,9 @@ name: CI
 # these are the checks that caught the real regressions during development
 # (worker bundle crash + node-only typecheck drift), kept fast.
 on:
+  # Every pull request, whatever its base — a PR stacked on another branch gets the same
+  # gate as one targeting main.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -24,6 +25,27 @@ jobs:
     defaults:
       run:
         working-directory: apps/availability
+
+    # A throwaway Postgres for the integration tests. A Prisma `where` clause cannot
+    # be unit-tested: `NOT: { col: "x" }` also drops NULL rows, which type-checks,
+    # passes every unit test, and returns an empty page in production. It did.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: folkops_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -50,5 +72,198 @@ jobs:
       - name: Typecheck (worker)
         run: npm run typecheck:worker
 
+      # `prisma db push` builds the schema from schema.prisma and therefore skips
+      # every hand-written object in the migrations: the outbox triggers, their
+      # functions, and the CHECK constraints that hold the advance ledger's rules.
+      # Integration tests then ran against a database that is not shaped like
+      # production — a row the database itself should have queued was simply absent.
+      # Applying the migrations is the same path production takes.
+      - name: Prepare the test database
+        run: npx prisma migrate deploy
+
+      # The schema file and the migrations must describe the same database.
+      #
+      # Everything a migration writes by hand — a foreign key, an index, a column
+      # default — is invisible to `schema.prisma` unless someone also declares it there,
+      # and `prisma migrate dev` generates its next migration from `schema.prisma`. So an
+      # undeclared object is not a tidiness problem: it is a DROP waiting in the next
+      # migration somebody generates.
+      #
+      # The first command prints the SQL that would be needed (nothing, when they agree);
+      # the second fails the build if there is any.
+      - name: Schema and migrations agree
+        run: |
+          npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script
+          npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
+
+      # The browser the deployment will actually use, installed the way the deployment
+      # installs it. Not the runner's Chrome, and not apt's `chromium-browser` — that
+      # one is a snap shim whose real binary never arrives in a container, which is the
+      # failure this step exists to catch.
+      - name: System libraries and Thai fonts (as nixpacks.toml installs them)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+            libxrandr2 libgbm1 libasound2t64 libpango-1.0-0 libcairo2 \
+            fontconfig fonts-noto-core fonts-thai-tlwg \
+            poppler-utils
+          fc-cache -f >/dev/null 2>&1 || true
+          fc-list | grep -qiE 'thai|noto' \
+            && echo "thai font: present ($(fc-list | grep -icE 'thai|noto') faces)" \
+            || { echo "thai font: MISSING"; exit 1; }
+          # The certificate draws Thai in Umpush (fonts-thai-tlwg): the one face whose every
+          # cluster reads back in Chrome's PDF engine — see FONT_STACK in lib/certificates/document.ts.
+          fc-list : family | grep -qi umpush \
+            && echo "certificate face: Umpush present" \
+            || { echo "certificate face: Umpush MISSING"; exit 1; }
+
+      # PDFium is Chrome's (and Google Drive's) PDF engine; the renderer test reads the
+      # certificate back through it, because poppler alone read right while Chrome read
+      # "วันวั ที่ปฏิบัติบั ติงาน". Pinned, so a new engine build cannot move the result silently.
+      - name: PDFium, to read certificates back as Chrome does
+        run: python3 -m pip install --quiet pypdfium2==5.13.0 && python3 -c "import pypdfium2.version as v; print('pdfium', v.PDFIUM_INFO)"
+
+      - name: Install the pinned browser (the same build step Railway runs)
+        run: npm run browser:install
+
+      - name: The certificate renderer works, using the project's own browser
+        env:
+          # Deliberately blanked: an override would let the runner's Chrome stand in for
+          # the one the deployment ships, and the test would prove nothing.
+          CHROME_HEADLESS_SHELL_PATH: ""
+          PUPPETEER_EXECUTABLE_PATH: ""
+          CHROMIUM_PATH: ""
+          # The renderer test writes the PDFs it made here, so the bytes this Linux image
+          # produces can be opened in real viewers — not a laptop's re-render of them.
+          CERT_SAMPLE_DIR: ${{ runner.temp }}/certificate-samples
+        run: |
+          npx vitest run --config vitest.integration.config.ts src/lib/certificates/renderer.itest.ts \
+            --reporter=json --outputFile=/tmp/renderer.json
+          node -e '
+            const r = require("/tmp/renderer.json");
+            const skipped = r.numPendingTests + r.numTodoTests;
+            console.log(`renderer suite: ${r.numPassedTests} passed, ${skipped} skipped`);
+            for (const f of r.testResults) for (const a of f.assertionResults)
+              if (a.status === "failed") console.error(`FAILED: ${a.fullName}\n${(a.failureMessages || []).join("\n").slice(0, 1500)}`);
+            if (r.numFailedTests > 0) { console.error(`${r.numFailedTests} renderer test(s) failed`); process.exit(1); }
+            if (skipped > 0) { console.error("the renderer suite must not skip in CI"); process.exit(1); }
+            if (r.numPassedTests < 17) { console.error("the renderer suite did not run in full"); process.exit(1); }
+          '
+          sleep 2
+          leftover=$(pgrep -fc "chrome|chromium|headless_shell" || true)
+          [ "${leftover:-0}" -eq 0 ] && echo "browser processes: none left" || { echo "browser processes left behind: $leftover"; exit 1; }
+
+      - name: Keep the sample certificates this runner rendered
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificate-samples
+          path: ${{ runner.temp }}/certificate-samples
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Integration tests (real database)
+        run: npm run test:integration
+
       - name: Build worker bundle
         run: npm run build:worker
+
+      # The app itself was never built here — only the worker — so a page that fails
+      # to compile or prerender passed CI and reached production.
+      # The image, not the checkout. Everything above this line runs against a source
+      # tree and the runner's own node_modules; none of that is what ships. The failure
+      # this change exists to fix was an image with no browser in it while every check
+      # around it was green.
+      - name: Install Nixpacks
+        # Pinned to the version Railway's builder reports, not whatever the install
+        # script hands out today. A smoke test that builds the image with a DIFFERENT
+        # builder than production is testing something production does not do — and the
+        # first run proved it: a newer CLI emitted a cache mount for
+        # `tsconfig.tsbuildinfo` that BuildKit could not bind (a directory onto a file),
+        # which Railway's own build never hits.
+        env:
+          NIXPACKS_VERSION: "1.41.0"
+        run: |
+          curl -fsSL "https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nixpacks
+          sudo chmod +x /usr/local/bin/nixpacks
+          echo "nixpacks: $(nixpacks --version)"
+
+      # Reported as a difference, not a total: a Next.js image with node_modules is most
+      # of the number with no browser in it at all.
+      #
+      # NOT continue-on-error. It was, and the first run failed behind it without anybody
+      # noticing — the baseline commit is not in a depth-1 checkout, and the step went
+      # green while measuring nothing. The delta is a number a decision rests on, so a
+      # run that cannot produce it has not passed.
+      #
+      # Runs before the smoke test so the numbers exist even when the smoke test fails.
+      - name: Image size, this branch against what production runs
+        env:
+          # The FULL sha. A shallow checkout cannot resolve an abbreviation for a commit
+          # it does not have, which is exactly how this failed the first time.
+          BASELINE_REF: badaf97631026585a108e87dcbef9507223b6a1a
+        run: bash scripts/image-size-delta.sh
+
+      - name: Runtime image smoke test (builds the image, runs it, renders inside it)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/folkops_test
+        run: bash scripts/image-smoke.sh
+
+      - name: Build app
+        run: npx next build
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+
+      # The historical evidence page in a real browser against the app just built: opening
+      # it writes nothing and calls neither PEAK nor Google, a suggested Paid By stays off
+      # the sheet until confirmed, GUIDE/OPERATOR/ACCOUNTANT are refused, and a NOT REQUIRED
+      # stops counting once the sheet changes. It truncates its own tables, so it runs last.
+      - name: Historical evidence in a real browser
+        run: node scripts/e2e/historical-evidence.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens
+
+      # The slip-correction page in a real browser, Google faked at the network layer only:
+      # non-admins are refused, opening it writes nothing, the button needs a reason and a
+      # confirmation, one row and one notice change, the rightful row does not, and a failed
+      # Drive rename is retried on the same file id. It truncates its own tables.
+      - name: Slip correction in a real browser
+        run: node scripts/e2e/slip-correction.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/slip-correction
+
+      # The job sheet page itself: approval (status, approver, time) instead of the old
+      # certification statement and signature; the certificate in lieu of receipt shown by
+      # number to an admin only, never printed, never created by opening the page.
+      - name: Job sheet approval in a real browser
+        run: node scripts/e2e/jobsheet-approval.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-approval
+
+      # The guest WhatsApp button on a guide's phone: only readable numbers, only the
+      # guide's own guests, never a cancelled booking, never printed, nothing written.
+      - name: Guest WhatsApp in a real browser
+        run: node scripts/e2e/guest-whatsapp.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guest-whatsapp
+
+      - name: Keep the historical evidence screenshots (invented data)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-evidence-screens
+          path: ${{ runner.temp }}/historical-evidence-screens
+          if-no-files-found: warn
+          retention-days: 14

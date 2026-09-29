@@ -8,6 +8,7 @@ import { productKey, isChannelProductName } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
 import { withTimeout } from "@/lib/api-cache";
+import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -43,8 +44,11 @@ export async function GET(req: NextRequest) {
     const source = sp.get("source") || "";
     const month = sp.get("month") || ""; // YYYY-MM — show only that month's bookings
     const q = (sp.get("q") || "").trim();
+    const tour = sp.get("tour") || ""; // a tour id, or "none" for bookings with no tour connected
     const where: Record<string, unknown> = {};
     if (status) where.status = status;
+    if (tour === "none") where.tourId = null;
+    else if (tour) where.tourId = tour;
     if (source) where.source = source;
     if (/^\d{4}-\d{2}$/.test(month)) where.date = { gte: `${month}-01`, lte: `${month}-31` };
     if (q) where.OR = [
@@ -53,14 +57,17 @@ export async function GET(req: NextRequest) {
       { externalRef: { contains: q, mode: "insensitive" } },
       { productName: { contains: q, mode: "insensitive" } },
     ];
-    const [bookings, tours] = await Promise.all([
+    const [bookings, tours, sourceRows] = await Promise.all([
       prisma.booking.findMany({
         where,
         orderBy: [{ date: "desc" }, { createdAt: "desc" }],
         take: 1000,
         select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true, createdAt: true },
       }),
-      prisma.tour.findMany({ orderBy: { id: "asc" }, select: { id: true, name: true } }),
+      prisma.tour.findMany({ orderBy: { id: "asc" }, select: { id: true, name: true, time: true } }),
+      // The sources actually stored ("GetYourGuide", "Viator.com", …) — the filter must
+      // offer these, not guessed short names that match nothing.
+      prisma.booking.findMany({ distinct: ["source"], select: { source: true }, orderBy: { source: "asc" } }),
     ]);
     // Attach the assigned guide (if any) so the All-bookings view tracks who is
     // handling each tour — turning the list into a follow-everything board.
@@ -74,7 +81,7 @@ export async function GET(req: NextRequest) {
       const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined;
       return { ...b, guideId: gid ?? null, guide: gid ? (gName.get(gid) ?? gid) : null };
     });
-    return NextResponse.json({ bookings: withGuide, tours });
+    return NextResponse.json({ bookings: withGuide, tours, sources: sourceRows.map((r) => r.source).filter(Boolean) });
   }
 
   // Auto-combine: fold any pending booking whose slot is already assigned into that
@@ -224,6 +231,22 @@ export async function POST(req: NextRequest) {
     await prisma.booking.deleteMany({ where: { id: { in: ids } } });
     await audit({ actorId, actorRole, action: "booking.deleted", entityType: "Booking", detail: { count: ids.length } });
     return NextResponse.json({ ok: true });
+  }
+
+  // A tour that already ran with nobody on it and did not really happen (nobody came,
+  // or the guests were taken elsewhere): close its bookings so it stops asking for a
+  // guide. Past dates only, never a booking a guide is tagged to. Kept, not deleted.
+  if (action === "closePast") {
+    const parsed = z.object({ ids: z.array(z.string().min(1)).min(1).max(50) }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const today = ymd(todayD());
+    const r = await prisma.booking.updateMany({
+      where: { id: { in: parsed.data.ids }, date: { lt: today }, status: { in: ["PENDING", "OFFERED"] }, assignedGuideId: null },
+      data: { status: "IGNORED" },
+    });
+    await audit({ actorId, actorRole, action: "booking.closed_unstaffed", entityType: "Booking", detail: { ids: parsed.data.ids, closed: r.count } });
+    forgetCached(DASHBOARD_CACHE_KEY);
+    return NextResponse.json({ ok: true, closed: r.count });
   }
 
   // Mark a set of bookings as offered (after the operator sent the job offer).

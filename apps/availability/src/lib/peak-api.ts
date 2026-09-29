@@ -83,15 +83,145 @@ function peakWrap<T>(j: Record<string, unknown>, key: string): T | undefined {
   const cap = key.charAt(0).toUpperCase() + key.slice(1);
   return (j[key] ?? j[cap]) as T | undefined;
 }
+
+/** Which spelling of the wrapper key the response actually used, or null. */
+function peakWrapName(j: Record<string, unknown>, key: string): string | null {
+  const cap = key.charAt(0).toUpperCase() + key.slice(1);
+  if (j && Object.prototype.hasOwnProperty.call(j, key)) return key;
+  if (j && Object.prototype.hasOwnProperty.call(j, cap)) return cap;
+  return null;
+}
+
+/**
+ * What a PEAK reply actually was, in terms safe to show an operator: shape and
+ * status, never contents. Every read path returns one of these so a diagnostic
+ * can say why a list came back empty instead of just reporting zero.
+ */
+export type PeakEnvelope = {
+  httpStatus: number;
+  wrapperName: string | null;   // the key PEAK used, e.g. "PeakAccountCode"
+  wrapperKeys: string[];        // FIELD NAMES inside the wrapper — never values
+  resCode: string | null;
+  resDesc: string | null;       // sanitized
+  arrayKey: string | null;      // which wrapper field held the rows
+  rawCount: number | null;      // rows before any filtering
+};
+
+/**
+ * Whether PEAK's own code reports a failure.
+ *
+ * PEAK answers application errors with HTTP 200, so the transport status alone
+ * cannot decide this. What it does NOT do is publish the success code anywhere
+ * we can verify: "0000" appears in one test fixture in this repo and in no
+ * documentation we hold, and the ClientToken path has always decided success by
+ * looking for a token rather than a code.
+ *
+ * So the rule is deliberately conservative in one direction: an all-zero or
+ * absent code is success, anything else is an error. It is only ever consulted
+ * when the reply carried NO data — a response with rows in it is a success
+ * whatever the code says, because inventing a stricter rule could turn a working
+ * integration into a broken one on a code we have never seen.
+ */
+export function peakCodeIsError(code: unknown): boolean {
+  const c = (code == null ? "" : String(code)).trim();
+  if (!c) return false;          // absent — nothing is being reported
+  if (/^0+$/.test(c)) return false; // "0", "0000" — success in every PEAK reply seen
+  return true;
+}
+
+/** Read the envelope without interpreting the payload. */
+export function readPeakEnvelope(
+  j: Record<string, unknown>,
+  wrapperKey: string,
+  httpStatus: number,
+): { envelope: PeakEnvelope; wrap: Record<string, unknown> | undefined } {
+  const wrap = peakWrap<Record<string, unknown>>(j ?? {}, wrapperKey);
+  const wrapperKeys = wrap && typeof wrap === "object" ? Object.keys(wrap) : [];
+  const arrays = wrapperKeys.filter((k) => Array.isArray(wrap?.[k]));
+  const arrayKey = arrays.find((k) => /account|code|chart|method|contact|list|item|data|row/i.test(k)) ?? arrays[0] ?? null;
+  const rows = arrayKey ? (wrap?.[arrayKey] as unknown[]) : null;
+  const rawDesc = wrap?.resDesc;
+  return {
+    wrap,
+    envelope: {
+      httpStatus,
+      wrapperName: peakWrapName(j ?? {}, wrapperKey),
+      wrapperKeys: wrapperKeys.slice(0, 16),
+      resCode: wrap?.resCode == null ? null : String(wrap.resCode),
+      resDesc: rawDesc == null ? null : sanitizePeakError(rawDesc),
+      arrayKey,
+      rawCount: Array.isArray(rows) ? rows.length : null,
+    },
+  };
+}
+
+/**
+ * The shared failure decision for every read call.
+ *
+ * Fails on a non-2xx, and on a 200 whose PEAK code reports an error while the
+ * body carried nothing usable — which is the case that used to be reported as a
+ * successful empty list.
+ */
+export function peakReadFailure(
+  envelope: PeakEnvelope,
+  httpOk: boolean,
+  hasData: boolean,
+): { code?: string; desc: string } | null {
+  if (!httpOk) {
+    return { code: envelope.resCode ?? undefined, desc: envelope.resDesc || `HTTP ${envelope.httpStatus}` };
+  }
+  if (hasData) return null; // rows arrived — that is a success whatever the code says
+  if (peakCodeIsError(envelope.resCode)) {
+    return {
+      code: envelope.resCode ?? undefined,
+      desc: envelope.resDesc || `PEAK returned HTTP 200 with error code ${envelope.resCode}`,
+    };
+  }
+  return null;
+}
 function sigHeaders(): Record<string, string> {
   const ts = stamp();
   const sig = createHmac("sha1", SIGN_SECRET).update(ts).digest(SIG_ENC);
   return { "Time-Stamp": ts, "Time-Signature": sig };
 }
 
+// PEAK's list paging. The 500 ceiling below was a guess and it was wrong: PEAK
+// answers a contacts page larger than 100 with
+//   Bad Json Request : 'limit' parameter must not exceed 100
+// as an application error inside an HTTP 200, so asking for 200 returned no
+// contacts at all and the picker had nothing to show. Contacts are therefore
+// clamped to 100 and read page by page.
+export const PEAK_LIST_LIMIT = 200;
+export const PEAK_MAX_LIST_LIMIT = 500;
+export const PEAK_CONTACTS_PAGE_MAX = 100;
+// Enough for 1,200 contacts. A cap at all is deliberate: if PEAK ever ignored
+// `page` this would otherwise read the same rows until the request died.
+const PEAK_CONTACTS_MAX_PAGES = 12;
+
 type Res<T> = { ok: boolean; code?: string; desc?: string } & T;
 
 let cached: { token: string; at: number } | null = null;
+
+// Nothing here used to time out. A PEAK call that never answers left the request
+// open indefinitely, and the Job Sheet then sat on "Loading PEAK contacts…" —
+// the exact same screen as the bug where the request was never sent at all
+// (#185). An unbounded wait that looks identical to a missing request is not a
+// failure anyone can diagnose, so every call now has a deadline and says so.
+const READ_TIMEOUT_MS = 15_000;
+const TOKEN_TIMEOUT_MS = 10_000;
+// A write waits longer before giving up, because abandoning it early is what
+// creates the "did the document get created?" question.
+const WRITE_TIMEOUT_MS = 30_000;
+
+// AbortSignal.timeout rejects with a TimeoutError; say that plainly instead of
+// reporting it as a generic network fault.
+export function callFailure(e: unknown, ms: number): string {
+  const err = e as { name?: string; message?: string };
+  if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+    return `PEAK did not respond within ${Math.round(ms / 1000)}s`;
+  }
+  return sanitizePeakError(`network: ${err?.message ?? String(e)}`);
+}
 
 // One ClientToken attempt. PEAK's docs name the secret field `password`; this
 // client shipped sending `connectKey`, which commit 076b3c0 proved the UAT
@@ -104,9 +234,10 @@ async function requestClientToken(field: "password" | "connectKey"): Promise<Res
       method: "POST",
       headers: { "content-type": "application/json", ...sigHeaders() },
       body: JSON.stringify({ peakClientToken: { connectId: CONNECT_ID, [field]: CONNECT_KEY } }),
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     });
-  } catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  } catch (e) { return { ok: false, desc: callFailure(e, TOKEN_TIMEOUT_MS) }; }
+  const j = await r.json().catch(() => ({})) as Record<string, unknown>;
   const t = peakWrap<{ token?: string; resCode?: string; resDesc?: string }>(j, "peakClientToken");
   if (t?.token) return { ok: true, token: t.token, code: t.resCode, desc: t.resDesc };
   // Non-2xx, or a 200 carrying PEAK's own error code: surface the code/description
@@ -124,27 +255,368 @@ export async function clientToken(force = false): Promise<Res<{ token?: string }
   return res;
 }
 
-async function authedHeaders(): Promise<Record<string, string> | null> {
-  const ct = await clientToken();
-  if (!ct.ok || !ct.token) return null;
-  return { "content-type": "application/json", "Client-Token": ct.token, "User-Token": USER_TOKEN, ...sigHeaders() };
+/**
+ * Does this reply say PEAK rejected our client token?
+ *
+ * The token is cached for 50 minutes, and nothing used to notice when PEAK stopped
+ * accepting it: every real call then failed with "Invalid Client Token" until the
+ * cache aged out, while "Test connection" kept passing because it forces a fresh
+ * one. The account-chart page showed exactly that — green credentials, a working
+ * payment-method list, and an unavailable account list, all at once.
+ */
+export function clientTokenRejected(httpStatus: number, resCode?: string | null, resDesc?: string | null): boolean {
+  if (httpStatus === 401) return true;
+  const d = `${resDesc ?? ""} ${resCode ?? ""}`.toLowerCase();
+  if (!d.includes("token")) return false;
+  return d.includes("invalid") || d.includes("expire") || d.includes("unauthor");
+}
+
+/**
+ * One authenticated call: build headers, send, parse the body.
+ *
+ * `retry` (default on) sends the call a SECOND time with a freshly minted token when
+ * the first reply says the token was rejected — that is the whole fix for a stale
+ * cache, and it is safe for a read.
+ *
+ * `fresh` mints a new token before the FIRST attempt. Writes use this instead of the
+ * retry: replaying a write after a failure risks a second document if the first one
+ * reached PEAK and only the reply was lost, whereas one extra handshake beforehand
+ * costs nothing and removes the stale-token failure outright.
+ */
+async function authedCall(
+  url: string,
+  init: RequestInit,
+  wrapperKey: string,
+  opts: { fresh?: boolean; retry?: boolean; timeoutMs?: number } = {},
+): Promise<{ r: Response; j: Record<string, unknown> } | { error: string; sent?: boolean }> {
+  // `sent` separates "never left" from "may have arrived". A token failure is the
+  // first; a timeout or dropped connection once the request was underway is the
+  // second — and for a write, the second means the document may exist.
+  const attempt = async (fresh: boolean): Promise<{ r: Response; j: Record<string, unknown> } | { error: string; sent?: boolean }> => {
+    const ct = await clientToken(fresh);
+    if (!ct.ok || !ct.token) return { error: ct.desc ? sanitizePeakError(ct.desc) : "could not obtain PEAK client token", sent: false };
+    const headers = { "content-type": "application/json", "Client-Token": ct.token, "User-Token": USER_TOKEN, ...sigHeaders() };
+    const ms = opts.timeoutMs ?? READ_TIMEOUT_MS;
+    try {
+      const r = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(ms) });
+      return { r, j: await r.json().catch(() => ({})) as Record<string, unknown> };
+    } catch (e) {
+      return { error: callFailure(e, ms), sent: true };
+    }
+  };
+
+  const first = await attempt(!!opts.fresh);
+  if ("error" in first || opts.retry === false) return first;
+  const { envelope } = readPeakEnvelope(first.j, wrapperKey, first.r.status);
+  if (!clientTokenRejected(first.r.status, envelope.resCode, envelope.resDesc)) return first;
+  // The cached token is dead. Drop it so the next caller does not inherit it either.
+  cached = null;
+  return attempt(true);
 }
 
 // One combined expense + payment (peakExpenses.expenses[] shape). Returns the
 // created document `code` (the EXP-… reference).
-export async function createExpenseAllInOne(expense: Record<string, unknown>): Promise<Res<{ id?: string; link?: string }>> {
+//
+// `uncertain` is set when the request may have reached PEAK and the answer was lost —
+// a transport error after sending, or a 5xx from in front of PEAK. A caller must not
+// treat that as "nothing was created": see lib/peak-payment-document.
+export async function createExpenseAllInOne(expense: Record<string, unknown>): Promise<Res<{ id?: string; link?: string; uncertain?: boolean }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
-  try {
-    r = await fetch(`${API}/Expenses/allinone`, { method: "POST", headers, body: JSON.stringify({ peakExpenses: { expenses: [expense], getResult: 1 } }) });
-  } catch (e) { return { ok: false, desc: `network: ${(e as Error).message}` }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  // A write gets a fresh token up front and is never replayed — see authedCall.
+  const call = await authedCall(
+    `${API}/Expenses/allinone`,
+    { method: "POST", body: JSON.stringify({ peakExpenses: { expenses: [expense], getResult: 1 } }) },
+    "peakExpenses",
+    { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  // A write that timed out may still have reached PEAK. Say so, because the next
+  // step is to look in PEAK before reposting — not to press the button again.
+  if ("error" in call) {
+    const uncertain = !!call.sent;
+    return { ok: false, uncertain, desc: uncertain
+      ? `${call.error}. The expense may or may not have been created — check PEAK before posting again.`
+      : call.error };
+  }
+  const { r, j } = call;
   const wrap = peakWrap<{ expenses?: Array<{ code?: string; id?: string; documentLink?: string; resCode?: string; resDesc?: string }>; resDesc?: string }>(j, "peakExpenses");
   const e = wrap?.expenses?.[0];
   if (e?.code) return { ok: true, code: e.code, id: e.id, link: e.documentLink, desc: e.resDesc };
-  return { ok: false, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
+  // PEAK's own refusals arrive as HTTP 200 with a resDesc: definite, nothing created.
+  // A 5xx with no PEAK body came from something in front of PEAK and proves nothing.
+  const uncertain = r.status >= 500 && !e?.resDesc && !wrap?.resDesc;
+  return { ok: false, uncertain, code: e?.resCode, desc: e?.resDesc || wrap?.resDesc || `HTTP ${r.status}` };
+}
+
+/**
+ * Whether PEAK's reply to Expenses/insertfile reports success.
+ *
+ * Its documented success is `{"resCode": "200", "resDesc": "Success"}` and its error
+ * `{"resCode": "400", ...}` — unlike the list endpoints, where an all-zero code means
+ * success (see peakCodeIsError). So this is decided on its own. An absent code counts
+ * as failure: reporting a slip as attached when it is not hides a missing document,
+ * while the opposite only asks someone to attach it by hand.
+ */
+export function insertFileSucceeded(httpStatus: number, j: Record<string, unknown>): { ok: boolean; desc: string } {
+  const wrap = peakWrap<{ resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakExpenses");
+  const code = String((j?.resCode ?? wrap?.resCode) ?? "").trim();
+  const desc = sanitizePeakError(String((j?.resDesc ?? wrap?.resDesc) ?? "").trim());
+  if (httpStatus >= 200 && httpStatus < 300 && (code === "200" || /^0+$/.test(code))) return { ok: true, desc: desc || "Success" };
+  return { ok: false, desc: desc || (code ? `PEAK code ${code}` : `HTTP ${httpStatus}, no result code`) };
+}
+
+// Attach a file to an existing expense document. POST /api/v1/Expenses/insertfile,
+// body { peakExpenses: { transactionId | transactionCode, file: { fileName, rawString, fileType } } }.
+//
+// PEAK's reference does not say how rawString is encoded. The first real attachment
+// (2026-09-15) sent plain base64 and PEAK answered "Invalid Base64 string." — nothing
+// attached. A data URI ("data:image/jpeg;base64,…") is the other common reading, so
+// that is sent first; only if PEAK again rejects the ENCODING is plain base64 tried.
+// A rejected encoding means nothing was attached, so the second attempt cannot attach
+// the slip twice. Any other answer (success, or a different error) is final.
+//
+// It reuses the client token the document's create call minted moments earlier rather
+// than minting another, and retries only on a token rejection — which means nothing
+// was attached, so the retry cannot attach the slip twice.
+export type InsertFileInput = {
+  transactionId?: string | null;
+  transactionCode?: string | null;
+  fileName: string;
+  base64: string;
+  fileType: "image" | "document";
+  /** The file's MIME type, e.g. "image/jpeg". Without it only plain base64 can be sent. */
+  mime?: string | null;
+};
+
+/** The insertfile body, with rawString as a data URI or as plain base64. */
+export function insertFileBody(input: InsertFileInput, encoding: "data-uri" | "plain") {
+  const raw = input.base64.replace(/^data:[^,]*,/, "");
+  const mime = (input.mime ?? "").trim();
+  return {
+    peakExpenses: {
+      ...(input.transactionId ? { transactionId: input.transactionId } : {}),
+      ...(input.transactionCode ? { transactionCode: input.transactionCode } : {}),
+      file: { fileName: input.fileName, rawString: encoding === "data-uri" && mime ? `data:${mime};base64,${raw}` : raw, fileType: input.fileType },
+    },
+  };
+}
+
+/** Whether PEAK refused the file's encoding (so nothing was attached and the other encoding may be tried). */
+export function insertFileEncodingRejected(desc: string | null | undefined): boolean {
+  return /base\s*-?\s*64/i.test(desc ?? "");
+}
+
+export async function insertExpenseFile(input: InsertFileInput): Promise<{ ok: boolean; desc: string }> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (!input.transactionId && !input.transactionCode) return { ok: false, desc: "No PEAK document to attach the slip to" };
+  const send = async (encoding: "data-uri" | "plain") => {
+    const call = await authedCall(
+      `${API}/Expenses/insertfile`,
+      { method: "POST", body: JSON.stringify(insertFileBody(input, encoding)) },
+      "peakExpenses",
+      { fresh: false, retry: true, timeoutMs: WRITE_TIMEOUT_MS },
+    );
+    if ("error" in call) return { ok: false, desc: call.error };
+    return insertFileSucceeded(call.r.status, call.j);
+  };
+  if (!(input.mime ?? "").trim()) return send("plain");
+  const first = await send("data-uri");
+  if (first.ok || !insertFileEncodingRejected(first.desc)) return first;
+  const second = await send("plain");
+  return second.ok ? second : { ok: false, desc: `${first.desc} (data URI); ${second.desc} (plain base64)` };
+}
+
+// ── An expense that already exists: read it, pay it ───────────────────────────
+//
+// The combined guide payment is two stages (lib/peak-payment-document): the expense
+// document is created unpaid, and the payment is recorded against that same document
+// later. PEAK API Core v1 documents both halves of stage 2:
+//   GET  /api/v1/Expenses?code=EXP-…              wrapper PeakExpenses → expenses[]
+//   POST /api/v1/Expenses/paidpaymentallinone     wrapper PeakPaidPayments
+// https://developers.peakaccount.com/reference/get_api-v1-expenses
+// https://developers.peakaccount.com/reference/post_api-v1-expenses-paidpaymentallinone
+// Neither is a billed transaction (PEAK API transaction counting: only Create calls count).
+
+export type PeakExpenseState = {
+  id: string | null;
+  code: string;
+  reference: string | null;
+  contactId: string | null;
+  status: string | null;   // e.g. "Draft", "Approve"
+  statusId: number | null;
+  isVoid: boolean;
+  netAmount: number | null;
+  whtAmount: number | null;
+  paymentAmount: number | null;
+  remainAmount: number | null;
+  remainWhtAmount: number | null;
+  /** Σ products[].withHoldingTaxAmount — the withholding set on the lines. Null when a line's value is not a plain amount. */
+  lineWhtAmount: number | null;
+  documentLink: string | null;
+  payments: number;        // how many payment groups PEAK already holds on it
+};
+
+/** Sum of the withholding PEAK holds on the lines. PEAK types it as a string ("45.00"); anything not a plain amount (e.g. "3%") makes the sum unknown. */
+function lineWht(products: unknown): number | null {
+  if (!Array.isArray(products) || !products.length) return null;
+  let sum = 0;
+  for (const p of products as Record<string, unknown>[]) {
+    const raw = p?.withHoldingTaxAmount;
+    if (raw == null || raw === "") continue;
+    const n = Number(String(raw).replace(/,/g, "").trim());
+    if (!Number.isFinite(n)) return null;
+    sum += n;
+  }
+  return Math.round(sum * 100) / 100;
+}
+
+const num = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const str = (v: unknown): string | null => (v == null || v === "" ? null : String(v));
+
+/**
+ * One expense out of a Get Expense reply. PEAK answers "not found" with an empty list.
+ *
+ * An EXP number is NOT unique in PEAK: after a document is voided its number can be
+ * given to the next document (seen in production, 2026-09-15: two documents, two ids,
+ * one number). So a reply holding more than one expense is an error, never "the first".
+ */
+export function parsePeakExpense(j: Record<string, unknown>): { expense: PeakExpenseState } | { notFound: true } | { error: string } {
+  const wrap = peakWrap<{ expenses?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakExpenses");
+  if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakExpenses wrapper" };
+  const list = Array.isArray(wrap.expenses) ? (wrap.expenses as Record<string, unknown>[]) : null;
+  const code = wrap.resCode == null ? "" : String(wrap.resCode).trim();
+  const okCode = code === "" || code === "200" || /^0+$/.test(code);
+  if (!list) return { error: wrap.resDesc ? sanitizePeakError(wrap.resDesc) : "PEAK returned no expense list" };
+  if (!list.length) return okCode ? { notFound: true } : { error: wrap.resDesc ? sanitizePeakError(wrap.resDesc) : `PEAK error ${code}` };
+  if (list.length > 1) return { error: `PEAK returned ${list.length} documents for one lookup (${[...new Set(list.map((x) => String(x.code ?? "?")))].join(", ")}) — it cannot tell which one is meant` };
+  const e = list[0];
+  return {
+    expense: {
+      id: str(e.id), code: String(e.code ?? ""), reference: str(e.reference), contactId: str(e.contactId),
+      status: str(e.status), statusId: num(e.statusId), isVoid: Number(e.isVoid ?? 0) === 1,
+      netAmount: num(e.netAmount), whtAmount: num(e.whtAmount), paymentAmount: num(e.paymentAmount),
+      remainAmount: num(e.remainAmount), remainWhtAmount: num(e.remainWhtAmount), lineWhtAmount: lineWht(e.products),
+      documentLink: str(e.documentLink), payments: Array.isArray(e.paidPayments) ? e.paidPayments.length : 0,
+    },
+  };
+}
+
+/**
+ * An expense exactly as PEAK returns it — every field of the document and its lines —
+ * for comparing a document made in PEAK by hand with one FolkOPS created (what makes
+ * PEAK show a column the other lacks). Read-only; a GET is not billed. A reused EXP
+ * number can return several documents: all of them are returned.
+ */
+export async function getExpenseRaw(code: string): Promise<{ ok: true; expenses: Record<string, unknown>[] } | { ok: false; desc: string }> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(`${API}/Expenses?${new URLSearchParams({ code }).toString()}`, { method: "GET" }, "peakExpenses");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const wrap = peakWrap<{ expenses?: unknown; resDesc?: unknown }>(call.j ?? {}, "peakExpenses");
+  if (!wrap || !Array.isArray(wrap.expenses)) return { ok: false, desc: wrap?.resDesc ? sanitizePeakError(wrap.resDesc) : "PEAK returned no expense list" };
+  return { ok: true, expenses: wrap.expenses as Record<string, unknown>[] };
+}
+
+/**
+ * Read one expense. By PEAK's id when FolkOPS has it — the id is unique, the EXP number is
+ * not (see parsePeakExpense) — and by EXP number only when there is no id.
+ * Read-only; safe to repeat.
+ */
+export async function getExpense(ref: { id?: string | null; code: string }): Promise<Res<{ expense?: PeakExpenseState; notFound?: boolean }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const id = (ref.id ?? "").trim();
+  const qs = new URLSearchParams(id ? { id } : { code: ref.code });
+  const call = await authedCall(`${API}/Expenses?${qs.toString()}`, { method: "GET" }, "peakExpenses");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const parsed = parsePeakExpense(call.j);
+  if ("error" in parsed) return { ok: false, desc: parsed.error };
+  if ("notFound" in parsed) return { ok: true, notFound: true };
+  return { ok: true, expense: parsed.expense };
+}
+
+export type PaidPaymentResult = {
+  ok: boolean;
+  code?: string;
+  desc?: string;
+  /** The request may have reached PEAK and the answer was lost: the payment may exist. */
+  uncertain?: boolean;
+  paymentTotal?: number | null;
+  remainPaymentAmount?: number | null;
+  remainWhtAmount?: number | null;
+};
+
+/**
+ * What PEAK said to Expenses/paidpaymentallinone. Its success is resCode "200"
+ * ("PeakPaidPayments have Completed") — the opposite of the list endpoints, where a
+ * non-zero code is an error (peakCodeIsError) — so it is decided here on its own.
+ * Any other PEAK code (e.g. 347 "Transaction must be Waiting Payment Status.") is a
+ * definite refusal: nothing was recorded.
+ */
+export function readPaidPaymentReply(httpStatus: number, j: Record<string, unknown>): PaidPaymentResult {
+  const wrap = peakWrap<Record<string, unknown>>(j ?? {}, "peakPaidPayments");
+  const pick = (k: string) => (wrap ? (wrap[k] ?? wrap[k.charAt(0).toUpperCase() + k.slice(1)]) : undefined);
+  const code = pick("resCode") == null ? "" : String(pick("resCode")).trim();
+  const desc = pick("resDesc") == null ? undefined : sanitizePeakError(pick("resDesc"));
+  const paid = (pick("paidPayments") ?? {}) as Record<string, unknown>;
+  const figures = { paymentTotal: num(paid.paymentTotal ?? paid.PaymentTotal), remainPaymentAmount: num(pick("remainPaymentAmount")), remainWhtAmount: num(pick("remainWhtAmount")) };
+  if (code === "200") return { ok: true, code, desc, ...figures };
+  if (code) return { ok: false, code, desc: desc ?? `PEAK refused the payment (code ${code})`, ...figures };
+  // No PEAK code at all: a 5xx came from something in front of PEAK and proves nothing.
+  return { ok: false, uncertain: httpStatus >= 500 || !wrap, desc: desc ?? `HTTP ${httpStatus}` };
+}
+
+/**
+ * Record ONE payment against an EXISTING expense, by its EXP code. Never creates a
+ * document. A write: fresh token, never replayed — a retried payment could record the
+ * same transfer twice.
+ */
+/**
+ * The body of Expenses/paidpaymentallinone. Names the document by PEAK's id when known
+ * (transactionId) and by EXP number only otherwise — never both, so PEAK cannot resolve
+ * a reused number to a different document than the id FolkOPS read back.
+ */
+export function paidPaymentBody(input: { documentNo: string; documentId?: string | null; paymentDate: string; paymentMethodId: string; amount: number; withholdingTaxAmount?: number | null }) {
+  const wht = input.withholdingTaxAmount && input.withholdingTaxAmount > 0 ? input.withholdingTaxAmount : null;
+  const id = (input.documentId ?? "").trim();
+  return {
+    peakPaidPayments: {
+      ...(id ? { transactionId: id } : { transactionCode: input.documentNo }),
+      paidPayments: {
+        paymentDate: input.paymentDate,
+        ...(wht ? { withHoldingTaxAmount: wht.toFixed(2) } : {}),
+        payments: [{ amount: input.amount, paymentMethod: { id: input.paymentMethodId } }],
+      },
+    },
+  };
+}
+
+export async function payExistingExpense(input: {
+  documentNo: string;
+  documentId?: string | null;
+  paymentDate: string; // yyyyMMdd
+  paymentMethodId: string;
+  amount: number;
+  withholdingTaxAmount?: number | null;
+}): Promise<PaidPaymentResult> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const body = paidPaymentBody(input);
+  const call = await authedCall(
+    `${API}/Expenses/paidpaymentallinone`,
+    { method: "POST", body: JSON.stringify(body) },
+    "peakPaidPayments",
+    { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  if ("error" in call) {
+    const uncertain = !!call.sent;
+    return { ok: false, uncertain, desc: uncertain
+      ? `${call.error}. The payment may or may not have been recorded — look at ${input.documentNo} in PEAK before doing anything else.`
+      : call.error };
+  }
+  return readPaidPaymentReply(call.r.status, call.j);
 }
 
 // Identity of the connected PEAK account (read-only).
@@ -157,18 +629,18 @@ export async function createExpenseAllInOne(expense: Record<string, unknown>): P
 // it is passed on.
 export type PeakIdentity = { merchantName: string; taxNumber: string | null; package: string | null; branchCode: string | null };
 
-export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity }>> {
+export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity; envelope?: PeakEnvelope }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
-  try { r = await fetch(`${API}/User/detail`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = peakWrap<Record<string, unknown>>(j, "peakUser");
-  if (!r.ok) return { ok: false, code: wrap?.resCode as string, desc: sanitizePeakError((wrap?.resDesc as string) || `HTTP ${r.status}`) };
+  const call = await authedCall(`${API}/User/detail`, { method: "GET" }, "peakUser");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
+  const { envelope, wrap } = readPeakEnvelope(j, "peakUser", r.status);
+  // Identity carries no array; "data" here means a merchant name came back.
+  const hasData = Boolean(wrap && typeof wrap === "object" && String(wrap.name ?? "").trim());
+  const failure = peakReadFailure(envelope, r.ok, hasData);
+  if (failure) return { ok: false, code: failure.code, desc: failure.desc, envelope };
   if (!wrap || typeof wrap !== "object") {
-    return { ok: false, desc: `PEAK replied 200 but no user detail was found. Response keys: [${Object.keys(j ?? {}).slice(0, 8).join(", ") || "none"}]` };
+    return { ok: false, envelope, desc: `PEAK replied ${r.status} but no user detail was found. Response keys: [${Object.keys(j ?? {}).slice(0, 8).join(", ") || "none"}]` };
   }
   const str = (v: unknown) => (v == null ? null : String(v).trim() || null);
   return {
@@ -179,8 +651,9 @@ export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity }>>
       package: str(wrap.package),
       branchCode: str(wrap.branchCode),
     },
-    code: wrap.resCode as string,
-    desc: wrap.resDesc as string,
+    code: envelope.resCode ?? undefined,
+    desc: envelope.resDesc ?? undefined,
+    envelope,
   };
 }
 
@@ -189,7 +662,7 @@ export async function getUserDetail(): Promise<Res<{ identity?: PeakIdentity }>>
 // PEAK's API reference; response wrapper is PeakAccountCode -> accountCode[].
 //
 // Deliberately READ-ONLY: this cannot create or post anything. It reuses the same
-// authedHeaders()/peakWrap()/sanitizePeakError() path as getContacts() below, so
+// authedCall()/peakWrap()/sanitizePeakError() path as getContacts() below, so
 // the Client Token handshake is untouched.
 export type PeakAccountCode = { code: string; name: string; nameEn?: string };
 
@@ -233,19 +706,22 @@ export function parsePeakAccounts(j: Record<string, unknown>): AccountParse {
   return { accounts, meta: { wrapperKeys, arrayKey, rawCount: raw.length, droppedNoCode: raw.length - accounts.length, sampleKeys } };
 }
 
-export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[]; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoCode: number; sampleKeys: string[] } }>> {
+export async function getAccountCodes(): Promise<Res<{ accounts?: PeakAccountCode[]; envelope?: PeakEnvelope; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoCode: number; sampleKeys: string[] } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
-  try { r = await fetch(`${API}/DailyJournals/accountcode`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakAccountCode");
-  if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
+  // No query string. PEAK's paging parameters are documented for the list
+  // endpoints below; this path is NOT confirmed against the current Production
+  // API (see the note above), so adding parameters it may not accept would only
+  // add a second reason for it to fail.
+  const call = await authedCall(`${API}/DailyJournals/accountcode`, { method: "GET" }, "peakAccountCode");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
+  const { envelope } = readPeakEnvelope(j, "peakAccountCode", r.status);
   const parsed = parsePeakAccounts(j);
-  if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
-  return { ok: true, accounts: parsed.accounts, meta: parsed.meta, code: wrap?.resCode, desc: wrap?.resDesc };
+  const hasData = !("error" in parsed) && parsed.meta.rawCount > 0;
+  const failure = peakReadFailure(envelope, r.ok, hasData);
+  if (failure) return { ok: false, code: failure.code, desc: failure.desc, envelope };
+  if ("error" in parsed) return { ok: false, code: envelope.resCode ?? undefined, desc: sanitizePeakError(envelope.resDesc || parsed.error), envelope };
+  return { ok: true, accounts: parsed.accounts, meta: parsed.meta, code: envelope.resCode ?? undefined, desc: envelope.resDesc ?? undefined, envelope };
 }
 
 // Payment methods (read-only) — the bank/cash accounts a payment can settle to.
@@ -296,22 +772,27 @@ export function parsePeakPaymentMethods(j: Record<string, unknown>): PaymentMeth
   return { methods, meta: { wrapperKeys, arrayKey, rawCount: raw.length, droppedNoId: raw.length - methods.length, sampleKeys } };
 }
 
-export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[]; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number; sampleKeys: string[] } }>> {
+export async function getPaymentMethods(): Promise<Res<{ methods?: PeakPaymentMethod[]; envelope?: PeakEnvelope; meta?: { wrapperKeys: string[]; arrayKey: string; rawCount: number; droppedNoId: number; sampleKeys: string[] } }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
-  let r: Response;
+
   // PEAK pages at 10 entries per page by default and this call sent no params at
   // all, so a company with more than ten payment methods would silently see only
   // the first page. Ask for the lot.
-  try { r = await fetch(`${API}/PaymentMethods?limit=200`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakPaymentMethods");
-  if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
+  // page + limit are the documented list parameters. getResult is NOT sent: in
+  // PEAK's reference it belongs to the write endpoints (it asks for the created
+  // document back), and this client only uses it on Expenses/allinone. Sending it
+  // to a GET would be guessing.
+  const pmQs = new URLSearchParams({ page: "1", limit: String(PEAK_LIST_LIMIT) });
+  const call = await authedCall(`${API}/PaymentMethods?${pmQs.toString()}`, { method: "GET" }, "peakPaymentMethods");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
+  const { envelope } = readPeakEnvelope(j, "peakPaymentMethods", r.status);
   const parsed = parsePeakPaymentMethods(j);
-  if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
-  return { ok: true, methods: parsed.methods, meta: parsed.meta, code: wrap?.resCode, desc: wrap?.resDesc };
+  const hasData = !("error" in parsed) && parsed.meta.rawCount > 0;
+  const failure = peakReadFailure(envelope, r.ok, hasData);
+  if (failure) return { ok: false, code: failure.code, desc: failure.desc, envelope };
+  if ("error" in parsed) return { ok: false, code: envelope.resCode ?? undefined, desc: sanitizePeakError(envelope.resDesc || parsed.error), envelope };
+  return { ok: true, methods: parsed.methods, meta: parsed.meta, code: envelope.resCode ?? undefined, desc: envelope.resDesc ?? undefined, envelope };
 }
 
 // Vendor/contact list (read-only) — the guides that already exist in PEAK, so an
@@ -345,21 +826,216 @@ export function parsePeakContacts(j: Record<string, unknown>): { contacts: PeakC
   return { contacts };
 }
 
-export async function getContacts(opts: { searchText?: string; limit?: number; page?: number } = {}): Promise<Res<{ contacts?: PeakContact[] }>> {
+export async function getContacts(opts: { searchText?: string; limit?: number; page?: number } = {}): Promise<Res<{ contacts?: PeakContact[]; envelope?: PeakEnvelope }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
-  const headers = await authedHeaders();
-  if (!headers) return { ok: false, desc: "could not obtain PEAK client token" };
   const qs = new URLSearchParams();
   if (opts.searchText?.trim()) qs.set("searchText", opts.searchText.trim());
-  qs.set("limit", String(Math.min(Math.max(opts.limit ?? 200, 1), 500)));
-  if (opts.page) qs.set("page", String(opts.page));
-  let r: Response;
-  try { r = await fetch(`${API}/Contacts/list?${qs.toString()}`, { method: "GET", headers }); }
-  catch (e) { return { ok: false, desc: sanitizePeakError(`network: ${(e as Error).message}`) }; }
-  const j = await r.json().catch(() => ({} as Record<string, unknown>));
-  const wrap = peakWrap<{ resCode?: string; resDesc?: string }>(j, "peakContacts");
-  if (!r.ok) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || `HTTP ${r.status}`) };
+  // Clamped HERE, not at the call sites, so no caller can ask for a page PEAK
+  // will refuse — two of them were asking for 200.
+  qs.set("limit", String(Math.min(Math.max(opts.limit ?? PEAK_CONTACTS_PAGE_MAX, 1), PEAK_CONTACTS_PAGE_MAX)));
+  // Always paged: an omitted page has meant "page 1" in every reply seen, but
+  // saying so makes the request reproducible when a count looks wrong.
+  qs.set("page", String(Math.max(opts.page ?? 1, 1)));
+  const call = await authedCall(`${API}/Contacts/list?${qs.toString()}`, { method: "GET" }, "peakContacts");
+  if ("error" in call) return { ok: false, desc: call.error };
+  const { r, j } = call;
+  const { envelope } = readPeakEnvelope(j, "peakContacts", r.status);
   const parsed = parsePeakContacts(j);
-  if ("error" in parsed) return { ok: false, code: wrap?.resCode, desc: sanitizePeakError(wrap?.resDesc || parsed.error) };
-  return { ok: true, contacts: parsed.contacts, code: wrap?.resCode, desc: wrap?.resDesc };
+  const hasData = !("error" in parsed) && parsed.contacts.length > 0;
+  const failure = peakReadFailure(envelope, r.ok, hasData);
+  if (failure) return { ok: false, code: failure.code, desc: failure.desc, envelope };
+  if ("error" in parsed) return { ok: false, code: envelope.resCode ?? undefined, desc: sanitizePeakError(envelope.resDesc || parsed.error), envelope };
+  return { ok: true, contacts: parsed.contacts, code: envelope.resCode ?? undefined, desc: envelope.resDesc ?? undefined, envelope };
+}
+
+// ── Create a contact (supplier) ───────────────────────────────────────────────
+// POST /api/v1/Contacts, wrapper PeakContacts → contacts[] (PEAK API Core v1).
+// https://developers.peakaccount.com/reference/post_api-v1-contacts
+// Not a billed transaction (PEAK API transaction counting: only document creates count).
+//
+// Used for ONE thing: a one-off guide recorded in FolkOPS (lib/tour-handover) who is not
+// yet a supplier in PEAK. The caller looks for an existing contact with the same tax
+// number first (lib/peak-guide-contact) — PEAK has no idempotency key, so a create is
+// a write that is never replayed.
+
+/** PEAK ContactType 5 = บุคคลธรรมดา; PrefixNameType 0 ไม่มี · 1 คุณ · 2 นาย · 3 นาง · 4 นางสาว. */
+export const PEAK_CONTACT_TYPE_INDIVIDUAL = 5;
+
+export type NewPeakContact = { name: string; prefixNameType: number; taxNumber: string; address?: string | null; phone?: string | null };
+
+export function createContactBody(c: NewPeakContact) {
+  return {
+    peakContacts: {
+      contacts: [{
+        name: c.name,
+        type: PEAK_CONTACT_TYPE_INDIVIDUAL,
+        prefixNameType: c.prefixNameType,
+        taxNumber: c.taxNumber,
+        branchCode: "00000", // an individual has no branch: head office
+        ...(c.address ? { address: c.address } : {}),
+        ...(c.phone ? { contactPhoneNumber: c.phone } : {}),
+      }],
+    },
+  };
+}
+
+export type CreatedContact = { ok: boolean; id?: string; code?: string; name?: string; desc?: string; uncertain?: boolean };
+
+/** PEAK's answer to Create Contact: the new id is the only proof it exists. */
+export function readCreatedContact(httpStatus: number, j: Record<string, unknown>): CreatedContact {
+  const wrap = peakWrap<{ contacts?: Array<Record<string, unknown>>; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakContacts");
+  const c = Array.isArray(wrap?.contacts) ? wrap!.contacts[0] : undefined;
+  const id = c?.id ? String(c.id).trim() : "";
+  if (id) return { ok: true, id, code: c?.code ? String(c.code) : undefined, name: c?.name ? String(c.name) : undefined };
+  const desc = sanitizePeakError(String(c?.resDesc ?? wrap?.resDesc ?? "").trim()) || `HTTP ${httpStatus}`;
+  // A refusal PEAK spelled out is definite; a 5xx or an empty reply proves nothing.
+  const said = !!(c?.resDesc || wrap?.resDesc);
+  return { ok: false, desc, uncertain: !said && (httpStatus >= 500 || !wrap) };
+}
+
+export async function createContact(c: NewPeakContact): Promise<CreatedContact> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(
+    `${API}/Contacts`,
+    { method: "POST", body: JSON.stringify(createContactBody(c)) },
+    "peakContacts",
+    { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  if ("error" in call) {
+    const uncertain = !!call.sent;
+    return { ok: false, uncertain, desc: uncertain ? `${call.error}. The contact may or may not have been created — FolkOPS looks for it by tax number before trying again.` : call.error };
+  }
+  return readCreatedContact(call.r.status, call.j);
+}
+
+/**
+ * Every contact PEAK will give us, read one 100-row page at a time.
+ *
+ * The picker and the tax-number suggestion both need the WHOLE list: a guide
+ * sitting on page two is a guide who cannot be mapped, and the suggestion would
+ * silently report no match rather than admit it had not looked.
+ *
+ * A page that fails AFTER earlier pages arrived keeps what arrived and reports
+ * `truncated` — a partial list an operator can still pick from beats an error,
+ * as long as it does not claim to be complete.
+ */
+export async function getAllContacts(
+  opts: { searchText?: string } = {},
+): Promise<Res<{ contacts?: PeakContact[]; pages?: number; truncated?: boolean }>> {
+  return collectPagedById<PeakContact>(
+    (page) => getContacts({ searchText: opts.searchText, limit: PEAK_CONTACTS_PAGE_MAX, page })
+      .then((r) => ({ ok: r.ok, items: r.contacts, code: r.code, desc: r.desc })),
+    PEAK_CONTACTS_PAGE_MAX,
+    PEAK_CONTACTS_MAX_PAGES,
+  ).then((r) => ({ ok: r.ok, contacts: r.items, pages: r.pages, truncated: r.truncated, code: r.code, desc: r.desc }));
+}
+
+/**
+ * Read a PEAK list page by page and stop for the right reason.
+ *
+ * Separated from the call it makes so the decisions can be tested: where the
+ * list ends, what happens when a later page fails, and the case PEAK might
+ * hand us — the same rows again because it ignored `page`. Reading those rows
+ * forever is how a picker becomes a hang.
+ */
+export async function collectPagedById<T extends { id: string }>(
+  fetchPage: (page: number) => Promise<{ ok: boolean; items?: T[]; code?: string; desc?: string }>,
+  pageSize: number,
+  maxPages: number,
+): Promise<{ ok: boolean; items?: T[]; pages?: number; truncated?: boolean; code?: string; desc?: string }> {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  let page = 0;
+  let ended = false;
+  while (page < maxPages) {
+    page++;
+    const res = await fetchPage(page);
+    if (!res.ok) {
+      // Partial beats nothing, as long as it does not claim to be complete.
+      if (items.length) return { ok: true, items, pages: page - 1, truncated: true, desc: res.desc };
+      return { ok: false, code: res.code, desc: res.desc };
+    }
+    const got = res.items ?? [];
+    let added = 0;
+    for (const it of got) {
+      if (!it?.id || seen.has(it.id)) continue;
+      seen.add(it.id);
+      items.push(it);
+      added++;
+    }
+    // Short page = the end. Nothing new on a full page = PEAK is not paging.
+    if (got.length < pageSize || added === 0) { ended = true; break; }
+  }
+  return { ok: true, items, pages: page, truncated: !ended };
+}
+
+/** Daily journals never retry a POST: a lost response is an unresolved document. */
+export type DailyJournalPayload = {
+  issuedDate: string; journalTypeId: string; contactId: string; reference: string;
+  description: string;
+  journalEntries: { accountCode: string; accountSubId?: string; debit: string; credit: string; description?: string }[];
+};
+export function dailyJournalResult(httpStatus: number, body: Record<string, unknown>): Res<{ id?: string; uncertain?: boolean }> {
+  const wrap = peakWrap<{ resCode?: string; resDesc?: string; dailyJournals?: { id?: string; code?: string; resCode?: string; resDesc?: string }[] }>(body, "peakDailyJournals");
+  const row = wrap?.dailyJournals?.[0];
+  if (httpStatus >= 200 && httpStatus < 300 && wrap?.resCode === "200" && row?.resCode === "200" && row.id && row.code) {
+    return { ok: true, id: row.id, code: row.code };
+  }
+  // Only a documented, explicit rejection proves no document was created.
+  const rejected = httpStatus < 500 && (row?.resCode === "400" || wrap?.resCode === "400" || httpStatus === 401 || httpStatus === 403);
+  return { ok: false, uncertain: !rejected, desc: sanitizePeakError(row?.resDesc || wrap?.resDesc || `Unconfirmed PEAK response (HTTP ${httpStatus})`) };
+}
+export type PeakJournalState = {
+  id: string | null; code: string; journalTypeId: number | null; contactId: string | null;
+  isVoid: boolean; issuedDate: string | null;
+  entries: { accountCode: string; accountSubId: string | null; accountSubCode: string | null; debit: number; credit: number; description: string | null }[];
+};
+
+// Pure parser, exported so the shape can be tested without a connection. PEAK reports
+// "not found" as an empty list inside an HTTP 200, like everything else it does.
+export function parsePeakJournal(j: Record<string, unknown>): { journal: PeakJournalState } | { notFound: true } | { error: string } {
+  const wrap = peakWrap<{ dailyJournals?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakDailyJournals");
+  if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakDailyJournals wrapper" };
+  const list = Array.isArray(wrap.dailyJournals) ? (wrap.dailyJournals as Record<string, unknown>[]) : null;
+  if (!list) return { error: "PEAK returned no dailyJournals array" };
+  if (!list.length) return { notFound: true };
+  const d = list[0];
+  const num = (v: unknown) => (v == null || v === "" ? 0 : Number(v));
+  const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+  const lines = Array.isArray(d.journalEntries) ? (d.journalEntries as Record<string, unknown>[]) : [];
+  return {
+    journal: {
+      id: str(d.id), code: String(d.code ?? ""), journalTypeId: d.journalTypeId == null ? null : Number(d.journalTypeId),
+      contactId: str(d.contactId), isVoid: num(d.isVoid) === 1, issuedDate: str(d.issuedDate),
+      entries: lines.map((e) => ({
+        accountCode: String(e.accountCode ?? ""), accountSubId: str(e.accountSubId), accountSubCode: str(e.accountSubCode),
+        debit: num(e.debit), credit: num(e.credit), description: str(e.description),
+      })),
+    },
+  };
+}
+
+/**
+ * Read one daily journal. GET only — this exists so an existing document can be
+ * CHECKED before FolkOPS records that it already carries a movement. Reads are not
+ * billed, so nothing here needs to be rationed.
+ */
+export async function getDailyJournal(code: string): Promise<Res<{ journal?: PeakJournalState; notFound?: boolean }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(`${API}/DailyJournals?${new URLSearchParams({ code }).toString()}`, { method: "GET" }, "peakDailyJournals");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const parsed = parsePeakJournal(call.j);
+  if ("error" in parsed) return { ok: false, desc: parsed.error };
+  if ("notFound" in parsed) return { ok: true, notFound: true };
+  return { ok: true, journal: parsed.journal };
+}
+
+export async function createDailyJournal(journal: DailyJournalPayload): Promise<Res<{ id?: string; uncertain?: boolean }>> {
+  if (!peakEnabled) return { ok: false, uncertain: false, desc: "PEAK connection is not configured" };
+  const call = await authedCall(`${API}/DailyJournals`, {
+    method: "POST", body: JSON.stringify({ peakDailyJournals: { dailyJournals: [journal] } }),
+  }, "peakDailyJournals", { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS });
+  if ("error" in call) return { ok: false, uncertain: !!call.sent, desc: sanitizePeakError(call.error) };
+  return dailyJournalResult(call.r.status, call.j);
 }

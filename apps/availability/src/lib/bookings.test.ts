@@ -97,9 +97,162 @@ describe("bookings — parseBokun", () => {
     expect(p.durationMin).toBe(180);
   });
 
+  // The booking search returns the same booking in another shape: the channel's code as
+  // confirmationCode, plus parentBookingId / productConfirmationCode — the two ids the webhook
+  // stored. Invented values.
+  it("reads the product code and the channel's cancellation time from a booking-search item", () => {
+    const p = parseBokun({
+      id: 770001, parentBookingId: 5550001, confirmationCode: "GET-5550001", productConfirmationCode: "ACME-T770001",
+      externalBookingReference: "GYGTEST0001", status: "CANCELLED", cancellationDate: Date.UTC(2026, 2, 1, 9, 0), creationDate: Date.UTC(2026, 0, 5),
+      startDate: Date.UTC(2026, 3, 10),
+    });
+    expect(p.confirmationCode).toBe("GET-5550001");
+    expect(p.externalId).toBeUndefined();
+    expect(p.productConfirmationCode).toBe("ACME-T770001");
+    expect(p.cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+  });
+
+  it("reads the same code from a webhook payload, where it is also the confirmation code", () => {
+    const p = parseBokun({ bookingId: 5550001, cancellationDate: "2026-03-01T09:00:00Z", activityBookings: [{ productConfirmationCode: "ACME-T770001" }] });
+    expect(p.externalId).toBe("5550001");
+    expect(p.confirmationCode).toBe("ACME-T770001");
+    expect(p.productConfirmationCode).toBe("ACME-T770001");
+    expect(p.cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+  });
+
+  it("has no cancellation time when the channel sends none or an unreadable one", () => {
+    expect(parseBokun({ confirmationCode: "GET-5550002" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ confirmationCode: "GET-5550002", cancellationDate: "not a date" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ confirmationCode: "GET-5550002", cancellationDate: 1772355600 }).cancelledAt).toBe("2026-03-01T09:00:00.000Z"); // seconds
+  });
+
+  it("never guesses a time zone: a bare date or a time without a zone is unknown", () => {
+    expect(parseBokun({ cancellationDate: "2026-03-01" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ cancellationDate: "2026-03-01T16:00:00" }).cancelledAt).toBeUndefined();
+    expect(parseBokun({ cancellationDate: "2026-03-01T16:00:00+07:00" }).cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+    expect(parseBokun({ cancellationDate: "1772355600000" }).cancelledAt).toBe("2026-03-01T09:00:00.000Z");
+  });
+
+  it("reads the Bokun booking id from either shape", () => {
+    expect(parseBokun({ parentBookingId: 5550001, confirmationCode: "GET-5550001" }).bokunBookingId).toBe("5550001");
+    expect(parseBokun({ bookingId: 5550001 }).bokunBookingId).toBe("5550001");
+  });
+
+  // The guest's phone was in the payload all along; nothing read it, so every
+  // Booking.phone was empty. These pin down WHERE it may be read from, because the
+  // same payload also carries our own number under seller.phoneNumber.
+  it("reads the guest's phone from the customer, never the seller's", () => {
+    const p = parseBokun({
+      seller: { phoneNumber: "+6620000000", emailAddress: "ops@folkpaths.com" },
+      customer: { firstName: "Anna", lastName: "P", phoneNumber: "+39333111222", email: "x@reply.getyourguide.com", contactDetailsHidden: false },
+      activityBookings: [{ product: { title: "Walk" } }],
+    });
+    expect(p.phone).toBe("+39333111222");
+  });
+
+  it("falls back to the passenger, then the invoice recipient", () => {
+    const viaPassenger = parseBokun({
+      seller: { phoneNumber: "+6620000000" },
+      activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { phoneNumber: "+4477712345" } }] }],
+    });
+    expect(viaPassenger.phone).toBe("+4477712345");
+
+    const viaRecipient = parseBokun({
+      seller: { phoneNumber: "+6620000000" },
+      invoice: { recipient: { phoneNumber: "+15551234567" } },
+    });
+    expect(viaRecipient.phone).toBe("+15551234567");
+  });
+
+  it("drops the phone when the channel says the contact details are hidden", () => {
+    // GetYourGuide sets this when the guest's details are withheld. Sending our own
+    // number instead would be worse than sending none.
+    expect(parseBokun({
+      seller: { phoneNumber: "+6620000000" },
+      customer: { phoneNumber: "+39333111222", contactDetailsHidden: true },
+    }).phone).toBeUndefined();
+
+    expect(parseBokun({
+      activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { phoneNumber: "+4477712345", contactDetailsHidden: true } }] }],
+    }).phone).toBeUndefined();
+  });
+
+  it("has no phone when the payload carries none — not an empty string", () => {
+    expect(parseBokun({ seller: { phoneNumber: "+6620000000" }, customer: { firstName: "A" } }).phone).toBeUndefined();
+    expect(parseBokun({ customer: { phoneNumber: "   " } }).phone).toBeUndefined();
+  });
+
   it("returns mostly-undefined for an empty payload (no crash)", () => {
     const p = parseBokun({});
     expect(p.pax).toBeUndefined();
     expect(p.productName).toBeUndefined();
+  });
+});
+
+// All numbers invented. Shapes follow the production payloads surveyed 2026-09-29.
+describe("guest phone — every place a channel may put it, and none it may not", () => {
+  const seller = { seller: { phoneNumber: "+6620000000" }, vendor: { phoneNumber: "+6620000001" }, reseller: { phone: "+6620000002" }, supplier: { mobilePhone: "+6620000003" } };
+
+  it("prefers Bokun's linkable international form over the typed number", () => {
+    const p = parseBokun({ ...seller, customer: { phoneNumber: "US+1 5550100123", phoneNumberLinkable: "+15550100123", phoneNumberCountryCode: "" } });
+    expect(p.phone).toBe("+15550100123");
+  });
+
+  it("ignores a malformed linkable form and keeps the typed number", () => {
+    expect(parseBokun({ customer: { phoneNumber: "+39 333 0100 123", phoneNumberLinkable: "0333" } }).phone).toBe("+39 333 0100 123");
+  });
+
+  for (const key of ["phone", "mobilePhone", "mobileNumber", "mobile", "telephone", "telephoneNumber"]) {
+    it(`reads customer.${key}`, () => {
+      expect(parseBokun({ ...seller, customer: { [key]: "+66 81 010 0123" } }).phone).toBe("+66 81 010 0123");
+    });
+  }
+
+  it("reads customer.contactDetails and a top-level contactDetails", () => {
+    expect(parseBokun({ ...seller, customer: { contactDetails: { mobilePhone: "+49 151 0100123" } } }).phone).toBe("+49 151 0100123");
+    expect(parseBokun({ ...seller, contactDetails: { telephone: "+44 7700 900123" } }).phone).toBe("+44 7700 900123");
+  });
+
+  it("the booking customer wins over the passenger and the invoice recipient", () => {
+    const p = parseBokun({
+      ...seller,
+      customer: { mobilePhone: "+61 400 010 012" },
+      invoice: { recipient: { phoneNumber: "+15550100999" } },
+      activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { phoneNumber: "+4477700900" } }] }],
+    });
+    expect(p.phone).toBe("+61 400 010 012");
+  });
+
+  it("never falls back to the seller, vendor, reseller or supplier", () => {
+    expect(parseBokun({ ...seller, customer: { firstName: "A" } }).phone).toBeUndefined();
+    expect(parseBokun({ ...seller }).phone).toBeUndefined();
+  });
+
+  it("hidden contact details: no number, and the import is told to clear any old one", () => {
+    const p = parseBokun({ ...seller, customer: { phoneNumber: "+39333111222", phoneNumberLinkable: "+39333111222", contactDetailsHidden: true } });
+    expect(p.phone).toBeUndefined();
+    expect(p.phoneHidden).toBe(true);
+    const nested = parseBokun({ customer: { contactDetails: { contactDetailsHidden: true, mobilePhone: "+39333111222" } } });
+    expect(nested.phone).toBeUndefined();
+    expect(nested.phoneHidden).toBe(true);
+  });
+
+  it("the hidden flag counts wherever the guest's details sit — top-level or passenger contactDetails too", () => {
+    const top = parseBokun({ customer: { phoneNumber: "+39333111222" }, contactDetails: { contactDetailsHidden: true } });
+    expect(top.phone).toBeUndefined();
+    expect(top.phoneHidden).toBe(true);
+    const pax = parseBokun({ customer: { phoneNumber: "+39333111222" }, activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { contactDetails: { contactDetailsHidden: true } } }] }] });
+    expect(pax.phone).toBeUndefined();
+    expect(pax.phoneHidden).toBe(true);
+  });
+
+  it("a shown number carries no phoneHidden flag", () => {
+    expect(parseBokun({ customer: { phoneNumber: "+39333111222", contactDetailsHidden: false } }).phoneHidden).toBeUndefined();
+  });
+
+  it("a numeric phone value is read as text; objects and blanks are not phones", () => {
+    expect(parseBokun({ customer: { phone: 66810100123 } }).phone).toBe("66810100123");
+    expect(parseBokun({ customer: { phone: { number: "+66810100123" } } }).phone).toBeUndefined();
+    expect(parseBokun({ customer: { phone: "  ", mobilePhone: "+66810100123" } }).phone).toBe("+66810100123");
   });
 });

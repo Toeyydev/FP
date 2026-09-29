@@ -15,7 +15,7 @@ export async function GET() {
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
   const [guides, assigns, leaves, pushSubs] = await Promise.all([
-    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true, email: true, fullName: true, phone: true, taxId: true, currentAddress: true, lineUserId: true } }),
+    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true, external: true, email: true, fullName: true, phone: true, taxId: true, currentAddress: true, lineUserId: true } }),
     prisma.assignment.groupBy({ by: ["guideId"], _count: { _all: true } }),
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", toDate: { gte: today } }, select: { guideId: true, fromDate: true, toDate: true } }),
     prisma.pushSubscription.groupBy({ by: ["userId"], _count: { _all: true } }),
@@ -31,7 +31,7 @@ export async function GET() {
     const realEmail = !!g.email && !/@(?:guides\.)?folkpath\.local$/i.test(g.email);
     // A "fast" alert channel = LINE or web-push. Without one, a job offer only reaches
     // the guide by email (or not at all) — slow/unreliable for day-of dispatch.
-    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked, email: g.email, fullName: g.fullName ?? "", phone: g.phone ?? "", taxId: decrypt(g.taxId), address: decrypt(g.currentAddress), lineLinked, hasPush, hasEmail: realEmail };
+    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked, external: g.external, email: g.email, fullName: g.fullName ?? "", phone: g.phone ?? "", taxId: decrypt(g.taxId), address: decrypt(g.currentAddress), lineLinked, hasPush, hasEmail: realEmail };
   }).sort((a, b) => b.tours - a.tours);
   return NextResponse.json({ rows });
 }
@@ -49,6 +49,11 @@ export async function PATCH(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const d = parsed.data;
   const data: Record<string, unknown> = {};
+  if (d.offerBlocked === false) {
+    // A one-off guide is never offered work again (owner decision 2026-09-15).
+    const g = await prisma.user.findUnique({ where: { id: d.id }, select: { external: true } });
+    if (g?.external) return NextResponse.json({ error: "external-guide", hint: "This is a one-off guide — they are not offered work again." }, { status: 409 });
+  }
   if (d.offerBlocked !== undefined) data.offerBlocked = d.offerBlocked;
   if (d.fullName !== undefined) data.fullName = d.fullName.trim() || null;
   if (d.phone !== undefined) data.phone = d.phone.trim() || null;
