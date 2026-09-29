@@ -95,6 +95,9 @@ export type ParsedBooking = {
   externalId?: string; confirmationCode?: string; externalRef?: string; productName?: string;
   date?: string; startTime?: string; slotIdx?: number; pax?: number; customerName?: string; durationMin?: number;
   phone?: string; // the guest's own number, when the channel passes it unmasked
+  // The channel said the guest's contact details are withheld (contactDetailsHidden). An
+  // import then CLEARS any number held from before, rather than keeping a stale one.
+  phoneHidden?: boolean;
   // The same Bokun booking reaches us in two shapes: the webhook's confirmation code is the
   // product confirmation code and its booking id is `bookingId`; the booking search's code is
   // the channel's ("GET-…"), with the product code and `parentBookingId` alongside. Keeping
@@ -109,6 +112,43 @@ export type ParsedBooking = {
 type Any = Record<string, unknown>;
 const obj = (v: unknown): Any => (v && typeof v === "object" ? (v as Any) : {});
 const arr = (v: unknown): Any[] => (Array.isArray(v) ? (v as Any[]) : []);
+
+// Where the guest's own number can be, in the order it is trusted. The booking CUSTOMER
+// first — the person who booked — then the lead passenger, then the invoice recipient.
+// Explicit paths only: seller / vendor / reseller / supplier objects carry phone numbers
+// too (seller.phoneNumber is Folkpaths' own, on every booking), so nothing here searches.
+const PHONE_KEYS = ["phoneNumber", "phone", "mobilePhone", "mobileNumber", "mobile", "telephone", "telephoneNumber"] as const;
+
+/**
+ * The guest's phone from a Bokun payload, and whether the channel withheld it.
+ *
+ * On every production payload checked (2026-09-29) the number sits at customer.phoneNumber,
+ * with Bokun's own international form beside it in customer.phoneNumberLinkable
+ * ("+<country><number>") and contactDetailsHidden=false. The linkable form is preferred
+ * when it is a clean international number: phoneNumber is sometimes "US+1 …"-style.
+ * The other key names and the contactDetails nesting are accepted because channels and
+ * API versions differ; none of them is ever read from a seller-side object.
+ */
+export function guestPhone(r: Any, ab: Any = obj(arr(r.activityBookings)[0])): { phone: string | undefined; hidden: boolean } {
+  const cust = obj(r.customer);
+  const passenger = obj(obj(arr(ab.pricingCategoryBookings)[0]).passengerInfo);
+  const recipient = obj(obj(r.invoice).recipient);
+  const sources = [cust, obj(cust.contactDetails), obj(r.contactDetails), passenger, obj(passenger.contactDetails), recipient];
+  // contactDetailsHidden is the channel telling us the guest's details are withheld; on
+  // the customer or the passenger it covers the guest, so no fallback may reveal them.
+  const hidden = [cust, obj(cust.contactDetails), obj(r.contactDetails), passenger, obj(passenger.contactDetails)].some((o) => o.contactDetailsHidden === true);
+  if (hidden) return { phone: undefined, hidden: true };
+  const clean = (v: unknown) => (typeof v === "string" || typeof v === "number") && String(v).trim() ? String(v).trim().slice(0, 40) : undefined;
+  for (const o of sources) {
+    const linkable = clean(o.phoneNumberLinkable);
+    if (linkable && /^\+[1-9]\d{6,14}$/.test(linkable)) return { phone: linkable, hidden: false };
+    for (const k of PHONE_KEYS) {
+      const v = clean(o[k]);
+      if (v) return { phone: v, hidden: false };
+    }
+  }
+  return { phone: undefined, hidden: false };
+}
 
 // Parser tuned to the real Bokun booking webhook shape, with deep-search fallbacks.
 export function parseBokun(raw: unknown): ParsedBooking {
@@ -164,12 +204,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
   // honour it. The email Bokun sends is an OTA relay address
   // (@reply.getyourguide.com, @expmessaging.tripadvisor.com), not the guest's own, so
   // it is deliberately not read here.
-  const cust = obj(r.customer);
-  const passenger = obj(obj(arr(ab.pricingCategoryBookings)[0]).passengerInfo);
-  const recipient = obj(obj(r.invoice).recipient);
-  const contactHidden = cust.contactDetailsHidden === true || passenger.contactDetailsHidden === true;
-  const phoneRaw = contactHidden ? undefined : (cust.phoneNumber ?? passenger.phoneNumber ?? recipient.phoneNumber);
-  const phone = phoneRaw != null && String(phoneRaw).trim() ? String(phoneRaw).trim().slice(0, 40) : undefined;
+  const { phone, hidden: phoneHidden } = guestPhone(r, ab);
 
   const durHours = Number(product.duration ?? obj(ab.activity).durationHours) || 0;
   // Snap to a fixed slot, and make startTime mirror that slot so the two never diverge
@@ -183,7 +218,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     externalRef: externalRef != null ? String(externalRef) : undefined,
     productName: productName != null ? String(productName) : undefined,
     date, startTime: slotTime, slotIdx,
-    pax: pax || undefined, customerName, phone,
+    pax: pax || undefined, customerName, phone, ...(phoneHidden ? { phoneHidden: true } : {}),
     durationMin: durHours ? durHours * 60 : undefined,
     productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
     bokunBookingId: bokunBookingId != null && typeof bokunBookingId !== "object" ? String(bokunBookingId) : undefined,

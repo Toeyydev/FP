@@ -97,7 +97,7 @@ export function guideShare<T extends { assignedGuideId: string | null }>(booking
 // guide has got (latest check-in). Null when the guide is not assigned to that
 // departure. `ownShareOnly` (FolkOPS Mobile) lists only the guide's share of a
 // split departure; the web My Tours still lists the whole departure.
-export async function guideTourDetails(guideId: string, date: string, slotIdx: number, opts: { ownShareOnly?: boolean } = {}) {
+export async function guideTourDetails(guideId: string, date: string, slotIdx: number, opts: { ownShareOnly?: boolean; everyPhone?: boolean } = {}) {
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return null;
 
@@ -128,7 +128,12 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     if (row?.bookingNo) ticketsByRef.set(row.bookingNo, row.tickets ?? "");
   }
 
-  const shown = opts.ownShareOnly ? guideShare(bookings, guideId) : bookings;
+  const own = guideShare(bookings, guideId);
+  const shown = opts.ownShareOnly ? own : bookings;
+  // A split departure lists every guest on the web view, but a guest's phone goes only to
+  // the guide they are assigned to. The other guide sees the name, never the number. An
+  // operator (everyPhone) keeps seeing every number, as they always have.
+  const mine = new Set((opts.everyPhone ? bookings : own).map((b) => b.id));
   return {
     date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
     pax: assignment.pax, note: assignment.note, checkinState: lastCheckin?.type ?? null,
@@ -136,6 +141,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: b.phone, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
   };
 }

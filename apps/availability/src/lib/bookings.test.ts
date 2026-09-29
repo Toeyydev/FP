@@ -188,3 +188,71 @@ describe("bookings — parseBokun", () => {
     expect(p.productName).toBeUndefined();
   });
 });
+
+// All numbers invented. Shapes follow the production payloads surveyed 2026-09-29.
+describe("guest phone — every place a channel may put it, and none it may not", () => {
+  const seller = { seller: { phoneNumber: "+6620000000" }, vendor: { phoneNumber: "+6620000001" }, reseller: { phone: "+6620000002" }, supplier: { mobilePhone: "+6620000003" } };
+
+  it("prefers Bokun's linkable international form over the typed number", () => {
+    const p = parseBokun({ ...seller, customer: { phoneNumber: "US+1 5550100123", phoneNumberLinkable: "+15550100123", phoneNumberCountryCode: "" } });
+    expect(p.phone).toBe("+15550100123");
+  });
+
+  it("ignores a malformed linkable form and keeps the typed number", () => {
+    expect(parseBokun({ customer: { phoneNumber: "+39 333 0100 123", phoneNumberLinkable: "0333" } }).phone).toBe("+39 333 0100 123");
+  });
+
+  for (const key of ["phone", "mobilePhone", "mobileNumber", "mobile", "telephone", "telephoneNumber"]) {
+    it(`reads customer.${key}`, () => {
+      expect(parseBokun({ ...seller, customer: { [key]: "+66 81 010 0123" } }).phone).toBe("+66 81 010 0123");
+    });
+  }
+
+  it("reads customer.contactDetails and a top-level contactDetails", () => {
+    expect(parseBokun({ ...seller, customer: { contactDetails: { mobilePhone: "+49 151 0100123" } } }).phone).toBe("+49 151 0100123");
+    expect(parseBokun({ ...seller, contactDetails: { telephone: "+44 7700 900123" } }).phone).toBe("+44 7700 900123");
+  });
+
+  it("the booking customer wins over the passenger and the invoice recipient", () => {
+    const p = parseBokun({
+      ...seller,
+      customer: { mobilePhone: "+61 400 010 012" },
+      invoice: { recipient: { phoneNumber: "+15550100999" } },
+      activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { phoneNumber: "+4477700900" } }] }],
+    });
+    expect(p.phone).toBe("+61 400 010 012");
+  });
+
+  it("never falls back to the seller, vendor, reseller or supplier", () => {
+    expect(parseBokun({ ...seller, customer: { firstName: "A" } }).phone).toBeUndefined();
+    expect(parseBokun({ ...seller }).phone).toBeUndefined();
+  });
+
+  it("hidden contact details: no number, and the import is told to clear any old one", () => {
+    const p = parseBokun({ ...seller, customer: { phoneNumber: "+39333111222", phoneNumberLinkable: "+39333111222", contactDetailsHidden: true } });
+    expect(p.phone).toBeUndefined();
+    expect(p.phoneHidden).toBe(true);
+    const nested = parseBokun({ customer: { contactDetails: { contactDetailsHidden: true, mobilePhone: "+39333111222" } } });
+    expect(nested.phone).toBeUndefined();
+    expect(nested.phoneHidden).toBe(true);
+  });
+
+  it("the hidden flag counts wherever the guest's details sit — top-level or passenger contactDetails too", () => {
+    const top = parseBokun({ customer: { phoneNumber: "+39333111222" }, contactDetails: { contactDetailsHidden: true } });
+    expect(top.phone).toBeUndefined();
+    expect(top.phoneHidden).toBe(true);
+    const pax = parseBokun({ customer: { phoneNumber: "+39333111222" }, activityBookings: [{ pricingCategoryBookings: [{ passengerInfo: { contactDetails: { contactDetailsHidden: true } } }] }] });
+    expect(pax.phone).toBeUndefined();
+    expect(pax.phoneHidden).toBe(true);
+  });
+
+  it("a shown number carries no phoneHidden flag", () => {
+    expect(parseBokun({ customer: { phoneNumber: "+39333111222", contactDetailsHidden: false } }).phoneHidden).toBeUndefined();
+  });
+
+  it("a numeric phone value is read as text; objects and blanks are not phones", () => {
+    expect(parseBokun({ customer: { phone: 66810100123 } }).phone).toBe("66810100123");
+    expect(parseBokun({ customer: { phone: { number: "+66810100123" } } }).phone).toBeUndefined();
+    expect(parseBokun({ customer: { phone: "  ", mobilePhone: "+66810100123" } }).phone).toBe("+66810100123");
+  });
+});

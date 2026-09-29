@@ -83,20 +83,26 @@ async function flagCrossChannelDuplicate(rec: { confirmationCode: string | null;
 // who happen to share a name), so we keep BOTH and only alert ops to eyeball it — never
 // drop a paid booking on a name clash. Scoped to date+slot so two different tours for
 // the same person are untouched. Returns true only when it removed a genuine duplicate.
-async function autoRemoveExactDuplicate(rec: { id: string; customerName: string | null; date: string | null; slotIdx: number | null; externalRef: string | null; confirmationCode: string | null }): Promise<boolean> {
+async function autoRemoveExactDuplicate(rec: { id: string; customerName: string | null; date: string | null; slotIdx: number | null; externalRef: string | null; confirmationCode: string | null; phone?: string | null }, phoneHidden = false): Promise<boolean> {
   try {
     const name = (rec.customerName || "").trim().toLowerCase();
     if (!name || !rec.date || rec.slotIdx == null) return false;
     const newRef = (bookingRef(rec.externalRef, rec.confirmationCode) || "").trim().toLowerCase();
     const others = await prisma.booking.findMany({
       where: { id: { not: rec.id }, date: rec.date, slotIdx: rec.slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } },
-      select: { customerName: true, externalRef: true, confirmationCode: true },
+      select: { id: true, customerName: true, externalRef: true, confirmationCode: true, phone: true },
     });
     const sameName = others.filter((o) => (o.customerName || "").trim().toLowerCase() === name);
     if (!sameName.length) return false;
     // Shares a booking number with an existing same-name row → genuine re-import: remove it.
-    if (newRef && sameName.some((o) => (bookingRef(o.externalRef, o.confirmationCode) || "").trim().toLowerCase() === newRef)) {
+    const kept = newRef ? sameName.find((o) => (bookingRef(o.externalRef, o.confirmationCode) || "").trim().toLowerCase() === newRef) : undefined;
+    if (kept) {
       await prisma.booking.update({ where: { id: rec.id }, data: { status: "IGNORED", notes: "Auto-removed: identical booking (same booking number) already on this slot" } });
+      // The re-import may be the copy that carries the guest's number. Keep it on the row
+      // that stays, when that row has none — never overwrite one it already holds.
+      // And when the channel now hides the guest's details, the row that stays stops holding them.
+      if (phoneHidden && kept.phone) await prisma.booking.update({ where: { id: kept.id }, data: { phone: null } });
+      else if (rec.phone && !kept.phone) await prisma.booking.update({ where: { id: kept.id }, data: { phone: rec.phone } });
       await notifyOps(`Removed a re-imported duplicate of "${rec.customerName}" on ${rec.date} — same booking number already on this slot.`, "Duplicate removed", `${rec.customerName} · ${rec.date}`, { push: false, date: rec.date });
       return true;
     }
@@ -355,7 +361,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       const sameRef = await prisma.booking.findMany({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true, externalId: true, confirmationCode: true } });
       const byRef = sameRef.find((b) => (!b.externalId || b.externalId === p.externalId) && (!b.confirmationCode || b.confirmationCode === p.confirmationCode));
       if (byRef) {
-        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
         return "updated";
       }
@@ -371,10 +377,10 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined,
         tourId: tourId ?? undefined, ...slotFields(existing?.datePinned ?? false),
-        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
+        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
       },
     });
-    if (!existing && !(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+    if (!existing && !(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
     if (cancelled && existing?.status !== "CANCELLED") await onBookingCancelled(rec);
     return existing ? "updated" : "created";
   }
@@ -394,7 +400,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       return "skipped";
     }
     if (dup) {
-      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phone ?? undefined, productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
       const copies = cancelled ? await cancelOtherCopies(p, dup.id, cancelledAtSource) : [];
       // Tell the guide/ops once per slot, after every copy is cancelled, so the recount is right.
       await announceCancelled([...(dup.status !== "CANCELLED" && cancelled ? [updated] : []), ...copies]);
@@ -408,7 +414,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null, status: cancelled ? "CANCELLED" : "PENDING", cancelledAtSource,
     },
   });
-  if (!(await autoRemoveExactDuplicate(rec)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+  if (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
   if (cancelled) await announceCancelled(await cancelOtherCopies(p, rec.id, cancelledAtSource));
   return "created";
 }
