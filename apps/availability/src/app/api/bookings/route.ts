@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
       },
     });
     // If the slot is already assigned to a guide, attach this booking to their job now.
-    await autoAttachLate(b);
+    await autoAttachLate(b, "manual-sync");
     await audit({ actorId, actorRole, action: "booking.added", entityType: "Booking", entityId: b.id });
     return NextResponse.json({ ok: true, booking: b });
   }
@@ -211,7 +211,7 @@ export async function POST(req: NextRequest) {
       });
     }
     // Setting a tour/slot may now match an assigned slot — attach to that guide.
-    await autoAttachLate(b);
+    await autoAttachLate(b, "manual-sync");
     return NextResponse.json({ ok: true, booking: b });
   }
 

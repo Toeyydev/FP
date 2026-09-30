@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { audit } from "@/lib/audit";
 import { parseCSV } from "@/lib/csv";
 import { normTime, timeToSlot, type ParsedBooking } from "@/lib/bookings";
-import { importParsed, type ImportResult } from "@/lib/booking-import";
+import { importParsed, reconcileCollected, type DirtyBookings, type ImportResult } from "@/lib/booking-import";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -82,6 +82,8 @@ export async function POST(req: NextRequest) {
   if (rows.length === 0) return NextResponse.json({ error: "no-rows", hint: "Couldn't read any rows — make sure the first row has column headers." }, { status: 400 });
 
   const counts = { rows: rows.length, created: 0, updated: 0, skipped: 0 };
+  // Each departure the file touches is reconciled once, after every row is in.
+  const dirty: DirtyBookings = new Map();
   for (const row of rows) {
     const ref = col(row, ["confirmation", "external booking reference", "booking reference", "reference", "ref", "booking id"]);
     const product = col(row, ["product", "experience", "activity", "title", "tour"]);
@@ -98,9 +100,10 @@ export async function POST(req: NextRequest) {
       confirmationCode: ref || undefined, externalRef: ref || undefined, productName: product || undefined,
       date, startTime: time, slotIdx: timeToSlot(time), pax: pax ?? undefined, customerName: name || undefined,
     };
-    try { const r: ImportResult = await importParsed(p, { source: channel, cancelled }); counts[r]++; }
+    try { const r: ImportResult = await importParsed(p, { source: channel, cancelled, via: "csv", collect: dirty }); counts[r]++; }
     catch { counts.skipped++; }
   }
+  await reconcileCollected(dirty, "csv");
 
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.import", entityType: "Booking", detail: counts });
   return NextResponse.json({ ok: true, ...counts });

@@ -165,6 +165,13 @@ export async function createCertificate(
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
   const made = await db.$transaction(async (tx) => {
+    // Lock the sheet row before reading it. The booking reconciliation (lib/booking-reconcile)
+    // locks the same row while it rewrites a sheet's guests, and refuses to touch a sheet that
+    // has a certificate. With both taking this lock, one waits for the other: a certificate
+    // is issued against the sheet as it stands after any booking update, or the update sees
+    // the certificate and leaves the sheet alone — never a certificate describing a sheet that
+    // changed underneath it.
+    await tx.$queryRaw`SELECT id FROM "JobSheet" WHERE "guideId" = ${key.guideId} AND "date" = ${key.date} AND "slotIdx" = ${key.slotIdx} FOR UPDATE`;
     const sheet = await loadSheet(tx, key);
     // No source given and no guide report: REFUSE rather than default.
     //

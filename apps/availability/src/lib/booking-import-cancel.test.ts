@@ -11,6 +11,7 @@ const prismaMock = vi.hoisted(() => ({
   user: { findMany: vi.fn(), findFirst: vi.fn() },
   notification: { create: vi.fn(), findFirst: vi.fn() },
   tourPayment: { findFirst: vi.fn() },
+  jobSheet: { findMany: vi.fn(async () => []) },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));
@@ -230,9 +231,13 @@ describe("onBookingCancelled — owner rule: no cancellation message for a tour 
     try {
       prismaMock.booking.findFirst.mockResolvedValue({ id: "late", status: "ASSIGNED", datePinned: false, confirmationCode: "GET-5550001", ...dup });
       copies = [];
-      prismaMock.booking.findMany.mockImplementation(async (args) => (copiesQuery(args) ? [] : [{ pax: 2, assignedGuideId: null }]));
+      // The departure: the cancelled booking and one other guest (2 pax), both on the guide's tour.
+      prismaMock.booking.findMany.mockImplementation(async (args) => (copiesQuery(args) ? [] : [
+        { id: "late", status: "CANCELLED", tourId: "T-TEST", assignedGuideId: null, externalRef: "GYGTEST0001", confirmationCode: "GET-5550001", pax: 2 },
+        { id: "other", status: "OFFERED", tourId: "T-TEST", assignedGuideId: null, externalRef: "GYGOTHER01", confirmationCode: "GET-5550002", pax: 2 },
+      ]));
       prismaMock.booking.update.mockImplementation(async ({ where }) => ({ id: where.id, confirmationCode: "GET-5550001", date: DATE, slotIdx: 2, customerName: "Test Guest" }));
-      prismaMock.assignment.findMany.mockResolvedValue([{ id: "a1", guideId: "G-TEST", pax: 4, googleEventId: null, opsGoogleEventId: null, date: DATE, slotIdx: 2 }]);
+      prismaMock.assignment.findMany.mockResolvedValue([{ id: "a1", guideId: "G-TEST", tourId: "T-TEST", pax: 4, googleEventId: null, opsGoogleEventId: null, date: DATE, slotIdx: 2 }]);
       prismaMock.user.findFirst.mockResolvedValue({ id: "guide-user", lineUserId: null, email: null });
       await importParsed(searchItem({ date: DATE, slotIdx: 2 }), { source: "GetYourGuide", cancelled: true });
     } finally {
@@ -264,16 +269,21 @@ describe("onBookingCancelled — owner rule: no cancellation message for a tour 
     expect(guideMessages()).toHaveLength(0);
   });
 
-  it("before the start the guide is still told, as before", async () => {
+  // Before the start the guide IS told — but no longer by this handler. A "you now have N
+  // guests" sent here went out before the job was updated, and was wrong whenever the job
+  // could not change (approved, certified, paid). The reconciliation that runs after the
+  // import tells the guide the COMMITTED count, or that a guest cancelled with no count —
+  // covered against a real database in booking-reconcile-round2.itest.ts (#13).
+  it("before the start: this handler announces no count and writes no pax — the reconciliation does both after it commits", async () => {
     await run(START - 60_000);
-    expect(guideMessages()).toHaveLength(1);
+    expect(guideMessages()).toHaveLength(0);
     expect(lateAudit()).toHaveLength(0);
-    expect(prismaMock.assignment.update).toHaveBeenCalledWith({ where: { id: "a1" }, data: { pax: 2 } });
+    expect(prismaMock.assignment.update).not.toHaveBeenCalled();
   });
 
-  it("days before the tour the guide is told, as before", async () => {
+  it("days before the tour, the same", async () => {
     await run(START - 5 * 24 * 3600e3);
-    expect(guideMessages()).toHaveLength(1);
+    expect(guideMessages()).toHaveLength(0);
+    expect(prismaMock.assignment.update).not.toHaveBeenCalled();
   });
 });
-
