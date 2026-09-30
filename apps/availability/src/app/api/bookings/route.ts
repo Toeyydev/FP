@@ -7,8 +7,19 @@ import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { productKey, isChannelProductName } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
+import { reconcileWithdrawn, type Withdrawn } from "@/lib/booking-reconcile";
 import { withTimeout } from "@/lib/api-cache";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
+
+// What a booking was, just before an operator hides or deletes it: enough for its old
+// departure to be reconciled afterwards (a deleted row cannot say where it was).
+const WITHDRAWN_SELECT = { id: true, status: true, date: true, slotIdx: true, externalRef: true, confirmationCode: true, tourId: true, assignedGuideId: true, pax: true } as const;
+async function reconcileAfterWithdrawal(before: Withdrawn[]): Promise<void> {
+  // The job follows: the booking's row comes off like a cancellation's, under the same
+  // rules (evidence kept, approved/certified/paid jobs left for review). Best-effort — the
+  // operator's action is already saved; the sweep catches anything this misses.
+  try { await reconcileWithdrawn(before, { source: "manual-sync", reason: "booking removed by an operator" }); } catch { /* see above */ }
+}
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -219,7 +230,9 @@ export async function POST(req: NextRequest) {
   if (action === "ignore") {
     const id = z.string().min(1).safeParse(body?.id);
     if (!id.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const before = await prisma.booking.findUnique({ where: { id: id.data }, select: WITHDRAWN_SELECT });
     await prisma.booking.update({ where: { id: id.data }, data: { status: "IGNORED" } });
+    if (before) await reconcileAfterWithdrawal([before]);
     return NextResponse.json({ ok: true });
   }
 
@@ -228,7 +241,9 @@ export async function POST(req: NextRequest) {
     const parsed = z.object({ ids: z.array(z.string().min(1)).min(1) }).or(z.object({ id: z.string().min(1) })).safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const ids = "ids" in parsed.data ? parsed.data.ids : [parsed.data.id];
+    const before = await prisma.booking.findMany({ where: { id: { in: ids } }, select: WITHDRAWN_SELECT });
     await prisma.booking.deleteMany({ where: { id: { in: ids } } });
+    await reconcileAfterWithdrawal(before);
     await audit({ actorId, actorRole, action: "booking.deleted", entityType: "Booking", detail: { count: ids.length } });
     return NextResponse.json({ ok: true });
   }

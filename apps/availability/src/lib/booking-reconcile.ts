@@ -67,9 +67,15 @@ export type ReconcileOptions = {
   notifier?: Notifier;
   /** Departures the booking was on before this change (a moved booking). */
   previous?: Departure[];
+  /** Bookings an operator just deleted or hid at this departure, as they were before. They
+   *  count as gone: their rows come off like a cancellation's, under the same rules. */
+  withdrawn?: Withdrawn[];
   /** Test seam: runs after everything is read and decided, before the final validation and the writes. */
   beforeWrite?: (attempt: number) => Promise<void>;
 };
+
+/** A booking as it was just before an operator deleted or hid it. */
+export type Withdrawn = { id: string; status: string; date: string | null; slotIdx: number | null; externalRef: string | null; confirmationCode: string | null; tourId: string | null; assignedGuideId: string | null; pax: number | null };
 
 export type ReviewCode = "BOOKING_JOB_MATCH_REVIEW_REQUIRED" | "BOOKING_RECONCILIATION_REVIEW_REQUIRED" | "BOOKING_MOVED_REVIEW_REQUIRED" | "DUPLICATE_BOOKING_REFERENCE_REVIEW_REQUIRED";
 export type ReconcileOutcome =
@@ -270,6 +276,24 @@ export async function reconcileBookings(items: { id: string; previous?: Departur
   return out;
 }
 
+/**
+ * An operator deleted or hid these bookings: reconcile each departure they were on, once,
+ * with them counted as gone. Called with the bookings as they were BEFORE the action (a
+ * deleted booking is not in the table any more to say where it was).
+ */
+export async function reconcileWithdrawn(items: Withdrawn[], opts: Omit<ReconcileOptions, "withdrawn">): Promise<Map<string, DepartureResult>> {
+  const out = new Map<string, DepartureResult>();
+  const byDep = new Map<string, { dep: Departure; items: Withdrawn[] }>();
+  for (const w of items) {
+    if (!w.date || w.slotIdx == null) continue;
+    const k = depKey({ date: w.date, slotIdx: w.slotIdx });
+    const e = byDep.get(k) ?? { dep: { date: w.date, slotIdx: w.slotIdx }, items: [] };
+    e.items.push(w); byDep.set(k, e);
+  }
+  for (const [k, e] of byDep) out.set(k, await reconcileDeparture(e.dep, { ...opts, withdrawn: e.items }));
+  return out;
+}
+
 /** Bring every guide job at one departure to the state its bookings say, atomically. */
 export async function reconcileDeparture(dep: Departure, opts: ReconcileOptions): Promise<DepartureResult> {
   const db = opts.db ?? prisma;
@@ -302,7 +326,7 @@ export async function reconcileDeparture(dep: Departure, opts: ReconcileOptions)
 
 type SheetRow = SheetBooking & { noShowPax?: number | null };
 type LoadedBooking = PlanBooking & { customerName: string | null; source: string | null; noShow: boolean; noShowPax: number };
-type Removed = { key: string; why: string; kind: "cancelled" | "released" | "moved"; bookingId?: string; to?: Departure };
+type Removed = { key: string; why: string; kind: "cancelled" | "withdrawn" | "released" | "moved"; bookingId?: string; to?: Departure };
 type Draft = {
   a: { id: string; guideId: string; tourId: string; pax: number | null };
   sheet: { id: string; ref: string | null } | undefined;
@@ -335,6 +359,15 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
     select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true, customerName: true, source: true, noShow: true, noShowPax: true },
     orderBy: { createdAt: "asc" },
   });
+  // A booking an operator deleted or hid is no longer in the table as a live booking. It
+  // joins the plan as it was, but as gone — the one rule for a guest who is no longer
+  // coming, whether the channel cancelled them or an operator removed them.
+  const withdrawnIds = new Set<string>();
+  for (const w of opts.withdrawn ?? []) {
+    if (w.date !== dep.date || w.slotIdx !== dep.slotIdx || bookings.some((b) => b.id === w.id)) continue;
+    bookings.push({ id: w.id, status: "CANCELLED", tourId: w.tourId, assignedGuideId: w.assignedGuideId, externalRef: w.externalRef, confirmationCode: w.confirmationCode, pax: w.pax, customerName: null, source: null, noShow: false, noShowPax: 0 });
+    withdrawnIds.add(w.id);
+  }
   const sheets = await tx.jobSheet.findMany({ where: dep, orderBy: { id: "asc" }, select: { id: true, ref: true, guideId: true, bookings: true, expenses: true, updatedAt: true, guideExpensesAt: true, approvalStatus: true, peakDocumentNo: true } });
   const rowsOf = (s: { bookings: unknown }) => ((s.bookings as unknown as SheetRow[]) ?? []);
   const sheetOf = (g: string) => sheets.find((s) => s.guideId === g);
@@ -424,6 +457,21 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
     if (pass >= 4) throw new Conflict("the ownership plan did not settle");
     for (const g of withdraw) noRelease.add(g);
   }
+  // A withdrawn booking on no sheet was still counted in its job's expected pax: that job
+  // is recounted even when it has no booking left (its only guest removed → 0).
+  // Only a booking that was PLACED (on the job) was counted: hiding a PENDING duplicate at a
+  // private tour's departure must not recount the operator's number to 0.
+  const lostFrom = new Set<string>();
+  for (const id of withdrawnIds) {
+    if (plan.cancelHolder.has(id)) continue;
+    if (!["OFFERED", "ASSIGNED"].includes((opts.withdrawn ?? []).find((w) => w.id === id)?.status ?? "")) continue;
+    const w = bookings.find((b) => b.id === id)!;
+    const tagged = w.assignedGuideId && assigns.some((a) => a.guideId === w.assignedGuideId) ? w.assignedGuideId : null;
+    const onTour = assigns.filter((a) => w.tourId && a.tourId === w.tourId);
+    const split = bookings.some((b) => LIVE.includes(b.status) && b.tourId === w.tourId && b.assignedGuideId);
+    const g = tagged ?? (onTour.length === 1 && !split ? onTour[0].guideId : null);
+    if (g) lostFrom.add(g);
+  }
   // A released booking joins its new job only if that job is certainly written as well;
   // otherwise it goes back to the inbox (PENDING) for an operator, never OFFERED to nobody.
   const unplace = new Set<string>();
@@ -467,8 +515,9 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
       const seen = await tx.auditLog.findFirst({ where: { action: "booking.guide_cancel_notified", entityId: b.id, detail: { path: ["guideId"], equals: a.guideId } }, select: { id: true } });
       if (seen || audits.some((x) => x.action === "booking.guide_cancel_notified" && x.entityId === b.id)) continue;
       audits.push({ action: "booking.guide_cancel_notified", entityType: "Booking", entityId: b.id, detail: { guideId: a.guideId, assignmentId: a.id, ...auditBase } });
+      const gone = withdrawnIds.has(b.id) ? "was removed by the office" : "was cancelled";
       notices.push({ guideId: a.guideId, entityId: a.id, key: `cancel|${b.id}`, date: dep.date, ops: null,
-        guide: [`A booking on your ${when(dep)} tour (${refOf(b)}) was cancelled. The office is checking your guest list — your job sheet has not changed yet.`, "A guest cancelled", `${when(dep)} · being checked`] });
+        guide: [`A booking on your ${when(dep)} tour (${refOf(b)}) ${gone}. The office is checking your guest list — your job sheet has not changed yet.`, withdrawnIds.has(b.id) ? "A booking was removed" : "A guest cancelled", `${when(dep)} · being checked`] });
     }
   };
 
@@ -484,6 +533,9 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
         issues.push(issue("BOOKING_MOVED_REVIEW_REQUIRED", { type: "Assignment", id: a.id }, frozenLate.get(g)!, { guideId: g, jobRef: sheetOf(g)?.ref ?? null, ...auditBase, why: frozenLate.get(g) },
           `${sheetOf(g)?.ref ?? `${g} ${when(dep)}`}: ${frozenLate.get(g)}. This job was not changed — take it off the other job first.`, dep.date, true));
       }
+      const stuck = sheetOf(g) ? rowsOf(sheetOf(g)!).filter((r) => bookings.some((b) => withdrawnIds.has(b.id) && refKeys(b).includes(rowKey(r)))).map((r) => r.bookingNo) : [];
+      if (stuck.length) issues.push(issue("BOOKING_RECONCILIATION_REVIEW_REQUIRED", { type: "JobSheet", id: sheetOf(g)!.id }, `withdrawn-kept|${stuck.join(",")}`, { guideId: g, jobRef: sheetOf(g)!.ref, ...auditBase, why: "a removed booking is still on the job sheet: the job is waiting for review", rows: stuck },
+        `${sheetOf(g)!.ref ?? when(dep)}: ${stuck.join(", ")} ${stuck.length > 1 ? "were" : "was"} removed from Bookings but stays on this job sheet, because the job is waiting for review. Check it.`, dep.date, true));
       await cancelNotices(a);
       continue;
     }
@@ -516,6 +568,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
         const cancelled = bookings.find((b) => b.status === "CANCELLED" && plan.cancelHolder.get(b.id) === g && refKeys(b).includes(k));
         if (cancelled && !liveHere) {
           if (rowHasEvidence(r)) { preserved.push(r.bookingNo); kept.push(r); }
+          else if (withdrawnIds.has(cancelled.id)) removed.push({ key: r.bookingNo, why: "removed by an operator", kind: "withdrawn", bookingId: cancelled.id });
           else removed.push({ key: r.bookingNo, why: "cancelled", kind: "cancelled", bookingId: cancelled.id });
           continue;
         }
@@ -556,10 +609,10 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
     // not. Recounted only when the job's guests come from bookings — a job an operator
     // dispatched with none in FolkOPS (a private or manual tour) keeps its number.
     const expected = sheet ? sheetNew : owned.reduce((n, b) => n + (b.pax ?? 0), 0);
-    const recount = (owned.length > 0 || removed.length > 0) && expected !== (a.pax ?? 0);
+    const recount = (owned.length > 0 || removed.length > 0 || lostFrom.has(g)) && expected !== (a.pax ?? 0);
     if (recount) changed.push("assignment pax");
     if (preserved.length) issues.push(issue("BOOKING_RECONCILIATION_REVIEW_REQUIRED", { type: "JobSheet", id: sheet!.id }, `cancelled-kept|${preserved.join(",")}`, { guideId: g, jobRef: sheet!.ref, ...auditBase, why: "cancelled booking kept: something is recorded on its row", rows: preserved },
-      `${sheet!.ref ?? when(dep)}: ${preserved.join(", ")} ${preserved.length > 1 ? "were" : "was"} cancelled, but attendance or ticket details are recorded on the row, so it stays. Check it.`, dep.date));
+      `${sheet!.ref ?? when(dep)}: ${preserved.join(", ")} ${preserved.length > 1 ? "were" : "was"} cancelled or removed, but attendance or ticket details are recorded on the row, so it stays. Check it.`, dep.date));
     if (!changed.length) { result.jobs.set(g, { status: "unchanged", changed, why: [] }); continue; }
 
     // The whole job moves, or none of it: blockers and approval stop everything.
@@ -683,17 +736,19 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
     if (to !== baseline) {
       const late = d.toPlace.length > 0 || d.added.length > 0;
       const cancelledOut = d.removed.some((r) => r.kind === "cancelled");
-      const head = late ? "LATE BOOKING" : cancelledOut && to < baseline ? "BOOKING CANCELLED" : "BOOKING CHANGED";
+      const withdrawnOut = d.removed.some((r) => r.kind === "withdrawn") || (lostFrom.has(g) && to < baseline);
+      const head = late ? "LATE BOOKING" : cancelledOut && to < baseline ? "BOOKING CANCELLED" : withdrawnOut && to < baseline ? "BOOKING REMOVED" : "BOOKING CHANGED";
       const news = d.owned.filter((b) => d.toPlace.includes(b) || [...d.added.map((r) => r.bookingNo), ...d.resized.map((r) => r.key)].some((k) => refKeys(b).includes(norm(k))));
-      const refs = [...new Set([...news.map((b) => bookingRef(b.externalRef, b.confirmationCode)), ...d.removed.map((r) => r.key)].filter(Boolean))].sort();
+      const lostRefs = lostFrom.has(g) ? bookings.filter((b) => withdrawnIds.has(b.id) && !plan.cancelHolder.has(b.id)).map((b) => bookingRef(b.externalRef, b.confirmationCode)) : [];
+      const refs = [...new Set([...news.map((b) => bookingRef(b.externalRef, b.confirmationCode)), ...d.removed.map((r) => r.key), ...lostRefs].filter(Boolean))].sort();
       const sources = [...new Set(news.map((b) => b.source).filter(Boolean))].join(" + ") || "Booking";
       const plus = news.filter((b) => d.toPlace.includes(b) || d.added.some((r) => refKeys(b).includes(rowKey(r)))).reduce((n, b) => n + (b.pax ?? 0), 0);
       const msg = [`${head} — ${sheet?.ref ?? when(dep)}`, `${sources} ${refs.join(", ")}${late && plus ? ` · +${plus} guests` : ""}`, `Expected guests: ${baseline} → ${to}`, `Guide: ${g}`, `Tour starts: ${when(dep)}`].join("\n");
-      const lead = late ? "A late booking was added" : cancelledOut && to < baseline ? "A guest cancelled" : "A booking changed";
+      const lead = late ? "A late booking was added" : cancelledOut && to < baseline ? "A guest cancelled" : withdrawnOut && to < baseline ? "A booking was removed" : "A booking changed";
       audits.push({ action: "booking.guide_state_notified", entityType: "Assignment", entityId: a.id, detail: { guideId: g, from: baseline, to, ...auditBase } });
       notices.push({
         guideId: g, entityId: a.id, key: `${a.id}|${baseline}->${to}`, date: dep.date,
-        ops: [msg, late ? "Late booking added to a job" : cancelledOut ? "Booking cancelled on a job" : "Booking changed on a job", `${refs.join(", ")} · ${baseline} → ${to} guests`],
+        ops: [msg, late ? "Late booking added to a job" : cancelledOut ? "Booking cancelled on a job" : withdrawnOut ? "Booking removed from a job" : "Booking changed on a job", `${refs.join(", ")} · ${baseline} → ${to} guests`],
         guide: [`${lead} on your ${when(dep)} tour. Expected guests: ${baseline} → ${to}.`, lead, `${when(dep)} · ${to} guests`],
       });
     }

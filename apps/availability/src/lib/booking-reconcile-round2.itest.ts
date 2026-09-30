@@ -50,6 +50,17 @@ const guideMsgs = async (userId = guideA.id) => (await prisma.notification.findM
 const opsMsgs = async () => (await prisma.notification.findMany({ where: { userId: ops.id }, orderBy: { createdAt: "asc" } })).map((n) => n.message);
 const run = (id: string, over: Partial<Parameters<typeof reconcileBookingChange>[1]> = {}) => reconcileBookingChange(id, { source: "test", ...over });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Resolve once another session is blocked on a row lock — ordering by a condition the
+ *  database reports, not by a wall-clock head start. Fails the test if it never happens. */
+async function untilSomeoneWaitsForALock(timeoutMs = 15_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const [{ n }] = await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%FOR UPDATE%'`;
+    if (Number(n) > 0) return;
+    await sleep(10);
+  }
+  throw new Error("no session ended up waiting for the row lock");
+}
 
 beforeAll(() => { requireTestDatabase(); });
 beforeEach(async () => {
@@ -225,7 +236,7 @@ describe("8 — reconciliation vs certificate creation", () => {
     const r = await run(late.id, { beforeWrite: async (attempt) => {
       if (attempt !== 1) return;
       cert = createCertificate({ guideId: A, date: DATE, slotIdx: 0 }, ADMIN, {}, "ADMIN_RECORDED");
-      await sleep(200); // it is waiting for the sheet lock
+      await untilSomeoneWaitsForALock(); // the certificate is now queued behind this reconciliation's sheet lock
     } });
     expect(r.kind).toBe("reconciled");
     const made = await cert!;
@@ -241,15 +252,23 @@ describe("8 — reconciliation vs certificate creation", () => {
     const s = await certSheet([aaa, bbb]);
     const before = JSON.stringify((await sheetOf(A)).bookings);
     const late = await mk("LATE8b", 2, { status: "PENDING" });
-    // The same lock createCertificate takes, held while the certificate is written.
+    // The same lock createCertificate takes, held until the reconciliation is provably
+    // waiting behind it; only then is the certificate written and the lock released.
+    let locked!: () => void, release!: () => void;
+    const lockTaken = new Promise<void>((r) => { locked = r; });
+    const mayFinish = new Promise<void>((r) => { release = r; });
     const issuing = prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "JobSheet" WHERE id = ${s.id} FOR UPDATE`;
-      await sleep(300);
+      locked();
+      await mayFinish;
       await tx.expenseCertificate.create({ data: { certificateNo: "CERT-R2-1", jobSheetId: s.id, activeJobSheetId: s.id, guideId: A, jobRef: s.ref, tourDate: DATE, slotIdx: 0, status: "READY_TO_ATTEST", payload: {} as never, payloadHash: "d".repeat(64), coveredRows: [] as never, totalSatang: 0, source: "ADMIN_RECORDED", sourceSheetUpdatedAt: s.updatedAt } });
-    }, { timeout: 10_000 });
-    await sleep(50);
-    const r = await run(late.id);
+    }, { timeout: 20_000 });
+    await lockTaken; // the certificate holds the sheet
+    const reconciling = run(late.id);
+    await untilSomeoneWaitsForALock(); // the reconciliation is queued behind it
+    release();
     await issuing;
+    const r = await reconciling;
     expect(r.kind).toBe("blocked");
     expect(JSON.stringify((await sheetOf(A)).bookings)).toBe(before);
     expect(await statusOf(late.id)).toBe("PENDING");
