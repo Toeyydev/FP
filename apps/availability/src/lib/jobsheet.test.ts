@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -364,3 +364,26 @@ describe("guideFeeOrStandard — an entered zero fee is a fee of zero", () => {
     expect(guideFeeOrStandard(entered)).toBe(entered);
   });
 });
+
+describe("uncategorisedExpenseRows — rows a PEAK document would refuse", () => {
+  it("names billed rows with no category, numbered as the sheet numbers them", () => {
+    const rows = [
+      { description: "Water", price: 10, pax: 2 },
+      { description: "Review reward", price: 50, pax: 1 },
+      { description: "Bus", price: 15, pax: 3, expenseType: "transport" },
+      { description: "Ferry", price: 5.5, pax: 4 },
+      { description: "Blank", price: null, pax: null },
+    ] as Expense[];
+    expect(uncategorisedExpenseRows(rows)).toEqual([
+      { rowNo: 1, description: "Water", amount: 20 },
+      { rowNo: 3, description: "Ferry", amount: 22 },
+    ]);
+  });
+  it("an unrecognised category counts as none", () => {
+    expect(uncategorisedExpenseRows([{ description: "Tuk-tuk", price: 40, pax: 1, expenseType: "rickshaw" }] as Expense[])).toHaveLength(1);
+  });
+  it("a fully categorised sheet has none", () => {
+    expect(uncategorisedExpenseRows([{ description: "Bus", price: 15, pax: 3, expenseType: "transport" }] as Expense[])).toEqual([]);
+  });
+});
+

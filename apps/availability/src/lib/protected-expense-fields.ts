@@ -78,6 +78,18 @@ export type MergeResult = { rows: ProtectedRow[]; conflicts: string[] };
 /** The phrase every duplicate-identity refusal carries, so the case is greppable. */
 export const DUPLICATE_IDENTITY = "duplicate protected expense identity";
 
+/** Protected by a payer stamp and nothing else: no waiver, no certificate request. */
+function stampOnly(row: ProtectedRow): boolean {
+  if (row.evidenceWaiver && typeof row.evidenceWaiver === "object") return false;
+  if (row.certificateRequest && typeof row.certificateRequest === "object") return false;
+  return isProtected(row);
+}
+
+/** financialIdentity without the accounting category. */
+function identityWithoutCategory(row: ProtectedRow): string {
+  return financialIdentity({ ...row, expenseType: undefined });
+}
+
 /**
  * Carry the server's fields from the stored rows onto the ones being saved — or refuse.
  *
@@ -129,7 +141,20 @@ export function mergeServerOwned(
       return;
     }
 
-    const at = next.findIndex((r) => financialIdentity(r) === id);
+    let at = next.findIndex((r) => financialIdentity(r) === id);
+    // A row whose only protection is a payer stamp may gain or change its accounting
+    // category. The stamp records WHO paid; the category is where the cost is booked, and
+    // PEAK refuses a row without one — so refusing the category here left a confirmed row
+    // that could never be booked (owner decision 2026-10-01). Matched on everything else
+    // the row says, and only when that match is unique on both sides. A waiver or a
+    // certificate request still needs the exact expense: a certificate's snapshot includes
+    // the category, and it goes stale on the change rather than being carried across.
+    if (at < 0 && stampOnly(old)) {
+      const loose = identityWithoutCategory(old);
+      const hits = next.flatMap((r, j) => (identityWithoutCategory(r) === loose ? [j] : []));
+      const before = prev.filter((r) => identityWithoutCategory(r) === loose).length;
+      if (hits.length === 1 && before === 1) at = hits[0];
+    }
     if (at < 0) {
       const replacing = next[i] ? ` The row now in position ${i + 1} is ${describe(next[i])}.` : "";
       conflicts.push(`${where} row ${i + 1} "${what}" carries ${carries}, and the expense it was granted for (${describe(old)}) is not in this save.${replacing} Withdraw the record first if this row really changed — the acceptance was given for what it used to say.`);

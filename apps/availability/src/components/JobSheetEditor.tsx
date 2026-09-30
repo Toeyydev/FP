@@ -4,7 +4,7 @@ import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
@@ -104,6 +104,11 @@ export default function JobSheetEditor() {
   const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  // The last Save the server refused, and why. Kept on screen until a save succeeds, so
+  // edits still showing after a refusal can never be read as saved. `stale` means the
+  // sheet changed underneath this page: nothing more may be saved from it until it is
+  // reloaded, or the next Save would undo whatever changed.
+  const [saveProblem, setSaveProblem] = useState<{ stale: boolean; reasons: string[] } | null>(null);
   // The guide's unpaid jobs this month (api/pay/peak-document/candidates): one transfer
   // is one PEAK document, so they are offered together before this job alone.
   const [monthJobs, setMonthJobs] = useState<{ date: string; slotIdx: number; ref: string | null; tour: string; amount: number; ready: boolean; waiting: string | null }[] | null>(null);
@@ -464,6 +469,7 @@ export default function JobSheetEditor() {
   };
 
   async function save(override?: Partial<Sheet>): Promise<boolean> {
+    if (saveProblem?.stale) { setMsg("Not saved — reload the sheet first."); return false; }
     setBusy(true); setMsg("");
     const s = { ...sheet!, ...override };
     const r = await jfetch("/api/jobsheet", {
@@ -474,7 +480,19 @@ export default function JobSheetEditor() {
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "stale" || d.error === "protected-row" ? (d.reasons ?? []).join(" ") || "Save refused." : d.error === "offline" ? "No connection — your changes are still here. Try Save again." : d.error === "bad-body" ? (d.detail ? `Check: ${d.detail}` : "Please check the values.") : d.error === "forbidden" ? "Operator only." : "Save failed."); return false; }
+    if (!r.ok) {
+      // Every refusal says it was not saved, with the server's own reasons when it gave
+      // any — a payer-rule or protected-row refusal used to read as a bare "Save failed."
+      const reasons: string[] = Array.isArray(d.reasons) && d.reasons.length ? d.reasons.map(String)
+        : d.error === "offline" ? ["No connection — your changes are still here. Try Save again."]
+        : d.error === "bad-body" ? [d.detail ? `Check: ${d.detail}` : "Please check the values."]
+        : d.error === "forbidden" ? ["Operator only."]
+        : [`The server refused the save (${r.status}).`];
+      setSaveProblem({ stale: d.error === "stale", reasons });
+      setMsg("Not saved");
+      return false;
+    }
+    setSaveProblem(null);
     const kept: string[] = d.restoredNoShows ?? [];
     const differ: { bookingNo: string; absentOnSheet: number; reported: number }[] = d.noShowMismatches ?? [];
     setSheet(d.sheet); setSaved(true);
@@ -483,6 +501,9 @@ export default function JobSheetEditor() {
     if (differ.length) parts.push(`needs review: ${differ.map((m) => `${m.bookingNo} shows ${m.absentOnSheet} absent, the guide reported ${m.reported}`).join("; ")}`);
     if (kept.length || differ.length) parts.push("To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason");
     setMsg(parts.join(" — "));
+    // The month's payment list carries this job's payout and whether it is ready; it was
+    // fetched before this save and would otherwise keep offering the old figures.
+    loadMonthJobs();
     return true;
   }
   async function sendToGuide() {
@@ -517,16 +538,20 @@ export default function JobSheetEditor() {
     setBusy(true); setMsg(approve ? "Approving…" : "Removing approval…");
     const r = await jfetch("/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, approve }) });
     const d = await r.json().catch(() => ({}));
-    setBusy(false);
-    if (!r.ok) { setMsg(d.error === "offline" ? "No connection — nothing was changed. Try again." : d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
-    setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt } : s);
+    if (!r.ok) { setBusy(false); setMsg(d.error === "offline" ? "No connection — nothing was changed. Try again." : d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
+    // Approving writes the sheet, so it has a new version: take it straight from the
+    // answer. The next Save sends it back as baseUpdatedAt, and holding the old one got
+    // that Save refused as stale.
+    setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt, ...(d.updatedAt ? { updatedAt: d.updatedAt } : {}) } : s);
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
     // PEAK readiness is computed SERVER-side and one of its reasons is "Job sheet
     // is not approved". Without this refetch the panel kept the stale list and
     // contradicted the ✓ Approved badge printed four lines above it — on the one
     // screen where an operator decides whether money is ready to move.
-    // Safe to reload: the sheet was saved above before approval was sent.
-    await load();
+    // Safe to reload: the sheet was saved above before approval was sent. The month's
+    // payment list changes with approval too (ready / not ready). Busy until both are
+    // back, so a second click cannot start another approval against a half-loaded page.
+    try { await Promise.all([load(), loadMonthJobs()]); } finally { setBusy(false); }
   }
 
   // Post this sheet to PEAK as an expense document.
@@ -796,9 +821,25 @@ export default function JobSheetEditor() {
           )}
           {canEdit && <button className="btn" disabled={busy} onClick={toggleApprove} title="Operator sign-off on the actual expenses before payout / PEAK sync">{isApproved(sheet.approvalStatus) ? "Unapprove" : "Approve"}</button>}
           {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>}
-          {canEdit && <button className="btn primary" disabled={busy} onClick={() => save()}>{busy ? "…" : "Save"}</button>}
+          {canEdit && <button className="btn primary" disabled={busy || !!saveProblem?.stale} onClick={() => save()}>{busy ? "…" : "Save"}</button>}
         </div>
       </div>
+
+      {saveProblem && (
+        <div className="js-save-problem no-print" role="alert" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "#fdecea", border: "1px solid #f3c2bd", color: "#9b1c1c", fontSize: 13.5, display: "grid", gap: 6 }}>
+          <b>Not saved — the changes on this page are not in the job sheet · ยังไม่ได้บันทึก</b>
+          {saveProblem.reasons.map((reason, i) => <span key={i} style={{ fontWeight: 500 }}>{reason}</span>)}
+          {saveProblem.stale && (
+            <span>
+              <button className="btn sm" disabled={busy} onClick={async () => {
+                if (!window.confirm("Reload the job sheet as it is saved now?\n\nChanges on this page that were not saved are discarded — make them again after the reload.")) return;
+                setSaveProblem(null); setMsg("");
+                await Promise.all([load(), loadMonthJobs()]);
+              }}>Reload the job sheet</button>
+            </span>
+          )}
+        </div>
+      )}
 
       {handover && (
         <div className="no-print" role="status" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "#fff8c4", border: "1px solid #ecd9bf", fontSize: 13.5, display: "grid", gap: 6 }}>
@@ -1032,7 +1073,7 @@ export default function JobSheetEditor() {
       {canEdit && !saved && (
         <div className="no-print" style={{ position: "fixed", right: 18, bottom: 18, zIndex: 60, display: "flex", gap: 10, alignItems: "center", background: "var(--card,#fff)", border: "1px solid var(--line,#ddd)", borderRadius: 999, boxShadow: "0 6px 20px rgba(0,0,0,.14)", padding: "8px 10px 8px 16px" }}>
           <span style={{ fontSize: 12.5, color: "var(--ink-soft,#777)", fontWeight: 600 }}>Unsaved changes<span style={{ display: "block", fontSize: 10.5, fontWeight: 500 }}>มีการแก้ไข ยังไม่บันทึก</span></span>
-          <button className="btn primary" disabled={busy} onClick={() => save()}>{busy ? "…" : "Save · บันทึก"}</button>
+          <button className="btn primary" disabled={busy || !!saveProblem?.stale} onClick={() => save()}>{busy ? "…" : "Save · บันทึก"}</button>
         </div>
       )}
 
@@ -1354,6 +1395,20 @@ export default function JobSheetEditor() {
             <div className="no-print" style={{ margin: "6px 0 8px", padding: "8px 12px", borderRadius: 8, background: "#fdf3e7", border: "1px solid #ecd9bf", color: "#b45309", fontSize: 12.5, fontWeight: 600 }}>
               ⚠ {odd.map((e) => `${e.description || "?"} (Qty ${e.pax})`).join(", ")} — this quantity is unusually high compared with the job passenger count ({guests} pax). Please review before finalizing.<br />
               <span style={{ fontWeight: 500 }}>จำนวนรายการนี้สูงกว่าจำนวนผู้เดินทางอย่างมีนัยสำคัญ กรุณาตรวจสอบก่อนบันทึก Job Sheet</span>
+            </div>
+          ) : null;
+        })()}
+        {!ro && (() => {
+          // A PEAK document refuses a row with no category, and used to be the first place
+          // to say so. Warn here instead. Saving is not blocked: a sheet is often filled in
+          // before anyone knows how its costs are booked.
+          const missing = uncategorisedExpenseRows(sheet.expenses);
+          return missing.length ? (
+            <div className="js-category-missing no-print" role="status" style={{ margin: "6px 0 8px", padding: "8px 12px", borderRadius: 8, background: "#fdf3e7", border: "1px solid #ecd9bf", color: "#b45309", fontSize: 12.5, fontWeight: 600 }}>
+              ⚠ Expense category required before creating a PEAK document · ต้องระบุหมวดค่าใช้จ่ายก่อนสร้างเอกสาร PEAK
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontWeight: 500 }}>
+                {missing.map((m) => <li key={m.rowNo}>Row {m.rowNo} · {m.description} · {thb(m.amount)}</li>)}
+              </ul>
             </div>
           ) : null;
         })()}

@@ -265,6 +265,16 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
     if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); setPaymentDocs(d.paymentDocs ?? []); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  // Job sheets are saved and approved in another tab, and this list — each job's payout
+  // and whether it is ready to pay — was fetched when this page opened. Fetch it again
+  // whenever the page comes back into view, so "Pay together" never offers the figures
+  // from before that save.
+  useEffect(() => {
+    const again = () => { if (document.visibilityState === "visible") load(period || undefined); };
+    document.addEventListener("visibilitychange", again);
+    window.addEventListener("focus", again);
+    return () => { document.removeEventListener("visibilitychange", again); window.removeEventListener("focus", again); };
+  }, [load, period]);
 
   const loadBonuses = useCallback(async (p: string) => {
     if (!p) return;

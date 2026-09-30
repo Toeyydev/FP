@@ -315,6 +315,22 @@ export function expenseCategory(e: Pick<Expense, "expenseType">): ExpenseCategor
   const hit = EXPENSE_CATEGORIES.find((c) => c.key === raw || c.code.toLowerCase() === raw);
   return hit ? (hit.key as ExpenseCategoryKey) : null;
 }
+/**
+ * Billed tour-expense rows with no category, numbered as the sheet numbers them (every
+ * non-review row counts). A PEAK document refuses these rows (lib/peak-payment-document),
+ * so the sheet names them first instead of leaving it to the preview.
+ */
+export function uncategorisedExpenseRows(expenses: Expense[] | null | undefined): { rowNo: number; description: string; amount: number }[] {
+  const out: { rowNo: number; description: string; amount: number }[] = [];
+  let rowNo = 0;
+  for (const e of expenses ?? []) {
+    if (isReviewExpense(e)) continue;
+    rowNo++;
+    const amount = expenseAmount(e);
+    if (amount > 0 && !expenseCategory(e)) out.push({ rowNo, description: (e.description ?? "").trim() || `row ${rowNo}`, amount });
+  }
+  return out;
+}
 export function expenseCategoryLabel(e: Pick<Expense, "expenseType">): string {
   const k = expenseCategory(e);
   return EXPENSE_CATEGORIES.find((c) => c.key === k)?.label ?? "Uncategorised";
