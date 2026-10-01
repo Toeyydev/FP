@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
       };
     })
     .filter((r) => (only === "open" ? r.status === "OPEN" || r.status === "IN_USE" || r.status === "RETURN_DUE" || r.status === null : true));
-  return NextResponse.json({ advances });
+  return NextResponse.json({ advances, frozen: advanceWritesFrozen() });
 }
 
 // POST — record money the company transferred to a guide. Operators only: money going

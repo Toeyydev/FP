@@ -57,6 +57,10 @@ export async function POST(req: NextRequest) {
   const peakRef = String(form.get("peakRef") || "").slice(0, 60) || null;
   const note = String(form.get("note") || "").slice(0, 500) || null;
   const advanceId = String(form.get("advanceId") || "") || null;
+  // An advance: what it may pay for (lib/advances/categories), its purpose, and why "other".
+  const allowedCategories = String(form.get("allowedCategories") || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const purpose = String(form.get("purpose") || "").slice(0, 200) || null;
+  const otherReason = String(form.get("otherReason") || "").slice(0, 300) || null;
   // Only an operator who has seen the money in the company account may say so.
   const confirmedArrived = String(form.get("confirmedArrived") || "") === "1";
   const file = form.get("file") as unknown as { size?: number; type?: string; name?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
@@ -116,7 +120,8 @@ export async function POST(req: NextRequest) {
     // (lib/advances/service), whether it is recorded here or from the Advances screen.
     const issued = await issueAdvance(prisma, {
       guideId, advanceDate: bangkokDate(at), amount, jobNo: sheet.ref ?? null,
-      method, bankAccount, bankRef: txRef, note, today: bangkokToday(),
+      method, bankAccount, bankRef: txRef, note, today: bangkokToday(), purpose,
+      allowedCategories: allowedCategories.length ? allowedCategories : null, otherReason,
       slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null,
       date, slotIdx, actor: { actorId: createdById, actorRole: session.user.role ?? null },
     });

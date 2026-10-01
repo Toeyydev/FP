@@ -1,7 +1,7 @@
 // Advance settlement Phase 1B, in a real browser (lib/advances/settlement):
-//   1. the job sheet shows the advance's status from the ledger and a "Settle ฿X to FOLK-ADV-…"
-//      button for the rows confirmed as paid from it — nothing about tagged-but-unlinked rows
-//   2. pressing it settles exactly those rows (server-computed amount), the panel updates
+//   1. the job sheet shows the advance's status from the ledger, and its card offers the rows
+//      confirmed as paid from it for settling — nothing about tagged-but-unlinked rows
+//   2. settling the ticked rows settles exactly those (server-computed amount), the card updates
 //   3. a row marked Company Advance that is not linked is shown as awaiting, not settleable
 //   4. the settled row cannot then be changed by a save
 // All data invented. Run after `next build`:  node scripts/e2e/advance-settlement.mjs
@@ -134,19 +134,24 @@ try {
   page.on("dialog", (d) => d.accept());
   await page.setCookie(await sessionCookie(data.op.email));
   await page.goto(`${BASE}/job-sheet?guideId=G-992&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
-  await page.waitForSelector(".js-settle-advance", { timeout: 20000 });
-  const label = await text(page, ".js-settle-advance");
-  check("the settle button names the linked rows' total and the advance (Grand Palace 500 + Wat Pho 200)", /Settle ฿700(\.00)? to FOLK-ADV-209907-001/.test(label), label);
-  check("the unlinked Rate-suggested row is shown as awaiting, not settleable", /฿100(\.00)? marked Company Advance can't be settled yet/.test(await text(page, ".js-advance-awaiting")), await text(page, ".js-advance-awaiting"));
+  // Phase 1D: settling happens on the advance's own card (components/AdvanceOperations) — the
+  // operator ticks the rows linked to it; the server still works out the amount.
+  const CARD = '.js-adv-card[data-advance="FOLK-ADV-209907-001"]';
+  await page.waitForSelector(`${CARD} .js-adv-pick`, { timeout: 20000 });
+  for (const box of await page.$$(`${CARD} .js-adv-pick`)) await box.click();
+  const label = await text(page, `${CARD} .js-adv-settle`);
+  check("the settle button names the linked rows' total and the advance (Grand Palace 500 + Wat Pho 200)", /Settle selected \(฿700(\.00)?\) to FOLK-ADV-209907-001/.test(label), label);
+  check("the unlinked Rate-suggested row is shown as awaiting, not settleable", /not settleable yet[\s\S]*฿100(\.00)?/.test(await text(page, ".js-advance-awaiting")), await text(page, ".js-advance-awaiting"));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "advance-before.png"), fullPage: true });
-  await page.click(".js-settle-advance");
+  await page.click(`${CARD} .js-adv-settle`);
   await pause(2500);
   const entries = await prisma.guideAdvanceEntry.findMany({ where: { advanceId: data.adv.id } });
   check("pressing it settles exactly those rows: one entry of ฿700 with two lines", entries.length === 1 && entries[0].amountSatang === 70000 && entries[0].snapshot?.lines?.length === 2, JSON.stringify(entries.map((e) => e.amountSatang)));
   const r = await rows();
   check("the two rows are marked settled; the unlinked row is not", !!r[0].advanceSettlement && !!r[1].advanceSettlement && !r[2].advanceSettlement);
-  check("the button is gone once nothing is left to settle", (await page.$(".js-settle-advance")) === null);
-  check("the panel reads the ledger: return due ฿300", /return due ฿300/i.test(await page.evaluate(() => document.body.innerText)));
+  check("the button is gone once nothing is left to settle", (await page.$(`${CARD} .js-adv-settle`)) === null);
+  const card = await text(page, CARD);
+  check("the panel reads the ledger: return due, ฿300 outstanding", /Return due/i.test(card) && /Outstanding ฿300(\.00)?/.test(card), card.slice(0, 200));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "advance-after.png"), fullPage: true });
   // A save that changes the settled row is refused, and says why.
   const save = await page.evaluate(async (date) => {

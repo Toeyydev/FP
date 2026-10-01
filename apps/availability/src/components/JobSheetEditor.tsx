@@ -6,7 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
-import { expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
+import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
+import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
 import { rateDefaultFor, RATE_KIND_LABEL, type JobRates, type RateKind } from "@/lib/rate-payer";
 import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
@@ -64,7 +65,8 @@ type Sheet = {
 // Advance rows as returned by /api/jobsheet (paidAt on advances, returnedAt on returns).
 // Phase 3: these come from the LEDGER (lib/advances/job-view), not re-added on the client.
 type AdvanceRow = { peakSync?: import("./AdvancePeakStatus").AdvancePeakState | null; id: string; amount: number; paidAt?: string; returnedAt?: string; method: string; txRef?: string | null; peakRef?: string | null; slipUrl?: string | null; note?: string | null;
-  advanceNo?: string; receiptNo?: string; receivedDate?: string; status?: string; settled?: number; outstanding?: number; allocated?: number; unallocated?: number; allocatedHere?: number };
+  advanceNo?: string; receiptNo?: string; receivedDate?: string; status?: string; settled?: number; outstanding?: number; allocated?: number; unallocated?: number; allocatedHere?: number;
+  allowedCategories?: string[]; advanceDate?: string; used?: number; returned?: number };
 type AdvanceTotals = { totalAdvancePaid: number; usedFromAdvance: number; totalReturned: number; deductedFromPayments: number; outstanding: number; taggedFromAdvance: number; tagsNotYetSettled: number; awaitingLink?: number };
 // A Company Advance row as settlement sees it (lib/advances/job-view JobAdvanceLine).
 type AdvanceLine = { index: number; identity: string; description: string; amount: number; category: string | null; advanceId: string | null; settled: boolean; settledBy: string | null };
@@ -97,6 +99,13 @@ export default function JobSheetEditor() {
   // The Rates this job's guests booked (lib/rate-payer): what a row's payer is SUGGESTED from.
   const [rates, setRates] = useState<JobRates | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Who is looking (from the server): the Advance panel shows only what this role may do.
+  const [role, setRole] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  // Which advance a Company Advance row was paid from, when more than one fits — sent with the
+  // save as the operator's choice; the server decides (lib/advances/link).
+  const [advanceChoices, setAdvanceChoices] = useState<Record<number, string>>({});
+  const [chooser, setChooser] = useState<null | { index: number; options: AdvanceRow[] }>(null);
   const [approvedByName, setApprovedByName] = useState<string | null>(null);
   // WhatsApp links by booking number, read live from the bookings by the server — only for
   // guests this viewer may contact, and never saved on the sheet.
@@ -137,6 +146,10 @@ export default function JobSheetEditor() {
   const [advKind, setAdvKind] = useState<null | "advance" | "return">(null); // which record-form is open
   const [advanceBank, setAdvanceBank] = useState("");
   const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null; confirmedArrived: boolean }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null, confirmedArrived: false });
+  // A new advance: what it may pay for (entrance by default), its purpose, and why "other".
+  const [advCats, setAdvCats] = useState<string[]>(["entrance"]);
+  const [advPurpose, setAdvPurpose] = useState("");
+  const [advOtherReason, setAdvOtherReason] = useState("");
   const [advBusy, setAdvBusy] = useState(false);
   const [showCross, setShowCross] = useState(false); // expand the cross-check again after approval
   const [jobMeta, setJobMeta] = useState<JobMeta>(null); // operator / OTA / lead guest / meeting point
@@ -158,7 +171,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -328,11 +341,7 @@ export default function JobSheetEditor() {
         : advance.status === "RETURN_DUE" || tourCompleted
           ? <span className="badge pending">Return due {thb(advT.outstanding)}</span>
           : <span className="badge invited">{advance.status === "IN_USE" ? "In use" : "Open"} · {thb(advT.outstanding)} out</span>;
-  // What one press of "Settle" would cover: the confirmed Company Advance rows linked to an
-  // advance with money outstanding, not settled yet (lib/advances/settlement).
-  const settleTarget = liveAdvances.find((a) => (a.outstanding ?? 0) > 0 && (advance.lines ?? []).some((l) => l.advanceId === a.id && !l.settled));
-  const settleLines = settleTarget ? (advance.lines ?? []).filter((l) => l.advanceId === settleTarget.id && !l.settled) : [];
-  const settleAmount = settleLines.reduce((s, l) => s + l.amount, 0);
+
 
   const advError = (d: { error?: string; reasons?: string[]; detail?: string }, status: number) =>
     status === 503 ? (d.detail ?? "Recording is paused while advances move to the new ledger — try again shortly.")
@@ -348,6 +357,8 @@ export default function JobSheetEditor() {
     const amt = Number(advForm.amount.replace(/[,\s]/g, ""));
     if (!Number.isFinite(amt) || amt <= 0) { setMsg("Enter a positive amount in baht."); return; }
     if (advForm.method === "bank" && !advForm.txRef.trim()) { setMsg("ใส่เลขอ้างอิงรายการโอนจากธนาคาร"); return; }
+    if (kind === "advance" && !advCats.length) { setMsg("Choose at least one category this advance may pay for."); return; }
+    if (kind === "advance" && advCats.includes("other") && advOtherReason.trim().length < 8) { setMsg("Say why this advance may pay for other costs (at least 8 characters)."); return; }
     if (!advForm.file) { setMsg("แนบสลิปโอนเงินก่อนบันทึก"); return; }
     if (advForm.method === "bank" && canEdit && !advanceBank) { setMsg("เลือกบัญชีธนาคารบริษัทที่เงินจริงเข้า–ออก"); return; }
     if (canEdit && !saved) { const ok = await save(); if (!ok) return; } // the row keys off the persisted sheet
@@ -361,6 +372,11 @@ export default function JobSheetEditor() {
     if (advForm.txRef.trim()) fd.append("txRef", advForm.txRef.trim());
     if (advForm.note.trim()) fd.append("note", advForm.note.trim());
     if (kind === "return" && canEdit && advForm.confirmedArrived) fd.append("confirmedArrived", "1");
+    if (kind === "advance") {
+      fd.append("allowedCategories", advCats.join(","));
+      if (advPurpose.trim()) fd.append("purpose", advPurpose.trim());
+      if (advCats.includes("other")) fd.append("otherReason", advOtherReason.trim());
+    }
     if (advForm.file) {
       let blob: Blob = advForm.file;
       try { blob = await shrinkImage(advForm.file); } catch { /* keep original */ }
@@ -377,27 +393,18 @@ export default function JobSheetEditor() {
       : "Return recorded as received ✓ — allocate it to the advance under Payments → Advances");
   }
 
-  // Settle an advance with the rows on this sheet confirmed as paid from it. The request names
-  // the rows and the sheet version; the server works out the amount (lib/advances/settlement),
-  // and a retry of the same rows replays instead of settling twice.
-  async function settleTaggedExpenses() {
-    if (!sheet || !settleTarget || !settleLines.length || !advance.jobSheetId || !advance.sheetVersion) return;
-    if (settleAmount > (settleTarget.outstanding ?? 0)) { setMsg(`These rows come to ${thb(settleAmount)}, more than the ${thb(settleTarget.outstanding ?? 0)} outstanding on ${settleTarget.advanceNo}.`); return; }
-    if (!confirm(`Settle ${thb(settleAmount)} of ${settleTarget.advanceNo} with ${settleLines.length} row(s) confirmed as paid from it?`)) return;
-    setAdvBusy(true); setMsg("");
-    const r = await jfetch(`/api/advances/${settleTarget.id}/settle-expenses`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jobSheetId: advance.jobSheetId, sheetVersion: advance.sheetVersion, lines: settleLines.map((l) => ({ index: l.index, identity: l.identity })) }),
-    });
-    const d = await r.json().catch(() => ({}));
-    setAdvBusy(false);
-    if (!r.ok) { setMsg(advError(d, r.status)); return; }
+  // Re-read the job's advances from the server (lib/advances/job-view) after any advance action
+  // or save — every figure on the panel is the server's.
+  async function refreshAdvance() {
+    if (!sheet) return;
     const fresh = await jfetch(`/api/jobsheet?guideId=${encodeURIComponent(sheet.guideId)}&date=${sheet.date}&slotIdx=${sheet.slotIdx}`);
     const fd2 = await fresh.json().catch(() => ({}));
     if (fd2.advance) setAdvance(fd2.advance);
-    if (fd2.sheet?.updatedAt) setSheet((s) => (s ? { ...s, updatedAt: fd2.sheet.updatedAt } : s));
-    setMsg(`Settled ${thb(d.amount ?? settleAmount)} of ${settleTarget.advanceNo} ✓`);
+    if (fd2.sheet?.updatedAt) setSheet((x) => (x ? { ...x, updatedAt: fd2.sheet.updatedAt, expenses: x.expenses.map((e, i) => ({ ...e, ...(fd2.sheet.expenses?.[i]?.advanceId ? { advanceId: fd2.sheet.expenses[i].advanceId } : {}) })) } : x));
   }
+  // The live advances of this job that may pay for a category (lib/advances/categories, as the
+  // server will check it). Company Advance is offered only when at least one exists.
+  const advancesFor = (category: string | null) => liveAdvances.filter((a) => !!category && (a.allowedCategories ?? ["entrance"]).includes(category));
 
   // ---- Guide's own expense report (separate from the operator's official set) ----
   const setGExp = (i: number, p: Partial<Expense>) => setGuideExp((arr) => arr.map((e, j) => j === i ? { ...e, ...p } : e));
@@ -493,7 +500,8 @@ export default function JobSheetEditor() {
       method: "PUT", headers: { "content-type": "application/json" },
       // The version this form was opened on. The server refuses a save built on a stale
       // one rather than quietly undoing whoever saved in between.
-      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}) }),
+      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}),
+        ...(Object.keys(advanceChoices).length ? { advanceChoices: Object.entries(advanceChoices).map(([index, advanceId]) => ({ index: Number(index), advanceId })) } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
@@ -510,6 +518,8 @@ export default function JobSheetEditor() {
       return false;
     }
     setSaveProblem(null);
+    setAdvanceChoices({});
+    void refreshAdvance(); // links set by this save show in the Advance panel straight away
     const kept: string[] = d.restoredNoShows ?? [];
     const differ: { bookingNo: string; absentOnSheet: number; reported: number }[] = d.noShowMismatches ?? [];
     setSheet(d.sheet); setSaved(true);
@@ -1245,7 +1255,8 @@ export default function JobSheetEditor() {
                         const expenseType = ev.target.value;
                         setExpense(i, {
                           expenseType,
-                          ...(expenseType !== "entrance" && paid === "GUIDE_ADVANCE" ? { paidBy: "", paidBySource: "operator" } : {}),
+                          // Company Advance stays only while an advance on this job may pay for the new category.
+                          ...(paid === "GUIDE_ADVANCE" && !advancesFor(expenseType).length ? { paidBy: "", paidBySource: "operator" } : {}),
                         });
                       }}
                       title="The stable category this expense is booked under. Accounting maps on THIS, not on the description.">
@@ -1263,13 +1274,25 @@ export default function JobSheetEditor() {
                   {/* An untagged row now shows "— not set —" rather than defaulting the display to
                       Company Direct. Who paid decides whether the guide is reimbursed, so
                       guessing it silently either overpays or underpays a real person. */}
-                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => setExpense(i, { paidBy: ev.target.value, paidBySource: "operator" })} title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
+                  <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(paid === "GUIDE_ADVANCE" ? { borderColor: "var(--primary)", fontWeight: 600 } : paid === "GUIDE_PERSONAL" ? { borderColor: "#b45309", fontWeight: 600 } : paid === "UNSPECIFIED" ? { borderColor: "var(--assign)", color: "var(--assign)", fontWeight: 600 } : {}) }} value={paid === "GUIDE_ADVANCE" ? "advance" : paid === "GUIDE_PERSONAL" ? "guide" : paid === "COMPANY_DIRECT" ? "company" : ""} onChange={(ev) => {
+                    const v = ev.target.value;
+                    const fits = advancesFor(expenseCategory(e));
+                    // More than one advance could have paid: the operator chooses — never guessed.
+                    if (v === "advance" && fits.length > 1) { setChooser({ index: i, options: fits }); return; }
+                    setAdvanceChoices((c) => { const { [i]: _drop, ...rest } = c; return rest; });
+                    setExpense(i, { paidBy: v, paidBySource: "operator" });
+                  }} className="js-payer-select" title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
-                    {PAYMENT_SOURCES.filter((s) => s.value !== "advance" || expenseCategory(e) === "entrance" || paid === "GUIDE_ADVANCE").map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
+                    {PAYMENT_SOURCES.filter((s) => s.value !== "advance" || advancesFor(expenseCategory(e)).length > 0 || paid === "GUIDE_ADVANCE").map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
-                  {paid === "GUIDE_ADVANCE" && expenseCategory(e) !== "entrance" && (
-                    <div style={{ fontSize: 10.5, color: "var(--danger,#b3402f)", marginTop: 2, whiteSpace: "normal" }}>
-                      Ticket advance is allowed only for Entrance Ticket rows.
+                  {paid === "GUIDE_ADVANCE" && !advancesFor(expenseCategory(e)).length && (
+                    <div className="js-advance-not-allowed" style={{ fontSize: 10.5, color: "var(--danger,#b3402f)", marginTop: 2, whiteSpace: "normal" }}>
+                      No advance on this job may pay for {expenseCategory(e) ?? "uncategorised"} costs — choose another payer, or allow the category on the advance.
+                    </div>
+                  )}
+                  {paid === "GUIDE_ADVANCE" && (advanceChoices[i] || (e as { advanceId?: string }).advanceId) && (
+                    <div className="js-advance-chosen" style={{ fontSize: 10.5, color: "var(--ink-soft)", marginTop: 2 }}>
+                      → {liveAdvances.find((a) => a.id === (advanceChoices[i] || (e as { advanceId?: string }).advanceId))?.advanceNo ?? "an advance"}{advanceChoices[i] ? " (chosen — saved with the sheet)" : ""}
                     </div>
                   )}
                   {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
@@ -1282,12 +1305,14 @@ export default function JobSheetEditor() {
                     </div>
                   )}
                   {/* A default is never shown as a confirmed payer. The booked Rate's suggestion,
-                      the old after-tour default, or a value an app sent without saying who chose it:
+                      the old after-tour default, a value an app sent without saying who chose it, or
+                      or a payer that only the category rule stands behind (owner policy: a rule is not a
+                      confirmation; lib/payer-rules effectivePayer):
                       each reads "awaiting confirmation" until a person confirms it here — re-picking
                       the same option in the list above changes nothing, so the button is the way. */}
-                  {paid !== "UNSPECIFIED" && (e.paidBySource === "rate-default" || e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
+                  {paid !== "UNSPECIFIED" && (e.paidBySource === "rate-default" || e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed" || (e.paidBySource !== "operator" && e.paidBySource !== "guide" && effectivePayer(e).basis !== "OPERATOR" && effectivePayer(e).basis !== "GUIDE")) && (
                     <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }}
-                      title={e.paidBySource === "rate-default" ? "Suggested by the Rate the guests booked — not a confirmed payer" : e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : "Sent by the app without saying who chose it — not a confirmed payer"}>
+                      title={e.paidBySource === "rate-default" ? "Suggested by the Rate the guests booked — not a confirmed payer" : e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : e.paidBySource === "unconfirmed" ? "Sent by the app without saying who chose it — not a confirmed payer" : "Set by the category rule or recorded without saying who chose it — not a confirmed payer"}>
                       <span className="js-payer-pending">{paid === "GUIDE_PERSONAL" ? "Guide Own Money" : paid === "GUIDE_ADVANCE" ? "Company Advance Money" : e.paidBySource === "rate-default" ? "Company Resource" : "Company paid direct"} · {e.paidBySource === "rate-default" ? "Suggested from booking Rate" : "awaiting confirmation"} · รอยืนยัน</span>
                       {canEdit && <button type="button" className="btn sm js-confirm-payer" style={{ marginLeft: 6 }} disabled={busy} onClick={() => setExpense(i, { paidBySource: "operator" })}>Confirm payer</button>}
                     </div>
@@ -1759,10 +1784,8 @@ export default function JobSheetEditor() {
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record ticket advance"}</button>}
+          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
           {(canEdit || (hasAdvance && advT.outstanding > 0)) && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
-          {canEdit && settleTarget && settleLines.length > 0 && <button className="btn sm js-settle-advance" disabled={advBusy || advance.frozen || !saved} title="Settle the advance with the rows confirmed as paid from it (the server works out the amount)" onClick={settleTaggedExpenses}>Settle {thb(settleAmount)} to {settleTarget.advanceNo}</button>}
-          {(advT.awaitingLink ?? 0) > 0 && <span className="js-advance-awaiting" style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{thb(advT.awaitingLink ?? 0)} marked Company Advance can't be settled yet — confirm its payer and link it to an advance on this job</span>}
           {hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (
@@ -1790,7 +1813,45 @@ export default function JobSheetEditor() {
               {advForm.file ? `📎 ${advForm.file.name.slice(0, 18)}…` : "📎 Slip"}
               <input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0] ?? null; setAdvForm((prev) => ({ ...prev, file: f })); e.target.value = ""; }} />
             </label>
-            <button className="btn sm primary" disabled={advBusy} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record ticket advance" : "Record return"}</button>
+            {advKind === "advance" && (
+              <div className="js-advance-create-categories" style={{ flexBasis: "100%", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 12 }}>
+                <span style={{ fontWeight: 600, color: "var(--ink-soft)" }}>May pay for:</span>
+                {[["entrance", "Entrance tickets"], ["meal", "Meals"], ["transport", "Transport"], ["other", "Other"]].map(([k, label]) => (
+                  <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input type="checkbox" value={k} className="js-create-cat" checked={advCats.includes(k)} onChange={(ev) => setAdvCats((c) => (ev.target.checked ? [...c, k] : c.filter((x) => x !== k)))} />{label}
+                  </label>
+                ))}
+                {advCats.includes("other") && <input className="js-create-other-reason" style={{ ...L, minWidth: 240 }} placeholder="Why may it pay for other costs? (kept in the history)" value={advOtherReason} onChange={(ev) => setAdvOtherReason(ev.target.value)} />}
+                <input className="js-create-purpose" style={{ ...L, minWidth: 200 }} placeholder="Purpose (optional)" maxLength={200} value={advPurpose} onChange={(ev) => setAdvPurpose(ev.target.value)} />
+              </div>
+            )}
+            <button className="btn sm primary js-advance-submit" disabled={advBusy} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record advance" : "Record return"}</button>
+          </div>
+        )}
+        <AdvanceOperations data={advance as unknown as OpsData} guideId={sheet.guideId} role={role} userId={userId}
+          approved={(sheet as { approvalStatus?: string | null }).approvalStatus === "APPROVED"} saved={saved}
+          onChanged={refreshAdvance} setMsg={setMsg} />
+        {chooser && (
+          <div className="no-print js-advance-chooser" role="dialog" aria-label="Choose the advance" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "grid", placeItems: "center", zIndex: 50 }}>
+            <div style={{ background: "var(--surface,#fff)", borderRadius: 12, padding: 16, maxWidth: 560, width: "92%" }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Which advance paid for “{sheet.expenses[chooser.index]?.description || `row ${chooser.index + 1}`}”?</div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 8 }}>More than one advance on this job may pay for this cost. Choose one — the server checks it again when you save.</div>
+              <table style={{ width: "100%", fontSize: 12.5 }}>
+                <thead><tr><th style={{ textAlign: "left" }}>Advance</th><th>Issued</th><th>Outstanding</th><th>Status</th><th>May pay for</th><th>Date</th><th /></tr></thead>
+                <tbody>{chooser.options.map((a) => (
+                  <tr key={a.id}>
+                    <td className="mono">{a.advanceNo}</td><td style={{ textAlign: "right" }}>{thb(a.amount)}</td><td style={{ textAlign: "right" }}>{thb(a.outstanding ?? 0)}</td>
+                    <td>{a.status}</td><td>{(a.allowedCategories ?? ["entrance"]).join(", ")}</td><td>{a.advanceDate ?? ""}</td>
+                    <td><button className="btn sm primary js-advance-choose" data-advance={a.advanceNo} onClick={() => {
+                      setAdvanceChoices((c) => ({ ...c, [chooser.index]: a.id }));
+                      setExpense(chooser.index, { paidBy: "advance", paidBySource: "operator" });
+                      setChooser(null);
+                    }}>Choose</button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+              <div style={{ marginTop: 10, textAlign: "right" }}><button className="btn sm" onClick={() => setChooser(null)}>Cancel</button></div>
+            </div>
           </div>
         )}
        </div>

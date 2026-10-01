@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { explain, RefundRow, type OpsRefund } from "./AdvanceOperations";
 import AdvanceBankSelect from "./AdvanceBankSelect";
+import RefundReviewPanel from "./RefundReview";
 import AdvancePeakStatus, { type AdvancePeakState } from "./AdvancePeakStatus";
 import RecordExistingPeakDialog, { type LinkTarget } from "./RecordExistingPeakDialog";
 import { thb } from "@/lib/jobsheet";
@@ -24,7 +26,7 @@ type Advance = {
 };
 type Receipt = {
   peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
-  id: string; receiptNo: string; guideId: string; receivedDate: string; status: "CLAIMED" | "VERIFIED" | "REJECTED" | "VOIDED"; refunded?: number; available?: number;
+  id: string; receiptNo: string; guideId: string; receivedDate: string; status: "CLAIMED" | "VERIFIED" | "REJECTED" | "VOIDED"; refunded?: number; available?: number; refunds?: OpsRefund[];
   amount: number; allocated: number; unallocated: number; bankRef: string | null; slipUrl: string | null;
   note: string | null; verifiedAt: string | null; rejectedReason: string | null;
 };
@@ -46,9 +48,11 @@ const jfetch = async (url: string, init?: RequestInit) => {
   return body as Record<string, unknown>;
 };
 
-export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { canEdit?: boolean; isAdmin?: boolean }) {
+export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role = null, userId = null }: { canEdit?: boolean; isAdmin?: boolean; role?: string | null; userId?: string | null }) {
   const [advances, setAdvances] = useState<Advance[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
+  // ADVANCE_WRITES_FROZEN, as the server reports it: write controls are disabled while it is on.
+  const [frozen, setFrozen] = useState(false);
   const [unbooked, setUnbooked] = useState<Unbooked | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -69,6 +73,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
       ]);
       if (m) setMode(m as unknown as { reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean });
       setAdvances((a.advances ?? []) as Advance[]);
+      setFrozen(a.frozen === true);
       setReceipts((r.receipts ?? []) as Receipt[]);
       setUnbooked(u as unknown as Unbooked);
     } catch (e) { setErr(String((e as Error).message)); }
@@ -84,7 +89,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
 
   // While the cutover freeze is on the server refuses every ordinary advance write.
   // Offering the buttons anyway only produces a 503 the operator cannot act on.
-  const canWrite = canEdit && !mode?.writesFrozen;
+  const canWrite = canEdit && !mode?.writesFrozen && !frozen;
   const canLink = isAdmin && !!mode?.existingLinks;
   const open = useMemo(() => advances.filter((a) => a.status === "OPEN" || a.status === "IN_USE" || a.status === "RETURN_DUE"), [advances]);
   const waiting = useMemo(() => receipts.filter((r) => r.status === "CLAIMED"), [receipts]);
@@ -96,13 +101,14 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
       )}
       {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}</div>}
       {msg && <div className="banner ok" role="status">{msg}</div>}
+      {frozen && <div className="banner js-advance-frozen" role="status">Advance writes are currently frozen — everything on this page is read-only until the advance workflow is switched on.</div>}
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0 }}>Ticket advances</h3>
+        <h3 style={{ margin: 0 }}>Company advances</h3>
         <span className="muted" style={{ fontSize: 12.5 }}>
           {open.length} outstanding · {thb(open.reduce((s, a) => s + a.outstanding, 0))} with guides
         </span>
-        {canWrite && <button className="btn sm primary" disabled={busy} onClick={() => setIssuing(true)} style={{ marginLeft: "auto" }}>Record ticket advance…</button>}
+        {canWrite && <button className="btn sm primary" disabled={busy || frozen} onClick={() => setIssuing(true)} style={{ marginLeft: "auto" }}>Record advance…</button>}
       </div>
 
       {canWrite && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}
@@ -185,6 +191,28 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
           </tbody>
         </table>
       </div>
+
+      {role === "ACCOUNTANT" && <RefundReviewPanel userId={userId} />}
+      {role !== "ACCOUNTANT" && receipts.some((r) => (r.refunds ?? []).length > 0) && (
+        <div className="js-refunds-section" style={{ display: "grid", gap: 6 }}>
+          <h3 style={{ margin: "6px 0 0" }}>Refunds to guides <small className="muted" style={{ fontWeight: 500 }}>excess returns paid back — not guide payments</small></h3>
+          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+            Recorded by an operator, approved by another person (an accountant may approve), then paid with its bank reference and slip.
+          </p>
+          {receipts.flatMap((r) => (r.refunds ?? []).map((f) => (
+            <div key={f.id}>
+              <div className="muted" style={{ fontSize: 11.5 }}>{r.receiptNo} · {r.guideId}</div>
+              <RefundRow f={f} ops={canWrite} accountant={false} userId={userId} frozen={frozen} busy={busy}
+                run={async (label, url, body) => {
+                  const res = await fetch(url, body instanceof FormData ? { method: "POST", body } : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+                  const d = await res.json().catch(() => ({}));
+                  if (!res.ok) { setMsg(explain(res.status, d)); return null; }
+                  setMsg(`${label} ✓`); await load(); return d;
+                }} />
+            </div>
+          )))}
+        </div>
+      )}
 
       <h3 style={{ margin: "6px 0 0" }}>Costs still to be booked</h3>
       <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
@@ -293,8 +321,14 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
   const [bankRef, setBankRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // What it may pay for (tickets by default); "other" needs a reason, kept in its history.
+  const [cats, setCats] = useState<string[]>(["entrance"]);
+  const [otherReason, setOtherReason] = useState("");
+  const [purpose, setPurpose] = useState("");
 
   const submit = async () => {
+    if (!cats.length) { setErr("Choose at least one category this advance may pay for"); return; }
+    if (cats.includes("other") && otherReason.trim().length < 8) { setErr("Say why this advance may pay for other costs (at least 8 characters)"); return; }
     if (!jobNo.trim()) { setErr("เลือก Job No. ของรายการเงินทดรอง"); return; }
     if (!bankAccount) { setErr("เลือกบัญชีธนาคารบริษัทที่โอนเงินออก"); return; }
     if (!bankRef.trim()) { setErr("ใส่เลขอ้างอิงรายการโอนจากธนาคาร"); return; }
@@ -304,6 +338,9 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
       const body = new FormData();
       for (const [key,value] of Object.entries({guideId:guideId.trim(),advanceDate,amount,jobNo:jobNo.trim(),bankRef,bankAccount})) body.set(key,value);
       if (file) body.set("file",file);
+      body.set("allowedCategories", cats.join(","));
+      if (cats.includes("other")) body.set("otherReason", otherReason.trim());
+      if (purpose.trim()) body.set("purpose", purpose.trim());
       const r = await jfetch("/api/advances", { method: "POST", body });
       onDone(`${(r.advance as { advanceNo: string }).advanceNo} recorded`);
     } catch (e) { setErr(String((e as Error).message)); setBusy(false); }
@@ -312,7 +349,7 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
   return (
     <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="adv-h" style={{ width: "min(520px, 100%)" }}>
-        <h3 id="adv-h">Record ticket advance</h3>
+        <h3 id="adv-h">Record advance</h3>
         <div className="mbody">
         <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
           Money the company transferred to a guide to buy customer tickets for this Job No. It is cleared by the approved ticket
@@ -327,6 +364,14 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
           <AdvanceBankSelect value={bankAccount} onChange={setBankAccount} disabled={busy} />
           <label>สลิปโอนเงิน<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={e=>setFile(e.target.files?.[0]??null)} /></label>
           <label>Bank reference<input value={bankRef} onChange={(e) => setBankRef(e.target.value)} disabled={busy} /></label>
+          <div className="js-issue-categories" style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12.5 }}>
+            <span className="muted">May pay for:</span>
+            {[["entrance", "Entrance tickets"], ["meal", "Meals"], ["transport", "Transport"], ["other", "Other"]].map(([k, label]) => (
+              <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={cats.includes(k)} disabled={busy} onChange={(e) => setCats((c) => (e.target.checked ? [...c, k] : c.filter((x) => x !== k)))} />{label}</label>
+            ))}
+          </div>
+          {cats.includes("other") && <label>Why may it pay for other costs?<input value={otherReason} onChange={(e) => setOtherReason(e.target.value)} disabled={busy} /></label>}
+          <label>Purpose (optional)<input value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={200} disabled={busy} /></label>
         </div>
         </div>
         <div className="mfoot">

@@ -22,6 +22,8 @@
 //      GuideAdvanceReceipt  →  GuideAdvance (ascending id)  →  TourPayment (job order)
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
+import { checkAllowedCategories, DEFAULT_ALLOWED, normaliseAllowed } from "@/lib/advances/categories";
+import { expenseCategory } from "@/lib/jobsheet";
 import { MIN_REFUND_REASON, refundNoFor, returnLinkProblems, returnSummary } from "@/lib/advances/returns";
 import { summariesFor } from "@/lib/advances/summaries";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
@@ -136,9 +138,17 @@ const isUnique = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestErr
 export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInput & {
   actor: Actor; bankAccount?: string | null; slipUrl?: string | null; slipFileId?: string | null; evidenceId?: string | null;
   date?: string; slotIdx?: number;
+  /** What this advance may pay for (lib/advances/categories). Tickets only when not said. */
+  allowedCategories?: readonly string[] | null;
+  /** Required when "other" is allowed — kept in the audit history with who and when. */
+  otherReason?: string | null;
 }): Promise<{ ok: true; advance: { id: string; advanceNo: string } } | Fail> {
   const reasons = checkIssueAdvance(input);
+  const wanted = input.allowedCategories?.length ? input.allowedCategories : DEFAULT_ALLOWED;
+  reasons.push(...checkAllowedCategories(wanted, { otherReason: input.otherReason }));
   if (reasons.length) return fail(400, ...reasons);
+  const allowedCategories = normaliseAllowed(wanted);
+  const purpose = (input.purpose ?? "").trim() || (allowedCategories.length === 1 && allowedCategories[0] === "entrance" ? "Ticket advance" : "Company advance");
   const amountSatang = toSatang(input.amount);
 
   // Which job this advance belongs to decides which job sheet shows it (the legacy
@@ -163,7 +173,7 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
           data: {
             guideId: input.guideId, advanceNo, jobNo,
             advanceDate: input.advanceDate, amountSatang, accountingPeriod: periodOf(input.advanceDate),
-            bankAccount: input.bankAccount ?? null, purpose: "Ticket advance", method: input.method ?? "bank", txRef: input.bankRef ?? null,
+            bankAccount: input.bankAccount ?? null, purpose, allowedCategories, method: input.method ?? "bank", txRef: input.bankRef ?? null,
             note: input.note ?? null, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null,
             evidenceId: input.evidenceId ?? null, createdById: input.actor.actorId,
             // legacy columns, kept in step so the job-sheet panel keeps working
@@ -173,7 +183,13 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
           select: { id: true, advanceNo: true },
         });
       });
-      await audit({ ...input.actor, action: "advance.issued", entityType: "GuideAdvance", entityId: advance.id, detail: { advanceNo: advance.advanceNo, guideId: input.guideId, advanceDate: input.advanceDate, amount: fromSatang(amountSatang), jobNo: input.jobNo ?? null } });
+      await audit({ ...input.actor, action: "advance.issued", entityType: "GuideAdvance", entityId: advance.id, detail: { advanceNo: advance.advanceNo, guideId: input.guideId, advanceDate: input.advanceDate, amount: fromSatang(amountSatang), jobNo: input.jobNo ?? null, purpose, allowedCategories } });
+      // The categories it was issued with are the first entry of its category history; with
+      // "other", the reason is kept there — never only in a field that a later edit replaces.
+      await audit({ ...input.actor, action: "advance.categories_changed", entityType: "GuideAdvance", entityId: advance.id, detail: {
+        advanceNo: advance.advanceNo, before: null, after: allowedCategories, added: allowedCategories, removed: [],
+        ...(allowedCategories.includes("other") ? { otherReason: (input.otherReason ?? "").trim() } : {}), at: new Date().toISOString(),
+      } });
       return { ok: true, advance };
     } catch (e) {
       if (isUnique(e) && attempt < 2) continue; // two advances numbered at the same moment
@@ -344,6 +360,40 @@ export async function allocateReceipt(prisma: PrismaClient, input: {
     if (isUnique(e)) return fail(409, "That allocation was already recorded — reload the page");
     throw e;
   }
+}
+
+// ── An advance's allowed categories (Phase 1D) ────────────────────────────────
+//
+// Editable while it is safe: a category can always be added ("other" with a reason); it can
+// be removed only when no expense row on the advance's job is linked to this advance in that
+// category — linked or settled, those rows were confirmed as paid from it, and taking the
+// category away would leave them pointing at an advance that may not pay for them. Every
+// change is one audit entry (before, after, who, when, and the reason when "other" is
+// switched on), so the history survives the field being edited again.
+export async function updateAdvanceCategories(prisma: PrismaClient, input: { advanceId: string; allowedCategories: readonly string[]; otherReason?: string | null; actor: Actor }): Promise<{ ok: true; allowedCategories: string[] } | Fail> {
+  const a = await prisma.guideAdvance.findUnique({ where: { id: input.advanceId }, select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, reversedAt: true, allowedCategories: true } });
+  if (!a) return fail(404, "No such advance");
+  if (a.reversedAt) return fail(409, `${a.advanceNo} was reversed`);
+  const reasons = checkAllowedCategories(input.allowedCategories, { otherReason: input.otherReason, previous: a.allowedCategories });
+  if (reasons.length) return fail(400, ...reasons);
+  const before = normaliseAllowed(a.allowedCategories);
+  const after = normaliseAllowed(input.allowedCategories);
+  const removed = before.filter((c) => !after.includes(c));
+  const added = after.filter((c) => !before.includes(c));
+  if (!removed.length && !added.length) return { ok: true, allowedCategories: after };
+  if (removed.length && a.slotIdx >= 0) {
+    const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: a.guideId, date: a.date, slotIdx: a.slotIdx } }, select: { expenses: true } });
+    const using = ((sheet?.expenses as unknown as SheetRow[]) ?? []).filter((e) => (e.advanceId === a.id || e.advanceSettlement?.advanceId === a.id) && removed.includes(expenseCategory(e) as never));
+    if (using.length) return fail(409, `${a.advanceNo} still pays for ${using.map((e) => `"${(e.description ?? "").trim() || "a row"}" (${expenseCategory(e)})`).join(", ")} — change those rows first; ${removed.join(", ")} cannot be removed`);
+  }
+  // Only from the categories this request saw — a concurrent edit is refused, not overwritten.
+  const moved = await prisma.guideAdvance.updateMany({ where: { id: a.id, reversedAt: null, allowedCategories: { equals: a.allowedCategories } }, data: { allowedCategories: after } });
+  if (moved.count !== 1) return fail(409, `${a.advanceNo} changed — reload and try again`);
+  await audit({ ...input.actor, action: "advance.categories_changed", entityType: "GuideAdvance", entityId: a.id, detail: {
+    advanceNo: a.advanceNo, before, after, added, removed,
+    ...(added.includes("other") ? { otherReason: (input.otherReason ?? "").trim() } : {}), at: new Date().toISOString(),
+  } });
+  return { ok: true, allowedCategories: after };
 }
 
 // ── Returns: linking, voiding, refunds (Phase 1C, lib/advances/returns) ──────

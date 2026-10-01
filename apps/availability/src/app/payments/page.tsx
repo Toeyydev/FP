@@ -8,5 +8,5 @@ import Payments from "@/components/Payments";
 export default async function PaymentsPage() {
   const session = await auth();
   if (!canViewFinance(session?.user?.role)) redirect("/");
-  return <Payments canEdit={isOps(session!.user!.role)} isAdmin={isAdmin(session!.user!.role)} />;
+  return <Payments canEdit={isOps(session!.user!.role)} isAdmin={isAdmin(session!.user!.role)} role={session!.user!.role ?? null} userId={session!.user!.id ?? null} />;
 }

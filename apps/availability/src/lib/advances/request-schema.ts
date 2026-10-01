@@ -18,6 +18,10 @@ export const advanceBody = z.object({
   note: z.string().max(500).nullish(),
   date: isoDate.optional(),
   slotIdx: z.number().int().min(0).optional(),
+  // What it may pay for (comma-separated from a form, or a list) and, with "other", why.
+  allowedCategories: z.union([z.array(z.string().max(20)).max(4), z.string().max(80)]).optional()
+    .transform((v) => (typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : v)),
+  otherReason: z.string().max(300).nullish(),
 });
 
 export const receiptBody = z.object({
