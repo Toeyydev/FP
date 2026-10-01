@@ -9,6 +9,8 @@ import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { linkExistingPeakDocument, type DocumentLookup, type PeakDocument } from "./peak-link";
 import { syncAdvanceBatch } from "./peak-sync";
+import { settleFromExpenses } from "./service";
+import { financialIdentity } from "@/lib/protected-expense-fields";
 import { POST as createAdvance } from "@/app/api/advances/route";
 import type { NextRequest } from "next/server";
 
@@ -44,7 +46,7 @@ async function fixture(over: { expenses?: Prisma.InputJsonValue } = {}) {
     data: {
       guideId: GUIDE, date: SHEET_DATE, slotIdx: 0, tourId: "T-900", status: "Confirmed", ref: "FOLK-TEST-0001",
       approvalStatus: "APPROVED", bookings: [], guideFee: { price: 1000, time: 1, whtPct: 3 },
-      expenses: over.expenses ?? [{ description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance" }],
+      expenses: over.expenses ?? [{ description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator" }],
     },
   });
   const advance = await prisma.guideAdvance.create({
@@ -57,7 +59,18 @@ async function fixture(over: { expenses?: Prisma.InputJsonValue } = {}) {
   const receipt = await prisma.guideAdvanceReceipt.create({
     data: { receiptNo: "FOLK-ADR-202611-001", guideId: GUIDE, receivedDate: SHEET_DATE, amountSatang: 30_000, status: "CLAIMED", method: "bank" },
   });
-  return { sheet, advance, receipt };
+  // The rows marked Company Advance are linked to this advance, as a save would have done.
+  const rows = (sheet.expenses as unknown as { paidBy?: string; advanceId?: string }[]).map((r) => (r.paidBy === "advance" ? { ...r, advanceId: advance.id } : r));
+  const linked = await prisma.jobSheet.update({ where: { id: sheet.id }, data: { expenses: rows as Prisma.InputJsonValue } });
+  return { sheet: linked, advance, receipt };
+}
+
+/** Settle every Company Advance row through the ordinary path (explicit lines). Phase 1E: linking never writes a settlement. */
+async function settleAll(advanceId: string, sheetId: string) {
+  const sheet = await prisma.jobSheet.findUniqueOrThrow({ where: { id: sheetId } });
+  const rows = sheet.expenses as unknown as Parameters<typeof financialIdentity>[0][];
+  const lines = rows.map((r, index) => ({ r, index })).filter(({ r }) => (r as { paidBy?: string }).paidBy === "advance").map(({ r, index }) => ({ index, identity: financialIdentity(r) }));
+  return settleFromExpenses(prisma, { advanceId, jobSheetId: sheetId, sheetVersion: sheet.updatedAt.toISOString(), lines, actor });
 }
 
 const outbox = (kind: string, sourceId: string) => prisma.advancePeakSync.findUnique({ where: { id: `${kind}:${sourceId}` } });
@@ -178,31 +191,33 @@ describe("recording a return that PEAK already carries", () => {
   });
 });
 
-describe("recording ticket costs that PEAK already carries", () => {
-  it("settles the advance against the existing document without creating a journal", async () => {
+describe("recording advance-funded costs that PEAK already carries", () => {
+  it("links the settlement the ledger already holds — its own lines — without a journal or a second ledger line", async () => {
     const { advance, sheet } = await fixture();
+    expect(await settleAll(advance.id, sheet.id)).toMatchObject({ ok: true, amountSatang: 60_000 });
     const result = await linkExistingPeakDocument(prisma, {
-      kind: "EXPENSE", advanceId: advance.id, jobSheetId: sheet.id, amount: 600, documentNo: "PV-000009", documentType: "DAILY_JOURNAL",
+      kind: "EXPENSE", advanceId: advance.id, jobSheetId: sheet.id, documentNo: "PV-000009", documentType: "DAILY_JOURNAL",
       note: "the ticket line inside the payment document for this job", acknowledgeWarnings: true, requestKey: "req-expense-1", actor,
     }, lookupOf(journalFor("EXPENSE", 600, "PV-000009")));
 
     expect(result).toMatchObject({ ok: true, documentNo: "PV-000009" });
     const entries = await prisma.guideAdvanceEntry.findMany();
     expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ type: "EXPENSE_SETTLEMENT", amountSatang: 60_000, jobNo: sheet.ref, peakDocumentNo: "PV-000009" });
+    expect(entries[0]).toMatchObject({ type: "EXPENSE_SETTLEMENT", amountSatang: 60_000, jobNo: sheet.ref });
     expect(await prisma.guideAdvance.findUnique({ where: { id: advance.id } })).toMatchObject({ settledSatang: 60_000 });
     expect(await outbox("EXPENSE", entries[0].id)).toMatchObject({ status: "POSTED", documentNo: "PV-000009" });
   });
 
-  it("refuses to clear a meal through a ticket advance", async () => {
-    const { advance, sheet } = await fixture({ expenses: [{ description: "Lunch", price: 600, pax: 1, expenseType: "meal", paidBy: "advance" }] });
+  it("a meal under a ticket-only advance cannot be settled — so there is nothing to link, and linking writes nothing", async () => {
+    const { advance, sheet } = await fixture({ expenses: [{ description: "Lunch", price: 600, pax: 1, expenseType: "meal", paidBy: "advance", paidBySource: "operator" }] });
+    expect((await settleAll(advance.id, sheet.id)).ok).toBe(false);
     const result = await linkExistingPeakDocument(prisma, {
       kind: "EXPENSE", advanceId: advance.id, jobSheetId: sheet.id, amount: 600, documentNo: "PV-000010", documentType: "DAILY_JOURNAL",
       note: "food bought with the ticket advance", acknowledgeWarnings: true, requestKey: "req-expense-2", actor,
     }, lookupOf(journalFor("EXPENSE", 600, "PV-000010")));
 
     expect(result).toMatchObject({ ok: false, status: 409 });
-    expect((result as { reasons: string[] }).reasons.join(" ")).toContain("customer tickets only");
+    expect((result as { reasons: string[] }).reasons.join(" ")).toContain("no live settlement");
     expect(await prisma.guideAdvanceEntry.count()).toBe(0);
     expect(await prisma.advancePeakDocumentLink.count()).toBe(0);
   });
@@ -271,10 +286,11 @@ describe("two people at once", () => {
     expect(await prisma.guideAdvance.findUnique({ where: { id: advance.id } })).toMatchObject({ peakDocumentNo: "JV-000200" });
   });
 
-  it("settles a job sheet once when two settlements race", async () => {
+  it("links a settlement once when two people link it at the same moment", async () => {
     const { advance, sheet } = await fixture();
+    await settleAll(advance.id, sheet.id);
     const req = {
-      kind: "EXPENSE" as const, advanceId: advance.id, jobSheetId: sheet.id, amount: 600,
+      kind: "EXPENSE" as const, advanceId: advance.id, jobSheetId: sheet.id,
       documentNo: "PV-000200", documentType: "DAILY_JOURNAL" as const,
       note: "the ticket line inside the payment document", acknowledgeWarnings: true, actor,
     };

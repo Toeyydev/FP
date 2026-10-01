@@ -121,7 +121,7 @@ async function startServer(extraEnv = {}) {
   const child = spawn(process.execPath, ["--require", join(appDir, "scripts/e2e/outbound-guard.cjs"), "--require", join(appDir, "scripts/e2e/drive-fake.cjs"), nextBin, "start", "-p", String(PORT)], {
     cwd: appDir, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, OUTBOUND_LOG: OUTBOUND, AUTH_TRUST_HOST: "true", NEXT_TELEMETRY_DISABLED: "1", AUTH_SECRET,
-      GOOGLE_CLIENT_ID: "e2e-client", GOOGLE_CLIENT_SECRET: "e2e-secret", FAKE_DRIVE_LOG: DRIVE_LOG, PEAK_ADVANCE_CONFIG: PEAK_CONFIG, ADVANCE_WRITES_FROZEN: "", PEAK_ADVANCE_AUTO_SYNC: "", ...extraEnv },
+      GOOGLE_CLIENT_ID: "e2e-client", GOOGLE_CLIENT_SECRET: "e2e-secret", FAKE_DRIVE_LOG: DRIVE_LOG, PEAK_ADVANCE_CONFIG: PEAK_CONFIG, ADVANCE_WRITES_FROZEN: "", PEAK_ADVANCE_AUTO_SYNC: "", ADVANCE_EXISTING_PEAK_LINKS_ENABLED: "1", ...extraEnv },
   });
   let log = "";
   child.stdout.on("data", (d) => { log += d; });
@@ -336,6 +336,12 @@ try {
   await pause(2000);
   check("18 · ฿100 of the excess allocated to the other job's advance — only because the operator chose it", (await adv("FOLK-ADV-209910-901")).settledSatang === 10000);
 
+  // Phase 1E — each movement's PEAK state, and the amount a document for it must carry (operators only).
+  const peakA = await text(page, `.js-adv-card[data-advance="${A.advanceNo}"] .js-adv-peak`);
+  const peakR = await text(page, `.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-peak`);
+  check("1E · the advance card shows the issue and the settlement with their PEAK state", /issue ฿1,000\.00: not in PEAK yet/.test(peakA) && /settlement on this job ฿300\.00: not in PEAK yet/.test(peakA), peakA);
+  check("1E · the return card shows the amount to link — what reached the advances", /return ฿800\.00 allocated to advances: not in PEAK yet/.test(peakR), peakR);
+
   // 19, 21 — record a refund of ฿100; the recorder sees they cannot approve it.
   await page.click(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-refund-record`);
   await page.type(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-refund-amount`, "100");
@@ -433,7 +439,7 @@ try {
   await gp.setCookie(await sessionCookie("g993@example.test"));
   await gp.goto(J0, { waitUntil: "networkidle0" });
   await pause(1500);
-  const guideSees = await gp.evaluate(() => [".js-adv-settle", ".js-return-verify", ".js-return-allocate", ".js-refund-approve", ".js-refund-pay", ".js-refund-record", ".js-adv-edit-categories", ".js-return-void"].filter((s) => document.querySelector(s)));
+  const guideSees = await gp.evaluate(() => [".js-adv-settle", ".js-return-verify", ".js-return-allocate", ".js-refund-approve", ".js-refund-pay", ".js-refund-record", ".js-adv-edit-categories", ".js-return-void", ".js-adv-peak", ".js-return-peak", ".js-peak-unlink"].filter((s) => document.querySelector(s)));
   const guideTry = await gp.evaluate(async (id) => (await fetch(`/api/advances/returns/${id}/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bankRef: "BANK-GUIDE-TRY" }) })).status, R1.id);
   check("26 · the guide sees no operator accounting control, and the server answers 403", guideSees.length === 0 && guideTry === 403, JSON.stringify(guideSees));
   await gCtx.close();
@@ -468,6 +474,22 @@ try {
   await p2.waitForSelector(".js-refunds-section", { timeout: 10000 }).catch(() => {});
   const listed = await p2.$$eval(".js-refunds-section .js-refund-row", (xs) => xs.map((x) => x.getAttribute("data-status")).sort().join(","));
   check("the Advances page lists the refunds with their state — paid and voided", listed === "PAID,VOIDED", listed);
+  // Phase 1E — linking a settlement: chosen from the ledger with its exact amount, never typed.
+  await p2.evaluate((no) => { const tr = [...document.querySelectorAll("tr")].find((x) => x.innerText.includes(no)); [...tr.querySelectorAll("button")].find((b) => b.innerText.trim() === "PEAK doc…").click(); }, A.advanceNo);
+  await p2.waitForSelector(".sheet select");
+  await p2.evaluate(() => { const s = [...document.querySelectorAll(".sheet select")].find((x) => [...x.options].some((o) => o.value === "EXPENSE")); s.value = "EXPENSE"; s.dispatchEvent(new Event("change", { bubbles: true })); });
+  await p2.waitForSelector(".js-link-settlement select", { timeout: 10000 });
+  const settlementPick = await text(p2, ".js-link-settlement");
+  check("1E · the link dialog offers the recorded settlement and says the document must carry exactly its amount", /FOLK-TEST-OPS-01 · 2099-10-10 · ฿300\.00/.test(settlementPick) && /must carry exactly ฿300\.00/.test(settlementPick), settlementPick.slice(0, 200));
+  await p2.evaluate(() => {
+    const set = (el, v) => { const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); };
+    set([...document.querySelectorAll(".sheet input")].find((i) => i.placeholder === "as PEAK shows it"), "JV-E2E-0001");
+    set(document.querySelector(".sheet textarea"), "checked in PEAK by the accountant (example)");
+  });
+  await (await p2.waitForSelector("xpath/.//button[normalize-space()='Check in PEAK…']")).click();
+  await p2.waitForSelector(".sheet .banner.danger", { timeout: 10000 });
+  check("1E · with no PEAK connection the check is refused in plain words, and nothing is linked", /PEAK could not be asked about JV-E2E-0001/.test(await text(p2, ".sheet .banner.danger")) && (await prisma.advancePeakDocumentLink.count()) === 0);
+  await (await p2.$("xpath/.//div[contains(@class,'sheet')]//button[normalize-space()='Cancel']")).click();
   await (await p2.$("xpath/.//button[normalize-space()='Record advance…']")).click();
   await p2.waitForSelector(".js-issue-categories");
   const typeIn = async (label, value) => p2.evaluate((label, value) => { const l = [...document.querySelectorAll(".modal label")].find((x) => x.innerText.trim().startsWith(label)); const i = l.querySelector("input"); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(i, value); i.dispatchEvent(new Event("input", { bubbles: true })); }, label, value);

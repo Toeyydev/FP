@@ -7,6 +7,7 @@
 // purpose: a tag is now a proposal until an operator settles it, and money the guide
 // sends back settles nothing until it is confirmed and allocated. The tagged total is
 // still reported — as a proposal, next to the settled figure, never inside it.
+import { peakLinksFor } from "@/lib/advances/peak-link";
 import { advanceSyncStates } from "./peak-sync";
 import type { PrismaClient } from "@prisma/client";
 import { expenseAmount, expenseCategory, type Expense } from "@/lib/jobsheet";
@@ -166,7 +167,17 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
   };
   const status = jobStatusOf(liveSummaries);
 
-  const sync = await advanceSyncStates(db as PrismaClient, [...advances.map(a => `ADVANCE:${a.id}`), ...receipts.map(r => `RETURN:${r.id}`)]);
+  // Each settlement of these advances, with its PEAK state (Phase 1E: what a document for it must carry).
+  const settlementEntries = advances.length && db.guideAdvanceEntry?.findMany
+    ? await db.guideAdvanceEntry.findMany({ where: { advanceId: { in: advances.map((a) => a.id) }, type: "EXPENSE_SETTLEMENT", reversedByEntryId: null }, select: { id: true, advanceId: true, amountSatang: true, jobNo: true, sourceId: true } })
+    : [];
+  const sync = await advanceSyncStates(db as PrismaClient, [...advances.map(a => `ADVANCE:${a.id}`), ...receipts.map(r => `RETURN:${r.id}`), ...settlementEntries.map((e) => `EXPENSE:${e.id}`)]);
+  const linkDb = db as unknown as Pick<PrismaClient, "advancePeakDocumentLink">;
+  const [advLinks, retLinks, expLinks] = await Promise.all([
+    peakLinksFor(linkDb, "ADVANCE", advances.map((a) => a.id)),
+    peakLinksFor(linkDb, "RETURN", receipts.map((r) => r.id)),
+    peakLinksFor(linkDb, "EXPENSE", settlementEntries.map((e) => e.id)),
+  ]);
   return {
     advances: advances.map((a) => ({
       peakSync: sync.get(`ADVANCE:${a.id}`) ?? null, id: a.id, advanceNo: a.advanceNo, amount: fromSatang(a.amountSatang), paidAt: a.paidAt, advanceDate: a.advanceDate,
@@ -176,6 +187,11 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
       status: summaries.get(a.id)!.status, problems: summaries.get(a.id)!.problems, allowedCategories: a.allowedCategories,
       used: fromSatang(summaries.get(a.id)!.used), returned: fromSatang(summaries.get(a.id)!.returned), deducted: fromSatang(summaries.get(a.id)!.deducted),
       drift: fromSatang(summaries.get(a.id)!.driftSatang), purpose: a.purpose,
+      peakLink: advLinks.get(a.id)?.documentNo ?? null,
+      settlements: settlementEntries.filter((e) => e.advanceId === a.id).map((e) => ({
+        entryId: e.id, amount: fromSatang(e.amountSatang), jobNo: e.jobNo, onThisJob: !!sheetRow && e.sourceId === sheetRow.id,
+        peakSync: sync.get(`EXPENSE:${e.id}`) ?? null, peakLink: expLinks.get(e.id)?.documentNo ?? null,
+      })),
     })),
     returns: receipts.map((r) => ({
       peakSync: sync.get(`RETURN:${r.id}`) ?? null, id: r.id, receiptNo: r.receiptNo, amount: fromSatang(r.amountSatang), returnedAt: r.createdAt, receivedDate: r.receivedDate,
@@ -185,6 +201,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
         return { allocated: fromSatang(s.allocated), refunded: fromSatang(s.refunded), unallocated: fromSatang(s.unallocated), available: fromSatang(s.available), problems: s.problems };
       })(),
       allocatedHere: fromSatang(allocatedHereById.get(r.id) ?? 0),
+      peakLink: retLinks.get(r.id)?.documentNo ?? null,
       advanceId: r.advanceId, jobSheetId: r.jobSheetId,
       refunds: receiptRefunds.filter((f) => f.receiptId === r.id).map(({ receiptId: _r, amountSatang, ...f }) => ({ ...f, amount: fromSatang(amountSatang) })),
     })),

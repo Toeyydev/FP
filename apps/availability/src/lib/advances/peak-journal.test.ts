@@ -13,8 +13,10 @@ describe("advance journal money direction",()=>{
  it("refuses a payable in place of an advance asset",()=>expect(()=>advanceJournal(source,{...config,advanceAccountCode:"212203"})).toThrow("asset"));
  it("requires the bank subaccount, not just the GL code",()=>expect(()=>advanceJournal(source,{...config,bankAccountSubId:""})).toThrow());
  it("rejects impossible dates",()=>expect(()=>advanceJournal({...source,date:"2026-02-30"},config)).toThrow());
- it("blocks non-ticket categories",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Other cost",amount:1000,category:"other"}]},config)).toThrow("ticket expenses only"));
- it("refuses non-ticket costs even when an account mapping exists",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Coach",amount:1000,category:"transport"}]},{...config,expenseAccounts:{...config.expenseAccounts,transport:"510104"}})).toThrow("ticket expenses only"));
+ // Owner 2026-10-01: an advance may fund entrance / meal / transport / other — each through its own mapped account, never a guessed one.
+ it("refuses an 'other' cost when the chart maps no account for it",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Other cost",amount:1000,category:"other"}]},config)).toThrow("expense account for other"));
+ it("refuses a category no advance may pay for",()=>expect(()=>advanceJournal({...source,kind:"EXPENSE",expenses:[{description:"Fee",amount:1000,category:"guide_fee"}]},config)).toThrow("entrance, meal, transport or other"));
+ it("books a transport cost to the transport account the chart maps",()=>{const p=advanceJournal({...source,kind:"EXPENSE",amountSatang:100000,expenses:[{description:"Coach",amount:1000,category:"transport"}]},{...config,expenseAccounts:{...config.expenseAccounts,transport:"510199"}});expect(p.journalEntries).toEqual([{accountCode:"510199",debit:"1000.00",credit:"0.00",description:"Coach"},{accountCode:"115101",debit:"0.00",credit:"1000.00"}]);});
 });
 describe("PEAK journal acknowledgements",()=>{
  it("requires a successful row AND envelope",()=>{expect(dailyJournalResult(200,{PeakDailyJournals:{resCode:"200",dailyJournals:[{resCode:"200",id:"id",code:"JV-1"}]}})).toMatchObject({ok:true,id:"id",code:"JV-1"});});

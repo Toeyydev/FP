@@ -26,6 +26,7 @@ const body = z.object({
   receiptId: z.string().min(1).optional(),
   jobSheetId: z.string().min(1).optional(),
   jobNo: z.string().min(1).max(60).optional(),
+  entryId: z.string().min(1).optional(),
   amount: z.number().finite().positive().optional(),
   bankAccount: z.string().max(120).optional(),
   bankRef: z.string().max(120).optional(),
@@ -55,8 +56,9 @@ export async function POST(req: NextRequest) {
     if (!b.receiptId) return NextResponse.json({ error: "bad-body", reasons: ["Which return is this document for?"] }, { status: 400 });
     request = { ...shared, kind: "RETURN", receiptId: b.receiptId, bankAccount: b.bankAccount ?? null, bankRef: b.bankRef ?? null, allocations: b.allocations ?? [] };
   } else {
-    if (!b.advanceId || !b.amount || !(b.jobSheetId || b.jobNo)) {
-      return NextResponse.json({ error: "bad-body", reasons: ["A ticket settlement needs the advance, the job sheet and the amount the document carries"] }, { status: 400 });
+    // The amount is the ledger's (lib/advances/peak-link): one given here must equal it.
+    if (!b.advanceId || !(b.jobSheetId || b.jobNo)) {
+      return NextResponse.json({ error: "bad-body", reasons: ["A settlement link needs the advance and the job sheet"] }, { status: 400 });
     }
     // Screens know the Job No.; the ledger keys on the sheet. Resolve it here, for the
     // guide who holds the advance, so a Job No. typed for another guide cannot match.
@@ -68,7 +70,7 @@ export async function POST(req: NextRequest) {
       if (!sheet) return NextResponse.json({ error: "not-found", reasons: [`No job sheet ${b.jobNo} for this guide`] }, { status: 404 });
       jobSheetId = sheet.id;
     }
-    request = { ...shared, kind: "EXPENSE", advanceId: b.advanceId, jobSheetId, amount: b.amount };
+    request = { ...shared, kind: "EXPENSE", advanceId: b.advanceId, jobSheetId, amount: b.amount ?? null, entryId: b.entryId ?? null };
   }
 
   // A preview runs exactly the same checks and writes nothing. It exists so the

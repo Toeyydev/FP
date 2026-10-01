@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
 import { ENTRY_LABEL, fromSatang, type EntryType } from "@/lib/advances/rules";
 import { summariesFor } from "@/lib/advances/summaries";
+import { peakLinksFor } from "@/lib/advances/peak-link";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     prisma.guideAdvanceReceipt.findMany({ where: { id: { in: entries.map((e) => e.receiptId).filter((x): x is string => !!x) } }, select: { id: true, receiptNo: true } }),
   ]);
   const sync = await advanceSyncStates(prisma, entries.map(e => `EXPENSE:${e.id}`));
+  const links = await peakLinksFor(prisma, "EXPENSE", entries.filter((e) => e.type === "EXPENSE_SETTLEMENT").map((e) => e.id));
   const s = (await summariesFor(prisma, [advance])).get(advance.id)!;
   return NextResponse.json({
     advance: {
@@ -33,7 +35,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     entries: entries.map((e) => {
       const payment = payments.find((p) => p.id === e.paymentId);
       return {
-        peakSync: sync.get(`EXPENSE:${e.id}`) ?? null, id: e.id, type: e.type, label: ENTRY_LABEL[e.type as EntryType] ?? e.type, amount: fromSatang(e.amountSatang),
+        peakSync: sync.get(`EXPENSE:${e.id}`) ?? null, peakLink: links.get(e.id)?.documentNo ?? null,
+        jobSheetId: e.sourceType === "JOB_SHEET" ? e.sourceId : null, id: e.id, type: e.type, label: ENTRY_LABEL[e.type as EntryType] ?? e.type, amount: fromSatang(e.amountSatang),
         effectiveDate: e.effectiveDate, jobNo: e.jobNo, reason: e.reason, createdAt: e.createdAt,
         paymentNo: payment?.paymentNo ?? null, paymentStatus: payment?.status ?? null,
         receiptNo: receipts.find((r) => r.id === e.receiptId)?.receiptNo ?? null,

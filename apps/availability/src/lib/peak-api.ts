@@ -988,6 +988,8 @@ export function dailyJournalResult(httpStatus: number, body: Record<string, unkn
 export type PeakJournalState = {
   id: string | null; code: string; journalTypeId: number | null; contactId: string | null;
   isVoid: boolean; issuedDate: string | null;
+  /** The document's own reference, when PEAK returns one (not yet seen in a real read). */
+  reference?: string | null;
   entries: { accountCode: string; accountSubId: string | null; accountSubCode: string | null; debit: number; credit: number; description: string | null }[];
 };
 
@@ -1006,7 +1008,7 @@ export function parsePeakJournal(j: Record<string, unknown>): { journal: PeakJou
   return {
     journal: {
       id: str(d.id), code: String(d.code ?? ""), journalTypeId: d.journalTypeId == null ? null : Number(d.journalTypeId),
-      contactId: str(d.contactId), isVoid: num(d.isVoid) === 1, issuedDate: str(d.issuedDate),
+      contactId: str(d.contactId), isVoid: num(d.isVoid) === 1, issuedDate: str(d.issuedDate), reference: str(d.reference),
       entries: lines.map((e) => ({
         accountCode: String(e.accountCode ?? ""), accountSubId: str(e.accountSubId), accountSubCode: str(e.accountSubCode),
         debit: num(e.debit), credit: num(e.credit), description: str(e.description),

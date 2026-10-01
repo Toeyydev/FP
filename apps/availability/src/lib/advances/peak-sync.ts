@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { createDailyJournal, sanitizePeakError } from "@/lib/peak-api";
 import { advanceJournal, type AdvancePeakConfig, type JournalSource } from "./peak-journal";
 import { advanceWritesFrozen, existingPeakLinksEnabled } from "./freeze";
+import { amountsByAccount, expenseAccountsFrom, settlementLines } from "./expense-accounts";
 
 // Explicit configuration is shared by web and worker. Never infer bank IDs or journal
 // type numbers from a label. Only the deployment owner can enable automatic posting.
@@ -28,6 +29,7 @@ async function sourceFor(db: PrismaClient, kind: string, id: string, config: Adv
     const r = await db.guideAdvanceReceipt.findUniqueOrThrow({ where: { id }, include: { entries: { where: { type: "RETURN_ALLOCATION", reversedByEntryId: null }, include: { advance: true } } } });
     if (r.peakDocumentNo) throw new Error("An existing PEAK reference needs reconciliation; do not post again");
     if (r.status !== "VERIFIED" || r.method !== "bank") throw new Error("Confirm the bank return before syncing");
+    if ((r.refundedSatang ?? 0) > 0) throw new Error("Part of this return was refunded to the guide — how that is booked is an accountant decision; link the PEAK document by hand");
     if (r.allocatedSatang !== r.amountSatang) throw new Error("Allocate this return to its Job No. before syncing");
     if (!r.bankRef || await db.guideAdvanceReceipt.count({ where: { bankRef: r.bankRef } }) !== 1) throw new Error("Missing or duplicate return bank reference");
     if (r.entries.some(e => !e.advance.peakDocumentNo && !e.advance.peakRef)) throw new Error("Sync or reconcile the original advances first");
@@ -46,9 +48,15 @@ async function sourceFor(db: PrismaClient, kind: string, id: string, config: Adv
     if (sheet.approvalStatus !== "APPROVED") throw new Error("Job sheet must remain approved before posting");
     const siblings = await db.guideAdvanceEntry.count({ where: { sourceId: e.sourceId, type: "EXPENSE_SETTLEMENT", reversedByEntryId: null } });
     if (siblings !== 1) throw new Error("Multiple settlements on this job need consolidated accounting review");
-    const snapshot = e.snapshot as { rows?: JournalSource["expenses"] } | null;
+    // The settlement's explicit lines are the only amounts (lib/advances/expense-accounts);
+    // the older `rows` copy is never posted, and each line books to its category's mapped account.
+    const lines = settlementLines(e, e.advance);
+    if (!lines.ok) throw new Error(lines.reasons.join("; "));
+    const mapped = amountsByAccount(lines.lines, config.expenseAccounts);
+    if (!mapped.ok) throw new Error(mapped.reasons.join("; "));
     guideId = e.advance.guideId;
-    source = { kind, amountSatang: e.amountSatang, date: e.effectiveDate, reference: `FOLK-SET-${e.id}`, jobNo: e.jobNo ?? "", expenses: snapshot?.rows };
+    source = { kind, amountSatang: e.amountSatang, date: e.effectiveDate, reference: `FOLK-SET-${e.id}`, jobNo: e.jobNo ?? "",
+      expenses: lines.lines.map((l) => ({ description: l.description, amount: l.amountSatang / 100, category: l.category, peakAccountCode: config.expenseAccounts[l.category] })) };
   } else throw new Error("Unsupported advance event");
   const guide = await db.user.findUnique({ where: { guideId }, select: { peakContactId: true } });
   return { ...source, guideContactId: guide?.peakContactId ?? "" };
@@ -61,14 +69,9 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
   if (process.env.PEAK_ADVANCE_AUTO_SYNC !== "1" || advanceWritesFrozen() || existingPeakLinksEnabled()) return 0;
   let config: AdvancePeakConfig;
   try { config = advancePeakConfig(); } catch { return 0; }
-  const mappings = await db.peakAccountMapping.findMany({ where: { isActive: true } });
-  // This ledger is only for ticket money sent to a guide. Other tour costs follow
-  // their normal company-direct or guide-reimbursement workflows.
-  const categoryKeys: Record<string,string> = { entrance: "ENTRANCE_TICKET" };
-  config.expenseAccounts = Object.fromEntries(Object.entries(categoryKeys).flatMap(([key, value]) => {
-    const account = mappings.find(m => m.folkopsCategory === value)?.peakAccountCode;
-    return account ? [[key, account]] : [];
-  }));
+  // An advance may fund entrance / meal / transport / other (owner 2026-10-01). Each
+  // category books to its account in the saved chart; an unmapped one blocks the item.
+  config.expenseAccounts = expenseAccountsFrom(await db.peakAccountMapping.findMany({ where: { isActive: true } }));
   // A crashed sender may have created a document. Human reconciliation is mandatory.
   await db.advancePeakSync.updateMany({ where: { status: "SENDING", updatedAt: { lt: new Date(Date.now() - 10 * 60_000) } }, data: { status: "UNCERTAIN", error: "Sender interrupted; check PEAK before any further action" } });
   const queue = await db.advancePeakSync.findMany({ where: { status: { in: ["PENDING", "BLOCKED"] }, nextAttemptAt: { lte: new Date() } }, orderBy: { createdAt: "asc" }, take: 10 });
