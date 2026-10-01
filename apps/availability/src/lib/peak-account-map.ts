@@ -7,6 +7,7 @@
 import { prisma } from "@/lib/db";
 import { isMapped, type AccountMapping } from "@/lib/peak-accounts";
 import type { PeakAccount, PeakAccountMap } from "@/lib/peak-sync";
+import { CATEGORY_CHART_CODE } from "@/lib/advances/expense-accounts";
 
 const SELECT = { folkopsCategory: true, peakAccountCode: true, peakAccountName: true, isActive: true } as const;
 
@@ -21,12 +22,8 @@ const SELECT = { folkopsCategory: true, peakAccountCode: true, peakAccountName: 
 // the sheet (see lib/peak-sync). A row's own account always wins over the default.
 // GUIDE_FEE is absent — it is not a tour-expense category; read it with
 // guideFeeAccount() below.
-const TOUR_EXPENSE_CATEGORIES = [
-  ["entrance", "ENTRANCE_TICKET"],
-  ["transport", "TRANSPORTATION"],
-  ["meal", "MEAL_REFRESHMENT"],
-  ["other", "OTHER_TOUR_COST"],
-] as const;
+// One definition, shared with the advance settlement link and sender (lib/advances/expense-accounts).
+const TOUR_EXPENSE_CATEGORIES = Object.entries(CATEGORY_CHART_CODE) as [keyof typeof CATEGORY_CHART_CODE, string][];
 
 const toAccount = (m: AccountMapping | undefined): PeakAccount | null =>
   isMapped(m) ? { code: m!.peakAccountCode!, name: m!.peakAccountName ?? undefined } : null;

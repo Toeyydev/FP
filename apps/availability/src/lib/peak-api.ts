@@ -993,15 +993,26 @@ export type PeakJournalState = {
 
 // Pure parser, exported so the shape can be tested without a connection. PEAK reports
 // "not found" as an empty list inside an HTTP 200, like everything else it does.
-export function parsePeakJournal(j: Record<string, unknown>): { journal: PeakJournalState } | { notFound: true } | { error: string } {
+//
+// What a real read showed (Phase 1F, 2026-10-02 — one GET of a real JVFN journal):
+//   * the human-visible document number is `code`; there is NO `reference` field, and no
+//     contact on a journal — `description` is free text, never matched against;
+//   * a lookup by code can return SEVERAL journals with that code: the live one (no `isVoid`
+//     key) and a voided twin (`isVoid: 1`) whose lines are the mirror image. Taking the first
+//     item would read whichever PEAK happened to list first — so the live one is chosen,
+//     two live ones are an error, and only-voided reads as void.
+export function parsePeakJournal(j: Record<string, unknown>, code?: string): { journal: PeakJournalState } | { notFound: true } | { error: string } {
   const wrap = peakWrap<{ dailyJournals?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakDailyJournals");
   if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakDailyJournals wrapper" };
   const list = Array.isArray(wrap.dailyJournals) ? (wrap.dailyJournals as Record<string, unknown>[]) : null;
   if (!list) return { error: "PEAK returned no dailyJournals array" };
-  if (!list.length) return { notFound: true };
-  const d = list[0];
   const num = (v: unknown) => (v == null || v === "" ? 0 : Number(v));
   const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+  const same = code ? list.filter((d) => String(d.code ?? "").trim().toUpperCase() === code.trim().toUpperCase()) : list;
+  if (!same.length) return { notFound: true };
+  const live = same.filter((d) => num(d.isVoid) !== 1);
+  if (live.length > 1) return { error: `PEAK has ${live.length} live journals numbered ${code ?? String(same[0].code)} — reconcile them in PEAK first` };
+  const d = live[0] ?? same[0];
   const lines = Array.isArray(d.journalEntries) ? (d.journalEntries as Record<string, unknown>[]) : [];
   return {
     journal: {
@@ -1025,7 +1036,7 @@ export async function getDailyJournal(code: string): Promise<Res<{ journal?: Pea
   const call = await authedCall(`${API}/DailyJournals?${new URLSearchParams({ code }).toString()}`, { method: "GET" }, "peakDailyJournals");
   if ("error" in call) return { ok: false, desc: call.error };
   if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
-  const parsed = parsePeakJournal(call.j);
+  const parsed = parsePeakJournal(call.j, code);
   if ("error" in parsed) return { ok: false, desc: parsed.error };
   if ("notFound" in parsed) return { ok: true, notFound: true };
   return { ok: true, journal: parsed.journal };

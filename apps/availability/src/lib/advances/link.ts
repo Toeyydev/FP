@@ -58,19 +58,26 @@ export function linkAdvanceRows<T extends SheetRow>(
       changes.push({ row: what, from: row.advanceId, to: null });
       return rest as T;
     }
-    if (row.advanceSettlement) return { ...row, advanceId: row.advanceSettlement.advanceId };
+    // An explicit choice is an instruction: it is honoured through the same checks, or refused —
+    // never silently ignored because the row already carries a link (Phase 1F rehearsal finding).
+    const chosen = choices.find((c) => c.index === i);
+    if (row.advanceSettlement) {
+      if (chosen && chosen.advanceId !== row.advanceSettlement.advanceId) {
+        problems.push(`${what}: it was settled against ${row.advanceSettlement.advanceNo} — reverse that settlement before choosing another advance`);
+      }
+      return { ...row, advanceId: row.advanceSettlement.advanceId };
+    }
 
     // Untouched: the same expense, confirmed the same way, already on the sheet with no link —
     // left alone unless the operator explicitly chose an advance for it in this save.
     const untouched = before && !before.advanceId && (before.paidBySource ?? "") === (row.paidBySource ?? "");
-    if (!carried && untouched && !choices.some((c) => c.index === i)) return row;
+    if (!carried && untouched && !chosen) return row;
 
-    if (carried) {
+    if (carried && !chosen) {
       const adv = advances.find((a) => a.id === carried);
       if (adv && linkProblems(row, adv, job).length === 0) return row.advanceId === carried ? row : { ...row, advanceId: carried };
     }
     const eligible = eligibleAdvances(row, advances, job);
-    const chosen = choices.find((c) => c.index === i);
     let target: (typeof advances)[number] | undefined;
     if (chosen) {
       target = eligible.find((a) => a.id === chosen.advanceId);

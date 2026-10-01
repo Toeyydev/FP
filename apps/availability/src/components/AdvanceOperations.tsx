@@ -13,7 +13,13 @@ export type OpsAdvance = {
   id: string; advanceNo: string; amount: number; outstanding: number; status: string | null; problems?: string[];
   allowedCategories?: string[]; used?: number; returned?: number; deducted?: number; drift?: number; purpose?: string | null;
   advanceDate?: string; peakSync?: { status: string; documentNo: string | null } | null;
+  peakLink?: string | null;
+  settlements?: { entryId: string; amount: number; jobNo: string | null; onThisJob: boolean; peakSync: { status: string; documentNo: string | null } | null; peakLink: string | null }[];
 };
+type PeakState = { status: string; documentNo: string | null } | null | undefined;
+/** One movement's PEAK state, in words: a linked document, what the sender did, or nothing yet. */
+const peakWords = (link: string | null | undefined, sync: PeakState) =>
+  link ? `linked ${link}` : sync?.status === "POSTED" ? `posted ${sync.documentNo ?? ""}`.trim() : sync ? `not in PEAK yet (${sync.status.toLowerCase()})` : "not in PEAK yet";
 export type OpsLine = { index: number; identity: string; description: string; amount: number; category: string | null; advanceId: string | null; settled: boolean; settledBy: string | null };
 export type OpsRefund = {
   id: string; refundNo: string; amount: number; status: string; reason: string; recordedById: string;
@@ -23,6 +29,7 @@ export type OpsReturn = {
   id: string; receiptNo: string; amount: number; status: string; receivedDate: string; txRef?: string | null; bankRef?: string | null; slipUrl: string | null;
   allocated: number; unallocated: number; refunded?: number; available?: number; problems?: string[];
   advanceId?: string | null; jobSheetId?: string | null; refunds?: OpsRefund[]; peakSync?: { status: string; documentNo: string | null } | null;
+  peakLink?: string | null;
 };
 export type OpsData = {
   advances: OpsAdvance[]; returns: OpsReturn[]; lines?: OpsLine[]; jobSheetId?: string | null; sheetVersion?: string | null; frozen: boolean;
@@ -120,11 +127,19 @@ function AdvanceCard({ a, lines, data, ops, frozen, busy, approved, saved, run }
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
         <div><span className="mono" style={{ fontWeight: 700 }}>{a.advanceNo}</span> <span className={`badge${a.status === "SETTLED" ? " active" : a.status === "VOID" ? " muted" : " pending"}`}>{a.status ? STATUS[a.status] ?? a.status : "Needs review"}</span>
           {a.purpose ? <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}> · {a.purpose}</span> : null}
-          {a.peakSync ? <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}> · PEAK {a.peakSync.status.toLowerCase()}{a.peakSync.documentNo ? ` ${a.peakSync.documentNo}` : ""}</span> : null}</div>
+</div>
         <div className="js-adv-figures" style={{ fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
           Issued {thb(a.amount)} · Used {thb(a.used ?? 0)} · Returned {thb(a.returned ?? 0)}{(a.deducted ?? 0) > 0 ? ` · Deducted ${thb(a.deducted ?? 0)}` : ""} · <b>Outstanding {thb(a.outstanding)}</b>
         </div>
       </div>
+      {/* Phase 1E: each money movement's PEAK state and the amount a document for it must carry.
+          Linking an existing document happens on Payments → Advances (admin); nothing is created here. */}
+      {ops && <div className="js-adv-peak" style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)" }}>
+        PEAK · issue {thb(a.amount)}: {peakWords(a.peakLink, a.peakSync)}
+        {(a.settlements ?? []).map((st) => (
+          <span key={st.entryId} className="js-adv-peak-settlement"> · settlement {st.onThisJob ? "on this job" : st.jobNo ?? ""} {thb(st.amount)}: {peakWords(st.peakLink, st.peakSync)}</span>
+        ))}
+      </div>}
       {problem && <div className="js-adv-problem" role="alert" style={{ marginTop: 6, color: "var(--danger,#b3402f)", fontSize: 12.5 }}>
         This advance's ledger does not add up ({[...(a.problems ?? []), (a.drift ?? 0) !== 0 ? `counter off by ${thb(a.drift ?? 0)}` : ""].filter(Boolean).join(", ")}). Nothing can be settled or allocated against it until it is checked.
       </div>}
@@ -211,6 +226,11 @@ export function ReturnCard({ r, guideId, jobAdvances, jobSheetId, ops, accountan
           Amount {thb(r.amount)} · Allocated {thb(r.allocated)} · Refunded {thb(r.refunded ?? 0)} · <b>Unallocated {thb(r.unallocated)}</b>{available !== r.unallocated ? ` (free ${thb(available)})` : ""}
         </div>
       </div>
+      {ops && r.status === "VERIFIED" && (
+        <div className="js-return-peak" style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-soft)" }}>
+          PEAK · return {thb(r.allocated)} allocated to advances{(r.refunded ?? 0) > 0 ? ` (not the ${thb(r.refunded ?? 0)} refunded to the guide)` : ""}: {peakWords(r.peakLink, r.peakSync)}
+        </div>
+      )}
       {(r.problems?.length ?? 0) > 0 && <div role="alert" style={{ color: "var(--danger,#b3402f)", fontSize: 12.5, marginTop: 4 }}>This return's books do not add up ({r.problems!.join(", ")}) — nothing more can be done with it until it is checked.</div>}
       {excess && (
         <div className="js-excess-return" style={{ marginTop: 6, padding: "6px 10px", borderRadius: 8, background: "var(--warn-bg,#fbf4e4)", fontSize: 12.5 }}>

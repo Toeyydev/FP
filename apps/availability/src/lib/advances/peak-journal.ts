@@ -1,3 +1,4 @@
+import { ADVANCE_ELIGIBLE } from "./categories";
 import type { DailyJournalPayload } from "@/lib/peak-api";
 export type AdvancePostingKind = "ADVANCE" | "RETURN" | "EXPENSE";
 export type AdvancePeakConfig = {
@@ -24,7 +25,9 @@ export function advanceJournal(source: JournalSource, config: AdvancePeakConfig)
   if (source.kind === "EXPENSE") {
     const rows = source.expenses ?? [];
     if (!rows.length || rows.some(r => !Number.isFinite(r.amount) || r.amount <= 0)) throw new Error("Missing approved expense lines");
-    if (rows.some(r => r.category !== "entrance")) throw new Error("Guide advances may settle ticket expenses only");
+    // Any category an advance may pay for (lib/advances/categories) — each through its own
+    // mapped account. Nothing outside those four, and never an account guessed for one.
+    if (rows.some(r => !(ADVANCE_ELIGIBLE as readonly string[]).includes(r.category ?? ""))) throw new Error("An advance settles entrance, meal, transport or other costs only");
     if (rows.reduce((n,r) => n + Math.round(r.amount * 100),0) !== source.amountSatang) throw new Error("Partial expense settlement needs explicit line allocation before PEAK sync");
     journalEntries = rows.map(r => entry(required(r.peakAccountCode || config.expenseAccounts[r.category ?? ""], `expense account for ${r.category ?? "unclassified expense"}`), r.amount.toFixed(2), "0.00", undefined, r.description));
     journalEntries.push(entry(advance,"0.00",amount,config.advanceAccountSubId));

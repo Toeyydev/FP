@@ -87,6 +87,14 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
     finally { setBusy(false); }
   };
 
+  // Remove a manual PEAK link that named the wrong document — admin only, with a reason
+  // (lib/advances/peak-link unlinkPeakDocument). Nothing is sent to PEAK either way.
+  const unlink = async (kind: "ADVANCE" | "RETURN" | "EXPENSE", sourceId: string, documentNo: string) => {
+    const reason = prompt(`Remove the link to ${documentNo}? Say why it is the wrong document (kept in the audit log):`);
+    if (!reason || !reason.trim()) return;
+    await act(() => jfetch("/api/advances/peak-link/unlink", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, sourceId, reason: reason.trim() }) }), `Link to ${documentNo} removed — link the right document next`);
+  };
+
   // While the cutover freeze is on the server refuses every ordinary advance write.
   // Offering the buttons anyway only produces a 503 the operator cannot act on.
   const canWrite = canEdit && !mode?.writesFrozen && !frozen;
@@ -119,7 +127,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
             {advances.map((a) => (
               <tr key={a.id}>
-                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} />}<VoucherLine advance={a} /></td>
+                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}<VoucherLine advance={a} /></td>
                 <td>{a.guideId}</td>
                 <td>{a.advanceDate}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
@@ -160,7 +168,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
             {receipts.length === 0 && <tr><td colSpan={8} className="muted">No return has been recorded.</td></tr>}
             {receipts.map((r) => (
               <tr key={r.id}>
-                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} />{r.peakLink && <LinkedBadge link={r.peakLink} />}</td>
+                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} />{r.peakLink && <LinkedBadge link={r.peakLink} onUnlink={canLink ? () => void unlink("RETURN", r.id, r.peakLink!.documentNo) : undefined} />}</td>
                 <td>{r.guideId}</td>
                 <td>{r.receivedDate}</td>
                 <td className="r num">{thb(r.amount)}</td>
@@ -173,7 +181,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
                 <td style={{ display: "flex", gap: 6 }}>
                   {canLink && !r.peakLink && r.status !== "REJECTED" && (
                     <button className="btn sm ghost" disabled={busy} title="This return is already in PEAK — confirm it, put it against its advance and record that document, in one step"
-                      onClick={() => setLinking({ kind: "RETURN", receiptId: r.id, guideId: r.guideId, label: r.receiptNo, amount: r.amount, unallocated: r.unallocated, bankRef: r.bankRef, status: r.status, advances: open.filter((a) => a.guideId === r.guideId).map((a) => ({ id: a.id, advanceNo: a.advanceNo, outstanding: a.outstanding })) })}>PEAK doc…</button>
+                      onClick={() => setLinking({ kind: "RETURN", receiptId: r.id, guideId: r.guideId, label: r.receiptNo, amount: r.amount, unallocated: r.unallocated, refunded: r.refunded ?? 0, bankRef: r.bankRef, status: r.status, advances: open.filter((a) => a.guideId === r.guideId).map((a) => ({ id: a.id, advanceNo: a.advanceNo, outstanding: a.outstanding })) })}>PEAK doc…</button>
                   )}
                   {canWrite && !r.peakLink && r.status === "CLAIMED" && <>
                     <button className="btn sm primary" disabled={busy || !returnBank} title={returnBank ? "You have seen this money in the company bank account" : "เลือกบัญชีธนาคารบริษัทก่อนยืนยัน"}
@@ -301,12 +309,13 @@ function VoucherLine({ advance }: { advance: Advance }) {
 }
 
 /** Already in PEAK, under someone else's document — so FolkOPS will not send it. */
-function LinkedBadge({ link }: { link: PeakLink }) {
+function LinkedBadge({ link, onUnlink }: { link: PeakLink; onUnlink?: () => void }) {
   return (
-    <div style={{ fontSize: 12, marginTop: 2 }} title={`${link.note}${link.warning ? ` · ${link.warning}` : ""}`}>
+    <div className="js-peak-linked" style={{ fontSize: 12, marginTop: 2 }} title={`${link.note}${link.warning ? ` · ${link.warning}` : ""}`}>
       <span className="badge ok">บันทึกใน PEAK อยู่แล้ว</span>{" "}
       <span className="mono">{link.documentNo}</span>
       {!link.verified && <span className="muted"> · figures not machine-checked</span>}
+      {onUnlink && <> · <button type="button" className="btn sm ghost js-peak-unlink" onClick={onUnlink}>wrong document?</button></>}
     </div>
   );
 }

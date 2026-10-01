@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 
 // Recording a PEAK document the accountant already created.
@@ -10,7 +10,10 @@ import { thb } from "@/lib/jobsheet";
 
 export type LinkTarget =
   | { kind: "ADVANCE"; advanceId: string; guideId: string; label: string; amount: number; jobNo: string | null; outstanding: number }
-  | { kind: "RETURN"; receiptId: string; guideId: string; label: string; amount: number; unallocated: number; bankRef: string | null; status: string; advances: { id: string; advanceNo: string; outstanding: number }[] };
+  | { kind: "RETURN"; receiptId: string; guideId: string; label: string; amount: number; unallocated: number; refunded?: number; bankRef: string | null; status: string; advances: { id: string; advanceNo: string; outstanding: number }[] };
+
+/** A recorded settlement of this advance, as the ledger holds it (GET /api/advances/[id]). */
+type Settlement = { id: string; amount: number; jobNo: string | null; jobSheetId: string | null; effectiveDate: string; peakLink: string | null; reversedByEntryId: string | null; type: string };
 
 type Preview = { documentNo: string; amount: number; verified: boolean; warnings: string[]; describes: string };
 
@@ -23,25 +26,34 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
   const [documentType, setDocumentType] = useState<"DAILY_JOURNAL" | "EXPENSE">("DAILY_JOURNAL");
   const [documentNo, setDocumentNo] = useState("");
   const [note, setNote] = useState("");
-  const [jobNo, setJobNo] = useState(target.kind === "ADVANCE" ? target.jobNo ?? "" : "");
-  const [amount, setAmount] = useState("");
   const [advanceId, setAdvanceId] = useState(target.kind === "RETURN" ? target.advances[0]?.id ?? "" : "");
   const [bankRef, setBankRef] = useState(target.kind === "RETURN" ? target.bankRef ?? "" : "");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [requestKey] = useState(newRequestKey);
+  // Phase 1E: a settlement is linked as the ledger recorded it — chosen here, never typed.
+  const [settlements, setSettlements] = useState<Settlement[] | null>(null);
+  const [entryId, setEntryId] = useState("");
+  useEffect(() => {
+    if (mode !== "EXPENSE" || settlements || target.kind !== "ADVANCE") return;
+    void fetch(`/api/advances/${target.advanceId}`).then((r) => r.json()).then((d) => {
+      const list = ((d.entries ?? []) as Settlement[]).filter((e) => e.type === "EXPENSE_SETTLEMENT" && !e.reversedByEntryId && !e.peakLink && e.jobSheetId);
+      setSettlements(list); setEntryId(list[0]?.id ?? "");
+    }).catch(() => setSettlements([]));
+  }, [mode, settlements, target]);
+  const settlement = settlements?.find((e) => e.id === entryId) ?? null;
 
   const payload = useMemo(() => {
     const base = { kind: mode, documentNo: documentNo.trim(), documentType, note: note.trim(), requestKey };
     if (mode === "ADVANCE") return { ...base, advanceId: (target as { advanceId: string }).advanceId };
-    if (mode === "EXPENSE") return { ...base, advanceId: (target as { advanceId: string }).advanceId, jobNo: jobNo.trim(), amount: Number(amount) };
+    if (mode === "EXPENSE") return { ...base, advanceId: (target as { advanceId: string }).advanceId, jobSheetId: settlement?.jobSheetId ?? undefined, entryId: settlement?.id };
     const t = target as Extract<LinkTarget, { kind: "RETURN" }>;
     return {
       ...base, receiptId: t.receiptId, bankRef: bankRef.trim(), bankAccount,
       allocations: advanceId ? [{ advanceId, amount: t.unallocated }] : [],
     };
-  }, [mode, documentNo, documentType, note, requestKey, target, jobNo, amount, bankRef, advanceId, bankAccount]);
+  }, [mode, documentNo, documentType, note, requestKey, target, bankRef, advanceId, bankAccount, settlement]);
 
   const send = async (dryRun: boolean) => {
     setBusy(true); setErr(null);
@@ -74,15 +86,19 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
           <div className="fld"><label>What is already in PEAK</label>
             <select value={mode} onChange={(e) => { setMode(e.target.value as typeof mode); setPreview(null); }}>
               <option value="ADVANCE">The transfer to the guide</option>
-              <option value="EXPENSE">Ticket costs already charged against this advance</option>
+              <option value="EXPENSE">Costs already settled from this advance</option>
             </select>
           </div>
         )}
 
         {mode === "EXPENSE" && (
-          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
-            <div className="fld"><label>Job No.</label><input value={jobNo} onChange={(e) => { setJobNo(e.target.value); setPreview(null); }} placeholder="FOLK-BKK-…" /></div>
-            <div className="fld"><label>Ticket amount in that document</label><input inputMode="decimal" value={amount} onChange={(e) => { setAmount(e.target.value); setPreview(null); }} /></div>
+          <div className="fld js-link-settlement"><label>Settlement (from the ledger)</label>
+            {settlements === null ? <span className="muted">…</span> : !settlements.length
+              ? <span className="muted">No recorded settlement of this advance is waiting for a PEAK document. Settle the rows on the job sheet first — linking never writes a settlement.</span>
+              : <select value={entryId} onChange={(e) => { setEntryId(e.target.value); setPreview(null); }}>
+                  {settlements.map((e) => <option key={e.id} value={e.id}>{e.jobNo ?? "job"} · {e.effectiveDate} · {thb(e.amount)}</option>)}
+                </select>}
+            {settlement && <small className="muted">The document must carry exactly {thb(settlement.amount)} — the settlement&apos;s own lines, each on its category&apos;s account.</small>}
           </div>
         )}
 
@@ -91,6 +107,7 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
             <div className="fld"><label>Bank statement reference</label>
               <input value={bankRef} onChange={(e) => { setBankRef(e.target.value); setPreview(null); }} placeholder="the line on the company statement" />
             </div>
+            <small className="muted js-link-return-amount">Linked for what reached the advance{(target as Extract<LinkTarget, { kind: "RETURN" }>).refunded ? ` — not the ${thb((target as Extract<LinkTarget, { kind: "RETURN" }>).refunded ?? 0)} refunded to the guide` : ""}. The server works out the amount.</small>
             <div className="fld"><label>Put it against</label>
               <select value={advanceId} onChange={(e) => { setAdvanceId(e.target.value); setPreview(null); }}>
                 <option value="">— choose the advance this repays —</option>
@@ -134,7 +151,7 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
           {!preview
-            ? <button className="btn primary" disabled={busy || !documentNo.trim() || note.trim().length < 5} onClick={() => void send(true)}>Check in PEAK…</button>
+            ? <button className="btn primary" disabled={busy || !documentNo.trim() || note.trim().length < 5 || (mode === "EXPENSE" && !settlement)} onClick={() => void send(true)}>Check in PEAK…</button>
             : <button className="btn primary" disabled={busy} onClick={() => void send(false)}>Record {preview.documentNo}</button>}
         </div>
       </div>
