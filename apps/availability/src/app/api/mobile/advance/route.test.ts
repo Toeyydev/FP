@@ -9,7 +9,7 @@ const prismaMock = vi.hoisted(() => ({
   guideAdvance: { findMany: vi.fn(), findFirst: vi.fn() },
   guideAdvanceEntry: { findMany: vi.fn() },
   guideAdvanceReceipt: { findMany: vi.fn(), findFirst: vi.fn() },
-  jobSheet: { findUnique: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), findMany: vi.fn(async () => []) },
   checkin: { count: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -39,7 +39,7 @@ beforeEach(async () => {
   prismaMock.user.findUnique.mockResolvedValue(guide);
   // 2,000 advanced, 1,000 of it already settled by expenses on the ledger.
   prismaMock.guideAdvance.findMany.mockResolvedValue([{ id: "a1", advanceNo: "FOLK-ADV-202609-001", amountSatang: 200_000, settledSatang: 100_000, advanceDate: "2026-09-11", paidAt: new Date(NOW - 86400000), method: "bank", txRef: null, note: null, slipUrl: null, reversedAt: null }]);
-  prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }]);
+  prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ id: "e1", advanceId: "a1", type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }]);
   prismaMock.guideAdvanceReceipt.findMany.mockResolvedValue([]);
   prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", ref: "FOLK-BKK-20300911-01" });
   prismaMock.checkin.count.mockResolvedValue(3);

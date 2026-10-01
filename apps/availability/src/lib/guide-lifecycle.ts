@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { keepSettledRows, type SheetRow } from "@/lib/advances/settlement";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { notifyOps } from "@/lib/booking-import";
@@ -235,7 +236,9 @@ export async function submitTourReport(o: {
       }
       // Then remove any left-early pax generically and re-sync attraction tickets.
       const applied = applyReportedAttendance(rows, expenses, o.noShowCounts ? leftEarly : absent);
-      await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings as object, expenses: applied.expenses as object, status: "Review: no-show" } });
+      // A row settled against a company advance keeps its count (lib/advances/settlement).
+      const kept = keepSettledRows(expenses as SheetRow[], applied.expenses as SheetRow[]);
+      await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings as object, expenses: kept.rows as object, status: "Review: no-show" } });
       await audit({ actorId: o.actorId, actorRole: "GUIDE", action: "jobsheet.attendance_synced", entityType: "JobSheet", detail: { date, slotIdx, absent } });
     }
   }
@@ -377,7 +380,9 @@ export async function recordNoShow(o: {
       const mine = attributableBookings([...others, b], guideId, ctx).includes(b);
       if (mine) rows = [...rows, noShowSheetBooking({ ...b, noShow: true, noShowPax }) as Booking];
     }
-    const expenses = syncAttractionTickets(rows, (sheet.expenses as Expense[]) ?? []);
+    const synced = syncAttractionTickets(rows, (sheet.expenses as Expense[]) ?? []);
+    // A row settled against a company advance keeps its count (lib/advances/settlement).
+    const expenses = keepSettledRows(((sheet.expenses as SheetRow[]) ?? []), synced as SheetRow[]).rows;
     await prisma.jobSheet.update({ where: key, data: { bookings: rows as object, expenses: expenses as object } });
   }
   await audit({ actorId: o.actorId, actorRole: o.actorRole, action: noShowPax > 0 ? "booking.noshow" : "booking.noshow_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, previousNoShowPax, noShowPax, by: o.via, ...(reason ? { reason } : {}) } });

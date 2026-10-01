@@ -38,29 +38,12 @@ export type AdvanceTotals = {
   outstanding: number;
 };
 
-// Satang-precision rounding so float sums (e.g. 0.1+0.2) never leave a phantom
-// balance that blocks "Settled".
-const r2 = (v: number) => Math.round(v * 100) / 100;
-
-export function advanceTotals(advances: AdvanceLike[], returns: AdvanceLike[], expenses: Expense[]): AdvanceTotals {
-  const totalAdvancePaid = r2((advances ?? []).reduce((s, a) => s + (a.amount || 0), 0));
-  const usedFromAdvance = r2((expenses ?? []).filter(isAdvanceExpense).reduce((s, e) => s + expenseAmount(e), 0));
-  const totalReturned = r2((returns ?? []).reduce((s, a) => s + (a.amount || 0), 0));
-  return { totalAdvancePaid, usedFromAdvance, totalReturned, outstanding: r2(totalAdvancePaid - usedFromAdvance - totalReturned) };
-}
-
+// The guide app's status words (part of the mobile API). Worked out from the ledger by
+// lib/advances/summaries `guideStatus` — never re-added from expense tags.
 // NOT_REQUIRED — no advance issued · OPEN — advance out, tour not completed yet ·
-// PENDING_SETTLEMENT — tour done, money still outstanding · SETTLED — balance zero ·
-// OVER_RETURNED — more came back than was outstanding: never silently accepted,
-// the UI must show a review warning.
+// PENDING_SETTLEMENT — money due back · SETTLED — balance zero ·
+// OVER_RETURNED — the ledger does not add up: shown as "review required".
 export type AdvanceStatus = "NOT_REQUIRED" | "OPEN" | "PENDING_SETTLEMENT" | "SETTLED" | "OVER_RETURNED";
-
-export function advanceStatus(t: AdvanceTotals, tourCompleted: boolean): AdvanceStatus {
-  if (t.totalAdvancePaid <= 0) return "NOT_REQUIRED";
-  if (t.outstanding < 0) return "OVER_RETURNED";
-  if (t.outstanding === 0) return "SETTLED";
-  return tourCompleted ? "PENDING_SETTLEMENT" : "OPEN";
-}
 
 export const ADVANCE_STATUS_LABEL: Record<AdvanceStatus, string> = {
   NOT_REQUIRED: "No Advance · ไม่มีเงินทดรองจ่าย",

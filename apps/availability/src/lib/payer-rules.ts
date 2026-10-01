@@ -48,13 +48,12 @@ export const PAID_BY_VALUE: Record<DefaultablePayer, string> = {
 };
 
 /**
- * An advance is money the company put in the guide's hands to buy tickets with. Booking
- * a meal against one turns a bottle of water into a settlement of that advance, and the
- * ledger stops matching the tickets it was given for.
+ * Any category may be paid from a company advance (owner decision 2026-10-01: tickets,
+ * meals, transport and approved other costs). Whether THIS advance may pay for a row's
+ * category is the advance's own `allowedCategories`, checked when the row is linked to it
+ * (lib/advances/link) — never a blanket rule by kind here.
  */
-export function payerAllowed(kind: ExpenseKind, payer: PaidBy): boolean {
-  if (payer === "UNSPECIFIED") return true; // a blank is always allowed; it just blocks paying
-  if (kind === "MEAL" && payer === "GUIDE_ADVANCE") return false;
+export function payerAllowed(_kind: ExpenseKind, _payer: PaidBy): boolean {
   return true;
 }
 

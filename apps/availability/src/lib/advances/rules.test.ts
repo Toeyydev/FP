@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  advanceStatus, balanceLine, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt,
+  advanceSummary, balanceLine, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt,
   checkReversal, outstandingSatang, unallocatedSatang, advanceNoFor, receiptNoFor, toSatang,
 } from "./rules";
 
@@ -13,11 +13,12 @@ describe("balance and status", () => {
     expect(outstandingSatang(adv({ settledSatang: 70_000 }))).toBe(30_000);
     expect(unallocatedSatang({ amountSatang: 50_000, allocatedSatang: 20_000 })).toBe(30_000);
   });
-  it("status follows the counter, not a stored field", () => {
-    expect(advanceStatus(adv())).toBe("OPEN");
-    expect(advanceStatus(adv({ settledSatang: 40_000 }))).toBe("PARTIALLY_SETTLED");
-    expect(advanceStatus(adv({ settledSatang: 100_000 }))).toBe("SETTLED");
-    expect(advanceStatus(adv({ settledSatang: 40_000, reversedAt: new Date() }))).toBe("REVERSED");
+  it("status follows the ledger entries (advanceSummary), not a stored field", () => {
+    const entry = (amountSatang: number) => [{ id: "x1", type: "EXPENSE_SETTLEMENT", amountSatang, reversesEntryId: null }];
+    expect(advanceSummary(adv(), [], null).status).toBe("OPEN");
+    expect(advanceSummary(adv({ settledSatang: 40_000 }), entry(40_000), null).status).toBe("IN_USE");
+    expect(advanceSummary(adv({ settledSatang: 100_000 }), entry(100_000), null).status).toBe("SETTLED");
+    expect(advanceSummary(adv({ settledSatang: 40_000, reversedAt: new Date() }), entry(40_000), null).status).toBe("VOID");
   });
   it("the confirmation line says where the balance lands", () => {
     expect(balanceLine(adv({ settledSatang: 70_000 }), 30_000)).toMatchObject({ outstanding: 300, change: 300, outstandingAfter: 0, withinBounds: true });

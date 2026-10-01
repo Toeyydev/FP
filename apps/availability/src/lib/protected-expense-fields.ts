@@ -24,8 +24,10 @@ import type { Expense } from "@/lib/jobsheet";
 //   certificateRequest  an admin asking a certificate to cover this row (lib/certificates/request)
 //   advanceId           the company advance this row was paid from — set only by the server,
 //                       after lib/advances/categories `linkProblems` finds nothing wrong
-//                       (Phase 1A: the field and its rules; nothing sets it yet)
-export const SERVER_OWNED_ROW_FIELDS = ["evidenceWaiver", "paidByBy", "paidByAt", "certificateRequest", "advanceId"] as const;
+//   advanceSettlement   the ledger entry that settled this row against that advance
+//                       (lib/advances/settlement). Makes the row protected: its amount,
+//                       payer, category and link stay as settled until the entry is reversed.
+export const SERVER_OWNED_ROW_FIELDS = ["evidenceWaiver", "paidByBy", "paidByAt", "certificateRequest", "advanceId", "advanceSettlement"] as const;
 export type ServerOwnedField = (typeof SERVER_OWNED_ROW_FIELDS)[number];
 
 export type ProtectedRow = Expense & {
@@ -34,6 +36,7 @@ export type ProtectedRow = Expense & {
   paidByAt?: string | null;
   certificateRequest?: unknown;
   advanceId?: string | null;
+  advanceSettlement?: { entryId: string; advanceId: string; advanceNo: string } | null;
 };
 
 /** Drop every server-owned field from rows that arrived over the wire. */
@@ -55,6 +58,7 @@ export function isProtected(row: ProtectedRow | null | undefined): boolean {
   if (!row) return false;
   if (row.evidenceWaiver && typeof row.evidenceWaiver === "object") return true;
   if (row.certificateRequest && typeof row.certificateRequest === "object") return true;
+  if (row.advanceSettlement && typeof row.advanceSettlement === "object") return true;
   return Boolean((row.paidByBy ?? "").trim() || (row.paidByAt ?? "").trim());
 }
 
@@ -86,6 +90,7 @@ export const DUPLICATE_IDENTITY = "duplicate protected expense identity";
 function stampOnly(row: ProtectedRow): boolean {
   if (row.evidenceWaiver && typeof row.evidenceWaiver === "object") return false;
   if (row.certificateRequest && typeof row.certificateRequest === "object") return false;
+  if (row.advanceSettlement && typeof row.advanceSettlement === "object") return false; // a settled row keeps its category too
   return isProtected(row);
 }
 
@@ -130,7 +135,8 @@ export function mergeServerOwned(
     if (!isProtected(old)) return;
     const id = financialIdentity(old);
     const what = (old.description ?? "").trim() || `row ${i + 1}`;
-    const carries = old.certificateRequest ? "an admin's request for a certificate (withdraw it on the historical evidence page first)"
+    const carries = old.advanceSettlement ? `a settlement of company advance ${old.advanceSettlement.advanceNo} (reverse that settlement first)`
+      : old.certificateRequest ? "an admin's request for a certificate (withdraw it on the historical evidence page first)"
       : old.evidenceWaiver ? "an accepted receipt waiver"
       : "a recorded payer";
 

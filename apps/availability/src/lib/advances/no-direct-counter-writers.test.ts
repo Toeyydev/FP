@@ -24,7 +24,9 @@ const LEDGER = "lib/advances/service.ts";
 describe("repository invariant — only the ledger moves its counters", () => {
   it("no file outside lib/advances/service writes settledSatang or allocatedSatang", () => {
     const offenders = files.filter((p) => {
-      if (rel(p) === LEDGER || /\.test\.tsx?$/.test(p)) return false;
+      // Tests are exempt — unit and real-database alike: a test may corrupt a counter on purpose
+      // to prove the ledger refuses to build on it (lib/advances/phase1b-settlement.itest).
+      if (rel(p) === LEDGER || /\.(test|itest)\.tsx?$/.test(p)) return false;
       const src = code(readFileSync(p, "utf8"));
       // A WRITE, not a read: the counter given a value (Prisma `data:`), assigned to,
       // or moved by raw SQL. `settledSatang: true` in a select and `: number` in a type

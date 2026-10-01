@@ -22,9 +22,10 @@
 //      GuideAdvanceReceipt  →  GuideAdvance (ascending id)  →  TourPayment (job order)
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
+import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import {
-  advanceNoFor, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
-  fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang,
+  advanceNoFor, advanceSummary, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
+  fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
   type AllocationRequest, type EntryType, type IssueAdvanceInput, type ReceiptInput, type ReceiptStatus,
 } from "@/lib/advances/rules";
 
@@ -312,37 +313,100 @@ export async function allocateReceipt(prisma: PrismaClient, input: {
 }
 
 // ── Settling from approved job-sheet expenses ────────────────────────────────
+//
+// Phase 1B (lib/advances/settlement): the request names the rows; the server checks each
+// one against the sheet as it stands, works out the amount, writes ONE ledger entry whose
+// snapshot lists the rows, and marks those rows settled — in one transaction, guarded by
+// the sheet's version so a save that lands in between refuses rather than races.
+
+export type SettleResult =
+  | { ok: true; entryId: string; replayed: boolean; amountSatang: number; outstandingSatang: number | null; status: SettlementStatus | null }
+  | Fail;
+
+const ledgerEntriesOf = (db: Tx | PrismaClient, advanceId: string) =>
+  db.guideAdvanceEntry.findMany({ where: { advanceId }, select: { id: true, type: true, amountSatang: true, reversesEntryId: true } });
 
 export async function settleFromExpenses(prisma: PrismaClient, input: {
-  advanceId: string; jobSheetId: string; jobNo: string | null; amount: number; effectiveDate: string;
-  snapshot: unknown; requestKey: string; actor: Actor;
-}): Promise<{ ok: true; entryId: string; replayed: boolean } | Fail> {
-  const replay = await existingRequest(prisma, input.requestKey);
-  if (replay.length) return { ok: true, entryId: replay[0].id, replayed: true };
-
-  const amountSatang = toSatang(input.amount);
-  if (!(amountSatang > 0)) return fail(400, "Enter the amount of this job sheet's expenses that the advance paid for");
+  advanceId: string; jobSheetId: string; sheetVersion: string; lines: LineRequest[];
+  requestKey?: string | null; actor: Actor;
+}): Promise<SettleResult> {
   const advance = await prisma.guideAdvance.findUnique({ where: { id: input.advanceId } });
   if (!advance) return fail(404, "No such advance");
+  const sheet = await prisma.jobSheet.findUnique({ where: { id: input.jobSheetId }, select: { id: true, ref: true, guideId: true, date: true, slotIdx: true, expenses: true, approvalStatus: true, updatedAt: true } });
+  if (!sheet) return fail(404, "No such job sheet");
+  if (Number.isNaN(new Date(input.sheetVersion).getTime())) return fail(400, "Send the version of the job sheet you were looking at");
+
+  const requestKey = settlementRequestKey(advance.id, sheet.id, input.sheetVersion, input.lines.map((l) => l.identity));
+  if (input.requestKey && input.requestKey !== requestKey) return fail(400, "That request key does not belong to this request — let the server compute it");
+  const replay = async (): Promise<SettleResult | null> => {
+    const prior = (await existingRequest(prisma, requestKey)).find((e) => e.advanceId === advance.id && e.type === "EXPENSE_SETTLEMENT");
+    if (!prior) return null;
+    const after = advanceSummary(advance, await ledgerEntriesOf(prisma, advance.id), sheet);
+    return { ok: true, entryId: prior.id, replayed: true, amountSatang: prior.amountSatang, outstandingSatang: after.outstanding, status: after.status };
+  };
+  const replayed = await replay();
+  if (replayed) return replayed;
+
+  // The advance and the sheet are the same job — not merely the same guide.
+  if (advance.guideId !== sheet.guideId || advance.date !== sheet.date || advance.slotIdx !== sheet.slotIdx) {
+    return fail(409, `${advance.advanceNo} was issued for another job — it can only be settled with its own job's expenses`);
+  }
   if (advance.reversedAt) return fail(409, `${advance.advanceNo} was reversed and no longer holds a balance`);
-  if (amountSatang > outstandingSatang(advance)) return fail(409, `Only ${fromSatang(outstandingSatang(advance)).toLocaleString()} is outstanding on ${advance.advanceNo}`);
+  if (sheet.approvalStatus !== "APPROVED") return fail(409, "Approve the job sheet before settling an advance against its expenses");
+  if (new Date(input.sheetVersion).getTime() !== sheet.updatedAt.getTime()) return fail(409, "The job sheet changed since you opened it — reload it and settle again");
+
+  // The books must add up before anything more is written against them.
+  const before = advanceSummary(advance, await ledgerEntriesOf(prisma, advance.id), sheet);
+  if (before.status === null || before.driftSatang !== 0) {
+    return fail(409, `${advance.advanceNo} cannot be settled until its ledger is checked (${before.problems.join(", ")}) — nothing was written`);
+  }
+
+  const rows = (sheet.expenses as unknown as SheetRow[]) ?? [];
+  const checked = checkSettlementLines(rows, input.lines, advance);
+  if (!checked.ok) return fail(checked.duplicate ? 422 : 409, ...checked.reasons);
+  if (checked.amountSatang > before.outstanding) {
+    return fail(409, `These rows come to ${fromSatang(checked.amountSatang).toLocaleString()}, but only ${fromSatang(before.outstanding).toLocaleString()} is outstanding on ${advance.advanceNo}`);
+  }
 
   try {
     const entry = await prisma.$transaction(async (tx) => {
-      if (!(await bumpAdvance(tx, input.advanceId, amountSatang))) {
-        throw new LedgerConflict(`${advance.advanceNo} no longer has ${fromSatang(amountSatang).toLocaleString()} outstanding — reload and try again`);
+      if (!(await bumpAdvance(tx, advance.id, checked.amountSatang))) {
+        throw new LedgerConflict(`${advance.advanceNo} no longer has ${fromSatang(checked.amountSatang).toLocaleString()} outstanding — reload and try again`);
       }
-      return writeEntry(tx, {
-        advanceId: input.advanceId, type: "EXPENSE_SETTLEMENT", amountSatang,
-        effectiveDate: input.effectiveDate, sourceType: "JOB_SHEET", sourceId: input.jobSheetId,
-        jobNo: input.jobNo, snapshot: input.snapshot, requestKey: input.requestKey,
+      const written = await writeEntry(tx, {
+        advanceId: advance.id, type: "EXPENSE_SETTLEMENT", amountSatang: checked.amountSatang,
+        effectiveDate: sheet.date, sourceType: "JOB_SHEET", sourceId: sheet.id, jobNo: sheet.ref,
+        snapshot: {
+          lines: checked.lines,
+          total: checked.amountSatang,
+          sheetVersion: sheet.updatedAt.toISOString(),
+          // The shape the PEAK journal reads today (lib/advances/peak-journal) — kept so a
+          // settlement stays postable without a second definition of what it covered.
+          rows: checked.lines.map((l) => ({ description: l.description, amount: fromSatang(l.amountSatang), category: l.category, peakAccountCode: (rows[l.index] as { peakAccountCode?: string | null }).peakAccountCode ?? null })),
+        },
+        requestKey,
       }, input.actor);
+      const marked = markSettled(rows, checked.lines, { entryId: written.id, advanceId: advance.id, advanceNo: advance.advanceNo });
+      const hit = await tx.jobSheet.updateMany({ where: { id: sheet.id, updatedAt: sheet.updatedAt }, data: { expenses: marked as unknown as Prisma.InputJsonValue } });
+      if (hit.count !== 1) throw new LedgerConflict("The job sheet changed while this was being settled — reload it and settle again");
+      return written;
     });
-    await audit({ ...input.actor, action: "advance.expenses_settled", entityType: "GuideAdvance", entityId: input.advanceId, detail: { advanceNo: advance.advanceNo, jobNo: input.jobNo, amount: fromSatang(amountSatang), jobSheetId: input.jobSheetId } });
-    return { ok: true, entryId: entry.id, replayed: false };
+    const after = advanceSummary({ ...advance, settledSatang: advance.settledSatang + checked.amountSatang }, await ledgerEntriesOf(prisma, advance.id), sheet);
+    await audit({ ...input.actor, action: "advance.expenses_settled", entityType: "GuideAdvance", entityId: advance.id, detail: {
+      advanceNo: advance.advanceNo, jobSheetId: sheet.id, jobNo: sheet.ref, entryId: entry.id, requestKey,
+      amount: fromSatang(checked.amountSatang),
+      lines: checked.lines.map((l) => ({ index: l.index, identity: l.identity, category: l.category, amount: fromSatang(l.amountSatang) })),
+      outstandingBefore: fromSatang(before.outstanding), outstandingAfter: fromSatang(after.outstanding), statusAfter: after.status,
+    } });
+    return { ok: true, entryId: entry.id, replayed: false, amountSatang: checked.amountSatang, outstandingSatang: after.outstanding, status: after.status };
   } catch (e) {
+    // Two clicks of the same request: the first one wrote; this one replays it.
+    if (e instanceof LedgerConflict || isUnique(e)) {
+      const again = await replay();
+      if (again) return again;
+    }
     if (e instanceof LedgerConflict) return fail(409, e.message);
-    if (isUnique(e)) return fail(409, `This job sheet has already settled part of ${advance.advanceNo} — reverse that entry first if it was wrong`);
+    if (isUnique(e)) return fail(409, `This job sheet already has a live settlement of ${advance.advanceNo} — reverse it, then settle all its rows together`);
     throw e;
   }
 }
@@ -421,6 +485,14 @@ export async function reverseEntry(prisma: PrismaClient, input: { entryId: strin
   if (reasons.length) return fail(entry ? 409 : 404, ...reasons);
   const e = entry!;
 
+  // A settlement already in PEAK is undone in PEAK first (lib/advances/peak-sync): reversing
+  // it here alone would leave the journal claiming a cost the ledger no longer holds.
+  if (e.type === "EXPENSE_SETTLEMENT") {
+    const inPeak = await expenseInPeak(prisma, e);
+    if (inPeak) return fail(409, `This settlement is in PEAK (${inPeak}) — reverse or void that document in PEAK first; nothing was changed here`);
+  }
+  const before = await prisma.guideAdvance.findUnique({ where: { id: e.advanceId }, select: { advanceNo: true, amountSatang: true, settledSatang: true } });
+
   try {
     const contra = await prisma.$transaction(async (tx) => {
       // Lock order: receipt first when this allocation came from one, then the advance.
@@ -437,15 +509,44 @@ export async function reverseEntry(prisma: PrismaClient, input: { entryId: strin
         reason: input.reason, requestKey: `reversal:${e.id}`,
       }, input.actor);
       await tx.guideAdvanceEntry.update({ where: { id: e.id }, data: { reversedByEntryId: written.id } });
+      // The rows it settled become editable again (unless something else protects them).
+      if (e.type === "EXPENSE_SETTLEMENT" && e.sourceType === "JOB_SHEET") {
+        const sheet = await tx.jobSheet.findUnique({ where: { id: e.sourceId }, select: { id: true, expenses: true, updatedAt: true } });
+        if (sheet) {
+          const { rows, unmarked } = unmarkSettled((sheet.expenses as unknown as SheetRow[]) ?? [], e.id);
+          if (unmarked) {
+            const hit = await tx.jobSheet.updateMany({ where: { id: sheet.id, updatedAt: sheet.updatedAt }, data: { expenses: rows as unknown as Prisma.InputJsonValue } });
+            if (hit.count !== 1) throw new LedgerConflict("The job sheet changed while this was being reversed — reload and try again");
+          }
+        }
+      }
       return written;
     });
-    await audit({ ...input.actor, action: "advance.entry_reversed", entityType: "GuideAdvanceEntry", entityId: e.id, detail: { advanceId: e.advanceId, type: e.type, amount: fromSatang(e.amountSatang), reason: input.reason.trim(), contraEntryId: contra.id } });
+    const after = await prisma.guideAdvance.findUnique({ where: { id: e.advanceId }, select: { amountSatang: true, settledSatang: true } });
+    await audit({ ...input.actor, action: "advance.entry_reversed", entityType: "GuideAdvanceEntry", entityId: e.id, detail: {
+      advanceId: e.advanceId, advanceNo: before?.advanceNo ?? null, type: e.type, amount: fromSatang(e.amountSatang), reason: input.reason.trim(), contraEntryId: contra.id,
+      outstandingBefore: before ? fromSatang(before.amountSatang - before.settledSatang) : null,
+      outstandingAfter: after ? fromSatang(after.amountSatang - after.settledSatang) : null,
+    } });
     return { ok: true, entryId: contra.id };
   } catch (err) {
     if (err instanceof LedgerConflict) return fail(409, err.message);
     if (isUnique(err)) return fail(409, "That entry has already been reversed");
+    // The outbox trigger refuses a reversal of anything PEAK is sending or has posted.
+    if (String((err as { message?: string })?.message ?? "").includes("Reconcile the PEAK journal")) {
+      return fail(409, "This entry is being sent to, or is already in, PEAK — reconcile the PEAK journal first; nothing was changed here");
+    }
     throw err;
   }
+}
+
+/** The PEAK document an expense settlement is in, if any — its own record, the outbox, or a manual link. */
+async function expenseInPeak(db: PrismaClient, e: { id: string; peakDocumentNo: string | null; peakReference: string | null }): Promise<string | null> {
+  if (e.peakDocumentNo) return e.peakDocumentNo;
+  const outbox = await db.advancePeakSync.findUnique({ where: { id: `EXPENSE:${e.id}` }, select: { status: true, documentNo: true } }).catch(() => null);
+  if (outbox && ["SENDING", "UNCERTAIN", "POSTED"].includes(outbox.status)) return outbox.documentNo ?? `outbox ${outbox.status.toLowerCase()}`;
+  const link = await db.advancePeakDocumentLink.findFirst({ where: { kind: "EXPENSE", sourceId: e.id, status: "LINKED" }, select: { documentNo: true } }).catch(() => null);
+  return link?.documentNo ?? (e.peakReference ? e.peakReference : null);
 }
 
 /**

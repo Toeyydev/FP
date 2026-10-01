@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasSettledRows, type SheetRow } from "@/lib/advances/settlement";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
@@ -111,6 +112,14 @@ export async function POST(req: NextRequest) {
       // unless the name-match redirected it to an existing guide.
       const date = p.date, slotIdx = p.slotIdx, guideId = guide.guideId ?? p.guideId, tourId = p.tourId;
       const totalPax = p.bookings.reduce((s, b) => s + (b.bookedPax ?? 0), 0) || null;
+
+      // An import replaces the sheet's rows wholesale. Rows settled against a company advance
+      // must not be overwritten (lib/advances/settlement) — reverse the settlement first.
+      const prior = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { expenses: true } });
+      if (hasSettledRows(prior?.expenses as SheetRow[] | null)) {
+        results.push({ file: fname, ok: false, detail: "This job's expenses are settled against a company advance — importing would replace them. Reverse that settlement first. Not imported." });
+        continue;
+      }
 
       // bookings (dedupe by booking no. so re-import / later Bokun sync won't duplicate)
       for (const b of p.bookings) {

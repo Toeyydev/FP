@@ -36,25 +36,9 @@ export const ENTRY_LABEL: Record<EntryType, string> = {
 export const RECEIPT_STATUSES = ["CLAIMED", "VERIFIED", "REJECTED", "VOIDED"] as const;
 export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 
-/** @deprecated The pre-Phase-1 projection. Use `advanceSummary(…).status` (SettlementStatus). */
-export type AdvanceStatus = "OPEN" | "PARTIALLY_SETTLED" | "SETTLED" | "REVERSED";
-
 export const MIN_REASON = 5;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const blank = (s: string | null | undefined) => !(s ?? "").trim();
-
-/**
- * @deprecated Phase 1A keeps this only for its current callers — api/advances (list and
- * detail), lib/advances/job-view and AdvancesWorkflow — whose status strings are part of an
- * API and a UI that change in Phase 1B/1D. It is a coarser view of `advanceSummary`, not a
- * second definition: the tests hold the two to the same answer on every ledger.
- */
-export function advanceStatus(a: { amountSatang: number; settledSatang: number; reversedAt?: Date | null }): AdvanceStatus {
-  if (a.reversedAt) return "REVERSED";
-  if (a.settledSatang <= 0) return "OPEN";
-  if (a.settledSatang >= a.amountSatang) return "SETTLED";
-  return "PARTIALLY_SETTLED";
-}
 
 export const outstandingSatang = (a: { amountSatang: number; settledSatang: number }) => a.amountSatang - a.settledSatang;
 /** What is left of a return to allocate: what arrived, less what is allocated, less what is being paid back. */
