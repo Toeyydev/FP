@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   parse: vi.fn(), ensure: vi.fn(),
-  db: { tour: { findUnique: vi.fn() }, user: { findFirst: vi.fn(), findMany: vi.fn() }, assignment: { upsert: vi.fn() }, jobSheet: { upsert: vi.fn() } },
+  db: { tour: { findUnique: vi.fn() }, user: { findFirst: vi.fn(), findMany: vi.fn() }, assignment: { upsert: vi.fn() }, jobSheet: { upsert: vi.fn(), findUnique: vi.fn(async () => null) } },
 }));
 vi.mock("@/auth", () => ({ auth: async () => ({ user: { id: "op", role: "ADMIN" } }) }));
 vi.mock("@/lib/db", () => ({ prisma: mocks.db }));
@@ -41,4 +41,13 @@ it("does not copy a source ref when a guide is remapped by name", async () => {
   const result = await (await post()).json();
   expect(result.imported).toBe(1);
   expect(mocks.db.jobSheet.upsert.mock.calls[0][0].create).toMatchObject({ guideId: "G-002", ref: null });
+});
+it("refuses to import over a sheet whose rows are settled against a company advance — nothing written", async () => {
+  mocks.db.jobSheet.findUnique.mockResolvedValueOnce({ expenses: [{ description: "Grand Palace", expenseType: "entrance", price: 500, pax: 1, paidBy: "advance", advanceSettlement: { entryId: "e1", advanceId: "a1", advanceNo: "FOLK-ADV-203005-001" } }] });
+  const result = await (await post()).json();
+  expect(result.imported).toBe(0);
+  expect(result.results[0]).toMatchObject({ ok: false });
+  expect(result.results[0].detail).toMatch(/settled against a company advance/);
+  expect(mocks.db.jobSheet.upsert).not.toHaveBeenCalled();
+  expect(mocks.db.assignment.upsert).not.toHaveBeenCalled();
 });

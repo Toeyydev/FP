@@ -307,6 +307,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/rate-payer
 
+      # A company advance is settled with the exact rows confirmed as paid from it; the server
+      # works out the amount, and a settled row cannot be changed by a save (lib/advances/settlement).
+      - name: Advance settlement in a real browser
+        run: node scripts/e2e/advance-settlement.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/advance-settlement
+
       - name: Keep the historical evidence screenshots (invented data)
         if: always()
         uses: actions/upload-artifact@v4

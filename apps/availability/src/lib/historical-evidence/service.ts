@@ -3,7 +3,9 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { expenseAmount, isReviewExpense, type Expense } from "@/lib/jobsheet";
 import { canonicalPaidBy } from "@/lib/peak-sync";
-import { effectivePayer, expenseKind, isOverride, MIN_PAYER_REASON, PAID_BY_VALUE, payerAllowed, type DefaultablePayer, type PayerRow } from "@/lib/payer-rules";
+import { effectivePayer, expenseKind, isOverride, MIN_PAYER_REASON, PAID_BY_VALUE, type DefaultablePayer, type PayerRow } from "@/lib/payer-rules";
+import { linkAdvanceRows } from "@/lib/advances/link";
+import type { SheetRow as AdvanceSheetRow } from "@/lib/advances/settlement";
 import { financialIdentity, mergeServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { createCertificate, voidCertificate, CertificateRefused, type Actor, type Deps } from "@/lib/certificates/service";
 import type { ExpenseSource } from "@/lib/certificates/source";
@@ -300,7 +302,6 @@ export async function confirmPayers(id: string, actor: Actor, input: { snapshotH
       if ((e.paidByBy ?? "").trim()) refuse([`"${e.description}" มีผู้บันทึก Paid By ไว้แล้ว ถ้าต้องแก้ให้แก้ใน Job Sheet`]);
 
       const kind = expenseKind(e);
-      if (!payerAllowed(kind, want.payer)) refuse([`"${e.description}": ค่าอาหารจ่ายจากเงินทดรองไม่ได้ — เงินทดรองใช้ซื้อบัตรเข้าชม`]);
       const override = isOverride(kind, want.payer);
       const reason = (want.reason ?? "").trim() || null;
       if (override && (reason ?? "").length < MIN_PAYER_REASON) refuse([`"${e.description}": Paid By ต่างจากค่าปกติของประเภทนี้ ต้องระบุเหตุผลอย่างน้อย ${MIN_PAYER_REASON} ตัวอักษร`], 400);
@@ -325,6 +326,16 @@ export async function confirmPayers(id: string, actor: Actor, input: { snapshotH
       if (where.length !== 1) refuse([`"${c.description}" จะซ้ำกับแถวอื่นหลังเปลี่ยน Paid By แยกไม่ได้ว่าแถวไหนคือแถวไหน`]);
       rows[where[0].i] = { ...rows[where[0].i], paidByBy: actor.id, paidByAt: at };
     }
+
+    // Company Advance is confirmed only for a cost an advance on this job may pay for, and
+    // the row is linked to it — the same rule as the Job Sheet save (lib/advances/link).
+    const jobAdvances = await tx.guideAdvance.findMany({
+      where: { guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, reversedAt: null },
+      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, allowedCategories: true, reversedAt: true },
+    });
+    const linked = linkAdvanceRows(rows as AdvanceSheetRow[], stored as AdvanceSheetRow[], jobAdvances, { guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx });
+    if (linked.problems.length) refuse(linked.problems);
+    rows.splice(0, rows.length, ...(linked.rows as typeof rows));
 
     const hit = await tx.jobSheet.updateMany({ where: { id: sheet.id, updatedAt: sheet.updatedAt }, data: { expenses: rows as unknown as Prisma.InputJsonValue } });
     if (hit.count !== 1) refuse([STALE]);

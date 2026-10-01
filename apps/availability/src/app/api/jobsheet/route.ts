@@ -29,6 +29,8 @@ import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
 import { payerRuleReasons, stampPayerActor, type PayerRuleRow } from "@/lib/payer-rules";
 import { claimsServerOwned, mergeServerOwned, stripServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
+import { linkAdvanceRows } from "@/lib/advances/link";
+import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
 
 function ops(role?: string) {
@@ -445,6 +447,10 @@ export async function PUT(req: NextRequest) {
     // does not send it still saves — but when it is there, a save that would overwrite
     // somebody else's edit is refused instead of silently winning.
     baseUpdatedAt: z.string().datetime().optional(),
+    // Which advance a Company Advance row was paid from, when more than one on the job could
+    // have (lib/advances/link). A proposal: the server decides, and links one by itself when
+    // only one advance fits.
+    advanceChoices: z.array(z.object({ index: z.number().int().min(0).max(99), advanceId: z.string().min(1).max(64) })).max(40).optional(),
   }).safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: "bad-body", detail: parsed.error.issues[0] ? `${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}` : undefined }, { status: 400 });
   const d = parsed.data;
@@ -491,6 +497,7 @@ export async function PUT(req: NextRequest) {
   // own fields onto what is being written, and refuse if either the sheet moved under
   // this request or a signed-for row is not the row it was signed for.
   let payerReasons: { row: string; paidBy: string | null; reason: string }[] = [];
+  let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
     const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, updatedAt: true } });
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
@@ -505,7 +512,16 @@ export async function PUT(req: NextRequest) {
     // Rate gives it — after the merge, so a stamp, waiver or certificate request carried from
     // the stored row is seen and that row is left alone. Still a default: never stamped.
     const withDefaults = applyRateDefaults(merged.rows as ProtectedRow[], rates).rows;
-    const stamped = stampPayerActor(withDefaults as PayerRuleRow[], session.user.id ?? null);
+    const stampedRows = stampPayerActor(withDefaults as PayerRuleRow[], session.user.id ?? null);
+    // Which company advance each confirmed Company Advance row was paid from (lib/advances/link).
+    const jobAdvances = await tx.guideAdvance.findMany({
+      where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, reversedAt: null },
+      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, allowedCategories: true, reversedAt: true },
+    });
+    const linked = linkAdvanceRows(stampedRows as SheetRow[], ((current?.expenses as SheetRow[] | null) ?? []), jobAdvances, { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, d.advanceChoices ?? []);
+    if (linked.problems.length) return { kind: "advance-link" as const, problems: linked.problems };
+    advanceLinks = linked.changes;
+    const stamped = linked.rows as unknown as PayerRuleRow[];
     // A reason given for a payer that departs from the expected one: kept on the row, and
     // named in this save's audit with who gave it (the row's own stamp says when).
     const before = ((current?.expenses as PayerRuleRow[] | null) ?? []);
@@ -531,6 +547,9 @@ export async function PUT(req: NextRequest) {
   if (written.kind === "stale") {
     return NextResponse.json({ error: "stale", reasons: ["This job sheet was saved by someone else while you had it open. Reload it and make the change again — saving now would quietly undo theirs."] }, { status: 409 });
   }
+  if (written.kind === "advance-link") {
+    return NextResponse.json({ error: "advance-link", reasons: written.problems, detail: written.problems.join("\n") }, { status: 409 });
+  }
   if (written.kind === "conflicts") {
     return NextResponse.json({ error: "protected-row", reasons: written.conflicts, detail: written.conflicts.join("\n") }, { status: 409 });
   }
@@ -553,7 +572,7 @@ export async function PUT(req: NextRequest) {
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}) } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
   // The saved sheet goes back to whoever saved it — an operator, usually — so the rows
   // that a certificate stands behind are stripped on the way out for anyone but an admin.
   // The row they just saved is unchanged in the database; what they are not told is that

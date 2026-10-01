@@ -6,7 +6,7 @@ const prismaMock = vi.hoisted(() => ({
   guideAdvance: { findMany: vi.fn(), findFirst: vi.fn() },
   guideAdvanceEntry: { findMany: vi.fn() },
   guideAdvanceReceipt: { findMany: vi.fn(), findFirst: vi.fn() },
-  jobSheet: { findUnique: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), findMany: vi.fn(async () => []) },
   checkin: { count: vi.fn() },
   user: { findUnique: vi.fn() },
 }));
@@ -49,7 +49,7 @@ describe("guideAdvanceSummary — read from the ledger", () => {
 
   it("counts only what the ledger has settled — a tag on the sheet is not a settlement", async () => {
     prismaMock.guideAdvance.findMany.mockResolvedValue([advance({ settledSatang: 100_000 })]);
-    prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }]);
+    prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ id: "e1", advanceId: "a1", type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }]);
     prismaMock.checkin.count.mockResolvedValue(3);
     const s = await guideAdvanceSummary("G-TEST", "2030-09-12", 0, NOW);
     expect(s).toMatchObject({ totalAdvancePaid: 2000, usedFromAdvance: 1000, totalReturned: 0, outstanding: 1000, status: "PENDING_SETTLEMENT" });
@@ -58,7 +58,7 @@ describe("guideAdvanceSummary — read from the ledger", () => {
 
   it("is settled once the ledger has cleared the whole advance", async () => {
     prismaMock.guideAdvance.findMany.mockResolvedValue([advance({ settledSatang: 200_000 })]);
-    prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }, { type: "RETURN_ALLOCATION", amountSatang: 100_000 }]);
+    prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ id: "e2", advanceId: "a1", type: "EXPENSE_SETTLEMENT", amountSatang: 100_000 }, { id: "e3", advanceId: "a1", type: "RETURN_ALLOCATION", amountSatang: 100_000 }]);
     expect(await guideAdvanceSummary("G-TEST", "2030-09-12", 0, NOW)).toMatchObject({ outstanding: 0, totalReturned: 1000, status: "SETTLED" });
   });
 
@@ -76,7 +76,7 @@ describe("guideAdvanceSummary — read from the ledger", () => {
 
   it("tells the guide what is still to send, net of money already sent — so a balance is never transferred twice", async () => {
     prismaMock.guideAdvance.findMany.mockResolvedValue([advance({ settledSatang: 30_000 })]); // 2,000 advanced, 1,700 owed
-    prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ type: "EXPENSE_SETTLEMENT", amountSatang: 30_000 }]);
+    prismaMock.guideAdvanceEntry.findMany.mockResolvedValue([{ id: "e4", advanceId: "a1", type: "EXPENSE_SETTLEMENT", amountSatang: 30_000 }]);
     prismaMock.guideAdvanceReceipt.findMany.mockResolvedValue([
       { id: "r1", receiptNo: "FOLK-ADR-203009-001", amountSatang: 20_000, allocatedSatang: 0, status: "CLAIMED", receivedDate: "2030-09-12", createdAt: new Date(NOW), method: "bank", bankRef: null, note: null, slipUrl: null },
       { id: "r2", receiptNo: "FOLK-ADR-203009-002", amountSatang: 50_000, allocatedSatang: 30_000, status: "VERIFIED", receivedDate: "2030-09-12", createdAt: new Date(NOW), method: "bank", bankRef: null, note: null, slipUrl: null },

@@ -18,7 +18,7 @@ type PeakLink = { documentNo: string; documentType: string; linkedAt: string; no
 type Advance = {
   peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
   id: string; advanceNo: string; guideId: string; jobNo: string | null; advanceDate: string;
-  amount: number; settled: number; outstanding: number; status: "OPEN" | "PARTIALLY_SETTLED" | "SETTLED" | "REVERSED";
+  amount: number; settled: number; outstanding: number; status: "OPEN" | "IN_USE" | "RETURN_DUE" | "SETTLED" | "VOID" | null; problems?: string[];
   purpose: string | null; txRef: string | null; slipUrl: string | null; reversalReason: string | null;
   voucherUrl?: string | null; acknowledgedAt?: string | null;
 };
@@ -34,7 +34,8 @@ type Unbooked = {
 };
 
 const STATUS_LABEL: Record<string, string> = {
-  OPEN: "Open", PARTIALLY_SETTLED: "Part settled", SETTLED: "Settled", REVERSED: "Reversed",
+  // Advances (lib/advances/rules advanceSummary). A null status means the ledger does not add up.
+  OPEN: "Open", IN_USE: "In use", RETURN_DUE: "Return due", SETTLED: "Settled", VOID: "Reversed", NEEDS_REVIEW: "Needs review",
   CLAIMED: "Waiting to be checked", VERIFIED: "Confirmed", REJECTED: "Rejected",
 };
 
@@ -85,7 +86,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
   // Offering the buttons anyway only produces a 503 the operator cannot act on.
   const canWrite = canEdit && !mode?.writesFrozen;
   const canLink = isAdmin && !!mode?.existingLinks;
-  const open = useMemo(() => advances.filter((a) => a.status === "OPEN" || a.status === "PARTIALLY_SETTLED"), [advances]);
+  const open = useMemo(() => advances.filter((a) => a.status === "OPEN" || a.status === "IN_USE" || a.status === "RETURN_DUE"), [advances]);
   const waiting = useMemo(() => receipts.filter((r) => r.status === "CLAIMED"), [receipts]);
 
   return (
@@ -119,7 +120,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
                 <td className="r num">{thb(a.amount)}</td>
                 <td className="r num">{thb(a.settled)}</td>
                 <td className="r num"><b>{thb(a.outstanding)}</b></td>
-                <td><span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "REVERSED" ? " muted" : ""}`}>{STATUS_LABEL[a.status]}</span></td>
+                <td><span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "VOID" ? " muted" : a.status === null ? " warn" : ""}`} title={a.problems?.join(", ") || undefined}>{STATUS_LABEL[a.status ?? "NEEDS_REVIEW"]}</span></td>
                 <td style={{ display: "flex", gap: 6 }}>
                   <button className="btn sm ghost" onClick={() => setDetail(a)}>Ledger</button>
                   {canLink && (

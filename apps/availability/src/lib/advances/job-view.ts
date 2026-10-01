@@ -10,7 +10,11 @@
 import { advanceSyncStates } from "./peak-sync";
 import type { PrismaClient } from "@prisma/client";
 import { expenseAmount, expenseCategory, type Expense } from "@/lib/jobsheet";
-import { advanceStatus, fromSatang } from "@/lib/advances/rules";
+import { fromSatang } from "@/lib/advances/rules";
+import { effectivePayer } from "@/lib/payer-rules";
+import { financialIdentity } from "@/lib/protected-expense-fields";
+import { jobStatusOf, summariesFor, JOB_STATUS_LABEL, type JobAdvanceStatus } from "@/lib/advances/summaries";
+import type { SheetRow } from "@/lib/advances/settlement";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 
 export type JobAdvanceRow = {
@@ -19,7 +23,16 @@ export type JobAdvanceRow = {
     acknowledgedAt?: Date | null;
   id: string; advanceNo: string; amount: number; paidAt: Date; advanceDate: string; method: string;
   txRef: string | null; peakRef: string | null; slipUrl: string | null; note: string | null;
-  settled: number; outstanding: number; status: string;
+  settled: number; outstanding: number;
+  /** lib/advances/rules advanceSummary — null when the ledger does not add up (see `problems`). */
+  status: string | null;
+  problems: string[];
+  allowedCategories: string[];
+};
+/** A row on the sheet paid from an advance, as settlement sees it (lib/advances/settlement). */
+export type JobAdvanceLine = {
+  index: number; identity: string; description: string; amount: number; category: string | null;
+  advanceId: string | null; settled: boolean; settledBy: string | null;
 };
 export type JobReceiptRow = {
   peakSync?: { status: string; documentNo: string | null; error: string | null } | null;
@@ -38,24 +51,33 @@ export type JobAdvanceView = {
     totalReturned: number;        // settled by RETURN_ALLOCATION entries
     deductedFromPayments: number; // settled by PAYMENT_DEDUCTION entries
     outstanding: number;
-    /** Rows on the sheet tagged "from the advance" — a proposal, not a settlement. */
+    /** Rows confirmed as Company Advance and linked to one of this job's advances. */
     taggedFromAdvance: number;
-    /** What the tags propose that no EXPENSE_SETTLEMENT has recorded yet. */
+    /** Of those, what no settlement covers yet. */
     tagsNotYetSettled: number;
+    /** Rows marked Company Advance that cannot be settled yet: not confirmed by a person, or not linked to an advance. */
+    awaitingLink: number;
   };
-  status: string;
+  /** Each Company Advance row on the sheet, linked or not. */
+  lines: JobAdvanceLine[];
+  /** The sheet, and its version — a settlement names the version it was made from. */
+  jobSheetId: string | null;
+  sheetVersion: string | null;
+  status: JobAdvanceStatus;
   frozen: boolean;
 };
 
-type Db = Pick<PrismaClient, "guideAdvance" | "guideAdvanceEntry" | "guideAdvanceReceipt" | "guideAdvanceReturn" | "advancePeakSync">;
+type Db = Pick<PrismaClient, "guideAdvance" | "guideAdvanceEntry" | "guideAdvanceReceipt" | "guideAdvanceReturn" | "advancePeakSync" | "jobSheet">;
 
 export async function jobAdvanceView(db: Db, input: { guideId: string; date: string; slotIdx: number; expenses: Expense[] | null | undefined }): Promise<JobAdvanceView> {
   const { guideId, date, slotIdx } = input;
   const advances = await db.guideAdvance.findMany({
     where: { guideId, date, slotIdx },
     orderBy: [{ advanceDate: "asc" }, { advanceNo: "asc" }],
-    select: { id: true, advanceNo: true, amountSatang: true, settledSatang: true, paidAt: true, advanceDate: true, method: true, txRef: true, peakRef: true, slipUrl: true, note: true, reversedAt: true, voucherUrl: true, acknowledgedAt: true },
+    select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, allowedCategories: true, amountSatang: true, settledSatang: true, paidAt: true, advanceDate: true, method: true, txRef: true, peakRef: true, slipUrl: true, note: true, reversedAt: true, voucherUrl: true, acknowledgedAt: true },
   });
+  const summaries = await summariesFor(db, advances);
+  const sheetRow = await db.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true, updatedAt: true } });
   const liveIds = advances.filter((a) => !a.reversedAt).map((a) => a.id);
 
   const [entries, legacyHere] = await Promise.all([
@@ -86,22 +108,43 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
   const receipts = candidates.filter((r) =>
     allocatedHereById.has(r.id) || (r.legacyReturnId && legacyIds.has(r.legacyReturnId)) || r.status === "CLAIMED" || (r.status === "VERIFIED" && r.allocatedSatang < r.amountSatang));
 
-  const sum = (type: string) => entries.filter((e) => e.type === type).reduce((s, e) => s + e.amountSatang, 0);
+  // Every figure from the ledger, through advanceSummary — never re-added from rows.
   const live = advances.filter((a) => !a.reversedAt);
-  const taggedSatang = Math.round((input.expenses ?? []).filter((e) => e.paidBy === "advance" && expenseCategory(e) === "entrance").reduce((s, e) => s + expenseAmount(e), 0) * 100);
-  const totals = {
-    totalAdvancePaid: fromSatang(live.reduce((s, a) => s + a.amountSatang, 0)),
-    usedFromAdvance: fromSatang(sum("EXPENSE_SETTLEMENT")),
-    totalReturned: fromSatang(sum("RETURN_ALLOCATION")),
-    deductedFromPayments: fromSatang(sum("PAYMENT_DEDUCTION")),
-    outstanding: fromSatang(live.reduce((s, a) => s + (a.amountSatang - a.settledSatang), 0)),
-    taggedFromAdvance: fromSatang(taggedSatang),
-    tagsNotYetSettled: fromSatang(Math.max(0, taggedSatang - sum("EXPENSE_SETTLEMENT"))),
-  };
+  const liveSummaries = live.map((a) => summaries.get(a.id)!);
+  const total = (f: (s: (typeof liveSummaries)[number]) => number) => fromSatang(liveSummaries.reduce((t, s) => t + f(s), 0));
 
-  const status = !live.length ? "NO_ADVANCE"
-    : live.every((a) => a.settledSatang >= a.amountSatang) ? "SETTLED"
-    : live.some((a) => a.settledSatang > 0) ? "PARTIALLY_SETTLED" : "OPEN";
+  // The sheet's Company Advance rows, as settlement sees them: confirmed by a person and
+  // linked to an advance of this job — or not yet (awaiting). Read from the row itself,
+  // never from `paidBy` alone.
+  const liveIdSet = new Set(live.map((a) => a.id));
+  const lines: JobAdvanceLine[] = [];
+  let awaitingSatang = 0;
+  ((input.expenses ?? []) as SheetRow[]).forEach((e, index) => {
+    if ((e.paidBy ?? "").trim().toLowerCase() !== "advance" && effectivePayer(e).payer !== "GUIDE_ADVANCE") return;
+    const amountSatang = Math.round(expenseAmount(e) * 100);
+    if (!(amountSatang > 0)) return;
+    const { payer, basis } = effectivePayer(e);
+    const usable = payer === "GUIDE_ADVANCE" && (basis === "OPERATOR" || basis === "GUIDE") && !!e.advanceId && liveIdSet.has(e.advanceId);
+    if (!usable && !e.advanceSettlement) { awaitingSatang += amountSatang; }
+    lines.push({
+      index, identity: financialIdentity(e), description: (e.description ?? "").trim(), amount: fromSatang(amountSatang),
+      category: expenseCategory(e), advanceId: usable || e.advanceSettlement ? (e.advanceId ?? e.advanceSettlement?.advanceId ?? null) : null,
+      settled: !!e.advanceSettlement, settledBy: e.advanceSettlement?.advanceNo ?? null,
+    });
+  });
+  const linkedSatang = lines.filter((l) => l.advanceId).reduce((t, l) => t + Math.round(l.amount * 100), 0);
+  const unsettledSatang = lines.filter((l) => l.advanceId && !l.settled).reduce((t, l) => t + Math.round(l.amount * 100), 0);
+  const totals = {
+    totalAdvancePaid: total((s) => s.issued),
+    usedFromAdvance: total((s) => s.used),
+    totalReturned: total((s) => s.returned),
+    deductedFromPayments: total((s) => s.deducted),
+    outstanding: total((s) => s.outstanding),
+    taggedFromAdvance: fromSatang(linkedSatang),
+    tagsNotYetSettled: fromSatang(unsettledSatang),
+    awaitingLink: fromSatang(awaitingSatang),
+  };
+  const status = jobStatusOf(liveSummaries);
 
   const sync = await advanceSyncStates(db as PrismaClient, [...advances.map(a => `ADVANCE:${a.id}`), ...receipts.map(r => `RETURN:${r.id}`)]);
   return {
@@ -109,8 +152,8 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
       peakSync: sync.get(`ADVANCE:${a.id}`) ?? null, id: a.id, advanceNo: a.advanceNo, amount: fromSatang(a.amountSatang), paidAt: a.paidAt, advanceDate: a.advanceDate,
       method: a.method, txRef: a.txRef, peakRef: a.peakRef, slipUrl: a.slipUrl, note: a.note,
       voucherUrl: a.voucherUrl, acknowledgedAt: a.acknowledgedAt,
-      settled: fromSatang(a.settledSatang), outstanding: fromSatang(a.amountSatang - a.settledSatang),
-      status: advanceStatus({ amountSatang: a.amountSatang, settledSatang: a.settledSatang, reversedAt: a.reversedAt }),
+      settled: fromSatang(summaries.get(a.id)!.ledgerSettled), outstanding: fromSatang(summaries.get(a.id)!.outstanding),
+      status: summaries.get(a.id)!.status, problems: summaries.get(a.id)!.problems, allowedCategories: a.allowedCategories,
     })),
     returns: receipts.map((r) => ({
       peakSync: sync.get(`RETURN:${r.id}`) ?? null, id: r.id, receiptNo: r.receiptNo, amount: fromSatang(r.amountSatang), returnedAt: r.createdAt, receivedDate: r.receivedDate,
@@ -119,14 +162,12 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
       allocatedHere: fromSatang(allocatedHereById.get(r.id) ?? 0),
     })),
     totals,
+    lines,
+    jobSheetId: sheetRow?.id ?? null,
+    sheetVersion: sheetRow?.updatedAt ? sheetRow.updatedAt.toISOString() : null,
     status,
     frozen: advanceWritesFrozen(),
   };
 }
 
-export const JOB_ADVANCE_STATUS_LABEL: Record<string, string> = {
-  NO_ADVANCE: "No Advance · ไม่มีเงินทดรองจ่าย",
-  OPEN: "Open · ยังไม่ได้เคลียร์",
-  PARTIALLY_SETTLED: "Partly settled · เคลียร์บางส่วน",
-  SETTLED: "Settled · เคลียร์เงินทดรองแล้ว",
-};
+export const JOB_ADVANCE_STATUS_LABEL: Record<string, string> = JOB_STATUS_LABEL;

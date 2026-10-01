@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeTotals, totalJobExpenses, type Expense } from "@/lib/jobsheet";
 import { jobSheetTotals } from "@/lib/peak-sync";
-import { advanceTotals } from "@/lib/advance";
+import { advanceSummary } from "@/lib/advances/rules";
 
 const exp = (description: string, price: number, pax: number, paidBy?: string): Expense => ({ description, price, pax, paidBy });
 
@@ -21,9 +21,13 @@ describe("accounting presentation — FOLK-BKK-20260811-01 style acceptance", ()
       exp("Taxi", 200, 1, "guide"), // guide's personal money → reimbursement due
     ];
     expect(jobSheetTotals(expenses, { price: 0, time: 0, whtPct: 0 }).reimbursementDue).toBe(200);
-    const at = advanceTotals([{ amount: 1000 }], [{ amount: 500 }], expenses);
-    expect(at.usedFromAdvance).toBe(500); // only the advance row
-    expect(at.outstanding).toBe(0); // 1000 − 500 − 500
+    // The advance itself settles on its ledger (lib/advances/rules advanceSummary): ฿1,000 out,
+    // the ฿500 advance row settled, ฿500 returned → nothing outstanding.
+    const s = advanceSummary({ amountSatang: 100_000, settledSatang: 100_000, date: "2099-01-01", slotIdx: 0 }, [
+      { id: "e1", type: "EXPENSE_SETTLEMENT", amountSatang: 50_000 }, { id: "e2", type: "RETURN_ALLOCATION", amountSatang: 50_000 },
+    ], null);
+    expect(s.used).toBe(50_000); // only the advance row
+    expect(s.outstanding).toBe(0); // 1000 − 500 − 500
   });
 
   it("total tour expenses include every actual expense regardless of paid-by", () => {

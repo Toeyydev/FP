@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { recordReceipt } from "@/lib/advances/service";
 import { notifyGuide, notifyOps } from "@/lib/booking-import";
-import { advanceTotals, advanceStatus, type AdvanceStatus } from "@/lib/advance";
+import { type AdvanceStatus } from "@/lib/advance";
+import { guideStatus, summariesFor } from "@/lib/advances/summaries";
 import { uploadSlip, type SlipFile } from "@/lib/advance-slip";
 import { thb } from "@/lib/jobsheet";
 import { bangkokToday } from "@/lib/guide-schedule";
@@ -16,7 +17,7 @@ import type { Expense } from "@/lib/jobsheet";
  * now only an operator could see that balance — the guide could record a return
  * (POST /api/jobsheet/advance) without being able to find out how much was left.
  *
- * The arithmetic is not repeated here: `advanceTotals` and `advanceStatus` from
+ * The arithmetic is not repeated here: `advanceSummary` (via lib/advances/summaries) from
  * lib/advance are the same functions the operator's job sheet and the printed PDF
  * use, so the app can never quietly disagree with them about money.
  */
@@ -81,7 +82,7 @@ export async function guideAdvanceSummary(
   const [advances, checkins] = await Promise.all([
     prisma.guideAdvance.findMany({
       where, orderBy: { advanceDate: "asc" },
-      select: { id: true, advanceNo: true, amountSatang: true, settledSatang: true, advanceDate: true, paidAt: true, method: true, txRef: true, note: true, slipUrl: true, reversedAt: true },
+      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, amountSatang: true, settledSatang: true, advanceDate: true, paidAt: true, method: true, txRef: true, note: true, slipUrl: true, reversedAt: true },
     }),
     prisma.checkin.count({ where }),
   ]);
@@ -95,18 +96,20 @@ export async function guideAdvanceSummary(
     }),
   ]);
 
-  const sum = (f: (t: string) => boolean) => entries.filter((e) => f(e.type)).reduce((s, e) => s + e.amountSatang, 0) / 100;
+  void entries; // the figures below come from the ledger through advanceSummary (lib/advances/summaries)
+  const summaries = [...(await summariesFor(prisma, live)).values()];
+  const satang = (f: (s: (typeof summaries)[number]) => number) => summaries.reduce((t, s) => t + f(s), 0);
   const totals = {
-    totalAdvancePaid: live.reduce((s, a) => s + a.amountSatang, 0) / 100,
-    usedFromAdvance: sum((t) => t === "EXPENSE_SETTLEMENT"),
-    totalReturned: sum((t) => t === "RETURN_ALLOCATION"),
-    outstanding: live.reduce((s, a) => s + (a.amountSatang - a.settledSatang), 0) / 100,
+    totalAdvancePaid: satang((s) => s.issued) / 100,
+    usedFromAdvance: satang((s) => s.used) / 100,
+    totalReturned: satang((s) => s.returned) / 100,
+    outstanding: satang((s) => s.outstanding) / 100,
   };
   const tourCompleted = date < bangkokToday(nowMs) || checkins > 0;
   const pendingSatang = receipts.reduce((s, r) => s + (r.status === "CLAIMED" ? r.amountSatang : r.amountSatang - r.allocatedSatang), 0);
-  const outstandingSatang = live.reduce((s, a) => s + (a.amountSatang - a.settledSatang), 0);
+  const outstandingSatang = satang((s) => s.outstanding);
   const stillSatang = Math.max(0, outstandingSatang - pendingSatang);
-  const returnedSatang = entries.filter((e) => e.type === "RETURN_ALLOCATION").reduce((s, e) => s + e.amountSatang, 0);
+  const returnedSatang = satang((s) => s.returned);
 
   return {
     date,
@@ -115,14 +118,14 @@ export async function guideAdvanceSummary(
     usedFromAdvance: totals.usedFromAdvance,
     totalReturned: (returnedSatang + Math.min(pendingSatang, outstandingSatang)) / 100,
     totalReturnedConfirmed: returnedSatang / 100,
-    deductedFromPayments: sum((t) => t === "PAYMENT_DEDUCTION"),
+    deductedFromPayments: satang((s) => s.deducted) / 100,
     outstanding: stillSatang / 100,
     ledgerOutstanding: outstandingSatang / 100,
     pendingReturns: pendingSatang / 100,
     stillToReturn: stillSatang / 100,
     // The status follows the LEDGER: a balance covered only by money still being checked is
     // not settled yet.
-    status: advanceStatus(totals, tourCompleted),
+    status: guideStatus(summaries, tourCompleted, live.length > 0),
     advances: live.map((a) => ({ id: a.id, amount: a.amountSatang / 100, at: a.paidAt, method: a.method, txRef: a.txRef, note: [a.advanceNo, a.note].filter(Boolean).join(" · ") || null, slip: a.slipUrl })),
     // Money the guide has sent back, whatever it has been put against yet. A CLAIMED one
     // is shown as waiting on purpose: it is a claim until someone checks the bank.
@@ -221,3 +224,4 @@ export async function recordAdvanceReturn(o: {
 
   return { ok: true, id: row.id, slip: slip?.url ?? null };
 }
+

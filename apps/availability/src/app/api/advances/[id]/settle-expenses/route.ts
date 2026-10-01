@@ -5,49 +5,42 @@ import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps } from "@/lib/roles";
 import { settleFromExpenses } from "@/lib/advances/service";
-import { expenseAmount, expenseCategory, type Expense } from "@/lib/jobsheet";
 
 export const dynamic = "force-dynamic";
 
-// The job sheet by its house key (guideId + date + slot), which every screen already has.
+// The request names the job sheet, the version of it the operator was looking at, and the
+// rows — each by its position AND what it says (lib/advances/settlement). It never carries
+// an amount or a total: the server works those out from the rows. `requestKey` is optional;
+// when sent it must be the one the server computes for this request (settle:{advance}:
+// {sheet}:{version}:{hash of the rows}), so a retry replays instead of writing twice.
 const body = z.object({
-  guideId: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0),
-  amount: z.number().finite().positive(), requestKey: z.string().min(8).max(120),
-});
+  jobSheetId: z.string().min(1),
+  sheetVersion: z.string().datetime(),
+  lines: z.array(z.object({ index: z.number().int().min(0).max(99), identity: z.string().min(1).max(1000) })).min(1).max(40),
+  requestKey: z.string().min(8).max(200).optional(),
+}).strict();
 
-// POST — settle part of an advance with the expenses on one approved job sheet that the
-// advance paid for. The rows tagged "from the advance" are the proposal; this records the
-// decision, with a snapshot of the rows it covered, so a later edit to the sheet cannot
-// quietly change a settled balance.
+// POST — settle an advance with the job sheet rows it paid for.
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
   const { id } = await ctx.params;
   const parsed = body.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => i.message) }, { status: 400 });
-
-  const { guideId, date, slotIdx } = parsed.data;
-  const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true, ref: true, guideId: true, date: true, expenses: true, approvalStatus: true } });
-  if (!sheet) return NextResponse.json({ error: "not-found", reasons: ["No such job sheet"] }, { status: 404 });
-  const advance = await prisma.guideAdvance.findUnique({ where: { id }, select: { guideId: true } });
-  if (!advance) return NextResponse.json({ error: "not-found", reasons: ["No such advance"] }, { status: 404 });
-  if (advance.guideId !== sheet.guideId) return NextResponse.json({ error: "not-allowed", reasons: ["That job sheet belongs to another guide"] }, { status: 409 });
-  if (sheet.approvalStatus !== "APPROVED") return NextResponse.json({ error: "not-allowed", reasons: ["Approve the job sheet before settling an advance against its expenses"] }, { status: 409 });
-
-  const rows = ((sheet.expenses as unknown as Expense[]) ?? []).filter((e) => e.paidBy === "advance" && expenseCategory(e) === "entrance" && expenseAmount(e) > 0);
-  const tagged = Math.round(rows.reduce((s, e) => s + expenseAmount(e), 0) * 100) / 100;
-  if (parsed.data.amount > tagged) {
-    const reason = `This job sheet marks ${tagged.toFixed(2)} of ticket costs as paid from an advance — a ticket-advance settlement cannot be larger than that`;
-    return NextResponse.json({ error: "not-allowed", reasons: [reason], detail: reason }, { status: 409 });
+  if (!parsed.success) {
+    const extra = parsed.error.issues.some((i) => i.code === "unrecognized_keys");
+    const reasons = extra ? ["Send only the job sheet, its version and the rows — the server works out the amount"] : parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+    return NextResponse.json({ error: "bad-body", reasons, detail: reasons.join("\n") }, { status: 400 });
   }
 
   const result = await settleFromExpenses(prisma, {
-    advanceId: id, jobSheetId: sheet.id, jobNo: sheet.ref, amount: parsed.data.amount, effectiveDate: sheet.date,
-    snapshot: { rows: rows.map((e) => ({ description: e.description, amount: expenseAmount(e), category: e.expenseType ?? null, peakAccountCode: e.peakAccountCode ?? null })), tagged },
-    requestKey: parsed.data.requestKey,
+    advanceId: id, jobSheetId: parsed.data.jobSheetId, sheetVersion: parsed.data.sheetVersion,
+    lines: parsed.data.lines, requestKey: parsed.data.requestKey ?? null,
     actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null },
   });
-  if (!result.ok) return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
-  return NextResponse.json({ ok: true, entryId: result.entryId, replayed: result.replayed });
+  if (!result.ok) return NextResponse.json({ error: result.status === 404 ? "not-found" : "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
+  return NextResponse.json({
+    ok: true, entryId: result.entryId, replayed: result.replayed, amount: result.amountSatang / 100,
+    outstanding: result.outstandingSatang == null ? null : result.outstandingSatang / 100, status: result.status,
+  });
 }

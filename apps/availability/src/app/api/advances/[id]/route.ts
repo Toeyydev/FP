@@ -3,7 +3,8 @@ import { advanceSyncStates } from "@/lib/advances/peak-sync";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
-import { advanceStatus, ENTRY_LABEL, fromSatang, type EntryType } from "@/lib/advances/rules";
+import { ENTRY_LABEL, fromSatang, type EntryType } from "@/lib/advances/rules";
+import { summariesFor } from "@/lib/advances/summaries";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +22,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     prisma.guideAdvanceReceipt.findMany({ where: { id: { in: entries.map((e) => e.receiptId).filter((x): x is string => !!x) } }, select: { id: true, receiptNo: true } }),
   ]);
   const sync = await advanceSyncStates(prisma, entries.map(e => `EXPENSE:${e.id}`));
+  const s = (await summariesFor(prisma, [advance])).get(advance.id)!;
   return NextResponse.json({
     advance: {
       id: advance.id, advanceNo: advance.advanceNo, guideId: advance.guideId, jobNo: advance.jobNo, advanceDate: advance.advanceDate,
-      amount: fromSatang(advance.amountSatang), settled: fromSatang(advance.settledSatang), outstanding: fromSatang(advance.amountSatang - advance.settledSatang),
-      status: advanceStatus(advance), reversalReason: advance.reversalReason,
+      amount: fromSatang(s.issued), settled: fromSatang(s.ledgerSettled), outstanding: fromSatang(s.outstanding),
+      used: fromSatang(s.used), returned: fromSatang(s.returned), deducted: fromSatang(s.deducted), drift: fromSatang(s.driftSatang),
+      status: s.status, problems: s.problems, allowedCategories: advance.allowedCategories, reversalReason: advance.reversalReason,
     },
     entries: entries.map((e) => {
       const payment = payments.find((p) => p.id === e.paymentId);

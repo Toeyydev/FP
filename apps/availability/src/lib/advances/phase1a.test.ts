@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ADVANCE_ELIGIBLE, DEFAULT_ALLOWED, categoryAllowed, checkAllowedCategories, eligibleAdvances, linkProblems, normaliseAllowed } from "@/lib/advances/categories";
-import { advanceStatus, advanceSummary, checkAllocations, unallocatedSatang, type LedgerEntryLike } from "@/lib/advances/rules";
+import { advanceSummary, checkAllocations, unallocatedSatang, type LedgerEntryLike } from "@/lib/advances/rules";
 import { claimsServerOwned, mergeServerOwned, stripServerOwned, SERVER_OWNED_ROW_FIELDS, type ProtectedRow } from "@/lib/protected-expense-fields";
 import type { Expense } from "@/lib/jobsheet";
 
@@ -148,18 +148,6 @@ describe("6–18 · advanceSummary: one equation, one status", () => {
   it("an entry type nothing should write (CORRECTION) or a reversal of nothing is not counted silently", () => {
     expect(advanceSummary(adv(10_000), [entry("CORRECTION", 10_000)], DRAFT)).toMatchObject({ status: null, problems: expect.arrayContaining(["UNSUPPORTED_ENTRY"]) });
     expect(advanceSummary(adv(0), [entry("REVERSAL", -10_000, "missing")], DRAFT)).toMatchObject({ status: null, problems: expect.arrayContaining(["ORPHAN_REVERSAL"]) });
-  });
-  it("the deprecated status is a coarser view of the summary, never a different answer", () => {
-    const cases: [number, LedgerEntryLike[], Record<string, unknown>][] = [
-      [0, [], {}], [70_000, [entry("EXPENSE_SETTLEMENT", 70_000)], {}], [100_000, [entry("EXPENSE_SETTLEMENT", 100_000)], {}],
-      [0, [], { reversedAt: new Date() }], [30_000, [entry("RETURN_ALLOCATION", 30_000)], {}],
-    ];
-    const coarse = { OPEN: "OPEN", IN_USE: "PARTIALLY_SETTLED", RETURN_DUE: null, SETTLED: "SETTLED", VOID: "REVERSED" } as const;
-    for (const [settled, entries, over] of cases) {
-      const a = adv(settled, over);
-      const s = advanceSummary(a, entries, DRAFT);
-      expect(advanceStatus(a), JSON.stringify({ settled, over })).toBe(coarse[s.status!]);
-    }
   });
 });
 

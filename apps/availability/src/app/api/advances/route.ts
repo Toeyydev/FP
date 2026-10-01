@@ -8,7 +8,8 @@ import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { canViewFinance, isOps } from "@/lib/roles";
 import { issueAdvance } from "@/lib/advances/service";
-import { advanceStatus, fromSatang, outstandingSatang } from "@/lib/advances/rules";
+import { fromSatang } from "@/lib/advances/rules";
+import { summariesFor } from "@/lib/advances/summaries";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { advanceBody } from "@/lib/advances/request-schema";
 
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
     orderBy: [{ advanceDate: "desc" }, { advanceNo: "desc" }],
     take: 500,
     select: {
-      id: true, advanceNo: true, guideId: true, jobNo: true, advanceDate: true, accountingPeriod: true,
+      id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, allowedCategories: true, jobNo: true, advanceDate: true, accountingPeriod: true,
       amountSatang: true, settledSatang: true, purpose: true, method: true, txRef: true, slipUrl: true,
       reversedAt: true, reversalReason: true, peakDocumentNo: true,
       voucherUrl: true, acknowledgedAt: true,
@@ -33,12 +34,18 @@ export async function GET(req: NextRequest) {
   });
   const sync = await advanceSyncStates(prisma, rows.map(r => `ADVANCE:${r.id}`));
   const links = await peakLinksFor(prisma, "ADVANCE", rows.map((r) => r.id));
+  // Where each advance stands: lib/advances/rules advanceSummary, the one definition.
+  const summaries = await summariesFor(prisma, rows);
   const advances = rows
-    .map((r) => ({
-      ...r, peakSync: sync.get(`ADVANCE:${r.id}`) ?? null, peakLink: links.get(r.id) ?? null, amount: fromSatang(r.amountSatang), settled: fromSatang(r.settledSatang),
-      outstanding: fromSatang(outstandingSatang(r)), status: advanceStatus(r),
-    }))
-    .filter((r) => (only === "open" ? r.status === "OPEN" || r.status === "PARTIALLY_SETTLED" : true));
+    .map((r) => {
+      const s = summaries.get(r.id)!;
+      return {
+        ...r, peakSync: sync.get(`ADVANCE:${r.id}`) ?? null, peakLink: links.get(r.id) ?? null, amount: fromSatang(s.issued), settled: fromSatang(s.ledgerSettled),
+        used: fromSatang(s.used), returned: fromSatang(s.returned), deducted: fromSatang(s.deducted),
+        outstanding: fromSatang(s.outstanding), status: s.status, problems: s.problems, drift: fromSatang(s.driftSatang),
+      };
+    })
+    .filter((r) => (only === "open" ? r.status === "OPEN" || r.status === "IN_USE" || r.status === "RETURN_DUE" || r.status === null : true));
   return NextResponse.json({ advances });
 }
 

@@ -44,19 +44,15 @@ describe("the kind decides the default", () => {
   });
 });
 
-describe("a meal may not be bought with an advance", () => {
-  it("is refused, whatever the dropdown offered", () => {
-    expect(payerAllowed("MEAL", "GUIDE_ADVANCE")).toBe(false);
+describe("any category may be paid from an advance — the advance decides which (owner decision 2026-10-01)", () => {
+  it("no blanket rule by kind: meal, transport and other may be Company Advance", () => {
+    for (const kind of ["MEAL", "TRANSPORT", "OTHER", "ENTRANCE_TICKET"] as const) expect(payerAllowed(kind, "GUIDE_ADVANCE"), kind).toBe(true);
     expect(payerAllowed("MEAL", "GUIDE_PERSONAL")).toBe(true);
     expect(payerAllowed("MEAL", "COMPANY_DIRECT")).toBe(true);
-    expect(payerAllowed("ENTRANCE_TICKET", "GUIDE_ADVANCE")).toBe(true);
   });
 
-  it("the server says so, and names the row", () => {
-    const why = payerRuleReasons([row({ description: "Lunch", expenseType: "meal", paidBy: "advance", price: 90 })], "FOLK-BKK-20990105-01");
-    expect(why).toHaveLength(1);
-    expect(why[0]).toContain("Lunch");
-    expect(why[0]).toContain("an advance is for tickets");
+  it("the payer rules no longer refuse a meal paid from an advance — linking it to an advance that allows meals is what is checked (lib/advances/link)", () => {
+    expect(payerRuleReasons([row({ description: "Lunch", expenseType: "meal", paidBy: "advance", price: 90 })], "FOLK-TEST-20990105-01")).toEqual([]);
   });
 });
 
