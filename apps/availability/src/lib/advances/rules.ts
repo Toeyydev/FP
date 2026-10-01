@@ -33,15 +33,22 @@ export const ENTRY_LABEL: Record<EntryType, string> = {
   REVERSAL: "Reversed",
 };
 
-export const RECEIPT_STATUSES = ["CLAIMED", "VERIFIED", "REJECTED"] as const;
+export const RECEIPT_STATUSES = ["CLAIMED", "VERIFIED", "REJECTED", "VOIDED"] as const;
 export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 
+/** @deprecated The pre-Phase-1 projection. Use `advanceSummary(…).status` (SettlementStatus). */
 export type AdvanceStatus = "OPEN" | "PARTIALLY_SETTLED" | "SETTLED" | "REVERSED";
 
 export const MIN_REASON = 5;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const blank = (s: string | null | undefined) => !(s ?? "").trim();
 
+/**
+ * @deprecated Phase 1A keeps this only for its current callers — api/advances (list and
+ * detail), lib/advances/job-view and AdvancesWorkflow — whose status strings are part of an
+ * API and a UI that change in Phase 1B/1D. It is a coarser view of `advanceSummary`, not a
+ * second definition: the tests hold the two to the same answer on every ledger.
+ */
 export function advanceStatus(a: { amountSatang: number; settledSatang: number; reversedAt?: Date | null }): AdvanceStatus {
   if (a.reversedAt) return "REVERSED";
   if (a.settledSatang <= 0) return "OPEN";
@@ -50,7 +57,8 @@ export function advanceStatus(a: { amountSatang: number; settledSatang: number; 
 }
 
 export const outstandingSatang = (a: { amountSatang: number; settledSatang: number }) => a.amountSatang - a.settledSatang;
-export const unallocatedSatang = (r: { amountSatang: number; allocatedSatang: number }) => r.amountSatang - r.allocatedSatang;
+/** What is left of a return to allocate: what arrived, less what is allocated, less what is being paid back. */
+export const unallocatedSatang = (r: { amountSatang: number; allocatedSatang: number; refundedSatang?: number | null }) => r.amountSatang - r.allocatedSatang - (r.refundedSatang ?? 0);
 
 /** FOLK-ADV-YYYYMM-NNN / FOLK-ADR-YYYYMM-NNN — the month of the real money movement. */
 export const advanceNoFor = (date: string, seq: number) => `FOLK-ADV-${date.slice(0, 7).replace("-", "")}-${String(seq).padStart(3, "0")}`;
@@ -127,7 +135,7 @@ export type AllocationRequest = { advanceId: string; amount: number };
  * this only refuses what is already wrong on its face.
  */
 export function checkAllocations(input: {
-  receipt: { guideId: string; status: ReceiptStatus; amountSatang: number; allocatedSatang: number };
+  receipt: { guideId: string; status: ReceiptStatus; amountSatang: number; allocatedSatang: number; refundedSatang?: number | null };
   advances: { id: string; guideId: string; amountSatang: number; settledSatang: number; reversedAt?: Date | null }[];
   allocations: AllocationRequest[];
 }): string[] {
@@ -136,6 +144,7 @@ export function checkAllocations(input: {
   if (receipt.status !== "VERIFIED") {
     reasons.push(receipt.status === "CLAIMED"
       ? "This return is still waiting to be checked — confirm the money reached the bank before allocating it"
+      : receipt.status === "VOIDED" ? "This return was voided and cannot be allocated"
       : "This return was rejected and cannot be allocated");
   }
   if (!allocations.length) reasons.push("Choose at least one advance to allocate this return to");
@@ -202,4 +211,96 @@ export function balanceLine(a: { amountSatang: number; settledSatang: number }, 
     outstandingAfter: fromSatang(a.amountSatang - after),
     withinBounds: after >= 0 && after <= a.amountSatang,
   };
+}
+
+// ── The settlement summary: ONE definition of where an advance stands ─────────────────
+//
+// Outstanding = Issued − Used − Returned − Deducted
+//
+//   Used      EXPENSE_SETTLEMENT entries (confirmed advance-funded expenses, settled from an
+//             approved job sheet)
+//   Returned  RETURN_ALLOCATION entries (a verified return placed against this advance)
+//   Deducted  PAYMENT_DEDUCTION entries (held back from a payment the guide was owed)
+//
+// each net of its REVERSAL entries. Read from the ledger entries themselves — never from a
+// job sheet's `paidBy` tags, which only propose. The stored `settledSatang` counter is
+// compared with that sum and any difference reported (drift), never repaired here.
+//
+// Status — one vocabulary for every screen (owner decision 2026-10-01):
+//   VOID        the advance was reversed
+//   SETTLED     nothing outstanding
+//   RETURN_DUE  money outstanding and the job sheet is APPROVED — the tour is accounted for
+//               and what remains has to come back
+//   IN_USE      money outstanding, something already used / returned / deducted, sheet not
+//               yet approved
+//   OPEN        nothing used / returned / deducted, sheet not yet approved
+// An advance recorded without a job (slotIdx −1, or no date) has no sheet to approve, so it
+// never becomes RETURN_DUE by itself.
+//
+// A ledger that implies a NEGATIVE balance, or holds an entry type nothing should have
+// written, is not given a status at all: `status` is null and `problems` says why. Clamping
+// it to zero would report as settled an advance whose books do not add up.
+
+export type SettlementStatus = "OPEN" | "IN_USE" | "RETURN_DUE" | "SETTLED" | "VOID";
+export const SETTLEMENT_STATUS_LABEL: Record<SettlementStatus, string> = {
+  OPEN: "Open · ยังไม่ใช้",
+  IN_USE: "In use · ใช้ไปบางส่วน",
+  RETURN_DUE: "Return due · รอคืนเงิน",
+  SETTLED: "Settled · เคลียร์แล้ว",
+  VOID: "Void · ยกเลิก",
+};
+
+export type SummaryProblem = "NEGATIVE_OUTSTANDING" | "COUNTER_DRIFT" | "UNSUPPORTED_ENTRY" | "ORPHAN_REVERSAL";
+export type LedgerEntryLike = { id: string; type: string; amountSatang: number; reversesEntryId?: string | null };
+export type AdvanceSummary = {
+  issued: number;      // satang
+  used: number;
+  returned: number;
+  deducted: number;
+  outstanding: number; // issued − used − returned − deducted, never clamped
+  status: SettlementStatus | null; // null when `problems` makes the books unreliable
+  ledgerSettled: number; // used + returned + deducted, from the entries
+  driftSatang: number;   // stored settledSatang − ledgerSettled; 0 when the counter is right
+  problems: SummaryProblem[];
+};
+
+export function advanceSummary(
+  advance: { amountSatang: number; settledSatang: number; reversedAt?: Date | string | null; date?: string | null; slotIdx?: number | null },
+  entries: readonly LedgerEntryLike[],
+  sheet: { approvalStatus?: string | null } | null | undefined,
+): AdvanceSummary {
+  const problems: SummaryProblem[] = [];
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const sums = { EXPENSE_SETTLEMENT: 0, RETURN_ALLOCATION: 0, PAYMENT_DEDUCTION: 0 } as Record<string, number>;
+  for (const e of entries) {
+    if (e.type === "REVERSAL") {
+      const target = e.reversesEntryId ? byId.get(e.reversesEntryId) : undefined;
+      if (!target || !(target.type in sums)) { problems.push(target ? "UNSUPPORTED_ENTRY" : "ORPHAN_REVERSAL"); continue; }
+      sums[target.type] += e.amountSatang; // negative
+    } else if (e.type in sums) {
+      sums[e.type] += e.amountSatang;
+    } else {
+      problems.push("UNSUPPORTED_ENTRY"); // CORRECTION: declared, never written — not counted silently
+    }
+  }
+  const issued = advance.amountSatang;
+  const used = sums.EXPENSE_SETTLEMENT, returned = sums.RETURN_ALLOCATION, deducted = sums.PAYMENT_DEDUCTION;
+  const ledgerSettled = used + returned + deducted;
+  const outstanding = issued - ledgerSettled;
+  const driftSatang = advance.settledSatang - ledgerSettled;
+  if (outstanding < 0) problems.push("NEGATIVE_OUTSTANDING");
+  if (driftSatang !== 0) problems.push("COUNTER_DRIFT");
+  const unique = [...new Set(problems)];
+
+  let status: SettlementStatus | null;
+  if (advance.reversedAt) status = "VOID";
+  else if (unique.some((p) => p !== "COUNTER_DRIFT")) status = null;
+  else if (outstanding === 0) status = "SETTLED";
+  else {
+    const hasJob = !!advance.date && advance.slotIdx != null && advance.slotIdx >= 0;
+    const approved = hasJob && sheet?.approvalStatus === "APPROVED";
+    if (approved) status = "RETURN_DUE";
+    else status = ledgerSettled > 0 ? "IN_USE" : "OPEN";
+  }
+  return { issued, used, returned, deducted, outstanding, status, ledgerSettled, driftSatang, problems: unique };
 }

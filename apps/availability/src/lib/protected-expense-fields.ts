@@ -22,7 +22,10 @@ import type { Expense } from "@/lib/jobsheet";
 
 //
 //   certificateRequest  an admin asking a certificate to cover this row (lib/certificates/request)
-export const SERVER_OWNED_ROW_FIELDS = ["evidenceWaiver", "paidByBy", "paidByAt", "certificateRequest"] as const;
+//   advanceId           the company advance this row was paid from — set only by the server,
+//                       after lib/advances/categories `linkProblems` finds nothing wrong
+//                       (Phase 1A: the field and its rules; nothing sets it yet)
+export const SERVER_OWNED_ROW_FIELDS = ["evidenceWaiver", "paidByBy", "paidByAt", "certificateRequest", "advanceId"] as const;
 export type ServerOwnedField = (typeof SERVER_OWNED_ROW_FIELDS)[number];
 
 export type ProtectedRow = Expense & {
@@ -30,6 +33,7 @@ export type ProtectedRow = Expense & {
   paidByBy?: string | null;
   paidByAt?: string | null;
   certificateRequest?: unknown;
+  advanceId?: string | null;
 };
 
 /** Drop every server-owned field from rows that arrived over the wire. */

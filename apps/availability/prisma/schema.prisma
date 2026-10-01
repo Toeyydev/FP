@@ -630,6 +630,8 @@ model JobSheet {
   updatedAt          DateTime                  @updatedAt
   certificates       ExpenseCertificate[]
 
+  advanceReceipts GuideAdvanceReceipt[] // returns a guide said were for this job (intent only)
+
   @@unique([guideId, date, slotIdx])
   @@index([date])
 }
@@ -1395,16 +1397,20 @@ model GuideAdvance {
   // them). These are the ledger's own: money in satang, a running settled total
   // the DATABASE bounds, and the dates kept apart — advanceDate is when the bank
   // moved it, createdAt is when someone typed it.
-  advanceNo        String  @unique // FOLK-ADV-YYYYMM-NNN
-  jobNo            String? // the Job No. it was issued for, when it was
-  advanceDate      String // "YYYY-MM-DD" (Bangkok) the money left the bank
-  amountSatang     Int // > 0
-  settledSatang    Int     @default(0) // Σ entries; 0 <= settled <= amountSatang (CHECK)
-  purpose          String?
-  evidenceId       String?
-  accountingPeriod String // "YYYY-MM"
-  peakDocumentNo   String? // recorded, never inferred
-  peakReference    String?
+  advanceNo         String   @unique // FOLK-ADV-YYYYMM-NNN
+  jobNo             String? // the Job No. it was issued for, when it was
+  advanceDate       String // "YYYY-MM-DD" (Bangkok) the money left the bank
+  amountSatang      Int // > 0
+  settledSatang     Int      @default(0) // Σ entries; 0 <= settled <= amountSatang (CHECK)
+  purpose           String?
+  // The expense categories this advance may pay for (lib/advances/categories): a subset of
+  // entrance | meal | transport | other. Existing advances read as tickets only; "other" is
+  // never on by default and is enabled per advance, with a reason.
+  allowedCategories String[] @default(["entrance"])
+  evidenceId        String?
+  accountingPeriod  String // "YYYY-MM"
+  peakDocumentNo    String? // recorded, never inferred
+  peakReference     String?
 
   // The voucher the guide receives, and their acknowledgement of it. The document
   // is derived from this row, so these only record where the copy was filed and
@@ -1418,9 +1424,12 @@ model GuideAdvance {
   reversedById     String?
   reversalReason   String?
 
-  returns     GuideAdvanceReturn[]
-  entries     GuideAdvanceEntry[]
-  adjustments GuidePaymentAdjustment[]
+  returns          GuideAdvanceReturn[]
+  entries          GuideAdvanceEntry[]
+  adjustments      GuidePaymentAdjustment[]
+  // Returns the guide said were for this advance. Intent only: what settles is a
+  // RETURN_ALLOCATION entry.
+  intendedReceipts GuideAdvanceReceipt[]    @relation("ReceiptIntendedAdvance")
 
   @@index([guideId, date, slotIdx])
   @@index([date])
@@ -1442,7 +1451,7 @@ model GuideAdvanceReceipt {
   receivedDate    String // "YYYY-MM-DD" (Bangkok) the money reached the company
   amountSatang    Int // > 0
   allocatedSatang Int       @default(0) // Σ RETURN_ALLOCATION entries; 0 <= allocated <= amountSatang
-  status          String    @default("CLAIMED") // CLAIMED | VERIFIED | REJECTED
+  status          String    @default("CLAIMED") // CLAIMED | VERIFIED | REJECTED | VOIDED
   method          String    @default("bank")
   bankAccount     String?
   bankRef         String?
@@ -1467,8 +1476,59 @@ model GuideAdvanceReceipt {
 
   entries GuideAdvanceEntry[]
 
+  // Which advance and job the guide said this money was for — structured, not in `note`.
+  // Intent only: allocation (RETURN_ALLOCATION entries) is still an explicit operator act.
+  advanceId      String?
+  advance        GuideAdvance?        @relation("ReceiptIntendedAdvance", fields: [advanceId], references: [id], onDelete: Restrict)
+  jobSheetId     String?
+  jobSheet       JobSheet?            @relation(fields: [jobSheetId], references: [id], onDelete: SetNull)
+  // A return recorded in error. Only with nothing allocated or refunded (DB check).
+  voidedAt       DateTime?
+  voidedById     String?
+  voidReason     String?
+  // Σ live refunds (GuideAdvanceRefund not VOIDED) of an over-returned excess.
+  // allocatedSatang + refundedSatang <= amountSatang (DB check).
+  refundedSatang Int                  @default(0)
+  refunds        GuideAdvanceRefund[]
+
   @@index([guideId, status])
+  @@index([advanceId])
+  @@index([jobSheetId])
   @@index([receivedDate])
+}
+
+// Paying back to a guide the part of a return that exceeded what they owed (an over-return).
+// An outbound money movement, so two separate steps: RECORDED (what is to be paid back, and
+// why) → APPROVED → PAID (the transfer, with its bank reference and slip). No single action
+// creates and finalises one. VOIDED releases its amount on the receipt. Never revenue, a
+// fee, a reimbursement or an expense — it unwinds cash the guide sent too much of.
+model GuideAdvanceRefund {
+  id           String              @id @default(cuid())
+  refundNo     String              @unique // FOLK-ADF-YYYYMM-NNN
+  receiptId    String
+  receipt      GuideAdvanceReceipt @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  guideId      String
+  amountSatang Int // > 0 (DB check)
+  status       String              @default("RECORDED") // RECORDED | APPROVED | PAID | VOIDED
+  reason       String
+  recordedById String
+  recordedAt   DateTime            @default(now())
+  approvedById String?
+  approvedAt   DateTime?
+  paidAt       DateTime?
+  paidById     String?
+  bankRef      String?
+  slipUrl      String?
+  slipFileId   String?
+  note         String?
+  voidedAt     DateTime?
+  voidedById   String?
+  voidReason   String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([receiptId])
+  @@index([guideId, status])
 }
 
 // Every movement that changes an advance balance. Append-only: written once,
