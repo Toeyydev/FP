@@ -13,6 +13,9 @@ const TABLES = [
   "GuideAdvanceReceipt", "GuideAdvanceReturn", "GuideAdvance",
   // A guide's transfers, and the PEAK document each one settles. Before TourPayment,
   // which a recorded payment points back at.
+  // Supplemental payments point at GuidePayment (their transfer and the payout they
+  // followed), so they truncate first.
+  "GuidePaymentSupplementLine", "SupplementalPayment", "Bonus",
   "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
   // Certificates in lieu of receipts hang off JobSheet, so they truncate before it.
   // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { computeTotals, reviewRewardTotal, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { guidePayoutTotal } from "@/lib/peak-sync";
+import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 
 // What a guide has earned and what has actually been paid, as the web My Pay
 // (/api/my-pay) and FolkOPS Mobile (/api/mobile/my-pay) both show it. The two
@@ -42,8 +43,16 @@ export type PayMonth = {
   tours: PayTour[];
 };
 
+/**
+ * An extra amount paid to the guide by its own transfer — a review incentive left out of an
+ * earlier payout, a bonus — shown apart from the tours, so neither looks larger than the
+ * transfer it was. Paid ones only: the guide sees money that moved.
+ */
+export type AdditionalPayment = { paymentNo: string; paidDate: string; type: string; label: string; gross: number; wht: number; net: number; jobs: string[]; slip: string | null };
+
 export type GuidePay = {
   months: PayMonth[];
+  additional: AdditionalPayment[];
   yearTotal: number;
   paidThisMonth: number;
   pendingTotal: number;
@@ -62,12 +71,16 @@ export async function guidePay(guideId: string, opts: { all?: boolean } = {}, no
   const today = bkk(0);
   const from = all ? "2000-01-01" : `${bkk(-365).slice(0, 7)}-01`;
 
-  const [assigns, sheets, statuses, tourPays, tours] = await Promise.all([
+  const [assigns, sheets, statuses, tourPays, tours, lines] = await Promise.all([
     prisma.assignment.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, tourId: true, createdAt: true } }),
     prisma.jobSheet.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, tourId: true, ref: true, expenses: true, guideFee: true, createdAt: true } }),
     prisma.payrollStatus.findMany({ where: { guideId } }),
     prisma.tourPayment.findMany({ where: { guideId, date: { gte: from, lte: today } }, select: { date: true, slotIdx: true, status: true, paidAt: true, eslipUrl: true } }),
     prisma.tour.findMany({ select: { id: true, name: true } }),
+    prisma.guidePaymentSupplementLine.findMany({
+      where: { guideId, active: true, payment: { status: "RECORDED", paymentDate: { gte: from } } },
+      select: { type: true, grossAmount: true, wht: true, netAmount: true, payment: { select: { paymentNo: true, paymentDate: true, slipUrl: true } }, supplemental: { select: { jobs: true } } },
+    }),
   ]);
 
   const tName = (id: string | null) => tours.find((t) => t.id === id)?.name ?? (id ?? "Tour");
@@ -128,5 +141,15 @@ export async function guidePay(guideId: string, opts: { all?: boolean } = {}, no
   const pendingTotal = r2(unpaid.reduce((s, x) => s + x.amount, 0));
   const pendingCount = unpaid.length;
 
-  return { months, yearTotal, paidThisMonth, pendingTotal, pendingCount, guideId, all };
+  const additional: AdditionalPayment[] = lines
+    .map((l) => ({
+      paymentNo: l.payment.paymentNo, paidDate: l.payment.paymentDate, type: l.type,
+      label: SUPPLEMENTAL_LABEL[l.type as SupplementalType]?.en ?? "Additional payment",
+      gross: Number(l.grossAmount), wht: Number(l.wht), net: Number(l.netAmount),
+      jobs: Array.isArray(l.supplemental.jobs) ? (l.supplemental.jobs as { jobNo: string }[]).map((j) => j.jobNo) : [],
+      slip: l.payment.slipUrl,
+    }))
+    .sort((a, b) => b.paidDate.localeCompare(a.paidDate));
+
+  return { months, additional, yearTotal, paidThisMonth, pendingTotal, pendingCount, guideId, all };
 }

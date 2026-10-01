@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { supplementalSummary } from "@/lib/supplemental-payments/service";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -184,7 +185,10 @@ export async function GET(req: NextRequest) {
     }) : null;
     return { ...d, status, gross, wht, lineCount: traces.length, drift, ...(transfer ? { paidDate: transfer.paidDate, hasSavedSlip: !!transfer.slipLink } : {}) };
   });
-  return NextResponse.json({ period, rows, totals, paymentDocs: docsOut });
+  // Supplemental payments still owed, and paid but not yet in PEAK — whatever month they
+  // belong to, so the month view never loses sight of them.
+  const supplemental = await supplementalSummary(prisma, period);
+  return NextResponse.json({ period, rows, totals, paymentDocs: docsOut, supplemental });
 }
 
 // POST { period, guideId, status } — mark a guide's payroll paid / pending.

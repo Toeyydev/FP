@@ -5,7 +5,9 @@ import { ADJUSTMENT_TYPES } from "@/lib/payments-v2/rules";
 
 export const paymentBody = z.object({
   guideId: z.string().min(1),
-  jobs: z.array(z.object({ jobNo: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).min(1).max(60),
+  // Jobs, or supplemental payments — the rules say which combinations may be paid together.
+  jobs: z.array(z.object({ jobNo: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0) })).max(60).default([]),
+  supplements: z.array(z.string().min(1).max(64)).max(20).optional(),
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   amountTransferred: z.number(),
   adjustments: z.array(z.object({ type: z.enum(ADJUSTMENT_TYPES), amount: z.number(), description: z.string().min(1).max(300), jobNo: z.string().max(64).nullish(), advanceId: z.string().max(64).nullish() })).max(20).optional(),

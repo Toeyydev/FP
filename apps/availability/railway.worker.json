@@ -5,6 +5,7 @@
     "buildCommand": "npx prisma generate && npm run build:worker"
   },
   "deploy": {
+    "preDeployCommand": "npx prisma migrate deploy",
     "startCommand": "npm run worker",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3

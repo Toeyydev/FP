@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { audit } from "@/lib/audit";
 import { canViewFinance } from "@/lib/roles";
-import { ensureJobRef } from "@/lib/jobref";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const PERIOD = /^\d{4}-\d{2}$/;
@@ -16,66 +13,26 @@ export async function GET(req: NextRequest) {
   const period = req.nextUrl.searchParams.get("period") || "";
   if (!PERIOD.test(period)) return NextResponse.json({ error: "bad-period" }, { status: 400 });
   const [bonuses, guides] = await Promise.all([
-    prisma.bonus.findMany({ where: { period }, orderBy: { createdAt: "desc" } }),
+    prisma.bonus.findMany({ where: { period }, orderBy: { createdAt: "desc" }, include: { supplementals: { where: { voidedAt: null }, select: { id: true } } } }),
     prisma.user.findMany({ where: { guideId: { not: null } }, select: { guideId: true, displayName: true } }),
   ]);
   const gName = (gid: string) => guides.find((g) => g.guideId === gid)?.displayName ?? gid;
-  const rows = bonuses.map((b) => ({ id: b.id, guideId: b.guideId, guide: gName(b.guideId), amount: b.amount, reason: b.reason ?? "", ref: b.ref ?? "", eslipUrl: b.eslipUrl ?? null }));
+  // An earlier bonus is settled either by its old slip, or by the supplemental payment it
+  // was converted into; one with neither is still owed and may be converted.
+  const rows = bonuses.map((b) => ({ id: b.id, guideId: b.guideId, guide: gName(b.guideId), amount: b.amount, reason: b.reason ?? "", ref: b.ref ?? "", eslipUrl: b.eslipUrl ?? null, period: b.period, convertedTo: b.supplementals[0]?.id ?? null }));
   const total = rows.reduce((s, b) => s + b.amount, 0);
   return NextResponse.json({ period, rows, total: Math.round(total * 100) / 100 });
 }
 
-// POST { period, guideId, amount, reason?, date?, slotIdx? } — add a bonus.
-// When date+slotIdx point at a rewarded tour, the bonus ref FOLLOWS that tour's job
-// sheet number (FOLK-BKK-…) so the bonus is traceable to the job sheet; a sheet with
-// no ref yet is given the next one. Otherwise the bonus gets an auto FOLK-BNS-YYYYMM-NN.
-export async function POST(req: NextRequest) {
+// Writes are closed (owner decision 2026-10-01). A bonus is now a supplemental payment:
+// it has a status, withholding, an account, a PEAK reference and its own transfer
+// (lib/supplemental-payments). The rows already here stay readable as history, unchanged.
+const readOnly = async (req: NextRequest) => {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const parsed = z.object({
-    period: z.string().regex(PERIOD), guideId: z.string().min(1),
-    amount: z.number().positive().max(1000000), reason: z.string().max(200).optional(),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), slotIdx: z.number().int().min(0).optional(),
-  }).safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const d = parsed.data;
-
-  let ref: string | null = null;
-  if (d.date && d.slotIdx != null) {
-    const key = { guideId_date_slotIdx: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } };
-    const sheet = await prisma.jobSheet.findUnique({ where: key, select: { id: true, ref: true } });
-    if (sheet) {
-      ref = await ensureJobRef(sheet.id, d.date);
-    }
-  }
-  if (!ref) {
-    const seq = (await prisma.bonus.count({ where: { period: d.period } })) + 1;
-    ref = `FOLK-BNS-${d.period.replace("-", "")}-${String(seq).padStart(2, "0")}`;
-  }
-
-  const b = await prisma.bonus.create({ data: { period: d.period, guideId: d.guideId, amount: d.amount, reason: d.reason?.trim() || null, ref, createdById: session!.user!.id ?? null } });
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bonus.added", entityType: "Bonus", entityId: b.id, detail: { period: d.period, guideId: d.guideId, amount: d.amount } });
-  return NextResponse.json({ ok: true });
-}
-
-// PATCH { id, ref } — set the bonus reference no. (e.g. to match the PEAK job no.).
-export async function PATCH(req: NextRequest) {
-  const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const parsed = z.object({ id: z.string().min(1), ref: z.string().max(60) }).safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  await prisma.bonus.update({ where: { id: parsed.data.id }, data: { ref: parsed.data.ref.trim() || null } });
-  return NextResponse.json({ ok: true });
-}
-
-// DELETE { id } — remove a bonus.
-export async function DELETE(req: NextRequest) {
-  const session = await auth();
-  if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const body = await req.json().catch(() => ({}));
-  const id = String(body?.id || "");
-  if (!id) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  await prisma.bonus.deleteMany({ where: { id } });
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bonus.removed", entityType: "Bonus", entityId: id });
-  return NextResponse.json({ ok: true });
-}
+  void req;
+  return NextResponse.json({ error: "read-only", reasons: ["Bonuses are now paid as supplemental payments — use Add Supplemental Payment. Earlier bonuses stay here as history."] }, { status: 410 });
+};
+export const POST = readOnly;
+export const PATCH = readOnly;
+export const DELETE = readOnly;

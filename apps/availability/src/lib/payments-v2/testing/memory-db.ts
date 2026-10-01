@@ -31,13 +31,15 @@ const unique = (target: string[]) => new Prisma.PrismaClientKnownRequestError("U
 
 export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   const t: Record<string, Row[]> = {};
-  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "guideAdvanceReceipt", "guideAdvanceEntry", "paymentTransaction", "paymentEvidence", "auditLog"];
+  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "guideAdvanceReceipt", "guideAdvanceEntry", "paymentTransaction", "paymentEvidence", "auditLog", "supplementalPayment", "guidePaymentSupplementLine"];
   for (const n of names) t[n] = (seed[n] ?? []).map((r, i) => ({ id: r.id ?? `${n}_${i}`, ...clone(r) }));
   let seq = 1000;
   const relations: Record<string, Record<string, (row: Row) => any>> = {
     guidePaymentJob: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId) },
     guidePaymentAdjustment: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId) },
-    guidePayment: { jobs: (r) => t.guidePaymentJob.filter((j) => j.paymentId === r.id), adjustments: (r) => t.guidePaymentAdjustment.filter((a) => a.paymentId === r.id) },
+    guidePayment: { jobs: (r) => t.guidePaymentJob.filter((j) => j.paymentId === r.id), adjustments: (r) => t.guidePaymentAdjustment.filter((a) => a.paymentId === r.id), supplements: (r) => t.guidePaymentSupplementLine.filter((x) => x.paymentId === r.id) },
+    guidePaymentSupplementLine: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId), supplemental: (r) => t.supplementalPayment.find((x) => x.id === r.supplementalId) },
+    supplementalPayment: { lines: (r) => t.guidePaymentSupplementLine.filter((x) => x.supplementalId === r.id) },
     paymentBatchItem: { batch: (r) => t.paymentBatch.find((b) => b.id === r.batchId) },
     paymentTransaction: { evidence: (r) => t.paymentEvidence.find((e) => e.id === r.evidenceId) },
   };
@@ -58,6 +60,8 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   const checkUnique = (name: string, row: Row) => {
     if (name === "guidePayment" && t.guidePayment.some((p) => p !== row && p.paymentNo === row.paymentNo)) throw unique(["paymentNo"]);
     if (name === "guidePaymentJob" && row.active !== false && t.guidePaymentJob.some((j) => j !== row && j.active !== false && j.guideId === row.guideId && j.date === row.date && j.slotIdx === row.slotIdx)) throw unique(["GuidePaymentJob_one_active_payment_per_job"]);
+    if (name === "guidePaymentSupplementLine" && row.active !== false && t.guidePaymentSupplementLine.some((x) => x !== row && x.active !== false && x.supplementalId === row.supplementalId)) throw unique(["GuidePaymentSupplementLine_one_active_payment"]);
+    if (name === "supplementalPayment" && row.requestKey && t.supplementalPayment.some((x) => x !== row && x.requestKey === row.requestKey)) throw unique(["requestKey"]);
     if (name === "tourPayment" && t.tourPayment.some((p) => p !== row && p.guideId === row.guideId && p.date === row.date && p.slotIdx === row.slotIdx)) throw unique(["guideId", "date", "slotIdx"]);
   };
   const model = (name: string) => ({
@@ -70,13 +74,17 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
     findUnique: async (args: Row) => { const r = t[name].find((x) => matches(x, args.where)); return r ? shape(name, r, args) : null; },
     count: async (args: Row = {}) => t[name].filter((r) => matches(r, args.where)).length,
     create: async (args: Row) => {
-      const { jobs, adjustments, ...data } = args.data;
+      const { jobs: nestedJobs, adjustments, supplements, ...data } = args.data;
+      // A SupplementalPayment's `jobs` is a plain JSON column, not a nested create.
+      const jobs = name === "guidePayment" ? nestedJobs : undefined;
+      if (name !== "guidePayment" && nestedJobs !== undefined) data.jobs = nestedJobs;
       const row: Row = { id: `${name}_${seq++}`, createdAt: new Date(), ...data };
-      if (name === "guidePaymentJob" && row.active === undefined) row.active = true;
+      if ((name === "guidePaymentJob" || name === "guidePaymentSupplementLine") && row.active === undefined) row.active = true;
       t[name].push(row);
       try { checkUnique(name, row); } catch (e) { t[name].pop(); throw e; }
       for (const j of jobs?.create ?? []) await model("guidePaymentJob").create({ data: { ...j, paymentId: row.id } });
       for (const a of adjustments?.create ?? []) await model("guidePaymentAdjustment").create({ data: { ...a, paymentId: row.id } });
+      for (const x of supplements?.create ?? []) await model("guidePaymentSupplementLine").create({ data: { ...x, paymentId: row.id } });
       return shape(name, row, args);
     },
     update: async (args: Row) => { const r = t[name].find((x) => matches(x, args.where)); if (!r) throw new Error("not found"); Object.assign(r, args.data); return shape(name, r, args); },
