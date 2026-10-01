@@ -104,6 +104,11 @@ export type ParsedBooking = {
   // both lets an import recognise a copy stored the other way — and refuse one that isn't.
   productConfirmationCode?: string;
   bokunBookingId?: string;
+  // The Bókun BOOKING's own confirmation code — the webhook's top-level code, which for a
+  // GetYourGuide booking is the "GET-…" code the booking search stores the same booking
+  // under. Read only for a single-product booking: with several products one booking code
+  // names them all, so it cannot say which FolkOPS record a cancellation is for.
+  bookingConfirmationCode?: string;
   // When the channel cancelled it (Bokun cancellationDate), as ISO. The source's own
   // event time — never the moment FolkOPS happened to receive the cancellation.
   cancelledAt?: string;
@@ -170,6 +175,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
   // Read from known places only: a deep search could pick up another booking's id or code.
   const bokunBookingId = externalId ?? r.parentBookingId;
   const productConfirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? r.productConfirmationCode;
+  const bookingCodeRaw = arr(r.activityBookings).length === 1 ? r.confirmationCode : undefined;
   const cancelledAt = toISO(r.cancellationDate ?? ab.cancellationDate);
   // The webhook carries the Rate on the activity booking; the booking search on the item
   // itself (or its fields). Known places only — a deep search could find another's title.
@@ -229,6 +235,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     durationMin: durHours ? durHours * 60 : undefined,
     productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
     bokunBookingId: bokunBookingId != null && typeof bokunBookingId !== "object" ? String(bokunBookingId) : undefined,
+    ...(typeof bookingCodeRaw === "string" && bookingCodeRaw.trim() ? { bookingConfirmationCode: bookingCodeRaw.trim() } : {}),
     cancelledAt,
     ...(rateTitle ? { rateTitle } : {}),
   };

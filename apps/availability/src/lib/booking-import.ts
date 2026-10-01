@@ -357,26 +357,44 @@ const LIVE_STATUSES = ["PENDING", "OFFERED", "ASSIGNED"];
 
 // One Bokun booking can sit in FolkOPS twice: the webhook stored it under its product
 // confirmation code (with Bokun's booking id as externalId), and the booking search later
-// stored it again under the channel's code ("GET-…"). Dedupe hid one of the two, and the
-// search only ever updates the copy carrying its own code — so a cancellation could land on
-// the hidden copy while the copy on the guide's job stayed live. When the search reports a
-// cancellation, cancel the other copies of the SAME product booking too: matched on the
-// product confirmation code (unique per product booking; a booking id alone can cover several
-// products, and an OTA ref is shared by every version of an amended booking), and refused when
-// the copy carries a different Bokun booking id. A rebooking is a NEW product booking with a
-// new code, so the confirmed new booking is never touched. Hidden (IGNORED) copies are left
-// alone; a copy already cancelled only gains the channel's time if it has none. Returns the
-// copies it cancelled.
-async function cancelOtherCopies(p: ParsedBooking, exceptId: string, cancelledAtSource: Date | undefined): Promise<{ id: string; date: string | null; slotIdx: number | null; customerName: string | null }[]> {
-  const code = p.productConfirmationCode?.trim();
-  if (!code || code === (p.confirmationCode || p.externalRef)) return [];
-  const copies = await prisma.booking.findMany({
-    where: { id: { not: exceptId }, confirmationCode: code, status: { in: [...LIVE_STATUSES, "CANCELLED"] } },
-    select: { id: true, status: true, date: true, slotIdx: true, customerName: true, cancelledAtSource: true, externalId: true },
+// stored it again under the channel's code ("GET-…"). Dedupe hid one of the two, and each
+// path only ever updates the copy carrying its own identity — so a cancellation could land
+// on the hidden copy while the copy on the guide's job stayed live. A cancellation therefore
+// also cancels the other copies of the SAME Bokun booking, matched on exact Bokun identity
+// only — never on a name, a date or an OTA ref alone:
+//   * the product confirmation code (unique per product booking; a booking id alone can
+//     cover several products, and an OTA ref is shared by every version of an amended
+//     booking), or
+//   * the Bokun booking's own confirmation code ("GET-…"), which the parser reads only for a
+//     single-product booking — and which must name exactly ONE live record: two live
+//     records under one booking code cannot both be this booking, so neither is touched and
+//     an operator is asked instead (CANCEL_MATCH_AMBIGUOUS).
+// A copy is refused when it carries a different Bokun booking id or a different OTA ref. A
+// rebooking is a NEW product booking with a new code, so the confirmed new booking is never
+// touched. Hidden (IGNORED) copies are left alone; a copy already cancelled only gains the
+// channel's time if it has none — so a second report of the same cancellation changes nothing.
+type CopyRow = { id: string; date: string | null; slotIdx: number | null; customerName: string | null };
+async function cancelOtherCopies(p: ParsedBooking, exceptId: string, cancelledAtSource: Date | undefined, via?: ReconcileSource): Promise<{ cancelledNow: CopyRow[]; matched: number; ambiguous: boolean }> {
+  const productCode = p.productConfirmationCode?.trim();
+  const byProduct = productCode && productCode !== (p.confirmationCode || p.externalRef) ? productCode : undefined;
+  const bookingCode = p.bookingConfirmationCode?.trim() || undefined;
+  const codes = [...new Set([byProduct, bookingCode].filter((c): c is string => !!c))];
+  if (!codes.length) return { cancelledNow: [], matched: 0, ambiguous: false };
+  const found = await prisma.booking.findMany({
+    where: { id: { not: exceptId }, confirmationCode: codes.length === 1 ? codes[0] : { in: codes }, status: { in: [...LIVE_STATUSES, "CANCELLED"] } },
+    select: { id: true, status: true, date: true, slotIdx: true, customerName: true, cancelledAtSource: true, externalId: true, externalRef: true, confirmationCode: true },
   });
-  const cancelledNow: { id: string; date: string | null; slotIdx: number | null; customerName: string | null }[] = [];
+  const copies = (found ?? []).filter((c) =>
+    !(c.externalId && p.bokunBookingId && c.externalId !== p.bokunBookingId)        // contradicting source identity
+    && !(c.externalRef && p.externalRef && c.externalRef !== p.externalRef));        // a different OTA booking
+  // Matched by the booking code alone: it must point at one live record, or nothing is guessed.
+  const byBookingCodeOnly = (c: (typeof copies)[number]) => !!bookingCode && c.confirmationCode === bookingCode && c.confirmationCode !== byProduct;
+  const liveByBookingCode = copies.filter((c) => byBookingCodeOnly(c) && LIVE_STATUSES.includes(c.status));
+  const ambiguous = liveByBookingCode.length > 1;
+  if (ambiguous) await raiseCancelReview(p, liveByBookingCode.map((c) => c.id), via);
+  const cancelledNow: CopyRow[] = [];
   for (const c of copies) {
-    if (c.externalId && p.bokunBookingId && c.externalId !== p.bokunBookingId) continue; // contradicting source identity
+    if (ambiguous && byBookingCodeOnly(c)) continue;
     if (c.status === "CANCELLED") {
       if (!c.cancelledAtSource && cancelledAtSource) await prisma.booking.update({ where: { id: c.id }, data: { cancelledAtSource } });
       continue;
@@ -384,11 +402,36 @@ async function cancelOtherCopies(p: ParsedBooking, exceptId: string, cancelledAt
     await prisma.booking.update({ where: { id: c.id }, data: { status: "CANCELLED", cancelledAtSource } });
     await audit({
       action: "booking.cancelled", entityType: "Booking", entityId: c.id,
-      detail: { ref: code, from: c.status, to: "CANCELLED", channelCode: p.confirmationCode ?? null, cancelledAtSource: cancelledAtSource?.toISOString() ?? null, reason: "the channel cancelled this booking; this record is another copy of it" },
+      detail: {
+        ref: c.confirmationCode ?? byProduct ?? bookingCode, from: c.status, to: "CANCELLED", channelCode: p.confirmationCode ?? null,
+        cancelledAtSource: cancelledAtSource?.toISOString() ?? null, via: via ?? null,
+        // How this record was recognised as the booking Bokun cancelled.
+        resolvedBy: byBookingCodeOnly(c) ? "bokun-booking-confirmation-code" : "product-confirmation-code",
+        incoming: { bokunBookingId: p.bokunBookingId ?? null, productConfirmationCode: productCode ?? null, bookingConfirmationCode: bookingCode ?? null },
+        reason: "the channel cancelled this booking; this record is another copy of it",
+      },
     });
     cancelledNow.push(c);
   }
-  return cancelledNow;
+  const matched = copies.filter((c) => !(ambiguous && byBookingCodeOnly(c))).length;
+  return { cancelledNow, matched, ambiguous };
+}
+
+// Two live records answer to one Bokun booking code. Cancelling either would be a guess, so
+// neither is touched: ops are asked, once per booking code (the same issue log the job
+// reconciliation uses — lib/booking-reconcile).
+async function raiseCancelReview(p: ParsedBooking, candidateIds: string[], via?: ReconcileSource): Promise<void> {
+  try {
+    const code = p.bookingConfirmationCode ?? p.confirmationCode ?? "";
+    const sig = `CANCEL_MATCH_AMBIGUOUS|${code}`;
+    const seen = await prisma.auditLog.findFirst({ where: { action: "booking.reconciliation_required", detail: { path: ["sig"], equals: sig } }, select: { id: true } });
+    if (seen) return;
+    await audit({
+      action: "booking.reconciliation_required", entityType: "Booking", entityId: candidateIds[0],
+      detail: { code: "CANCEL_MATCH_AMBIGUOUS", sig, via: via ?? null, bookingConfirmationCode: code, bokunBookingId: p.bokunBookingId ?? null, candidates: candidateIds, kept: "no booking cancelled" },
+    });
+    await notifyOps(`Bókun cancelled booking ${code}, but ${candidateIds.length} live FolkOPS bookings carry that code — none was cancelled. Check which one it is.`, "Cancellation needs review", `${code} · ${candidateIds.length} matches`, { push: true, ...(p.date ? { date: p.date } : {}) });
+  } catch { /* best-effort: the refusal to guess already stands */ }
 }
 
 async function announceCancelled(bookings: { date: string | null; slotIdx: number | null; customerName: string | null }[]): Promise<void> {
@@ -447,6 +490,18 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         return "updated";
       }
     }
+    // A cancellation for a booking this path has never stored: the booking may already be in
+    // FolkOPS under another identity (the search's "GET-…" copy). Cancel THAT record now,
+    // rather than store a second, cancelled copy that dedupe would hide while the visible
+    // one stayed live until the next autosync. Nothing new is created when it resolves.
+    if (!existing && cancelled) {
+      const resolved = await cancelOtherCopies(p, "", cancelledAtSource, via);
+      if (resolved.matched > 0) {
+        await announceCancelled(resolved.cancelledNow);
+        for (const c of resolved.cancelledNow) await reconcileAfterImport(c.id, via, c, collect);
+        return "updated";
+      }
+    }
     const rec = await prisma.booking.upsert({
       where: { source_externalId: { source, externalId: p.externalId } },
       create: {
@@ -461,9 +516,18 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
       },
     });
-    const keep = existing || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec)));
-    if (cancelled && existing?.status !== "CANCELLED") await onBookingCancelled(rec);
+    // A cancelled record is never hidden as a duplicate of a live one: hiding it is how a
+    // cancellation used to vanish. It cannot double-count a guest — it is not live.
+    const keep = existing || cancelled || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec)));
+    // Other copies of the same Bokun booking (e.g. the visible "GET-…" copy while this one
+    // was a hidden webhook copy) are cancelled too — exact identity only, see cancelOtherCopies.
+    const others = cancelled ? await cancelOtherCopies(p, rec.id, cancelledAtSource, via) : { cancelledNow: [] as CopyRow[] };
+    // Announce only what went from live to cancelled here — never a record FolkOPS never had
+    // live, never one already cancelled — once per departure.
+    const wasLive = !!existing && LIVE_STATUSES.includes(existing.status);
+    if (cancelled) await announceCancelled([...(wasLive ? [rec] : []), ...others.cancelledNow]);
     if (keep) await reconcileAfterImport(rec.id, via, existing, collect);
+    for (const c of others.cancelledNow) await reconcileAfterImport(c.id, via, c, collect);
     return existing ? "updated" : "created";
   }
 
@@ -484,7 +548,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     if (dup && (await ignoreStaleLive(dup, cancelled, via))) return "skipped";
     if (dup) {
       const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
-      const copies = cancelled ? await cancelOtherCopies(p, dup.id, cancelledAtSource) : [];
+      const copies = cancelled ? (await cancelOtherCopies(p, dup.id, cancelledAtSource, via)).cancelledNow : [];
       // Tell the guide/ops once per slot, after every copy is cancelled, so the recount is right.
       await announceCancelled([...(dup.status !== "CANCELLED" && cancelled ? [updated] : []), ...copies]);
       await reconcileAfterImport(dup.id, via, dup, collect);
@@ -499,7 +563,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     },
   });
   const keepNew = !(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec));
-  if (cancelled) await announceCancelled(await cancelOtherCopies(p, rec.id, cancelledAtSource));
+  if (cancelled) await announceCancelled((await cancelOtherCopies(p, rec.id, cancelledAtSource, via)).cancelledNow);
   if (keepNew) await reconcileAfterImport(rec.id, via, null, collect);
   return "created";
 }
