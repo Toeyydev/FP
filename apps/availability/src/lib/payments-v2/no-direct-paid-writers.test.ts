@@ -61,6 +61,9 @@ describe("repository invariant — only payments-v2 can make a job PAID", () => 
       "app/api/payment-batches/route.ts",
       // Lists this month's paid tours for the PEAK reference view.
       "app/api/peak/status/route.ts",
+      // A GuideAdvanceRefund's own status (money paid back to a guide after an over-return),
+      // never a job's or a guide payment's.
+      "lib/advances/service.ts",
       // Skips cancelling a job that was already paid (a filter).
       "lib/booking-import.ts",
       // Takes a wrongly attached slip off a legacy PAID row: PAID only in the guard

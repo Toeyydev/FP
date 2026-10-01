@@ -15,6 +15,7 @@ import { effectivePayer } from "@/lib/payer-rules";
 import { financialIdentity } from "@/lib/protected-expense-fields";
 import { jobStatusOf, summariesFor, JOB_STATUS_LABEL, type JobAdvanceStatus } from "@/lib/advances/summaries";
 import type { SheetRow } from "@/lib/advances/settlement";
+import { returnSummary } from "@/lib/advances/returns";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 
 export type JobAdvanceRow = {
@@ -39,6 +40,9 @@ export type JobReceiptRow = {
   id: string; receiptNo: string; amount: number; returnedAt: Date; receivedDate: string; method: string;
   txRef: string | null; slipUrl: string | null; note: string | null;
   status: string; allocated: number; unallocated: number;
+  /** Paid back to the guide (PAID refunds), and what is still free to allocate or refund. */
+  refunded?: number; available?: number; problems?: string[];
+  advanceId?: string | null; jobSheetId?: string | null;
   /** How much of it is allocated to THIS job's advances. */
   allocatedHere: number;
 };
@@ -67,7 +71,7 @@ export type JobAdvanceView = {
   frozen: boolean;
 };
 
-type Db = Pick<PrismaClient, "guideAdvance" | "guideAdvanceEntry" | "guideAdvanceReceipt" | "guideAdvanceReturn" | "advancePeakSync" | "jobSheet">;
+type Db = Pick<PrismaClient, "guideAdvance" | "guideAdvanceEntry" | "guideAdvanceReceipt" | "guideAdvanceReturn" | "advancePeakSync" | "jobSheet" | "guideAdvanceRefund">;
 
 export async function jobAdvanceView(db: Db, input: { guideId: string; date: string; slotIdx: number; expenses: Expense[] | null | undefined }): Promise<JobAdvanceView> {
   const { guideId, date, slotIdx } = input;
@@ -78,6 +82,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
   });
   const summaries = await summariesFor(db, advances);
   const sheetRow = await db.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true, updatedAt: true } });
+  const advanceIds = advances.map((a) => a.id);
   const liveIds = advances.filter((a) => !a.reversedAt).map((a) => a.id);
 
   const [entries, legacyHere] = await Promise.all([
@@ -87,9 +92,9 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
     db.guideAdvanceReturn.findMany({ where: { guideId, date, slotIdx }, select: { id: true } }),
   ]);
 
-  // Receipts shown on this job: those allocated to its advances, the migrated returns
-  // that were typed on this job, and any of the guide's money not yet put anywhere — so
-  // an operator looking at the job can see a return is waiting.
+  // Returns shown on THIS job (Phase 1C): those allocated to its advances, those linked to
+  // its job sheet or to one of its advances, and the migrated returns typed on it. Not every
+  // pending return the guide has — a return for another job is that job's business.
   const allocatedHereById = new Map<string, number>();
   for (const e of entries) if (e.type === "RETURN_ALLOCATION" && e.receiptId) allocatedHereById.set(e.receiptId, (allocatedHereById.get(e.receiptId) ?? 0) + e.amountSatang);
   const candidates = await db.guideAdvanceReceipt.findMany({
@@ -98,15 +103,21 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
       OR: [
         { id: { in: [...allocatedHereById.keys()] } },
         { legacyReturnId: { in: legacyHere.map((r) => r.id) } },
-        { status: { in: ["CLAIMED", "VERIFIED"] } },
+        ...(advanceIds.length ? [{ advanceId: { in: advanceIds } }] : []),
+        ...(sheetRow ? [{ jobSheetId: sheetRow.id }] : []),
       ],
     },
     orderBy: [{ receivedDate: "asc" }, { receiptNo: "asc" }],
-    select: { id: true, receiptNo: true, amountSatang: true, allocatedSatang: true, status: true, receivedDate: true, createdAt: true, method: true, bankRef: true, slipUrl: true, note: true, legacyReturnId: true },
+    select: { id: true, receiptNo: true, amountSatang: true, allocatedSatang: true, refundedSatang: true, status: true, receivedDate: true, createdAt: true, method: true, bankRef: true, slipUrl: true, note: true, legacyReturnId: true, advanceId: true, jobSheetId: true },
   });
-  const legacyIds = new Set(legacyHere.map((r) => r.id));
-  const receipts = candidates.filter((r) =>
-    allocatedHereById.has(r.id) || (r.legacyReturnId && legacyIds.has(r.legacyReturnId)) || r.status === "CLAIMED" || (r.status === "VERIFIED" && r.allocatedSatang < r.amountSatang));
+  const receipts = candidates;
+  // Each return's own balance (lib/advances/returns returnSummary).
+  const [receiptEntries, receiptRefunds] = receipts.length
+    ? await Promise.all([
+        db.guideAdvanceEntry.findMany({ where: { receiptId: { in: receipts.map((r) => r.id) } }, select: { id: true, receiptId: true, type: true, amountSatang: true, reversesEntryId: true } }),
+        db.guideAdvanceRefund.findMany({ where: { receiptId: { in: receipts.map((r) => r.id) } }, select: { receiptId: true, status: true, amountSatang: true } }),
+      ])
+    : [[], []];
 
   // Every figure from the ledger, through advanceSummary — never re-added from rows.
   const live = advances.filter((a) => !a.reversedAt);
@@ -158,8 +169,12 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
     returns: receipts.map((r) => ({
       peakSync: sync.get(`RETURN:${r.id}`) ?? null, id: r.id, receiptNo: r.receiptNo, amount: fromSatang(r.amountSatang), returnedAt: r.createdAt, receivedDate: r.receivedDate,
       method: r.method, txRef: r.bankRef, slipUrl: r.slipUrl, note: r.note, status: r.status,
-      allocated: fromSatang(r.allocatedSatang), unallocated: fromSatang(r.amountSatang - r.allocatedSatang),
+      ...(() => {
+        const s = returnSummary(r, receiptEntries.filter((e) => e.receiptId === r.id), receiptRefunds.filter((f) => f.receiptId === r.id));
+        return { allocated: fromSatang(s.allocated), refunded: fromSatang(s.refunded), unallocated: fromSatang(s.unallocated), available: fromSatang(s.available), problems: s.problems };
+      })(),
       allocatedHere: fromSatang(allocatedHereById.get(r.id) ?? 0),
+      advanceId: r.advanceId, jobSheetId: r.jobSheetId,
     })),
     totals,
     lines,

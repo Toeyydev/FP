@@ -89,8 +89,9 @@ export async function guideAdvanceSummary(
   const live = advances.filter((a) => !a.reversedAt);
   const [entries, receipts] = await Promise.all([
     live.length ? prisma.guideAdvanceEntry.findMany({ where: { advanceId: { in: live.map((a) => a.id) }, reversedByEntryId: null, type: { not: "REVERSAL" } }, select: { type: true, amountSatang: true } }) : Promise.resolve([]),
+    // This job's returns only (Phase 1C): linked to its job sheet or one of its advances.
     prisma.guideAdvanceReceipt.findMany({
-      where: { guideId, status: { in: ["CLAIMED", "VERIFIED"] } },
+      where: { guideId, status: { in: ["CLAIMED", "VERIFIED"] }, OR: [{ advanceId: { in: advances.map((a) => a.id) } }, { jobSheet: { guideId, date, slotIdx } }] },
       orderBy: { receivedDate: "asc" },
       select: { id: true, receiptNo: true, amountSatang: true, allocatedSatang: true, status: true, receivedDate: true, createdAt: true, method: true, bankRef: true, note: true, slipUrl: true },
     }),
@@ -207,7 +208,11 @@ export async function recordAdvanceReturn(o: {
   const receipt = await recordReceipt(prisma, {
     guideId, receivedDate: bangkokDate(at), amount, byGuide: o.byGuide, confirmedArrived: !o.byGuide && !!o.confirmedArrived, today: bangkokToday(Date.now()),
     bankAccount: o.bankAccount ?? null, bankRef: o.txRef ?? null, method: o.method || "bank",
-    note: [o.note, sheet.ref ? `Recorded on ${sheet.ref}` : null, o.advanceId ? `Guide says it is for advance ${o.advanceId}` : null].filter(Boolean).join(" · ") || null,
+    // What the money is for, as structured fields (intent only — allocation stays an operator's
+    // act): this job, and the advance the guide named, or the job's only live advance.
+    note: o.note?.trim() || null,
+    jobSheetId: sheet.id,
+    advanceId: o.advanceId ?? (await soleLiveAdvance(where)),
     slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null,
     actor: { actorId: o.actorId, actorRole: o.actorRole },
   });
@@ -225,3 +230,9 @@ export async function recordAdvanceReturn(o: {
   return { ok: true, id: row.id, slip: slip?.url ?? null };
 }
 
+
+/** The job's advance when there is exactly one live one — what a return on that job is plainly for. */
+async function soleLiveAdvance(job: { guideId: string; date: string; slotIdx: number }): Promise<string | null> {
+  const live = await prisma.guideAdvance.findMany({ where: { ...job, reversedAt: null }, select: { id: true }, take: 2 });
+  return live.length === 1 ? live[0].id : null;
+}

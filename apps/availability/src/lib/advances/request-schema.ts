@@ -28,6 +28,9 @@ export const receiptBody = z.object({
   bankRef: z.string().max(120).nullish(),
   method: z.string().max(24).nullish(),
   note: z.string().max(500).nullish(),
+  // What the money was for — intent only (lib/advances/returns); allocation stays explicit.
+  advanceId: z.string().max(64).nullish(),
+  jobSheetId: z.string().max(64).nullish(),
 });
 
 export const allocateBody = z.object({

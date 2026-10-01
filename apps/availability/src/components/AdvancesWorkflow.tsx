@@ -24,7 +24,7 @@ type Advance = {
 };
 type Receipt = {
   peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
-  id: string; receiptNo: string; guideId: string; receivedDate: string; status: "CLAIMED" | "VERIFIED" | "REJECTED";
+  id: string; receiptNo: string; guideId: string; receivedDate: string; status: "CLAIMED" | "VERIFIED" | "REJECTED" | "VOIDED"; refunded?: number; available?: number;
   amount: number; allocated: number; unallocated: number; bankRef: string | null; slipUrl: string | null;
   note: string | null; verifiedAt: string | null; rejectedReason: string | null;
 };
@@ -36,7 +36,7 @@ type Unbooked = {
 const STATUS_LABEL: Record<string, string> = {
   // Advances (lib/advances/rules advanceSummary). A null status means the ledger does not add up.
   OPEN: "Open", IN_USE: "In use", RETURN_DUE: "Return due", SETTLED: "Settled", VOID: "Reversed", NEEDS_REVIEW: "Needs review",
-  CLAIMED: "Waiting to be checked", VERIFIED: "Confirmed", REJECTED: "Rejected",
+  CLAIMED: "Waiting to be checked", VERIFIED: "Confirmed", REJECTED: "Rejected", VOIDED: "Voided",
 };
 
 const jfetch = async (url: string, init?: RequestInit) => {
