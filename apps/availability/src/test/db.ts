@@ -10,7 +10,7 @@ const TABLES = [
   // The advance ledger and everything that hangs off it. Listed before JobSheet
   // and User because these rows reference them.
   "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",
-  "GuideAdvanceReceipt", "GuideAdvanceReturn", "GuideAdvance",
+  "GuideAdvanceRefund", "GuideAdvanceReceipt", "GuideAdvanceReturn", "GuideAdvance",
   // A guide's transfers, and the PEAK document each one settles. Before TourPayment,
   // which a recorded payment points back at.
   // Supplemental payments point at GuidePayment (their transfer and the payout they
