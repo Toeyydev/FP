@@ -40,7 +40,10 @@ export async function POST(req: NextRequest) {
       approvedBy: nowApproved ? session!.user!.id ?? null : null,
       approvedAt: nowApproved ? new Date() : null,
     },
-    select: { approvalStatus: true, approvedBy: true, approvedAt: true },
+    // updatedAt too: this write moves the sheet's version, and the editor sends that
+    // version back as baseUpdatedAt on its next Save. Without it the editor held the
+    // version from before the approval and its next Save was refused as stale.
+    select: { approvalStatus: true, approvedBy: true, approvedAt: true, updatedAt: true },
   });
 
   await audit({

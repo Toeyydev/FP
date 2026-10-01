@@ -139,6 +139,45 @@ describe("a signed-for row cannot be changed by a save", () => {
   });
 });
 
+describe("a row with a confirmed payer may gain its category", () => {
+  // Owner decision 2026-10-01. A confirmed payer stamps the row, and the row's category was
+  // part of what the stamp was matched on — so adding the category a PEAK document needs
+  // was refused as if the expense had changed, and the row could never be booked.
+  const bare = (over: Partial<ProtectedRow> = {}) => stamped({ expenseType: undefined, ...over });
+  it("a stamped row with no category takes one, and keeps its stamp", () => {
+    const r = mergeServerOwned([bare()], [row({ expenseType: "transport" })]);
+    expect(r.conflicts).toEqual([]);
+    expect(r.rows[0]).toMatchObject({ expenseType: "transport", paidByBy: "u_admin", paidByAt: "2099-04-01T03:00:00.000Z" });
+  });
+  it("a stamped row may change category too", () => {
+    const r = mergeServerOwned([stamped({ expenseType: "other" })], [row({ expenseType: "transport" })]);
+    expect(r.conflicts).toEqual([]);
+    expect(r.rows[0]).toMatchObject({ expenseType: "transport", paidByBy: "u_admin" });
+  });
+  it("the payer, price or count changing is still refused", () => {
+    for (const over of [{ paidBy: "company" }, { price: 12 }, { pax: 5 }] as Partial<ProtectedRow>[]) {
+      expect(mergeServerOwned([bare()], [row({ expenseType: "transport", ...over })]).conflicts).toHaveLength(1);
+    }
+  });
+  it("a waived row still needs the exact expense, category included", () => {
+    expect(mergeServerOwned([waived({ expenseType: undefined })], [row({ expenseType: "transport" })]).conflicts).toHaveLength(1);
+  });
+  it("a row an admin asked a certificate for still needs the exact expense", () => {
+    const req = { by: "u_admin", at: "2099-04-01T03:00:00.000Z" };
+    expect(mergeServerOwned([bare({ certificateRequest: req })], [row({ expenseType: "transport" })]).conflicts).toHaveLength(1);
+  });
+  it("two rows that only the category told apart are refused, not guessed", () => {
+    const two = [stamped({ expenseType: "meal" }), stamped({ expenseType: "other" })];
+    const r = mergeServerOwned(two, [row({ expenseType: "transport" }), row({ expenseType: "entrance" })]);
+    expect(r.conflicts.length).toBeGreaterThan(0);
+  });
+  it("an exact match still wins over a category-only match", () => {
+    const r = mergeServerOwned([bare()], [row({ expenseType: undefined })]);
+    expect(r.conflicts).toEqual([]);
+    expect(r.rows[0]).toMatchObject({ paidByBy: "u_admin" });
+  });
+});
+
 describe("what counts as the same expense", () => {
   it("whitespace is not a change", () => {
     expect(financialIdentity(row({ description: "  Ferry   fare " }))).toBe(financialIdentity(row({ description: "Ferry fare" })));

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Expense } from "@/lib/jobsheet";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { buildPayload, canonicalString, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type SheetFacts } from "@/lib/certificates/payload";
+import { mergeServerOwned } from "@/lib/protected-expense-fields";
 import { categoryLabelTh, renderCertificateHtml, roundLabelTh, thaiDate, thaiDateTime } from "@/lib/certificates/document";
 import { EXPENSE_CATEGORIES } from "@/lib/jobsheet";
 import { readBackCount } from "@/lib/certificates/text-layer";
@@ -127,6 +128,22 @@ describe("noticing the sheet moved after it was certified", () => {
   it("attaching a receipt afterwards drifts — that row no longer needs certifying", () => {
     const d = checkDrift(stored(), { facts: FACTS, expenses: [row({ receiptUrl: "https://drive.example.test/r" }), row({ description: "Bus", price: 15 })] });
     expect(d.drifted).toBe(true);
+  });
+
+  it("a category added on the sheet afterwards drifts — the certificate is not quietly carried across", () => {
+    // A row protected only by a confirmed payer may now gain its category on Save
+    // (lib/protected-expense-fields). A certificate issued for that row before it had one
+    // printed the old category, so the change must show up here: linking refuses, and an
+    // admin withdraws the certificate and issues a new one. Nothing edits it in place.
+    const bare = [row({ expenseType: undefined }), row({ description: "Bus", price: 15, expenseType: undefined })];
+    const issued = certifiableRows(bare);
+    const cert = { payloadHash: payloadHash(buildPayload(FACTS, issued)), coveredRows: issued };
+    const stamp = { paidByBy: "u_ops", paidByAt: "2099-04-01T03:00:00.000Z" };
+    const saved = mergeServerOwned(bare.map((r) => ({ ...r, ...stamp })), bare.map((r) => ({ ...r, expenseType: "transport" })));
+    expect(saved.conflicts).toEqual([]); // the save goes through…
+    const d = checkDrift(cert, { facts: FACTS, expenses: saved.rows as Expense[] });
+    expect(d.drifted).toBe(true); // …and the certificate no longer matches the sheet
+    expect(cert.coveredRows.map((r) => r.category)).toEqual(["other", "other"]); // the stored snapshot is untouched
   });
 
   it("a new unreceipted row drifts — the certificate does not cover it", () => {
