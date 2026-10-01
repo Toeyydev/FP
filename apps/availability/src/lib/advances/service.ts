@@ -22,9 +22,11 @@
 //      GuideAdvanceReceipt  →  GuideAdvance (ascending id)  →  TourPayment (job order)
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
+import { MIN_REFUND_REASON, refundNoFor, returnLinkProblems, returnSummary } from "@/lib/advances/returns";
+import { summariesFor } from "@/lib/advances/summaries";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import {
-  advanceNoFor, advanceSummary, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
+  MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
   fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
   type AllocationRequest, type EntryType, type IssueAdvanceInput, type ReceiptInput, type ReceiptStatus,
 } from "@/lib/advances/rules";
@@ -68,14 +70,25 @@ export async function bumpAdvance(tx: Tx, advanceId: string, deltaSatang: number
   return rows === 1;
 }
 
-/** The same statement on a receipt. Only a VERIFIED receipt may hold an allocation. */
+/** The same statement on a receipt. Only a VERIFIED receipt may hold an allocation, and never past what is left after refunds. */
 export async function bumpReceipt(tx: Tx, receiptId: string, deltaSatang: number): Promise<boolean> {
   const rows = await tx.$executeRaw`
     UPDATE "GuideAdvanceReceipt" SET "allocatedSatang" = "allocatedSatang" + ${deltaSatang}
      WHERE "id" = ${receiptId}
        AND "status" = 'VERIFIED'
        AND "allocatedSatang" + ${deltaSatang} >= 0
-       AND "allocatedSatang" + ${deltaSatang} <= "amountSatang"`;
+       AND "allocatedSatang" + ${deltaSatang} + "refundedSatang" <= "amountSatang"`;
+  return rows === 1;
+}
+
+/** A refund paid out of a receipt's unallocated balance: one conditional statement, so two payments cannot both take the same baht. */
+async function bumpReceiptRefunded(tx: Tx, receiptId: string, deltaSatang: number): Promise<boolean> {
+  const rows = await tx.$executeRaw`
+    UPDATE "GuideAdvanceReceipt" SET "refundedSatang" = "refundedSatang" + ${deltaSatang}
+     WHERE "id" = ${receiptId}
+       AND "status" = 'VERIFIED'
+       AND "refundedSatang" + ${deltaSatang} >= 0
+       AND "allocatedSatang" + "refundedSatang" + ${deltaSatang} <= "amountSatang"`;
   return rows === 1;
 }
 
@@ -107,8 +120,9 @@ async function existingRequest(db: Tx | PrismaClient, requestKey: string) {
   return db.guideAdvanceEntry.findMany({ where: { requestKey }, select: { id: true, advanceId: true, type: true, amountSatang: true, requestKey: true } });
 }
 
-async function nextNo(tx: Tx, kind: "ADV" | "ADR", date: string): Promise<string> {
+async function nextNo(tx: Tx, kind: "ADV" | "ADR" | "ADF", date: string): Promise<string> {
   const period = periodOf(date);
+  if (kind === "ADF") return refundNoFor(date, (await tx.guideAdvanceRefund.count({ where: { refundNo: { startsWith: `FOLK-ADF-${period.replace("-", "")}` } } })) + 1);
   const n = kind === "ADV"
     ? await tx.guideAdvance.count({ where: { accountingPeriod: period } })
     : await tx.guideAdvanceReceipt.count({ where: { receiptNo: { startsWith: `FOLK-ADR-${period.replace("-", "")}` } } });
@@ -177,6 +191,8 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
  */
 export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & {
   actor: Actor; slipUrl?: string | null; slipFileId?: string | null; evidenceId?: string | null; bankAccount?: string | null;
+  /** What the guide or operator said this money was for — intent only, never an allocation (lib/advances/returns). */
+  advanceId?: string | null; jobSheetId?: string | null;
   /** The operator states they have seen this money in the company account. Without it the
    *  receipt waits to be checked — a slip is a picture of a transfer, not proof it landed. */
   confirmedArrived?: boolean;
@@ -195,6 +211,8 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
     const clash = await prisma.guideAdvanceReceipt.findFirst({ where: { guideId: input.guideId, bankRef }, select: { receiptNo: true } });
     if (clash) return fail(409, `Bank reference ${bankRef} is already recorded on ${clash.receiptNo}`);
   }
+  const link = await loadReturnLink(prisma, { guideId: input.guideId }, input.advanceId ?? null, input.jobSheetId ?? null);
+  if (!link.ok) return link;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -207,6 +225,7 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
             method: input.method ?? "bank", bankAccount: input.bankAccount ?? null, bankRef,
             slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null, evidenceId: input.evidenceId ?? null,
             note: input.note ?? null,
+            advanceId: link.advanceId, jobSheetId: link.jobSheetId,
             claimedById: input.actor.actorId, claimedAt: new Date(),
             verifiedById: !input.byGuide && input.confirmedArrived ? input.actor.actorId : null,
             verifiedAt: !input.byGuide && input.confirmedArrived ? new Date() : null,
@@ -215,7 +234,7 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
           select: { id: true, receiptNo: true, status: true },
         });
       });
-      await audit({ ...input.actor, action: input.byGuide ? "advance.return_claimed" : "advance.return_recorded", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: { receiptNo: receipt.receiptNo, guideId: input.guideId, receivedDate: input.receivedDate, amount: fromSatang(amountSatang), bankRef, byGuide: input.byGuide } });
+      await audit({ ...input.actor, action: input.byGuide ? "advance.return_claimed" : "advance.return_recorded", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: { receiptNo: receipt.receiptNo, guideId: input.guideId, receivedDate: input.receivedDate, amount: fromSatang(amountSatang), bankRef, byGuide: input.byGuide, advanceId: link.advanceId, jobSheetId: link.jobSheetId } });
       return { ok: true, receipt };
     } catch (e) {
       if (isUnique(e) && attempt < 2) continue;
@@ -227,8 +246,12 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
 
 /** The operator has seen the money in the bank. One conditional statement, so two tabs cannot both verify. */
 export async function verifyReceipt(prisma: PrismaClient, input: { receiptId: string; actor: Actor; bankAccount?: string | null; bankRef?: string | null }): Promise<{ ok: true } | Fail> {
-  const receipt = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId }, select: { id: true, guideId: true, receiptNo: true, status: true, bankRef: true } });
+  const receipt = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId }, select: { id: true, guideId: true, receiptNo: true, status: true, bankRef: true, amountSatang: true, advanceId: true, jobSheetId: true } });
   if (!receipt) return fail(404, "No such return");
+  if (receipt.status !== "CLAIMED") return fail(409, `${receipt.receiptNo} is ${receipt.status.toLowerCase()} — only a return waiting to be checked can be verified`);
+  if (!(receipt.amountSatang > 0)) return fail(409, `${receipt.receiptNo} has no amount`);
+  const link = await loadReturnLink(prisma, receipt, receipt.advanceId, receipt.jobSheetId);
+  if (!link.ok) return fail(409, ...link.reasons.map((r) => `${receipt.receiptNo}: ${r} — link it to the right advance first`));
   const bankRef = (input.bankRef ?? "").trim() || null;
   const missing = checkConfirmation(bankRef);
   if (missing.length) return fail(400, ...missing);
@@ -241,7 +264,10 @@ export async function verifyReceipt(prisma: PrismaClient, input: { receiptId: st
     data: { status: "VERIFIED", verifiedAt: new Date(), verifiedById: input.actor.actorId, ...(input.bankAccount ? { bankAccount: input.bankAccount } : {}), ...(bankRef ? { bankRef } : {}) },
   });
   if (moved.count !== 1) return fail(409, `${receipt.receiptNo} is already ${receipt.status.toLowerCase()} — reload the page`);
-  await audit({ ...input.actor, action: "advance.return_verified", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: { receiptNo: receipt.receiptNo, guideId: receipt.guideId, bankRef } });
+  await audit({ ...input.actor, action: "advance.return_verified", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: {
+    receiptNo: receipt.receiptNo, guideId: receipt.guideId, amount: fromSatang(receipt.amountSatang), bankRef,
+    advanceId: receipt.advanceId, jobSheetId: receipt.jobSheetId, verifiedBy: input.actor.actorId, verifiedAt: new Date().toISOString(),
+  } });
   return { ok: true };
 }
 
@@ -277,6 +303,14 @@ export async function allocateReceipt(prisma: PrismaClient, input: {
   const advances = await prisma.guideAdvance.findMany({ where: { id: { in: input.allocations.map((a) => a.advanceId) } } });
   const reasons = checkAllocations({ receipt: { ...receipt, status: receipt.status as ReceiptStatus }, advances, allocations: input.allocations });
   if (reasons.length) return fail(409, ...reasons);
+  const rs = await receiptSummaryOf(prisma, receipt);
+  if (!rs.ok) return fail(409, `${receipt.receiptNo} cannot be allocated until its books are checked (${rs.problems.join(", ")})`);
+  const asked = input.allocations.reduce((s, a) => s + toSatang(a.amount), 0);
+  if (asked > rs.available) return fail(409, `${receipt.receiptNo} has ${fromSatang(rs.available).toLocaleString()} free to allocate${rs.pendingRefunds ? ` (${fromSatang(rs.pendingRefunds).toLocaleString()} is set aside for a refund to the guide)` : ""}`);
+  for (const a of advances) {
+    const s = (await summariesFor(prisma, [a])).get(a.id)!;
+    if (s.status === null || s.driftSatang !== 0) return fail(409, `${a.advanceNo} cannot take an allocation until its ledger is checked (${s.problems.join(", ")})`);
+  }
 
   // Deterministic order: the receipt, then the advances by id. Never the other way.
   const lines = input.allocations
@@ -310,6 +344,184 @@ export async function allocateReceipt(prisma: PrismaClient, input: {
     if (isUnique(e)) return fail(409, "That allocation was already recorded — reload the page");
     throw e;
   }
+}
+
+// ── Returns: linking, voiding, refunds (Phase 1C, lib/advances/returns) ──────
+
+/** Load and check what a return says it is for. Intent only. */
+async function loadReturnLink(db: PrismaClient, receipt: { guideId: string }, advanceId: string | null, jobSheetId: string | null):
+  Promise<{ ok: true; advanceId: string | null; jobSheetId: string | null } | Fail> {
+  if (!advanceId && !jobSheetId) return { ok: true, advanceId: null, jobSheetId: null };
+  const advance = advanceId ? await db.guideAdvance.findUnique({ where: { id: advanceId }, select: { id: true, guideId: true, date: true, slotIdx: true, reversedAt: true, advanceNo: true } }) : null;
+  if (advanceId && !advance) return fail(404, "No such advance");
+  const sheet = jobSheetId ? await db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { id: true, guideId: true, date: true, slotIdx: true } }) : null;
+  if (jobSheetId && !sheet) return fail(404, "No such job sheet");
+  const problems = returnLinkProblems(receipt, advance, sheet);
+  if (problems.length) return fail(409, ...problems);
+  // An advance named without its job: the job is the advance's own.
+  let sheetId = sheet?.id ?? null;
+  if (advance && !sheetId && advance.slotIdx >= 0) {
+    sheetId = (await db.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: advance.guideId, date: advance.date, slotIdx: advance.slotIdx } }, select: { id: true } }))?.id ?? null;
+  }
+  return { ok: true, advanceId: advance?.id ?? null, jobSheetId: sheetId };
+}
+
+async function receiptSummaryOf(db: PrismaClient | Tx, receipt: { id: string; amountSatang: number; allocatedSatang: number; refundedSatang: number; status: string }) {
+  const [allocs, refunds] = await Promise.all([
+    db.guideAdvanceEntry.findMany({ where: { receiptId: receipt.id }, select: { id: true, type: true, amountSatang: true, reversesEntryId: true } }),
+    db.guideAdvanceRefund.findMany({ where: { receiptId: receipt.id }, select: { status: true, amountSatang: true } }),
+  ]);
+  return returnSummary(receipt, allocs, refunds);
+}
+
+/** Record (or change) the advance / job a return is for. Intent only; refused once anything is allocated from it. */
+export async function linkReceipt(prisma: PrismaClient, input: { receiptId: string; advanceId: string | null; jobSheetId: string | null; actor: Actor }): Promise<{ ok: true } | Fail> {
+  const r = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId } });
+  if (!r) return fail(404, "No such return");
+  if (r.status === "VOIDED" || r.status === "REJECTED") return fail(409, `${r.receiptNo} is ${r.status.toLowerCase()}`);
+  if (r.allocatedSatang > 0) return fail(409, `${r.receiptNo} is already allocated — reverse the allocation before changing what it is for`);
+  const link = await loadReturnLink(prisma, r, input.advanceId, input.jobSheetId);
+  if (!link.ok) return link;
+  const moved = await prisma.guideAdvanceReceipt.updateMany({ where: { id: r.id, status: r.status, allocatedSatang: 0 }, data: { advanceId: link.advanceId, jobSheetId: link.jobSheetId } });
+  if (moved.count !== 1) return fail(409, `${r.receiptNo} changed — reload and try again`);
+  await audit({ ...input.actor, action: "advance.return_linked", entityType: "GuideAdvanceReceipt", entityId: r.id, detail: { receiptNo: r.receiptNo, guideId: r.guideId, from: { advanceId: r.advanceId, jobSheetId: r.jobSheetId }, to: { advanceId: link.advanceId, jobSheetId: link.jobSheetId } } });
+  return { ok: true };
+}
+
+/** Where PEAK already holds this return, if anywhere: the outbox, or a hand-entered document linked to it. */
+async function returnInPeak(db: PrismaClient | Tx, receiptId: string): Promise<string | null> {
+  const outbox = await db.advancePeakSync.findUnique({ where: { id: `RETURN:${receiptId}` }, select: { status: true, documentNo: true } });
+  if (outbox && ["SENDING", "UNCERTAIN", "POSTED"].includes(outbox.status)) return outbox.documentNo ?? `outbox ${outbox.status.toLowerCase()}`;
+  const link = await db.advancePeakDocumentLink.findFirst({ where: { kind: "RETURN", sourceId: receiptId, status: "LINKED" }, select: { documentNo: true } });
+  return link?.documentNo ?? null;
+}
+
+/** A return recorded in error. Only with nothing allocated, refunded or being refunded, and nothing in PEAK. */
+export async function voidReceipt(prisma: PrismaClient, input: { receiptId: string; reason: string; actor: Actor }): Promise<{ ok: true } | Fail> {
+  if ((input.reason ?? "").trim().length < MIN_REASON) return fail(400, "Say why this return is being voided");
+  const r = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId } });
+  if (!r) return fail(404, "No such return");
+  if (r.status !== "CLAIMED" && r.status !== "VERIFIED") return fail(409, `${r.receiptNo} is ${r.status.toLowerCase()} and cannot be voided`);
+  const rs = await receiptSummaryOf(prisma, r);
+  if (rs.allocated > 0 || r.allocatedSatang > 0) return fail(409, `${r.receiptNo} is allocated to an advance — reverse the allocation first`);
+  if (rs.refunded > 0 || r.refundedSatang > 0) return fail(409, `${r.receiptNo} has a refund paid out of it — it cannot be voided`);
+  if (rs.pendingRefunds > 0) return fail(409, `${r.receiptNo} has a refund being prepared — void that refund first`);
+  const inPeak = await returnInPeak(prisma, r.id);
+  if (inPeak) return fail(409, `${r.receiptNo} is in PEAK (${inPeak}) — reverse it in PEAK first; nothing was changed here`);
+  try {
+    await prisma.$transaction(async (tx) => {
+      const moved = await tx.guideAdvanceReceipt.updateMany({
+        where: { id: r.id, status: { in: ["CLAIMED", "VERIFIED"] }, allocatedSatang: 0, refundedSatang: 0 },
+        data: { status: "VOIDED", voidedAt: new Date(), voidedById: input.actor.actorId ?? "unknown", voidReason: input.reason.trim() },
+      });
+      if (moved.count !== 1) throw new LedgerConflict(`${r.receiptNo} changed while it was being voided — reload and try again`);
+      if (await tx.guideAdvanceRefund.count({ where: { receiptId: r.id, status: { not: "VOIDED" } } })) throw new LedgerConflict(`${r.receiptNo} has a refund — void that refund first`);
+      // A pending PEAK item for it is cancelled in the same transaction; one PEAK is sending
+      // or holds is never undone here.
+      await tx.advancePeakSync.updateMany({ where: { id: `RETURN:${r.id}`, status: { in: ["PENDING", "BLOCKED"] } }, data: { status: "CANCELLED" } });
+      const now = await returnInPeak(tx, r.id);
+      if (now) throw new LedgerConflict(`${r.receiptNo} went to PEAK (${now}) while it was being voided — nothing was changed`);
+    });
+  } catch (e) {
+    if (e instanceof LedgerConflict) return fail(409, e.message);
+    throw e;
+  }
+  await audit({ ...input.actor, action: "advance.return_voided", entityType: "GuideAdvanceReceipt", entityId: r.id, detail: { receiptNo: r.receiptNo, guideId: r.guideId, amount: fromSatang(r.amountSatang), from: r.status, reason: input.reason.trim() } });
+  return { ok: true };
+}
+
+type RefundRow = { id: string; refundNo: string; receiptId: string; guideId: string; amountSatang: number; status: string; recordedById: string; bankRef: string | null };
+
+/** Step 1: record that part of an over-return is to be paid back to the guide. Moves no money. */
+export async function recordRefund(prisma: PrismaClient, input: { receiptId: string; amount: number; reason: string; actor: Actor }): Promise<{ ok: true; refund: { id: string; refundNo: string; status: string } } | Fail> {
+  if ((input.reason ?? "").trim().length < MIN_REFUND_REASON) return fail(400, `Say why this money is being paid back to the guide (at least ${MIN_REFUND_REASON} characters)`);
+  const amountSatang = Number.isFinite(input.amount) ? toSatang(input.amount) : NaN;
+  if (!(amountSatang > 0) || Math.abs(input.amount * 100 - amountSatang) > 1e-6) return fail(400, "Enter the amount to pay back, in baht, at most two decimals");
+  const r = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId } });
+  if (!r) return fail(404, "No such return");
+  if (r.status !== "VERIFIED") return fail(409, `${r.receiptNo} is ${r.status.toLowerCase()} — only money confirmed in the bank can be paid back`);
+  const rs = await receiptSummaryOf(prisma, r);
+  if (!rs.ok) return fail(409, `${r.receiptNo} cannot be refunded until its books are checked (${rs.problems.join(", ")})`);
+  if (amountSatang > rs.available) return fail(409, `${r.receiptNo} has ${fromSatang(rs.available).toLocaleString()} not allocated and not already set aside — a refund cannot be more than that`);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const refund = await prisma.$transaction(async (tx) => tx.guideAdvanceRefund.create({
+        data: { refundNo: await nextNo(tx, "ADF", r.receivedDate), receiptId: r.id, guideId: r.guideId, amountSatang, status: "RECORDED", reason: input.reason.trim(), recordedById: input.actor.actorId ?? "unknown" },
+        select: { id: true, refundNo: true, status: true },
+      }));
+      await audit({ ...input.actor, action: "advance.refund_recorded", entityType: "GuideAdvanceRefund", entityId: refund.id, detail: { refundNo: refund.refundNo, receiptNo: r.receiptNo, guideId: r.guideId, amount: fromSatang(amountSatang), reason: input.reason.trim() } });
+      return { ok: true, refund };
+    } catch (e) {
+      if (isUnique(e) && attempt < 2) continue;
+      throw e;
+    }
+  }
+  return fail(409, "Could not number the refund — try again");
+}
+
+/**
+ * Step 2: a second person approves it. Maker–checker: the person who recorded a refund may
+ * not approve it — an outbound transfer needs two people (owner policy 2026-10-01).
+ */
+export async function approveRefund(prisma: PrismaClient, input: { refundId: string; actor: Actor }): Promise<{ ok: true } | Fail> {
+  const f = await prisma.guideAdvanceRefund.findUnique({ where: { id: input.refundId } }) as RefundRow | null;
+  if (!f) return fail(404, "No such refund");
+  if (f.status !== "RECORDED") return fail(409, `${f.refundNo} is ${f.status.toLowerCase()} — only a recorded refund can be approved`);
+  if (!input.actor.actorId || input.actor.actorId === f.recordedById) return fail(409, `${f.refundNo} was recorded by you — another person must approve a refund`);
+  const r = await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: f.receiptId } });
+  const rs = await receiptSummaryOf(prisma, r);
+  // Still payable: the money it would take is still free (this refund is among the pending).
+  if (!rs.ok || f.amountSatang > rs.available + f.amountSatang) return fail(409, `${r.receiptNo} no longer has ${fromSatang(f.amountSatang).toLocaleString()} free for this refund — void it`);
+  const moved = await prisma.guideAdvanceRefund.updateMany({ where: { id: f.id, status: "RECORDED", NOT: { recordedById: input.actor.actorId } }, data: { status: "APPROVED", approvedById: input.actor.actorId, approvedAt: new Date() } });
+  if (moved.count !== 1) return fail(409, `${f.refundNo} changed — reload the page`);
+  await audit({ ...input.actor, action: "advance.refund_approved", entityType: "GuideAdvanceRefund", entityId: f.id, detail: { refundNo: f.refundNo, receiptNo: r.receiptNo, guideId: f.guideId, amount: fromSatang(f.amountSatang), recordedBy: f.recordedById } });
+  return { ok: true };
+}
+
+/** Step 3: the transfer to the guide was made. Takes the amount out of the receipt's unallocated balance, atomically. */
+export async function payRefund(prisma: PrismaClient, input: { refundId: string; paidAt: string; bankRef: string; slipUrl?: string | null; slipFileId?: string | null; actor: Actor }): Promise<{ ok: true; replayed: boolean } | Fail> {
+  const f = await prisma.guideAdvanceRefund.findUnique({ where: { id: input.refundId } }) as RefundRow | null;
+  if (!f) return fail(404, "No such refund");
+  const bankRef = (input.bankRef ?? "").trim();
+  const missing = checkConfirmation(bankRef);
+  if (missing.length) return fail(400, ...missing.map((m) => m.replace("this money arrived", "this transfer to the guide")));
+  const paidAt = new Date(input.paidAt);
+  if (Number.isNaN(paidAt.getTime()) || paidAt.getTime() > Date.now() + 60_000) return fail(400, "Give the date and time the transfer was made — not in the future");
+  if (f.status === "PAID") return f.bankRef === bankRef ? { ok: true, replayed: true } : fail(409, `${f.refundNo} is already paid (${f.bankRef})`);
+  if (f.status !== "APPROVED") return fail(409, `${f.refundNo} is ${f.status.toLowerCase()} — a refund is paid only after it is approved`);
+  const clash = await prisma.guideAdvanceRefund.findFirst({ where: { guideId: f.guideId, bankRef, id: { not: f.id } }, select: { refundNo: true } });
+  if (clash) return fail(409, `Bank reference ${bankRef} is already recorded on ${clash.refundNo}`);
+  try {
+    await prisma.$transaction(async (tx) => {
+      const moved = await tx.guideAdvanceRefund.updateMany({ where: { id: f.id, status: "APPROVED" }, data: { status: "PAID", paidAt, paidById: input.actor.actorId ?? "unknown", bankRef, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null } });
+      if (moved.count !== 1) throw new LedgerConflict(`${f.refundNo} changed — reload the page`);
+      if (!(await bumpReceiptRefunded(tx, f.receiptId, f.amountSatang))) throw new LedgerConflict(`The return no longer has ${fromSatang(f.amountSatang).toLocaleString()} free — nothing was paid; void this refund`);
+    });
+  } catch (e) {
+    if (e instanceof LedgerConflict) {
+      const now = await prisma.guideAdvanceRefund.findUnique({ where: { id: f.id }, select: { status: true, bankRef: true } });
+      if (now?.status === "PAID" && now.bankRef === bankRef) return { ok: true, replayed: true }; // a retry that lost the race to itself
+      return fail(409, e.message);
+    }
+    if (isUnique(e)) return fail(409, `Bank reference ${bankRef} is already recorded on another refund`);
+    throw e;
+  }
+  const r = await prisma.guideAdvanceReceipt.findUnique({ where: { id: f.receiptId }, select: { receiptNo: true } });
+  await audit({ ...input.actor, action: "advance.refund_paid", entityType: "GuideAdvanceRefund", entityId: f.id, detail: { refundNo: f.refundNo, receiptNo: r?.receiptNo ?? null, guideId: f.guideId, amount: fromSatang(f.amountSatang), bankRef, paidAt: paidAt.toISOString(), paidBy: input.actor.actorId } });
+  return { ok: true, replayed: false };
+}
+
+/** A refund that will not be paid. A PAID one is not voided here: undoing a transfer needs its own design. */
+export async function voidRefund(prisma: PrismaClient, input: { refundId: string; reason: string; actor: Actor }): Promise<{ ok: true } | Fail> {
+  if ((input.reason ?? "").trim().length < MIN_REASON) return fail(400, "Say why this refund is being voided");
+  const f = await prisma.guideAdvanceRefund.findUnique({ where: { id: input.refundId } }) as RefundRow | null;
+  if (!f) return fail(404, "No such refund");
+  if (f.status === "PAID") return fail(409, `${f.refundNo} was paid to the guide — a paid refund cannot be voided; reversing a transfer needs its own procedure`);
+  if (f.status === "VOIDED") return fail(409, `${f.refundNo} is already voided`);
+  const moved = await prisma.guideAdvanceRefund.updateMany({ where: { id: f.id, status: { in: ["RECORDED", "APPROVED"] } }, data: { status: "VOIDED", voidedAt: new Date(), voidedById: input.actor.actorId ?? "unknown", voidReason: input.reason.trim() } });
+  if (moved.count !== 1) return fail(409, `${f.refundNo} changed — reload the page`);
+  await audit({ ...input.actor, action: "advance.refund_voided", entityType: "GuideAdvanceRefund", entityId: f.id, detail: { refundNo: f.refundNo, guideId: f.guideId, amount: fromSatang(f.amountSatang), from: f.status, reason: input.reason.trim() } });
+  return { ok: true };
 }
 
 // ── Settling from approved job-sheet expenses ────────────────────────────────
@@ -490,6 +702,10 @@ export async function reverseEntry(prisma: PrismaClient, input: { entryId: strin
   if (e.type === "EXPENSE_SETTLEMENT") {
     const inPeak = await expenseInPeak(prisma, e);
     if (inPeak) return fail(409, `This settlement is in PEAK (${inPeak}) — reverse or void that document in PEAK first; nothing was changed here`);
+  }
+  if (e.type === "RETURN_ALLOCATION" && e.receiptId) {
+    const inPeak = await returnInPeak(prisma, e.receiptId);
+    if (inPeak) return fail(409, `The return behind this allocation is in PEAK (${inPeak}) — reverse it in PEAK first; nothing was changed here`);
   }
   const before = await prisma.guideAdvance.findUnique({ where: { id: e.advanceId }, select: { advanceNo: true, amountSatang: true, settledSatang: true } });
 

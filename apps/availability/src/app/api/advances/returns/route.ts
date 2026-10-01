@@ -6,7 +6,8 @@ import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { canViewFinance, isOps } from "@/lib/roles";
 import { recordReceipt } from "@/lib/advances/service";
-import { fromSatang, unallocatedSatang } from "@/lib/advances/rules";
+import { fromSatang } from "@/lib/advances/rules";
+import { returnSummary } from "@/lib/advances/returns";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { receiptBody } from "@/lib/advances/request-schema";
 
@@ -25,11 +26,21 @@ export async function GET(req: NextRequest) {
     take: 500,
   });
   const sync = await advanceSyncStates(prisma, rows.map(r => `RETURN:${r.id}`));
+  // Each return's balance from its own records (lib/advances/returns returnSummary).
+  const [allocs, refunds] = await Promise.all([
+    prisma.guideAdvanceEntry.findMany({ where: { receiptId: { in: rows.map((r) => r.id) } }, select: { id: true, receiptId: true, type: true, amountSatang: true, reversesEntryId: true } }),
+    prisma.guideAdvanceRefund.findMany({ where: { receiptId: { in: rows.map((r) => r.id) } }, orderBy: { createdAt: "asc" }, select: { id: true, refundNo: true, receiptId: true, amountSatang: true, status: true, reason: true, recordedById: true, approvedById: true, paidAt: true, bankRef: true, voidReason: true } }),
+  ]);
   const links = await peakLinksFor(prisma, "RETURN", rows.map((r) => r.id));
   return NextResponse.json({
     receipts: rows.map((r) => ({
       peakSync: sync.get(`RETURN:${r.id}`) ?? null, peakLink: links.get(r.id) ?? null, id: r.id, receiptNo: r.receiptNo, guideId: r.guideId, receivedDate: r.receivedDate, status: r.status,
-      amount: fromSatang(r.amountSatang), allocated: fromSatang(r.allocatedSatang), unallocated: fromSatang(unallocatedSatang(r)),
+      ...(() => {
+        const s = returnSummary(r, allocs.filter((e) => e.receiptId === r.id), refunds.filter((f) => f.receiptId === r.id));
+        return { amount: fromSatang(s.amount), allocated: fromSatang(s.allocated), refunded: fromSatang(s.refunded), pendingRefunds: fromSatang(s.pendingRefunds), unallocated: fromSatang(s.unallocated), available: fromSatang(s.available), problems: s.problems };
+      })(),
+      advanceId: r.advanceId, jobSheetId: r.jobSheetId, voidedAt: r.voidedAt, voidReason: r.voidReason,
+      refunds: refunds.filter((f) => f.receiptId === r.id).map((f) => ({ ...f, amount: fromSatang(f.amountSatang) })),
       bankRef: r.bankRef, bankAccount: r.bankAccount, slipUrl: r.slipUrl, note: r.note,
       claimedAt: r.claimedAt, verifiedAt: r.verifiedAt, rejectedReason: r.rejectedReason,
     })),
