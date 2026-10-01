@@ -6,6 +6,7 @@ import { tourStartMs } from "@/lib/no-show-count";
 import { toSheetBooking, SHEET_BOOKING_STATUSES, type SheetBooking } from "@/lib/sheet-bookings";
 import { isReviewExpense, isApproved, type Expense } from "@/lib/jobsheet";
 import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
+import { applyRateDefaults, summariseRates } from "@/lib/rate-payer";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 
 // One place that carries booking changes all the way to the guides' jobs.
@@ -325,7 +326,7 @@ export async function reconcileDeparture(dep: Departure, opts: ReconcileOptions)
 // ── Before the start: one transaction per departure ──────────────────────────
 
 type SheetRow = SheetBooking & { noShowPax?: number | null };
-type LoadedBooking = PlanBooking & { customerName: string | null; source: string | null; noShow: boolean; noShowPax: number };
+type LoadedBooking = PlanBooking & { customerName: string | null; source: string | null; noShow: boolean; noShowPax: number; rateTitle: string | null };
 type Removed = { key: string; why: string; kind: "cancelled" | "withdrawn" | "released" | "moved"; bookingId?: string; to?: Departure };
 type Draft = {
   a: { id: string; guideId: string; tourId: string; pax: number | null };
@@ -334,6 +335,8 @@ type Draft = {
   newRows: SheetRow[] | null; newExpenses: (Expense & ProtectedRow)[] | null;
   added: SheetRow[]; removed: Removed[]; resized: { key: string; from: number | null; to: number | null }[];
   recalculated: { description: string; from: number; to: number }[]; warnings: string[];
+  /** Rate suggestions refreshed because the job's guests changed (lib/rate-payer), and confirmed payers the new Rates disagree with. */
+  rateChanges: { description: string; from: string | null; to: string | null }[]; rateNotes: string[];
   sheetOld: number; sheetNew: number; changed: string[];
 };
 
@@ -356,7 +359,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
 
   const bookings: LoadedBooking[] = await tx.booking.findMany({
     where: { ...dep, status: { in: [...LIVE, "CANCELLED"] } },
-    select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true, customerName: true, source: true, noShow: true, noShowPax: true },
+    select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true, customerName: true, source: true, noShow: true, noShowPax: true, rateTitle: true },
     orderBy: { createdAt: "asc" },
   });
   // A booking an operator deleted or hid is no longer in the table as a live booking. It
@@ -365,7 +368,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
   const withdrawnIds = new Set<string>();
   for (const w of opts.withdrawn ?? []) {
     if (w.date !== dep.date || w.slotIdx !== dep.slotIdx || bookings.some((b) => b.id === w.id)) continue;
-    bookings.push({ id: w.id, status: "CANCELLED", tourId: w.tourId, assignedGuideId: w.assignedGuideId, externalRef: w.externalRef, confirmationCode: w.confirmationCode, pax: w.pax, customerName: null, source: null, noShow: false, noShowPax: 0 });
+    bookings.push({ id: w.id, status: "CANCELLED", tourId: w.tourId, assignedGuideId: w.assignedGuideId, externalRef: w.externalRef, confirmationCode: w.confirmationCode, pax: w.pax, customerName: null, source: null, noShow: false, noShowPax: 0, rateTitle: null });
     withdrawnIds.add(w.id);
   }
   const sheets = await tx.jobSheet.findMany({ where: dep, orderBy: { id: "asc" }, select: { id: true, ref: true, guideId: true, bookings: true, expenses: true, updatedAt: true, guideExpensesAt: true, approvalStatus: true, peakDocumentNo: true } });
@@ -548,6 +551,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
     let newRows: SheetRow[] | null = null, newExpenses: (Expense & ProtectedRow)[] | null = null;
     const added: SheetRow[] = [], removed: Removed[] = [], resized: Draft["resized"] = [], preserved: string[] = [];
     const warnings: string[] = [], recalculated: Draft["recalculated"] = [];
+    const rateChanges: Draft["rateChanges"] = [], rateNotes: string[] = [];
     let sheetOld = 0, sheetNew = 0;
     if (sheet) {
       const saved = rowsOf(sheet);
@@ -602,6 +606,23 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
         });
         if (recalculated.length) newExpenses = exps;
       }
+      // The guests changed, so their Rates may have. Suggested payers follow the new Rates —
+      // refreshed, or taken off where the new mix no longer supports one. A payer a person
+      // confirmed is never changed here; where the new Rates disagree with it, it is reported.
+      if (guestsChanged) {
+        const live = owned.filter((b) => LIVE.includes(b.status));
+        const base = newExpenses ?? ((sheet.expenses as unknown as (Expense & ProtectedRow)[]) ?? []);
+        const applied = applyRateDefaults(base, summariseRates(live), { onlyExisting: true });
+        applied.rows.forEach((e, i) => {
+          const was = base[i];
+          if ((was.paidBy ?? "") !== (e.paidBy ?? "") || (was.paidBySource ?? "") !== (e.paidBySource ?? "")) {
+            rateChanges.push({ description: (e.description ?? "").trim(), from: (was.paidBy ?? "") || null, to: (e.paidBy ?? "") || null });
+          }
+        });
+        if (rateChanges.length) newExpenses = applied.rows;
+        for (const c of applied.conflicts) rateNotes.push(`"${c.description}" ${c.reason}`);
+        for (const r of applied.review) if (rateChanges.some((x) => x.description === r.description)) rateNotes.push(`"${r.description}": its suggested payer was taken off — ${r.reason}`);
+      }
       if (newRows) changed.push("job sheet");
     }
     // The expected pax: the job sheet's own guest total when there is a sheet (the rule the
@@ -634,7 +655,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
       await cancelNotices(a);
       continue;
     }
-    drafts.push({ a, sheet, owned, toPlace, expected, recount, newRows, newExpenses, added, removed, resized, recalculated, warnings, sheetOld, sheetNew, changed });
+    drafts.push({ a, sheet, owned, toPlace, expected, recount, newRows, newExpenses, added, removed, resized, recalculated, warnings, rateChanges, rateNotes, sheetOld, sheetNew, changed });
   }
 
   // ── 4. Final validation, immediately before writing ──
@@ -719,6 +740,9 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
       if (d.resized.length) audits.push({ action: "jobsheet.booking_resized", entityType: "JobSheet", entityId: sheet.id, detail: { ...sheetBase, rows: d.resized } });
       if (d.sheetOld !== d.sheetNew) audits.push({ action: "jobsheet.expected_pax_changed", entityType: "JobSheet", entityId: sheet.id, detail: { ...sheetBase, oldExpectedPax: d.sheetOld, newExpectedPax: d.sheetNew } });
       if (d.recalculated.length) audits.push({ action: "jobsheet.expense_pax_recalculated", entityType: "JobSheet", entityId: sheet.id, detail: { ...sheetBase, rows: d.recalculated } });
+      if (d.rateChanges.length) audits.push({ action: "jobsheet.rate_suggestions_updated", entityType: "JobSheet", entityId: sheet.id, detail: { ...sheetBase, rows: d.rateChanges, note: "suggestions only — no confirmed payer changed" } });
+      if (d.rateNotes.length) issues.push(issue("PAYER_SUGGESTION_REVIEW", { type: "JobSheet", id: sheet.id }, d.rateNotes.join("|"), { ...sheetBase, why: d.rateNotes.join("; ") },
+        `${sheet.ref ?? "A job sheet"}: the guests' booked Rates changed. Check who paid: ${d.rateNotes.join("; ")}.`, dep.date));
       if (d.warnings.length) issues.push(issue("EXPENSE_COUNT_REVIEW", { type: "JobSheet", id: sheet.id }, `${d.sheetOld}->${d.sheetNew}`, { ...sheetBase, why: d.warnings.join("; ") },
         `${sheet.ref ?? "A job sheet"}: guests ${d.sheetOld} → ${d.sheetNew}. These expense counts were left as they are — check them: ${d.warnings.join("; ")}.`, dep.date));
     }

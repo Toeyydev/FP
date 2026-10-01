@@ -19,7 +19,9 @@ const NO_FEE: GuideFee = { price: 0, time: 0, whtPct: 0 };
 const feeAccount = { code: "510111", name: "ค่าจ้างมัคคุเทศก์" };
 
 const row = (over: Partial<Expense>): Expense => ({
-  description: "Grand Palace", price: 500, pax: 2, expenseType: "entrance", paidBy: "guide", ...over,
+  // Payers an operator confirmed: these cases are about the document's lines, not about
+  // whether a payer can be trusted (a payer nobody stands behind is refused — see below).
+  description: "Grand Palace", price: 500, pax: 2, expenseType: "entrance", paidBy: "guide", paidBySource: "operator", ...over,
 } as Expense);
 
 const build = (over: Partial<Parameters<typeof buildJobSheetExpense>[0]> = {}) =>

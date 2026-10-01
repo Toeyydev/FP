@@ -209,7 +209,7 @@ describe("Paid By on a report the guide files after the tour", () => {
       ["Ferry (Inc. Guide)", "company", "operator"],           // the operator already said
       ["Review reward", undefined, undefined],                 // earned, not spent
     ]);
-    expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 0, "category-default": 2, unconfirmed: 0 } });
+    expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 0, "category-default": 2, unconfirmed: 0, "rate-default": 0 } });
   });
 
   it("counts the tour as over as soon as the guide completed it", async () => {
@@ -328,7 +328,7 @@ describe("classifyPayers — a payer that arrives with a line is labelled, never
   it("never overwrites a payer that arrived with the line, even a different one", () => {
     const { rows, counts } = classifyPayers([{ description: "Bus", price: 15, pax: 3, paidBy: "advance", expenseType: "transport" }, { description: "Bus 2", price: 15, pax: 3, paidBy: "  ", expenseType: "transport" }], { defaultApplies: true });
     expect(rows.map((r) => r.paidBy)).toEqual(["advance", "guide"]);
-    expect(counts).toEqual({ operator: 0, guide: 0, "default-after-tour": 0, "category-default": 1, unconfirmed: 1 });
+    expect(counts).toEqual({ operator: 0, guide: 0, "default-after-tour": 0, "category-default": 1, unconfirmed: 1, "rate-default": 0 });
   });
 });
 

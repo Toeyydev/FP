@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/google-drive";
-import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, jobSheetDriveName, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, jobSheetDriveName, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
 import { jobSheetTotals } from "@/lib/peak-sync";
 import { paidByDocLabel } from "@/lib/paid-by-label";
@@ -49,7 +49,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
     const nsStats = noShowStats(bookings);
     // An uncategorised row prints "—" — the document shows what is stored, never a guess.
-    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(paidByDocLabel(e.paidBy))}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
+    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(paidByDocLabel(e))}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
 
     // Advance / settlement ledger — the accountant's cash story (never in expense totals).
     // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
@@ -114,7 +114,8 @@ ${advanceHtml}
         ${cost.reviewOwn > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Review Reward <span style="display:block;font-size:10px;color:#8a8f8b">ค่าตอบแทนรีวิว</span></td><td align="right"><b>${esc(thb(cost.reviewOwn))}</b></td></tr>` : ""}
         <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Withholding Tax <span style="font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
         <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Net Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์สุทธิ</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
-        ${guidePersonalTotal(expenses) > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(guidePersonalTotal(expenses)))}</b></td></tr>` : ""}
+        ${money.reimbursementDue > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(money.reimbursementDue))}</b></td></tr>` : ""}
+        ${money.awaitingConfirmationTotal > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Awaiting payer confirmation <span style="font-size:10px;color:#8a8f8b">รอยืนยันผู้ชำระ — ไม่รวมในยอดที่ต้องคืน</span></td><td align="right" style="color:#555">${esc(thb(money.awaitingConfirmationTotal))}</td></tr>` : ""}
         <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Net Pay to Guide <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนที่ต้องชำระให้มัคคุเทศก์</span></b></td><td align="right"><b>${esc(thb(money.netPayToGuide))}</b></td></tr>
       </tbody></table>
       ${approvalBlock}

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { expenseAmount, isReviewExpense, type Expense } from "@/lib/jobsheet";
 import { canonicalPaidBy } from "@/lib/peak-sync";
+import { guideMoneyConfirmed } from "@/lib/payer-rules";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import type { ExpenseSource } from "@/lib/certificates/source";
@@ -86,6 +87,10 @@ export function certifiableRows(expenses: readonly Expense[] | null | undefined)
   const out: CertifiableRow[] = [];
   (expenses ?? []).forEach((e, index) => {
     if (isReviewExpense(e)) return;
+    // Only Guide Own Money an operator or the guide confirmed (lib/payer-rules). A category
+    // rule, a Rate suggestion or the old after-tour default is not evidence, whatever paidBy
+    // says: nothing to certify until a person confirms the payer.
+    if (!guideMoneyConfirmed(e)) return;
     // Needed on its own (the guide's money, nothing behind it), or asked for by an admin
     // on a row whose older waiver or receipt would otherwise keep it off (lib/certificates/request).
     if (evidenceState(e as ExpenseWithEvidence).state !== "BLOCKED" && !requestedForCertificate(e as RequestableRow)) return;

@@ -6,7 +6,7 @@ const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
   $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prismaMock)),
   booking: { findMany: vi.fn() },
-  assignment: { updateMany: vi.fn(), count: vi.fn() },
+  assignment: { updateMany: vi.fn(), count: vi.fn(), findUnique: vi.fn(async () => null) },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 const auditMock = vi.hoisted(() => vi.fn());
@@ -101,7 +101,9 @@ describe("PUT /api/jobsheet — reported no-show guests stay on the sheet", () =
   it("loads live bookings at this date and slot, plus cancelled ones a guide reported absent", async () => {
     prismaMock.booking.findMany.mockResolvedValue([]);
     await save([]);
-    expect(prismaMock.booking.findMany.mock.calls[0][0].where).toEqual({
+    // The save also reads the job's booked Rates (lib/rate-payer); this is the slot's live-bookings query.
+    const slotCall = prismaMock.booking.findMany.mock.calls.find((c: any[]) => Array.isArray(c[0]?.where?.OR));
+    expect(slotCall?.[0].where).toEqual({
       date: "2030-05-06", slotIdx: 2,
       OR: [{ status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, { status: "CANCELLED", OR: [{ noShow: true }, { noShowPax: { gt: 0 } }] }],
     });

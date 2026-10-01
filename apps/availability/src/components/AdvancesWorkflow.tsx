@@ -29,8 +29,8 @@ type Receipt = {
   note: string | null; verifiedAt: string | null; rejectedReason: string | null;
 };
 type Unbooked = {
-  totals: { rows: number; total: number; fromAdvance: number; companyDirect: number; advanceWithoutRecord: number };
-  rows: { guideId: string; jobNo: string | null; date: string; description: string; category: string | null; amount: number; fundedBy: string; advanceNo: string | null; hasAdvanceRecord: boolean; peakDocumentNo: string | null; peakSyncStatus: string | null }[];
+  totals: { rows: number; total: number; fromAdvance: number; companyDirect: number; advanceWithoutRecord: number; awaitingPayer?: { rows: number; total: number } };
+  rows: { guideId: string; jobNo: string | null; date: string; description: string; category: string | null; amount: number; fundedBy: string; advanceNo: string | null; hasAdvanceRecord: boolean; peakDocumentNo: string | null; peakSyncStatus: string | null; state?: "READY_TO_BOOK" | "AWAITING_PAYER" }[];
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -192,18 +192,18 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
       </p>
       {unbooked && (
         <>
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
+          <div className="js-unbooked-totals" style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
             <span><b>{thb(unbooked.totals.total)}</b> over {unbooked.totals.rows} rows</span>
             <span className="muted">from ticket advances {thb(unbooked.totals.fromAdvance)}</span>
             <span className="muted">company paid direct {thb(unbooked.totals.companyDirect)}</span>
             {unbooked.totals.advanceWithoutRecord > 0 && <span style={{ color: "var(--danger, #b3402f)" }}>{thb(unbooked.totals.advanceWithoutRecord)} says “from an advance” with no advance on record</span>}
           </div>
-          <div className="tablewrap">
+          <div className="tablewrap js-unbooked-ready">
             <table className="grid">
               <thead><tr><th>Date</th><th>Job</th><th>Guide</th><th>Row</th><th className="r">Amount</th><th>Funded by</th><th>Notes</th></tr></thead>
               <tbody>
-                {unbooked.rows.length === 0 && <tr><td colSpan={7} className="muted">Nothing outstanding.</td></tr>}
-                {unbooked.rows.map((row, i) => (
+                {unbooked.rows.filter((r) => r.state !== "AWAITING_PAYER").length === 0 && <tr><td colSpan={7} className="muted">Nothing outstanding.</td></tr>}
+                {unbooked.rows.filter((r) => r.state !== "AWAITING_PAYER").map((row, i) => (
                   <tr key={`${row.jobNo}-${i}`}>
                     <td>{row.date}</td>
                     <td className="mono" style={{ fontSize: 11.5 }}>{row.jobNo ?? "—"}</td>
@@ -222,6 +222,31 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false }: { 
               </tbody>
             </table>
           </div>
+          {(unbooked.totals.awaitingPayer?.rows ?? 0) > 0 && (
+            <div className="js-unbooked-awaiting" style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13 }}>
+                <b>Awaiting payer confirmation</b> <span className="muted">รอยืนยันผู้ชำระ</span> — {thb(unbooked.totals.awaitingPayer!.total)} over {unbooked.totals.awaitingPayer!.rows} rows.{" "}
+                <span className="muted">Not ready to book and not in the totals above: the payer is a suggestion nobody confirmed. Confirm it on the job sheet first.</span>
+              </div>
+              <div className="tablewrap">
+                <table className="grid">
+                  <thead><tr><th>Date</th><th>Job</th><th>Guide</th><th>Row</th><th className="r">Amount</th><th>Suggested payer</th></tr></thead>
+                  <tbody>
+                    {unbooked.rows.filter((r) => r.state === "AWAITING_PAYER").map((row, i) => (
+                      <tr key={`aw-${row.jobNo}-${i}`}>
+                        <td>{row.date}</td>
+                        <td className="mono" style={{ fontSize: 11.5 }}>{row.jobNo ?? "—"}</td>
+                        <td>{row.guideId}</td>
+                        <td>{row.description}</td>
+                        <td className="r num">{thb(row.amount)}</td>
+                        <td>{row.fundedBy === "GUIDE_ADVANCE" ? "Ticket advance" : "Company direct"} · Suggested / รอยืนยัน</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
 

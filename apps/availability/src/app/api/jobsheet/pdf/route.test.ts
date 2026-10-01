@@ -59,7 +59,7 @@ describe("the printable job sheet names who paid each expense", () => {
     expect(paidByCell(html, "Row unknown")).toBe("ยังไม่ระบุผู้จ่าย");
     expect(paidByCell(html, "Row guide")).toBe("Guide");
     expect(paidByCell(html, "Row company")).toBe("Company");
-    expect(paidByCell(html, "Row advance")).toBe("Advance");
+    expect(paidByCell(html, "Row advance")).toBe("Advance · Suggested / รอยืนยัน"); // a meal payer nobody chose
   });
 });
 
@@ -85,5 +85,34 @@ describe("the printable job sheet carries approval, not a certification", () => 
     expect(html).toContain("ยังไม่อนุมัติ");
     expect(html).not.toContain("ผู้อนุมัติ</small>");
     for (const re of LEGACY) expect(html).not.toMatch(re);
+  });
+});
+
+describe("the printable job sheet states only confirmed payers as fact", () => {
+  const MIX = [
+    { description: "Water confirmed", price: 10, pax: 5, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
+    { description: "Ferry by Rate", price: 11, pax: 5, expenseType: "transport", paidBy: "guide", paidBySource: "rate-default" },
+    { description: "Bus after tour", price: 12, pax: 5, expenseType: "transport", paidBy: "guide", paidBySource: "default-after-tour" },
+    { description: "Ticket by Rate", price: 500, pax: 2, expenseType: "entrance", paidBy: "company", paidBySource: "rate-default" },
+    { description: "Boat confirmed", price: 100, pax: 1, expenseType: "transport", paidBy: "company", paidBySource: "operator", paidByReason: "company booked the boat (example)" },
+  ];
+  beforeEach(() => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: MIX, guideFee: { price: 1000, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z") });
+  });
+  it("labels: Rate suggestions and after-tour defaults read as suggested; operator-confirmed payers are definite", async () => {
+    const html = await render();
+    expect(paidByCell(html, "Water confirmed")).toBe("Guide");
+    expect(paidByCell(html, "Boat confirmed")).toBe("Company");
+    expect(paidByCell(html, "Ferry by Rate")).toBe("Guide · Suggested / รอยืนยัน");
+    expect(paidByCell(html, "Bus after tour")).toBe("Guide · Suggested / รอยืนยัน");
+    expect(paidByCell(html, "Ticket by Rate")).toBe("Company · Suggested / รอยืนยัน");
+  });
+  it("the reimbursement and the transfer count confirmed guide money only; the awaiting amount is shown apart", async () => {
+    const html = await render();
+    expect(html).toMatch(/of which reimbursable to guide[\s\S]*?<b>฿50\.00<\/b>/);
+    expect(html).toMatch(/of which awaiting payer confirmation[\s\S]*?<b>฿1,115\.00<\/b>/);
+    expect(html).toMatch(/Reimbursement for expenses[\s\S]*?<b>฿50\.00<\/b>/);
+    expect(html).toMatch(/Transfer to guide[\s\S]*?<b>฿1,020\.00<\/b>/);
+    expect(html).toMatch(/฿1,115\.00 of tour expenses is not in this transfer/);
   });
 });

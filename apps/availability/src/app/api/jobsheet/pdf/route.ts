@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, guidePersonalTotal, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { paidByShortLabel } from "@/lib/paid-by-label";
@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
   // Guide are the sanctioned short forms; never truncated composites. A row with no
   // recognised payer prints "ยังไม่ระบุผู้จ่าย", never a guessed "Company"
   // (lib/paid-by-label — the same rule as the Drive document).
-  const paidByShort = (v?: string) => paidByShortLabel(v);
+  const paidByShort = (e: Expense) => paidByShortLabel(e);
   const expRow = (cat: string, desc: string, price: string, pax: string, unit: string, amt: string, paidBy: string) => editable
     ? `<tr data-exp><td>${cat}</td><td contenteditable="true">${desc}</td><td class="n" contenteditable="true" data-eprice>${price}</td><td class="c">×</td><td class="n" contenteditable="true" data-epax>${pax}</td><td class="c" contenteditable="true">${unit}</td><td class="n" data-eamt>${amt}</td><td class="c" contenteditable="true">${paidBy}</td></tr>`
     : `<tr><td>${cat}</td><td>${desc}</td><td class="n">${price}</td><td class="c">×</td><td class="n">${pax}</td><td class="c">${unit}</td><td class="n">${amt}</td><td class="c">${paidBy}</td></tr>`;
@@ -114,7 +114,7 @@ export async function GET(req: NextRequest) {
   // An uncategorised row prints "—", never a guessed category: the printed sheet
   // must show exactly what is stored (see expenseCategory in lib/jobsheet).
   const catShort = (e: Expense) => (expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—");
-  let expenseRows = expenses.filter((e) => !isReviewExpense(e)).map((e) => expRow(catShort(e), esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e.paidBy))).join("");
+  let expenseRows = expenses.filter((e) => !isReviewExpense(e)).map((e) => expRow(catShort(e), esc(e.description), e.price != null ? thb(e.price) : "", e.pax != null ? String(e.pax) : "", esc(e.unit || "คน"), thb(expenseAmount(e)), paidByShort(e))).join("");
   if (editable) for (let k = 0; k < 3; k++) expenseRows += expRow("", "", "", "", "", "", "");
 
   const html = `<!DOCTYPE html>
@@ -293,6 +293,7 @@ export async function GET(req: NextRequest) {
         <div class="sum-head">SUMMARY <small>สรุปรายการทางการเงิน</small></div>
         <div><span>Total Tour Expenses <small>ค่าใช้จ่ายในการนำเที่ยว (ต้นทุนบริษัท)</small></span><b id="sumExp">${thb(cost.tourExpenses)}</b></div>
         ${money.reimbursementDue > 0 ? `<div class="sub"><span>of which reimbursable to guide <small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
+        ${money.awaitingConfirmationTotal > 0 ? `<div class="sub"><span>of which awaiting payer confirmation <small>รอยืนยันผู้ชำระ</small></span><b>${thb(money.awaitingConfirmationTotal)}</b></div>` : ""}
         ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
         <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
         <div class="sub"><span>of which withheld as tax (WHT)${payer.reviewReward > 0 ? " — on the fee" : ""} <small>ภาษีหัก ณ ที่จ่าย — ค่าจ้าง</small></span><b>${thb(payer.whtOnFee)}</b></div>
@@ -314,6 +315,7 @@ export async function GET(req: NextRequest) {
         ${payer.reviewReward > 0 ? `<div><span>Review incentive after WHT <small>ค่าตอบแทนรีวิวหลังหักภาษี</small></span><b>${thb(payer.reviewNet)}</b></div>` : ""}
         ${money.additionalGuidePayment - payer.reviewReward > 0.005 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment - payer.reviewReward)}</b></div>` : ""}
         ${money.reimbursementDue > 0 ? `<div><span>Reimbursement for expenses <small>คืนเงินสำรองจ่าย</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
+        ${money.awaitingConfirmationTotal > 0 ? `<div class="note">${thb(money.awaitingConfirmationTotal)} of tour expenses is not in this transfer — its payer is a suggestion awaiting confirmation.<br><small>รอยืนยันผู้ชำระ — ยังไม่รวมในยอดโอน</small></div>` : ""}
         ${money.settledByCompany > 0 ? `<div class="note">${thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it.<br><small>ค่าใช้จ่ายส่วนนี้บริษัทชำระให้ผู้ขายโดยตรงแล้ว</small></div>` : ""}
       </div>
     </div>

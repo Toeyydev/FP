@@ -25,7 +25,7 @@ import {
   type GuideFee,
   type Booking,
 } from "@/lib/jobsheet";
-import { paymentPayer } from "@/lib/payer-rules";
+import { awaitingPayerConfirmation, paymentPayer } from "@/lib/payer-rules";
 
 // ── Paid By ──────────────────────────────────────────────────────────────────
 // Who fronted the cash. Deliberately separate from the accounting CATEGORY: what
@@ -52,8 +52,8 @@ export function canonicalPaidBy(e: Pick<Expense, "paidBy">): PaidBy {
 // Only personal money creates a debt to the guide. Company-direct rows were never
 // the guide's money; advance rows were company money already in their hands and are
 // settled through the advance ledger (lib/advance), never reimbursed a second time.
-export function createsReimbursement(e: Pick<Expense, "paidBy">): boolean {
-  return canonicalPaidBy(e) === "GUIDE_PERSONAL";
+export function createsReimbursement(e: Pick<Expense, "paidBy" | "paidBySource" | "expenseType">): boolean {
+  return paymentPayer(e) === "GUIDE_PERSONAL"; // a payer nobody confirmed creates no debt
 }
 
 // ── Account mapping ──────────────────────────────────────────────────────────
@@ -72,6 +72,7 @@ export function expenseMappingStatus(e: Expense, accounts: PeakAccountMap = {}):
   const cat = expenseCategory(e);
   if (!cat) return "UNMAPPED";                       // no category chosen yet
   if (canonicalPaidBy(e) === "UNSPECIFIED") return "NEEDS_REVIEW"; // who paid is unknown
+  if (awaitingPayerConfirmation(e)) return "NEEDS_REVIEW"; // a suggested payer nobody has confirmed
   // OTHER_TOUR_COST is the catch-all. It is ready when the row names its own
   // account, or when the owner has saved a default for the category; with neither,
   // it waits for a choice on the row rather than being guessed.
@@ -116,6 +117,9 @@ export function expenseDisposition(e: Expense, accounts: PeakAccountMap = {}): S
   // An expense already booked in PEAK stays in this job's cost reporting but is
   // never re-sent — regardless of how well it is mapped.
   if (e.alreadyRecordedInPeak) return "ALREADY_RECORDED";
+  // A suggested payer (a booked Rate's, the after-tour default) is not a payer: neither
+  // posted as owed to the guide nor set aside as the company's until a person confirms it.
+  if (awaitingPayerConfirmation(e)) return "BLOCKED";
   if (notGuidePayable(e)) return "NOT_GUIDE_PAYABLE";
   return expenseMappingStatus(e, accounts) === "READY" ? "SYNC" : "BLOCKED";
 }
@@ -152,10 +156,11 @@ export type JobSheetTotals = {
   netGuideFee: number;              // fee after the whole withholding
   additionalGuidePayment: number;   // review rewards paid out with this job
   additionalOwnedByJob: number;     // …the part earned on THIS job (a cost of it)
-  reimbursementDue: number;         // GUIDE_PERSONAL rows only
+  reimbursementDue: number;         // CONFIRMED guide-own-money rows only (the effective payer, as Payments v2)
+  awaitingConfirmationTotal: number; // a payer is suggested but nobody confirmed it — in no transfer yet
   companyDirectTotal: number;       // already paid by the company — never reimbursed
   advanceSpentTotal: number;        // paid from a guide advance — settled separately
-  unspecifiedTotal: number;         // untagged rows: cannot be attributed yet
+  unspecifiedTotal: number;         // no payer at all, and none the row's kind implies
   totalCompanyCost: number;         // what this job cost the company
   netPayToGuide: number;            // what we transfer to the guide
   legacyPayout: number;             // what Payments transfers today (guidePayoutTotal)
@@ -176,7 +181,9 @@ export function jobSheetTotals(
 
   // Review rewards are guide compensation and are counted in additionalGuidePayment;
   // they must never also land in reimbursement, so they are excluded from `rows`.
-  const reimbursementDue = sumWhere(createsReimbursement);
+  // Who paid is the EFFECTIVE payer (lib/payer-rules), exactly as Payments v2 transfers it:
+  // a suggested or defaulted payer nobody confirmed is not money owed, whatever is stored.
+  const reimbursementDue = sumWhere((e) => paymentPayer(e) === "GUIDE_PERSONAL");
   const additionalGuidePayment = cost.reviewOwn + cost.reviewOther;
 
   // §12: what we owe the guide is their own money back plus what they earned —
@@ -185,7 +192,7 @@ export function jobSheetTotals(
   const paymentsFigure = guidePayoutTotal(expenses, guideFee).payout;
   // Tour expenses that are real company cost but not owed to the guide, because a
   // person recorded that the company already settled them.
-  const settled = sumWhere((e) => { const p = canonicalPaidBy(e); return p === "COMPANY_DIRECT" || p === "GUIDE_ADVANCE"; });
+  const settled = sumWhere((e) => { const p = paymentPayer(e); return p === "COMPANY_DIRECT" || p === "GUIDE_ADVANCE"; });
 
   return {
     totalTourExpenses: cost.tourExpenses,
@@ -198,9 +205,10 @@ export function jobSheetTotals(
     additionalGuidePayment,
     additionalOwnedByJob: cost.reviewOwn,
     reimbursementDue,
-    companyDirectTotal: sumWhere((e) => canonicalPaidBy(e) === "COMPANY_DIRECT"),
-    advanceSpentTotal: sumWhere((e) => canonicalPaidBy(e) === "GUIDE_ADVANCE"),
-    unspecifiedTotal: sumWhere((e) => canonicalPaidBy(e) === "UNSPECIFIED"),
+    companyDirectTotal: sumWhere((e) => paymentPayer(e) === "COMPANY_DIRECT"),
+    advanceSpentTotal: sumWhere((e) => paymentPayer(e) === "GUIDE_ADVANCE"),
+    awaitingConfirmationTotal: sumWhere((e) => awaitingPayerConfirmation(e)),
+    unspecifiedTotal: sumWhere((e) => paymentPayer(e) === "UNSPECIFIED" && !awaitingPayerConfirmation(e)),
     // Owner decision 2026-08-26: the Summary no longer lists Additional Guide
     // Payment, so the reward is excluded from this total too — otherwise the
     // visible lines would stop adding up to it, which is the exact confusion the
@@ -265,7 +273,16 @@ export function figuresNeedRecheck(
 
   const rows = (expenses ?? []).filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
 
-  const untagged = rows.filter((e) => canonicalPaidBy(e) === "UNSPECIFIED");
+  const awaiting = rows.filter((e) => awaitingPayerConfirmation(e));
+  if (awaiting.length) {
+    out.push({
+      field: "reimbursementDue",
+      short: awaiting.length === 1 ? "1 expense's payer is awaiting confirmation" : `${awaiting.length} expenses' payers are awaiting confirmation`,
+      detail: `A payer was suggested (by the booked Rate, or filled in after the tour) but nobody has confirmed it. ${awaiting.length === 1 ? "It is" : "They are"} in the tour's cost and in no transfer — press Confirm payer, or choose the payer, on ${awaiting.length === 1 ? "that row" : "those rows"}.`,
+      amount: totals.awaitingConfirmationTotal,
+    });
+  }
+  const untagged = rows.filter((e) => paymentPayer(e) === "UNSPECIFIED" && !awaitingPayerConfirmation(e));
   if (untagged.length) {
     out.push({
       field: "reimbursementDue",
@@ -497,7 +514,8 @@ export function guidePayoutView(args: {
     if (isReviewExpense(e)) continue;
     const amt = expenseAmount(e);
     if (!amt) continue;
-    const paid = canonicalPaidBy(e);
+    // The effective payer, as the transfer uses it: a suggestion nobody confirmed waits.
+    const paid = paymentPayer(e);
     if (paid === "COMPANY_DIRECT") { company += amt; continue; }
     if (paid === "GUIDE_ADVANCE") { advance += amt; continue; }
     // A row nobody has assigned a payer to is not money we can say is owed. It is
