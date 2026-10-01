@@ -43,7 +43,8 @@ const post = (body: unknown) => POST(new Request("https://ops.folkpaths.com/api/
 const JOB = { guideId: "G-TEST", date: "2030-08-28", slotIdx: 2 };
 const VOID = { ...JOB, documentNo: "EXP-TEST-0026", confirmVoidedInPeak: true };
 const SYNCED_AT = new Date("2030-09-14T11:12:33Z");
-const EXPENSES = [{ description: "Water (Inc. Guide)", price: 10, pax: 4, expenseType: "meal", paidBy: "guide" }];
+// A payer an operator confirmed: this suite is about the void, not about whether a payer can be trusted.
+const EXPENSES = [{ description: "Water (Inc. Guide)", price: 10, pax: 4, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }];
 
 const seed = (over: Row = {}) => {
   db.sheet = {

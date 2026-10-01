@@ -20,6 +20,13 @@ const expenseZ = z.object({
   expenseType: z.string().max(40).optional(),
   paidBy: z.string().max(24).optional(),
   paidBySource: z.enum(PAID_BY_SOURCES).optional(),
+  // Why a payer departs from the expected one (lib/payer-rules). Kept with the row; the
+  // save refuses an override without one. Dropped here before 2026-10-01, so no override
+  // could ever be saved from the editor.
+  paidByReason: z.string().max(500).optional(),
+  // The booked Rates a suggested payer came from (lib/rate-payer), e.g. "TICKET_INCLUDED".
+  // Display and audit only: a suggestion is never evidence and is recomputed on every save.
+  rateBasis: z.string().max(80).optional(),
   reimbursementRequired: z.boolean().optional(),
   estimatedAmount: numOpt,
   actualAmount: numOpt,

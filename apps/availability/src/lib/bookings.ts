@@ -107,6 +107,9 @@ export type ParsedBooking = {
   // When the channel cancelled it (Bokun cancellationDate), as ISO. The source's own
   // event time — never the moment FolkOPS happened to receive the cancellation.
   cancelledAt?: string;
+  // The Rate the guest booked, as Bókun names it ("Tour with all entrance tickets",
+  // "Standard rate", …). Drives the default payer of the job's expense rows (lib/rate-payer).
+  rateTitle?: string;
 };
 
 type Any = Record<string, unknown>;
@@ -168,6 +171,10 @@ export function parseBokun(raw: unknown): ParsedBooking {
   const bokunBookingId = externalId ?? r.parentBookingId;
   const productConfirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? r.productConfirmationCode;
   const cancelledAt = toISO(r.cancellationDate ?? ab.cancellationDate);
+  // The webhook carries the Rate on the activity booking; the booking search on the item
+  // itself (or its fields). Known places only — a deep search could find another's title.
+  const rateRaw = ab.rateTitle ?? r.rateTitle ?? obj(r.fields).rateTitle ?? obj(ab.fields).rateTitle;
+  const rateTitle = typeof rateRaw === "string" && rateRaw.trim() ? rateRaw.trim() : undefined;
 
   // Bokun encodes the local wall-clock start time as a UTC epoch — read it back
   // with UTC so 08:30 stays 08:30. Prefer the product-invoice timestamp (has the
@@ -223,6 +230,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
     bokunBookingId: bokunBookingId != null && typeof bokunBookingId !== "object" ? String(bokunBookingId) : undefined,
     cancelledAt,
+    ...(rateTitle ? { rateTitle } : {}),
   };
 }
 

@@ -37,3 +37,23 @@ describe("paid-by labels on job-sheet documents", () => {
     }
   });
 });
+
+describe("a payer nobody confirmed reads as suggested (owner policy 2026-10-01)", () => {
+  const row = (paidBy: string, paidBySource?: string, expenseType = "transport") => ({ description: "Example", price: 10, pax: 1, expenseType, paidBy, ...(paidBySource ? { paidBySource } : {}) });
+  it("rate-default and default-after-tour carry 'Suggested / รอยืนยัน' with the proposed payer", () => {
+    for (const src of ["rate-default", "default-after-tour"]) {
+      expect(paidByDocLabel(row("guide", src) as never), src).toBe("Guide Personal / มัคคุเทศก์สำรองจ่าย · Suggested / รอยืนยัน");
+      expect(paidByShortLabel(row("company", src, "entrance") as never), src).toBe("Company · Suggested / รอยืนยัน");
+    }
+    expect(paidByShortLabel(row("guide", undefined, "meal") as never)).toBe("Guide · Suggested / รอยืนยัน"); // a meal nobody chose
+  });
+  it("operator- and guide-confirmed payers stay definite", () => {
+    for (const src of ["operator", "guide"]) {
+      expect(paidByDocLabel(row("guide", src) as never), src).toBe("Guide Personal / มัคคุเทศก์สำรองจ่าย");
+      expect(paidByShortLabel(row("company", src, "meal") as never), src).toBe("Company");
+    }
+  });
+  it("a blank payer is still 'not specified', never suggested", () => {
+    expect(paidByShortLabel(row("", "rate-default") as never)).toBe(PAID_BY_UNSPECIFIED);
+  });
+});

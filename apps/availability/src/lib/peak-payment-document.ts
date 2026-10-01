@@ -15,6 +15,7 @@
 // This file is pure: no database, no network. The routes supply the jobs and the
 // saved account chart, and the side effects arrive through CreateDocumentDeps and
 // PayDocumentDeps — which is what lets the order of operations be tested without either.
+import { paymentPayer } from "@/lib/payer-rules";
 import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import { evidenceRequired, evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
@@ -250,17 +251,26 @@ export function buildGuidePaymentDocument(input: {
         continue;
       }
 
-      const paid = canonicalPaidBy(e);
-      if (paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE") continue;
+      const stored = canonicalPaidBy(e);
       // Who paid decides whether this money belongs in the transfer at all: a guide's
       // own money is reimbursed, company money is not. Unknown is not a default — the
       // Payments page counts such a row as owed, but a PEAK document would book it as a
       // reimbursement nobody confirmed. Refused, like the job-sheet sync refuses it.
-      if (paid === "UNSPECIFIED") {
+      if (stored === "UNSPECIFIED") {
         const raw = (e.paidBy ?? "").trim();
         reasons.add(`${where} row ${rowNo} "${desc}": ${raw ? `Paid By "${raw}" is not recognised` : "Paid By is not set"} — set it on the job sheet (Guide Personal, Guide Advance or Company Direct)`);
         continue;
       }
+      // A payer that is stored but nobody stands behind — a booked Rate's suggestion, the
+      // after-tour default, a payer sent with no-one named — is not a payer this document
+      // may rely on: not posted as owed to the guide, and not set aside as the company's
+      // either (that would drop a cost the guide may have paid). Refused, by name.
+      const paid = paymentPayer(e);
+      if (paid === "UNSPECIFIED") {
+        reasons.add(`${where} row ${rowNo} "${desc}" (${thb(round2(amt))}): its payer is a suggestion awaiting confirmation — confirm the payer on the job sheet before it goes into a PEAK document`);
+        continue;
+      }
+      if (paid === "COMPANY_DIRECT" || paid === "GUIDE_ADVANCE") continue;
 
       if (e.alreadyRecordedInPeak) {
         reasons.add(`"${desc}" on ${where} is marked as already in PEAK but is still being paid to the guide — it cannot be both`);

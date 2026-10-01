@@ -46,3 +46,32 @@ describe("costs no guide document carries", () => {
     expect(totals).toMatchObject({ rows: 2, total: 2200, fromAdvance: 1000, companyDirect: 1200, advanceWithoutRecord: 1000, alreadyBooked: 0 });
   });
 });
+
+// Owner policy 2026-10-01: only a payer a person confirmed is a company cost to book.
+describe("payers nobody confirmed are awaiting, never ready to book", () => {
+  const mixed = sheet({ expenses: [
+    { description: "Ticket confirmed", price: 500, pax: 2, expenseType: "entrance", paidBy: "company", paidBySource: "operator", paidByReason: "package includes it (example)" }, // 1000 ready
+    { description: "Ticket by Rate", price: 400, pax: 2, expenseType: "entrance", paidBy: "company", paidBySource: "rate-default" },     // 800 awaiting
+    { description: "Ticket after tour", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "default-after-tour" }, // 600 awaiting
+    { description: "Lunch unchosen", price: 150, pax: 2, expenseType: "meal", paidBy: "company" },                                      // 300 awaiting
+    { description: "Water by Rate", price: 10, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "rate-default" },            // guide money: not on this list
+  ] });
+  it("confirmed company money is ready to book; Rate suggestions, after-tour defaults and unchosen payers are awaiting — none dropped", () => {
+    const rows = unbookedExpenses({ sheets: [mixed], advances: [] });
+    expect(rows.map((r) => [r.description, r.state])).toEqual([
+      ["Ticket confirmed", "READY_TO_BOOK"],
+      ["Ticket by Rate", "AWAITING_PAYER"],
+      ["Ticket after tour", "AWAITING_PAYER"],
+      ["Lunch unchosen", "AWAITING_PAYER"],
+    ]);
+  });
+  it("the totals count what is ready to book only; the awaiting amount is reported apart", () => {
+    const totals = unbookedTotals(unbookedExpenses({ sheets: [mixed], advances: [] }));
+    expect(totals).toMatchObject({ rows: 1, total: 1000, companyDirect: 1000, fromAdvance: 0, advanceWithoutRecord: 0, awaitingPayer: { rows: 3, total: 1700 } });
+  });
+  it("once a person confirms the suggestion it moves to ready to book", () => {
+    const confirmed = sheet({ expenses: [{ description: "Ticket by Rate", price: 400, pax: 2, expenseType: "entrance", paidBy: "company", paidBySource: "operator", paidByReason: "package includes it (example)" }] });
+    const totals = unbookedTotals(unbookedExpenses({ sheets: [confirmed], advances: [] }));
+    expect(totals).toMatchObject({ rows: 1, total: 800, awaitingPayer: { rows: 0, total: 0 } });
+  });
+});

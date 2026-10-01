@@ -401,6 +401,7 @@ model Booking {
   confirmationCode            String? // Bokun confirmation code
   externalRef                 String? // original OTA booking number (GetYourGuide / Viator ref)
   productName                 String?
+  rateTitle                   String? // the Bókun Rate booked ("Tour with all entrance tickets"…) — may SUGGEST the payer of the job's rows, never confirms one (lib/rate-payer)
   tourId                      String? // mapped to our Tour (null until mapped)
   date                        String? // "YYYY-MM-DD" start date
   startTime                   String? // "HH:MM"

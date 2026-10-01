@@ -40,6 +40,10 @@ export type Expense = {
   //   "unconfirmed"        a payer arrived without anyone saying who chose it (older app builds
   //                        pre-selected "guide" on every line), and it is not the operator's
   paidBySource?: PaidBySource;
+  /** Why a payer departs from the expected one (lib/payer-rules). */
+  paidByReason?: string | null;
+  /** The booked Rates a suggested payer came from (lib/rate-payer). Display and audit only. */
+  rateBasis?: string;
   reimbursementRequired?: boolean;
   estimatedAmount?: number | null;
   actualAmount?: number | null;
@@ -77,7 +81,7 @@ export type Expense = {
   relatedBookingNo?: string;
   relatedJobRef?: string; // legacy job-ref form, still honoured when present
 };
-export const PAID_BY_SOURCES = ["operator", "guide", "category-default", "default-after-tour", "unconfirmed"] as const;
+export const PAID_BY_SOURCES = ["operator", "guide", "category-default", "default-after-tour", "unconfirmed", "rate-default"] as const;
 export type PaidBySource = (typeof PAID_BY_SOURCES)[number];
 export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
 
@@ -358,12 +362,6 @@ export function tourExpenseAccountingReady(expenses: Expense[]): boolean {
   return rows.length > 0 && rows.every((e) => expenseAccountingStatus(e) === "READY");
 }
 
-// Expenses the guide paid with PERSONAL money — the only category that can
-// create a reimbursement due to the guide (advance-paid rows were company money
-// already in the guide's hands and must never be reimbursed twice).
-export function guidePersonalTotal(expenses: Expense[]): number {
-  return (expenses ?? []).filter((e) => e.paidBy === "guide").reduce((s, e) => s + expenseAmount(e), 0);
-}
 
 export const thb = (v: number) =>
   `฿${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

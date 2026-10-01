@@ -4,6 +4,7 @@ import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
 import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isReviewExpense, type Expense, type PaidBySource } from "@/lib/jobsheet";
 import { defaultPayer, expenseKind, PAID_BY_VALUE } from "@/lib/payer-rules";
+import { jobRates, rateDefaultFor, type JobRates } from "@/lib/rate-payer";
 import { canonicalPaidBy } from "@/lib/peak-sync";
 import { tourStartMs } from "@/lib/no-show-count";
 import { resolveDurationMin } from "@/lib/tour-duration";
@@ -90,9 +91,9 @@ export const GUIDE_PAID_OWN_MONEY = "guide";
 export type PayerCounts = Record<PaidBySource, number>;
 export function classifyPayers(
   rows: GuideExpenseInput[],
-  ctx: { official?: Expense[] | null; previous?: Expense[] | null; defaultApplies: boolean },
+  ctx: { official?: Expense[] | null; previous?: Expense[] | null; defaultApplies: boolean; rates?: JobRates },
 ): { rows: Expense[]; counts: PayerCounts } {
-  const counts: PayerCounts = { operator: 0, guide: 0, "default-after-tour": 0, "category-default": 0, unconfirmed: 0 };
+  const counts: PayerCounts = { operator: 0, guide: 0, "default-after-tour": 0, "category-default": 0, unconfirmed: 0, "rate-default": 0 };
   const same = (a?: string | null, b?: string | null) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
   const out = rows.map(({ paidByChoice, ...line }) => {
     const e = line as Expense;
@@ -109,6 +110,13 @@ export function classifyPayers(
       // bought with a company advance, local transport is fronted by the guide, and a
       // meal is left blank because either answer is plausible and only a person on the
       // day knows which. A blank stops the payment rather than guessing at it.
+      // The booked Rate first (lib/rate-payer) — a suggestion awaiting confirmation — then the
+      // kind's own default.
+      const byRate = ctx.rates ? rateDefaultFor(e, ctx.rates) : null;
+      if (byRate && "payer" in byRate) { counts["rate-default"]++; return { ...e, paidBy: PAID_BY_VALUE[byRate.payer], paidBySource: "rate-default" as const, rateBasis: ctx.rates!.kinds.join("+") }; }
+      // The guests' Rates disagree, or one is not recognised: the category default would be
+      // a guess payments rely on, on exactly the row a person has to decide. Left blank.
+      if (byRate && "review" in byRate) return e;
       const kind = expenseKind(e);
       const def = defaultPayer(kind);
       if (!def) return e;
@@ -179,7 +187,8 @@ export async function submitGuideExpenses(o: {
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
   const paidRule = await guidePaidRule({ guideId, date, slotIdx, actorRole: o.actorRole, now });
   const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true, expenses: true, guideExpenses: true } });
-  const payers = classifyPayers(o.expenses, { official: existing?.expenses as Expense[] | undefined, previous: existing?.guideExpenses as Expense[] | undefined, defaultApplies: paidRule.apply });
+  const rates = await jobRates(prisma, { guideId, date, slotIdx });
+  const payers = classifyPayers(o.expenses, { official: existing?.expenses as Expense[] | undefined, previous: existing?.guideExpenses as Expense[] | undefined, defaultApplies: paidRule.apply, rates });
   const expenses = payers.rows;
 
   // Submitting the report is the moment Actual Pax becomes real: fill each booking

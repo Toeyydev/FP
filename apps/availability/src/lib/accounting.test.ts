@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { computeTotals, totalJobExpenses, guidePersonalTotal, type Expense } from "@/lib/jobsheet";
+import { computeTotals, totalJobExpenses, type Expense } from "@/lib/jobsheet";
+import { jobSheetTotals } from "@/lib/peak-sync";
 import { advanceTotals } from "@/lib/advance";
 
 const exp = (description: string, price: number, pax: number, paidBy?: string): Expense => ({ description, price, pax, paidBy });
@@ -19,7 +20,7 @@ describe("accounting presentation — FOLK-BKK-20260811-01 style acceptance", ()
       exp("Grand Palace", 500, 1, "advance"), // paid with company money already in guide's hands
       exp("Taxi", 200, 1, "guide"), // guide's personal money → reimbursement due
     ];
-    expect(guidePersonalTotal(expenses)).toBe(200);
+    expect(jobSheetTotals(expenses, { price: 0, time: 0, whtPct: 0 }).reimbursementDue).toBe(200);
     const at = advanceTotals([{ amount: 1000 }], [{ amount: 500 }], expenses);
     expect(at.usedFromAdvance).toBe(500); // only the advance row
     expect(at.outstanding).toBe(0); // 1000 − 500 − 500

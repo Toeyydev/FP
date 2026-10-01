@@ -298,6 +298,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/booking-reconcile
 
+      # A payer the booked Rate suggests reads "awaiting confirmation" and is confirmed by
+      # an explicit button, never shown as a confirmed payer (lib/rate-payer).
+      - name: Rate default payers in a real browser
+        run: node scripts/e2e/rate-payer.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/rate-payer
+
       - name: Keep the historical evidence screenshots (invented data)
         if: always()
         uses: actions/upload-artifact@v4

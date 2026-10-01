@@ -58,17 +58,32 @@ export function payerAllowed(kind: ExpenseKind, payer: PaidBy): boolean {
   return true;
 }
 
-/** Is this payer a departure from the category's default, and so a decision to justify? */
-export function isOverride(kind: ExpenseKind, payer: PaidBy): boolean {
-  const def = defaultPayer(kind);
+/**
+ * Is this payer a departure from what the row is expected to have, and so a decision to
+ * justify? Expected is the booked Rate's suggestion when there is one (lib/rate-payer —
+ * Company Resource for tickets on a ticket-inclusive Rate), else the category's default.
+ */
+export function isOverride(kind: ExpenseKind, payer: PaidBy, expected: DefaultablePayer | null = defaultPayer(kind)): boolean {
   if (payer === "UNSPECIFIED") return false;
-  return def != null && payer !== def;
+  return expected != null && payer !== expected;
+}
+
+/** A payer is stored on the row, but nobody stands behind it yet: a suggestion or an old default waiting for a person. */
+export function awaitingPayerConfirmation(e: PayerRow): boolean {
+  return canonicalPaidBy(e) !== "UNSPECIFIED" && effectivePayer(e).payer === "UNSPECIFIED";
 }
 
 /** Minimum a reason has to say to be worth recording. */
 export const MIN_PAYER_REASON = 8;
 
 export type PayerRuleRow = Expense & { paidByReason?: string | null };
+/** The payer the booked Rate suggests for a row, when it suggests one (lib/rate-payer). */
+export type ExpectedPayer = (e: Expense) => DefaultablePayer | null;
+
+/** What the system expects this row's payer to be: the booked Rate's suggestion, else its category rule, else nothing. */
+export function expectedPayerFor(e: Expense, expectedFor?: ExpectedPayer): DefaultablePayer | null {
+  return expectedFor?.(e) ?? defaultPayer(expenseKind(e));
+}
 
 /**
  * Every reason these rows may not be paid, in the words an operator can act on.
@@ -76,7 +91,7 @@ export type PayerRuleRow = Expense & { paidByReason?: string | null };
  * Checked on the server as well as in the dropdown: a rule that lives only in a select
  * element is a rule until somebody posts JSON.
  */
-export function payerRuleReasons(rows: PayerRuleRow[] | null | undefined, where = "this job"): string[] {
+export function payerRuleReasons(rows: PayerRuleRow[] | null | undefined, where = "this job", expectedFor?: ExpectedPayer): string[] {
   const out: string[] = [];
   let rowNo = 0;
   for (const e of rows ?? []) {
@@ -90,9 +105,16 @@ export function payerRuleReasons(rows: PayerRuleRow[] | null | undefined, where 
       out.push(`${where} row ${rowNo} "${what}": a meal cannot be paid from a guide advance — an advance is for tickets. Choose Guide Personal or Company Direct.`);
       continue;
     }
-    if (isOverride(kind, payer) && (e.paidByReason ?? "").trim().length < MIN_PAYER_REASON) {
-      const def = defaultPayer(kind);
-      out.push(`${where} row ${rowNo} "${what}": ${kind === "ENTRANCE_TICKET" ? "a ticket" : "local transport"} is normally ${def === "GUIDE_ADVANCE" ? "bought with a company advance" : "fronted by the guide"} — say why this one was not, and it is kept with the sheet.`);
+    // A suggestion is not a decision: it waits for a person, and needs no reason until one confirms it.
+    if ((e.paidBySource ?? "") === "rate-default") continue;
+    // A reason whenever the payer departs from what the system expected for this row — the
+    // booked Rate's suggestion, else the category rule — whatever the category. A row the
+    // system expected nothing for needs none.
+    const def = expectedPayerFor(e, expectedFor);
+    if (isOverride(kind, payer, def) && (e.paidByReason ?? "").trim().length < MIN_PAYER_REASON) {
+      const usual = def === "GUIDE_ADVANCE" ? "bought with a company advance" : def === "COMPANY_DIRECT" ? "paid by the company" : "fronted by the guide";
+      const basis = expectedFor?.(e) ? "the booked Rate suggests it is" : "it is normally";
+      out.push(`${where} row ${rowNo} "${what}": ${basis} ${usual} — say why this one was not, and it is kept with the sheet.`);
     }
   }
   return out;
@@ -145,8 +167,10 @@ export function effectivePayer(e: PayerRow): { payer: PaidBy; basis: PayerBasis 
   const kind = expenseKind(e);
   const stored = canonicalPaidBy(e);
 
-  // 1 — the old blanket default, in any category
-  if (source === "default-after-tour") return { payer: "UNSPECIFIED", basis: "UNCONFIRMED" };
+  // 1 — a default nobody confirmed: the old blanket after-tour default, or the default the
+  //     booking's Rate suggests (lib/rate-payer). Either reads as unanswered until a person
+  //     confirms the payer on the sheet.
+  if (source === "default-after-tour" || source === "rate-default") return { payer: "UNSPECIFIED", basis: "UNCONFIRMED" };
 
   if (stored !== "UNSPECIFIED") {
     if (source === "operator") return { payer: stored, basis: "OPERATOR" };
@@ -163,6 +187,27 @@ export function effectivePayer(e: PayerRow): { payer: PaidBy; basis: PayerBasis 
   const def = defaultPayer(kind);
   if (kind !== "MEAL" && def) return { payer: def, basis: "BUSINESS_RULE" };
   return { payer: "UNSPECIFIED", basis: "NONE" };
+}
+
+/**
+ * Guide Own Money that a PERSON stands behind — an operator or the guide chose it. The
+ * evidence threshold for a certificate, which is a document, not a calculation: the
+ * category rule (transport is normally the guide's) may work out a payment, but it is an
+ * expectation, not evidence; a Rate suggestion or the after-tour default is less still.
+ */
+export function guideMoneyConfirmed(e: PayerRow): boolean {
+  const { payer, basis } = effectivePayer(e);
+  return payer === "GUIDE_PERSONAL" && (basis === "OPERATOR" || basis === "GUIDE");
+}
+
+/**
+ * What a document or report may say about a row's payer: the payer stored on it, and
+ * whether a person still has to confirm it (a Rate suggestion, the after-tour default, a
+ * meal payer nobody chose). One answer for the job sheet, its PDF and Drive document, and
+ * the accountant's lists — the same `awaitingPayerConfirmation` the money uses.
+ */
+export function payerStatement(e: PayerRow): { payer: PaidBy; awaiting: boolean } {
+  return { payer: canonicalPaidBy(e), awaiting: awaitingPayerConfirmation(e) };
 }
 
 /** The payer a payment may rely on. */

@@ -1,4 +1,5 @@
 import { canonicalPaidBy } from "@/lib/peak-sync";
+import { guideMoneyConfirmed, type PayerRow } from "@/lib/payer-rules";
 import { expenseAmount, isReviewExpense } from "@/lib/jobsheet";
 import { evidenceState, type EvidenceWaiver, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
@@ -61,6 +62,8 @@ export function liveRequest(e: RequestableRow): CertificateRequest | null {
 export function optInFor(e: RequestableRow): OptIn | null {
   if (isReviewExpense(e) || expenseAmount(e) <= 0) return null;
   if (canonicalPaidBy(e) !== "GUIDE_PERSONAL") return null;
+  // Only a payer an operator or the guide confirmed — not a category rule, Rate suggestion or after-tour default.
+  if (!guideMoneyConfirmed(e as PayerRow)) return null;
   const s = evidenceState(e);
   if (s.state === "HAS_RECEIPT") return (e.evidenceWaiver?.certificateId ?? "").trim() ? null : "HAS_RECEIPT";
   if (s.state === "WAIVED" && !(s.waiver.certificateId ?? "").trim()) return "WAIVED";

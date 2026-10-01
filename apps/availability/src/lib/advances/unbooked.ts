@@ -8,8 +8,14 @@
 //
 // Until Phase 3.1 gives the advance clearing account a home in PEAK, FolkOPS keeps the
 // list and the accountant books from it. Nothing here writes anything.
+//
+// Only a payer a person stands behind is a company cost to book (lib/payer-rules
+// payerStatement). A row whose "company" or "advance" is a suggestion nobody confirmed —
+// a booked Rate's, the old after-tour default, a meal payer nobody chose — is listed as
+// AWAITING_PAYER: visible for follow-up, never counted in the totals, never ready to book.
 import { expenseAmount, type Expense } from "@/lib/jobsheet";
 import { canonicalPaidBy, notGuidePayable } from "@/lib/peak-sync";
+import { payerStatement } from "@/lib/payer-rules";
 
 export type UnbookedRow = {
   guideId: string;
@@ -29,6 +35,8 @@ export type UnbookedRow = {
   peakSyncStatus: string | null;
   /** Filled in when the accountant books it, so it is never booked twice. */
   bookedAs: string | null;
+  /** READY_TO_BOOK: a person confirmed who paid. AWAITING_PAYER: a suggestion — confirm it on the job sheet first. */
+  state: "READY_TO_BOOK" | "AWAITING_PAYER";
 };
 
 type SheetLike = {
@@ -65,15 +73,21 @@ export function unbookedExpenses(input: {
         hasAdvanceRecord: !!advance,
         peakDocumentNo: s.peakDocumentNo, peakSyncStatus: s.peakSyncStatus,
         bookedAs: input.bookedKeys?.get(key) ?? null,
+        state: payerStatement(e).awaiting ? "AWAITING_PAYER" : "READY_TO_BOOK",
       });
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || (a.jobNo ?? "").localeCompare(b.jobNo ?? ""));
 }
 
-export function unbookedTotals(rows: UnbookedRow[]) {
-  const sum = (f: (r: UnbookedRow) => boolean) => Math.round(rows.filter(f).reduce((s, r) => s + r.amount, 0) * 100) / 100;
+/** Totals of what is ready to book. Rows awaiting payer confirmation are counted apart, never in these. */
+export function unbookedTotals(all: UnbookedRow[]) {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const rows = all.filter((r) => r.state === "READY_TO_BOOK");
+  const waiting = all.filter((r) => r.state === "AWAITING_PAYER");
+  const sum = (f: (r: UnbookedRow) => boolean) => round(rows.filter(f).reduce((s, r) => s + r.amount, 0));
   return {
+    awaitingPayer: { rows: waiting.length, total: round(waiting.reduce((s, r) => s + r.amount, 0)) },
     rows: rows.length,
     total: sum(() => true),
     fromAdvance: sum((r) => r.fundedBy === "GUIDE_ADVANCE"),

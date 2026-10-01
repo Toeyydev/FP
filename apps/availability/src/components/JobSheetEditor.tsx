@@ -6,6 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
+import { expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
+import { rateDefaultFor, RATE_KIND_LABEL, type JobRates, type RateKind } from "@/lib/rate-payer";
 import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { approvalView, JOB_SHEET_ROLE_NOTE_TH } from "@/lib/jobsheet-approval";
@@ -89,6 +91,9 @@ export default function JobSheetEditor() {
   // The version the last successful save produced — what approving right after a save reviewed.
   const savedVersion = useRef<string | null>(null);
   const [canEdit, setCanEdit] = useState(true);
+  // The Rates this job's guests booked (lib/rate-payer): kinds seen, and bookings with none recorded.
+  // The Rates this job's guests booked (lib/rate-payer): what a row's payer is SUGGESTED from.
+  const [rates, setRates] = useState<JobRates | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [approvedByName, setApprovedByName] = useState<string | null>(null);
   // WhatsApp links by booking number, read live from the bookings by the server — only for
@@ -151,7 +156,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setIsAdmin(d.isAdmin === true); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -1192,6 +1197,16 @@ export default function JobSheetEditor() {
             the CATEGORY (lib/jobsheet), never the description. */}
         <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#fff8c4" }}>TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small><span className="js-sub">Company cost in this job</span></h3>
+        {rates && rates.titles.length > 0 && (
+          <div className="js-rate-titles no-print" style={{ margin: "0 0 6px", fontSize: 11.5, color: "var(--ink-soft)" }}>
+            Booked Rates · เรทที่ลูกค้าจอง: {rates.titles.map((t, k) => (
+              <span key={k} style={{ marginRight: 8, ...(t.kind === "UNKNOWN" ? { color: "#b45309", fontWeight: 600 } : {}) }}>
+                {t.title ?? "no Rate recorded"} ×{t.bookings} ({RATE_KIND_LABEL[t.kind as RateKind]})
+              </span>
+            ))}
+            <span style={{ display: "block" }}>Rates only suggest who paid — a suggestion is not a payer until someone confirms it.</span>
+          </div>
+        )}
         <div className="js-table-scroll">
         <table className="js-table js-exp-table">
           <thead><tr>
@@ -1258,11 +1273,49 @@ export default function JobSheetEditor() {
                       {paid === "GUIDE_ADVANCE" ? "ไม่รวมในยอดโอนให้ไกด์ — ใช้ตัดเงินทดรอง" : "ไม่รวมในยอดโอนให้ไกด์ — บริษัทชำระโดยตรง"}
                     </div>
                   )}
-                  {paid !== "UNSPECIFIED" && (e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
-                    <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }} title={e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : "Sent by the app without saying who chose it — not a confirmed payer"}>
-                      {e.paidBySource === "default-after-tour" ? "Default after tour · รอยืนยัน" : "Not confirmed · รอยืนยัน"}
+                  {/* A default is never shown as a confirmed payer. The booked Rate's suggestion,
+                      the old after-tour default, or a value an app sent without saying who chose it:
+                      each reads "awaiting confirmation" until a person confirms it here — re-picking
+                      the same option in the list above changes nothing, so the button is the way. */}
+                  {paid !== "UNSPECIFIED" && (e.paidBySource === "rate-default" || e.paidBySource === "default-after-tour" || e.paidBySource === "unconfirmed") && (
+                    <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }}
+                      title={e.paidBySource === "rate-default" ? "Suggested by the Rate the guests booked — not a confirmed payer" : e.paidBySource === "default-after-tour" ? "Filled by FolkOPS because the guide reported after the tour — not a confirmed payer" : "Sent by the app without saying who chose it — not a confirmed payer"}>
+                      <span className="js-payer-pending">{paid === "GUIDE_PERSONAL" ? "Guide Own Money" : paid === "GUIDE_ADVANCE" ? "Company Advance Money" : e.paidBySource === "rate-default" ? "Company Resource" : "Company paid direct"} · {e.paidBySource === "rate-default" ? "Suggested from booking Rate" : "awaiting confirmation"} · รอยืนยัน</span>
+                      {canEdit && <button type="button" className="btn sm js-confirm-payer" style={{ marginLeft: 6 }} disabled={busy} onClick={() => setExpense(i, { paidBySource: "operator" })}>Confirm payer</button>}
                     </div>
                   )}
+                  {(() => {
+                    // What the booked Rates say about this row, if anything — and whether the
+                    // payer on it departs from what is expected, which needs a reason.
+                    const sug = rates && expenseAmount(e) > 0 && !isReviewExpense(e) ? rateDefaultFor(e, rates) : null;
+                    const confirmed = paid !== "UNSPECIFIED" && !["rate-default", "default-after-tour", "unconfirmed"].includes(e.paidBySource ?? "");
+                    // The same rule as the server (lib/payer-rules): only tickets and transport need a reason.
+                    const expected = expectedPayerFor(e, () => (sug && "payer" in sug ? sug.payer : null));
+                    const needsReason = confirmed && isOverride(expenseKind(e), paid, expected);
+                    const label = (p: string) => (p === "GUIDE_PERSONAL" ? "Guide Own Money" : p === "GUIDE_ADVANCE" ? "Company Advance" : "Company Resource");
+                    return (<>
+                      {sug && "review" in sug && paid === "UNSPECIFIED" && (
+                        <div className="js-rate-review" style={{ fontSize: 10.5, color: "var(--assign)", marginTop: 2, whiteSpace: "normal" }}>
+                          Review: {sug.why} — choose who paid. · ตรวจสอบเรทที่ลูกค้าจอง แล้วเลือกผู้จ่าย
+                        </div>
+                      )}
+                      {confirmed && sug && "payer" in sug && sug.payer !== paid && (
+                        <div className="js-rate-conflict" style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }}>
+                          Confirmed as {label(paid)}; the booked Rates suggest {label(sug.payer)}. Kept as confirmed — check it.
+                        </div>
+                      )}
+                      {confirmed && sug && "review" in sug && (
+                        <div className="js-rate-conflict" style={{ fontSize: 10.5, color: "#b45309", marginTop: 2, whiteSpace: "normal" }}>
+                          Kept as confirmed, but {sug.why} — check it.
+                        </div>
+                      )}
+                      {needsReason && (
+                        <input className="js-payer-reason" style={{ ...L, marginTop: 3, fontSize: 11, borderColor: (e.paidByReason ?? "").trim().length < MIN_PAYER_REASON ? "var(--danger,#b3402f)" : undefined }}
+                          placeholder={`Why ${label(paid)}, not ${expected ? label(expected) : "the usual payer"}? (kept with the sheet)`}
+                          value={e.paidByReason ?? ""} disabled={!canEdit} onChange={(ev) => setExpense(i, { paidByReason: ev.target.value })} />
+                      )}
+                    </>);
+                  })()}
                 </td>
                 <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
                   {e.receiptUrl ? (
@@ -1760,8 +1813,9 @@ export default function JobSheetEditor() {
               adding either would double-count. Listed flat, they made the total
               look like it did not add up. */}
           <div><span>Total Tour Expenses{flagged("totalTourExpenses") && <em className="js-recheck-tag">recheck</em>}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าใช้จ่ายในการนำเที่ยว (ต้นทุนบริษัท)</small></span><b>{thb(money.totalTourExpenses)}</b></div>
-          <div className="js-sum-sub"><span>of which reimbursable to guide{flagged("reimbursementDue") && <em className="js-recheck-tag">recheck</em>}<small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: money.reimbursementDue > 0 ? "#b45309" : undefined }}>{thb(money.reimbursementDue)}</b></div>
+          <div className="js-sum-sub"><span>of which confirmed reimbursable to guide{flagged("reimbursementDue") && <em className="js-recheck-tag">recheck</em>}<small>ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</small></span><b style={{ color: money.reimbursementDue > 0 ? "#b45309" : undefined }}>{thb(money.reimbursementDue)}</b></div>
           {money.companyDirectTotal > 0 && <div className="js-sum-sub"><span>of which paid direct by company<small>บริษัทชำระโดยตรง</small></span><b>{thb(money.companyDirectTotal)}</b></div>}
+          {money.awaitingConfirmationTotal > 0 && <div className="js-sum-sub warn js-sum-awaiting"><span>of which awaiting payer confirmation<small>รอยืนยันผู้จ่าย — ยังไม่รวมในยอดโอน</small></span><b>{thb(money.awaitingConfirmationTotal)}</b></div>}
           {money.unspecifiedTotal > 0 && <div className="js-sum-sub warn"><span>of which Paid By not set<small>ยังไม่ระบุแหล่งเงิน</small></span><b>{thb(money.unspecifiedTotal)}</b></div>}
           <div><span>Guide Fee<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)", fontWeight: 400 }}>ค่าจ้างมัคคุเทศก์</small></span><b>{thb(money.guideFeeGross)}</b></div>
           <div className="js-sum-sub"><span>of which withheld as tax (WHT){payer.reviewReward > 0 ? " — on the fee" : ""}<small>ภาษีหัก ณ ที่จ่าย — นำส่งสรรพากร</small></span><b>{thb(payer.whtOnFee)}</b></div>
@@ -1801,15 +1855,20 @@ export default function JobSheetEditor() {
             {money.additionalGuidePayment - payer.reviewReward > 0.005 && (
               <div><span>Additional payment</span><b>{thb(money.additionalGuidePayment - payer.reviewReward)}</b></div>
             )}
-            <div><span>Reimbursement for expenses</span><b>{thb(money.reimbursementDue)}</b></div>
+            <div><span>Confirmed reimbursement to guide</span><b>{thb(money.reimbursementDue)}</b></div>
             {money.settledByCompany > 0 && (
               <div className="np-note">
                 <span>{thb(money.settledByCompany)} of tour expenses is not paid here — the company already settled it{money.advanceSpentTotal > 0 ? " (guide advance)" : " (paid direct)"}.</span>
               </div>
             )}
+            {money.awaitingConfirmationTotal > 0 && (
+              <div className="np-note warn js-transfer-awaiting">
+                <span>{thb(money.awaitingConfirmationTotal)} awaiting payer confirmation — not in this transfer until someone confirms who paid.</span>
+              </div>
+            )}
             {money.unspecifiedTotal > 0 && (
               <div className="np-note warn">
-                <span>{thb(money.unspecifiedTotal)} has no Paid By set, so it is being paid to the guide. Tag those rows if the company settled them.</span>
+                <span>{thb(money.unspecifiedTotal)} has no Paid By set, so it is not in this transfer. Set who paid on those rows.</span>
               </div>
             )}
           </div>
