@@ -7,7 +7,6 @@ import { thb } from "@/lib/jobsheet";
 import { STAGE_LABEL, transferStage, VERIFICATION_SOURCE, VERIFIED_LABEL_TH } from "@/lib/payment-transfer";
 import { parseReviewEmail } from "@/lib/review-parse";
 import { SLOTS } from "@/lib/slots";
-import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { matchState, type Slip } from "@/lib/payments/slips";
 import PeakPaymentDialog, { CreatedState, type CreatedDocument } from "@/components/PeakPaymentDialog";
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
@@ -15,6 +14,7 @@ import RecordExpDialog from "@/components/RecordExpDialog";
 import RecordGuidePaymentDialog, { type PayableJob } from "@/components/RecordGuidePaymentDialog";
 import GuidePaymentsWorkflow from "@/components/GuidePaymentsWorkflow";
 import AdvancesWorkflow from "@/components/AdvancesWorkflow";
+import SupplementalPayments, { type SupplementalPrefill } from "@/components/SupplementalPayments";
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 import { type DocumentDrift } from "@/lib/payment-document-drift";
@@ -34,7 +34,8 @@ type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; a
   peakStatus?: { state: "IN_PEAK" | "NOT_IN_PEAK" | "NOTHING_TO_POST"; documentNo: string | null; source: string | null } };
 type Row = { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; status: string; paidAt: string | null; eslipUrl?: string | null; peakRef?: string | null; jobs: Job[] };
 type Totals = { tours: number; netFee: number; expenses: number; payout: number };
-type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null };
+type Bonus = { id: string; guideId: string; guide: string; amount: number; reason: string; ref: string; eslipUrl: string | null; period: string; convertedTo: string | null };
+type SupplementalSummary = { unpaid: { count: number; total: number }; accountingPending: { count: number; total: number }; paidInPeriod: { count: number; total: number } };
 type Candidate = { date: string; slotIdx: number; time: string; tourId: string; tour: string; guideId: string; guide: string; customerName: string | null; ref: string | null };
 // A combined PEAK payment document ("Pay N jobs together"), in two stages: created in
 // PEAK and AWAITING_PAYMENT, then PAID once the payment is recorded against it.
@@ -79,6 +80,7 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });
+  const [supSummary, setSupSummary] = useState<SupplementalSummary | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [hideSec, setHideSec] = useState<Set<string>>(new Set());
   const toggleSec = (s: string) => setHideSec((p) => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; });
@@ -87,13 +89,14 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
   const [bonuses, setBonuses] = useState<{ rows: Bonus[]; total: number }>({ rows: [], total: 0 });
   // date/slotIdx are set only when the bonus is tied to a rewarded tour (via "Reward a
   // review"), so the server can make the bonus ref follow that tour's job-sheet number.
-  const [bForm, setBForm] = useState<{ guideId: string; amount: string; reason: string; date?: string; slotIdx?: number }>({ guideId: "", amount: "", reason: "" });
+  // "Reward a review" opens Add Supplemental Payment, pre-filled with the guide and the job.
+  const [supPrefill, setSupPrefill] = useState<SupplementalPrefill | null>(null);
+  const clearSupPrefill = useCallback(() => setSupPrefill(null), []);
   // "Reward a review" helper: the OTA email gives only the product + rating; the
   // operator adds the tour date or reviewer name to find who guided it.
   const [rv, setRv] = useState({ paste: "", date: "", name: "", product: "", stars: 0, comment: "", ota: "GYG" });
   const [rvMatches, setRvMatches] = useState<Candidate[] | null>(null);
   const [rvBusy, setRvBusy] = useState(false);
-  const [extraGuides, setExtraGuides] = useState<{ guideId: string; guide: string }[]>([]); // guides found via review lookup but not in this month's rows
   // Draft PEAK ref typed against a still-pending guide (keyed by guideId) — shown on
   // the row so the operator can record it before paying the guide's jobs together.
   const [payRef, setPayRef] = useState<Record<string, string>>({});
@@ -262,7 +265,7 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
 
   const load = useCallback(async (p?: string) => {
     const r = await fetch(`/api/payments${p ? `?period=${p}` : ""}`, { cache: "no-store" });
-    if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); setPaymentDocs(d.paymentDocs ?? []); }
+    if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); setPaymentDocs(d.paymentDocs ?? []); setSupSummary(d.supplemental ?? null); }
   }, []);
   useEffect(() => { load(); }, [load]);
   // Job sheets are saved and approved in another tab, and this list — each job's payout
@@ -282,13 +285,10 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
     if (r.ok) { const d = await r.json(); setBonuses({ rows: d.rows ?? [], total: d.total ?? 0 }); }
   }, []);
   useEffect(() => { loadBonuses(period); }, [period, loadBonuses]);
+  // After a supplemental payment changes: the earlier-bonus list (a conversion) and the
+  // month summary (unpaid / not in PEAK) are read again.
+  const refreshAfterSupplemental = useCallback(() => { if (period) { loadBonuses(period); load(period); } }, [period, loadBonuses, load]);
 
-  async function addBonus() {
-    const amt = parseFloat(bForm.amount);
-    if (!bForm.guideId || !(amt > 0)) return;
-    const r = await fetch("/api/payments/bonus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId: bForm.guideId, amount: amt, reason: bForm.reason, ...(bForm.date && bForm.slotIdx != null ? { date: bForm.date, slotIdx: bForm.slotIdx } : {}) }) });
-    if (r.ok) { setBForm({ guideId: "", amount: "", reason: "" }); setExtraGuides([]); loadBonuses(period); }
-  }
   // Pull product / rating / comment out of a pasted OTA review email.
   function onPasteReview(text: string) {
     const p = parseReviewEmail(text);
@@ -306,34 +306,13 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
     setRvBusy(false);
     if (r.ok) { const d = await r.json(); setRvMatches(d.candidates ?? []); } else setRvMatches([]);
   }
-  // Pre-fill the bonus form for the chosen guide (adding them to the picker if this
-  // month's payout doesn't already list them — a late review can span months).
+  // A review incentive is a supplemental payment now: open the form with the guide, the
+  // job the review was for, and the review as the reason. The amount is the operator's.
   function rewardCandidate(c: Candidate) {
     const reason = `${rv.stars ? rv.stars + "★ " : ""}${rv.ota || "OTA"} · ${c.tour} · ${dShort(c.date)}${rv.comment ? ` · "${rv.comment}"` : ""}`.slice(0, 200);
-    setExtraGuides((g) => g.some((x) => x.guideId === c.guideId) ? g : [...g, { guideId: c.guideId, guide: c.guide }]);
-    setBForm({ guideId: c.guideId, amount: "", reason, date: c.date, slotIdx: c.slotIdx });
+    setSupPrefill({ guideId: c.guideId, type: "REVIEW_INCENTIVE", date: c.date, slotIdx: c.slotIdx, reason });
     setRvMatches(null);
   }
-  async function delBonus(id: string) {
-    const r = await fetch("/api/payments/bonus", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
-    if (r.ok) loadBonuses(period);
-  }
-  async function uploadBonusEslip(bonusId: string, file: File) {
-    // The bonus REF NO. follows the payment slip: capture the slip's ref no. on upload
-    // (blank keeps the current ref).
-    const slipRef = prompt("Payment slip ref no. — sets the bonus REF NO. (leave blank to keep the current ref):", "");
-    const blob = await shrinkImage(file);
-    const fd = new FormData(); fd.append("bonusId", bonusId); fd.append("file", blob, shrunkName(file.name, blob));
-    if (slipRef && slipRef.trim()) fd.append("ref", slipRef.trim());
-    const r = await fetch("/api/payments/bonus/eslip", { method: "POST", body: fd });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) loadBonuses(period); else alert(d.hint || d.detail || `E-slip upload failed (${r.status}).`);
-  }
-  async function editBonusRef(id: string, ref: string) {
-    await fetch("/api/payments/bonus", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, ref }) });
-    loadBonuses(period);
-  }
-
   async function mark(guideId: string, status: "pending" | "paid") {
     const r = await fetch("/api/payments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ period, guideId, status }) });
     if (r.ok) load(period);
@@ -683,7 +662,10 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
       </div>
       <div style={{ fontSize: 12, color: "var(--ink-soft)", padding: "0 2px", marginBottom: 12 }}>
         Paid so far this month: <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(paidAmt)}</b>
-        {bonuses.total > 0 && <> · bonuses <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(bonuses.total)}</b></>}
+        {bonuses.total > 0 && <> · earlier bonuses <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(bonuses.total)}</b></>}
+        {supSummary && supSummary.paidInPeriod.count > 0 && <> · supplemental paid <b style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>{thb(supSummary.paidInPeriod.total)}</b></>}
+        {supSummary && supSummary.unpaid.count > 0 && <> · <b className="js-sup-unpaid" style={{ color: "#b45309" }}>{supSummary.unpaid.count} supplemental unpaid ({thb(supSummary.unpaid.total)})</b></>}
+        {supSummary && supSummary.accountingPending.count > 0 && <> · <b className="js-sup-pending" style={{ color: "#b45309" }}>⚠ {supSummary.accountingPending.count} supplemental not in PEAK ({thb(supSummary.accountingPending.total)})</b></>}
         {" "}· month total {thb(totals.payout)} across {totals.tours} job{totals.tours === 1 ? "" : "s"}
       </div>
 
@@ -784,34 +766,35 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
         </div>
       </section>
 
+      <SupplementalPayments canEdit={canEdit} prefill={supPrefill} onPrefillUsed={clearSupPrefill} onChanged={refreshAfterSupplemental} />
+
       <section className="panel" style={{ marginTop: 14 }}>
-        <div className="panel-head"><h2>Bonuses &amp; adjustments</h2><span className="hint">e.g. 5★ review rewards · {bonuses.rows.length} this month</span></div>
+        <div className="panel-head"><h2>Reward a review</h2><span className="hint">finds who guided the tour, then opens Add Supplemental Payment{bonuses.rows.length ? ` · ${bonuses.rows.length} earlier bonus${bonuses.rows.length === 1 ? "" : "es"} this month` : ""}</span></div>
         <div style={{ padding: 14 }}>
-          {bonuses.rows.length === 0 ? <div className="op-empty">No bonuses this month.</div> : (
+          {bonuses.rows.length > 0 && (<>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 6 }}>Earlier bonuses — recorded before supplemental payments, kept as history and read-only.</div>
             <table className="acct-table" style={{ marginBottom: 12 }}>
-              <thead><tr><th>Guide</th><th>Ref no.</th><th>Reason</th><th className="r">Amount</th><th>E-slip</th><th /></tr></thead>
+              <thead><tr><th>Guide</th><th>Ref no.</th><th>Reason</th><th className="r">Amount</th><th>E-slip</th><th>Now</th></tr></thead>
               <tbody>
                 {bonuses.rows.map((b) => (
                   <tr key={b.id}>
                     <td style={{ whiteSpace: "nowrap" }}><span className="gid">{b.guideId}</span> {b.guide}</td>
-                    <td><input className="search" style={{ width: 150, fontSize: 12, fontVariantNumeric: "tabular-nums" }} defaultValue={b.ref} disabled={!canEdit} title="Bonus reference no. (e.g. PEAK job no.)" onBlur={(e) => { if (e.target.value.trim() !== b.ref) editBonusRef(b.id, e.target.value.trim()); }} /></td>
+                    <td className="num" style={{ fontSize: 12 }}>{b.ref || "—"}</td>
                     <td style={{ color: "var(--ink-soft)" }}>{b.reason || "—"}</td>
                     <td className="r" style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>+{thb(b.amount)}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      {b.eslipUrl
-                        ? <span style={{ display: "inline-flex", gap: 6 }}>
-                            <a className="btn sm" href={b.eslipUrl} target="_blank" rel="noopener noreferrer" title="View bonus slip in Drive">E-slip</a>
-                            {canEdit && <label className="btn sm ghost" style={{ cursor: "pointer" }} title="Replace">Replace<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>}
-                          </span>
-                        : (canEdit && <label className="btn sm" style={{ cursor: "pointer" }} title="Upload bonus payment slip">Slip<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadBonusEslip(b.id, f); e.target.value = ""; }} /></label>)}
+                    <td style={{ whiteSpace: "nowrap" }}>{b.eslipUrl ? <a className="btn sm" href={b.eslipUrl} target="_blank" rel="noopener noreferrer" title="View bonus slip in Drive">E-slip</a> : "—"}</td>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 12 }}>
+                      {b.eslipUrl ? "Paid (old flow)"
+                        : b.convertedTo ? "Converted → supplemental payment"
+                        : canEdit ? <button className="btn sm primary js-convert-bonus" onClick={() => setSupPrefill({ guideId: b.guideId, type: "BONUS", reason: b.reason || `Earlier bonus (${b.period})`, legacyBonus: { id: b.id, amount: b.amount, period: b.period } })}>Convert to supplemental payment</button>
+                        : <span style={{ color: "#b45309" }}>Unpaid</span>}
                     </td>
-                    <td style={{ textAlign: "right" }}>{canEdit && <button className="btn sm danger" title="Remove bonus" onClick={() => delBonus(b.id)}>×</button>}</td>
                   </tr>
                 ))}
               </tbody>
-              <tfoot><tr className="pay-foot"><td colSpan={3}><b>Total bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td colSpan={2} /></tr></tfoot>
+              <tfoot><tr className="pay-foot"><td colSpan={3}><b>Total earlier bonuses</b></td><td className="r"><b>+{thb(bonuses.total)}</b></td><td colSpan={2} /></tr></tfoot>
             </table>
-          )}
+          </>)}
           {canEdit && (
           <div style={{ border: "1px dashed var(--line-strong)", borderRadius: 12, padding: 12, margin: "0 0 12px", background: "var(--paper)" }}>
             <div style={{ fontWeight: 700, fontSize: 13 }}>Reward a review</div>
@@ -839,17 +822,6 @@ export default function Payments({ canEdit = true, isAdmin = false }: { canEdit?
                 </tbody>
               </table>
             ) : <div className="op-empty" style={{ marginTop: 10 }}>No match — check the date, or try the reviewer&apos;s name.</div>)}
-          </div>
-          )}
-          {canEdit && (
-          <div className="op-toolbar" style={{ gap: 8, flexWrap: "wrap" }}>
-            <select className="search" style={{ flex: "none", width: 200 }} value={bForm.guideId} onChange={(e) => setBForm((x) => ({ ...x, guideId: e.target.value, date: undefined, slotIdx: undefined }))}>
-              <option value="">Choose guide…</option>
-              {[...rows.map((g) => ({ guideId: g.guideId, guide: g.guide })), ...extraGuides.filter((e) => !rows.some((r) => r.guideId === e.guideId))].map((g) => <option key={g.guideId} value={g.guideId}>{g.guideId} · {g.guide}</option>)}
-            </select>
-            <input className="search" style={{ flex: 1, minWidth: 180 }} placeholder="Reason (e.g. 5★ review – Omari)" value={bForm.reason} onChange={(e) => setBForm((x) => ({ ...x, reason: e.target.value }))} />
-            <input className="search" style={{ flex: "none", width: 120 }} type="number" min={0} placeholder="฿ amount" value={bForm.amount} onChange={(e) => setBForm((x) => ({ ...x, amount: e.target.value }))} />
-            <button className="btn primary" disabled={!bForm.guideId || !(parseFloat(bForm.amount) > 0)} onClick={addBonus}>+ Add bonus</button>
           </div>
           )}
         </div>

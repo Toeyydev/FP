@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
+import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const session = await auth();
   if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const { id } = await params;
-  const p = await prisma.guidePayment.findUnique({ where: { id }, include: { jobs: { orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }, adjustments: true } });
+  const p = await prisma.guidePayment.findUnique({ where: { id }, include: { jobs: { orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }, adjustments: true, supplements: { include: { supplemental: { select: { reason: true, jobs: true, originalPayment: { select: { paymentNo: true } } } } } } } });
   if (!p) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const [guide, people] = await Promise.all([
@@ -21,11 +22,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   ]);
   const who = (uid: string | null) => (uid ? people.find((u) => u.id === uid)?.displayName ?? uid : null);
   const jobTotal = Number(p.jobTotal), adjustmentTotal = Number(p.adjustmentTotal), amountTransferred = Number(p.amountTransferred);
+  // A supplemental payment's base is its supplemental lines; a job payment's is its jobs.
+  const base = jobTotal + Number(p.supplementTotal);
   return NextResponse.json({
     id: p.id, paymentNo: p.paymentNo, status: p.status, source: p.source,
     guideId: p.guideId, guide: guide?.displayName ?? p.guideId,
     paymentDate: p.paymentDate, accountingPeriod: p.accountingPeriod,
-    reconciliation: { jobTotal, adjustmentTotal, expectedTransfer: Math.round((jobTotal + adjustmentTotal) * 100) / 100, amountTransferred, difference: Math.round((amountTransferred - jobTotal - adjustmentTotal) * 100) / 100, balanced: Math.round((jobTotal + adjustmentTotal) * 100) === Math.round(amountTransferred * 100) },
+    kind: p.kind,
+    reconciliation: { jobTotal, supplementTotal: Number(p.supplementTotal), adjustmentTotal, expectedTransfer: Math.round((base + adjustmentTotal) * 100) / 100, amountTransferred, difference: Math.round((amountTransferred - base - adjustmentTotal) * 100) / 100, balanced: Math.round((base + adjustmentTotal) * 100) === Math.round(amountTransferred * 100) },
     bankRef: p.bankRef, slipUrl: p.slipUrl, evidenceId: p.evidenceId, slipUploadedAt: p.slipUploadedAt,
     noSlipReason: p.noSlipReason, mismatchReason: p.mismatchReason, periodOverrideReason: p.periodOverrideReason,
     peakPaymentRef: p.peakPaymentRef, note: p.note,
@@ -37,5 +41,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       peakDocumentNo: j.peakDocumentNo, peakSource: j.peakSource,
     })),
     adjustments: p.adjustments.map((a) => ({ type: a.type, amount: Number(a.amount), description: a.description, jobNo: a.jobNo })),
+    supplements: p.supplements.map((x) => ({
+      supplementalId: x.supplementalId, type: x.type, typeLabel: SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en ?? x.type, accountingCategory: x.accountingCategory,
+      grossAmount: Number(x.grossAmount), wht: Number(x.wht), netAmount: Number(x.netAmount), active: x.active,
+      reason: x.supplemental.reason, jobs: Array.isArray(x.supplemental.jobs) ? (x.supplemental.jobs as { jobNo: string }[]).map((j) => j.jobNo) : [],
+      originalPaymentNo: x.supplemental.originalPayment?.paymentNo ?? null,
+    })),
   });
 }

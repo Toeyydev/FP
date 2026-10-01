@@ -19,8 +19,9 @@ import { documentHoldsJobs } from "@/lib/peak-payment-document";
 import { applyDeductionsInTx, LedgerConflict, reverseDeductionsForPaymentInTx } from "@/lib/advances/service";
 import {
   bangkokToday, checkPayment, paidAtFor, paymentNoFor, toSatang, ADJUSTMENT_TYPES,
-  type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation,
+  type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
+import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 export type Actor = { actorId: string | null; actorRole: string | null };
@@ -36,7 +37,7 @@ export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip"> & {
   today?: string;
 };
 
-export type RecordedPayment = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[] };
+export type RecordedPayment = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[]; supplements: { id: string; type: string; netAmount: number }[] };
 export type RecordPaymentResult =
   | { ok: true; payment: RecordedPayment; reconciliation: Reconciliation; audits: AuditEntry[] }
   | { ok: false; code: "invalid" | "conflict"; reasons: string[]; reconciliation?: Reconciliation };
@@ -89,6 +90,28 @@ export async function loadJobFacts(db: Db, guideId: string, jobs: { date: string
   };
 }
 
+/** What the rules need to know about each supplemental payment being paid. */
+export async function loadSupplementFacts(db: Db, ids: string[] | null | undefined): Promise<SupplementFacts[]> {
+  const wanted = [...new Set((ids ?? []).filter(Boolean))];
+  if (!wanted.length) return [];
+  const rows = await db.supplementalPayment.findMany({ where: { id: { in: wanted } } });
+  const active = await db.guidePaymentSupplementLine.findMany({ where: { supplementalId: { in: wanted }, active: true }, select: { supplementalId: true, paymentId: true } });
+  const payIds = [...new Set(active.map((a) => a.paymentId))];
+  // Only a RECORDED payment holds it (see deactivateStaleSupplementLines).
+  const pays = payIds.length ? await db.guidePayment.findMany({ where: { id: { in: payIds }, status: "RECORDED" }, select: { id: true, paymentNo: true } }) : [];
+  return rows.map((r) => {
+    const line = active.find((a) => a.supplementalId === r.id && pays.some((p) => p.id === a.paymentId));
+    return {
+      id: r.id, guideId: r.guideId, type: r.type,
+      label: SUPPLEMENTAL_LABEL[r.type as SupplementalType]?.en ?? r.type,
+      accountingCategory: r.accountingCategory,
+      grossAmount: Number(r.grossAmount), wht: Number(r.wht), netAmount: Number(r.netAmount),
+      voided: !!r.voidedAt,
+      activePaymentNo: line ? pays.find((p) => p.id === line.paymentId)!.paymentNo : null,
+    };
+  });
+}
+
 async function evidenceContext(db: Db, input: Pick<RecordPaymentInput, "bankRef" | "slip">) {
   const bankRef = (input.bankRef ?? "").trim();
   const [byRef, bySlip] = await Promise.all([
@@ -105,7 +128,8 @@ const request = (input: RecordPaymentInput): PaymentRequest => ({ ...input, hasS
 /** The checks Record payment runs, with nothing written. */
 export async function previewPayment(db: Db, input: RecordPaymentInput): Promise<PaymentCheck> {
   const { facts } = await loadJobFacts(db, input.guideId, input.jobs);
-  return checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), ...(await evidenceContext(db, input)) });
+  const supplements = await loadSupplementFacts(db, input.supplements);
+  return checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), supplements, ...(await evidenceContext(db, input)) });
 }
 
 async function nextPaymentNo(db: Db, paymentDate: string): Promise<string> {
@@ -122,9 +146,16 @@ async function nextPaymentNo(db: Db, paymentDate: string): Promise<string> {
  */
 export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: RecordPaymentInput): Promise<RecordPaymentResult> {
   const { facts, sheets, tourPays, docs } = await loadJobFacts(tx, input.guideId, input.jobs);
-  const check = checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), ...(await evidenceContext(tx, input)) });
+  const supplementFacts = await loadSupplementFacts(tx, input.supplements);
+  const check = checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), supplements: supplementFacts, ...(await evidenceContext(tx, input)) });
   if (check.reasons.length) return { ok: false, code: "invalid", reasons: check.reasons, reconciliation: check.reconciliation };
 
+  // A line still active on a REVERSED payment can only come from a build without this
+  // feature reversing it; it holds nothing, so it is closed before this payment's line.
+  if (check.supplements.length) {
+    const reversed = await tx.guidePayment.findMany({ where: { status: "REVERSED", supplements: { some: { supplementalId: { in: check.supplements.map((x) => x.id) }, active: true } } }, select: { id: true } });
+    if (reversed.length) await tx.guidePaymentSupplementLine.updateMany({ where: { paymentId: { in: reversed.map((p) => p.id) } }, data: { active: false } });
+  }
   const paymentNo = await nextPaymentNo(tx, input.paymentDate);
   const paidAt = paidAtFor(input.paymentDate);
   const adjustments = (input.adjustments ?? []).filter((a): a is AdjustmentInput & { type: (typeof ADJUSTMENT_TYPES)[number] } => ADJUSTMENT_TYPES.includes(a.type as never));
@@ -134,6 +165,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
     data: {
       paymentNo, guideId: input.guideId, accountingPeriod: check.accountingPeriod!, paymentDate: input.paymentDate,
       jobTotal: check.reconciliation.jobTotal, adjustmentTotal: check.reconciliation.adjustmentTotal, amountTransferred: check.reconciliation.amountTransferred,
+      kind: check.supplements.length ? "SUPPLEMENTAL" : "REGULAR", supplementTotal: check.reconciliation.supplementTotal ?? 0,
       status: "RECORDED", source: input.source as PaymentSource,
       bankRef: t(input.bankRef), evidenceId: input.slip?.evidenceId ?? null, slipUrl: input.slip?.url ?? null,
       slipUploadedAt: input.slip ? input.slip.uploadedAt ?? new Date() : null, slipUploadedById: input.slip?.uploadedById ?? null,
@@ -161,6 +193,11 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
       },
       adjustments: {
         create: adjustments.map((a) => ({ type: a.type, amount: a.amount, description: a.description.trim(), jobNo: t(a.jobNo), advanceId: t(a.advanceId), createdById: input.actor.actorId })),
+      },
+      // The figures each supplemental payment was paid on. A partial unique index allows
+      // one ACTIVE line per supplemental payment — the database refuses paying it twice.
+      supplements: {
+        create: check.supplements.map((x) => ({ supplementalId: x.id, guideId: input.guideId, type: x.type, accountingCategory: x.accountingCategory, grossAmount: x.grossAmount, wht: x.wht, netAmount: x.netAmount })),
       },
     },
     select: { id: true, paymentNo: true },
@@ -198,6 +235,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
     paymentNo, guideId: input.guideId, source: input.source, paymentDate: input.paymentDate, accountingPeriod: check.accountingPeriod,
     advancesSettled: deducted.map((d) => ({ advanceNo: d.advanceNo, amount: d.amountSatang / 100 })),
     jobs: check.jobs.map((j) => ({ jobNo: j.jobNo, payable: j.figures.payable })),
+    ...(check.supplements.length ? { kind: "SUPPLEMENTAL", supplements: check.supplements.map((x) => ({ id: x.id, type: x.type, gross: x.grossAmount, wht: x.wht, net: x.netAmount, accountingCategory: x.accountingCategory })), supplementTotal: check.reconciliation.supplementTotal } : {}),
     jobTotal: check.reconciliation.jobTotal, adjustmentTotal: check.reconciliation.adjustmentTotal, amountTransferred: check.reconciliation.amountTransferred,
     balanced: check.reconciliation.balanced, mismatchReason: check.reconciliation.balanced ? null : t(input.mismatchReason),
     periodOverrideReason: check.periods.length > 1 ? t(input.periodOverrideReason) : null,
@@ -207,10 +245,11 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
     { ...input.actor, action: "payment.recorded", entityType: "GuidePayment", entityId: payment.id, detail: summary },
     ...adjustments.map((a) => ({ ...input.actor, action: "payment.adjustment_added", entityType: "GuidePayment", entityId: payment.id, detail: { paymentNo, type: a.type, amount: a.amount, description: a.description.trim(), jobNo: t(a.jobNo) } })),
     ...(input.slip?.url ? [{ ...input.actor, action: "payment.slip_attached", entityType: "GuidePayment", entityId: payment.id, detail: { paymentNo, evidenceId: input.slip.evidenceId ?? null } }] : []),
+    ...check.supplements.map((x) => ({ ...input.actor, action: "supplemental.paid", entityType: "SupplementalPayment", entityId: x.id, detail: { paymentNo, type: x.type, gross: x.grossAmount, wht: x.wht, net: x.netAmount, paymentDate: input.paymentDate, bankRef: t(input.bankRef), slip: !!input.slip?.url } })),
   ];
   return {
     ok: true,
-    payment: { id: payment.id, paymentNo, paymentDate: input.paymentDate, amountTransferred: check.reconciliation.amountTransferred, accountingPeriod: check.accountingPeriod!, jobs: check.jobs.map((j) => ({ jobNo: j.jobNo, date: j.date, slotIdx: j.slotIdx, payable: j.figures.payable })) },
+    payment: { id: payment.id, paymentNo, paymentDate: input.paymentDate, amountTransferred: check.reconciliation.amountTransferred, accountingPeriod: check.accountingPeriod!, jobs: check.jobs.map((j) => ({ jobNo: j.jobNo, date: j.date, slotIdx: j.slotIdx, payable: j.figures.payable })), supplements: check.supplements.map((x) => ({ id: x.id, type: x.type, netAmount: x.netAmount })) },
     reconciliation: check.reconciliation,
     audits,
   };
@@ -234,6 +273,7 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
       if (e instanceof LedgerConflict) return { ok: false, code: "conflict", reasons: [e.message] };
       const target = uniqueTarget(e);
       if (target.includes("paymentNo")) continue; // two payments took the same number at once: try the next one
+      if (target.includes("Supplement")) return { ok: false, code: "conflict", reasons: ["This supplemental payment was paid by another payment a moment ago — reload and check"] };
       if (target) return { ok: false, code: "conflict", reasons: ["One of these jobs was paid by another payment a moment ago — reload and check"] };
       throw e;
     }
@@ -253,7 +293,7 @@ export type ReversePaymentResult =
  */
 export async function reversePayment(prisma: PrismaClient, input: { paymentId: string; reason: string; actor: Actor }): Promise<ReversePaymentResult> {
   const reason = (input.reason ?? "").trim();
-  const p = await prisma.guidePayment.findUnique({ where: { id: input.paymentId }, include: { jobs: true, adjustments: true } });
+  const p = await prisma.guidePayment.findUnique({ where: { id: input.paymentId }, include: { jobs: true, adjustments: true, supplements: true } });
   if (!p) return { ok: false, status: 404, reasons: ["No such payment"] };
   if (p.status !== "RECORDED") return { ok: false, status: 409, reasons: [`${p.paymentNo} is already ${p.status.toLowerCase()}`] };
   if (reason.length < 5) return { ok: false, status: 400, reasons: ["Give the reason this payment is being reversed"] };
@@ -272,6 +312,9 @@ export async function reversePayment(prisma: PrismaClient, input: { paymentId: s
     const moved = await tx.guidePayment.updateMany({ where: { id: p.id, status: "RECORDED" }, data: { status: "REVERSED", reversedAt: now, reversedById: input.actor.actorId, reversalReason: reason } });
     if (moved.count !== 1) throw new PaymentConflict(`${p.paymentNo} changed while it was being reversed`);
     await tx.guidePaymentJob.updateMany({ where: { paymentId: p.id }, data: { active: false } });
+    // Its supplemental payments are unpaid again — the obligation stays, ready to be paid
+    // by a new transfer, and this payment's line stays on record, inactive.
+    await tx.guidePaymentSupplementLine.updateMany({ where: { paymentId: p.id }, data: { active: false } });
     // The deductions this payment made never settled anything, because the money is
     // being undone. Contra entries are always negative, so this can never be refused
     // by the ledger's bounds (lib/advances/rules).
@@ -296,9 +339,13 @@ export async function reversePayment(prisma: PrismaClient, input: { paymentId: s
     ...input.actor, action: "payment.reversed", entityType: "GuidePayment", entityId: p.id,
     detail: {
       paymentNo: p.paymentNo, guideId: p.guideId, reason,
-      before: { status: "RECORDED", paymentDate: p.paymentDate, amountTransferred: Number(p.amountTransferred), jobs: p.jobs.map((j) => j.jobNo) },
-      after: { status: "REVERSED", jobsUnpaid: p.jobs.map((j) => j.jobNo).filter((n) => !stillHeld.includes(n)), jobsStillPaidByAnotherPayment: stillHeld, advancesReopened: restoredAdvances.map((a) => ({ advanceNo: a.advanceNo, amount: a.amountSatang / 100 })) },
+      before: { status: "RECORDED", paymentDate: p.paymentDate, amountTransferred: Number(p.amountTransferred), jobs: p.jobs.map((j) => j.jobNo), ...(p.supplements.length ? { supplements: p.supplements.map((x) => ({ id: x.supplementalId, type: x.type, net: Number(x.netAmount) })) } : {}) },
+      after: { status: "REVERSED", ...(p.supplements.length ? { supplementsUnpaid: p.supplements.map((x) => x.supplementalId) } : {}), jobsUnpaid: p.jobs.map((j) => j.jobNo).filter((n) => !stillHeld.includes(n)), jobsStillPaidByAnotherPayment: stillHeld, advancesReopened: restoredAdvances.map((a) => ({ advanceNo: a.advanceNo, amount: a.amountSatang / 100 })) },
     },
   });
+  for (const x of p.supplements) {
+    await audit({ ...input.actor, action: "supplemental.payment_reversed", entityType: "SupplementalPayment", entityId: x.supplementalId,
+      detail: { paymentNo: p.paymentNo, reason, type: x.type, net: Number(x.netAmount), note: "unpaid again; the reversed payment stays on record" } });
+  }
   return { ok: true, paymentNo: p.paymentNo, jobs: p.jobs.map((j) => j.jobNo), advancesReopened: restoredAdvances.map((a) => ({ advanceNo: a.advanceNo, amount: a.amountSatang / 100 })) };
 }

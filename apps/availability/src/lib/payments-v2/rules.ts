@@ -86,6 +86,27 @@ export type PaymentRequest = {
   source: PaymentSource;
   /** PEAK_DOCUMENT: the combined document (FOLK-PAY-…) whose locked jobs this payment settles. */
   peakPaymentRef?: string | null;
+  /**
+   * Supplemental payments (lib/supplemental-payments) this transfer pays, by id. A transfer
+   * pays jobs OR supplemental payments, never both: an amount left out of a closed payout
+   * is paid on its own, so the earlier transfer is never re-read as larger than it was.
+   */
+  supplements?: string[];
+};
+
+/** What the rules need to know about one supplemental payment, loaded by the service. */
+export type SupplementFacts = {
+  id: string;
+  guideId: string;
+  type: string;
+  label: string;
+  accountingCategory: string;
+  grossAmount: number;
+  wht: number;
+  netAmount: number;
+  voided: boolean;
+  /** FOLK-PMT-… of the ACTIVE payment already holding it, if any. */
+  activePaymentNo: string | null;
 };
 
 /** Everything the rules need to know about one job, loaded by the service. */
@@ -104,6 +125,8 @@ export type JobFacts = {
 
 export type Reconciliation = {
   jobTotal: number;
+  /** Σ net of the supplemental payments this transfer pays (0 for a job payment). */
+  supplementTotal?: number;
   adjustmentTotal: number;
   expectedTransfer: number;
   amountTransferred: number;
@@ -113,10 +136,13 @@ export type Reconciliation = {
 
 export type ResolvedJob = { jobNo: string; date: string; slotIdx: number; accountingDate: string; figures: JobFigures };
 
+export type ResolvedSupplement = Omit<SupplementFacts, "voided" | "activePaymentNo">;
+
 export type PaymentCheck = {
   reasons: string[];
   reconciliation: Reconciliation;
   jobs: ResolvedJob[];
+  supplements: ResolvedSupplement[];
   accountingPeriod: string | null;
   periods: string[];
 };
@@ -125,18 +151,39 @@ export type PaymentCheck = {
 export function reconciliationLine(r: Reconciliation): string {
   const f = (v: number) => Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const adj = r.adjustmentTotal === 0 ? "" : ` ${r.adjustmentTotal < 0 ? "−" : "+"} ${f(r.adjustmentTotal)}`;
-  return `${f(r.jobTotal)}${adj} = ${f(r.expectedTransfer)}${r.balanced ? " ✓" : ` · transferred ${f(r.amountTransferred)} (${r.difference > 0 ? "+" : "−"}${f(r.difference)})`}`;
+  const base = r.supplementTotal ? (r.jobTotal ? r.jobTotal + r.supplementTotal : r.supplementTotal) : r.jobTotal;
+  return `${f(base)}${adj} = ${f(r.expectedTransfer)}${r.balanced ? " ✓" : ` · transferred ${f(r.amountTransferred)} (${r.difference > 0 ? "+" : "−"}${f(r.difference)})`}`;
 }
 
 const blank = (s: string | null | undefined) => !(s ?? "").trim();
 const tooShort = (s: string | null | undefined) => (s ?? "").trim().length < MIN_REASON;
 
 /** Every reason the payment cannot be recorded — all at once — plus its reconciliation. */
-export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { today: string; bankRefUsedBy?: string | null; slipUsedBy?: string | null }): PaymentCheck {
+export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { today: string; bankRefUsedBy?: string | null; slipUsedBy?: string | null; supplements?: SupplementFacts[] }): PaymentCheck {
   const reasons: string[] = [];
+  const wanted = req.supplements ?? [];
   if (blank(req.guideId)) reasons.push("Choose the guide being paid");
   if (!PAYMENT_SOURCES.includes(req.source)) reasons.push("Unknown payment source");
-  if (!req.jobs.length) reasons.push("Choose at least one job");
+  if (!req.jobs.length && !wanted.length) reasons.push("Choose at least one job");
+  if (req.jobs.length && wanted.length) reasons.push("A supplemental payment is paid on its own — record the jobs in a separate payment");
+  if (wanted.length && req.source !== "MANUAL") reasons.push("A supplemental payment is recorded by hand, with its own slip");
+
+  // Supplemental payments: this guide's, not withdrawn, not paid already.
+  const supplements: ResolvedSupplement[] = [];
+  const seenSupplement = new Set<string>();
+  for (const id of wanted) {
+    if (seenSupplement.has(id)) { reasons.push("A supplemental payment is selected twice"); continue; }
+    seenSupplement.add(id);
+    const f = (ctx.supplements ?? []).find((x) => x.id === id);
+    if (!f) { reasons.push("A supplemental payment was not found — reload and try again"); continue; }
+    const name = `${f.label} ${f.netAmount.toFixed(2)}`;
+    if (f.guideId !== req.guideId) { reasons.push(`${name} belongs to another guide`); continue; }
+    if (f.voided) { reasons.push(`${name} was voided`); continue; }
+    if (f.activePaymentNo) { reasons.push(`${name} is already paid by ${f.activePaymentNo} — reverse that payment before paying it again`); continue; }
+    if (!(f.netAmount > 0)) { reasons.push(`${name} pays nothing`); continue; }
+    const { voided: _v, activePaymentNo: _a, ...rest } = f;
+    supplements.push(rest);
+  }
 
   const seen = new Set<string>();
   const resolved: ResolvedJob[] = [];
@@ -164,8 +211,10 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     resolved.push({ jobNo: j.jobNo.trim(), date: j.date, slotIdx: j.slotIdx, accountingDate, figures });
   }
 
-  // One accounting month per payment, unless someone says why.
-  const periods = [...new Set(resolved.map((j) => j.accountingDate.slice(0, 7)))].sort();
+  // One accounting month per payment, unless someone says why. A supplemental payment books
+  // into the month it is paid: it has no tour of its own to take a month from.
+  const supplementPeriod = supplements.length && DATE.test(req.paymentDate ?? "") ? [req.paymentDate.slice(0, 7)] : [];
+  const periods = [...new Set([...resolved.map((j) => j.accountingDate.slice(0, 7)), ...supplementPeriod])].sort();
   if (periods.length > 1 && tooShort(req.periodOverrideReason)) reasons.push(`These jobs book into ${periods.join(" and ")} — pay each month separately, or give the reason they belong in one transfer`);
 
   // The actual transfer date: real, not in the future, not before the work was done.
@@ -191,13 +240,15 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
   }
 
   const jobSatang = resolved.reduce((s, j) => s + toSatang(j.figures.payable), 0);
+  const supplementSatang = supplements.reduce((s, x) => s + toSatang(x.netAmount), 0);
   const amountOk = Number.isFinite(req.amountTransferred) && req.amountTransferred > 0 && hasAtMostTwoDecimals(req.amountTransferred);
   if (!amountOk) reasons.push("Enter the amount transferred, in baht and satang");
   const transferSatang = amountOk ? toSatang(req.amountTransferred) : 0;
-  const expected = jobSatang + adjSatang;
-  if (resolved.length && expected <= 0) reasons.push("After adjustments nothing is left to transfer");
+  const expected = jobSatang + supplementSatang + adjSatang;
+  if ((resolved.length || supplements.length) && expected <= 0) reasons.push("After adjustments nothing is left to transfer");
   const reconciliation: Reconciliation = {
     jobTotal: fromSatang(jobSatang),
+    ...(supplements.length ? { supplementTotal: fromSatang(supplementSatang) } : {}),
     adjustmentTotal: fromSatang(adjSatang),
     expectedTransfer: fromSatang(expected),
     amountTransferred: fromSatang(transferSatang),
@@ -205,7 +256,7 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     balanced: amountOk && transferSatang === expected,
   };
   if (amountOk && !reconciliation.balanced && tooShort(req.mismatchReason)) {
-    reasons.push(`Jobs + adjustments come to ${reconciliationLine({ ...reconciliation, balanced: true }).replace(" ✓", "")}, but ${reconciliation.amountTransferred.toFixed(2)} was transferred — correct it, add the adjustment, or give the reason`);
+    reasons.push(`${supplements.length ? "Supplemental payments" : "Jobs"} + adjustments come to ${reconciliationLine({ ...reconciliation, balanced: true }).replace(" ✓", "")}, but ${reconciliation.amountTransferred.toFixed(2)} was transferred — correct it, add the adjustment, or give the reason`);
   }
 
   // A row whose payer nobody recorded cannot be paid on a guess. Paying it might
@@ -227,5 +278,5 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
   if (bankRef.length > 120) reasons.push("The bank reference is too long");
   if (bankRef && ctx.bankRefUsedBy) reasons.push(`Bank reference ${bankRef} is already recorded on ${ctx.bankRefUsedBy}`);
 
-  return { reasons, reconciliation, jobs: resolved, accountingPeriod: periods[0] ?? null, periods };
+  return { reasons, reconciliation, jobs: resolved, supplements, accountingPeriod: periods[0] ?? null, periods };
 }

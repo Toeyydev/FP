@@ -10,7 +10,8 @@ import { GuideTabs } from "@/components/GuideTabs";
 // guide-readable breakdown: fee (after WHT) + reimbursed expenses = total.
 type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; fee?: number; expenses?: number; reviewReward: number; paid: boolean; paidAt: string | null; slip: string | null };
 type Month = { period: string; label: string; tourCount: number; total: number; reviewReward: number; paidCount: number; monthly: { paid: boolean; paidAt: string | null; slip: string | null }; tours: Tour[] };
-type Data = { months: Month[]; yearTotal: number; paidThisMonth: number; pendingTotal?: number; pendingCount?: number; guideId: string; all?: boolean };
+type Additional = { paymentNo: string; paidDate: string; label: string; gross: number; wht: number; net: number; jobs: string[]; slip: string | null };
+type Data = { months: Month[]; additional?: Additional[]; yearTotal: number; paidThisMonth: number; pendingTotal?: number; pendingCount?: number; guideId: string; all?: boolean };
 
 const thb = (v: number) => `฿${v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 const dLabel = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
@@ -88,6 +89,19 @@ export default function MyPay() {
               <span>Paid this month</span>
             </div>
           </div>
+
+          {(d.additional ?? []).length > 0 && (
+            <section className="panel js-my-additional" style={{ padding: 12, marginBottom: 12 }} aria-label="Additional payments">
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>Additional payments · ยอดจ่ายเพิ่มเติม</div>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", margin: "2px 0 8px" }}>Paid separately from your tour payments.</div>
+              {(d.additional ?? []).map((a) => (
+                <div key={a.paymentNo + a.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--line)", fontSize: 13 }}>
+                  <span>{a.label}{a.jobs.length ? ` · ${a.jobs.join(", ")}` : ""}<small style={{ display: "block", color: "var(--ink-soft)" }}>{a.paymentNo} · paid {dLabel(a.paidDate)}{a.wht > 0 ? ` · ${thb(a.gross)} − WHT ${thb(a.wht)}` : ""}{a.slip ? <> · <a href={a.slip} target="_blank" rel="noopener noreferrer">slip</a></> : null}</small></span>
+                  <b style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{thb(a.net)}</b>
+                </div>
+              ))}
+            </section>
+          )}
 
           <div className="pay-toggle">
             <button className={tab === "pending" ? "on" : ""} onClick={() => setTab("pending")}>Pending{pending.length ? ` (${pending.length})` : ""}</button>

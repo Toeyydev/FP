@@ -14,6 +14,9 @@ const prismaMock = vi.hoisted(() => ({
   guidePaymentDocument: { findMany: vi.fn() },
   guidePaymentJob: { findMany: vi.fn() },
   guidePayment: { findMany: vi.fn() },
+  // The month view's supplemental-payment summary — none in these cases.
+  supplementalPayment: { findMany: vi.fn(async () => []) },
+  guidePaymentSupplementLine: { findMany: vi.fn(async () => []) },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));

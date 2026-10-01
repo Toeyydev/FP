@@ -8,6 +8,8 @@ const prismaMock = vi.hoisted(() => ({
   payrollStatus: { findMany: vi.fn() },
   tourPayment: { findMany: vi.fn() },
   tour: { findMany: vi.fn() },
+  // Supplemental payments (paid separately) — none in these cases.
+  guidePaymentSupplementLine: { findMany: vi.fn(async () => []) },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 

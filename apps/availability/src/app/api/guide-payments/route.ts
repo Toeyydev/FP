@@ -6,6 +6,9 @@ import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps, canViewFinance } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
+import { notifyGuide } from "@/lib/booking-import";
+import { thb } from "@/lib/jobsheet";
+import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { paymentBody } from "@/lib/payments-v2/request-schema";
 import { previewPayment, recordPayment, type RecordPaymentInput } from "@/lib/payments-v2/service";
@@ -30,7 +33,7 @@ export async function GET(req: NextRequest) {
   const payments = await prisma.guidePayment.findMany({
     where: { ...(guideId ? { guideId } : {}), OR: [{ accountingPeriod: period }, { paymentDate: { startsWith: period } }] },
     orderBy: { createdAt: "desc" },
-    include: { jobs: true, adjustments: true },
+    include: { jobs: true, adjustments: true, supplements: true },
   });
   const guides = await prisma.user.findMany({ where: { guideId: { in: [...new Set(payments.map((p) => p.guideId))] } }, select: { guideId: true, displayName: true } });
   return NextResponse.json({
@@ -38,11 +41,13 @@ export async function GET(req: NextRequest) {
     payments: payments.map((p) => ({
       id: p.id, paymentNo: p.paymentNo, status: p.status, source: p.source, paymentDate: p.paymentDate, accountingPeriod: p.accountingPeriod,
       guideId: p.guideId, guide: guides.find((g) => g.guideId === p.guideId)?.displayName ?? p.guideId, createdAt: p.createdAt,
+      kind: p.kind, supplementTotal: Number(p.supplementTotal),
       jobTotal: Number(p.jobTotal), adjustmentTotal: Number(p.adjustmentTotal), amountTransferred: Number(p.amountTransferred),
       bankRef: p.bankRef, slipUrl: p.slipUrl, noSlipReason: p.noSlipReason, mismatchReason: p.mismatchReason, note: p.note,
       reversedAt: p.reversedAt, reversalReason: p.reversalReason,
       jobs: p.jobs.map((j) => ({ jobNo: j.jobNo, date: j.date, slotIdx: j.slotIdx, payable: Number(j.payable), feeGross: Number(j.feeGross), wht: Number(j.wht), reimbursement: Number(j.reimbursement), reviewReward: Number(j.reviewReward), peakDocumentNo: j.peakDocumentNo })),
       adjustments: p.adjustments.map((a) => ({ type: a.type, amount: Number(a.amount), description: a.description, jobNo: a.jobNo })),
+      supplements: p.supplements.map((x) => ({ supplementalId: x.supplementalId, type: x.type, typeLabel: SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en ?? x.type, grossAmount: Number(x.grossAmount), wht: Number(x.wht), netAmount: Number(x.netAmount), active: x.active })),
     })),
   });
 }
@@ -84,9 +89,10 @@ export async function POST(req: NextRequest) {
     const guide = await prisma.user.findUnique({ where: { guideId: body.guideId }, select: { displayName: true, fullName: true } });
     const guideName = guide?.fullName || guide?.displayName || body.guideId;
     const monthFolder = `${body.paymentDate.slice(0, 7)} ${MONTHS[Number(body.paymentDate.slice(5, 7)) - 1] ?? ""}`.trim();
-    // Named after the transfer and the jobs it pays — never after another job's EXP.
-    const first = body.jobs[0].jobNo;
-    const name = `${body.guideId} ${guideName} — ${body.paymentDate} — ${first}${body.jobs.length > 1 ? ` +${body.jobs.length - 1} more` : ""} — e-slip.${extOf(mime)}`;
+    // Named after the transfer and the jobs it pays — never after another job's EXP. A
+    // supplemental payment has no job of its own to be named after.
+    const what = body.jobs.length ? `${body.jobs[0].jobNo}${body.jobs.length > 1 ? ` +${body.jobs.length - 1} more` : ""}` : "supplemental payment";
+    const name = `${body.guideId} ${guideName} — ${body.paymentDate} — ${what} — e-slip.${extOf(mime)}`;
     let link: string, fileId: string;
     try {
       ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
@@ -110,6 +116,14 @@ export async function POST(req: NextRequest) {
   if (!result.ok) return NextResponse.json({ error: result.code === "conflict" ? "conflict" : "not-recordable", reasons: result.reasons, reconciliation: result.reconciliation ?? null }, { status: 409 });
 
   // Tell the guide their money is on the way — best effort, never blocks the record.
-  try { await sendPaymentNotice(body.guideId, result.payment.jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, slip?.url); } catch { /* notifying is best-effort */ }
+  try {
+    if (result.payment.supplements.length) {
+      const kinds = [...new Set(result.payment.supplements.map((x) => SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en.toLowerCase() ?? "extra payment"))].join(" and ");
+      const amount = thb(result.payment.amountTransferred);
+      await notifyGuide(body.guideId, `💸 An additional payment has been transferred — ${amount} (${kinds}). It is separate from your earlier payments.`, "Additional payment transferred 💸", `${amount} · ${kinds}`, undefined, slip?.url ? { url: slip.url } : {});
+    } else {
+      await sendPaymentNotice(body.guideId, result.payment.jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, slip?.url);
+    }
+  } catch { /* notifying is best-effort */ }
   return NextResponse.json({ ok: true, payment: result.payment, reconciliation: result.reconciliation });
 }

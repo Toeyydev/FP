@@ -18,6 +18,12 @@ import { join } from "node:path";
 //
 // Reading and showing the history of any rows that already exist stays allowed. What
 // is refused is creating, approving or paying a NEW one outside FOLK-PAY.
+//
+// A review incentive left out of a payout that already went (owner, 2026-10-01) is a
+// supplemental payment (lib/supplemental-payments): paid by its own FOLK-PMT guide payment
+// through Payments v2, booked to REVIEW_REWARD (510110), and withheld at the rate configured
+// for supplemental review incentives (SUPPLEMENTAL_WHT_PCT_REVIEW_INCENTIVE) or, with none
+// configured, the rate the operator states. It is not a ReviewPayout and mints no FOLK-RR.
 
 const ROOT = process.cwd();
 const SRC = join(ROOT, "src");

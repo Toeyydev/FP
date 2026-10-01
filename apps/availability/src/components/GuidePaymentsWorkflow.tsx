@@ -20,15 +20,23 @@ type PaymentRow = {
   paymentDate: string; accountingPeriod: string; amountTransferred: number; jobTotal: number; adjustmentTotal: number;
   createdAt: string; reversedAt: string | null; reversalReason: string | null; slipUrl: string | null; noSlipReason: string | null;
   jobs: { jobNo: string; payable: number }[];
+  kind?: string; supplements?: { typeLabel: string; netAmount: number }[];
 };
+type SupplementLine = { supplementalId: string; typeLabel: string; accountingCategory: string; grossAmount: number; wht: number; netAmount: number; active: boolean; reason: string; jobs: string[]; originalPaymentNo: string | null };
 type Detail = {
   id: string; paymentNo: string; status: string; source: string; guide: string; guideId: string; paymentDate: string; accountingPeriod: string;
-  reconciliation: { jobTotal: number; adjustmentTotal: number; expectedTransfer: number; amountTransferred: number; difference: number; balanced: boolean };
+  kind?: string;
+  reconciliation: { jobTotal: number; supplementTotal?: number; adjustmentTotal: number; expectedTransfer: number; amountTransferred: number; difference: number; balanced: boolean };
   bankRef: string | null; slipUrl: string | null; noSlipReason: string | null; mismatchReason: string | null; periodOverrideReason: string | null;
   note: string | null; createdAt: string; createdBy: string | null; reversedAt: string | null; reversedBy: string | null; reversalReason: string | null;
   jobs: { jobNo: string; date: string; slotIdx: number; payable: number; feeGross: number; wht: number; reimbursement: number; reviewReward: number; peakDocumentNo: string | null; active: boolean }[];
   adjustments: { type: string; amount: number; description: string; jobNo: string | null }[];
+  supplements?: SupplementLine[];
 };
+
+/** "Guide payment", or "Supplemental · Review incentive" — a supplemental transfer is never read as part of the job payment it followed. */
+const paymentKindLabel = (p: { kind?: string; supplements?: { typeLabel: string }[] }) =>
+  p.kind === "SUPPLEMENTAL" ? `Supplemental · ${[...new Set((p.supplements ?? []).map((x) => x.typeLabel))].join(", ") || "extra payment"}` : "Guide payment";
 
 const key = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 const dShort = (d: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
@@ -177,11 +185,11 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
               {payments.length === 0 && <tr><td colSpan={8} className="op-empty">No guide payments recorded for {period}.</td></tr>}
               {payments.map((p) => (
                 <tr key={p.id}>
-                  <td className="num">{p.paymentNo}</td>
+                  <td className="num">{p.paymentNo}<small style={{ display: "block", fontSize: 11, color: p.kind === "SUPPLEMENTAL" ? "var(--primary)" : "var(--ink-soft)", fontWeight: p.kind === "SUPPLEMENTAL" ? 600 : 400 }}>{paymentKindLabel(p)}</small></td>
                   <td><span className="gid">{p.guideId}</span> {p.guide}</td>
                   <td>{p.paymentDate}</td>
                   <td className="r num"><b>{thb(p.amountTransferred)}</b></td>
-                  <td className="r num">{p.jobs.length}</td>
+                  <td className="r num">{p.kind === "SUPPLEMENTAL" ? "—" : p.jobs.length}</td>
                   <td><span className={`chip-pay ${p.status === "REVERSED" ? "reversed" : "recorded"}`}>{p.status === "REVERSED" ? "Reversed" : "Recorded"}</span></td>
                   <td style={{ whiteSpace: "nowrap", color: "var(--ink-soft)", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
                   <td style={{ textAlign: "right" }}><button className="btn sm" onClick={() => openDetail(p.id)}>Open</button></td>
@@ -196,7 +204,7 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setOpenPayment(null); }}>
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pmt-h" style={{ width: "min(720px, 100%)" }}>
             <h3 id="pmt-h">{openPayment.paymentNo}</h3>
-            <div className="mctx">{openPayment.guideId} · {openPayment.guide} · transfer date {openPayment.paymentDate} · accounting month {openPayment.accountingPeriod}</div>
+            <div className="mctx">{paymentKindLabel(openPayment)} · {openPayment.guideId} · {openPayment.guide} · transfer date {openPayment.paymentDate} · accounting month {openPayment.accountingPeriod}</div>
             <div className="mbody" style={{ display: "grid", gap: 12 }}>
               {openPayment.status === "REVERSED" && (
                 <div className="pay-drift" role="alert">
@@ -204,6 +212,29 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
                   <span>Reversal reason: {openPayment.reversalReason}</span>
                 </div>
               )}
+              {openPayment.kind === "SUPPLEMENTAL" ? (
+              <div className="grid-scroll">
+                <table className="acct-table pay-review" aria-label="What this supplemental payment paid">
+                  <thead><tr><th>Type</th><th>Reason</th><th>Related</th><th className="r">Gross</th><th className="r">WHT</th><th className="r">Amount paid</th></tr></thead>
+                  <tbody>
+                    {(openPayment.supplements ?? []).map((x) => (
+                      <tr key={x.supplementalId}>
+                        <td>{x.typeLabel}<small style={{ display: "block", color: "var(--ink-soft)" }}>{x.accountingCategory}</small></td>
+                        <td>{x.reason}</td>
+                        <td className="num" style={{ fontSize: 12 }}>{[...x.jobs, ...(x.originalPaymentNo ? [`omitted from ${x.originalPaymentNo}`] : [])].join(" · ") || "guide-level"}</td>
+                        <td className="r num">{thb(x.grossAmount)}</td><td className="r num">{thb(x.wht)}</td><td className="r num"><b>{thb(x.netAmount)}</b></td>
+                      </tr>
+                    ))}
+                    {openPayment.adjustments.map((a, i) => (
+                      <tr key={`a${i}`}><td>{a.type.replace(/_/g, " ").toLowerCase()}</td><td colSpan={4}>{a.description}</td><td className="r num">{thb(a.amount)}</td></tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr><td colSpan={5}>Separate from any earlier payment to this guide — no earlier transfer was changed.</td><td className="r num"><b>{thb(openPayment.reconciliation.amountTransferred)}</b></td></tr>
+                  </tfoot>
+                </table>
+              </div>
+              ) : (
               <div className="grid-scroll">
                 <table className="acct-table pay-review" aria-label="What this payment paid">
                   <thead><tr><th>Job No.</th><th>Tour date</th><th className="r">Guide fee</th><th className="r">WHT</th><th className="r">Reimbursement</th><th className="r">Review</th><th className="r">Amount paid</th><th>PEAK</th></tr></thead>
@@ -226,9 +257,10 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
                   </tfoot>
                 </table>
               </div>
+              )}
               <div className={`pay-recon${openPayment.reconciliation.balanced ? " ok" : ""}`} role="status">
                 <span className="paydoc-label">Reconciliation</span>
-                <b className="num">{thb(openPayment.reconciliation.jobTotal)} {openPayment.reconciliation.adjustmentTotal < 0 ? "−" : "+"} {thb(Math.abs(openPayment.reconciliation.adjustmentTotal))} = {thb(openPayment.reconciliation.expectedTransfer)}{openPayment.reconciliation.balanced ? " ✓" : ` · transferred ${thb(openPayment.reconciliation.amountTransferred)}`}</b>
+                <b className="num">{thb(openPayment.reconciliation.jobTotal + (openPayment.reconciliation.supplementTotal ?? 0))} {openPayment.reconciliation.adjustmentTotal < 0 ? "−" : "+"} {thb(Math.abs(openPayment.reconciliation.adjustmentTotal))} = {thb(openPayment.reconciliation.expectedTransfer)}{openPayment.reconciliation.balanced ? " ✓" : ` · transferred ${thb(openPayment.reconciliation.amountTransferred)}`}</b>
               </div>
               <div className="pay-review-facts">
                 <div><span className="paydoc-label">Evidence</span><b>{openPayment.slipUrl ? <a href={openPayment.slipUrl} target="_blank" rel="noopener noreferrer">Bank slip</a> : openPayment.noSlipReason ? `No slip — ${openPayment.noSlipReason}` : "No slip"}</b></div>
