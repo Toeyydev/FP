@@ -59,9 +59,13 @@ async function save(expenses: Row[], baseUpdatedAt?: string, over: Record<string
     body: JSON.stringify({ guideId: G, date: DATE, slotIdx: 2, tourId: "T-900", status: "Confirmed", bookings: [], expenses, guideFee: FEE, ...(baseUpdatedAt ? { baseUpdatedAt } : {}), ...over }) }));
   return { status: r.status, body: await r.json() };
 }
+// Approving signs off the version on the operator's screen (reviewedUpdatedAt, required since
+// the booking reconcile): here, the version the database holds — what a freshly loaded
+// page would show. Removing an approval needs no version.
 async function approve(on: boolean) {
+  const reviewedUpdatedAt = on ? iso((await sheetNow()).updatedAt) : undefined;
   const r = await APPROVE(new NextRequest("http://test.local/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ guideId: G, date: DATE, slotIdx: 2, approve: on }) }));
+    body: JSON.stringify({ guideId: G, date: DATE, slotIdx: 2, approve: on, ...(reviewedUpdatedAt ? { reviewedUpdatedAt } : {}) }) }));
   return { status: r.status, body: await r.json() };
 }
 async function monthList() {
