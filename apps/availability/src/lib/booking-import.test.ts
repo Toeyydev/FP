@@ -32,48 +32,21 @@ beforeEach(() => {
   prismaMock.booking.findMany.mockResolvedValue([]);
 });
 
-describe("autoAttachLate — late booking onto an already-assigned slot is HELD for the operator", () => {
+describe("autoAttachLate — a booking on an assigned departure goes through reconciliation", () => {
   it("does nothing when the slot has no assignment yet", async () => {
     await autoAttachLate(booking());
     expect(prismaMock.booking.update).not.toHaveBeenCalled();
     expect(prismaMock.notification.create).not.toHaveBeenCalled();
   });
 
-  it("never auto-adds to the assigned guide — stays PENDING, operator alerted", async () => {
+  // Owner decision 2026-09-30 (13 Sep incident): a booking on an assigned departure is no
+  // longer HELD for an operator. autoAttachLate hands it to the one reconciliation service
+  // (lib/booking-reconcile), which places it when the match is unambiguous and raises a
+  // review otherwise — covered against a real database in booking-reconcile.itest.ts.
+  it("hands a booking on an assigned departure to the reconciliation service", async () => {
     prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
     const res = await autoAttachLate(booking({ pax: 2 }));
-
-    expect(res).toBe(false);
-    expect(prismaMock.booking.update).not.toHaveBeenCalled(); // stays PENDING
-    expect(prismaMock.assignment.update).not.toHaveBeenCalled(); // guide's pax untouched
-    expect(prismaMock.jobSheet.upsert).not.toHaveBeenCalled(); // sheet untouched
-    expect(prismaMock.notification.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ kind: "late-booking", message: expect.stringContaining("Held as pending") }) }),
-    );
-    // the alert names the assigned guide so the operator knows whose group grew
-    expect(prismaMock.notification.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ message: expect.stringContaining("G-003") }) }),
-    );
-  });
-
-  it("holds and alerts when the slot is split across guides", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([
-      { guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 6 },
-      { guideId: "G-007", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 },
-    ]);
-    await autoAttachLate(booking({ pax: 2 }));
-    expect(prismaMock.booking.update).not.toHaveBeenCalled();
-    expect(prismaMock.assignment.update).not.toHaveBeenCalled();
-    expect(prismaMock.notification.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ message: expect.stringContaining("2 guides") }) }),
-    );
-  });
-
-  it("holds an UNMAPPED booking (no tourId) too — no silent tour linking", async () => {
-    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: "G-003", date: FUTURE, slotIdx: 5, tourId: "t1", pax: 4 }]);
-    await autoAttachLate(booking({ tourId: null, pax: 2 }));
-    expect(prismaMock.booking.update).not.toHaveBeenCalled();
-    expect(prismaMock.notification.create).toHaveBeenCalled();
+    expect(res).toBe(false); // the mock has no booking row to place
   });
 
   it("ignores cancelled bookings and ones with no date/slot", async () => {

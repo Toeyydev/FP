@@ -13,10 +13,14 @@ import { hasHistoricalJobSheet } from "@/lib/historical-guard";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { tourStartMs } from "@/lib/no-show-count";
+import { reconcileBookingChange, reconcileBookings, reconcileDeparture, planDeparture, depKey, type ReconcileSource, type Departure } from "@/lib/booking-reconcile";
+import { SHEET_BOOKING_STATUSES, type SheetBooking } from "@/lib/sheet-bookings";
 
 export type ImportResult = "created" | "updated" | "skipped";
 
-export async function notifyOps(message: string, title: string, body: string, opts?: { push?: boolean; date?: string }) {
+// `dedupe: false` is for a caller that decided itself, against recorded state, that this is
+// news — a count going 6 → 8 again after a stale 8 → 6 must be said again.
+export async function notifyOps(message: string, title: string, body: string, opts?: { push?: boolean; date?: string; dedupe?: boolean }) {
   // A finished job shouldn't alert: skip entirely if the tour date is in the past.
   if (opts?.date) { const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); if (opts.date < today) return; }
   try {
@@ -25,7 +29,7 @@ export async function notifyOps(message: string, title: string, body: string, op
       // De-dupe: an unresolved alert (e.g. an over-capacity booking re-seen on every
       // 2.5-min auto-sync) must not stack up. If this exact message is already in the
       // operator's inbox, skip it — no second row, no second push.
-      const dup = await prisma.notification.findFirst({ where: { userId: o.id, kind: "late-booking", message }, select: { id: true } });
+      const dup = opts?.dedupe === false ? null : await prisma.notification.findFirst({ where: { userId: o.id, kind: "late-booking", message }, select: { id: true } });
       if (dup) continue;
       // Always record it in the in-app inbox; only PUSH (phone/browser ping) for
       // actionable alerts. Routine auto-handled events pass { push: false } so the
@@ -120,37 +124,60 @@ async function autoRemoveExactDuplicate(rec: { id: string; customerName: string 
 // arrival goes back to them — the booking stays PENDING in the Bookings inbox and
 // ops get an actionable alert to review and place it themselves (add it to the
 // guide, split the slot, or offer it out). Never throws.
-export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; externalRef?: string | null; status: string }): Promise<boolean> {
+export async function autoAttachLate(b: { id: string; tourId: string | null; date: string | null; slotIdx: number | null; pax: number | null; customerName: string | null; confirmationCode: string | null; externalRef?: string | null; status: string }, via: ReconcileSource = "sweep"): Promise<boolean> {
+  // A booking that arrives after a guide was assigned used to be HELD as PENDING with an
+  // alert asking an operator to place it — and on 13 Sep 2026 nobody did, so a job sheet
+  // kept 6 guests while 8 came. It now goes through the one reconciliation service
+  // (lib/booking-reconcile): placed on the guide's job when that is unambiguous, left for
+  // an operator with a review alert when it is not. Never throws.
   try {
-    if (b.status !== "PENDING" || !b.date || b.slotIdx == null) return false;
-    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx } });
-    if (assigns.length === 0) return false; // not dispatched yet — the normal inbox grouping handles it
-    const ref = bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "a new booking";
-    const addPax = b.pax ?? 0;
-    const who = assigns.length > 1 ? `${assigns.length} guides` : assigns[0].guideId;
-    // Stable message text — notifyOps de-dupes on it, so the reconcile sweep re-seeing
-    // this booking every pass doesn't stack alerts.
-    await notifyOps(
-      `Booking ${ref} (+${addPax} pax) for ${b.date} arrived after ${who} ${assigns.length > 1 ? "were" : "was"} assigned. Held as pending — review it in Bookings and assign it yourself.`,
-      "Late booking needs assigning",
-      `${ref} · ${b.date} · +${addPax} pax`,
-      { date: b.date },
-    );
-    return false;
-  } catch { return false; /* import must succeed regardless of alert errors */ }
+    const r = await reconcileBookingChange(b.id, { source: via, reason: "booking on an assigned departure" });
+    return r.kind === "reconciled" && r.changed.includes("booking placed");
+  } catch { return false; /* import must succeed regardless */ }
 }
 
-// Sweep existing PENDING bookings (today onward) and flag any whose slot is
-// already assigned to a guide (held for the operator to place — never combined
-// automatically), THEN re-sync every assignment's pax to the real booking total
-// so the operator's board/dashboard never shows a stale number.
+/** Booking ids an import touched, with where each was before — reconciled once per departure afterwards. */
+export type DirtyBookings = Map<string, Departure[]>;
+
+/** Every write in importParsed ends here: the booking's change is carried to the job(s) —
+ *  now, or (a batch import passing `collect`) once per departure when the batch is done. */
+async function reconcileAfterImport(id: string, via: ReconcileSource, before?: { date: string | null; slotIdx: number | null } | null, collect?: DirtyBookings): Promise<void> {
+  const previous: Departure[] = before?.date && before.slotIdx != null ? [{ date: before.date, slotIdx: before.slotIdx }] : [];
+  if (collect) { collect.set(id, [...(collect.get(id) ?? []), ...previous]); return; }
+  try { await reconcileBookingChange(id, { source: via, reason: "booking imported", previous }); } catch { /* best-effort; the booking is saved */ }
+}
+
+/** Reconcile what a batch import collected: each affected departure once. Never throws. */
+export async function reconcileCollected(collect: DirtyBookings, via: ReconcileSource): Promise<void> {
+  try { await reconcileBookings([...collect].map(([id, previous]) => ({ id, previous })), { source: via, reason: "booking imported" }); } catch { /* best-effort */ }
+}
+
+// A payload saying a booking is live, for a booking FolkOPS already holds as CANCELLED, is an
+// older event arriving late (a retried webhook, a stale page): Bokun does not un-cancel a
+// booking — a rebooking is a new booking with its own code. Applying it would put stale
+// pax, date or tour onto the record, so nothing is applied and the refusal is audited.
+// Bokun sends no modification time or version to order other updates by (checked on the
+// stored payloads, 2026-09-30: only creationDate and cancellationDate), so this is the one
+// ordering FolkOPS can prove; for the rest, the last payload received is the booking, and
+// the hourly autosync — which reads Bokun's CURRENT state — puts any late stale value right.
+async function ignoreStaleLive(rec: { id: string; status: string }, cancelled: boolean, via: ReconcileSource): Promise<boolean> {
+  if (cancelled || rec.status !== "CANCELLED") return false;
+  await audit({ action: "booking.stale_update_ignored", entityType: "Booking", entityId: rec.id, detail: { via, reason: "a live payload arrived for a booking already cancelled at the source; nothing applied" } });
+  return true;
+}
+
+// The sweep: every upcoming ASSIGNED departure whose jobs disagree with its bookings is
+// reconciled (lib/booking-reconcile) — a PENDING booking a guide's job can take, an expected
+// pax that no longer matches the job's own bookings, a sheet missing a guest or still
+// listing a cancelled one. Which departures need it is decided from ONE read of all upcoming
+// assignments, bookings and sheets with the same ownership rule the reconciliation uses, so
+// the sweep never recounts a job the reconciliation would leave alone (two guides and
+// untagged guests, an unmapped booking — those wait for an operator).
 // Idempotent — safe to call on every inbox / dashboard load.
 //
-// Throttled: this ~70-query sweep fires from every dashboard AND inbox load, so with
-// a few operators/tabs polling it used to re-run many times a minute for no gain (the
-// data barely moves between calls) — a big driver of general DB contention / slowness.
-// We now run it at most once per RECONCILE_MIN_GAP_MS across the process; the 30-min
-// background loop and the manual Sync path pass force=true for an immediate real sweep.
+// Throttled: it fires from every dashboard AND inbox load, so it runs at most once per
+// RECONCILE_MIN_GAP_MS across the process; the background loop and the manual Sync path
+// pass force=true for an immediate real sweep.
 let lastReconcileAt = 0;
 const RECONCILE_MIN_GAP_MS = 45_000;
 export async function reconcileAssignedBookings(force = false): Promise<number> {
@@ -158,30 +185,31 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
   if (!force && now - lastReconcileAt < RECONCILE_MIN_GAP_MS) return 0;
   lastReconcileAt = now;
   const today = ymd(todayD());
-  const pending = await prisma.booking.findMany({
-    where: { status: "PENDING", tourId: { not: null }, date: { gte: today }, slotIdx: { not: null } },
-    select: { id: true, tourId: true, date: true, slotIdx: true, pax: true, customerName: true, confirmationCode: true, externalRef: true, status: true },
-  });
-  let combined = 0;
-  for (const b of pending) if (await autoAttachLate(b)) combined++;
+  const [assigns, bks, sheets] = await Promise.all([
+    prisma.assignment.findMany({ where: { date: { gte: today } }, select: { id: true, guideId: true, tourId: true, date: true, slotIdx: true, pax: true, googleEventId: true, opsGoogleEventId: true } }),
+    prisma.booking.findMany({ where: { date: { gte: today }, slotIdx: { not: null }, status: { in: [...SHEET_BOOKING_STATUSES, "CANCELLED"] } }, select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true, date: true, slotIdx: true } }),
+    prisma.jobSheet.findMany({ where: { date: { gte: today } }, select: { guideId: true, date: true, slotIdx: true, bookings: true } }),
+  ]);
+  const at = <T extends { date: string | null; slotIdx: number | null }>(xs: T[], d: Departure) => xs.filter((x) => x.date === d.date && x.slotIdx === d.slotIdx);
+  const deps = new Map<string, Departure>();
+  for (const a of assigns) deps.set(depKey(a), { date: a.date, slotIdx: a.slotIdx });
 
-  // Re-sync assignment.pax = the slot's live booking total (split-aware).
-  const assigns = await prisma.assignment.findMany({ where: { date: { gte: today } }, select: { id: true, guideId: true, date: true, slotIdx: true, pax: true, googleEventId: true, opsGoogleEventId: true } });
-  for (const a of assigns) {
-    // PENDING excluded: a held late booking is NOT on the guide's job until the
-    // operator places it, so it must not inflate the assignment's pax.
-    const bks = await prisma.booking.findMany({ where: { date: a.date, slotIdx: a.slotIdx, status: { in: ["OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
-    const split = bks.some((b) => b.assignedGuideId);
-    // On a split slot, a guide's pax is ONLY their tagged guests — an untagged guest
-    // must not be counted into every guide's pax (that double-counted one booking
-    // across both guides). Untagged guests stay unassigned for the operator to place.
-    const mine = split ? bks.filter((b) => b.assignedGuideId === a.guideId) : bks;
-    const sum = mine.reduce((s, b) => s + (b.pax ?? 0), 0);
-    if (sum > 0 && sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
-    // Safety net: a fully-cancelled slot (0 guests) loses its calendar events.
-    else if (sum === 0 && (a.googleEventId || a.opsGoogleEventId)) {
-      try { await removeTourEvents(a); } catch { /* best-effort */ }
-      await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
+  let placed = 0;
+  for (const d of deps.values()) {
+    const ga = at(assigns, d), gb = at(bks, d), gs = at(sheets, d).map((s) => ({ guideId: s.guideId, rows: (s.bookings as unknown as SheetBooking[]) ?? [] }));
+    if (sweepNeedsReconcile(ga, gb, gs)) {
+      try {
+        const r = await reconcileDeparture(d, { source: "sweep", reason: "departure out of step with its bookings" });
+        placed += r.placed.size;
+      } catch { /* one departure must not stop the sweep */ }
+    }
+    // Safety net: a departure with no live guests left for this tour loses its calendar events.
+    for (const a of ga) {
+      const anyLive = gb.some((b) => ["OFFERED", "ASSIGNED"].includes(b.status) && (!b.tourId || b.tourId === a.tourId));
+      if (!anyLive && (a.googleEventId || a.opsGoogleEventId)) {
+        try { await removeTourEvents(a); } catch { /* best-effort */ }
+        await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
+      }
     }
   }
 
@@ -195,7 +223,37 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
   const strand = offered.filter((b) => { const k = `${b.date}|${b.slotIdx}`; return !assignedSlots.has(k) && !liveOfferSlots.has(k); }).map((b) => b.id);
   if (strand.length) await prisma.booking.updateMany({ where: { id: { in: strand } }, data: { status: "PENDING" } });
 
-  return combined;
+  return placed;
+}
+
+/** Does this departure disagree with its bookings in a way the reconciliation would act on? Pure. */
+export function sweepNeedsReconcile(
+  assigns: { guideId: string; tourId: string; pax: number | null }[],
+  bookings: { id: string; status: string; tourId: string | null; assignedGuideId: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null }[],
+  sheets: { guideId: string; rows: SheetBooking[] }[],
+): boolean {
+  if (!assigns.length) return false;
+  const plan = planDeparture(assigns, bookings, sheets);
+  const keys = (b: { externalRef: string | null; confirmationCode: string | null }) => [b.externalRef, b.confirmationCode].map((x) => (x ?? "").trim().toLowerCase()).filter(Boolean);
+  for (const a of assigns) {
+    if (plan.frozen.has(a.guideId)) continue;
+    const owned = bookings.filter((b) => plan.owner.get(b.id) === a.guideId);
+    if (owned.some((b) => b.status === "PENDING")) return true;
+    const rows = sheets.find((s) => s.guideId === a.guideId)?.rows;
+    // The expected pax the reconciliation keeps: the sheet's guest total, or the bookings when there is no sheet.
+    const target = rows ? rows.reduce((s, r) => s + (Number(r.bookedPax) || 0), 0) : owned.reduce((s, b) => s + (b.pax ?? 0), 0);
+    if (owned.length && target !== (a.pax ?? 0)) return true;
+    if (!rows) continue;
+    for (const b of owned) {
+      const row = rows.find((r) => keys(b).includes((r.bookingNo ?? "").trim().toLowerCase()));
+      if (!row || (row.bookedPax ?? null) !== (b.pax ?? null)) return true;
+    }
+    for (const b of bookings) if (b.status === "CANCELLED" && plan.cancelHolder.get(b.id) === a.guideId) {
+      const row = rows.find((r) => keys(b).includes((r.bookingNo ?? "").trim().toLowerCase()));
+      if (row && row.actualPax == null && !(row.status ?? "").trim()) return true;
+    }
+  }
+  return false;
 }
 
 // Upsert one already-parsed booking. Dedupes by (source, externalId); when no
@@ -203,12 +261,16 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
 // Auto-maps the tour from a learned product→tour mapping. Shared by the webhook,
 // the Bokun API sync, and the CSV import.
 // A live booking was cancelled (e.g. a GetYourGuide cancellation arriving via the
-// Bokun webhook). If its slot is assigned to a guide, re-sync the guide's pax and
-// tell them in real time so they aren't left expecting a guest who won't show.
+// Bokun webhook). Tell the guide whose job it was, in real time, so they aren't left
+// expecting a guest who won't show — and when no guest is left for the tour, take the
+// tour off their schedule. The job's own numbers (expected pax, sheet rows, expense
+// counts) are NOT written here, and no new count is announced here either: the
+// reconciliation that runs right after the import does both, atomically, and only says a
+// count once it is committed.
 async function onBookingCancelled(b: { id?: string; confirmationCode?: string | null; date: string | null; slotIdx: number | null; customerName: string | null }): Promise<void> {
   try {
     if (!b.date || b.slotIdx == null) return;
-    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, pax: true, googleEventId: true, opsGoogleEventId: true, date: true, slotIdx: true } });
+    const assigns = await prisma.assignment.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { id: true, guideId: true, tourId: true, pax: true, googleEventId: true, opsGoogleEventId: true, date: true, slotIdx: true } });
     if (!assigns.length) return;
     // Owner rule (2026-09-13): a cancellation that arrives after the departure has started is
     // history, not news. The booking keeps its CANCELLED status (and any no-show the guide
@@ -222,16 +284,28 @@ async function onBookingCancelled(b: { id?: string; confirmationCode?: string | 
       }).catch(() => {});
       return;
     }
-    const bks = await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } }, select: { pax: true, assignedGuideId: true } });
-    const split = bks.some((x) => x.assignedGuideId);
+    const bks = (await prisma.booking.findMany({ where: { date: b.date, slotIdx: b.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES, "CANCELLED"] } }, select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true } })) ?? [];
+    const sheets = (await prisma.jobSheet.findMany({ where: { date: b.date, slotIdx: b.slotIdx }, select: { guideId: true, bookings: true } })) ?? [];
+    const plan = planDeparture(assigns, bks, sheets.map((s) => ({ guideId: s.guideId, rows: (s.bookings as unknown as SheetBooking[]) ?? [] })));
+    const me = bks.find((x) => x.id === b.id);
+    const tourOf = me?.tourId ?? null;
+    // The one job this booking was on: the sheet listing it, else its tag, else the only
+    // guide running its tour. Anything less certain tells ops, not a guess at a guide.
+    const onTour = assigns.filter((a) => tourOf != null && a.tourId === tourOf);
+    const holder = (b.id ? plan.cancelHolder.get(b.id) : undefined)
+      ?? (me?.assignedGuideId && assigns.some((a) => a.guideId === me.assignedGuideId) ? me.assignedGuideId : undefined)
+      ?? (onTour.length === 1 ? onTour[0].guideId : undefined);
+    const live = bks.filter((x) => SHEET_BOOKING_STATUSES.includes(x.status));
     const upcoming = b.date >= ymd(todayD());
     const who = b.customerName ? `${b.customerName} ` : "";
+    if (!holder) await notifyOps(`Cancellation on ${b.date}: ${who}was on no single guide's job — check the departure's guest lists.`, "Booking cancelled", `${b.date} · check guests`, { push: false, date: b.date });
     for (const a of assigns) {
-      // Split-aware: this guide's remaining guests (on a split slot, only theirs).
-      const mine = split ? bks.filter((x) => !x.assignedGuideId || x.assignedGuideId === a.guideId) : bks;
-      const sum = mine.reduce((acc, x) => acc + (x.pax ?? 0), 0);
+      const concerned = a.guideId === holder || onTour.some((x) => x.guideId === a.guideId);
+      if (!concerned) continue;
+      // Nobody left who could be this job's guest: no live booking on its tour, none unmapped, none tagged to it.
+      const anyLeft = live.some((x) => x.assignedGuideId === a.guideId || !x.tourId || x.tourId === a.tourId);
 
-      if (sum === 0 && upcoming) {
+      if (!anyLeft && upcoming) {
         // Whole tour cancelled \u2014 remove it from the guide entirely (calendar, job
         // sheet, check-ins, any open offer, and the assignment) so it disappears
         // from their schedule. Never touch a tour that's already been paid.
@@ -271,11 +345,10 @@ async function onBookingCancelled(b: { id?: string; confirmationCode?: string | 
         }
         await notifyGuide(a.guideId, `Your ${b.date} tour was cancelled \u2014 all guests cancelled. It has been removed from your schedule.`, "Tour cancelled", `${b.date} \u00b7 removed`);
         await notifyOps(`Cancellation on ${b.date}: ${who}was the last guest \u2014 ${a.guideId}'s tour removed from the board.`, "Tour cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 removed`, { push: false, date: b.date });
-      } else {
-        if (sum !== a.pax) await prisma.assignment.update({ where: { id: a.id }, data: { pax: sum } });
-        await notifyGuide(a.guideId, `A guest cancelled on your ${b.date} tour. You now have ${sum} guest${sum === 1 ? "" : "s"}.`, "A guest cancelled", `${b.date} \u00b7 ${sum} guests`);
-        await notifyOps(`Cancellation on ${b.date}: ${who}left ${a.guideId}'s job \u2014 now ${sum} guests.`, "Booking cancelled", `${b.date} \u00b7 ${a.guideId} \u00b7 ${sum} pax`, { push: false, date: b.date });
       }
+      // Otherwise nothing is said here. The reconciliation that runs right after this import
+      // tells the guide and ops the job's new guest count once it is COMMITTED — or, when the
+      // job cannot change (approved, certified, paid), that a guest cancelled, with no count.
     }
   } catch { /* real-time alert + calendar sync are best-effort; the cancellation is already saved */ }
 }
@@ -324,7 +397,9 @@ async function announceCancelled(bookings: { date: string | null; slotIdx: numbe
   for (const b of bySlot.values()) await onBookingCancelled(b);
 }
 
-export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown }): Promise<ImportResult> {
+export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown; via?: ReconcileSource; collect?: DirtyBookings }): Promise<ImportResult> {
+  const via: ReconcileSource = opts.via ?? "csv";
+  const collect = opts.collect;
   let tourId: string | null = null;
   if (p.productName) {
     const map = await prisma.productMap.findUnique({ where: { productKey: productKey(p.productName) } }).catch(() => null);
@@ -353,7 +428,8 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     pinned ? {} : { date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
 
   if (p.externalId) {
-    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true } });
+    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true, date: true, slotIdx: true } });
+    if (existing && (await ignoreStaleLive(existing, cancelled, via))) return "skipped";
     // The SAME OTA booking can re-arrive under a different Bokun externalId (a
     // re-issue / channel remap). If we already hold this externalRef, update THAT
     // record in place instead of creating a duplicate — but only a record nothing marks
@@ -361,11 +437,13 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     // booking and code; merging the two would let the old booking's cancellation cancel
     // the confirmed new one (or leave the new one cancelled), whichever event came first.
     if (!existing && p.externalRef) {
-      const sameRef = await prisma.booking.findMany({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true, externalId: true, confirmationCode: true } });
+      const sameRef = await prisma.booking.findMany({ where: { externalRef: p.externalRef }, select: { id: true, status: true, datePinned: true, externalId: true, confirmationCode: true, date: true, slotIdx: true } });
       const byRef = sameRef.find((b) => (!b.externalId || b.externalId === p.externalId) && (!b.confirmationCode || b.confirmationCode === p.confirmationCode));
       if (byRef) {
+        if (await ignoreStaleLive(byRef, cancelled, via)) return "skipped";
         const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
+        await reconcileAfterImport(updated.id, via, byRef, collect);
         return "updated";
       }
     }
@@ -383,15 +461,16 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
       },
     });
-    if (!existing && !(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+    const keep = existing || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec)));
     if (cancelled && existing?.status !== "CANCELLED") await onBookingCancelled(rec);
+    if (keep) await reconcileAfterImport(rec.id, via, existing, collect);
     return existing ? "updated" : "created";
   }
 
   // No externalId: dedupe on confirmationCode / externalRef so re-import is safe.
   const ref = p.confirmationCode || p.externalRef;
   if (ref) {
-    const select = { id: true, status: true, datePinned: true, confirmationCode: true } as const;
+    const select = { id: true, status: true, datePinned: true, confirmationCode: true, date: true, slotIdx: true } as const;
     const byCode = await prisma.booking.findFirst({ where: { confirmationCode: ref }, select });
     const dup = byCode ?? await prisma.booking.findFirst({ where: { externalRef: ref }, select });
     // A match on the ref alone does not prove it is the same booking: an OTA ref is shared by
@@ -402,11 +481,13 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       await audit({ action: "booking.cancel_not_applied", entityType: "Booking", entityId: dup.id, detail: { ref, reason: "cancellation matched only by a shared booking ref, not by this record's own code — left unchanged" } });
       return "skipped";
     }
+    if (dup && (await ignoreStaleLive(dup, cancelled, via))) return "skipped";
     if (dup) {
       const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
       const copies = cancelled ? await cancelOtherCopies(p, dup.id, cancelledAtSource) : [];
       // Tell the guide/ops once per slot, after every copy is cancelled, so the recount is right.
       await announceCancelled([...(dup.status !== "CANCELLED" && cancelled ? [updated] : []), ...copies]);
+      await reconcileAfterImport(dup.id, via, dup, collect);
       return "updated";
     }
   }
@@ -417,8 +498,9 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       pax: p.pax ?? null, customerName: p.customerName ?? null, phone: p.phone ?? null, status: cancelled ? "CANCELLED" : "PENDING", cancelledAtSource,
     },
   });
-  if (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec))) await autoAttachLate(rec);
+  const keepNew = !(await autoRemoveExactDuplicate(rec, p.phoneHidden === true)) && !(await flagCrossChannelDuplicate(rec));
   if (cancelled) await announceCancelled(await cancelOtherCopies(p, rec.id, cancelledAtSource));
+  if (keepNew) await reconcileAfterImport(rec.id, via, null, collect);
   return "created";
 }
 
@@ -438,11 +520,11 @@ function isOtaBooking(p: { confirmationCode?: string; externalRef?: string }, so
 // Import a raw Bokun/channel payload (deep-parsed). With { otaOnly }, syncs only
 // marketplace bookings (GetYourGuide + Viator) and skips direct FOLK-xxxx website
 // bookings — so the inbox stays clean. The live webhook leaves it off.
-export async function importRawBooking(raw: unknown, opts?: { otaOnly?: boolean }): Promise<ImportResult> {
+export async function importRawBooking(raw: unknown, opts?: { otaOnly?: boolean; via?: ReconcileSource; collect?: DirtyBookings }): Promise<ImportResult> {
   const parsed = parseBokun(raw);
   const source = detectChannel(raw);
   if (opts?.otaOnly && !isOtaBooking(parsed, source)) return "skipped";
-  return importParsed(parsed, { source, cancelled: isCancellation(raw), raw });
+  return importParsed(parsed, { source, cancelled: isCancellation(raw), raw, via: opts?.via ?? (opts?.otaOnly ? "autosync" : "webhook"), collect: opts?.collect });
 }
 
 
@@ -478,16 +560,19 @@ export async function autoSyncBokun(): Promise<void> {
     }
     const { from, to } = autoSyncWindow(Date.now());
     let synced = 0;
+    // Every departure the sync touched is reconciled ONCE at the end, not once per booking.
+    const dirty: DirtyBookings = new Map();
     let firstPageFailed: { status: number; error?: string } | null = null;
     for (let page = 1; page <= AUTO_SYNC_PAGES; page++) {
       const res = await searchBookings({ from, to, page, pageSize: 100 });
       if (!res.ok) { if (page === 1) firstPageFailed = { status: res.status, error: res.error }; break; }
       if (res.items.length === 0) break;
-      for (const item of res.items) { try { await importRawBooking(item, { otaOnly: true }); synced++; } catch { /* skip a bad item */ } }
+      for (const item of res.items) { try { await importRawBooking(item, { otaOnly: true, via: "autosync", collect: dirty }); synced++; } catch { /* skip a bad item */ } }
       if (res.items.length < 100) break;
       // The last allowed page was full: there may be more bookings this run never read. Say so.
       if (page === AUTO_SYNC_PAGES) await prisma.auditLog.create({ data: { action: "bokun.autosync.truncated", entityType: "Booking", detail: { from, to, pagesRead: page, itemsRead: synced } } });
     }
+    await reconcileCollected(dirty, "autosync");
     if (firstPageFailed) {
       // Don't fail silently: record the error, and if Bokun has been failing for a
       // while, alert the operators (at most once every 2h so it never spams).

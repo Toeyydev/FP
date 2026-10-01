@@ -274,6 +274,10 @@ export async function GET(req: NextRequest) {
   // WhatsApp links for the guests, read live from Booking.phone — never stored on the
   // sheet. Operators, or the guide assigned to this job for their own guests only.
   const guestContacts = await guestContactsFor(prisma, { isOps, guideId: session.user.guideId }, { guideId, date, slotIdx });
+  // The last time the booking reconciliation moved this sheet's expected guest count
+  // (lib/booking-reconcile) — shown as "Synced from booking · 6 → 8", never as attendance.
+  const lastSync = existing ? await prisma.auditLog.findFirst({ where: { action: "jobsheet.expected_pax_changed", entityType: "JobSheet", entityId: existing.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true, detail: true } }) : null;
+  const bookingSync = lastSync ? (() => { const d = lastSync.detail as { oldExpectedPax?: number; newExpectedPax?: number; source?: string } | null; return { at: lastSync.createdAt.toISOString(), from: d?.oldExpectedPax ?? null, to: d?.newExpectedPax ?? null, source: d?.source ?? null }; })() : null;
   const peak = !isOps ? null : (() => {
     const exps = ((existing?.expenses as Expense[]) ?? defaultExpenses) as Expense[];
     const gf = ((existing?.guideFee && Object.keys(existing.guideFee as object).length ? existing.guideFee : DEFAULT_GUIDE_FEE) as unknown) as GuideFee;
@@ -330,7 +334,7 @@ export async function GET(req: NextRequest) {
     // those bookings belong to the original guide at this slot, and reconciling would
     // take every one of them off again. Kept exactly as saved, like a past tour.
     if (date < todayBKK || handover?.role === "to") {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -404,7 +408,7 @@ export async function GET(req: NextRequest) {
       .map(toSheetBooking);
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -413,7 +417,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts,
+    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts, bookingSync,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }

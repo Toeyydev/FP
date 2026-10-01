@@ -3,7 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { audit } from "@/lib/audit";
 import { bokunApiEnabled, searchBookings } from "@/lib/bokun-api";
-import { importRawBooking, reconcileAssignedBookings, type ImportResult } from "@/lib/booking-import";
+import { importRawBooking, reconcileAssignedBookings, reconcileCollected, type DirtyBookings, type ImportResult } from "@/lib/booking-import";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -28,18 +28,24 @@ export async function POST(req: NextRequest) {
   const to = body.success && body.data.to ? body.data.to : fmt(now + 365 * 86400_000);
 
   const counts = { fetched: 0, created: 0, updated: 0, skipped: 0 };
+  // Each departure the sync touches is reconciled once, after every page is in.
+  const dirty: DirtyBookings = new Map();
   let page = 1;
   for (; page <= 50; page++) {
     const res = await searchBookings({ from, to, page, pageSize: 100 });
-    if (!res.ok) return NextResponse.json({ error: "bokun-api", status: res.status, detail: res.error, ...counts }, { status: 502 });
+    if (!res.ok) {
+      await reconcileCollected(dirty, "manual-sync"); // what earlier pages imported still reaches the jobs
+      return NextResponse.json({ error: "bokun-api", status: res.status, detail: res.error, ...counts }, { status: 502 });
+    }
     if (res.items.length === 0) break;
     counts.fetched += res.items.length;
     for (const item of res.items) {
-      try { const r: ImportResult = await importRawBooking(item, { otaOnly: true }); counts[r]++; } catch { counts.skipped++; }
+      try { const r: ImportResult = await importRawBooking(item, { otaOnly: true, via: "manual-sync", collect: dirty }); counts[r]++; } catch { counts.skipped++; }
     }
     if (res.items.length < 100) break; // last page
   }
 
+  await reconcileCollected(dirty, "manual-sync");
   // Manual Sync is the "instant path" — force a real reconcile now (bypass the throttle)
   // so pax totals / auto-combine reflect what we just imported without waiting for a load.
   await reconcileAssignedBookings(true).catch(() => {});

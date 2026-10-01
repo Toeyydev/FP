@@ -2,7 +2,7 @@
 
 import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
@@ -86,12 +86,16 @@ export default function JobSheetEditor() {
   const [tour, setTour] = useState<Tour>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [saved, setSaved] = useState(false);
+  // The version the last successful save produced — what approving right after a save reviewed.
+  const savedVersion = useRef<string | null>(null);
   const [canEdit, setCanEdit] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [approvedByName, setApprovedByName] = useState<string | null>(null);
   // WhatsApp links by booking number, read live from the bookings by the server — only for
   // guests this viewer may contact, and never saved on the sheet.
   const [guestContacts, setGuestContacts] = useState<Record<string, { whatsapp: string; display: string }>>({});
+  // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
+  const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
@@ -147,7 +151,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setIsAdmin(d.isAdmin === true); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setIsAdmin(d.isAdmin === true); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -496,6 +500,7 @@ export default function JobSheetEditor() {
     const kept: string[] = d.restoredNoShows ?? [];
     const differ: { bookingNo: string; absentOnSheet: number; reported: number }[] = d.noShowMismatches ?? [];
     setSheet(d.sheet); setSaved(true);
+    savedVersion.current = d.sheet?.updatedAt ?? null;
     const parts = ["Saved ✓"];
     if (kept.length) parts.push(`kept ${kept.length} reported no-show${kept.length === 1 ? "" : "s"} on the sheet (${kept.join(", ")})`);
     if (differ.length) parts.push(`needs review: ${differ.map((m) => `${m.bookingNo} shows ${m.absentOnSheet} absent, the guide reported ${m.reported}`).join("; ")}`);
@@ -533,16 +538,21 @@ export default function JobSheetEditor() {
 
   async function toggleApprove() {
     if (!sheet) return;
-    if (!saved) { const ok = await save(); if (!ok) return; }
+    // The version on this screen is the one being signed off. If the sheet changed on the
+    // server since (a booking update, another operator), the server refuses and this screen
+    // says so — it never reloads and approves by itself.
+    let reviewed = sheet.updatedAt ?? null;
+    if (!saved) { const ok = await save(); if (!ok) return; reviewed = savedVersion.current; }
     const approve = !isApproved(sheet.approvalStatus);
     setBusy(true); setMsg(approve ? "Approving…" : "Removing approval…");
-    const r = await jfetch("/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, approve }) });
+    const r = await jfetch("/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, approve, ...(reviewed ? { reviewedUpdatedAt: new Date(reviewed).toISOString() } : {}) }) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { setBusy(false); setMsg(d.error === "offline" ? "No connection — nothing was changed. Try again." : d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : "Couldn't update approval."); return; }
+    if (d.error === "JOB_SHEET_CHANGED_REVIEW_AGAIN") { setBusy(false); setMsg("Job Sheet changed since you reviewed it. Please review the latest version before approving."); return; }
+    if (!r.ok) { setBusy(false); setMsg(d.error === "offline" ? "No connection — nothing was changed. Try again." : d.error === "no-sheet" ? "Save the sheet first." : d.error === "forbidden" ? "Operator only." : d.error === "reviewed-version-required" ? (d.reasons ?? []).join(" ") : "Couldn't update approval."); return; }
     // Approving writes the sheet, so it has a new version: take it straight from the
     // answer. The next Save sends it back as baseUpdatedAt, and holding the old one got
     // that Save refused as stale.
-    setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt, ...(d.updatedAt ? { updatedAt: d.updatedAt } : {}) } : s);
+    setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt, updatedAt: d.updatedAt ?? s.updatedAt } : s);
     setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
     // PEAK readiness is computed SERVER-side and one of its reasons is "Job sheet
     // is not approved". Without this refetch the panel kept the stale list and
@@ -905,6 +915,7 @@ export default function JobSheetEditor() {
             <div className="gs-grid">
               <div>
                 <h3>Your customers ({sheet.bookings.length}){noShowTotal > 0 ? <span style={{ color: "var(--danger)", fontWeight: 700 }}> · {noShowTotal} no-show</span> : null}</h3>
+                <GuestCounts rows={sheet.bookings} sync={bookingSync} />
                 {ro && !canMarkNoShow && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", margin: "2px 0 6px" }}>{!checkedIn ? "Check in to report no-shows." : "No-show reporting is open for 30 minutes after the tour starts."}</div>}
                 {sheet.bookings.length ? (
                   <ol className="gs-cust">
@@ -952,7 +963,7 @@ export default function JobSheetEditor() {
                   <ul className="gs-exp">
                     {exp.map((e, i) => (
                       <li key={i}>
-                        <span>{e.description}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax (incl. guide)</small></span>
+                        <span>{e.description}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax{/inc\.?\s*guide/i.test(e.description ?? "") ? " (incl. guide)" : ""}</small></span>
                         <b>{thb(expenseAmount(e))}</b>
                       </li>
                     ))}
@@ -1151,6 +1162,7 @@ export default function JobSheetEditor() {
         {/* Job details */}
         <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายละเอียดงาน"}</small></h3>
+        <GuestCounts rows={sheet.bookings} sync={bookingSync} />
         <table className="js-table">
           <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print" /></tr></thead>
           <tbody>
@@ -2237,3 +2249,21 @@ export default function JobSheetEditor() {
     </div>
   );
 }
+
+// Expected guests (from the bookings) and actual guests (what was reported) side by side,
+// so a booked count is never read as attendance. "Synced from booking" names the last time
+// the booking reconciliation moved the expected count, and by how much.
+function GuestCounts({ rows, sync }: { rows: { bookedPax: number | null; actualPax: number | null; status?: string }[]; sync: { at: string; from: number | null; to: number | null } | null }) {
+  const expected = rows.reduce((s, r) => s + (Number(r.bookedPax) || 0), 0);
+  const reported = rows.some((r) => r.actualPax != null || r.status === "no-show");
+  const actual = rows.reduce((s, r) => s + (r.actualPax != null ? Number(r.actualPax) || 0 : r.status === "no-show" ? 0 : Number(r.bookedPax) || 0), 0);
+  const at = sync ? new Date(sync.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
+  return (
+    <div className="guest-counts" aria-label="Guest counts" style={{ fontSize: 12, color: "var(--ink-soft,#666)", margin: "2px 0 8px", display: "flex", gap: 12, flexWrap: "wrap" }}>
+      <span>Expected guests <b style={{ color: "var(--ink,#111)" }}>{expected}</b></span>
+      <span>Actual guests <b style={{ color: "var(--ink,#111)" }}>{reported ? actual : "Not reported"}</b></span>
+      {sync && sync.from != null && sync.to != null && <span className="no-print">Synced from booking · updated {at} · {sync.from} → {sync.to} guests</span>}
+    </div>
+  );
+}
+
