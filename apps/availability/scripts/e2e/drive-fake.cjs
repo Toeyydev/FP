@@ -6,15 +6,30 @@
 // FAKE_DRIVE_FILES   JSON { fileId: { name, md5Checksum } }
 // FAKE_DRIVE_FAIL    how many PATCHes to fail first (to exercise the retry)
 // FAKE_DRIVE_LOG     every Drive call is appended here: "METHOD fileId name?"
+// Uploads, folder lookups/creation and sharing are answered with made-up ids (the advance
+// operations browser suite stores slips through the real upload path).
 const { appendFileSync } = require("node:fs");
 const files = JSON.parse(process.env.FAKE_DRIVE_FILES || "{}");
 let fail = Number(process.env.FAKE_DRIVE_FAIL || 0);
 const log = (line) => { try { appendFileSync(process.env.FAKE_DRIVE_LOG, `${line}\n`); } catch {} };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const inner = globalThis.fetch;
+let created = 0;
 globalThis.fetch = async function fakeGoogle(input, init) {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url ?? String(input);
   if (url.startsWith("https://oauth2.googleapis.com/token")) return json({ access_token: "e2e-access-token" });
+  // Uploads (advance / refund slips, vouchers): folder lookups find nothing, folders and files
+  // are "created" with made-up ids, sharing succeeds. Logged like every other call.
+  if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
+    const id = `fake-upload-${++created}`;
+    log(`UPLOAD ${id}`);
+    return json({ id, webViewLink: `https://drive.google.com/file/d/${id}/view` });
+  }
+  if (/^https:\/\/www\.googleapis\.com\/drive\/v3\/files\?/.test(url)) {
+    if ((init?.method || "GET").toUpperCase() === "POST") { const id = `fake-folder-${++created}`; log(`FOLDER ${id}`); return json({ id }); }
+    return json({ files: [] });
+  }
+  if (/\/permissions\?/.test(url)) return json({ id: "fake-permission" });
   const m = url.match(/^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^/?]+)/);
   if (m) {
     const id = decodeURIComponent(m[1]);

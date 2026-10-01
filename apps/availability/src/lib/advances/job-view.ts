@@ -29,6 +29,8 @@ export type JobAdvanceRow = {
   status: string | null;
   problems: string[];
   allowedCategories: string[];
+  /** advanceSummary per advance (lib/advances/rules) — what the panel shows, never re-added on the client. */
+  used?: number; returned?: number; deducted?: number; drift?: number; purpose?: string | null;
 };
 /** A row on the sheet paid from an advance, as settlement sees it (lib/advances/settlement). */
 export type JobAdvanceLine = {
@@ -43,8 +45,15 @@ export type JobReceiptRow = {
   /** Paid back to the guide (PAID refunds), and what is still free to allocate or refund. */
   refunded?: number; available?: number; problems?: string[];
   advanceId?: string | null; jobSheetId?: string | null;
+  /** Paying back an over-returned excess (GuideAdvanceRefund), oldest first. */
+  refunds?: JobRefundRow[];
   /** How much of it is allocated to THIS job's advances. */
   allocatedHere: number;
+};
+export type JobRefundRow = {
+  id: string; refundNo: string; amount: number; status: string; reason: string;
+  recordedById: string; approvedById: string | null; approvedAt: Date | null;
+  paidAt: Date | null; paidById: string | null; bankRef: string | null; slipUrl: string | null; voidReason: string | null;
 };
 export type JobAdvanceView = {
   advances: JobAdvanceRow[];
@@ -78,7 +87,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
   const advances = await db.guideAdvance.findMany({
     where: { guideId, date, slotIdx },
     orderBy: [{ advanceDate: "asc" }, { advanceNo: "asc" }],
-    select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, allowedCategories: true, amountSatang: true, settledSatang: true, paidAt: true, advanceDate: true, method: true, txRef: true, peakRef: true, slipUrl: true, note: true, reversedAt: true, voucherUrl: true, acknowledgedAt: true },
+    select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, allowedCategories: true, purpose: true, amountSatang: true, settledSatang: true, paidAt: true, advanceDate: true, method: true, txRef: true, peakRef: true, slipUrl: true, note: true, reversedAt: true, voucherUrl: true, acknowledgedAt: true },
   });
   const summaries = await summariesFor(db, advances);
   const sheetRow = await db.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { id: true, updatedAt: true } });
@@ -115,7 +124,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
   const [receiptEntries, receiptRefunds] = receipts.length
     ? await Promise.all([
         db.guideAdvanceEntry.findMany({ where: { receiptId: { in: receipts.map((r) => r.id) } }, select: { id: true, receiptId: true, type: true, amountSatang: true, reversesEntryId: true } }),
-        db.guideAdvanceRefund.findMany({ where: { receiptId: { in: receipts.map((r) => r.id) } }, select: { receiptId: true, status: true, amountSatang: true } }),
+        db.guideAdvanceRefund.findMany({ where: { receiptId: { in: receipts.map((r) => r.id) } }, orderBy: { createdAt: "asc" }, select: { id: true, refundNo: true, receiptId: true, status: true, amountSatang: true, reason: true, recordedById: true, approvedById: true, approvedAt: true, paidAt: true, paidById: true, bankRef: true, slipUrl: true, voidReason: true } }),
       ])
     : [[], []];
 
@@ -165,6 +174,8 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
       voucherUrl: a.voucherUrl, acknowledgedAt: a.acknowledgedAt,
       settled: fromSatang(summaries.get(a.id)!.ledgerSettled), outstanding: fromSatang(summaries.get(a.id)!.outstanding),
       status: summaries.get(a.id)!.status, problems: summaries.get(a.id)!.problems, allowedCategories: a.allowedCategories,
+      used: fromSatang(summaries.get(a.id)!.used), returned: fromSatang(summaries.get(a.id)!.returned), deducted: fromSatang(summaries.get(a.id)!.deducted),
+      drift: fromSatang(summaries.get(a.id)!.driftSatang), purpose: a.purpose,
     })),
     returns: receipts.map((r) => ({
       peakSync: sync.get(`RETURN:${r.id}`) ?? null, id: r.id, receiptNo: r.receiptNo, amount: fromSatang(r.amountSatang), returnedAt: r.createdAt, receivedDate: r.receivedDate,
@@ -175,6 +186,7 @@ export async function jobAdvanceView(db: Db, input: { guideId: string; date: str
       })(),
       allocatedHere: fromSatang(allocatedHereById.get(r.id) ?? 0),
       advanceId: r.advanceId, jobSheetId: r.jobSheetId,
+      refunds: receiptRefunds.filter((f) => f.receiptId === r.id).map(({ receiptId: _r, amountSatang, ...f }) => ({ ...f, amount: fromSatang(amountSatang) })),
     })),
     totals,
     lines,

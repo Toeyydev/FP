@@ -316,6 +316,17 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/advance-settlement
 
+      # The advance operations an operator, an accountant and a guide each see on a job: advances
+      # with categories, the Company Advance payer and its chooser, settling, returns, the
+      # two-step refund with its slip, role limits, and the read-only view while frozen.
+      # Google is faked at the network layer (scripts/e2e/drive-fake.cjs); nothing leaves.
+      - name: Advance operations in a real browser
+        run: node scripts/e2e/advance-operations.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/advance-operations
+
       - name: Keep the historical evidence screenshots (invented data)
         if: always()
         uses: actions/upload-artifact@v4
