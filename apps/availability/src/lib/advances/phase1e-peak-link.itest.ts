@@ -189,12 +189,14 @@ describe("8–9 · an advance issue", () => {
     expect(reasons(await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-902"), lookupOf(asExpense)))).toMatch(/does not touch the guide advance account/);
     expect(await prisma.advancePeakDocumentLink.count()).toBe(0);
   });
-  it("a document for another PEAK contact, or a reference naming another transfer, is refused", async () => {
+  // Phase 1F: a real PEAK journal carries no reference field (the parser no longer invents one);
+  // a contact is compared only when a document has one.
+  it("a document for another PEAK contact, or a voided document, is refused", async () => {
     const { advance } = await job([], ["entrance"]);
     await prisma.user.updateMany({ where: { guideId: G }, data: { peakContactId: "contact-guide-example" } });
     expect(reasons(await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-903"), lookupOf(issueDoc("JV-1E-903", 1000, { contactId: "contact-someone-else" }))))).toMatch(/another PEAK contact/);
-    expect(reasons(await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-904"), lookupOf(issueDoc("JV-1E-904", 1000, { contactId: "contact-guide-example", reference: "TX-SOMETHING-ELSE" }))))).toMatch(/names neither/);
-    expect(await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-905"), lookupOf(issueDoc("JV-1E-905", 1000, { contactId: "contact-guide-example", reference: advance.advanceNo })))).toMatchObject({ ok: true });
+    expect(reasons(await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-904"), lookupOf(issueDoc("JV-1E-904", 1000, { isVoid: true }))))).toMatch(/void in PEAK/);
+    expect(await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-905"), lookupOf(issueDoc("JV-1E-905", 1000, { contactId: "contact-guide-example" })))).toMatchObject({ ok: true });
   });
 });
 

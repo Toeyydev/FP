@@ -52,7 +52,7 @@ export type PeakDocumentType = "DAILY_JOURNAL" | "EXPENSE";
 export type PeakJournalEntry = { accountCode: string; accountSubId?: string | null; accountSubCode?: string | null; debit: number; credit: number };
 export type PeakDocument = {
   code: string; id?: string | null; documentType: PeakDocumentType;
-  isVoid?: boolean; contactId?: string | null; issuedDate?: string | null; reference?: string | null;
+  isVoid?: boolean; contactId?: string | null; issuedDate?: string | null;
   entries?: PeakJournalEntry[];
 };
 export type DocumentLookup = (documentNo: string, type: PeakDocumentType) => Promise<
@@ -93,8 +93,6 @@ export function checkDocumentMatches(input: {
   bankSideUnchecked?: boolean;
   /** The guide's PEAK contact, when FolkOPS knows it. */
   guideContactId?: string | null;
-  /** ADVANCE: the references the transfer is known by (advance number, bank reference). */
-  references?: string[];
 }): { reasons: string[]; warnings: string[] } {
   const { kind, amountSatang, document: doc, config } = input;
   const reasons: string[] = [], warnings: string[] = [];
@@ -130,10 +128,6 @@ export function checkDocumentMatches(input: {
     const bankCredit = bank.reduce((s, e) => s + satangOf(e.credit), 0);
     if (!bank.length) reasons.push(`${doc.code} does not credit the company bank account ${config.bankAccountCode}`);
     else if (bankCredit !== amountSatang) reasons.push(`${doc.code} credits ${money(bankCredit)} from the bank, not ${money(amountSatang)}`);
-    const refs = (input.references ?? []).map((r) => r.trim().toUpperCase()).filter(Boolean);
-    if (doc.reference && refs.length && !refs.some((r) => doc.reference!.toUpperCase().includes(r))) {
-      reasons.push(`${doc.code} is referenced "${doc.reference}", which names neither ${refs.join(" nor ")}`);
-    }
   } else if (kind === "RETURN") {
     if (advCredit !== amountSatang) reasons.push(`${doc.code} credits ${money(advCredit)} to the advance account, not ${money(amountSatang)}`);
     if (input.bankSideUnchecked) {
@@ -221,7 +215,7 @@ export async function previewLink(prisma: PrismaClient, req: LinkRequest, lookup
 type Prepared = { ctx: Ctx; amountSatang: number; describes: string; sourceId: string };
 type Check = {
   amountSatang: number; describes: string; event: LinkEvent;
-  expenseByAccount?: Map<string, number>; bankSideUnchecked?: boolean; guideId: string; references?: string[];
+  expenseByAccount?: Map<string, number>; bankSideUnchecked?: boolean; guideId: string;
 };
 
 /** A ledger problem on any advance involved refuses the link — the books must add up first. */
@@ -254,7 +248,6 @@ async function describeEvent(prisma: PrismaClient, req: LinkRequest): Promise<Ch
     if (problems.length) return fail(409, ...problems);
     return {
       amountSatang: a.amountSatang, guideId: a.guideId, event: { kind: "ADVANCE", sourceId: a.id },
-      references: [a.advanceNo, a.txRef ?? ""].filter(Boolean),
       describes: `${a.advanceNo} · ${fromSatang(a.amountSatang).toLocaleString()} sent to ${a.guideId}${a.jobNo ? ` for ${a.jobNo}` : ""}`,
     };
   }
@@ -371,7 +364,7 @@ async function verifyDocument(documentNo: string, req: LinkRequest, c: Check, gu
   }
   const { reasons, warnings: w } = checkDocumentMatches({
     kind: req.kind, amountSatang: c.amountSatang, document: found.document, config,
-    expenseByAccount: c.expenseByAccount, bankSideUnchecked: c.bankSideUnchecked, guideContactId, references: c.references,
+    expenseByAccount: c.expenseByAccount, bankSideUnchecked: c.bankSideUnchecked, guideContactId,
   });
   if (reasons.length) return fail(409, ...reasons);
   warnings.push(...w);
@@ -396,7 +389,7 @@ function defaultLookup(): DocumentLookup | null {
     if (!r.ok) return { ok: false, desc: r.desc ?? "lookup failed" };
     if (r.notFound || !r.journal) return { ok: false, notFound: true, desc: "not found" };
     const j = r.journal;
-    return { ok: true, document: { code: j.code || documentNo, id: j.id, documentType: "DAILY_JOURNAL", isVoid: j.isVoid, contactId: j.contactId, issuedDate: j.issuedDate, reference: j.reference ?? null, entries: j.entries } };
+    return { ok: true, document: { code: j.code || documentNo, id: j.id, documentType: "DAILY_JOURNAL", isVoid: j.isVoid, contactId: j.contactId, issuedDate: j.issuedDate, entries: j.entries } };
   };
 }
 
