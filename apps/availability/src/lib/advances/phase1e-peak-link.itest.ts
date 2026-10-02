@@ -411,3 +411,117 @@ describe("25 · an August-shaped case (invented figures), preview only", () => {
     expect(s).toMatchObject({ issued: 100_000, used: 50_000, returned: 50_000, outstanding: 0, status: "SETTLED", driftSatang: 0 });
   });
 });
+
+// The screen checks first (preview) and records second. A warning — a journal that names no
+// contact is the ordinary one — has to reach the person so they can acknowledge it. It must
+// never be refused before they see it, and never be accepted without them.
+describe("26–31 · a warning is shown, then acknowledged — never refused unseen, never accepted silently", () => {
+  /** Everything a link could touch, as one comparable value. */
+  const footprint = async () => JSON.stringify({
+    links: await prisma.advancePeakDocumentLink.findMany({ orderBy: { id: "asc" } }),
+    outbox: await prisma.advancePeakSync.findMany({ orderBy: { id: "asc" } }),
+    advances: await prisma.guideAdvance.findMany({ orderBy: { id: "asc" } }),
+    receipts: await prisma.guideAdvanceReceipt.findMany({ orderBy: { id: "asc" } }),
+    entries: await prisma.guideAdvanceEntry.findMany({ orderBy: { id: "asc" } }),
+    audits: await prisma.auditLog.count(),
+  });
+  const unacknowledged = { acknowledgeWarnings: false } as Partial<LinkRequest>;
+  const NO_CONTACT = /names no contact in PEAK/;
+
+  it("26 · a preview reports the warning instead of refusing — not verified, and nothing is written", async () => {
+    const { advance } = await job([], ["entrance"]);
+    const before = await footprint();
+    const p = await previewLink(prisma, issue(advance.id, "JV-1E-2601", unacknowledged), lookupOf(issueDoc("JV-1E-2601", 1000)));
+    expect(p).toMatchObject({ ok: true, documentNo: "JV-1E-2601", amount: 1000, verified: false });
+    expect(p.ok && p.warnings.length === 1 && NO_CONTACT.test(p.warnings[0])).toBe(true);
+    expect(await footprint()).toBe(before);
+  });
+
+  it("27 · a preview never upgrades a warning: verified only when there is none", async () => {
+    const { advance } = await job([], ["entrance"]);
+    await prisma.user.updateMany({ where: { guideId: G }, data: { peakContactId: "contact-example" } });
+    const clean = await previewLink(prisma, issue(advance.id, "JV-1E-2701", unacknowledged), lookupOf(issueDoc("JV-1E-2701", 1000, { contactId: "contact-example" })));
+    expect(clean).toMatchObject({ ok: true, verified: true, warnings: [] });
+    // acknowledging in a preview changes nothing about how the document is described
+    const acked = await previewLink(prisma, issue(advance.id, "JV-1E-2702"), lookupOf(issueDoc("JV-1E-2702", 1000)));
+    expect(acked).toMatchObject({ ok: true, verified: false });
+    expect(acked.ok && acked.warnings.length).toBe(1);
+  });
+
+  it("28 · recording without the acknowledgement is refused with the warning, and writes nothing", async () => {
+    const { advance } = await job([], ["entrance"]);
+    const look = lookupOf(issueDoc("JV-1E-2801", 1000));
+    const before = await footprint();
+    for (const over of [unacknowledged, { acknowledgeWarnings: undefined } as Partial<LinkRequest>]) {
+      const r = await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-2801", over), look);
+      expect(r).toMatchObject({ ok: false, status: 409 });
+      expect(reasons(r)).toMatch(NO_CONTACT);
+      expect(reasons(r)).toMatch(/Confirm that this is the right document/);
+    }
+    expect(await footprint()).toBe(before);
+  });
+
+  it("29 · recording with the acknowledgement links it — kept as not verified, with the warning on the link and in the audit", async () => {
+    const { advance } = await job([], ["entrance"]);
+    const r = await linkExistingPeakDocument(prisma, issue(advance.id, "JV-1E-2901"), lookupOf(issueDoc("JV-1E-2901", 1000)));
+    expect(r).toMatchObject({ ok: true, documentNo: "JV-1E-2901", verified: false });
+    const link = await prisma.advancePeakDocumentLink.findUniqueOrThrow({ where: { kind_sourceId: { kind: "ADVANCE", sourceId: advance.id } } });
+    expect(link.verified).toBe(false);
+    expect(link.warning).toMatch(NO_CONTACT);
+    expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
+  });
+
+  it("30 · a real mismatch is still refused — in the preview and when recording, acknowledged or not", async () => {
+    const { advance } = await job([], ["entrance"]);
+    const wrong: [string, PeakDocument, RegExp][] = [
+      ["amount", issueDoc("JV-1E-3001", 900), /debits 900\.00 to the advance account, not 1,000\.00/],
+      ["account", { code: "JV-1E-3002", documentType: "DAILY_JOURNAL", contactId: null, entries: [{ accountCode: "519999", debit: 1000, credit: 0 }, bankLine(0, 1000)] }, /does not touch the guide advance account/],
+      ["bank side", { code: "JV-1E-3003", documentType: "DAILY_JOURNAL", contactId: null, entries: [advLine(1000, 0), { accountCode: "111300", accountSubId: "another-bank", debit: 0, credit: 1000 }] }, /does not credit the company bank account/],
+      ["void", issueDoc("JV-1E-3004", 1000, { isVoid: true }), /is void in PEAK/],
+      ["document type", { code: "EXP-1E-3005", documentType: "EXPENSE" }, /never an expense document|is an expense document/],
+    ];
+    const before = await footprint();
+    for (const [what, doc, message] of wrong) {
+      const type = doc.documentType;
+      for (const ack of [false, true]) {
+        const req = issue(advance.id, doc.code, { acknowledgeWarnings: ack, documentType: type } as Partial<LinkRequest>);
+        const p = await previewLink(prisma, req, lookupOf(doc));
+        const w = await linkExistingPeakDocument(prisma, req, lookupOf(doc));
+        expect([what, ack, p.ok, w.ok]).toEqual([what, ack, false, false]);
+        expect(reasons(p)).toMatch(message);
+        expect(reasons(w)).toMatch(message);
+      }
+    }
+    const missing = await previewLink(prisma, issue(advance.id, "JV-1E-3099", unacknowledged), lookupOf());
+    expect(missing).toMatchObject({ ok: false, status: 404 });
+    expect(await footprint()).toBe(before);
+  });
+
+  it("31 · through the route: preview shows the warning (200), Record without it is 409, Record with it links — and PEAK is never written to", async () => {
+    const { advance } = await job([], ["entrance"]);
+    vi.stubEnv("PEAK_ADVANCE_CONFIG", ""); // no PEAK mapping: the document cannot be checked at all — the plainest warning there is
+    authMock.auth.mockResolvedValue({ user: { id: admin.actorId, role: "ADMIN" } });
+    const call = async (extra: Record<string, unknown>) => {
+      const res = await LINK(new NextRequest("http://test.local/x", { method: "POST", body: JSON.stringify({ kind: "ADVANCE", advanceId: advance.id, documentNo: "JV-1E-3101", documentType: "DAILY_JOURNAL", note: "checked in PEAK by eye (example)", requestKey: "rk-3101-example", ...extra }) }));
+      return { status: res.status, body: await res.json() as { verified?: boolean; warnings?: string[]; detail?: string } };
+    };
+    const before = await footprint();
+    const preview = await call({ preview: true, acknowledgeWarnings: false });
+    expect(preview.status).toBe(200);
+    expect(preview.body.verified).toBe(false);
+    expect(preview.body.warnings?.join(" ")).toMatch(/could not reach PEAK/);
+    expect(await footprint()).toBe(before); // pressing "Check in PEAK…" changes nothing
+
+    const silent = await call({ acknowledgeWarnings: false });
+    expect(silent.status).toBe(409);
+    expect(silent.body.detail).toMatch(/could not reach PEAK/);
+    expect(await footprint()).toBe(before);
+
+    const recorded = await call({ acknowledgeWarnings: true });
+    expect(recorded.status).toBe(200);
+    const link = await prisma.advancePeakDocumentLink.findUniqueOrThrow({ where: { kind_sourceId: { kind: "ADVANCE", sourceId: advance.id } } });
+    expect(link.verified).toBe(false);
+    expect(link.warning).toMatch(/could not reach PEAK/);
+    expect(fetchSpy).not.toHaveBeenCalled(); // nothing went to PEAK — or anywhere
+  });
+});

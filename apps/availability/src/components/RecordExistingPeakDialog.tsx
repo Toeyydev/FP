@@ -60,7 +60,9 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
     try {
       const r = await fetch("/api/advances/peak-link", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...payload, preview: dryRun, acknowledgeWarnings: !dryRun && !!preview }),
+        // Acknowledged only for warnings this person was shown; the server checks again and
+        // refuses a warning nobody acknowledged.
+        body: JSON.stringify({ ...payload, preview: dryRun, acknowledgeWarnings: !dryRun && !!preview?.warnings.length }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || body.reasons?.join("\n") || body.error || `HTTP ${r.status}`);
@@ -144,7 +146,8 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
             <div>{preview.verified
               ? <span className="badge ok">PEAK checked: accounts and amount match</span>
               : <span className="badge warn">not fully checked</span>}</div>
-            {preview.warnings.map((w) => <div key={w} style={{ color: "var(--danger, #b3402f)" }}>⚠ {w}</div>)}
+            {preview.warnings.map((w) => <div key={w} className="js-link-warning" style={{ color: "var(--danger, #b3402f)" }}>⚠ {w}</div>)}
+            {!!preview.warnings.length && <div className="muted js-link-ack">Recording confirms that you have checked this document in PEAK yourself. The link is kept as “not fully checked”, with these warnings.</div>}
           </div>
         )}
 
@@ -152,7 +155,7 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
           <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
           {!preview
             ? <button className="btn primary" disabled={busy || !documentNo.trim() || note.trim().length < 5 || (mode === "EXPENSE" && !settlement)} onClick={() => void send(true)}>Check in PEAK…</button>
-            : <button className="btn primary" disabled={busy} onClick={() => void send(false)}>Record {preview.documentNo}</button>}
+            : <button className="btn primary" disabled={busy} onClick={() => void send(false)}>{preview.warnings.length ? "I have checked it — record" : "Record"} {preview.documentNo}</button>}
         </div>
       </div>
     </div>

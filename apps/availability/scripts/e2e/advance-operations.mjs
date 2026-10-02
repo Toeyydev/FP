@@ -489,6 +489,37 @@ try {
   await (await p2.waitForSelector("xpath/.//button[normalize-space()='Check in PEAK…']")).click();
   await p2.waitForSelector(".sheet .banner.danger", { timeout: 10000 });
   check("1E · with no PEAK connection the check is refused in plain words, and nothing is linked", /PEAK could not be asked about JV-E2E-0001/.test(await text(p2, ".sheet .banner.danger")) && (await prisma.advancePeakDocumentLink.count()) === 0);
+  // A warning is shown and acknowledged, never refused unseen. This suite has no PEAK, so the
+  // answer to the read-only check is supplied here; Record goes to the real server untouched.
+  const WARNING = "JV-E2E-0001 names no contact in PEAK, so only the accounts and the amount could be matched";
+  let checkAnswer = { ok: true, documentNo: "JV-E2E-0001", amount: 300, verified: false, warnings: [WARNING], describes: "300 of entrance (example)" };
+  const sent = [];
+  const onLink = (r) => {
+    if (r.method() !== "POST" || !r.url().endsWith("/api/advances/peak-link")) return void r.continue();
+    const body = JSON.parse(r.postData() ?? "{}"); sent.push(body);
+    return body.preview ? void r.respond({ status: 200, contentType: "application/json", body: JSON.stringify(checkAnswer) }) : void r.continue();
+  };
+  await p2.setRequestInterception(true); p2.on("request", onLink);
+  const linkButton = async (re) => { await p2.waitForFunction((src) => [...document.querySelectorAll(".sheet button")].some((b) => new RegExp(src).test(b.innerText.trim())), { timeout: 10000 }, re.source); return p2.evaluateHandle((src) => [...document.querySelectorAll(".sheet button")].find((b) => new RegExp(src).test(b.innerText.trim())), re.source); };
+  await (await linkButton(/^Check in PEAK…$/)).click();
+  await p2.waitForSelector(".sheet .js-link-warning", { timeout: 10000 });
+  const warned = await text(p2, ".sheet [role='status']");
+  check("link · a warning from the check is shown, marked not fully checked — never as a pass, and not as a refusal",
+    warned.includes(WARNING) && /not fully checked/.test(warned) && !/PEAK checked: accounts and amount match/.test(warned) && !(await p2.$(".sheet .banner.danger")), warned.slice(0, 240));
+  check("link · the check itself sent no acknowledgement and linked nothing", sent.length === 1 && sent[0].preview === true && sent[0].acknowledgeWarnings === false && (await prisma.advancePeakDocumentLink.count()) === 0, JSON.stringify(sent.map((b) => [b.preview, b.acknowledgeWarnings])));
+  const ackText = await text(p2, ".sheet .js-link-ack");
+  const recordWarned = await linkButton(/^I have checked it — record JV-E2E-0001$/);
+  check("link · the Record button appears after a warning, and says what pressing it confirms", !!recordWarned.asElement() && /confirms that you have checked this document in PEAK yourself/.test(ackText), ackText.slice(0, 160));
+  await recordWarned.click();
+  await p2.waitForSelector(".sheet .banner.danger", { timeout: 10000 });
+  check("link · pressing Record sends the acknowledgement explicitly — and the server still decides (no PEAK here: refused, nothing linked)",
+    sent.length === 2 && sent[1].preview === false && sent[1].acknowledgeWarnings === true && (await prisma.advancePeakDocumentLink.count()) === 0, JSON.stringify(sent.map((b) => [b.preview, b.acknowledgeWarnings])));
+  checkAnswer = { ...checkAnswer, verified: true, warnings: [] };
+  await (await linkButton(/^Check in PEAK…$/)).click();
+  await (await linkButton(/^Record JV-E2E-0001$/)).click();
+  await p2.waitForFunction(() => !!document.querySelector(".sheet .banner.danger"), { timeout: 10000 });
+  check("link · with no warning shown, Record acknowledges nothing", sent.length === 4 && sent[3].preview === false && sent[3].acknowledgeWarnings === false && (await prisma.advancePeakDocumentLink.count()) === 0, JSON.stringify(sent.map((b) => [b.preview, b.acknowledgeWarnings])));
+  p2.off("request", onLink); await p2.setRequestInterception(false);
   await (await p2.$("xpath/.//div[contains(@class,'sheet')]//button[normalize-space()='Cancel']")).click();
   await (await p2.$("xpath/.//button[normalize-space()='Record advance…']")).click();
   await p2.waitForSelector(".js-issue-categories");
