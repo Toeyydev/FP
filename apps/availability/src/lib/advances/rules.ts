@@ -37,6 +37,16 @@ export const RECEIPT_STATUSES = ["CLAIMED", "VERIFIED", "REJECTED", "VOIDED"] as
 export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 
 export const MIN_REASON = 5;
+
+/**
+ * Prefix of an EXPENSE outbox item's `error` when an admin recorded that the settlement is
+ * already carried by the same job's guide-payment document (lib/advances/booked-in-guide-payment).
+ * The item is CANCELLED with that document's number; nothing was posted. A CANCELLED item
+ * WITHOUT this prefix (a reversal, a removed manual link) means no such thing.
+ */
+export const BOOKED_IN_GUIDE_PAYMENT = "BOOKED_IN_GUIDE_PAYMENT";
+export const isBookedInGuidePayment = (o: { status: string; documentNo?: string | null; error?: string | null } | null | undefined) =>
+  !!o && o.status === "CANCELLED" && !!o.documentNo && (o.error ?? "").startsWith(`${BOOKED_IN_GUIDE_PAYMENT}:`);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const blank = (s: string | null | undefined) => !(s ?? "").trim();
 

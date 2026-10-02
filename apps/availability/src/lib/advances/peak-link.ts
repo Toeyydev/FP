@@ -6,7 +6,7 @@ import {
 import { advancePeakConfig } from "./peak-sync";
 import { bumpAdvance, bumpReceipt, LedgerConflict, type Actor, type Fail } from "./service";
 import {
-  checkAllocations, checkConfirmation, fromSatang, idempotencyKeyFor, MIN_REASON,
+  checkAllocations, checkConfirmation, fromSatang, idempotencyKeyFor, isBookedInGuidePayment, MIN_REASON,
   periodOf, toSatang, type AllocationRequest, type ReceiptStatus,
 } from "./rules";
 import { amountsByAccount, expenseAccountsFrom, settlementLines } from "./expense-accounts";
@@ -300,6 +300,10 @@ async function describeEvent(prisma: PrismaClient, req: LinkRequest): Promise<Ch
   const entry = await liveSettlement(prisma, a.id, sheet.id);
   if (!entry) return fail(409, `${sheet.ref ?? "This job sheet"} has no live settlement against ${a.advanceNo} — settle the rows first (on the advance card); linking never writes a settlement`);
   if (req.entryId && req.entryId !== entry.id) return fail(409, "That is not the live settlement for this advance and job — reload the page");
+  // Already recorded as carried by the job's guide-payment document: a link to another PEAK
+  // document would be a second claim on the same cost.
+  const closed = await prisma.advancePeakSync.findUnique({ where: { id: `EXPENSE:${entry.id}` }, select: { status: true, documentNo: true, error: true } });
+  if (isBookedInGuidePayment(closed)) return fail(409, `This settlement is recorded as already booked in guide payment ${closed!.documentNo} — it cannot also be linked to another PEAK document`);
   const lines = settlementLines(entry, a);
   if (!lines.ok) return fail(409, ...lines.reasons);
   if (req.amount != null && toSatang(req.amount) !== entry.amountSatang) {
@@ -535,10 +539,12 @@ async function findExistingLink(prisma: PrismaClient, req: LinkRequest): Promise
  */
 async function closeOutbox(tx: Prisma.TransactionClient, kind: LinkKind, sourceId: string, documentNo: string, documentId: string | null) {
   const id = `${kind}:${sourceId}`;
-  const current = await tx.advancePeakSync.findUnique({ where: { id }, select: { status: true } });
+  const current = await tx.advancePeakSync.findUnique({ where: { id }, select: { status: true, documentNo: true, error: true } });
   if (current && ["SENDING", "UNCERTAIN", "POSTED"].includes(current.status)) {
     throw new LedgerConflict(`FolkOPS has already sent this to PEAK (${current.status.toLowerCase()}) — reconcile that document before linking another`);
   }
+  // The same guard inside the transaction, so a link racing the "booked in guide payment" action cannot overwrite it.
+  if (isBookedInGuidePayment(current)) throw new LedgerConflict(`This settlement is recorded as already booked in guide payment ${current!.documentNo} — it cannot also be linked to another PEAK document`);
   await tx.advancePeakSync.upsert({
     where: { id },
     create: { id, kind, sourceId, status: "POSTED", documentNo, documentId, error: null, payload: Prisma.DbNull },

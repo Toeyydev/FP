@@ -8,6 +8,7 @@
 // and the server decides: these controls only appear for the roles the routes allow, and are
 // disabled while ADVANCE_WRITES_FROZEN is on, but a hidden button is never the security.
 import { useMemo, useState } from "react";
+import { isBookedInGuidePayment } from "@/lib/advances/rules";
 
 export type OpsAdvance = {
   id: string; advanceNo: string; amount: number; outstanding: number; status: string | null; problems?: string[];
@@ -16,10 +17,12 @@ export type OpsAdvance = {
   peakLink?: string | null;
   settlements?: { entryId: string; amount: number; jobNo: string | null; onThisJob: boolean; peakSync: { status: string; documentNo: string | null } | null; peakLink: string | null }[];
 };
-type PeakState = { status: string; documentNo: string | null } | null | undefined;
+type PeakState = { status: string; documentNo: string | null; error?: string | null } | null | undefined;
 /** One movement's PEAK state, in words: a linked document, what the sender did, or nothing yet. */
 const peakWords = (link: string | null | undefined, sync: PeakState) =>
-  link ? `linked ${link}` : sync?.status === "POSTED" ? `posted ${sync.documentNo ?? ""}`.trim() : sync ? `not in PEAK yet (${sync.status.toLowerCase()})` : "not in PEAK yet";
+  link ? `linked ${link}` : sync?.status === "POSTED" ? `posted ${sync.documentNo ?? ""}`.trim()
+    : isBookedInGuidePayment(sync) ? `booked in guide payment ${sync!.documentNo} (not posted again)`
+    : sync ? `not in PEAK yet (${sync.status.toLowerCase()})` : "not in PEAK yet";
 export type OpsLine = { index: number; identity: string; description: string; amount: number; category: string | null; advanceId: string | null; settled: boolean; settledBy: string | null };
 export type OpsRefund = {
   id: string; refundNo: string; amount: number; status: string; reason: string; recordedById: string;
