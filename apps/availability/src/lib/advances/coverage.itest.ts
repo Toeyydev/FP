@@ -159,7 +159,7 @@ describe("an advance is on record, but does not cover the cost", () => {
     await seedAdvance(KEY, 500, { jobNo: JOB.jobNo });
     const before = await footprint();
     const r = await pay(970);
-    expect(r.ok ? [] : r.reasons).toEqual([expect.stringMatching(/has ฿100\.00 more assigned to an advance than that advance issued \(฿500\.00 issued across this job\)/)]);
+    expect(r.ok ? [] : r.reasons).toEqual([expect.stringMatching(/has ฿100\.00 more charged to an advance than that advance issued \(all advances of this job issued ฿500\.00\)/)]);
     expect(await footprint()).toEqual(before);
     const c = await (await CANDIDATES(new NextRequest("http://test.local/api/guide-payments/candidates?period=2025-06"))).json();
     expect(c.rows[0].advanceGap).toMatchObject({ code: "ADVANCE_NOT_RECORDED", amount: 100, excess: 100, issued: 500, rows: [] });

@@ -42,7 +42,7 @@ describe("the rule: which rows are held, and when", () => {
   it("the rows cannot come to more than the advances handed over: ฿500 issued, ฿600 of tickets leaves ฿100 unexplained", () => {
     const gap = advanceGap([ticket()], [{ amount: 500, allowedCategories: ["entrance"] }]);
     expect(gap).toEqual({ code: "ADVANCE_NOT_RECORDED", amount: 100, excess: 100, issued: 500, rows: [] });
-    expect(advanceGapMessage(gap!)).toMatch(/has ฿100\.00 more assigned to an advance than that advance issued/);
+    expect(advanceGapMessage(gap!)).toMatch(/has ฿100\.00 more charged to an advance than that advance issued \(all advances of this job issued ฿500\.00\)/);
     expect(advanceGap([ticket()], [{ amount: 600, allowedCategories: ["entrance"] }])).toBeNull(); // exactly spent is covered
     const needsChoice = advanceGap([ticket()], [{ id: "a", amount: 300, allowedCategories: ["entrance"] }, { id: "b", amount: 300, allowedCategories: ["entrance"] }]);
     expect(needsChoice).toMatchObject({ amount: 600, rows: [{ why: "ADVANCE_LINK_REQUIRED" }] });
@@ -224,6 +224,15 @@ describe("the job sheet", () => {
     expect(hit).toHaveLength(1);
     expect(hit[0]).toMatchObject({ field: "netPayToGuide", amount: 600 });
     expect(hit[0].short).toMatch(/1 expense is marked "From company advance", but no advance is recorded for this job/);
+  });
+  it("says which of the situations it is — no advance, one to choose, a dead link, the wrong kind, or over the advance", () => {
+    const short = (rows: Expense[], advances: JobAdvance[]) => figuresNeedRecheck(rows, totals(rows), {}, undefined, { advances }).find((x) => x.code === "ADVANCE_NOT_RECORDED")?.short ?? "";
+    const two = [{ id: "a", amount: 1000, allowedCategories: ["entrance"] }, { id: "b", amount: 1000, allowedCategories: ["entrance"] }];
+    expect(short([ticket()], NONE)).toMatch(/but no advance is recorded for this job/);
+    expect(short([ticket()], two)).toMatch(/more than one advance of this job could have paid — choose the advance on that row/);
+    expect(short([ticket({ advanceId: "gone" })], [ADVANCE])).toMatch(/linked to an advance that is no longer active/);
+    expect(short([ticket({ expenseType: "meal" })], [ADVANCE])).toMatch(/but no advance recorded for this job covers it/);
+    expect(short([ticket({ advanceId: "adv-ticket", price: 600, pax: 2 })], [ADVANCE])).toMatch(/More is charged to an advance than that advance issued/);
   });
   it("says nothing when the advance is on record, or when the screen has not been told either way", () => {
     expect(figuresNeedRecheck([ticket()], totals([ticket()]), {}, undefined, { advances: [ADVANCE] }).some((x) => x.code)).toBe(false);

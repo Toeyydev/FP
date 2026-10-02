@@ -123,9 +123,9 @@ export function advanceGapMessage(gap: AdvanceGap): string {
   const count = (rs: AdvanceGapRow[]) => `${rs.length} row${rs.length === 1 ? "" : "s"}`;
   if (none.length) parts.push(`has ${baht(sum(none))} of expenses (${count(none)}) marked "From company advance", but no advance is recorded for this job`);
   if (kind.length) parts.push(`has ${baht(sum(kind))} of expenses (${count(kind)}) marked "From company advance" that the advance recorded for this job does not cover (${[...new Set(kind.map((r) => r.category ?? "no category"))].join(", ")})`);
-  if (choose.length) parts.push(`has ${baht(sum(choose))} of expenses (${count(choose)}) that more than one advance could have paid — choose the advance on the job sheet`);
+  if (choose.length) parts.push(`has ${baht(sum(choose))} of expenses (${count(choose)}) that more than one advance could have paid — choose the advance on the job sheet (the row's payer has to be confirmed there too, if nobody has confirmed it)`);
   if (missing.length) parts.push(`has ${baht(sum(missing))} of expenses (${count(missing)}) linked to an advance that is no longer active`);
-  if (gap.excess > 0) parts.push(`has ${baht(gap.excess)} more assigned to an advance than that advance issued (${baht(gap.issued)} issued across this job)`);
+  if (gap.excess > 0) parts.push(`has ${baht(gap.excess)} more charged to an advance than that advance issued (all advances of this job issued ${baht(gap.issued)})`);
   return `${parts.join("; and ")} — that amount is not in the transfer and nothing shows the company paid it. ` +
     `Record the advance${kind.length || gap.excess > 0 ? " that paid for it" : ""}, or correct who paid on the job sheet, before paying`;
 }
