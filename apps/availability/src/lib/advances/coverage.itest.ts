@@ -12,6 +12,13 @@ vi.mock("@/auth", () => authMock);
 const fetchSpy = vi.hoisted(() => vi.fn(async () => { throw new Error("no network in this test"); }));
 vi.stubGlobal("fetch", fetchSpy);
 
+// The job sheet route reaches for these on load; none of them is what is being tested.
+vi.mock("@/lib/push", async (orig) => ({ ...(await orig<typeof import("@/lib/push")>()), sendPushToUser: vi.fn(async () => 0) }));
+vi.mock("@/lib/line", async (orig) => ({ ...(await orig<typeof import("@/lib/line")>()), lineEnabled: false, linePush: vi.fn(async () => true), linePushFlex: vi.fn(async () => true) }));
+vi.mock("@/lib/email", async (orig) => ({ ...(await orig<typeof import("@/lib/email")>()), sendEmail: vi.fn(async () => true) }));
+vi.mock("@/lib/google-drive", async (orig) => ({ ...(await orig<typeof import("@/lib/google-drive")>()), googleDriveEnabled: false }));
+vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof import("@/lib/tour-calendar-sync")>()), removeTourEvents: vi.fn(async () => {}), pushTourToCalendars: vi.fn(async () => {}) }));
+
 import { NextRequest } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -21,6 +28,9 @@ import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
 import { advanceJobKey } from "@/lib/advances/coverage";
 import { GET as CANDIDATES } from "@/app/api/guide-payments/candidates/route";
 import { GET as PAYMENTS } from "@/app/api/payments/route";
+import { GET as JOBSHEET } from "@/app/api/jobsheet/route";
+import { advanceGap, liveJobAdvances } from "@/lib/advances/coverage";
+import type { Expense } from "@/lib/jobsheet";
 
 const G = "G-926";
 const JOB = { jobNo: "FOLK-TEST-20250610-01", date: "2025-06-10", slotIdx: 1 };
@@ -221,5 +231,30 @@ describe("jobs this rule has nothing to say about", () => {
   it("a job with no Company Advance row is paid exactly as before", async () => {
     await seedJob([{ description: "Water", price: 20, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }]);
     expect((await pay(1010)).ok).toBe(true);
+  });
+});
+
+describe("the job sheet reads a linked row the same way the payment does", () => {
+  const sheetView = async () => (await JOBSHEET(new NextRequest(`http://test.local/api/jobsheet?guideId=${G}&date=${JOB.date}&slotIdx=${JOB.slotIdx}`))).json();
+  const advanceReasons = (d: { peak?: { eligibility?: { reasons?: string[] } } }) => (d.peak?.eligibility?.reasons ?? []).filter((r) => /advance/i.test(r));
+
+  it("a row linked to its live advance raises nothing on the job sheet — in the sync status or in the screen's own check", async () => {
+    const advance = await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo });
+    await seedJob([{ ...TICKET, advanceId: advance.id }]);
+    const d = await sheetView();
+    expect(d.advance.advances.map((a: { id: string }) => a.id)).toEqual([advance.id]);
+    expect(advanceReasons(d)).toEqual([]);
+    // what the page computes from the same response (components/JobSheetEditor)
+    expect(advanceGap(d.sheet.expenses as Expense[], liveJobAdvances(d.advance.advances))).toBeNull();
+    expect((await pay(970)).ok).toBe(true); // and the payment agrees
+  });
+
+  it("a row linked to an advance that was reversed is reported on the job sheet, as the payment reports it", async () => {
+    const advance = await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo, reversedAt: new Date("2025-06-11T00:00:00Z") });
+    await seedJob([{ ...TICKET, advanceId: advance.id }]);
+    const d = await sheetView();
+    expect(advanceReasons(d).join(" ")).toMatch(/฿600\.00/);
+    expect(advanceGap(d.sheet.expenses as Expense[], liveJobAdvances(d.advance.advances))).toMatchObject({ amount: 600 });
+    expect((await pay(970)).ok).toBe(false);
   });
 });

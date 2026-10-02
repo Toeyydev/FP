@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADVANCE_NOT_RECORDED, advanceGap, advanceGapMessage, type JobAdvance } from "@/lib/advances/coverage";
+import { ADVANCE_NOT_RECORDED, advanceGap, advanceGapMessage, liveJobAdvances, type JobAdvance } from "@/lib/advances/coverage";
 import { checkPayment, jobFigures, type JobFacts, type PaymentRequest } from "@/lib/payments-v2/rules";
 import { combinedPaymentBlock, paidJobPeakBlock, type CombinedJobState } from "@/lib/combined-payment";
 import { blocksOf, buildGuidePaymentDocument, PaymentDocumentNotPostable, type PaymentAccounts } from "@/lib/peak-payment-document";
@@ -70,6 +70,16 @@ describe("the rule: which rows are held, and when", () => {
     expect(advanceGap([ticket()], [ADVANCE])).toBeNull();
     expect(advanceGap([ticket()], [ADVANCE, { id: "meal", amount: 1000, allowedCategories: ["meal"] }])).toBeNull();
     expect(advanceGap([ticket()], [ADVANCE, { id: "tickets-2", amount: 1000, allowedCategories: ["entrance"] }])).toMatchObject({ rows: [{ why: "ADVANCE_LINK_REQUIRED" }] });
+  });
+  it("the job sheet's advances keep their id, so a linked row finds the advance it points at", () => {
+    // As the job view sends them (lib/advances/job-view): the screen and GET /api/jobsheet pass these on.
+    const view = [{ id: "adv-ticket", amount: 1000, allowedCategories: ["entrance"], status: "OPEN" }, { id: "adv-reversed", amount: 500, allowedCategories: ["entrance"], status: "VOID" }];
+    expect(liveJobAdvances(view)).toEqual([{ id: "adv-ticket", amount: 1000, allowedCategories: ["entrance"] }]);
+    expect(advanceGap([ticket({ advanceId: "adv-ticket" })], liveJobAdvances(view))).toBeNull();
+    expect(advanceGap([ticket({ advanceId: "adv-reversed" })], liveJobAdvances(view))).toMatchObject({ rows: [{ why: "LINKED_ADVANCE_NOT_LIVE" }] });
+    // Passed on without the id, the same correctly linked row read as linked to nothing.
+    expect(advanceGap([ticket({ advanceId: "adv-ticket" })], [{ amount: 1000, allowedCategories: ["entrance"] }])).toMatchObject({ rows: [{ why: "LINKED_ADVANCE_NOT_LIVE" }] });
+    expect(liveJobAdvances(null)).toEqual([]);
   });
   it("a row with no category is covered by no advance", () => {
     expect(advanceGap([ticket({ expenseType: undefined, paidBySource: "operator" })], [ADVANCE])).toMatchObject({ amount: 600, rows: [{ category: null, why: "CATEGORY_NOT_ALLOWED" }] });

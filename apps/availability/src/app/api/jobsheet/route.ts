@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { liveJobAdvances } from "@/lib/advances/coverage";
 import { sheetRowFate, rowStays } from "@/lib/sheet-reconcile";
 import { paymentCoverage } from "@/lib/payment-coverage";
 import { z } from "zod";
@@ -300,7 +301,7 @@ export async function GET(req: NextRequest) {
       peakContactId: header?.peakContactId, accountingDate: dates.accountingDate,
       origin: existing?.origin ?? null,
       accounts, jobRef: existing?.ref, bookings: (existing?.bookings as Booking[]) ?? [], state,
-      advances: advance.advances.filter((a) => a.status !== "VOID").map((a) => ({ amount: a.amount, allowedCategories: a.allowedCategories })),
+      advances: liveJobAdvances(advance.advances),
     });
     return {
       ...state,

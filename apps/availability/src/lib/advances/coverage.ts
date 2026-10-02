@@ -29,6 +29,16 @@ export const ADVANCE_NOT_RECORDED = "ADVANCE_NOT_RECORDED";
 /** A live advance of the job, as far as coverage needs to know it. */
 export type JobAdvance = { id?: string; amount: number; allowedCategories?: readonly string[] | null };
 
+/**
+ * The job's live advances as coverage reads them, from the job view's rows
+ * (lib/advances/job-view; "VOID" is a reversed advance). The id goes with them: a row is
+ * traced to its advance by id, and an advance passed without one can never be the advance a
+ * linked row points at — the row would read as linked to nothing.
+ */
+export function liveJobAdvances(rows: readonly { id: string; amount: number; allowedCategories?: readonly string[] | null; status?: string | null }[] | null | undefined): JobAdvance[] {
+  return (rows ?? []).filter((a) => a.status !== "VOID").map((a) => ({ id: a.id, amount: a.amount, allowedCategories: a.allowedCategories }));
+}
+
 export type AdvanceGapRow = {
   /** The row's number as the job sheet shows it (review rewards are not numbered). */
   rowNo: number;
