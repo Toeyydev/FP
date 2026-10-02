@@ -41,12 +41,15 @@ export async function POST(req: NextRequest) {
     // An explicit second act by the operator, for a sheet that changed after it was
     // already posted. Never defaulted to true.
     confirmRepost: z.boolean().optional(),
+    // A previous document for this sheet was explicitly recorded as voided in PEAK.
+    // Re-creating it must be a separate, deliberate act; never inferred from a click.
+    confirmResyncAfterVoid: z.boolean().optional(),
     // Accepted from older screens and ignored: a separate document is no longer something
     // an operator can confirm their way into (see perSheetSyncRefusal).
     confirmSeparateDocument: z.boolean().optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { guideId, date, slotIdx, confirmRepost } = parsed.data;
+  const { guideId, date, slotIdx, confirmRepost, confirmResyncAfterVoid } = parsed.data;
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
 
   if (!peakEnabled) return NextResponse.json({ error: "peak-not-connected" }, { status: 503 });
@@ -64,6 +67,16 @@ export async function POST(req: NextRequest) {
     guideFeeAccount(),
   ]);
   if (!sheet) return NextResponse.json({ error: "no-sheet" }, { status: 404 });
+
+  // Recording a document as voided clears its id/number but deliberately leaves the
+  // VOIDED state. Without this guard, the reloaded page offered Sync in the old
+  // button's place and one accidental click created a replacement PEAK document.
+  if (sheet.peakSyncStatus === "VOIDED" && !confirmResyncAfterVoid) {
+    return NextResponse.json({
+      error: "resync-after-void",
+      reason: "A PEAK document for this job was voided before. Syncing creates a new document. Confirm the re-sync explicitly, or use Payments to include this job with the guide's other jobs.",
+    }, { status: 409 });
+  }
 
   const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
   const guideFee = sheet.guideFee && Object.keys(sheet.guideFee as object).length
@@ -180,7 +193,8 @@ export async function POST(req: NextRequest) {
   });
   await audit({
     ...actor, action: "jobsheet.peak_synced", entityType: "JobSheet", entityId: sheet.id,
-    detail: { ref: sheet.ref, guideId, date, slotIdx, documentNo, lines: doc.lines.length, total: doc.total },
+    detail: { ref: sheet.ref, guideId, date, slotIdx, documentNo, lines: doc.lines.length, total: doc.total,
+      ...(sheet.peakSyncStatus === "VOIDED" ? { confirmedResyncAfterVoid: true } : {}) },
   });
   return NextResponse.json({ ok: true, documentNo, documentId: res.id ?? null, lines: doc.lines.length, total: doc.total });
 }

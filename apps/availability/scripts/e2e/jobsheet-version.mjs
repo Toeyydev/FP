@@ -11,6 +11,8 @@
 //   5. a sheet changed behind the page (another tab) is refused, the page says it was not
 //      saved, never "Saved", and will not Save again until it is reloaded
 //   6. the Payments page fetches its list again when it comes back into view
+//   7. after a PEAK void, desktop and mobile show the recovery panel instead of
+//      putting Sync to PEAK where the void action was
 //
 // Run after `next build`:  node scripts/e2e/jobsheet-version.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and
@@ -214,6 +216,19 @@ try {
   await waitText(page, /Saved ✓|Not saved/);
   check("after the reload a Save goes through", puts.at(-1) === 200 && (await sheetNow()).operatorNote === "saved in another tab — confirmed", `last PUT ${puts.at(-1)}`);
   check("the job sheet page ran without a crash", errors.length === 0, errors.join(" | ").slice(0, 200));
+
+  // 7 — the post-void state is safe at both operator viewport sizes. The server-side
+  // confirmation is covered in the route suite; this proves the accidental one-click
+  // path is not rendered after the page reloads.
+  await prisma.jobSheet.update({ where: KEY, data: { peakSyncStatus: "VOIDED", peakDocumentId: null, peakDocumentNo: null, syncedAt: null } });
+  for (const [label, width, height] of [["desktop", 1280, 1000], ["mobile", 390, 844]]) {
+    await page.setViewport({ width, height });
+    await page.reload({ waitUntil: "networkidle0" });
+    await page.waitForSelector(".js-peak-voided", { timeout: 15000 });
+    const panel = await page.$eval(".js-peak-voided", (x) => x.innerText);
+    const ordinarySync = await page.evaluate(() => [...document.querySelectorAll("button")].some((b) => b.textContent.trim() === "Sync to PEAK"));
+    check(`${label}: a void shows Payments guidance and no one-click Sync button`, /previous PEAK document was voided/.test(panel) && /Open Payments/.test(panel) && /Sync again/.test(panel) && !ordinarySync, panel.replace(/\s+/g, " ").slice(0, 200));
+  }
 
   // 6 — Payments fetches again when it comes back into view
   const pay = await browser.newPage();
