@@ -12,6 +12,22 @@ export function advancePeakConfig(): AdvancePeakConfig {
   return JSON.parse(raw) as AdvancePeakConfig;
 }
 
+/** The configuration a journal is built from: the deployment's accounts, plus each category's account from the saved chart. */
+export async function advancePeakConfigWithChart(db: Pick<PrismaClient, "peakAccountMapping">): Promise<AdvancePeakConfig> {
+  const config = advancePeakConfig();
+  config.expenseAccounts = expenseAccountsFrom(await db.peakAccountMapping.findMany({ where: { isActive: true } }));
+  return config;
+}
+
+/**
+ * What a movement's journal is built from — and every reason it may not be posted, as a
+ * thrown error. Reads only. The sender calls it after claiming an item; the account journal
+ * preview (lib/advances/account-journal) calls it to say what WOULD be posted, and why not.
+ */
+export async function journalSourceFor(db: PrismaClient, kind: string, id: string, config: AdvancePeakConfig): Promise<JournalSource> {
+  return sourceFor(db, kind, id, config);
+}
+
 async function sourceFor(db: PrismaClient, kind: string, id: string, config: AdvancePeakConfig): Promise<JournalSource> {
   let source: Omit<JournalSource, "guideContactId">;
   let guideId: string;

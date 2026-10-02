@@ -479,6 +479,24 @@ try {
   await (await p2.waitForSelector("xpath/.//button[normalize-space()='Advances']")).click();
   await p2.waitForSelector("xpath/.//button[normalize-space()='Record advance…']", { timeout: 15000 });
   await p2.waitForSelector(".js-refunds-section", { timeout: 10000 }).catch(() => {});
+  // The account journal: every advance movement as its double entry, with where it stands in
+  // PEAK. Read-only — looking at it must send and change nothing.
+  const outboxBefore = JSON.stringify(await prisma.advancePeakSync.findMany({ orderBy: { id: "asc" } }));
+  await p2.waitForSelector(".js-account-journal .js-journal-entry", { timeout: 15000 }).catch(() => {});
+  const journal = await p2.evaluate(async () => {
+    const panel = document.querySelector(".js-account-journal");
+    const rows = [...document.querySelectorAll(".js-account-journal .js-journal-entry")];
+    const api = await (await fetch("/api/advances/journal")).json();
+    return { text: panel?.innerText ?? "", rows: rows.length, states: [...new Set(rows.map((r) => r.getAttribute("data-state")))], buttons: panel ? panel.querySelectorAll("button").length : -1,
+      api: { n: api.entries.length, balanced: api.entries.every((e) => e.balanced || e.lines.length === 0), kinds: [...new Set(api.entries.map((e) => e.kind))].sort(), autoSync: api.autoSync, configured: api.configured } };
+  });
+  check("journal · the Advances page shows each movement as a debit and a credit, with its PEAK standing",
+    journal.rows > 0 && journal.rows === journal.api.n && /Account journal/.test(journal.text) && /Debit/i.test(journal.text) && /Credit/i.test(journal.text) && /Guide advances/.test(journal.text) && journal.states.every((s) => !!s),
+    JSON.stringify({ rows: journal.rows, states: journal.states, api: journal.api }));
+  check("journal · every entry balances, the kinds are the three movements, and automatic posting is reported off",
+    journal.api.balanced && journal.api.configured === true && journal.api.autoSync === false && journal.api.kinds.every((k) => ["ADVANCE", "EXPENSE", "RETURN"].includes(k)), JSON.stringify(journal.api));
+  check("journal · it is a list, not a control: no button in it, and reading it left the PEAK outbox exactly as it was",
+    journal.buttons === 0 && /posts nothing/.test(journal.text) && JSON.stringify(await prisma.advancePeakSync.findMany({ orderBy: { id: "asc" } })) === outboxBefore);
   const listed = await p2.$$eval(".js-refunds-section .js-refund-row", (xs) => xs.map((x) => x.getAttribute("data-status")).sort().join(","));
   check("the Advances page lists the refunds with their state — paid and voided", listed === "PAID,VOIDED", listed);
   // Phase 1E — linking a settlement: chosen from the ledger with its exact amount, never typed.
