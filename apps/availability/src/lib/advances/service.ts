@@ -28,7 +28,7 @@ import { MIN_REFUND_REASON, refundNoFor, returnLinkProblems, returnSummary } fro
 import { summariesFor } from "@/lib/advances/summaries";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import {
-  MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
+  MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
   fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
   type AllocationRequest, type EntryType, type IssueAdvanceInput, type ReceiptInput, type ReceiptStatus,
 } from "@/lib/advances/rules";
@@ -809,8 +809,13 @@ export async function reverseEntry(prisma: PrismaClient, input: { entryId: strin
 /** The PEAK document an expense settlement is in, if any — its own record, the outbox, or a manual link. */
 async function expenseInPeak(db: PrismaClient, e: { id: string; peakDocumentNo: string | null; peakReference: string | null }): Promise<string | null> {
   if (e.peakDocumentNo) return e.peakDocumentNo;
-  const outbox = await db.advancePeakSync.findUnique({ where: { id: `EXPENSE:${e.id}` }, select: { status: true, documentNo: true } }).catch(() => null);
+  const outbox = await db.advancePeakSync.findUnique({ where: { id: `EXPENSE:${e.id}` }, select: { status: true, documentNo: true, error: true } }).catch(() => null);
   if (outbox && ["SENDING", "UNCERTAIN", "POSTED"].includes(outbox.status)) return outbox.documentNo ?? `outbox ${outbox.status.toLowerCase()}`;
+  // An admin recorded that this settlement is carried by its job's guide-payment document
+  // (lib/advances/booked-in-guide-payment): not posted by this outbox, but undoing the
+  // settlement silently would contradict PEAK. Only that marked state counts — an item
+  // cancelled for another reason (a reversal, a removed manual link) may keep an old number.
+  if (isBookedInGuidePayment(outbox)) return `${outbox!.documentNo} (booked in the guide payment)`;
   const link = await db.advancePeakDocumentLink.findFirst({ where: { kind: "EXPENSE", sourceId: e.id, status: "LINKED" }, select: { documentNo: true } }).catch(() => null);
   return link?.documentNo ?? (e.peakReference ? e.peakReference : null);
 }

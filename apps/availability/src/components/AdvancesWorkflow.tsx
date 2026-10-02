@@ -288,7 +288,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
       )}
 
       {issuing && <IssueAdvanceDialog onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }} />}
-      {detail && <LedgerDialog advance={detail} canEdit={canEdit} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
+      {detail && <LedgerDialog advance={detail} canEdit={canEdit} isAdmin={isAdmin} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
       {linking && <RecordExistingPeakDialog target={linking} bankAccount={returnBank || undefined} onClose={() => setLinking(null)} onDone={async (m) => { setLinking(null); setMsg(m); await load(); }} />}
       {allocating && <AllocateDialog receipt={allocating} advances={open.filter((a) => a.guideId === allocating.guideId)} onClose={() => setAllocating(null)} onDone={async (m) => { setAllocating(null); setMsg(m); await load(); }} />}
     </section>
@@ -456,11 +456,12 @@ type Entry = {
   reversesEntryId: string | null; reversedByEntryId: string | null; canReverse: boolean;
 };
 
-function LedgerDialog({ advance, canEdit, onClose, onChanged }: { advance: Advance; canEdit: boolean; onClose: () => void; onChanged: (msg: string) => void }) {
+function LedgerDialog({ advance, canEdit, isAdmin, onClose, onChanged }: { advance: Advance; canEdit: boolean; isAdmin: boolean; onClose: () => void; onChanged: (msg: string) => void }) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [head, setHead] = useState<{ amount: number; settled: number; outstanding: number; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [booked, setBooked] = useState<Entry | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -506,6 +507,10 @@ function LedgerDialog({ advance, canEdit, onClose, onChanged }: { advance: Advan
                   <td style={{ fontSize: 12 }}>{e.reason ?? ""}</td>
                   <td>
                     {canEdit && e.canReverse && <button className="btn sm ghost" disabled={busy} onClick={() => reverse(e)}>Reverse…</button>}
+                    {isAdmin && e.type === "EXPENSE_SETTLEMENT" && ["PENDING", "BLOCKED"].includes(e.peakSync?.status ?? "") && (
+                      <button className="btn sm ghost" disabled={busy} title="Close this pending item only when the same job's guide-payment document already carries the expense"
+                        onClick={() => setBooked(e)}>Already in guide payment…</button>
+                    )}
                     {e.type === "PAYMENT_DEDUCTION" && !e.reversedByEntryId && <span className="muted" style={{ fontSize: 11.5 }}>undo by reversing {e.paymentNo}</span>}
                   </td>
                 </tr>
@@ -516,6 +521,73 @@ function LedgerDialog({ advance, canEdit, onClose, onChanged }: { advance: Advan
         </div>
         <div className="mfoot">
           <button className="btn" onClick={onClose}>Close</button>
+        </div>
+      </div>
+      {booked && <BookedInGuidePaymentDialog entry={booked} onClose={() => setBooked(null)} onDone={async () => {
+        setBooked(null);
+        await load();
+        onChanged(`${booked.label} recorded as already booked in the guide payment — nothing was posted to PEAK`);
+      }} />}
+    </div>
+  );
+}
+
+/**
+ * Evidence-first exception for historical settlements already carried by the guide's
+ * own EXP document. The copy is intentionally explicit: this closes a FolkOPS queue
+ * item and never creates or changes a PEAK document.
+ */
+function BookedInGuidePaymentDialog({ entry, onClose, onDone }: { entry: Entry; onClose: () => void; onDone: () => void }) {
+  const [expenseDocumentNo, setExpenseDocumentNo] = useState("");
+  const [paymentEvidenceNo, setPaymentEvidenceNo] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ready = /^EXP-/i.test(expenseDocumentNo.trim()) && /^PV-/i.test(paymentEvidenceNo.trim()) && reason.trim().length >= 8;
+
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await jfetch(`/api/advances/entries/${entry.id}/booked-in-guide-payment`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expenseDocumentNo: expenseDocumentNo.trim(), paymentEvidenceNo: paymentEvidenceNo.trim(), reason: reason.trim() }),
+      });
+      onDone();
+    } catch (e) { setErr(String((e as Error).message)); setBusy(false); }
+  };
+
+  return (
+    <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="booked-guide-payment-h" style={{ width: "min(560px, 100%)" }}>
+        <h3 id="booked-guide-payment-h">Already booked in guide payment</h3>
+        <div className="mbody">
+          <p style={{ marginTop: 0 }}><b>{entry.label}</b> · {entry.jobNo ?? "job sheet"} · {thb(entry.amount)}</p>
+          {/* The app has no .banner style, so the two messages that must not be missed are styled here. */}
+          <div className="banner warn js-booked-note" role="note" style={{ padding: "10px 12px", border: "1px solid #ecd9bf", borderLeft: "4px solid #b45309", borderRadius: 8, background: "#fff8ec", fontSize: 13.5, lineHeight: 1.45 }}>
+            <b>Nothing is posted to PEAK.</b> This only closes this settlement’s pending outbox item, after FolkOPS confirms the expense document belongs to the same job’s guide payment.
+          </div>
+          {err && <div className="banner danger js-booked-error" role="alert" style={{ whiteSpace: "pre-line", padding: "10px 12px", border: "1px solid var(--danger-line)", borderLeft: "4px solid var(--danger)", borderRadius: 8, background: "var(--danger-bg)", color: "var(--danger)", fontSize: 13.5, fontWeight: 600 }}>{err}</div>}
+          <div style={{ display: "grid", gap: 10 }}>
+            <label>Guide-payment expense document
+              <input autoFocus value={expenseDocumentNo} onChange={(e) => setExpenseDocumentNo(e.target.value)} placeholder="EXP-…" disabled={busy} autoComplete="off" />
+            </label>
+            <label>Payment evidence
+              <input value={paymentEvidenceNo} onChange={(e) => setPaymentEvidenceNo(e.target.value)} placeholder="PV-…" disabled={busy} autoComplete="off" />
+            </label>
+            <label>Accounting reason
+              {/* .modal styles input and select, not textarea — give it the same look, full width, on its own line. */}
+              <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} maxLength={500} disabled={busy}
+                placeholder="Why this settlement must not create another PEAK document"
+                style={{ display: "block", width: "100%", border: "1px solid var(--line-strong)", borderRadius: 10, padding: "9px 12px", fontFamily: "inherit", fontSize: 14, background: "var(--paper)", resize: "vertical" }} />
+            </label>
+          </div>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 0 }}>
+            Result: the outbox item is marked cancelled with both references in its audit record. The guide-payment document keeps its existing owner; no PEAK link is created.
+          </p>
+        </div>
+        <div className="mfoot">
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" onClick={submit} disabled={busy || !ready}>{busy ? "Checking…" : "Check and close without posting"}</button>
         </div>
       </div>
     </div>
