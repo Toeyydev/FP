@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expenseZ } from "@/lib/jobsheet-schema";
+import { bookingZ, expenseZ } from "@/lib/jobsheet-schema";
 import type { Expense } from "@/lib/jobsheet";
 
 describe("expense save schema keeps every field", () => {
@@ -45,5 +45,27 @@ describe("expense save schema keeps every field", () => {
     const out = expenseZ.parse({ description: "Water", price: 10, pax: 2 });
     expect(out.description).toBe("Water");
     expect(out.paidBy).toBeUndefined();
+  });
+
+  it.each([-1, -0.5, 1.5])("rejects an expense quantity of %s", (pax) => {
+    expect(() => expenseZ.parse({ description: "Water", price: 10, pax })).toThrow();
+  });
+
+  it.each([
+    ["bookedPax", -1],
+    ["bookedPax", 1.5],
+    ["actualPax", -2],
+    ["actualPax", 2.25],
+  ] as const)("rejects %s=%s", (field, value) => {
+    expect(() => bookingZ.parse({ name: "Guest", bookingNo: "TEST", bookedPax: 1, actualPax: 1, [field]: value })).toThrow();
+  });
+
+  it("keeps zero and blank pax valid", () => {
+    expect(expenseZ.parse({ description: "Water", price: 10, pax: 0 }).pax).toBe(0);
+    expect(bookingZ.parse({ name: "Guest", bookedPax: null, actualPax: null })).toMatchObject({ bookedPax: null, actualPax: null });
+  });
+
+  it("does not change the separate policy for negative prices", () => {
+    expect(expenseZ.parse({ description: "Correction", price: -10, pax: 1 }).price).toBe(-10);
   });
 });

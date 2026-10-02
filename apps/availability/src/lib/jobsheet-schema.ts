@@ -11,11 +11,15 @@ import { PAID_BY_SOURCES } from "@/lib/jobsheet";
 // store gaps, and JSON.stringify drops undefined keys on re-save, so requiring a
 // present number would reject an otherwise-valid save. Strings/extra keys are lenient.
 const num = z.number().nullish().transform((v) => v ?? null);
+// Headcounts and quantities are counts, not money. Keeping this separate from
+// `num` is deliberate: negative prices may represent a correction, but negative
+// or fractional people/units would corrupt attendance, assignments and payouts.
+const paxNum = z.number().int("must be a whole number").min(0, "must be zero or more").nullish().transform((v) => v ?? null);
 const numOpt = z.number().nullable().optional(); // present → number|null; absent → omitted (not stored)
-const bookingZ = z.object({ name: z.string().max(200).optional().default(""), bookingNo: z.string().max(120).optional().default(""), bookedPax: num, actualPax: num, tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
+const bookingZ = z.object({ name: z.string().max(200).optional().default(""), bookingNo: z.string().max(120).optional().default(""), bookedPax: paxNum, actualPax: paxNum, tickets: z.string().max(20).optional().default(""), status: z.string().max(40).optional().default("") });
 
 const expenseZ = z.object({
-  description: z.string().max(160).optional().default(""), price: num, pax: num,
+  description: z.string().max(160).optional().default(""), price: num, pax: paxNum,
   unit: z.string().max(24).optional(),
   expenseType: z.string().max(40).optional(),
   paidBy: z.string().max(24).optional(),

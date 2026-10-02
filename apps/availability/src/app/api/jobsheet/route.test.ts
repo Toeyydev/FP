@@ -30,6 +30,10 @@ const save = (bookings: object[]) => PUT(new Request("https://ops.folkpaths.com/
   method: "PUT", headers: { "content-type": "application/json" },
   body: JSON.stringify({ ...JOB, tourId: "T-001", status: "Confirmed", bookings, expenses: [], guideFee: { price: 1200, time: 1, whtPct: 3 }, operatorNote: "" }),
 }) as unknown as Parameters<typeof PUT>[0]);
+const saveBody = (over: Record<string, unknown>) => PUT(new Request("https://ops.folkpaths.com/api/jobsheet", {
+  method: "PUT", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ ...JOB, tourId: "T-001", status: "Confirmed", bookings: [], expenses: [], guideFee: { price: 1200, time: 1, whtPct: 3 }, operatorNote: "", ...over }),
+}) as unknown as Parameters<typeof PUT>[0]);
 
 /** The data the save wrote — the updateMany that carries the sheet, not the certifiedAt stamp. */
 const saved = () => prismaMock.jobSheet.updateMany.mock.calls.find((c) => (c[0] as { data?: { bookings?: unknown } }).data?.bookings !== undefined)![0].data as { bookings: { name: string; bookingNo: string; actualPax: number; status: string }[] };
@@ -52,6 +56,23 @@ beforeEach(() => {
   });
   prismaMock.assignment.count.mockResolvedValue(1);
   prismaMock.jobSheet.findMany.mockResolvedValue([]);
+});
+
+describe("PUT /api/jobsheet — pax validation", () => {
+  it.each([
+    ["bookedPax", { bookings: [{ name: "Guest", bookedPax: -1, actualPax: 1 }] }],
+    ["actualPax", { bookings: [{ name: "Guest", bookedPax: 1, actualPax: 1.5 }] }],
+    ["expense pax", { expenses: [{ description: "Water", price: 10, pax: -2 }] }],
+  ] as const)("rejects invalid %s before reading or writing the database", async (_label, body) => {
+    const res = await saveBody(body);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toMatchObject({ error: "bad-body" });
+    expect(json.detail).toMatch(/(bookings|expenses)\.0\.(bookedPax|actualPax|pax):/);
+    expect(prismaMock.jobSheet.findUnique).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("PUT /api/jobsheet — reported no-show guests stay on the sheet", () => {
