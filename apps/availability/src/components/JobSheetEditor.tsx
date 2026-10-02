@@ -81,6 +81,17 @@ const TH = ({ en, th }: { en: string; th: string }) => (
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 
+function paxProblems(sheet: Pick<Sheet, "bookings" | "expenses">): string[] {
+  const bad = (v: number | null | undefined) => v != null && (!Number.isInteger(v) || v < 0);
+  return [
+    ...sheet.bookings.flatMap((b, i) => [
+      ...(bad(b.bookedPax) ? [`Booking row ${i + 1}: Booked Pax must be a whole number of zero or more.`] : []),
+      ...(bad(b.actualPax) ? [`Booking row ${i + 1}: Actual Pax must be a whole number of zero or more.`] : []),
+    ]),
+    ...sheet.expenses.flatMap((e, i) => bad(e.pax) ? [`Expense row ${i + 1} (${e.description || "unnamed"}): quantity must be a whole number of zero or more.`] : []),
+  ];
+}
+
 export default function JobSheetEditor() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -500,8 +511,14 @@ export default function JobSheetEditor() {
 
   async function save(override?: Partial<Sheet>): Promise<boolean> {
     if (saveProblem?.stale) { setMsg("Not saved — reload the sheet first."); return false; }
-    setBusy(true); setMsg("");
     const s = { ...sheet!, ...override };
+    const invalidPax = paxProblems(s);
+    if (invalidPax.length) {
+      setSaveProblem({ stale: false, reasons: invalidPax });
+      setMsg("Not saved — check pax");
+      return false;
+    }
+    setBusy(true); setMsg("");
     const r = await jfetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
       // The version this form was opened on. The server refuses a save built on a stale
@@ -1201,8 +1218,8 @@ export default function JobSheetEditor() {
                 <td>{i + 1}</td>
                 <td><input style={L} value={b.name} onChange={(e) => setBooking(i, { name: e.target.value })} /></td>
                 <td><input style={L} value={b.bookingNo} onChange={(e) => setBooking(i, { bookingNo: e.target.value })} /></td>
-                <td><input style={{ ...L, width: 70 }} type="number" value={b.bookedPax ?? ""} onChange={(e) => setBooking(i, { bookedPax: numOrNull(e.target.value) })} /></td>
-                <td><input style={{ ...L, width: 70 }} type="number" value={b.actualPax ?? ""} onChange={(e) => setBooking(i, { actualPax: numOrNull(e.target.value) })} /></td>
+                <td><input style={{ ...L, width: 70 }} type="number" min={0} step={1} value={b.bookedPax ?? ""} onChange={(e) => setBooking(i, { bookedPax: numOrNull(e.target.value) })} /></td>
+                <td><input style={{ ...L, width: 70 }} type="number" min={0} step={1} value={b.actualPax ?? ""} onChange={(e) => setBooking(i, { actualPax: numOrNull(e.target.value) })} /></td>
                 <td>
                   <select style={{ ...L, appearance: "none", WebkitAppearance: "none", MozAppearance: "none", backgroundImage: "none", cursor: "pointer" }} value={b.tickets} onChange={(e) => setBooking(i, { tickets: e.target.value as Booking["tickets"] })}>
                     <option value="">—</option><option value="included">Included</option><option value="not">Not incl.</option>
@@ -1375,7 +1392,7 @@ export default function JobSheetEditor() {
                     <span className="js-amt-in no-print">
                       <input style={{ ...L, width: 60, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} title="Unit price" />
                       <span>×</span>
-                      <input style={{ ...L, width: 44, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} title="Quantity" />
+                      <input style={{ ...L, width: 44, textAlign: "right" }} type="number" min={0} step={1} value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} title="Quantity" />
                       <select style={{ ...L, width: 50, appearance: "none", WebkitAppearance: "none", textAlign: "center", backgroundImage: "none", cursor: "pointer" }} value={e.unit ?? "คน"} onChange={(ev) => setExpense(i, { unit: ev.target.value })} title="เลือกหน่วย">{UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</select>
                     </span>
                   )}
@@ -1684,7 +1701,7 @@ export default function JobSheetEditor() {
                         <td>{ro ? (e.description || "Review Reward") : <input style={{ ...L, ...(isReviewExpense(e) ? {} : { borderColor: "var(--danger)" }) }} value={e.description} title={'Type "Review" or "รีวิว" — e.g. "Review reward" or "ค่ารีวิว".\nThis is what keeps the row in Additional Guide Payment (PEAK 510110) instead of Tour Expenses (510104).\n\nพิมพ์ "Review" หรือ "รีวิว" เช่น "Review reward" หรือ "ค่ารีวิว"\nคำนี้คือสิ่งที่ทำให้บรรทัดนี้เป็นค่าตอบแทนไกด์ ไม่ใช่ต้นทุนทัวร์'} onChange={(ev) => setExpense(i, { description: ev.target.value })} />}<small style={{ display: "block", fontSize: 9.5, color: "var(--ink-soft)" }}>Review reward · ค่าตอบแทนรีวิว{own ? "" : " · paid with this job, not a cost of it · จ่ายพร้อมงานนี้ ไม่ใช่ต้นทุนของงานนี้"}</small>{!ro && !isReviewExpense(e) && <small style={{ display: "block", fontSize: 9.5, color: "var(--danger)", fontWeight: 600 }}>Must contain &ldquo;Review&rdquo; or &ldquo;\u0e23\u0e35\u0e27\u0e34\u0e27&rdquo; · \u0e15\u0e49\u0e2d\u0e07\u0e21\u0e35\u0e04\u0e33\u0e27\u0e48\u0e32 &ldquo;Review&rdquo; \u0e2b\u0e23\u0e37\u0e2d &ldquo;\u0e23\u0e35\u0e27\u0e34\u0e27&rdquo;</small>}</td>
                         <td>{ro ? (e.relatedBookingNo || e.relatedJobRef || "—") : <input style={{ ...L, fontFamily: "monospace", fontSize: 12 }} value={e.relatedBookingNo ?? ""} placeholder="GYG… (เว้นว่าง = แขกงานนี้)" title="Booking no. of the guest who left the review — a booking on this job's guest list counts as this job's cost; any other booking is paid out here without inflating this job" onChange={(ev) => setExpense(i, { relatedBookingNo: ev.target.value })} />}</td>
                         <td className="no-print">{ro ? (e.notes || "—") : <input style={L} value={e.notes ?? ""} placeholder="e.g. great review from customer" onChange={(ev) => setExpense(i, { notes: ev.target.value })} />}</td>
-                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{ro ? thb(expenseAmount(e)) : <span style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}><input style={{ ...L, width: 58, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} />×<input style={{ ...L, width: 40, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></span>}</td>
+                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{ro ? thb(expenseAmount(e)) : <span style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}><input style={{ ...L, width: 58, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setExpense(i, { price: numOrNull(ev.target.value) })} />×<input style={{ ...L, width: 40, textAlign: "right" }} type="number" min={0} step={1} value={e.pax ?? ""} onChange={(ev) => setExpense(i, { pax: numOrNull(ev.target.value) })} /></span>}</td>
                         <td className="no-print">{canEdit && <button className="btn sm danger" onClick={() => up({ expenses: sheet.expenses.filter((_, j) => j !== i) })}>×</button>}</td>
                       </tr>
                     );
