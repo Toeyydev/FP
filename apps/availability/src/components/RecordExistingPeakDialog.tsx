@@ -31,6 +31,7 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [changed, setChanged] = useState(false);
   const [requestKey] = useState(newRequestKey);
   // Phase 1E: a settlement is linked as the ledger recorded it — chosen here, never typed.
   const [settlements, setSettlements] = useState<Settlement[] | null>(null);
@@ -55,19 +56,33 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
     };
   }, [mode, documentNo, documentType, note, requestKey, target, bankRef, advanceId, bankAccount, settlement]);
 
+  const post = async (dryRun: boolean) => {
+    const r = await fetch("/api/advances/peak-link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      // Recording confirms exactly the warnings the check showed, word for word. The server
+      // checks again and refuses if what it finds is not what was shown here.
+      body: JSON.stringify({ ...payload, preview: dryRun, ...(dryRun ? {} : { acknowledgedWarnings: preview?.warnings ?? [] }) }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, body, message: String(body.detail || body.reasons?.join("\n") || body.error || `HTTP ${r.status}`) };
+  };
   const send = async (dryRun: boolean) => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setChanged(false);
     try {
-      const r = await fetch("/api/advances/peak-link", {
-        method: "POST", headers: { "content-type": "application/json" },
-        // Acknowledged only for warnings this person was shown; the server checks again and
-        // refuses a warning nobody acknowledged.
-        body: JSON.stringify({ ...payload, preview: dryRun, acknowledgeWarnings: !dryRun && !!preview?.warnings.length }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.detail || body.reasons?.join("\n") || body.error || `HTTP ${r.status}`);
-      if (dryRun) setPreview(body as Preview);
-      else onDone(`${body.documentNo} recorded — FolkOPS will not send this to PEAK again`);
+      const res = await post(dryRun);
+      if (res.ok) {
+        if (dryRun) setPreview(res.body as Preview);
+        else onDone(`${res.body.documentNo} recorded — FolkOPS will not send this to PEAK again`);
+        return;
+      }
+      // The check no longer says what was confirmed: nothing was recorded. Show the new
+      // result, so it is read and confirmed again — never recorded on the old confirmation.
+      if (!dryRun && res.body.code === "warnings-not-acknowledged") {
+        const again = await post(true);
+        if (again.ok) { setPreview(again.body as Preview); setChanged(true); return; }
+        throw new Error(again.message);
+      }
+      throw new Error(res.message);
     } catch (e) { setErr(String((e as Error).message)); setPreview(null); }
     finally { setBusy(false); }
   };
@@ -138,6 +153,8 @@ export default function RecordExistingPeakDialog({ target, bankAccount, onClose,
         </div>
 
         {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}</div>}
+
+        {changed && preview && <div className="banner warn js-link-changed" role="alert">Nothing was recorded: the check gave a different result this time. Read it again, then record.</div>}
 
         {preview && (
           <div className="panel" style={{ display: "grid", gap: 6, fontSize: 12.5 }} role="status">
