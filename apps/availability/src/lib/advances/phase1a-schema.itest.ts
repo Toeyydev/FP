@@ -8,16 +8,20 @@ import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 
 const GUIDE = "G-912";
 const DATE = "2099-05-06";
+// Document numbers are unique in the database, so every row in this file takes the next one.
+// (They used to be drawn at random from 900 values, and two in one test sometimes collided.)
+let seq = 100;
+const nextNo = () => String(seq++);
 
 async function anAdvance(over: Record<string, unknown> = {}) {
   return prisma.guideAdvance.create({ data: {
     guideId: GUIDE, date: DATE, slotIdx: 0, amount: 1000, paidAt: new Date(), method: "bank", txRef: "TX-EXAMPLE-1",
-    advanceNo: `FOLK-ADV-209905-${String(Math.floor(Math.random() * 900) + 100)}`, advanceDate: DATE, amountSatang: 100_000, accountingPeriod: "2099-05", ...over,
+    advanceNo: `FOLK-ADV-209905-${nextNo()}`, advanceDate: DATE, amountSatang: 100_000, accountingPeriod: "2099-05", ...over,
   } });
 }
 async function aReceipt(over: Record<string, unknown> = {}) {
   return prisma.guideAdvanceReceipt.create({ data: {
-    receiptNo: `FOLK-ADR-209905-${String(Math.floor(Math.random() * 900) + 100)}`, guideId: GUIDE, receivedDate: DATE, amountSatang: 50_000, status: "VERIFIED", method: "bank", ...over,
+    receiptNo: `FOLK-ADR-209905-${nextNo()}`, guideId: GUIDE, receivedDate: DATE, amountSatang: 50_000, status: "VERIFIED", method: "bank", ...over,
   } });
 }
 const refused = async (p: Promise<unknown>, constraint: string) => {
@@ -76,7 +80,7 @@ describe("GuideAdvanceReceipt: intent, void and refund", () => {
 
 describe("GuideAdvanceRefund: two steps, each with its evidence", () => {
   const refund = async (receiptId: string, over: Record<string, unknown> = {}) => prisma.guideAdvanceRefund.create({ data: {
-    refundNo: `FOLK-ADF-209905-${String(Math.floor(Math.random() * 900) + 100)}`, receiptId, guideId: GUIDE, amountSatang: 20_000, reason: "guide sent ฿200 too much (example)", recordedById: "u_op", ...over,
+    refundNo: `FOLK-ADF-209905-${nextNo()}`, receiptId, guideId: GUIDE, amountSatang: 20_000, reason: "guide sent ฿200 too much (example)", recordedById: "u_op", ...over,
   } });
   it("starts RECORDED; APPROVED needs an approver; PAID needs the transfer; VOIDED needs a reason", async () => {
     const r = await aReceipt({ allocatedSatang: 30_000 });
