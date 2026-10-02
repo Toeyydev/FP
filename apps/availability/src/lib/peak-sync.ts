@@ -12,6 +12,7 @@
 // would pay for the same thing twice. Only what the guide fronted with personal
 // money comes back to them.
 
+import { advanceGap, advanceGapReason, type AdvanceGap, type JobAdvance } from "@/lib/advances/coverage";
 import { categoryForExpenseType, categoryLabel, isPerJobCategory } from "@/lib/peak-accounts";
 import {
   expenseAmount,
@@ -240,7 +241,7 @@ export function jobSheetTotals(
 //
 // Each reason names the affected figure, what is wrong, and what to do about it.
 export type RecheckField = "totalTourExpenses" | "reimbursementDue" | "netPayToGuide" | "reviewReward";
-export type Recheck = { field: RecheckField; short: string; detail: string; amount?: number };
+export type Recheck = { field: RecheckField; short: string; detail: string; amount?: number; /** A machine-readable reason, when the check has one. */ code?: string };
 
 export function figuresNeedRecheck(
   expenses: Expense[],
@@ -251,8 +252,34 @@ export function figuresNeedRecheck(
   // empty account map and reports rows as unready that the table beside it is
   // showing as Ready — two contradictory statements about the same rows.
   rowStatuses?: (("READY" | "NEEDS_REVIEW" | "UNMAPPED") | null | undefined)[],
+  // The job's live company advances, when the caller knows them (the job sheet does:
+  // lib/advances/job-view). Left out, the advance check is skipped — a screen that cannot
+  // tell must not announce a problem it has not looked for.
+  ctx: { advances?: JobAdvance[] } = {},
 ): Recheck[] {
   const out: Recheck[] = [];
+
+  // Rows counted as "paid from a company advance" on a job with no advance on record
+  // (lib/advances/coverage). They are out of Net Pay, and nothing shows the company paid
+  // them — so the figure may be short by exactly this much, and the payment is refused.
+  if (ctx.advances !== undefined) {
+    const gap = advanceGap(expenses ?? [], ctx.advances);
+    if (gap) {
+      out.push({
+        field: "netPayToGuide",
+        code: gap.code,
+        // The three ways it happens, each said as what it is: no advance at all, an advance
+        // that is not for this kind of cost, or more spent than the advances handed over.
+        short: gap.rows.length && gap.rows.every((r) => r.why === "NO_ADVANCE")
+          ? `${gap.rows.length === 1 ? "1 expense is" : `${gap.rows.length} expenses are`} marked "From company advance", but no advance is recorded for this job`
+          : gap.rows.length
+            ? `${gap.rows.length === 1 ? "1 expense is" : `${gap.rows.length} expenses are`} marked "From company advance", but the advance recorded for this job does not cover ${gap.rows.length === 1 ? "it" : "them"}`
+            : `More is marked "From company advance" than the ${thbLike(gap.issued)} of advances recorded for this job`,
+        detail: `This amount is left out of Net Pay as money the company already handed over — and nothing shows that it did. If the guide paid, the guide is owed it. Record the advance that paid for it (Advances, below), or change Paid By on the row${gap.rows.length === 1 ? "" : "s"}. The job cannot be paid until then. · ระบุว่าจ่ายจากเงินทดรองของบริษัท แต่ไม่มีเงินทดรองที่บันทึกไว้รองรับยอดนี้ — กรุณาบันทึกเงินทดรอง หรือแก้ผู้จ่าย ก่อนจ่ายเงินไกด์`,
+        amount: gap.amount,
+      });
+    }
+  }
 
   // A review reward is priced per review: price x count. Leaving the count blank
   // makes the row worth ZERO while still reading "Review 50" on screen, so it
@@ -557,6 +584,9 @@ export type SyncEligibilityInput = {
   /** "HISTORICAL_BACKFILL" for a reconstructed sheet. Display only — the block
    *  that matters is in buildPayoutExpense, which every posting path goes through. */
   origin?: string | null;
+  /** The job's live company advances, when the caller has read them (lib/advances/coverage).
+   *  Left out, the advance check is not made. */
+  advances?: JobAdvance[];
 };
 
 export type SyncEligibility = {
@@ -564,6 +594,8 @@ export type SyncEligibility = {
   canSync: boolean;
   reasons: string[];   // why not — empty when canSync
   changedSinceSync: boolean;
+  /** The machine-readable form of an advance refusal among `reasons`, when there is one. */
+  advanceGap?: AdvanceGap | null;
 };
 
 // May this sheet be posted to PEAK, and if not, exactly why. Every reason is
@@ -609,6 +641,15 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
     ? "1 expense is marked already-recorded without a source document"
     : `${unresolvedDupes.length} expenses are marked already-recorded without a source document`);
 
+  // The job-sheet document leaves a "paid from a company advance" row out, as the combined
+  // payment document does. With no advance on record that would post the smaller figure
+  // to PEAK with nothing to explain the difference — refused for the same reason.
+  let advanceBlock: AdvanceGap | null = null;
+  if (input.advances !== undefined) {
+    advanceBlock = advanceGap(expenses ?? [], input.advances);
+    if (advanceBlock) reasons.push(advanceGapReason(jobRef || "This job", advanceBlock));
+  }
+
   const totals = jobSheetTotals(expenses, guideFee, jobRef, bookings);
   if (!(totals.netPayToGuide >= 0) || !isFinite(totals.netPayToGuide)) reasons.push("Payment values are not valid");
   if (syncableExpenses(expenses, accounts).length === 0 && totals.guideFeeGross <= 0) reasons.push("Nothing to post");
@@ -626,7 +667,7 @@ export function peakSyncEligibility(input: SyncEligibilityInput): SyncEligibilit
     // BLOCKED = a hard dependency outside this sheet (contact mapping, approval).
     // NOT_READY = data on this sheet the operator can fix right here.
     const blocking = reasons.some((r) => r.includes("PEAK Contact") || r.includes("not approved"));
-    return { status: blocking ? "BLOCKED" : "NOT_READY", canSync: false, reasons, changedSinceSync };
+    return { status: blocking ? "BLOCKED" : "NOT_READY", canSync: false, reasons, changedSinceSync, advanceGap: advanceBlock };
   }
   return { status: "READY", canSync: true, reasons: [], changedSinceSync };
 }

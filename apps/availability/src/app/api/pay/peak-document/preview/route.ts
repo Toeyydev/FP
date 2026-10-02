@@ -7,7 +7,7 @@ import { auth } from "@/auth";
 import { isAdmin, isOps } from "@/lib/roles";
 import { redactBodyForNonAdmin } from "@/lib/certificates/access";
 import { peakEnabled } from "@/lib/peak-api";
-import { buildGuidePaymentDocument, PaymentDocumentNotPostable, type MissingCategoryRow } from "@/lib/peak-payment-document";
+import { buildGuidePaymentDocument, PaymentDocumentNotPostable, blocksOf, type MissingCategoryRow } from "@/lib/peak-payment-document";
 import { loadPaymentContext } from "@/lib/peak-payment-server";
 import { transferFigures } from "@/lib/payment-transfer";
 
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   let missingCategories: MissingCategoryRow[] = [];
   let evidenceGaps: MissingCategoryRow[] = [];
   try {
-    if (!candidates.length) return reply(session?.user?.role, { ok: false, reasons, missingCategories, evidenceGaps });
+    if (!candidates.length) return reply(session?.user?.role, { ok: false, reasons, missingCategories, evidenceGaps, blocks: ctx.blocks });
     const doc = buildGuidePaymentDocument({
       guideId, peakContactId: ctx.peakContactId,
       // The number is assigned when the document is created. It changes no line.
@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
       // A row whose receipt was waived against a certificate is only evidenced while
       // that certificate is in force (lib/certificates/evidence).
       certificates: await certificateStatuses(candidates.map((j) => (j.expenses ?? []) as SheetExpense[])),
+      alreadyPaid,
     });
     // The same verifier the payment uses, asked of the same folder. Only reported here —
     // a preview does not stop anybody — but reported from the file as it is right now,
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest) {
     if (!evidence.ok) {
       return reply(session?.user?.role, { ok: false, reasons: [...reasons, ...evidence.reasons], missingCategories, evidenceGaps: doc.evidenceGaps, staleCertificates: evidence.stale });
     }
-    if (reasons.length) return reply(session?.user?.role, { ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps });
+    if (reasons.length) return reply(session?.user?.role, { ok: false, reasons, missingCategories, evidenceGaps: doc.evidenceGaps, blocks: ctx.blocks });
     return reply(session?.user?.role, {
       ok: true, lines: doc.traces, gross: doc.gross, wht: doc.wht, total: doc.total, jobs: doc.jobs, issuedDate: doc.issuedDate,
       // What the operator checks before pressing Create: the whole figure, the part
@@ -114,6 +115,8 @@ export async function POST(req: NextRequest) {
     if (!(e instanceof PaymentDocumentNotPostable)) throw e;
     missingCategories = e.missingCategories;
     evidenceGaps = e.evidenceGaps;
-    return reply(session?.user?.role, { ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories, evidenceGaps });
+    // A job refused at the door and again by the builder is one block, not two.
+    const blocks = [...ctx.blocks, ...blocksOf(e).filter((b) => !ctx.blocks.some((x) => x.date === b.date && x.slotIdx === b.slotIdx))];
+    return reply(session?.user?.role, { ok: false, reasons: [...new Set([...reasons, ...e.reasons])], missingCategories, evidenceGaps, blocks });
   }
 }

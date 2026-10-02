@@ -1,5 +1,6 @@
 "use client";
 
+import { advanceGapMessage, type AdvanceGap } from "@/lib/advances/coverage";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
@@ -26,6 +27,8 @@ type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; a
   // Payments v2: the recorded payment that pays this job, and why it cannot be in one now.
   payment?: { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; slipUrl: string | null; noSlipReason: string | null } | null;
   payBlock?: string | null;
+  /** Rows counted as paid from a company advance the job has no record of (lib/advances/coverage). */
+  advanceGap?: AdvanceGap | null;
   // Paid per tour with no PEAK document number yet: "Record EXP…" can take one (api/pay PATCH).
   canRecordExp?: boolean;
   // Paid on its own record, approved, with no PEAK document: "Put paid jobs in PEAK" can take it.
@@ -191,6 +194,21 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
     : !j.paid && j.combinedBlock?.code === "not-approved"
       ? <span className="pay-doc-tag" title="A combined PEAK payment takes approved job sheets only. Approve this job sheet first — it can still be paid on its own.">Not approved</span>
       : null;
+  // Money left out of the transfer as "paid from a company advance" on a job with no advance
+  // on record. Shown on the job whether or not it is paid: unpaid, it holds the payment;
+  // paid, it was settled at the smaller figure and someone has to look.
+  const advanceGapTag = (j: Job) => j.advanceGap
+    ? <span className="pay-doc-tag js-advance-gap" data-code={j.advanceGap.code} style={{ color: "var(--danger, #b3402f)", borderColor: "var(--danger, #b3402f)" }}
+        title={`${j.advanceGap.rows.map((r) => `Row ${r.rowNo} "${r.description}" ${thb(r.amount)}`).join(" · ")}${j.advanceGap.rows.length ? " — " : ""}The job ${advanceGapMessage(j.advanceGap)}. ${j.paid ? "This job is already paid: check whether the guide is still owed it." : "It cannot be paid until then."}`}>
+        ⚠ {thb(j.advanceGap.amount)} from an advance not on record
+      </span>
+    : null;
+  const advanceGapNote = (jobs: Job[]) => {
+    const hit = jobs.filter((j) => j.advanceGap);
+    if (!hit.length) return null;
+    const total = hit.reduce((s, j) => s + (j.advanceGap?.amount ?? 0), 0);
+    return <span className="js-advance-gap-guide" style={{ display: "block", fontSize: 11.5, color: "var(--danger, #b3402f)" }}>⚠ {hit.length} job{hit.length === 1 ? "" : "s"}: {thb(total)} marked “from company advance” with no advance on record to cover it</span>;
+  };
   // No PEAK document for this job in FolkOPS (lib/peak-job-status). Once paid, that is a
   // gap in the books; before payment it is the normal state — so the paid one stands out.
   const notInPeak = (j: Job) => j.peakStatus?.state === "NOT_IN_PEAK";
@@ -461,7 +479,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
               ? <input type="checkbox" checked={sel.has(r.guideId)} onChange={() => toggleSel(r.guideId)} title="Select for a payment batch" />
               : null}
           </td>
-          <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{isOpen ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}</td>
+          <td><span style={{ color: "var(--ink-soft)", marginRight: 4 }}>{isOpen ? "▾" : "▸"}</span><span className="gid">{r.guideId}</span> {r.guide}{advanceGapNote(jobs)}</td>
           <td className="r">{jobs.length}</td>
           <td className="r">{thb(sumBy(jobs, "fee"))}</td>
           <td className="r">{thb(sumBy(jobs, "expenses"))}</td>
@@ -578,7 +596,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                   {j.peakRef && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", fontVariantNumeric: "tabular-nums" }} title="PEAK ref for this payment">{j.peakRef}</span>}
                   {j.peakPaymentRef && <span className="pay-doc-tag" title="The combined PEAK document this job belongs to — every job in it shares this reference and document">{docTag(j)}</span>}
                   {paymentChip(j)}
-                  {inPeakTag(j)}
+                  {inPeakTag(j)}{advanceGapTag(j)}
                   {peakBadge(j)}
                   {canEdit && expCandidate(j) && <button type="button" className="btn sm ghost" style={{ padding: "1px 8px" }} title="Record the number of the PEAK document made by hand for this payment" onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter(expCandidate), preselect: [`${j.date}|${j.slotIdx}`] })}>+ EXP</button>}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : j.peakPaymentRef ? docBadge(j) : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
@@ -720,7 +738,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(j.guideId)}&date=${j.date}&slotIdx=${j.slotIdx}`} title="Open this tour's job sheet">Job sheet</a>
                     {j.peakPaymentRef && <span className="pay-doc-tag" title={`The combined PEAK document this job belongs to${docEvidence(j)}`}>{docTag(j)} · {docBadge(j)}</span>}
-                    {inPeakTag(j)}
+                    {inPeakTag(j)}{advanceGapTag(j)}
                     {peakBadge(j)}
                     {canEdit && !j.peakPaymentRef && !j.payBlock && <button className="btn sm primary" title="Record the transfer that pays this job" onClick={() => openRecordPayment(j.guideId, j.guide, rows.find((x) => x.guideId === j.guideId)?.jobs ?? [j], [`${j.date}|${j.slotIdx}`])}>Record payment…</button>}
                   </td>

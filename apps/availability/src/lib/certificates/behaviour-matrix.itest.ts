@@ -22,7 +22,7 @@ const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 
 import { prisma } from "@/lib/db";
-import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
+import { requireTestDatabase, resetDatabase, seedAdvance, seedGuide } from "@/test/db";
 import type { Expense } from "@/lib/jobsheet";
 import { evidenceRequired, evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { certificateStatuses } from "@/lib/certificates/evidence";
@@ -98,12 +98,16 @@ const deps = (over: Deps = {}): Deps => ({
 });
 
 const ROWS: Row[] = [e("Ferry", 11), e("Temple", 500, 2, { paidBy: "advance", expenseType: "entrance" })];
-const seedSheet = async (rows: Row[] = ROWS) =>
-  prisma.jobSheet.create({ data: {
+const seedSheet = async (rows: Row[] = ROWS) => {
+  // A row marked "From company advance" stands for an advance that was really issued: it is
+  // on record for the job, which is what keeps the row out of the transfer (lib/advances/coverage).
+  if (rows.some((r) => (r as { paidBy?: string }).paidBy === "advance")) await seedAdvance({ guideId: GUIDE, date: DATE, slotIdx: 0 }, 1000, { jobNo: REF });
+  return prisma.jobSheet.create({ data: {
     ref: REF, guideId: GUIDE, date: DATE, slotIdx: 0, tourId: "T-900", status: "Confirmed",
     bookings: [], guideFee: { price: 1200, time: 1, whtPct: 3 }, expenses: rows as object[],
     guideExpensesAt: new Date("2099-04-02T06:30:00.000Z"), approvalStatus: "APPROVED",
   } });
+};
 
 const rowsNow = async (): Promise<ExpenseWithEvidence[]> =>
   ((await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!.expenses as unknown as ExpenseWithEvidence[]);
@@ -143,7 +147,9 @@ const buildDocument = async () => {
   const sheet = (await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId: GUIDE, date: DATE, slotIdx: 0 } } }))!;
   return buildGuidePaymentDocument({
     guideId: GUIDE, peakContactId: "peak-contact-1", paymentRef: "FOLK-PAY-209904-01",
-    jobs: [{ date: DATE, slotIdx: 0, ref: REF, tourId: "T-900", expenses: rows as Expense[], guideFee: sheet.guideFee as never, approvalStatus: "APPROVED" } as never],
+    jobs: [{ date: DATE, slotIdx: 0, ref: REF, tourId: "T-900", expenses: rows as Expense[], guideFee: sheet.guideFee as never, approvalStatus: "APPROVED",
+      // as the server loads them: the live advances on record for the job
+      advances: (await prisma.guideAdvance.findMany({ where: { guideId: GUIDE, date: DATE, slotIdx: 0, reversedAt: null } })).map((a) => ({ amount: a.amountSatang / 100, allowedCategories: a.allowedCategories })) } as never],
     accounts: ACCOUNTS as never, certificates: await certificateStatuses([rows as Expense[]]),
   });
 };

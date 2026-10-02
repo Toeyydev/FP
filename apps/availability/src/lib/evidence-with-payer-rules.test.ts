@@ -29,7 +29,8 @@ const receipt = { receiptUrl: "https://drive.example.test/r" };
 const build = (expenses: Expense[], fee: GuideFee) =>
   buildGuidePaymentDocument({
     guideId: "G-901", peakContactId: "contact-1", paymentRef: "FOLK-PAY-209903-01",
-    jobs: [{ date: "2099-03-04", slotIdx: 0, ref: "FOLK-BKK-20990304-01", expenses, guideFee: fee }],
+    // The advance in these cases was really issued: it is on record (lib/advances/coverage).
+    jobs: [{ date: "2099-03-04", slotIdx: 0, ref: "FOLK-BKK-20990304-01", expenses, guideFee: fee, advances: [{ amount: 5000, allowedCategories: ["entrance", "meal", "transport"] }] }],
     accounts: ACCOUNTS,
   } as Parameters<typeof buildGuidePaymentDocument>[0]);
 

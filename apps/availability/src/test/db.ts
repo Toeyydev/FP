@@ -52,3 +52,19 @@ export async function seedGuide(guideId = "G-900", over: { displayName?: string;
     },
   });
 }
+
+let advanceSeq = 0;
+/**
+ * A company advance on record for a job — issued, live, with an invented number. What
+ * entitles a row marked "From company advance" to be left out of the guide's transfer
+ * (lib/advances/coverage).
+ */
+export async function seedAdvance(job: { guideId: string; date: string; slotIdx: number }, amount = 1000, over: { jobNo?: string | null; reversedAt?: Date | null; allowedCategories?: string[] } = {}) {
+  const n = String(++advanceSeq).padStart(3, "0");
+  return prisma.guideAdvance.create({ data: {
+    guideId: job.guideId, date: job.date, slotIdx: job.slotIdx, amount, paidAt: new Date(`${job.date}T01:00:00Z`), method: "bank", txRef: `TX-SEED-${n}`,
+    advanceNo: `FOLK-ADV-${job.date.slice(0, 4)}${job.date.slice(5, 7)}-9${n.slice(1)}${advanceSeq > 99 ? advanceSeq : ""}`, advanceDate: job.date, amountSatang: Math.round(amount * 100),
+    accountingPeriod: job.date.slice(0, 7), jobNo: over.jobNo ?? null, slipUrl: "https://example.test/advance-slip",
+    allowedCategories: over.allowedCategories ?? ["entrance"], reversedAt: over.reversedAt ?? null,
+  } });
+}

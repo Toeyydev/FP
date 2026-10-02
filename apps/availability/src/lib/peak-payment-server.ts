@@ -11,6 +11,8 @@ import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak
 import { createExpenseAllInOne, getExpense, getPaymentMethods, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
+import { advanceBlock, advanceGap, advanceGapReason, advanceJobKey, type AdvanceBlock } from "@/lib/advances/coverage";
+import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
 import { paidAtFor } from "@/lib/payments-v2/rules";
 import { recordPaymentInTx } from "@/lib/payments-v2/service";
 import {
@@ -72,6 +74,9 @@ export type PaymentContext = {
   alreadyPaid: boolean;
   paidDate: string | null;
   slipLink: string | null;
+  /** Jobs refused because rows are counted as paid from an advance that is not on record —
+   *  the machine-readable form of that refusal (lib/advances/coverage). */
+  blocks: AdvanceBlock[];
 };
 
 /**
@@ -102,15 +107,20 @@ export async function loadPaymentContext(
     reviewRewardAccount(),
   ]);
   const docs = await documentsByRef(pays.map((p) => p.peakPaymentRef));
+  // The live company advances of each of these jobs (lib/advances/coverage).
+  const advanced = await liveAdvancesByJob(prisma, { jobs: keys.map((k) => ({ guideId, date: k.date, slotIdx: k.slotIdx })) });
+  const advancesOf = (k: JobKey) => advanced.get(advanceJobKey({ guideId, date: k.date, slotIdx: k.slotIdx })) ?? [];
 
   const reasons: string[] = [];
   const at = (list: { date: string; slotIdx: number }[], k: JobKey) => list.find((x) => x.date === k.date && x.slotIdx === k.slotIdx);
   const jobs: PaymentJob[] = [];
   const awaitingApproval: PaymentJob[] = [];
+  const blocks: PaymentContext["blocks"] = [];
   const toJob = (sheet: (typeof sheets)[number], k: JobKey): PaymentJob => ({
     date: k.date, slotIdx: k.slotIdx, ref: sheet.ref ?? null, origin: sheet.origin,
     expenses: (sheet.expenses as unknown as Expense[]) ?? [],
     guideFee: guideFeeOf(sheet.guideFee),
+    advances: advancesOf(k),
   });
 
   for (const k of keys) {
@@ -127,9 +137,11 @@ export async function loadPaymentContext(
       payment: pay ? { ...pay, document: pay.peakPaymentRef ? docs.get(pay.peakPaymentRef) ?? null : null } : null,
       coveredByPayroll: !!sheet && coveredByPayrollRun(payroll, k.date, assignment?.createdAt ?? sheet.createdAt),
       period: k.date.slice(0, 7),
+      advanceGap: sheet ? advanceGap((sheet.expenses as unknown as Expense[]) ?? [], advancesOf(k)) : null,
     });
     if (block) {
       reasons.push(blockReason(label, block));
+      if (block.advanceGap) blocks.push(advanceBlock({ jobNo: sheet?.ref, date: k.date, slotIdx: k.slotIdx }, block.advanceGap));
       if (block.code === "not-approved" && sheet) awaitingApproval.push(toJob(sheet, k));
       continue;
     }
@@ -163,6 +175,7 @@ export async function loadPaymentContext(
     alreadyPaid: !!opts.alreadyPaid,
     paidDate: transfer.paidDate,
     slipLink: transfer.slipLink,
+    blocks,
   };
   if (reasons.length) return { ok: false, reasons, ctx };
   return { ok: true, ctx };
@@ -233,6 +246,7 @@ export async function pendingJobsInMonth(guideId: string, date: string, today: s
     prisma.payrollStatus.findUnique({ where: { guideId_period: { guideId, period } }, select: { status: true, paidAt: true } }),
   ]);
   const docs = await documentsByRef(pays.map((p) => p.peakPaymentRef));
+  const advanced = await liveAdvancesByJob(prisma, { guideId, from: where.date.gte, to: where.date.lte });
   const keyOf = (x: JobKey) => `${x.date}|${x.slotIdx}`;
   const keys = new Map<string, JobKey>();
   for (const x of [...assigns, ...sheets]) keys.set(keyOf(x), { date: x.date, slotIdx: x.slotIdx });
@@ -247,8 +261,11 @@ export async function pendingJobsInMonth(guideId: string, date: string, today: s
       payment: pay ? { ...pay, document: pay.peakPaymentRef ? docs.get(pay.peakPaymentRef) ?? null : null } : null,
       coveredByPayroll: !!created && coveredByPayrollRun(payroll, k.date, created),
       period,
+      advanceGap: sheet ? advanceGap((sheet.expenses as unknown as Expense[]) ?? [], advanced.get(advanceJobKey({ guideId, date: k.date, slotIdx: k.slotIdx }))) : null,
     });
-    if (block && block.code !== "not-approved" && block.code !== "no-job-sheet") continue;
+    // Listed as not ready — with its reason — when the fix is on the job sheet: approve it,
+    // save it, or settle who paid for a row no advance covers.
+    if (block && block.code !== "not-approved" && block.code !== "no-job-sheet" && block.code !== "advance-not-recorded") continue;
     const payout = sheet ? round2(guidePayoutTotal((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)).payout) : round2(guidePayoutTotal([], DEFAULT_GUIDE_FEE).payout);
     out.push({ ...k, ref: sheet?.ref ?? null, tourId: sheet?.tourId ?? assignment?.tourId ?? "", payout, block });
   }
@@ -436,6 +453,17 @@ async function paymentBlockers(tx: Prisma.TransactionClient | typeof prisma, doc
     if (!isApproved(sheet.approvalStatus)) reasons.push(`${j.ref} is no longer approved`);
     if (sheetInPeak(sheet)) reasons.push(`${j.ref} was posted to PEAK from its own job sheet${sheet.peakDocumentNo ? ` (${sheet.peakDocumentNo})` : ""}`);
     current.set(`${j.date}|${j.slotIdx}`, currentJobFigures((sheet.expenses as unknown as Expense[]) ?? [], guideFeeOf(sheet.guideFee)));
+    // A row left out of this document as "paid from a company advance" needs that advance on
+    // record at the moment the money moves (lib/advances/coverage) — it may have been
+    // reversed, or never recorded on a document made before this rule. Checked here because
+    // this runs before the transfer is offered and before PEAK is asked to record anything.
+    // Not for a document of jobs already paid: that transfer has happened.
+    if (!doc.alreadyPaid) {
+      const jobKey = { guideId: doc.guideId, date: j.date, slotIdx: j.slotIdx };
+      const advanced = await liveAdvancesByJob(tx, { jobs: [jobKey] });
+      const gap = advanceGap((sheet.expenses as unknown as Expense[]) ?? [], advanced.get(advanceJobKey(jobKey)));
+      if (gap) reasons.push(advanceGapReason(j.ref || `${j.date} slot ${j.slotIdx + 1}`, gap));
+    }
   }
   // Every job's gross, WHT and payout against what the document was created with
   // (lib/payment-document-drift) — a fee set to ฿0 after the EXP was made changes gross and

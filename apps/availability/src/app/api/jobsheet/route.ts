@@ -300,6 +300,7 @@ export async function GET(req: NextRequest) {
       peakContactId: header?.peakContactId, accountingDate: dates.accountingDate,
       origin: existing?.origin ?? null,
       accounts, jobRef: existing?.ref, bookings: (existing?.bookings as Booking[]) ?? [], state,
+      advances: advance.advances.filter((a) => a.status !== "VOID").map((a) => ({ amount: a.amount, allowedCategories: a.allowedCategories })),
     });
     return {
       ...state,

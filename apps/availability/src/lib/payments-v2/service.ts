@@ -11,6 +11,8 @@
 //
 // Every caller — Record payment, bank-slip match, slip review, a combined PEAK document's
 // payment — goes through here. Nothing else may write TourPayment.status = "PAID".
+import { advanceJobKey } from "@/lib/advances/coverage";
+import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
@@ -66,6 +68,7 @@ export async function loadJobFacts(db: Db, guideId: string, jobs: { date: string
   const refs = [...new Set(pays.map((p) => p.peakPaymentRef).filter((r): r is string => !!r))];
   const docRows = refs.length ? await db.guidePaymentDocument.findMany({ where: { paymentRef: { in: refs } }, select: { paymentRef: true, peakDocumentNo: true, peakDocumentId: true, status: true } }) : [];
   const docs = new Map(docRows.map((d) => [d.paymentRef, d]));
+  const advanced = await liveAdvancesByJob(db, { jobs: jobs.map((j) => ({ guideId, date: j.date, slotIdx: j.slotIdx })) });
   const facts: JobFacts[] = jobs.map((j) => {
     const s = sheets.find((x) => key(x) === key(j));
     const p = pays.find((x) => key(x) === key(j));
@@ -80,6 +83,7 @@ export async function loadJobFacts(db: Db, guideId: string, jobs: { date: string
       activePaymentNo: activePayments.find((p) => p.id === active.find((x) => key(x) === key(j))?.paymentId)?.paymentNo ?? null,
       paidByPayroll: !!created && coveredByPayrollRun(payroll, j.date, created),
       document: doc && documentHoldsJobs(doc.status) ? { paymentRef: doc.paymentRef, peakDocumentNo: doc.peakDocumentNo, status: doc.status } : null,
+      advances: advanced.get(advanceJobKey({ guideId, date: j.date, slotIdx: j.slotIdx })) ?? [],
     };
   });
   return {

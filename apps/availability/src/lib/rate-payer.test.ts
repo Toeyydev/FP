@@ -220,7 +220,8 @@ describe("8–9, 13–14, 21 · the money: summary, payout, PEAK agree", () => {
   });
   const doc = (expenses: Expense[]) => buildGuidePaymentDocument({
     guideId: "G-990", peakContactId: "contact-example", paymentRef: "FOLK-PAY-(preview)", certificates: {},
-    jobs: [{ date: "2099-05-20", slotIdx: 0, ref: "FOLK-BKK-20990520-01", origin: null, expenses, guideFee: FEE }],
+    // An advance is on record for this job, so a confirmed Company Advance row has one to rest on.
+    jobs: [{ date: "2099-05-20", slotIdx: 0, ref: "FOLK-BKK-20990520-01", origin: null, expenses, guideFee: FEE, advances: [{ amount: 5000, allowedCategories: ["entrance", "meal", "transport"] }] }],
     accounts: { guideFee: { code: "590001" }, reviewReward: { code: "590002" }, categories: { transport: { code: "590003" }, meal: { code: "590004" }, entrance: { code: "590005" } } },
   });
   it("11 · the PEAK document refuses a suggested payer, naming the job and row", () => {

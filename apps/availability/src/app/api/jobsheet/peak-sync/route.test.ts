@@ -7,6 +7,8 @@ const prismaMock = vi.hoisted(() => ({
   assignment: { findMany: vi.fn() },
   payrollStatus: { findUnique: vi.fn() },
   guidePaymentDocument: { findMany: vi.fn(async () => []) },
+  // The job's company advances (lib/advances/coverage) — none unless a case records one.
+  guideAdvance: { findMany: vi.fn(async () => [] as { guideId: string; date: string; slotIdx: number; amountSatang: number; allowedCategories: string[] }[]) },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 const createExpenseMock = vi.hoisted(() => vi.fn());
@@ -112,6 +114,31 @@ describe("POST /api/jobsheet/peak-sync — refusals", () => {
     expect(res.status).toBe(409);
     expect((await res.json()).reasons).toContain("Job sheet is not approved");
     expect(createExpenseMock).not.toHaveBeenCalled();
+  });
+
+  // Issue #206 — the sheet's own document leaves a "From company advance" row out, as the
+  // combined one does; with no advance on record it would post the smaller figure unexplained.
+  it("refuses a sheet whose Company Advance row no recorded advance covers — in words and as a code, nothing posted or written", async () => {
+    const rows = [{ description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator" }];
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet({ expenses: rows }));
+    const res = await post(JOB);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.reasons.join(" ")).toMatch(/has ฿600\.00 of expenses \(1 row\) marked "From company advance", but no advance is recorded for this job/);
+    expect(body.blocks).toEqual([expect.objectContaining({ code: "ADVANCE_NOT_RECORDED", amount: 600, date: JOB.date, slotIdx: JOB.slotIdx })]);
+    expect(createExpenseMock).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("…and posts it as before once the advance is on record: the ticket on no line", async () => {
+    const rows = [{ description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator" }];
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet({ expenses: rows }));
+    prismaMock.guideAdvance.findMany.mockResolvedValueOnce([{ ...JOB, amountSatang: 60000, allowedCategories: ["entrance"] }]);
+    const res = await post(JOB);
+    expect(res.status).toBe(200);
+    expect(createExpenseMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(createExpenseMock.mock.calls[0])).not.toContain("Temple ticket");
   });
 
   it("refuses a guide with no PEAK contact — never posts under a name", async () => {

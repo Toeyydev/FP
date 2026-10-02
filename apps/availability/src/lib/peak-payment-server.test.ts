@@ -7,6 +7,8 @@ const txMock = vi.hoisted(() => ({
   tourPayment: { findMany: vi.fn() },
   jobSheet: { findUnique: vi.fn() },
   guidePaymentDocument: { updateMany: vi.fn() },
+  // The jobs' live company advances (lib/advances/coverage) — none in these cases.
+  guideAdvance: { findMany: vi.fn(async () => []) },
 }));
 const prismaMock = vi.hoisted(() => ({
   $transaction: vi.fn(),

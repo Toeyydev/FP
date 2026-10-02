@@ -20,5 +20,5 @@ export async function POST(req: NextRequest) {
     ...body, jobs: body.jobs ?? [], amountTransferred: body.amountTransferred ?? 0,
     slip: hasSlip ? { url: "pending" } : null, source: "MANUAL", actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null },
   });
-  return NextResponse.json({ ok: check.reasons.length === 0, reasons: check.reasons, reconciliation: check.reconciliation, jobs: check.jobs, accountingPeriod: check.accountingPeriod, periods: check.periods });
+  return NextResponse.json({ ok: check.reasons.length === 0, reasons: check.reasons, blocks: check.blocks, reconciliation: check.reconciliation, jobs: check.jobs, accountingPeriod: check.accountingPeriod, periods: check.periods });
 }

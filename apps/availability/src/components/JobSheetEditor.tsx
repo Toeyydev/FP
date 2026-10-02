@@ -143,6 +143,9 @@ export default function JobSheetEditor() {
   const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
   // Guide advance + settlement (cash movements — separate from expenses, see lib/advance)
   const [advance, setAdvance] = useState<AdvanceData>(EMPTY_ADVANCE);
+  // Whether the job's advances have been read from the server yet. Until they have, "no
+  // advance on record" is not something this screen may say.
+  const [advanceLoaded, setAdvanceLoaded] = useState(false);
   const [advKind, setAdvKind] = useState<null | "advance" | "return">(null); // which record-form is open
   const [advanceBank, setAdvanceBank] = useState("");
   const [advForm, setAdvForm] = useState<{ amount: string; at: string; method: string; txRef: string; note: string; file: File | null; confirmedArrived: boolean }>({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null, confirmedArrived: false });
@@ -173,6 +176,7 @@ export default function JobSheetEditor() {
     const d = await r.json();
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
+    setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
     // expense lines (with prices) as a starting template to fill in.
@@ -281,7 +285,9 @@ export default function JobSheetEditor() {
   const money = jobSheetTotals(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
   // Which figures are not yet safe to pay from, and why. Marked AT the number as
   // well as listed, so nobody reads a total without seeing that it is provisional.
-  const recheck = figuresNeedRecheck(sheet.expenses, money, {}, peak?.rows?.map((r) => r?.mappingStatus));
+  const recheck = figuresNeedRecheck(sheet.expenses, money, {}, peak?.rows?.map((r) => r?.mappingStatus),
+    // Operators only: the guide's own view shows what the guide reported, not who is held to account for a payer.
+    canEdit && advanceLoaded ? { advances: advance.advances.filter((a) => a.status !== "VOID").map((a) => ({ amount: a.amount, allowedCategories: a.allowedCategories })) } : {});
   const flagged = (f: "totalTourExpenses" | "reimbursementDue" | "netPayToGuide") => recheck.some((r) => r.field === f);
   const ro = !canEdit; // read-only (guide view)
   // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
@@ -1961,7 +1967,7 @@ export default function JobSheetEditor() {
               <div className="js-recheck-head">Recheck before paying<span>{recheck.length} thing{recheck.length === 1 ? "" : "s"} to confirm</span></div>
               <ul>
                 {recheck.map((r, i) => (
-                  <li key={i}>
+                  <li key={i} data-code={r.code}>
                     <b>{r.short}{r.amount ? ` · ${thb(r.amount)}` : ""}</b>
                     <span>{r.detail}</span>
                   </li>

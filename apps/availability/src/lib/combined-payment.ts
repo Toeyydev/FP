@@ -11,6 +11,7 @@
 // Pure: no database, no network.
 import { isApproved } from "@/lib/jobsheet";
 import { paymentDocumentLock } from "@/lib/peak-payment-document";
+import { advanceGapMessage, type AdvanceGap } from "@/lib/advances/coverage";
 
 export type CombinedBlockCode =
   | "no-job-sheet"
@@ -22,7 +23,8 @@ export type CombinedBlockCode =
   | "in-peak-from-sheet"
   | "not-approved"
   | "not-paid"
-  | "has-peak-ref";
+  | "has-peak-ref"
+  | "advance-not-recorded";
 
 export type CombinedBlock = {
   code: CombinedBlockCode;
@@ -30,6 +32,8 @@ export type CombinedBlock = {
   message: string;
   /** The PEAK document the job's own sheet created, when that is the reason. */
   documentNo?: string;
+  /** The rows held out of the transfer with no advance behind them, when that is the reason. */
+  advanceGap?: AdvanceGap;
 };
 
 export type CombinedJobState = {
@@ -43,6 +47,8 @@ export type CombinedJobState = {
   coveredByPayroll: boolean;
   /** "YYYY-MM" — only for the message. */
   period: string;
+  /** Rows counted as paid from a company advance this job has no record of (lib/advances/coverage). */
+  advanceGap?: AdvanceGap | null;
 };
 
 /** Whether a job sheet already created its own PEAK expense document. */
@@ -85,6 +91,9 @@ export function combinedPaymentBlock(job: CombinedJobState): CombinedBlock | nul
   if (!isApproved(sheet.approvalStatus)) {
     return { code: "not-approved", message: "is not approved — approve the job sheet before paying it in a PEAK document" };
   }
+  // The document would book the job at a figure that leaves an amount out on the strength
+  // of an advance nobody recorded. Held until the advance is recorded or the payer corrected.
+  if (job.advanceGap) return { code: "advance-not-recorded", message: advanceGapMessage(job.advanceGap), advanceGap: job.advanceGap };
   return null;
 }
 

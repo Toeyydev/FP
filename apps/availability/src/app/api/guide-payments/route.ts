@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
 
   // Check everything BEFORE the slip is filed, so a refused payment leaves no stray file.
   const dry = await previewPayment(prisma, { ...body, source: "MANUAL", slip: hasFile ? { url: "pending" } : null, actor });
-  if (dry.reasons.length) return NextResponse.json({ error: "not-recordable", reasons: dry.reasons, reconciliation: dry.reconciliation }, { status: 409 });
+  if (dry.reasons.length) return NextResponse.json({ error: "not-recordable", reasons: dry.reasons, blocks: dry.blocks, reconciliation: dry.reconciliation }, { status: 409 });
 
   let slip: RecordPaymentInput["slip"] = null;
   if (hasFile) {

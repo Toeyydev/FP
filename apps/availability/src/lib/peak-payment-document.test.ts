@@ -282,7 +282,8 @@ describe("what belongs in a payment document", () => {
       { description: "Boat from advance", price: 50, pax: 2, expenseType: "transport", paidBy: "advance" },
       { description: "Water", price: 20, pax: 1, expenseType: "meal", paidBy: "guide", paidBySource: "operator" },
     ];
-    const doc = build({ jobs: [{ ...JOBS[0], expenses: rows }] });
+    // The advance is on record — that is what entitles its row to be left out (lib/advances/coverage).
+    const doc = build({ jobs: [{ ...JOBS[0], expenses: rows, advances: [{ amount: 5000, allowedCategories: ["entrance", "meal", "transport"] }] }] });
     expect(doc.lines.map((l) => l.description)).toEqual(["Guide fee - FOLK-BKK-20300506-01 · WHT 3% ฿36.00", "Reimbursement / Meal / Refreshment - FOLK-BKK-20300506-01"]);
     expect(doc.total).toBe(1184);
   });
@@ -384,7 +385,7 @@ describe("Paid By must be known before a row is paid through PEAK", () => {
       { description: "Entrance", price: 500, pax: 2, expenseType: "entrance", paidBy: "company" },
       { description: "Boat", price: 50, pax: 2, expenseType: "transport", paidBy: "advance" },
     ];
-    expect(() => build({ jobs: [job(rows)] })).not.toThrow();
+    expect(() => build({ jobs: [{ ...job(rows), advances: [{ amount: 5000, allowedCategories: ["entrance", "meal", "transport"] }] }] })).not.toThrow();
   });
 
   it("never reaches PEAK: the document is refused before anything is claimed", async () => {

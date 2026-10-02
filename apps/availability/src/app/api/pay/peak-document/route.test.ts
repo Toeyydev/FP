@@ -13,6 +13,8 @@ type Where = Record<string, any>;
 const db = vi.hoisted(() => ({
   users: [] as Row[], sheets: [] as Row[], assigns: [] as Row[], pays: [] as Row[], payrolls: [] as Row[], docs: [] as Row[], tours: [] as Row[], audits: [] as Row[],
   payments: [] as Row[], paymentJobs: [] as Row[], paymentAdjustments: [] as Row[],
+  // Company advances on record (lib/advances/coverage): { guideId, date, slotIdx, reversedAt, amountSatang, allowedCategories }.
+  advances: [] as Row[],
 }));
 
 const prismaMock = vi.hoisted(() => {
@@ -75,6 +77,7 @@ const prismaMock = vi.hoisted(() => {
       }),
     },
     guidePaymentJob: table(() => db.paymentJobs),
+    guideAdvance: table(() => db.advances),
     guidePaymentAdjustment: table(() => db.paymentAdjustments),
     tour: table(() => db.tours),
     auditLog: table(() => db.audits),
@@ -144,7 +147,7 @@ function seed() {
   db.pays = [];
   db.payrolls = [];
   db.docs = [];
-  db.payments = []; db.paymentJobs = []; db.paymentAdjustments = [];
+  db.payments = []; db.paymentJobs = []; db.paymentAdjustments = []; db.advances = [];
   db.tours = [{ id: "T-001", name: "Test Temple Tour" }];
   db.audits = [];
 }
@@ -905,6 +908,8 @@ describe("no transfer without a document, and no document settled without eviden
     db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!.expenses.push(
       { description: "Temple tickets", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance" },
     );
+    // …and the advance that bought it is on record for that job.
+    db.advances.push({ guideId: GUIDE, ...J3, reversedAt: null, amountSatang: 100000, allowedCategories: ["entrance"] });
     const res = await create([J1, J2, J3]);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ total: 4169, gross: 4295 });
@@ -1222,5 +1227,136 @@ describe("฿1,924: the review incentive is withheld on, and the transfer answer
     expect(body).toMatchObject({ stage: "PEAK_DRIFT", canTransfer: false });
     expect((await pay()).status).toBe(409);
     expect(peak.pay).not.toHaveBeenCalled();
+  });
+});
+
+// ── Issue #206: "From company advance" on a job with no advance on record ────
+// All figures invented. J3's sheet gets a ฿1,000 ticket row marked Company Advance.
+describe("a Company Advance row with no advance on record holds the job — document, transfer and payment", () => {
+  const TICKET = { description: "Temple tickets", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator" };
+  const j3 = () => db.sheets.find((s) => s.date === J3.date && s.slotIdx === J3.slotIdx)!;
+  const tag = () => { j3().expenses = [...j3().expenses, { ...TICKET }]; };
+  const record = (over: Row = {}) => db.advances.push({ guideId: GUIDE, ...J3, reversedAt: null, amountSatang: 100000, allowedCategories: ["entrance"], ...over });
+  const preview = (jobs: { date: string; slotIdx: number }[]) => PREVIEW(new Request("https://ops.folkpaths.com/api/pay/peak-document/preview", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: GUIDE, jobs }),
+  }) as unknown as Parameters<typeof PREVIEW>[0]);
+  const ready = () => READY(new NextRequest("https://ops.folkpaths.com/api/pay/peak-document/ready?paymentRef=FOLK-PAY-203005-01"));
+  const BLOCK = { code: "ADVANCE_NOT_RECORDED", jobNo: "FOLK-BKK-20300512-01", date: J3.date, slotIdx: J3.slotIdx, amount: 1000 };
+
+  it("the preview refuses, in words and as a code with the amount", async () => {
+    tag();
+    const body = await (await preview([J1, J2, J3])).json();
+    expect(body.ok).toBe(false);
+    expect(body.reasons.join(" ")).toMatch(/FOLK-BKK-20300512-01 has ฿1,000\.00 of expenses \(1 row\) marked "From company advance", but no advance is recorded for this job/);
+    expect(body.blocks).toHaveLength(1);
+    expect(body.blocks[0]).toMatchObject(BLOCK);
+    expect(body.blocks[0].rows).toEqual([expect.objectContaining({ description: "Temple tickets", amount: 1000 })]);
+  });
+
+  it("creating the document is refused whole (409): no PEAK call, no document, no job locked, no audit", async () => {
+    tag();
+    const res = await create([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("not-payable");
+    expect(body.blocks).toEqual([expect.objectContaining(BLOCK)]);
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(peak.attach).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+    expect(db.pays.filter((p) => p.status === "PAID" || p.peakPaymentRef)).toHaveLength(0);
+    expect(db.payments).toHaveLength(0);
+    expect(audit).not.toHaveBeenCalled();
+    expect(db.audits).toHaveLength(0);
+  });
+
+  it("the other jobs can still go without it", async () => {
+    tag();
+    const res = await create([J1, J2]);
+    expect(res.status).toBe(200);
+    expect(db.docs).toHaveLength(1);
+  });
+
+  it("with the advance on record the document is created as before — the ticket in no line", async () => {
+    tag(); record();
+    const res = await create([J1, J2, J3]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ total: 4169, gross: 4295 });
+    expect((peak.create.mock.calls[0][0].products as Row[]).some((l) => String(l.description).includes("Temple"))).toBe(false);
+  });
+
+  it("a reversed advance is not an advance on record", async () => {
+    tag();
+    record({ reversedAt: new Date("2030-05-13T00:00:00Z") });
+    const res = await create([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).blocks).toEqual([expect.objectContaining(BLOCK)]);
+    expect(peak.create).not.toHaveBeenCalled();
+  });
+
+  it("an advance for another job, or another guide, does not cover this one", async () => {
+    tag();
+    record({ ...J1 }); record({ guideId: "G-OTHER" });
+    expect((await create([J1, J2, J3])).status).toBe(409);
+    expect(peak.create).not.toHaveBeenCalled();
+  });
+
+  it("an advance too small for the tickets, or one that is not for tickets, does not cover them — refused, no PEAK call", async () => {
+    tag(); record({ amountSatang: 40000 });
+    let res = await create([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).blocks).toEqual([expect.objectContaining({ code: "ADVANCE_NOT_RECORDED", amount: 600, excess: 600, issued: 400, rows: [] })]);
+    db.advances = []; record({ allowedCategories: ["meal"] });
+    res = await create([J1, J2, J3]);
+    expect(res.status).toBe(409);
+    expect((await res.json()).blocks[0]).toMatchObject({ amount: 1000, rows: [{ why: "CATEGORY_NOT_ALLOWED" }] });
+    expect(peak.create).not.toHaveBeenCalled();
+    expect(db.docs).toHaveLength(0);
+  });
+
+  it("payer corrected to the guide: the ticket is a reimbursement line and the document is ฿1,000 larger", async () => {
+    j3().expenses = [...j3().expenses, { ...TICKET, paidBy: "guide" }];
+    const res = await create([J1, J2, J3]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ total: 5169, gross: 5295 });
+    expect(vi.mocked(audit).mock.calls.some(([a]) => (a as { action: string }).action === "pay.peak_document_claimed")).toBe(true);
+  });
+
+  it("a document made while the advance was on record is not offered for transfer once that advance is reversed", async () => {
+    tag(); record();
+    await create([J1, J2, J3]);
+    db.advances[0].reversedAt = new Date("2030-05-19T00:00:00Z");
+    const body = await (await ready()).json();
+    expect(body.canTransfer).toBe(false);
+    expect(body.bankNote).toBeNull();
+    expect(body.reasons.join(" ")).toMatch(/FOLK-BKK-20300512-01 has ฿1,000\.00 .* no advance is recorded for this job/);
+  });
+
+  it("…and its payment is refused BEFORE PEAK is asked to record anything: nothing paid, no payment record, no notice", async () => {
+    tag(); record();
+    await create([J1, J2, J3]);
+    db.advances[0].reversedAt = new Date("2030-05-19T00:00:00Z");
+    const audits = vi.mocked(audit).mock.calls.length;
+    const res = await payDoc();
+    expect(res.status).toBe(409);
+    expect((await res.json()).reasons.join(" ")).toMatch(/no advance is recorded for this job/);
+    expect(peak.pay).not.toHaveBeenCalled();
+    expect(peak.attach).not.toHaveBeenCalled();
+    expect(db.docs[0].status).toBe("AWAITING_PAYMENT");
+    expect(db.pays.filter((p) => p.status === "PAID")).toHaveLength(0);
+    expect(db.payments).toHaveLength(0);
+    expect(db.paymentJobs).toHaveLength(0);
+    expect(vi.mocked(audit).mock.calls).toHaveLength(audits); // nothing audited as paid or attempted
+    expect(sendPaymentNotice).not.toHaveBeenCalled();
+  });
+
+  it("with the advance still on record the payment is recorded as before", async () => {
+    tag(); record();
+    await create([J1, J2, J3]);
+    const res = await payDoc();
+    expect(res.status).toBe(200);
+    expect(peak.pay).toHaveBeenCalledTimes(1);
+    expect(db.payments).toHaveLength(1);
+    for (const j of [J1, J2, J3]) expect(payOf(j)).toMatchObject({ status: "PAID" });
   });
 });

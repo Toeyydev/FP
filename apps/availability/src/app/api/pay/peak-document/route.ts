@@ -10,7 +10,7 @@ import { redactBodyForNonAdmin } from "@/lib/certificates/access";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
 import { peakEnabled } from "@/lib/peak-api";
 import {
-  buildGuidePaymentDocument, createCombinedDocument, documentHoldsJobs, documentStatus, PaymentDocumentNotPostable,
+  buildGuidePaymentDocument, createCombinedDocument, documentHoldsJobs, documentStatus, PaymentDocumentNotPostable, blocksOf,
   type CreateDocumentResult, type GuidePaymentDocument,
 } from "@/lib/peak-payment-document";
 import {
@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
   }
 
   const loaded = await loadPaymentContext(guideId, jobs, { alreadyPaid });
-  if (!loaded.ok) return reply(session?.user?.role, { error: "not-payable", reasons: loaded.reasons }, { status: 409 });
+  if (!loaded.ok) return reply(session?.user?.role, { error: "not-payable", reasons: loaded.reasons, blocks: loaded.ctx.blocks }, { status: 409 });
   const { ctx } = loaded;
 
   let doc: GuidePaymentDocument | null = null;
@@ -110,9 +110,9 @@ export async function POST(req: NextRequest) {
   for (let attempt = 0; attempt < 3 && !result; attempt++) {
     const paymentRef = await nextPaymentRef(bangkokToday());
     try {
-      doc = buildGuidePaymentDocument({ guideId, peakContactId: ctx.peakContactId, paymentRef, jobs: ctx.jobs, accounts: ctx.accounts, createdOn: bangkokToday(), certificates: certs });
+      doc = buildGuidePaymentDocument({ guideId, peakContactId: ctx.peakContactId, paymentRef, jobs: ctx.jobs, accounts: ctx.accounts, createdOn: bangkokToday(), certificates: certs, alreadyPaid });
     } catch (e) {
-      if (e instanceof PaymentDocumentNotPostable) return reply(session?.user?.role, { error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories, evidenceGaps: e.evidenceGaps }, { status: 409 });
+      if (e instanceof PaymentDocumentNotPostable) return reply(session?.user?.role, { error: "not-payable", reasons: e.reasons, missingCategories: e.missingCategories, evidenceGaps: e.evidenceGaps, blocks: blocksOf(e) }, { status: 409 });
       throw e;
     }
     try {

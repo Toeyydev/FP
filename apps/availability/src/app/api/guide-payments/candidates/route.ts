@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { advanceGap, advanceGapMessage } from "@/lib/advances/coverage";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { canViewFinance } from "@/lib/roles";
@@ -46,6 +47,8 @@ export async function GET(req: NextRequest) {
       const figures = jobFigures((f.sheet?.expenses as Expense[]) ?? [], f.sheet?.guideFee);
       // Written once, from canonical facts. The service refuses the same cases on record.
       const heldBy = f.payment?.peakPaymentRef ?? null;
+      // Rows counted as paid from a company advance this job has no record of (lib/advances/coverage).
+      const gap = f.sheet ? advanceGap((f.sheet.expenses as Expense[]) ?? [], f.advances) : null;
       const blocked = f.activePaymentNo ? `Paid by ${f.activePaymentNo}`
         : f.paidByPayroll ? "Paid by the guide's monthly payroll"
         : f.payment?.status === "PAID" ? "Marked paid before payments were recorded"
@@ -53,6 +56,7 @@ export async function GET(req: NextRequest) {
         : !f.sheet ? "No job sheet"
         : !f.sheet.ref ? "The job sheet has no Job No."
         : f.sheet.approvalStatus !== "APPROVED" ? "Job sheet not approved"
+        : gap ? `The job ${advanceGapMessage(gap)}`
         : !(figures.payable > 0) ? "Nothing to pay"
         : null;
       rows.push({
@@ -71,6 +75,8 @@ export async function GET(req: NextRequest) {
         paymentStatus: f.activePaymentNo ? "paid" : f.payment?.status === "PAID" ? "legacy-paid" : f.paidByPayroll ? "payroll-paid" : "unpaid",
         paidBy: f.activePaymentNo ?? null,
         eligible: !blocked, blockedReason: blocked,
+        // Machine-readable, and on every job it is true of — paid or not.
+        advanceGap: gap,
       });
     }
   }
