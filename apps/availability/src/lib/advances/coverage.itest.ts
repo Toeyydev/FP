@@ -12,6 +12,13 @@ vi.mock("@/auth", () => authMock);
 const fetchSpy = vi.hoisted(() => vi.fn(async () => { throw new Error("no network in this test"); }));
 vi.stubGlobal("fetch", fetchSpy);
 
+// The job sheet route reaches for these on load; none of them is what is being tested.
+vi.mock("@/lib/push", async (orig) => ({ ...(await orig<typeof import("@/lib/push")>()), sendPushToUser: vi.fn(async () => 0) }));
+vi.mock("@/lib/line", async (orig) => ({ ...(await orig<typeof import("@/lib/line")>()), lineEnabled: false, linePush: vi.fn(async () => true), linePushFlex: vi.fn(async () => true) }));
+vi.mock("@/lib/email", async (orig) => ({ ...(await orig<typeof import("@/lib/email")>()), sendEmail: vi.fn(async () => true) }));
+vi.mock("@/lib/google-drive", async (orig) => ({ ...(await orig<typeof import("@/lib/google-drive")>()), googleDriveEnabled: false }));
+vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof import("@/lib/tour-calendar-sync")>()), removeTourEvents: vi.fn(async () => {}), pushTourToCalendars: vi.fn(async () => {}) }));
+
 import { NextRequest } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -21,6 +28,9 @@ import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
 import { advanceJobKey } from "@/lib/advances/coverage";
 import { GET as CANDIDATES } from "@/app/api/guide-payments/candidates/route";
 import { GET as PAYMENTS } from "@/app/api/payments/route";
+import { GET as JOBSHEET } from "@/app/api/jobsheet/route";
+import { advanceGap, liveJobAdvances } from "@/lib/advances/coverage";
+import type { Expense } from "@/lib/jobsheet";
 
 const G = "G-926";
 const JOB = { jobNo: "FOLK-TEST-20250610-01", date: "2025-06-10", slotIdx: 1 };
@@ -104,8 +114,8 @@ describe("no advance on record", () => {
 describe("the advance is on record", () => {
   it("the same payment is recorded as it always was: ฿970, the ticket in no transfer", async () => {
     await seedJob();
-    await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo });
-    expect([...await liveAdvancesByJob(prisma, { jobs: [KEY] })]).toEqual([[advanceJobKey(KEY), [{ amount: 1000, allowedCategories: ["entrance"] }]]]);
+    const advance = await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo });
+    expect([...await liveAdvancesByJob(prisma, { jobs: [KEY] })]).toEqual([[advanceJobKey(KEY), [{ id: advance.id, amount: 1000, allowedCategories: ["entrance"] }]]]);
 
     const r = await pay(970);
     expect(r.ok).toBe(true);
@@ -149,16 +159,36 @@ describe("an advance is on record, but does not cover the cost", () => {
     await seedAdvance(KEY, 500, { jobNo: JOB.jobNo });
     const before = await footprint();
     const r = await pay(970);
-    expect(r.ok ? [] : r.reasons).toEqual([expect.stringMatching(/has ฿100\.00 more marked "From company advance" than the ฿500\.00 of advances recorded for it/)]);
+    expect(r.ok ? [] : r.reasons).toEqual([expect.stringMatching(/has ฿100\.00 more charged to an advance than that advance issued \(all advances of this job issued ฿500\.00\)/)]);
     expect(await footprint()).toEqual(before);
     const c = await (await CANDIDATES(new NextRequest("http://test.local/api/guide-payments/candidates?period=2025-06"))).json();
     expect(c.rows[0].advanceGap).toMatchObject({ code: "ADVANCE_NOT_RECORDED", amount: 100, excess: 100, issued: 500, rows: [] });
   });
 
-  it("two advances that add up to the tickets cover them", async () => {
+  it("two eligible advances hold an unlinked historical row until the operator chooses one", async () => {
     await seedJob();
     await seedAdvance(KEY, 300, { jobNo: JOB.jobNo });
     await seedAdvance(KEY, 300, { jobNo: JOB.jobNo });
+    const before = await footprint();
+    const r = await pay(970);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? [] : r.reasons).toEqual([expect.stringMatching(/more than one advance could have paid — choose the advance on the job sheet/)]);
+    expect(await footprint()).toEqual(before);
+    const c = await (await CANDIDATES(new NextRequest("http://test.local/api/guide-payments/candidates?period=2025-06"))).json();
+    expect(c.rows[0].advanceGap).toMatchObject({
+      code: "ADVANCE_NOT_RECORDED",
+      amount: 600,
+      rows: [{ rowNo: 1, amount: 600, why: "ADVANCE_LINK_REQUIRED" }],
+    });
+  });
+
+  it("two rows linked to their own advances are covered without pooling their ceilings", async () => {
+    const first = await seedAdvance(KEY, 300, { jobNo: JOB.jobNo });
+    const second = await seedAdvance(KEY, 300, { jobNo: JOB.jobNo });
+    await seedJob([
+      { ...TICKET, description: "Temple ticket A", price: 300, pax: 1, advanceId: first.id },
+      { ...TICKET, description: "Temple ticket B", price: 300, pax: 1, advanceId: second.id },
+    ]);
     expect((await pay(970)).ok).toBe(true);
   });
 
@@ -201,5 +231,30 @@ describe("jobs this rule has nothing to say about", () => {
   it("a job with no Company Advance row is paid exactly as before", async () => {
     await seedJob([{ description: "Water", price: 20, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }]);
     expect((await pay(1010)).ok).toBe(true);
+  });
+});
+
+describe("the job sheet reads a linked row the same way the payment does", () => {
+  const sheetView = async () => (await JOBSHEET(new NextRequest(`http://test.local/api/jobsheet?guideId=${G}&date=${JOB.date}&slotIdx=${JOB.slotIdx}`))).json();
+  const advanceReasons = (d: { peak?: { eligibility?: { reasons?: string[] } } }) => (d.peak?.eligibility?.reasons ?? []).filter((r) => /advance/i.test(r));
+
+  it("a row linked to its live advance raises nothing on the job sheet — in the sync status or in the screen's own check", async () => {
+    const advance = await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo });
+    await seedJob([{ ...TICKET, advanceId: advance.id }]);
+    const d = await sheetView();
+    expect(d.advance.advances.map((a: { id: string }) => a.id)).toEqual([advance.id]);
+    expect(advanceReasons(d)).toEqual([]);
+    // what the page computes from the same response (components/JobSheetEditor)
+    expect(advanceGap(d.sheet.expenses as Expense[], liveJobAdvances(d.advance.advances))).toBeNull();
+    expect((await pay(970)).ok).toBe(true); // and the payment agrees
+  });
+
+  it("a row linked to an advance that was reversed is reported on the job sheet, as the payment reports it", async () => {
+    const advance = await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo, reversedAt: new Date("2025-06-11T00:00:00Z") });
+    await seedJob([{ ...TICKET, advanceId: advance.id }]);
+    const d = await sheetView();
+    expect(advanceReasons(d).join(" ")).toMatch(/฿600\.00/);
+    expect(advanceGap(d.sheet.expenses as Expense[], liveJobAdvances(d.advance.advances))).toMatchObject({ amount: 600 });
+    expect((await pay(970)).ok).toBe(false);
   });
 });

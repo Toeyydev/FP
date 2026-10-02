@@ -1,5 +1,6 @@
 "use client";
 
+import { liveJobAdvances } from "@/lib/advances/coverage";
 import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -298,7 +299,7 @@ export default function JobSheetEditor() {
   // well as listed, so nobody reads a total without seeing that it is provisional.
   const recheck = figuresNeedRecheck(sheet.expenses, money, {}, peak?.rows?.map((r) => r?.mappingStatus),
     // Operators only: the guide's own view shows what the guide reported, not who is held to account for a payer.
-    canEdit && advanceLoaded ? { advances: advance.advances.filter((a) => a.status !== "VOID").map((a) => ({ amount: a.amount, allowedCategories: a.allowedCategories })) } : {});
+    canEdit && advanceLoaded ? { advances: liveJobAdvances(advance.advances) } : {});
   const flagged = (f: "totalTourExpenses" | "reimbursementDue" | "netPayToGuide") => recheck.some((r) => r.field === f);
   const ro = !canEdit; // read-only (guide view)
   // Guides may tick no-shows only AFTER they've checked in AND within 30 min of the
@@ -1318,6 +1319,11 @@ export default function JobSheetEditor() {
                     <div className="js-advance-chosen" style={{ fontSize: 10.5, color: "var(--ink-soft)", marginTop: 2 }}>
                       → {liveAdvances.find((a) => a.id === (advanceChoices[i] || (e as { advanceId?: string }).advanceId))?.advanceNo ?? "an advance"}{advanceChoices[i] ? " (chosen — saved with the sheet)" : ""}
                     </div>
+                  )}
+                  {paid === "GUIDE_ADVANCE" && advancesFor(expenseCategory(e)).length > 1 && (
+                    <button type="button" className="btn sm js-advance-pick" style={{ marginTop: 4 }} onClick={() => setChooser({ index: i, options: advancesFor(expenseCategory(e)) })}>
+                      {(advanceChoices[i] || (e as { advanceId?: string }).advanceId) ? "Change advance…" : "Choose advance…"}
+                    </button>
                   )}
                   {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
                       older app sent without saying who chose it. Picking any payer above confirms it. */}

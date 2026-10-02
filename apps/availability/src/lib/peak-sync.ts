@@ -270,11 +270,16 @@ export function figuresNeedRecheck(
         code: gap.code,
         // The three ways it happens, each said as what it is: no advance at all, an advance
         // that is not for this kind of cost, or more spent than the advances handed over.
-        short: gap.rows.length && gap.rows.every((r) => r.why === "NO_ADVANCE")
-          ? `${gap.rows.length === 1 ? "1 expense is" : `${gap.rows.length} expenses are`} marked "From company advance", but no advance is recorded for this job`
-          : gap.rows.length
-            ? `${gap.rows.length === 1 ? "1 expense is" : `${gap.rows.length} expenses are`} marked "From company advance", but the advance recorded for this job does not cover ${gap.rows.length === 1 ? "it" : "them"}`
-            : `More is marked "From company advance" than the ${thbLike(gap.issued)} of advances recorded for this job`,
+        short: (() => {
+          const n = gap.rows.length;
+          const subject = `${n === 1 ? "1 expense is" : `${n} expenses are`} marked "From company advance"`;
+          const all = (why: string) => n > 0 && gap.rows.every((r) => r.why === why);
+          if (all("NO_ADVANCE")) return `${subject}, but no advance is recorded for this job`;
+          if (all("ADVANCE_LINK_REQUIRED")) return `${subject}, and more than one advance of this job could have paid — choose the advance on ${n === 1 ? "that row" : "those rows"}`;
+          if (all("LINKED_ADVANCE_NOT_LIVE")) return `${subject} and linked to an advance that is no longer active`;
+          if (n) return `${subject}, but no advance recorded for this job covers ${n === 1 ? "it" : "them"}`;
+          return `More is charged to an advance than that advance issued`;
+        })(),
         detail: `This amount is left out of Net Pay as money the company already handed over — and nothing shows that it did. If the guide paid, the guide is owed it. Record the advance that paid for it (Advances, below), or change Paid By on the row${gap.rows.length === 1 ? "" : "s"}. The job cannot be paid until then. · ระบุว่าจ่ายจากเงินทดรองของบริษัท แต่ไม่มีเงินทดรองที่บันทึกไว้รองรับยอดนี้ — กรุณาบันทึกเงินทดรอง หรือแก้ผู้จ่าย ก่อนจ่ายเงินไกด์`,
         amount: gap.amount,
       });

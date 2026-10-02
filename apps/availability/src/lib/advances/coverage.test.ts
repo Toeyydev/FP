@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ADVANCE_NOT_RECORDED, advanceGap, advanceGapMessage, type JobAdvance } from "@/lib/advances/coverage";
+import { ADVANCE_NOT_RECORDED, advanceGap, advanceGapMessage, liveJobAdvances, type JobAdvance } from "@/lib/advances/coverage";
 import { checkPayment, jobFigures, type JobFacts, type PaymentRequest } from "@/lib/payments-v2/rules";
 import { combinedPaymentBlock, paidJobPeakBlock, type CombinedJobState } from "@/lib/combined-payment";
 import { blocksOf, buildGuidePaymentDocument, PaymentDocumentNotPostable, type PaymentAccounts } from "@/lib/peak-payment-document";
@@ -13,11 +13,11 @@ import type { Expense, GuideFee } from "@/lib/jobsheet";
 // The example throughout: a ฿1,000 fee (3% withheld → ฿970) and one ฿600 ticket.
 
 const FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
-const ticket = (over: Partial<Expense> = {}): Expense => ({ description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator", ...over });
+const ticket = (over: Partial<Expense & { advanceId?: string | null }> = {}): Expense & { advanceId?: string | null } => ({ description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator", ...over });
 const water: Expense = { description: "Water", price: 20, pax: 2, expenseType: "meal", paidBy: "guide", paidBySource: "operator" };
 const JOB = { date: "2099-06-10", slotIdx: 1, ref: "FOLK-BKK-20990610-01" };
 // A live advance of the job: ฿1,000 handed over, for tickets (what every advance is for unless it says otherwise).
-const ADVANCE: JobAdvance = { amount: 1000, allowedCategories: ["entrance"] };
+const ADVANCE: JobAdvance = { id: "adv-ticket", amount: 1000, allowedCategories: ["entrance"] };
 const NONE: JobAdvance[] = [];
 
 describe("the rule: which rows are held, and when", () => {
@@ -42,13 +42,44 @@ describe("the rule: which rows are held, and when", () => {
   it("the rows cannot come to more than the advances handed over: ฿500 issued, ฿600 of tickets leaves ฿100 unexplained", () => {
     const gap = advanceGap([ticket()], [{ amount: 500, allowedCategories: ["entrance"] }]);
     expect(gap).toEqual({ code: "ADVANCE_NOT_RECORDED", amount: 100, excess: 100, issued: 500, rows: [] });
-    expect(advanceGapMessage(gap!)).toMatch(/has ฿100\.00 more marked "From company advance" than the ฿500\.00 of advances recorded for it/);
+    expect(advanceGapMessage(gap!)).toMatch(/has ฿100\.00 more charged to an advance than that advance issued \(all advances of this job issued ฿500\.00\)/);
     expect(advanceGap([ticket()], [{ amount: 600, allowedCategories: ["entrance"] }])).toBeNull(); // exactly spent is covered
-    expect(advanceGap([ticket()], [{ amount: 300, allowedCategories: ["entrance"] }, { amount: 300, allowedCategories: ["entrance"] }])).toBeNull(); // two advances add up
+    const needsChoice = advanceGap([ticket()], [{ id: "a", amount: 300, allowedCategories: ["entrance"] }, { id: "b", amount: 300, allowedCategories: ["entrance"] }]);
+    expect(needsChoice).toMatchObject({ amount: 600, rows: [{ why: "ADVANCE_LINK_REQUIRED" }] });
   });
   it("both at once are both said, and add up: an uncovered meal and tickets over the advance", () => {
     const gap = advanceGap([ticket({ price: 400, pax: 2 }), ticket({ description: "Lunch", price: 150, pax: 2, expenseType: "meal" })], [{ amount: 500, allowedCategories: ["entrance"] }]);
     expect(gap).toMatchObject({ amount: 600, excess: 300, issued: 500, rows: [{ description: "Lunch", amount: 300, why: "CATEGORY_NOT_ALLOWED" }] });
+  });
+  it("checks each linked advance separately instead of pooling another category's cash", () => {
+    const advances = [
+      { id: "tickets", amount: 1000, allowedCategories: ["entrance"] },
+      { id: "meals", amount: 1000, allowedCategories: ["meal"] },
+    ];
+    const gap = advanceGap([ticket({ price: 1000, pax: 2, advanceId: "tickets" })], advances);
+    expect(gap).toMatchObject({ amount: 1000, excess: 1000, issued: 2000, rows: [] });
+    expect(advanceGap([
+      ticket({ price: 500, pax: 2, advanceId: "tickets" }),
+      ticket({ description: "Lunch", price: 500, pax: 2, expenseType: "meal", advanceId: "meals" }),
+    ], advances)).toBeNull();
+  });
+  it("holds a row linked to a reversed or missing advance", () => {
+    expect(advanceGap([ticket({ advanceId: "old-advance" })], [ADVANCE])).toMatchObject({ amount: 600, rows: [{ why: "LINKED_ADVANCE_NOT_LIVE" }] });
+  });
+  it("allows an unlinked historical row only when exactly one advance is eligible", () => {
+    expect(advanceGap([ticket()], [ADVANCE])).toBeNull();
+    expect(advanceGap([ticket()], [ADVANCE, { id: "meal", amount: 1000, allowedCategories: ["meal"] }])).toBeNull();
+    expect(advanceGap([ticket()], [ADVANCE, { id: "tickets-2", amount: 1000, allowedCategories: ["entrance"] }])).toMatchObject({ rows: [{ why: "ADVANCE_LINK_REQUIRED" }] });
+  });
+  it("the job sheet's advances keep their id, so a linked row finds the advance it points at", () => {
+    // As the job view sends them (lib/advances/job-view): the screen and GET /api/jobsheet pass these on.
+    const view = [{ id: "adv-ticket", amount: 1000, allowedCategories: ["entrance"], status: "OPEN" }, { id: "adv-reversed", amount: 500, allowedCategories: ["entrance"], status: "VOID" }];
+    expect(liveJobAdvances(view)).toEqual([{ id: "adv-ticket", amount: 1000, allowedCategories: ["entrance"] }]);
+    expect(advanceGap([ticket({ advanceId: "adv-ticket" })], liveJobAdvances(view))).toBeNull();
+    expect(advanceGap([ticket({ advanceId: "adv-reversed" })], liveJobAdvances(view))).toMatchObject({ rows: [{ why: "LINKED_ADVANCE_NOT_LIVE" }] });
+    // Passed on without the id, the same correctly linked row read as linked to nothing.
+    expect(advanceGap([ticket({ advanceId: "adv-ticket" })], [{ amount: 1000, allowedCategories: ["entrance"] }])).toMatchObject({ rows: [{ why: "LINKED_ADVANCE_NOT_LIVE" }] });
+    expect(liveJobAdvances(null)).toEqual([]);
   });
   it("a row with no category is covered by no advance", () => {
     expect(advanceGap([ticket({ expenseType: undefined, paidBySource: "operator" })], [ADVANCE])).toMatchObject({ amount: 600, rows: [{ category: null, why: "CATEGORY_NOT_ALLOWED" }] });
@@ -193,6 +224,15 @@ describe("the job sheet", () => {
     expect(hit).toHaveLength(1);
     expect(hit[0]).toMatchObject({ field: "netPayToGuide", amount: 600 });
     expect(hit[0].short).toMatch(/1 expense is marked "From company advance", but no advance is recorded for this job/);
+  });
+  it("says which of the situations it is — no advance, one to choose, a dead link, the wrong kind, or over the advance", () => {
+    const short = (rows: Expense[], advances: JobAdvance[]) => figuresNeedRecheck(rows, totals(rows), {}, undefined, { advances }).find((x) => x.code === "ADVANCE_NOT_RECORDED")?.short ?? "";
+    const two = [{ id: "a", amount: 1000, allowedCategories: ["entrance"] }, { id: "b", amount: 1000, allowedCategories: ["entrance"] }];
+    expect(short([ticket()], NONE)).toMatch(/but no advance is recorded for this job/);
+    expect(short([ticket()], two)).toMatch(/more than one advance of this job could have paid — choose the advance on that row/);
+    expect(short([ticket({ advanceId: "gone" })], [ADVANCE])).toMatch(/linked to an advance that is no longer active/);
+    expect(short([ticket({ expenseType: "meal" })], [ADVANCE])).toMatch(/but no advance recorded for this job covers it/);
+    expect(short([ticket({ advanceId: "adv-ticket", price: 600, pax: 2 })], [ADVANCE])).toMatch(/More is charged to an advance than that advance issued/);
   });
   it("says nothing when the advance is on record, or when the screen has not been told either way", () => {
     expect(figuresNeedRecheck([ticket()], totals([ticket()]), {}, undefined, { advances: [ADVANCE] }).some((x) => x.code)).toBe(false);
