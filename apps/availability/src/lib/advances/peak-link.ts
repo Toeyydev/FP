@@ -60,6 +60,14 @@ export type DocumentLookup = (documentNo: string, type: PeakDocumentType) => Pro
 >;
 
 const fail = (status: number, ...reasons: string[]): Fail => ({ ok: false, status, reasons });
+/** The refusal the screen answers by showing the check again: what was acknowledged is not what the check now says. */
+export const WARNINGS_NOT_ACKNOWLEDGED = "warnings-not-acknowledged";
+const unacknowledged = (...reasons: string[]): Fail => Object.assign(fail(409, ...reasons), { code: WARNINGS_NOT_ACKNOWLEDGED });
+/** Acknowledged means: exactly these warnings, as a person was shown them — no more, no fewer, none different. */
+function acknowledges(shown: string[] | undefined, now: string[]): boolean {
+  const a = [...new Set(shown ?? [])].sort(), b = [...new Set(now)].sort();
+  return a.length === b.length && a.every((w, i) => w === b[i]);
+}
 export type LinkResult =
   | { ok: true; replayed: boolean; documentNo: string; kind: LinkKind; sourceId: string; verified: boolean; warnings: string[] }
   | Fail;
@@ -185,7 +193,8 @@ export async function peakLinksFor(db: Pick<PrismaClient, "advancePeakDocumentLi
 
 export type LinkRequest = {
   documentNo: string; documentType: PeakDocumentType; note: string;
-  acknowledgeWarnings?: boolean; requestKey: string; actor: Actor;
+  /** The warnings the person was shown by the check and confirmed, word for word. */
+  acknowledgedWarnings?: string[]; requestKey: string; actor: Actor;
 } & (
   | { kind: "ADVANCE"; advanceId: string }
   | { kind: "RETURN"; receiptId: string; bankAccount?: string | null; bankRef?: string | null; allocations: AllocationRequest[] }
@@ -206,7 +215,9 @@ export async function previewLink(prisma: PrismaClient, req: LinkRequest, lookup
 > {
   const blocked = checkLinkMode();
   if (blocked) return blocked;
-  const prepared = await prepare(prisma, req, lookup);
+  // A preview REPORTS warnings so a person can read them and decide; it never accepts them.
+  // Only the write path can, and only for the very warnings a person was shown.
+  const prepared = await prepare(prisma, req, lookup, "report");
   if ("ok" in prepared && prepared.ok === false) return prepared;
   const { ctx, amountSatang, describes } = prepared as Prepared;
   return { ok: true, documentNo: ctx.documentNo, amount: fromSatang(amountSatang), verified: ctx.verified, warnings: ctx.warnings, describes };
@@ -323,7 +334,7 @@ async function describeEvent(prisma: PrismaClient, req: LinkRequest): Promise<Ch
 }
 
 /** Everything that can be decided before the transaction opens. */
-async function prepare(prisma: PrismaClient, req: LinkRequest, lookup?: DocumentLookup): Promise<Prepared | Fail> {
+async function prepare(prisma: PrismaClient, req: LinkRequest, lookup?: DocumentLookup, onWarning: "refuse" | "report" = "refuse"): Promise<Prepared | Fail> {
   const documentNo = normalizeDocumentNo(req.documentNo);
   if (!documentNo) return fail(400, "Enter the PEAK document number exactly as PEAK shows it");
   if ((req.note ?? "").trim().length < MIN_REASON) return fail(400, "Say why this PEAK document is the right one — the auditor reads this, not the code");
@@ -337,13 +348,19 @@ async function prepare(prisma: PrismaClient, req: LinkRequest, lookup?: Document
   if (clash.length) return fail(409, `${documentNo} is already recorded against ${clash.map(describeOwner).join("; ")} — one PEAK document cannot also carry this movement`);
 
   const guide = await prisma.user.findFirst({ where: { guideId: c.guideId }, select: { peakContactId: true } });
-  const ctx = await verifyDocument(documentNo, req, c, guide?.peakContactId ?? null, lookup);
+  const ctx = await verifyDocument(documentNo, req, c, guide?.peakContactId ?? null, lookup, onWarning);
   if ("ok" in ctx && ctx.ok === false) return ctx;
   return { ctx: ctx as Ctx, amountSatang: c.amountSatang, describes: c.describes, sourceId: c.event.sourceId };
 }
 
-async function verifyDocument(documentNo: string, req: LinkRequest, c: Check, guideContactId: string | null, lookup?: DocumentLookup): Promise<Ctx | Fail> {
+async function verifyDocument(documentNo: string, req: LinkRequest, c: Check, guideContactId: string | null, lookup?: DocumentLookup, onWarning: "refuse" | "report" = "refuse"): Promise<Ctx | Fail> {
   const warnings: string[] = [];
+  // A preview only reports warnings (never verified) — otherwise the screen could never show
+  // what there is to acknowledge. A write goes through only if the warnings found NOW are
+  // exactly the ones the person confirmed: a new, missing or different warning means they
+  // have not seen this result, so it is refused and the screen shows the check again.
+  const accepted = (now: string[]) => onWarning === "report" || acknowledges(req.acknowledgedWarnings, now);
+  const changed = (req.acknowledgedWarnings ?? []).length ? ["This is not the result you confirmed — the check has changed. Read it again before recording"] : [];
   if (req.documentType === "EXPENSE" && req.kind !== "EXPENSE") {
     return fail(409, req.kind === "ADVANCE"
       ? "An advance issue is money moved onto the advance asset — it is never an expense document"
@@ -357,7 +374,7 @@ async function verifyDocument(documentNo: string, req: LinkRequest, c: Check, gu
     // Nothing to check against. Allowed, but never silently: the link records that
     // its figures were not confirmed, and the person has to acknowledge that.
     warnings.push("FolkOPS could not reach PEAK, so this document was not checked — the number was taken as given");
-    if (!req.acknowledgeWarnings) return fail(409, ...warnings, "Confirm that you have checked this document in PEAK yourself");
+    if (!accepted(warnings)) return unacknowledged(...changed, ...warnings, "Confirm that you have checked this document in PEAK yourself");
     return { documentNo, document: null, verified: false, warnings };
   }
   const found = await read(documentNo, req.documentType);
@@ -372,8 +389,8 @@ async function verifyDocument(documentNo: string, req: LinkRequest, c: Check, gu
   });
   if (reasons.length) return fail(409, ...reasons);
   warnings.push(...w);
-  if (warnings.length && !req.acknowledgeWarnings) {
-    return fail(409, ...warnings, "Confirm that this is the right document before it is linked");
+  if (!accepted(warnings)) {
+    return unacknowledged(...changed, ...warnings, warnings.length ? "Confirm that this is the right document before it is linked" : "The check now raises no warning — record it again from the new result");
   }
   return { documentNo, document: found.document, verified: warnings.length === 0, warnings };
 }

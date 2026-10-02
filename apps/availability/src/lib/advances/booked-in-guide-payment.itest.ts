@@ -16,7 +16,7 @@ import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { financialIdentity } from "@/lib/protected-expense-fields";
 import { markBookedInGuidePayment } from "./booked-in-guide-payment";
-import { linkExistingPeakDocument } from "./peak-link";
+import { linkAsScreen as linkExistingPeakDocument } from "@/test/peak-link-screen";
 import { syncAdvanceBatch } from "./peak-sync";
 import { reverseEntry } from "./service";
 import { POST as BOOKED } from "@/app/api/advances/entries/[id]/booked-in-guide-payment/route";

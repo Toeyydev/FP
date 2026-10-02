@@ -19,7 +19,9 @@ const body = z.object({
   documentNo: z.string().min(2).max(60),
   documentType: z.enum(["DAILY_JOURNAL", "EXPENSE"]).default("DAILY_JOURNAL"),
   note: z.string().min(1).max(500),
-  acknowledgeWarnings: z.boolean().optional(),
+  // The warnings the check showed, word for word. Recording is refused unless they are
+  // exactly what the check finds again (lib/advances/peak-link).
+  acknowledgedWarnings: z.array(z.string().max(600)).max(20).optional(),
   requestKey: z.string().min(8).max(120),
   preview: z.boolean().optional(),
   advanceId: z.string().min(1).optional(),
@@ -48,7 +50,7 @@ export async function POST(req: NextRequest) {
   const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };
 
   let request: LinkRequest;
-  const shared = { documentNo: b.documentNo, documentType: b.documentType, note: b.note, acknowledgeWarnings: b.acknowledgeWarnings, requestKey: b.requestKey, actor };
+  const shared = { documentNo: b.documentNo, documentType: b.documentType, note: b.note, acknowledgedWarnings: b.acknowledgedWarnings, requestKey: b.requestKey, actor };
   if (b.kind === "ADVANCE") {
     if (!b.advanceId) return NextResponse.json({ error: "bad-body", reasons: ["Which advance is this document for?"] }, { status: 400 });
     request = { ...shared, kind: "ADVANCE", advanceId: b.advanceId };
@@ -77,11 +79,11 @@ export async function POST(req: NextRequest) {
   // screen can show what will happen — not so the screen can decide whether it may.
   if (b.preview) {
     const result = await previewLink(prisma, request);
-    if (!result.ok) return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
+    if (!result.ok) return NextResponse.json({ error: "not-allowed", code: (result as { code?: string }).code, reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
     return NextResponse.json(result);
   }
 
   const result = await linkExistingPeakDocument(prisma, request);
-  if (!result.ok) return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
+  if (!result.ok) return NextResponse.json({ error: "not-allowed", code: (result as { code?: string }).code, reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
   return NextResponse.json(result);
 }
