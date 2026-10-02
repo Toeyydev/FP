@@ -151,7 +151,9 @@ export async function accountJournal(db: PrismaClient): Promise<AccountJournal> 
     if (r.status !== "VERIFIED") unconfirmed.add(`RETURN:${r.id}`);
     entries.push({ id: `RETURN:${r.id}`, kind: "RETURN", reference: r.receiptNo, guideId: r.guideId, jobNo: jobs.join(", ") || null, date: r.receivedDate, amount: baht(r.amountSatang), lines, balanced: balancedAt(lines, r.amountSatang), ...(await standing("RETURN", r.id)) });
   }
-  entries.sort((x, y) => x.date.localeCompare(y.date) || x.reference.localeCompare(y.reference));
+  // By day, and within a day in the order money moves: handed over, spent, returned.
+  const step = { ADVANCE: 0, EXPENSE: 1, RETURN: 2 } as const;
+  entries.sort((x, y) => x.date.localeCompare(y.date) || step[x.kind] - step[y.kind] || x.reference.localeCompare(y.reference));
 
   const byState: AccountJournal["totals"]["byState"] = {};
   let net = 0;

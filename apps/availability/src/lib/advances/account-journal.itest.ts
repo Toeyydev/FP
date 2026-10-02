@@ -111,6 +111,15 @@ describe("the double entry of each movement", () => {
     expect(j.totals.advanceAccountNet).toBe(0);
   });
 
+  it("on one day the entries read in the order the money moved: handed over, spent, returned", async () => {
+    const { sheet, advance } = await seedJob([{ description: "Temple ticket", price: 250, pax: 2, expenseType: "entrance" }]);
+    await settle(advance.id, sheet.id);
+    const receiptId = await verifiedReturn(500, advance.id);
+    await prisma.guideAdvance.update({ where: { id: advance.id }, data: { advanceDate: DATE } });
+    await prisma.guideAdvanceReceipt.update({ where: { id: receiptId }, data: { receivedDate: DATE } });
+    expect((await accountJournal(prisma)).entries.map((e) => [e.date, e.kind])).toEqual([[DATE, "ADVANCE"], [DATE, "EXPENSE"], [DATE, "RETURN"]]);
+  });
+
   it("an advance not yet used is money the guide still holds, by the books", async () => {
     await seedJob([{ description: "Temple ticket", price: 250, pax: 2, expenseType: "entrance" }]);
     expect((await accountJournal(prisma)).totals.advanceAccountNet).toBe(1000);
