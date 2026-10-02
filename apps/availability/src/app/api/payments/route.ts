@@ -14,6 +14,8 @@ import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { peakJobStatus } from "@/lib/peak-job-status";
 import { paymentDocumentLocksInMonth } from "@/lib/peak-payment-server";
 import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, type CombinedBlock } from "@/lib/combined-payment";
+import { advanceGap, advanceGapMessage, advanceJobKey, type AdvanceGap } from "@/lib/advances/coverage";
+import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
 import { recordExpBlockers } from "@/lib/record-exp";
 import { documentStatus } from "@/lib/peak-payment-document";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
@@ -71,13 +73,19 @@ export async function GET(req: NextRequest) {
       })
     : [];
   const docOf = new Map(paymentDocs.map((d) => [d.paymentRef, d]));
+  // The live company advances of each job. A row counted as paid from an advance on a
+  // job without one is reported on the job (advanceGap) and holds its payment (lib/advances/coverage).
+  const advanced = await liveAdvancesByJob(prisma, { from: `${period}-01`, to: `${period}-31` });
+  const gapOf = (k: string, s: (typeof sheets)[number] | undefined) =>
+    s ? advanceGap((s.expenses as unknown as Expense[]) ?? [], advanced.get(advanceJobKey({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx }))) : null;
   // Whether the job can go into "Pay N jobs together · one ref" — the same rule the
   // preview and the post refuse with, so the count on this page is the count the
   // server will accept. A job whose sheet already posted its own PEAK document stays
   // listed, but is not offered.
   const combinedOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, date: string) => {
     const tp = tourPayOf.get(k);
-    const state = { sheet: s ?? null, payment: tp ? { ...tp, document: tp.peakPaymentRef ? docOf.get(tp.peakPaymentRef) ?? null : null } : null, coveredByPayroll: covered, period: date.slice(0, 7) };
+    const gap = gapOf(k, s);
+    const state = { sheet: s ?? null, payment: tp ? { ...tp, document: tp.peakPaymentRef ? docOf.get(tp.peakPaymentRef) ?? null : null } : null, coveredByPayroll: covered, period: date.slice(0, 7), advanceGap: gap };
     const combinedBlock: CombinedBlock | null = combinedPaymentBlock(state);
     // "Put paid jobs in PEAK": paid on their own record, with no PEAK document yet — the
     // rule the preview and the create refuse with (lib/combined-payment paidJobPeakBlock).
@@ -94,9 +102,12 @@ export async function GET(req: NextRequest) {
       : (tp?.peakPaymentRef ?? "") ? `In combined PEAK document ${docOf.get(tp!.peakPaymentRef!)?.peakDocumentNo ?? tp!.peakPaymentRef} — record its payment there`
       : !s ? "No job sheet"
       : !isApproved(s.approvalStatus) ? "Job sheet not approved"
+      : gap ? `The job ${advanceGapMessage(gap)}`
       : !(amount > 0) ? "Nothing to pay"
       : null;
-    return { combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp, canPutInPeak, payment, payBlock };
+    // The machine-readable reason, on every job it is true of — paid or not, so a job
+    // already settled at the smaller figure is still visible as one to look at.
+    return { advanceGap: gap, combinable: !combinedBlock, combinedBlock, sheetPeakDocumentNo: (s?.peakDocumentNo ?? "").trim() || null, canRecordExp, canPutInPeak, payment, payBlock };
   };
   // Whether FolkOPS holds a PEAK document for the job (lib/peak-job-status).
   const peakStatusOf = (k: string, s: (typeof sheets)[number] | undefined, covered: boolean, gid: string, amount: number) => {
@@ -119,7 +130,7 @@ export async function GET(req: NextRequest) {
     coveredByPayrollRun(statusOf(gid), tourDate, recordCreatedAt);
 
   type PaymentRef = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; slipUrl: string | null; noSlipReason: string | null };
-  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; canPutInPeak: boolean; payment: PaymentRef | null; payBlock: string | null; peakStatus: ReturnType<typeof peakJobStatus> };
+  type Job = { date: string; slotIdx: number; tour: string; ref: string | null; amount: number; paid: boolean; payStatus: string; peakRef: string | null; paidAt: Date | null; eslipUrl: string | null; slips: Slip[] | null; peakPaymentRef: string | null; fee: number; expenses: number; combinable: boolean; combinedBlock: CombinedBlock | null; sheetPeakDocumentNo: string | null; canRecordExp: boolean; canPutInPeak: boolean; payment: PaymentRef | null; payBlock: string | null; advanceGap: AdvanceGap | null; peakStatus: ReturnType<typeof peakJobStatus> };
   // Every tour the guide was assigned counts — using its saved job sheet if there
   // is one, otherwise the standard guide fee (no sheet = base pay, no expenses).
   const byGuide: Record<string, { guideId: string; guide: string; tours: number; netFee: number; expenses: number; payout: number; jobs: Job[] }> = {};

@@ -13,6 +13,7 @@
 // Pure: no database, no network. lib/payments-v2/service loads the facts and writes.
 import { computeTotals, guideFeeOrStandard, isApproved, reviewRewardTotal, type Expense } from "@/lib/jobsheet";
 import { guidePayoutTotal, tourCostBreakdown } from "@/lib/peak-sync";
+import { advanceBlock, advanceGap, advanceGapReason, type AdvanceBlock, type JobAdvance } from "@/lib/advances/coverage";
 
 export const ADJUSTMENT_TYPES = ["ADVANCE_SETTLEMENT", "PREVIOUS_OVERPAYMENT", "PREVIOUS_UNDERPAYMENT", "MANUAL_CORRECTION", "OTHER"] as const;
 export type AdjustmentType = (typeof ADJUSTMENT_TYPES)[number];
@@ -121,7 +122,12 @@ export type JobFacts = {
   paidByPayroll: boolean;
   /** The combined PEAK document holding the job, when it is locked to one. */
   document: { paymentRef: string; peakDocumentNo: string | null; status: string } | null;
+  /** The job's live company advances (lib/advances/coverage). Not loaded reads as none. */
+  advances?: JobAdvance[];
 };
+
+/** A refusal a screen or report can act on without reading the sentence. */
+export type PaymentBlock = AdvanceBlock;
 
 export type Reconciliation = {
   jobTotal: number;
@@ -140,6 +146,8 @@ export type ResolvedSupplement = Omit<SupplementFacts, "voided" | "activePayment
 
 export type PaymentCheck = {
   reasons: string[];
+  /** The refusals above that have a machine-readable form. Every one is also in `reasons`. */
+  blocks: PaymentBlock[];
   reconciliation: Reconciliation;
   jobs: ResolvedJob[];
   supplements: ResolvedSupplement[];
@@ -271,6 +279,26 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     }
   }
 
+  // A row counted as paid from a company advance, on a job with no advance on record, is
+  // out of the transfer with nothing to show the company paid it. Paying the job now would
+  // settle it at the smaller figure and the amount would be gone. The transfer waits until
+  // the advance is recorded or the payer is corrected (lib/advances/coverage).
+  //
+  // Not when a PEAK document's payment is being recorded (PEAK_DOCUMENT): by then PEAK has
+  // confirmed the payment, and refusing to record a transfer that happened would leave it
+  // in PEAK and nowhere here. That path is held earlier, before the transfer is offered and
+  // before PEAK is touched (lib/peak-payment-server paymentBlockers).
+  const blocks: PaymentBlock[] = [];
+  for (const f of facts) {
+    if (req.source === "PEAK_DOCUMENT") break;
+    if (!f.sheet || !req.jobs.some((j) => j.date === f.date && j.slotIdx === f.slotIdx)) continue;
+    const gap = advanceGap((f.sheet.expenses as Expense[]) ?? [], f.advances);
+    if (!gap) continue;
+    const where = f.sheet.ref || `${f.date} slot ${f.slotIdx + 1}`;
+    reasons.push(advanceGapReason(where, gap));
+    blocks.push(advanceBlock({ jobNo: f.sheet.ref, date: f.date, slotIdx: f.slotIdx }, gap));
+  }
+
   // Evidence.
   if (!req.hasSlip && tooShort(req.noSlipReason)) reasons.push("Attach the bank slip, or give the reason there is none");
   if (ctx.slipUsedBy) reasons.push(`This slip is already the evidence for ${ctx.slipUsedBy}`);
@@ -278,5 +306,5 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
   if (bankRef.length > 120) reasons.push("The bank reference is too long");
   if (bankRef && ctx.bankRefUsedBy) reasons.push(`Bank reference ${bankRef} is already recorded on ${ctx.bankRefUsedBy}`);
 
-  return { reasons, reconciliation, jobs: resolved, supplements, accountingPeriod: periods[0] ?? null, periods };
+  return { reasons, blocks, reconciliation, jobs: resolved, supplements, accountingPeriod: periods[0] ?? null, periods };
 }

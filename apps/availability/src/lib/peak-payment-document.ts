@@ -15,6 +15,7 @@
 // This file is pure: no database, no network. The routes supply the jobs and the
 // saved account chart, and the side effects arrive through CreateDocumentDeps and
 // PayDocumentDeps — which is what lets the order of operations be tested without either.
+import { advanceBlock, advanceGap, advanceGapReason, type AdvanceBlock, type AdvanceGap, type JobAdvance } from "@/lib/advances/coverage";
 import { paymentPayer } from "@/lib/payer-rules";
 import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
@@ -43,6 +44,8 @@ export type PaymentJob = {
   expenses: Expense[];
   guideFee: GuideFee;
   origin?: string | null;
+  /** The job's live company advances (lib/advances/coverage). Not loaded reads as none. */
+  advances?: JobAdvance[];
 };
 
 export type PaymentAccounts = {
@@ -116,10 +119,17 @@ export class PaymentDocumentNotPostable extends Error {
     readonly missingCategories: MissingCategoryRow[] = [],
     /** Reimbursements with no receipt — listed whether or not they are what refused it. */
     readonly evidenceGaps: MissingCategoryRow[] = [],
+    /** Jobs with rows counted as paid from a company advance that is not on record (lib/advances/coverage). */
+    readonly advanceGaps: { jobRef: string; date: string; slotIdx: number; gap: AdvanceGap }[] = [],
   ) {
     super(reasons.join("; "));
     this.name = "PaymentDocumentNotPostable";
   }
+}
+
+/** The machine-readable form of a refusal's advance gaps — what the routes return as `blocks`. */
+export function blocksOf(e: PaymentDocumentNotPostable): AdvanceBlock[] {
+  return e.advanceGaps.map((g) => advanceBlock({ jobNo: g.jobRef, date: g.date, slotIdx: g.slotIdx }, g.gap));
 }
 
 export function paymentRefFor(paymentDate: string, seq: number): string {
@@ -147,6 +157,13 @@ export function buildGuidePaymentDocument(input: {
    * caller that loads none leaves every such row unproven rather than assumed good.
    */
   certificates?: Readonly<Record<string, string>>;
+  /**
+   * These jobs were already paid, and the document only records that transfer afterwards
+   * ("Put paid jobs in PEAK"). The money has moved at the figure it moved at, so a row with
+   * no advance behind it does not refuse the record of it — it stays a warning on Payments.
+   * Never set for a document that is about to be paid.
+   */
+  alreadyPaid?: boolean;
 }): GuidePaymentDocument {
   const { guideId, peakContactId, paymentRef, accounts, vatType } = input;
   const reasons = new Set<string>();
@@ -180,6 +197,7 @@ export function buildGuidePaymentDocument(input: {
   // below has to know that, or it would report the shortfall as company money leaking
   // in — the wrong cause, on a document that is already being refused for the right one.
   const heldForEvidence = new Map<string, number>();
+  const advanceGaps: { jobRef: string; date: string; slotIdx: number; gap: AdvanceGap }[] = [];
   const outJobs: GuidePaymentDocument["jobs"] = [];
   let expected = 0;
 
@@ -191,6 +209,14 @@ export function buildGuidePaymentDocument(input: {
     if (!(j.ref ?? "").trim()) reasons.add(`${where} has no job sheet number — every PEAK line must name its job`);
     const ref = (j.ref ?? "").trim();
     const expenses = j.expenses ?? [];
+    // Rows left out of this document as "paid from a company advance" need an advance on
+    // record to be left out FOR. Without one the document would book — and the transfer
+    // would pay — a figure with that amount missing and nothing to say where it went.
+    const gap = input.alreadyPaid ? null : advanceGap(expenses, j.advances);
+    if (gap) {
+      advanceGaps.push({ jobRef: where, date: j.date, slotIdx: j.slotIdx, gap });
+      reasons.add(advanceGapReason(where, gap));
+    }
     const groups = new Map<string, { kind: PaymentLineKind; category: string | null; code: string; label: string; amount: number }>();
     const push = (kind: PaymentLineKind, category: string | null, code: string, price: number, lineWht: number, description: string) => {
       lines.push({ description, quantity: 1, price, accountCode: code, vatType, withHoldingTaxAmount: lineWht });
@@ -353,7 +379,7 @@ export function buildGuidePaymentDocument(input: {
     }
   }
 
-  if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories, evidenceGaps);
+  if (reasons.size) throw new PaymentDocumentNotPostable([...reasons], missingCategories, evidenceGaps, advanceGaps);
 
   const issuedDate = compact(latest);
   // Due the day it is created, never before it is issued. Due on the tour date, a

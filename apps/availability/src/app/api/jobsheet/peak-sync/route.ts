@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
+import { advanceBlock, advanceJobKey } from "@/lib/advances/coverage";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -70,7 +72,9 @@ export async function POST(req: NextRequest) {
 
   // One gate, shared with the screen that shows the button — so "Sync" is never
   // offered for a sheet this would refuse, and the refusal names what to go fix.
+  const advanced = await liveAdvancesByJob(prisma, { jobs: [{ guideId, date, slotIdx }] });
   const eligibility = peakSyncEligibility({
+    advances: advanced.get(advanceJobKey({ guideId, date, slotIdx })) ?? [],
     expenses, guideFee, approved: isApproved(sheet.approvalStatus),
     peakContactId: guide?.peakContactId, accountingDate: dates.accountingDate,
     origin: sheet.origin, accounts, jobRef: sheet.ref,
@@ -82,7 +86,8 @@ export async function POST(req: NextRequest) {
     },
   });
   if (!eligibility.canSync) {
-    return NextResponse.json({ error: "not-eligible", status: eligibility.status, reasons: eligibility.reasons }, { status: 409 });
+    const blocks = eligibility.advanceGap ? [advanceBlock({ jobNo: sheet.ref, date, slotIdx }, eligibility.advanceGap)] : [];
+    return NextResponse.json({ error: "not-eligible", status: eligibility.status, reasons: eligibility.reasons, blocks }, { status: 409 });
   }
 
   // A sheet that was posted and has CHANGED since is a human decision, not an

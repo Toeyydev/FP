@@ -69,7 +69,8 @@ const ACCOUNTS: PaymentAccounts = {
   reviewReward: { code: "510110" },
   categories: { entrance: { code: "510104" }, transport: { code: "510104" }, meal: { code: "510104" }, other: { code: "510104" } },
 };
-const JOB = { date: "2099-03-04", slotIdx: 0, ref: "FOLK-BKK-20990304-01", expenses: ROWS, guideFee: FEE };
+// The ฿2,000 advance of this example was issued and is on record (lib/advances/coverage).
+const JOB = { date: "2099-03-04", slotIdx: 0, ref: "FOLK-BKK-20990304-01", expenses: ROWS, guideFee: FEE, advances: [{ amount: 5000, allowedCategories: ["entrance", "meal", "transport"] }] };
 const build = (over: Partial<Parameters<typeof buildGuidePaymentDocument>[0]> = {}) =>
   buildGuidePaymentDocument({
     guideId: "G-901", peakContactId: "contact-1", paymentRef: "FOLK-PAY-209903-01",

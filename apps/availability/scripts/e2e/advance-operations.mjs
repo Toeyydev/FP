@@ -72,6 +72,8 @@ function browserPath() {
 
 // ── data (invented) ──────────────────────────────────────────────────────────
 const DATE = "2099-10-10";
+// Today in Bangkok: Payments lists the current month, up to today.
+const GAP_DATE = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 const AUTH_SECRET = process.env.AUTH_SECRET || "e2e-only-not-a-real-secret-0123456789";
 const DRIVE_LOG = join(appDir, ".e2e-drive.log");
 writeFileSync(DRIVE_LOG, "");
@@ -113,7 +115,12 @@ async function seed() {
   // Another job's advance (for an excess) and another job's pending return (must not show on job 0).
   const c = await prisma.guideAdvance.create({ data: { guideId: "G-993", date: DATE, slotIdx: 1, amount: 1000, paidAt: new Date(), method: "bank", txRef: "TX-E2E-C", advanceNo: "FOLK-ADV-209910-901", advanceDate: "2026-09-30", amountSatang: 100000, accountingPeriod: "2026-09", jobNo: j1.ref, allowedCategories: ["entrance"] } });
   await prisma.guideAdvanceReceipt.create({ data: { receiptNo: "FOLK-ADR-209910-902", guideId: "G-993", receivedDate: "2026-09-30", amountSatang: 5000, status: "CLAIMED", method: "bank", jobSheetId: j1.id } });
-  return { admin, j0, j1, c };
+  // Issue #206: an approved job, already run, whose ticket is marked "From company advance" —
+  // and no advance was ever recorded for it. Dated this month so Payments lists it.
+  await prisma.assignment.create({ data: { guideId: "G-993", date: GAP_DATE, slotIdx: 3, tourId: "T-900", pax: 2 } });
+  const jgap = await prisma.jobSheet.create({ data: { ref: "FOLK-TEST-OPS-GAP", guideId: "G-993", date: GAP_DATE, slotIdx: 3, tourId: "T-900", status: "Confirmed", approvalStatus: "APPROVED", bookings: [], guideFee: { price: 1000, time: 1, whtPct: 3 },
+    expenses: [{ description: "Temple ticket (example)", expenseType: "entrance", price: 300, pax: 2, paidBy: "advance", paidBySource: "operator" }] } });
+  return { admin, j0, j1, c, jgap };
 }
 
 async function startServer(extraEnv = {}) {
@@ -553,6 +560,55 @@ try {
   const D = await prisma.guideAdvance.findFirst({ where: { txRef: "TX-E2E-D" } });
   check("1 · an advance created on the Advances page with nothing changed may pay for tickets only", JSON.stringify(D?.allowedCategories) === JSON.stringify(["entrance"]), JSON.stringify(D?.allowedCategories));
   await p2.close();
+  // Issue #206 — a Company Advance row on a job with no advance on record is said out loud,
+  // on the job sheet and on Payments, and the job cannot be paid until it is settled.
+  const gapPage = await browser.newPage();
+  await gapPage.setViewport({ width: 1280, height: 1800 });
+  const gapErrors = [];
+  gapPage.on("pageerror", (e) => gapErrors.push(String(e)));
+  await gapPage.setCookie(await sessionCookie("admin-ops@example.test"));
+  await gapPage.goto(`${BASE}/job-sheet?guideId=G-993&date=${GAP_DATE}&slotIdx=3`, { waitUntil: "networkidle0" });
+  await gapPage.waitForSelector(".js-recheck", { timeout: 20000 }).catch(() => {});
+  const recheck = await text(gapPage, '.js-recheck li[data-code="ADVANCE_NOT_RECORDED"]');
+  check("206 · the job sheet lists it under Recheck before paying, with the amount and what to do",
+    /marked "From company advance", but no advance is recorded for this job · ฿600\.00/.test(recheck) && /Record the advance/.test(recheck) && /The job cannot be paid until then/.test(recheck), recheck.slice(0, 220));
+
+  await gapPage.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+  await gapPage.waitForSelector(".js-advance-gap-guide", { timeout: 20000 }).catch(() => {});
+  const guideNote = await text(gapPage, ".js-advance-gap-guide");
+  check("206 · Payments warns on the guide's row", /1 job: ฿600\.00 marked “from company advance” with no advance on record to cover it/.test(guideNote), guideNote);
+  await gapPage.evaluate(() => document.querySelector(".js-advance-gap-guide").closest("tr").click());
+  await gapPage.waitForSelector(".js-advance-gap", { timeout: 10000 }).catch(() => {});
+  const jobTag = await gapPage.evaluate(() => { const t = document.querySelector(".js-advance-gap"); if (!t) return null; const row = t.closest(".pay-job-row"); return { code: t.getAttribute("data-code"), text: t.innerText, title: t.getAttribute("title"), payButton: [...row.querySelectorAll("button")].some((b) => /^Record payment/.test(b.innerText.trim()) && b.classList.contains("primary")) }; });
+  check("206 · …and on the job: the code, the amount, the row, and no button to pay it",
+    jobTag?.code === "ADVANCE_NOT_RECORDED" && /฿600\.00 from an advance not on record/.test(jobTag.text) && /Row 1 "Temple ticket \(example\)" ฿600\.00/.test(jobTag.title) && jobTag.payButton === false, JSON.stringify(jobTag).slice(0, 300));
+  const api = await gapPage.evaluate(async (date) => {
+    const list = await (await fetch("/api/payments")).json();
+    const job = list.rows.flatMap((r) => r.jobs).find((j) => j.ref === "FOLK-TEST-OPS-GAP");
+    const preview = await (await fetch("/api/guide-payments/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: "G-993", jobs: [{ jobNo: "FOLK-TEST-OPS-GAP", date, slotIdx: 3 }], paymentDate: date, amountTransferred: 970, noSlipReason: "paid in cash (example)" }) })).json();
+    return { amount: job?.amount, gap: job?.advanceGap, payBlock: job?.payBlock, combinable: job?.combinable, combinedBlock: job?.combinedBlock?.code, previewOk: preview.ok, previewBlocks: preview.blocks };
+  }, GAP_DATE);
+  check("206 · the server says the same, machine-readably: held for ฿600.00, the ฿970.00 figure untouched, not payable, not combinable",
+    api.amount === 970 && api.gap?.code === "ADVANCE_NOT_RECORDED" && api.gap?.amount === 600 && /no advance is recorded/.test(api.payBlock ?? "") && api.combinable === false && api.combinedBlock === "advance-not-recorded"
+      && api.previewOk === false && api.previewBlocks?.[0]?.code === "ADVANCE_NOT_RECORDED" && api.previewBlocks?.[0]?.amount === 600, JSON.stringify(api).slice(0, 400));
+  check("206 · nothing was written by any of it — no payment, no paid job, no PEAK document",
+    (await prisma.guidePayment.count()) === 0 && (await prisma.tourPayment.count({ where: { guideId: "G-993", date: GAP_DATE, status: "PAID" } })) === 0 && (await prisma.guidePaymentDocument.count()) === 0);
+
+  // The advance is recorded: the warning goes, and the job can be paid at the same figure.
+  await prisma.guideAdvance.create({ data: { guideId: "G-993", date: GAP_DATE, slotIdx: 3, amount: 600, paidAt: new Date(), method: "bank", txRef: "TX-E2E-GAP", advanceNo: "FOLK-ADV-209910-903", advanceDate: GAP_DATE, amountSatang: 60000, accountingPeriod: GAP_DATE.slice(0, 7), jobNo: data.jgap.ref, allowedCategories: ["entrance"] } });
+  await gapPage.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+  await pause(800);
+  const after = await gapPage.evaluate(async () => {
+    const list = await (await fetch("/api/payments")).json();
+    const job = list.rows.flatMap((r) => r.jobs).find((j) => j.ref === "FOLK-TEST-OPS-GAP");
+    return { tag: !!document.querySelector(".js-advance-gap-guide"), gap: job?.advanceGap, payBlock: job?.payBlock, combinable: job?.combinable, amount: job?.amount };
+  });
+  check("206 · once the advance is on record the warning is gone and the job is payable as before (฿970.00)",
+    after.tag === false && after.gap === null && after.payBlock === null && after.combinable === true && after.amount === 970, JSON.stringify(after));
+  await gapPage.goto(`${BASE}/job-sheet?guideId=G-993&date=${GAP_DATE}&slotIdx=3`, { waitUntil: "networkidle0" });
+  await pause(800);
+  check("206 · …and the job sheet no longer asks for it", !(await gapPage.$('.js-recheck li[data-code="ADVANCE_NOT_RECORDED"]')) && gapErrors.length === 0, gapErrors.join(" | ").slice(0, 200));
+  await gapPage.close();
 } finally {
   await browser.close();
   server.kill();

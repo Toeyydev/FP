@@ -17,6 +17,8 @@ const prismaMock = vi.hoisted(() => ({
   // The month view's supplemental-payment summary — none in these cases.
   supplementalPayment: { findMany: vi.fn(async () => []) },
   guidePaymentSupplementLine: { findMany: vi.fn(async () => []) },
+  // The month's company advances (lib/advances/coverage) — none unless a case records one.
+  guideAdvance: { findMany: vi.fn(async () => [] as { guideId: string; date: string; slotIdx: number; amountSatang: number; allowedCategories: string[] }[]) },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -193,5 +195,67 @@ describe("GET /api/payments — after undoing false paid marks", () => {
     expect(c).toMatchObject({ paid: false, peakRef: null });
     expect(jobPeakDocumentNo(c.peakStatus)).toBeNull();
     expect(pathsOf(body, EXP_B)).toEqual(["response.rows[0].jobs[0].peakRef", "response.rows[0].jobs[0].peakStatus.documentNo"]);
+  });
+});
+
+// Issue #206 — "From company advance" on a job with no advance on record. All figures invented.
+describe("GET /api/payments — a Company Advance row with no advance on record is reported, never just left out", () => {
+  const C = { date: "2020-03-24", slotIdx: 1, ref: "FOLK-TEST-0324-01" };
+  const TICKET = { description: "Temple ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator" };
+  type Held = { ref: string; amount: number; paid: boolean; payBlock: string | null; combinable: boolean; combinedBlock: { code: string } | null; advanceGap: { code: string; amount: number; excess: number; issued: number; rows: { rowNo: number; description: string; amount: number; why: string }[] } | null };
+  const held = async () => {
+    const res = await GET(new NextRequest("https://ops.folkpaths.com/api/payments?period=2020-03"));
+    const body = (await res.json()) as { rows: { jobs: Held[] }[] };
+    return body.rows[0].jobs.find((j) => j.ref === C.ref)!;
+  };
+  beforeEach(() => {
+    prismaMock.assignment.findMany.mockResolvedValue([{ guideId: GUIDE, date: C.date, slotIdx: C.slotIdx, tourId: "T-TEST", createdAt: new Date("2020-03-20T10:00:00Z") }]);
+    prismaMock.jobSheet.findMany.mockResolvedValue([{ ...sheet(C, "2020-03-20T10:00:00Z"), guideFee: { price: 1000, time: 1, whtPct: 3 }, expenses: [TICKET] }]);
+    prismaMock.tourPayment.findMany.mockResolvedValue([]);
+    prismaMock.guideAdvance.findMany.mockResolvedValue([]);
+  });
+
+  it("no advance: the job carries the machine-readable reason, cannot be paid, and cannot join a combined PEAK document", async () => {
+    const j = await held();
+    expect(j.advanceGap).toEqual({ code: "ADVANCE_NOT_RECORDED", amount: 600, excess: 0, issued: 0, rows: [{ rowNo: 1, description: "Temple ticket", category: "entrance", amount: 600, why: "NO_ADVANCE" }] });
+    expect(j.payBlock).toMatch(/฿600\.00 of expenses .* no advance is recorded for this job/);
+    expect(j.combinable).toBe(false);
+    expect(j.combinedBlock?.code).toBe("advance-not-recorded");
+    expect(j.amount).toBe(970); // the figure is not altered — the job is held
+  });
+
+  it("only live advances are asked for", async () => {
+    await held();
+    expect(prismaMock.guideAdvance.findMany.mock.calls[0][0].where).toMatchObject({ reversedAt: null, date: { gte: "2020-03-01", lte: "2020-03-31" } });
+  });
+
+  it("an advance on record for that job: no reason, payable and combinable as before", async () => {
+    prismaMock.guideAdvance.findMany.mockResolvedValue([{ guideId: GUIDE, date: C.date, slotIdx: C.slotIdx, amountSatang: 100000, allowedCategories: ["entrance"] }]);
+    const j = await held();
+    expect(j).toMatchObject({ advanceGap: null, payBlock: null, combinable: true, combinedBlock: null, amount: 970 });
+  });
+
+  it("an advance too small for the row, or for another kind of cost, still holds the job", async () => {
+    prismaMock.guideAdvance.findMany.mockResolvedValue([{ guideId: GUIDE, date: C.date, slotIdx: C.slotIdx, amountSatang: 50000, allowedCategories: ["entrance"] }]);
+    expect(await held()).toMatchObject({ combinable: false, advanceGap: { code: "ADVANCE_NOT_RECORDED", amount: 100, excess: 100, issued: 500, rows: [] } });
+    prismaMock.guideAdvance.findMany.mockResolvedValue([{ guideId: GUIDE, date: C.date, slotIdx: C.slotIdx, amountSatang: 100000, allowedCategories: ["meal"] }]);
+    expect(await held()).toMatchObject({ combinable: false, advanceGap: { amount: 600, rows: [{ why: "CATEGORY_NOT_ALLOWED" }] } });
+  });
+
+  it("an advance for another job of the same guide does not cover this one", async () => {
+    prismaMock.guideAdvance.findMany.mockResolvedValue([{ guideId: GUIDE, date: C.date, slotIdx: C.slotIdx + 1, amountSatang: 100000, allowedCategories: ["entrance"] }, { guideId: "G-OTHER", date: C.date, slotIdx: C.slotIdx, amountSatang: 100000, allowedCategories: ["entrance"] }]);
+    expect((await held()).advanceGap).toMatchObject({ code: "ADVANCE_NOT_RECORDED", amount: 600 });
+  });
+
+  it("payer corrected to the guide: the ฿600 is in the payout again and nothing is held", async () => {
+    prismaMock.jobSheet.findMany.mockResolvedValue([{ ...sheet(C, "2020-03-20T10:00:00Z"), guideFee: { price: 1000, time: 1, whtPct: 3 }, expenses: [{ ...TICKET, paidBy: "guide" }] }]);
+    expect(await held()).toMatchObject({ advanceGap: null, payBlock: null, combinable: true, amount: 1570 });
+  });
+
+  it("a job already paid still shows the reason, so the shortfall can be looked at", async () => {
+    prismaMock.tourPayment.findMany.mockResolvedValue([{ ...pay(C, "2020-03-26T10:00:00Z", null) }]);
+    const j = await held();
+    expect(j.paid).toBe(true);
+    expect(j.advanceGap).toMatchObject({ code: "ADVANCE_NOT_RECORDED", amount: 600 });
   });
 });
