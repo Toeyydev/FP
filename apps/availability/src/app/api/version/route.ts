@@ -11,10 +11,13 @@ export function GET() {
   // bookings + cancellations current without depending on the webhook or anyone
   // having the app open.
   startSyncLoop();
-  // Same build id the client baked in (inlined at build time), so they always
-  // agree within a deploy and only differ when a new version ships.
+  // Prefer Railway's runtime metadata. NEXT_PUBLIC_BUILD_ID is inlined during
+  // `next build`; a cached server-route compilation once left it holding the
+  // previous deploy's SHA. The runtime value cannot be frozen in that cache, so
+  // an old client sees the new SHA and reloads. Local/non-Railway runs keep the
+  // build id fallback and existing behaviour.
   return NextResponse.json(
-    { version: process.env.NEXT_PUBLIC_BUILD_ID || "dev" },
+    { version: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_BUILD_ID || "dev" },
     { headers: { "cache-control": "no-store" } },
   );
 }
