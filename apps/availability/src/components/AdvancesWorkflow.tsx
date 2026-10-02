@@ -1,4 +1,5 @@
 "use client";
+import AdvanceAccountJournal from "./AdvanceAccountJournal";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { explain, RefundRow, type OpsRefund } from "./AdvanceOperations";
 import AdvanceBankSelect from "./AdvanceBankSelect";
@@ -54,6 +55,8 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
   // ADVANCE_WRITES_FROZEN, as the server reports it: write controls are disabled while it is on.
   const [frozen, setFrozen] = useState(false);
   const [unbooked, setUnbooked] = useState<Unbooked | null>(null);
+  // Bumped on every load, so the account journal below re-reads after any change above it.
+  const [loads, setLoads] = useState(0);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -76,6 +79,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
       setFrozen(a.frozen === true);
       setReceipts((r.receipts ?? []) as Receipt[]);
       setUnbooked(u as unknown as Unbooked);
+      setLoads((n) => n + 1);
     } catch (e) { setErr(String((e as Error).message)); }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -221,6 +225,8 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
           )))}
         </div>
       )}
+
+      <AdvanceAccountJournal version={loads} />
 
       <h3 style={{ margin: "6px 0 0" }}>Costs still to be booked</h3>
       <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
