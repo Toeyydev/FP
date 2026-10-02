@@ -19,11 +19,11 @@ export async function liveAdvancesByJob(db: Db, where: { guideId?: string; jobs?
       ...(where.jobs ? { OR: where.jobs.map((j) => ({ guideId: j.guideId, date: j.date, slotIdx: j.slotIdx })) } : {}),
       ...(where.from || where.to ? { date: { ...(where.from ? { gte: where.from } : {}), ...(where.to ? { lte: where.to } : {}) } } : {}),
     },
-    select: { guideId: true, date: true, slotIdx: true, amountSatang: true, allowedCategories: true },
+    select: { id: true, guideId: true, date: true, slotIdx: true, amountSatang: true, allowedCategories: true },
   });
   for (const r of rows) {
     const k = advanceJobKey(r);
-    out.set(k, [...(out.get(k) ?? []), { amount: r.amountSatang / 100, allowedCategories: r.allowedCategories }]);
+    out.set(k, [...(out.get(k) ?? []), { id: r.id, amount: r.amountSatang / 100, allowedCategories: r.allowedCategories }]);
   }
   return out;
 }

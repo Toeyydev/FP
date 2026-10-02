@@ -1301,6 +1301,11 @@ export default function JobSheetEditor() {
                       → {liveAdvances.find((a) => a.id === (advanceChoices[i] || (e as { advanceId?: string }).advanceId))?.advanceNo ?? "an advance"}{advanceChoices[i] ? " (chosen — saved with the sheet)" : ""}
                     </div>
                   )}
+                  {paid === "GUIDE_ADVANCE" && advancesFor(expenseCategory(e)).length > 1 && (
+                    <button type="button" className="btn sm js-advance-pick" style={{ marginTop: 4 }} onClick={() => setChooser({ index: i, options: advancesFor(expenseCategory(e)) })}>
+                      {(advanceChoices[i] || (e as { advanceId?: string }).advanceId) ? "Change advance…" : "Choose advance…"}
+                    </button>
+                  )}
                   {/* A payer nobody confirmed reads as one: the after-tour default, or a value an
                       older app sent without saying who chose it. Picking any payer above confirms it. */}
                   {(paid === "GUIDE_ADVANCE" || paid === "COMPANY_DIRECT") && (
@@ -2401,4 +2406,3 @@ function GuestCounts({ rows, sync }: { rows: { bookedPax: number | null; actualP
     </div>
   );
 }
-

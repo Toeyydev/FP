@@ -104,8 +104,8 @@ describe("no advance on record", () => {
 describe("the advance is on record", () => {
   it("the same payment is recorded as it always was: ฿970, the ticket in no transfer", async () => {
     await seedJob();
-    await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo });
-    expect([...await liveAdvancesByJob(prisma, { jobs: [KEY] })]).toEqual([[advanceJobKey(KEY), [{ amount: 1000, allowedCategories: ["entrance"] }]]]);
+    const advance = await seedAdvance(KEY, 1000, { jobNo: JOB.jobNo });
+    expect([...await liveAdvancesByJob(prisma, { jobs: [KEY] })]).toEqual([[advanceJobKey(KEY), [{ id: advance.id, amount: 1000, allowedCategories: ["entrance"] }]]]);
 
     const r = await pay(970);
     expect(r.ok).toBe(true);
