@@ -136,6 +136,38 @@ describe("Booked in guide payment", () => {
     expect(await outboxOf(a.entry.id)).toMatchObject({ status: "PENDING" });
   });
 
+  // Financial duplication safeguards: each of these already owns the document in FolkOPS's own
+  // records, so closing the settlement against it would put one PEAK document behind two events.
+  it("refuses a document that a payroll run also names", async () => {
+    const { entry } = await fixture();
+    await prisma.payrollStatus.create({ data: { guideId: G, period: "2099-03", peakRef: EXP } as never });
+    const r = await mark(entry.id);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(reasons(r)).toMatch(/has another recorded owner/);
+    expect(await outboxOf(entry.id)).toMatchObject({ status: "PENDING", documentNo: null });
+    expect(await prisma.auditLog.count({ where: { action: "advance.settlement_booked_in_guide_payment" } })).toBe(0);
+  });
+
+  it("refuses a document that is the job sheet's own PEAK document — even this job's sheet", async () => {
+    const { entry, sheet } = await fixture();
+    await prisma.jobSheet.update({ where: { id: sheet.id }, data: { peakDocumentNo: EXP } });
+    const r = await mark(entry.id);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(reasons(r)).toMatch(/has another recorded owner/);
+    expect(await outboxOf(entry.id)).toMatchObject({ status: "PENDING", documentNo: null });
+    expect(await prisma.auditLog.count({ where: { action: "advance.settlement_booked_in_guide_payment" } })).toBe(0);
+  });
+
+  it("refuses a document that an advance event already carries — even this settlement's own advance", async () => {
+    const { entry, advance } = await fixture();
+    await prisma.guideAdvance.update({ where: { id: advance.id }, data: { peakDocumentNo: EXP } });
+    const r = await mark(entry.id);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(reasons(r)).toMatch(/has another recorded owner/);
+    expect(await outboxOf(entry.id)).toMatchObject({ status: "PENDING", documentNo: null });
+    expect(await prisma.auditLog.count({ where: { action: "advance.settlement_booked_in_guide_payment" } })).toBe(0);
+  });
+
   it("refuses an outbox item that is sending, uncertain or posted, and a reversed or unknown settlement", async () => {
     for (const status of ["SENDING", "UNCERTAIN", "POSTED"]) {
       await resetDatabase(); await seedGuide(G);
