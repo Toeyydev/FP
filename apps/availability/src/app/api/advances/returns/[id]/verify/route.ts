@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps } from "@/lib/roles";
 import { verifyReceipt } from "@/lib/advances/service";
+import { autoAllocateReturn } from "@/lib/advances/auto";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +21,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null },
   });
   if (!result.ok) return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
-  return NextResponse.json({ ok: true });
+  // Confirmed against the bank: if the guide said which advance this repays, it goes
+  // against that advance now (lib/advances/auto). Anything beyond what the advance still
+  // holds is left as an excess for a person.
+  const allocated = await autoAllocateReturn(prisma, id, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null });
+  return NextResponse.json({ ok: true, allocated });
 }

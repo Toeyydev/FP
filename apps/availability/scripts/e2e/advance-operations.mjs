@@ -316,19 +316,13 @@ try {
   await pause(1800);
   check("15 · verified from the card", (await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: R1.id } })).status === "VERIFIED");
 
-  // 16 — allocate to A, capped at A's outstanding (฿700).
-  await page.click(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-allocate`);
-  await page.waitForSelector(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-alloc-target`);
-  await pause(600);
-  await page.select(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-alloc-target`, A.id);
-  await pause(200);
-  const caps = await text(page, `.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-alloc-caps`);
-  const pre = await page.$eval(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-alloc-amount`, (x) => x.value);
-  check("16 · the allocation shows both caps and suggests no more than the smaller (฿700)", /at most ฿700\.00/.test(caps) && pre === "700", `${caps} / ${pre}`);
-  await clickText(page, `.js-return-card[data-receipt="${R1.receiptNo}"] .js-return-form`, "Allocate");
-  await pause(2000);
+  // 16 — confirming the return put it against the advance the guide named, by itself, and
+  // only up to what that advance still held (฿700 of the ฿1,000): no Allocate click.
   const aAfter = await adv(A.advanceNo);
+  const r1After = await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: R1.id } });
+  check("16 · confirming the return allocated it to its advance automatically, capped at what the advance held (฿700)", r1After.allocatedSatang === 70000, `allocated ${r1After.allocatedSatang}`);
   check("16 · allocated: A is settled", aAfter.settledSatang === aAfter.amountSatang);
+  await page.reload({ waitUntil: "networkidle0" }); await page.waitForSelector(".js-return-card");
 
   // 17 — the ฿300 beyond what this job owed is shown as an excess.
   await page.waitForSelector(`.js-return-card[data-receipt="${R1.receiptNo}"] .js-excess-return`, { timeout: 5000 }).catch(() => {});

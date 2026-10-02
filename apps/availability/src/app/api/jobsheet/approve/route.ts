@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { autoSettleSheet } from "@/lib/advances/auto";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -57,6 +58,13 @@ export async function POST(req: NextRequest) {
     },
   });
   if (hit.count !== 1) return NextResponse.json(changedSinceReview, { status: 409 });
+  // Approval is the decision; settling the advance rows it covers is arithmetic, so it
+  // follows by itself (lib/advances/auto). Whatever the ledger refuses is reported and
+  // left for a person — it never undoes the approval. Done before the sheet is re-read
+  // below, because settling marks rows and moves the sheet's version.
+  const advanceSettled = nowApproved && !isApproved(existing.approvalStatus)
+    ? await autoSettleSheet(prisma, { guideId, date, slotIdx }, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null })
+    : [];
   // updatedAt too: this write moved the sheet's version, and the editor sends that version
   // back as baseUpdatedAt on its next Save. Without it the editor held the version from
   // before the approval and its next Save was refused as stale.
@@ -68,5 +76,5 @@ export async function POST(req: NextRequest) {
     entityType: "JobSheet", entityId: existing.id,
     detail: { guideId, date, slotIdx, ref: existing.ref },
   });
-  return NextResponse.json({ ok: true, ...sheet });
+  return NextResponse.json({ ok: true, ...sheet, advanceSettled });
 }

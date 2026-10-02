@@ -600,7 +600,12 @@ export default function JobSheetEditor() {
     // answer. The next Save sends it back as baseUpdatedAt, and holding the old one got
     // that Save refused as stale.
     setSheet((s) => s ? { ...s, approvalStatus: d.approvalStatus, approvedBy: d.approvedBy, approvedAt: d.approvedAt, updatedAt: d.updatedAt ?? s.updatedAt } : s);
-    setMsg(isApproved(d.approvalStatus) ? "Approved ✓" : "Approval removed");
+    // Approval settles the advance rows it covers by itself (lib/advances/auto): say what
+    // happened, and say plainly when the ledger refused, so nothing is assumed settled.
+    const auto = (Array.isArray(d.advanceSettled) ? d.advanceSettled : []) as { advanceNo: string; ok: boolean; amount: number; reasons: string[] }[];
+    const settledNote = auto.filter((x) => x.ok).map((x) => `${thb(x.amount)} settled against ${x.advanceNo}`).join(" · ");
+    const refusedNote = auto.filter((x) => !x.ok).map((x) => `${x.advanceNo || "Advance"} not settled: ${x.reasons[0] ?? "see Advances"}`).join(" · ");
+    setMsg(isApproved(d.approvalStatus) ? ["Approved ✓", settledNote, refusedNote].filter(Boolean).join(" — ") : "Approval removed");
     // PEAK readiness is computed SERVER-side and one of its reasons is "Job sheet
     // is not approved". Without this refetch the panel kept the stale list and
     // contradicted the ✓ Approved badge printed four lines above it — on the one

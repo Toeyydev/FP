@@ -325,7 +325,14 @@ describe("34–40 · roles, audit, and what never happens", () => {
     const a = await advance();
     const id = await claim(300, { advanceId: a.id });
     expect((await call(VERIFY, id, { bankRef: "BANK-EX-OP" }, "OPERATOR", opA.actorId)).status).toBe(200);
-    expect((await call(ALLOCATE, id, { requestKey: "op-alloc-0001", allocations: [{ advanceId: a.id, amount: 300 }] }, "ADMIN", opB.actorId)).status).toBe(200);
+    // Confirming a return that names its advance puts it against that advance by itself
+    // (lib/advances/auto), so there is nothing left for a second, manual allocation to take.
+    expect((await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id } })).allocatedSatang).toBe(30_000);
+    expect((await call(ALLOCATE, id, { requestKey: "op-alloc-0001", allocations: [{ advanceId: a.id, amount: 300 }] }, "ADMIN", opB.actorId)).status).toBe(409);
+    // A return that names no advance is still allocated by a person, through the same route.
+    const loose = await claim(100);
+    expect((await call(VERIFY, loose, { bankRef: "BANK-EX-OP-2" }, "OPERATOR", opA.actorId)).status).toBe(200);
+    expect((await call(ALLOCATE, loose, { requestKey: "op-alloc-0002", allocations: [{ advanceId: a.id, amount: 100 }] }, "ADMIN", opB.actorId)).status).toBe(200);
     process.env.ADVANCE_WRITES_FROZEN = "1";
     const id2 = await claim(100).catch(() => "");
     expect(id2).not.toBe(""); // the service itself is not frozen — the routes are
