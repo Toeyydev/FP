@@ -600,7 +600,7 @@ export default function JobSheetEditor() {
   // came back. On failure the server has already recorded FAILED + the reason, so
   // reloading makes the panel agree with the message rather than contradict it.
 
-  async function syncToPeak(confirmRepost = false, confirmSeparateDocument = false) {
+  async function syncToPeak(confirmRepost = false, confirmSeparateDocument = false, confirmResyncAfterVoid = false) {
     if (!sheet) return;
     if (!saved) { const ok = await save(); if (!ok) return; }
     if (confirmRepost && !confirmSeparateDocument && !window.confirm(
@@ -609,7 +609,7 @@ export default function JobSheetEditor() {
     setBusy(true); setMsg(confirmRepost ? "Posting a correction…" : "Posting to PEAK…");
     const r = await jfetch("/api/jobsheet/peak-sync", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ...(confirmRepost ? { confirmRepost: true } : {}), ...(confirmSeparateDocument ? { confirmSeparateDocument: true } : {}) }),
+      body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ...(confirmRepost ? { confirmRepost: true } : {}), ...(confirmSeparateDocument ? { confirmSeparateDocument: true } : {}), ...(confirmResyncAfterVoid ? { confirmResyncAfterVoid: true } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
@@ -619,12 +619,13 @@ export default function JobSheetEditor() {
       const others = Array.isArray(d.otherJobs) ? d.otherJobs.map((j: { ref?: string | null; date: string; slotIdx: number }) => `• ${j.ref ?? `${j.date} slot ${j.slotIdx}`}`).join("\n") : "";
       const yes = window.confirm(`${d.reason}${others ? `\n\n${others}` : ""}\n\nTo pay these jobs with one PEAK document, cancel and use "Pay N jobs together" on Payments instead.\n\nSync this job on its own anyway?`);
       if (!yes) { setMsg("Not synced — nothing was posted to PEAK."); return; }
-      return syncToPeak(confirmRepost, true);
+      return syncToPeak(confirmRepost, true, confirmResyncAfterVoid);
     }
     if (!r.ok) {
       setMsg(
         d.error === "offline" ? "No connection — nothing was posted. Try again."
           : d.error === "changed-since-sync" ? `Already posted as ${d.documentNo ?? "a document"} and changed since — use Post a correction.`
+          : d.error === "resync-after-void" ? (d.reason ?? "This job's previous PEAK document was voided. Confirm before creating a new one.")
           : d.error === "not-eligible" ? (d.reasons?.[0] ?? "This sheet is not ready to post.")
           : d.error === "not-postable" ? (d.reason ?? "This sheet cannot be posted.")
           : d.error === "use-combined-document" || d.error === "paid-use-transfer-document" ? (d.reason ?? "Use the combined PEAK document — one per transfer.")
@@ -2207,6 +2208,20 @@ export default function JobSheetEditor() {
                 </>
               );
               if (el?.status === "SYNCING") return <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700 }}>Syncing…</div>;
+              if (peak?.peakSyncStatus === "VOIDED") return (
+                <div className="js-peak-voided" role="status" style={{ marginTop: 6, padding: 9, border: "1px solid #d6a24b", borderRadius: 8, background: "#fff8e8" }}>
+                  <b>This job&rsquo;s previous PEAK document was voided.</b>
+                  <div style={{ marginTop: 4, fontSize: 11.5, lineHeight: 1.45 }}>To pay it with the guide&rsquo;s other jobs, use Payments. Syncing here creates a new PEAK document.</div>
+                  <div style={{ marginTop: 7, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <a className="btn sm primary" href="/payments">Open Payments</a>
+                    <button className="btn sm" disabled={busy} onClick={() => {
+                      const typed = window.prompt(`A PEAK document for this job was voided before. Syncing creates a NEW document.\n\nType SYNC to continue:`, "");
+                      if (typed?.trim().toUpperCase() !== "SYNC") { setMsg("Not synced — nothing was posted to PEAK."); return; }
+                      void syncToPeak(false, false, true);
+                    }}>Sync again…</button>
+                  </div>
+                </div>
+              );
               if (el?.status === "READY") return (
                 <>
                   <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: "var(--green)" }}>Ready to sync</div>
@@ -2401,4 +2416,3 @@ function GuestCounts({ rows, sync }: { rows: { bookedPax: number | null; actualP
     </div>
   );
 }
-

@@ -165,6 +165,27 @@ describe("POST /api/jobsheet/peak-sync — refusals", () => {
     expect(createExpenseMock).not.toHaveBeenCalled();
   });
 
+  it("refuses an immediate re-sync after a void and writes nothing", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet({ peakSyncStatus: "VOIDED" }));
+    const res = await post(JOB);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "resync-after-void" });
+    expect(createExpenseMock).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("re-syncs after a void only with explicit confirmation and audits it", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue(sheet({ peakSyncStatus: "VOIDED" }));
+    const res = await post({ ...JOB, confirmResyncAfterVoid: true });
+    expect(res.status).toBe(200);
+    expect(createExpenseMock).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: "jobsheet.peak_synced",
+      detail: expect.objectContaining({ confirmedResyncAfterVoid: true }),
+    }));
+  });
+
   it("refuses to re-post a CHANGED sheet without an explicit confirmation", async () => {
     // PEAK cannot amend the first document, so an automatic re-post would leave two
     // documents for one job — the operator has to say so out loud.
