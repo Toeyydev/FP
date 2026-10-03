@@ -1,3 +1,4 @@
+import { isDirectWebsiteBooking } from "@/lib/bookings";
 import { describe, it, expect } from "vitest";
 import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName, slotAwareTourId } from "@/lib/bookings";
 import { isEveningSlot, SLOT_TIMES } from "@/lib/slots";
@@ -254,5 +255,24 @@ describe("guest phone — every place a channel may put it, and none it may not"
     expect(parseBokun({ customer: { phone: 66810100123 } }).phone).toBe("66810100123");
     expect(parseBokun({ customer: { phone: { number: "+66810100123" } } }).phone).toBeUndefined();
     expect(parseBokun({ customer: { phone: "  ", mobilePhone: "+66810100123" } }).phone).toBe("+66810100123");
+  });
+});
+
+describe("isDirectWebsiteBooking — who is kept out of the dispatch inbox", () => {
+  it("an OTA booking delivered by the Bókun webhook (FOLK-T… code, OTA reference) is NOT a website booking", () => {
+    expect(isDirectWebsiteBooking({ confirmationCode: "FOLK-T900000001", externalRef: "GYGEXAMPLE0001" })).toBe(false);
+    expect(isDirectWebsiteBooking({ confirmationCode: "FOLK-T900000002", externalRef: "1400000001" })).toBe(false);
+  });
+  it("the search copy of an OTA booking is not one either", () => {
+    expect(isDirectWebsiteBooking({ confirmationCode: "GET-900000001", externalRef: "GYGEXAMPLE0001" })).toBe(false);
+    expect(isDirectWebsiteBooking({ confirmationCode: "VIA-900000001", externalRef: null })).toBe(false);
+  });
+  it("a booking whose own number is FOLK- and that has no OTA reference is a website booking", () => {
+    expect(isDirectWebsiteBooking({ confirmationCode: "FOLK-0001", externalRef: null })).toBe(true);
+    expect(isDirectWebsiteBooking({ confirmationCode: "folk-0002", externalRef: "  " })).toBe(true);
+    expect(isDirectWebsiteBooking({ confirmationCode: null, externalRef: "FOLK-0003" })).toBe(true);
+  });
+  it("a booking with no numbers at all is left in the inbox for an operator", () => {
+    expect(isDirectWebsiteBooking({ confirmationCode: null, externalRef: null })).toBe(false);
   });
 });
