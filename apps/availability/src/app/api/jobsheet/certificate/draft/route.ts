@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { transferSlipFileIds } from "@/lib/certificates/receipt-kind";
 import { isAdmin } from "@/lib/roles";
 import { denied } from "@/lib/certificates/denied";
 import type { Expense } from "@/lib/jobsheet";
-import { buildPayload, certifiableRows, duplicateIdentities, ineligibleRows, payloadHash } from "@/lib/certificates/payload";
+import { buildPayload, certifiableRows, isCertificateKind, duplicateIdentities, ineligibleRows, payloadHash } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { pdfRendererAvailable, renderPdf } from "@/lib/certificates/pdf";
 import { defaultSource, isExpenseSource, sourceRefusal, type ExpenseSource } from "@/lib/certificates/source";
@@ -63,12 +64,23 @@ export async function GET(req: NextRequest) {
 
   // A draft may be read without the guide having filed anything — that is the case it
   // exists for. What it still needs is rows it can speak for, and rows it can tell apart.
+  const kindRaw = req.nextUrl.searchParams.get("kind") ?? "GUIDE_PAID";
+  if (!isCertificateKind(kindRaw)) return NextResponse.json({ error: "bad-query", reasons: ["ประเภทใบรับรองไม่ถูกต้อง"] }, { status: 400 });
+  const kind = kindRaw;
   const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
-  const rows = certifiableRows(expenses);
+  const tourName = sheet.tourId ? (await prisma.tour.findUnique({ where: { id: sheet.tourId }, select: { name: true } }))?.name ?? null : null;
+  const rows = certifiableRows(expenses, kind, { tourName, transferSlipFileIds: await transferSlipFileIds(prisma, expenses) });
   const blockers = [...ineligibleRows(expenses), ...duplicateIdentities(rows, expenses)];
   if (!rows.length) {
-    blockers.push("ไม่มีรายการใดในใบงานนี้ที่ต้องใช้ใบรับรองแทนใบเสร็จ — ทุกแถวมีใบเสร็จแล้ว หรือไม่ใช่เงินที่ไกด์สำรองจ่าย");
+    blockers.push(kind === "COMPANY_ADVANCE"
+      ? "ไม่มีรายการที่จ่ายจากเงินทดรองโดยไม่มีตั๋วหรือใบเสร็จในใบงานนี้"
+      : "ไม่มีรายการใดในใบงานนี้ที่ต้องใช้ใบรับรองแทนใบเสร็จ — ทุกแถวมีใบเสร็จแล้ว หรือไม่ใช่เงินที่ไกด์สำรองจ่าย");
   }
+  // The advances the rows were paid from, as the issued certificate will list them.
+  const advanceIds = [...new Set(rows.map((r) => String((expenses[r.index] as { advanceId?: string | null })?.advanceId ?? "")).filter(Boolean))];
+  const advances = kind === "COMPANY_ADVANCE"
+    ? { advances: (await prisma.guideAdvance.findMany({ where: { id: { in: advanceIds } }, select: { advanceNo: true } })).map((a) => a.advanceNo).sort() }
+    : null;
   if (blockers.length) return NextResponse.json({ error: "not-allowed", reasons: blockers }, { status: 409 });
 
   if (!pdfRendererAvailable()) {
@@ -93,7 +105,7 @@ export async function GET(req: NextRequest) {
       // The fact, not a function of the chosen source: it is what decides which
       // admin-recorded sentence is true.
       guideReportedAt: sheet.guideExpensesAt },
-    rows, null, { source, recordedBy },
+    rows, null, { source, recordedBy }, advances,
   );
 
   const html = renderCertificateHtml({

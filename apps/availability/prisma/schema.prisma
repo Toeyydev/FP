@@ -719,7 +719,11 @@ model ExpenseCertificate {
   // and NULL once it is voided, and Postgres does not compare NULLs in a unique index —
   // so a voided certificate frees the sheet for a new one without a partial index,
   // which Prisma cannot declare and the schema-drift gate would delete.
-  activeJobSheetId      String?          @unique
+  activeJobSheetId      String?
+  /// Whose money paid the rows (lib/certificates/payload CertificateKind): GUIDE_PAID —
+  /// the guide's own, reimbursed — or COMPANY_ADVANCE — a company advance. One ACTIVE
+  /// certificate per job sheet PER KIND: the unique key below is (activeJobSheetId, kind).
+  kind                  String           @default("GUIDE_PAID")
   // Exactly what was approved, and the fingerprint of it.
   payload               Json
   payloadHash           String
@@ -842,6 +846,8 @@ model ExpenseCertificate {
   // payment's EXP covers several job sheets and may carry several certificates.
   @@index([peakDocumentNo])
   @@index([peakPaymentRef])
+
+  @@unique([activeJobSheetId, kind])
 }
 
 /// One attempt to attach one certificate's PDF to one PEAK expense document.
@@ -1930,4 +1936,22 @@ model HistoricalEvidenceReview {
   updatedAt     DateTime @updatedAt
 
   @@index([decision])
+}
+
+// What an attached receipt file turned out to be (lib/certificates/receipt-kind), by its
+// Drive file id — a Drive file under one id never changes, so neither does the answer.
+// Kept apart from the expense row on purpose: the row is round-tripped through the
+// browser on every save, and a fact the server read out of a file is not the browser's
+// to carry or to change.
+//
+//   TRANSFER_SLIP  a bank transfer slip (K BIZ text layer read in-process). On a row paid
+//                  from a company advance it is the advance going OUT, not the ticket the
+//                  advance bought — so it is not evidence of that cost.
+//   DOCUMENT       anything else: a ticket, a receipt, a photo FolkOPS does not read.
+model ReceiptClassification {
+  fileId    String   @id // Drive file id of the attachment
+  kind      String // TRANSFER_SLIP | DOCUMENT
+  txRef     String? // the slip's transaction ID, when it is one
+  checkedAt DateTime @default(now())
+  checkedBy String? // User.id who pressed the check, or null when classified at upload
 }

@@ -32,6 +32,9 @@ describe("the advance voucher", () => {
     const html = advanceVoucherHtml(base);
     expect(html).toContain("คืนเงินส่วนที่เหลือภายใน 3 วันทำการ");
     expect(html).toContain("เก็บตั๋วหรือใบเสร็จทุกใบ");
+    // Owner rule 2026-10-04: a ticket or receipt is uploaded; none kept → a certificate in lieu.
+    expect(html).toContain("ถูกอัปโหลดแนบในใบงาน");
+    expect(html).toContain("ใบรับรองแทนใบเสร็จรับเงิน");
   });
 
   it("prints the bank reference, because that is what ties it to the statement", () => {

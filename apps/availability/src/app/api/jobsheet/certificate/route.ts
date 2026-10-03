@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { transferSlipFileIds, uncheckedAdvanceAttachments } from "@/lib/certificates/receipt-kind";
 import { isAdmin } from "@/lib/roles";
 import type { Expense } from "@/lib/jobsheet";
-import { certifiableRows, duplicateIdentities, ineligibleRows } from "@/lib/certificates/payload";
+import { certifiableRows, isCertificateKind, duplicateIdentities, ineligibleRows } from "@/lib/certificates/payload";
 import { LABEL, LABEL_TH, type CertificateState } from "@/lib/certificates/state";
 import { CertificateRefused, createCertificate, type Actor } from "@/lib/certificates/service";
 import { adminRecordedExplainerTh, availableSources, defaultSource, isExpenseSource, SOURCE_LABEL_TH } from "@/lib/certificates/source";
@@ -52,7 +53,13 @@ export async function GET(req: NextRequest) {
   if (!sheet) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
-  const rows = certifiableRows(expenses);
+  const tourName = sheet.tourId ? (await prisma.tour.findUnique({ where: { id: sheet.tourId }, select: { name: true } }))?.name ?? null : null;
+  const rows = certifiableRows(expenses, "GUIDE_PAID", { tourName });
+  // Costs paid from a company advance with no ticket or receipt — their own certificate.
+  const transferSlips = await transferSlipFileIds(prisma, expenses);
+  const advanceRows = certifiableRows(expenses, "COMPANY_ADVANCE", { tourName, transferSlipFileIds: transferSlips });
+  // Advance-paid rows whose attachment nobody has checked: it may be the transfer slip.
+  const advanceAttachmentsUnchecked = (await uncheckedAdvanceAttachments(prisma, expenses)).length;
   const certificates = await prisma.expenseCertificate.findMany({
     where: { jobSheetId: sheet.id },
     orderBy: { createdAt: "desc" },
@@ -63,7 +70,7 @@ export async function GET(req: NextRequest) {
       // fact the PDF does rather than from the job sheet as it stands now.
       sourceGuideReportedAt: true,
       driveUrl: true, attestedByName: true, attestedByRole: true, attestedAt: true, uploadedAt: true, linkedAt: true,
-      voidedAt: true, voidReason: true, coveredRows: true, createdAt: true,
+      voidedAt: true, voidReason: true, coveredRows: true, createdAt: true, kind: true,
       guideId: true, tourDate: true, slotIdx: true,
       peakPaymentRef: true, peakDocumentNo: true, peakDocumentId: true, peakDocumentLink: true,
       peakDocumentSource: true, peakPaidDate: true, peakLinkedAt: true,
@@ -82,7 +89,9 @@ export async function GET(req: NextRequest) {
   // Why a new one could not be issued right now, in the operator's words.
   const blockers: string[] = [];
   blockers.push(...ineligibleRows(expenses), ...duplicateIdentities(rows, expenses));
-  if (certificates.some((c) => c.status !== "VOID")) blockers.push("This job sheet already has a certificate. Withdraw it first if it needs replacing.");
+  if (certificates.some((c) => c.status !== "VOID" && c.kind !== "COMPANY_ADVANCE")) blockers.push("This job sheet already has a certificate. Withdraw it first if it needs replacing.");
+  const advanceBlockers: string[] = [...ineligibleRows(expenses), ...duplicateIdentities(advanceRows, expenses)];
+  if (certificates.some((c) => c.status !== "VOID" && c.kind === "COMPANY_ADVANCE")) advanceBlockers.push("This job sheet already has a certificate for its advance-paid costs. Withdraw it first if it needs replacing.");
 
   return NextResponse.json({
     ok: true,
@@ -92,6 +101,11 @@ export async function GET(req: NextRequest) {
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
     canIssue: rows.length > 0 && blockers.length === 0,
     blockers,
+    advanceRowsNeedingCertificate: advanceRows,
+    advanceTotalSatang: advanceRows.reduce((t, r) => t + r.amountSatang, 0),
+    canIssueAdvance: advanceRows.length > 0 && advanceBlockers.length === 0,
+    advanceBlockers,
+    advanceAttachmentsUnchecked,
     // Where the rows may be said to have come from, and which to offer first. The admin
     // who would be recorded is named from the SESSION — the browser is told who it is
     // about to become, it does not get to say.
@@ -148,10 +162,12 @@ export async function POST(req: NextRequest) {
   if (askedSource !== undefined && !isExpenseSource(askedSource)) {
     return NextResponse.json({ error: "bad-body", reasons: ["ที่มาของรายการไม่ถูกต้อง"] }, { status: 400 });
   }
+  const askedKind = raw?.kind ?? "GUIDE_PAID";
+  if (!isCertificateKind(askedKind)) return NextResponse.json({ error: "bad-body", reasons: ["ประเภทใบรับรองไม่ถูกต้อง"] }, { status: 400 });
 
   try {
-    const cert = await createCertificate(parsed.data, actorOf(session), {}, askedSource);
-    return NextResponse.json({ ok: true, certificate: { id: cert.id, certificateNo: cert.certificateNo, status: cert.status, totalSatang: cert.totalSatang, payloadHash: cert.payloadHash, source: cert.source } });
+    const cert = await createCertificate(parsed.data, actorOf(session), {}, askedSource, askedKind);
+    return NextResponse.json({ ok: true, certificate: { id: cert.id, certificateNo: cert.certificateNo, status: cert.status, totalSatang: cert.totalSatang, payloadHash: cert.payloadHash, source: cert.source, kind: cert.kind } });
   } catch (e) {
     if (e instanceof CertificateRefused) return NextResponse.json({ error: "not-allowed", reasons: e.reasons, detail: e.reasons.join("\n") }, { status: e.status });
     throw e;

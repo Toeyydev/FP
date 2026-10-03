@@ -369,7 +369,8 @@ describe("the words a person reads — round and expense type", () => {
   });
 
   it("changes words only — the certified facts and their hash still carry the stored key and slot", () => {
-    const payload = buildPayload(FACTS, certifiableRows([row({ expenseType: "meal" })]));
+    // A meal that is not water is a food cost: certified on a food tour only (lib/certificates/payload).
+    const payload = buildPayload(FACTS, certifiableRows([row({ expenseType: "meal" })], "GUIDE_PAID", { tourName: "Eat Like a Local — Example" }));
     expect(payload.rows[0].category).toBe("meal");
     expect(canonicalString(payload)).toContain("meal");
     expect(canonicalString(payload)).not.toContain("ค่าอาหาร");

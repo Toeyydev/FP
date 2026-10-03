@@ -256,6 +256,43 @@ try {
   check("the panel now offers the draft and says who chose the row", shownNow.includes("สร้างร่างใบรับรอง") && shownNow.includes("เลือกโดย Malee Testsuite"));
   check("no certificate was created by choosing rows", (await prisma.expenseCertificate.count({ where: { jobSheetId: data.waived.id } })) === 0);
   if (SHOTS) await (await page.$(PANEL)).screenshot({ path: join(SHOTS, "07-ready-after-selecting.png") });
+
+  // Certificates to issue (all jobs, both kinds) and the advance-paid certificate panel.
+  {
+    const advSheet = await prisma.jobSheet.create({ data: { ref: "FOLK-BKK-20260829-09", guideId: "G-902", date: "2026-08-29", slotIdx: 4, tourId: "T-900", approvalStatus: "APPROVED",
+      expenses: [{ description: "Temple ticket", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator", paidByAt: "2026-08-29T12:00:00Z", paidByBy: data.users.ADMIN.id }] } });
+    const p3 = await browser.newPage();
+    await p3.setViewport({ width: 1280, height: 1000 });
+    const errs = [];
+    p3.on("pageerror", (e) => errs.push(String(e)));
+    await p3.setCookie(await sessionCookie(data.users.ADMIN.email));
+    await p3.goto(`${BASE}/admin/certificates`, { waitUntil: "networkidle0" });
+    await p3.waitForSelector(".js-cert-outstanding", { timeout: 20000 });
+    const listed = await p3.$$eval(".js-cert-outstanding tbody tr[data-kind]", (trs) => trs.map((t) => `${t.querySelector("td").innerText}:${t.getAttribute("data-kind")}`));
+    const menu = await p3.$$eval(".op-side a", (as) => as.map((a) => a.innerText.trim()));
+    if (SHOTS) await p3.screenshot({ path: join(SHOTS, "08-certificates-to-issue.png"), fullPage: false });
+    check("Certificates to issue lists the advance-paid job as its own kind, and is in the admin's menu",
+      listed.includes("FOLK-BKK-20260829-09:COMPANY_ADVANCE") && menu.includes("Certificates to issue") && errs.length === 0, JSON.stringify({ listed: listed.slice(0, 6), errs }));
+    await p3.goto(`${BASE}/job-sheet?guideId=G-902&date=2026-08-29&slotIdx=4`, { waitUntil: "networkidle0" });
+    await p3.waitForFunction(() => [...document.querySelectorAll("h3")].some((h) => h.innerText.includes("ค่าใช้จ่ายที่จ่ายจากเงินทดรอง")), { timeout: 20000 });
+    const panel = await p3.evaluate(() => [...document.querySelectorAll("h3")].find((h) => h.innerText.includes("ค่าใช้จ่ายที่จ่ายจากเงินทดรอง")).closest("section").innerText);
+    check("the job sheet offers an advance-paid certificate for the ticket kept without a receipt", /1 รายการ · ฿1,000\.00/.test(panel) && errs.length === 0, panel.replace(/\s+/g, " ").slice(0, 200));
+    await p3.setCookie(await sessionCookie(data.users.OPERATOR.email));
+    await p3.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+    await p3.waitForSelector(".op-side a", { timeout: 20000 });
+    await pause(800);
+    const opMenu = await p3.$$eval(".op-side a", (as) => as.map((a) => a.innerText.trim()));
+    check("an operator's menu does not offer Certificates to issue", !opMenu.includes("Certificates to issue"), JSON.stringify(opMenu));
+    // A ticket "receipted" with a file nobody has checked: the advance panel asks for a check.
+    await prisma.jobSheet.update({ where: { id: advSheet.id }, data: { expenses: [{ description: "Temple ticket", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator", paidByAt: "2026-08-29T12:00:00Z", paidByBy: data.users.ADMIN.id, receiptUrl: "https://drive.example.test/attached", receiptFileId: "e2e-attached-1" }] } });
+    await p3.setCookie(await sessionCookie(data.users.ADMIN.email));
+    await p3.goto(`${BASE}/job-sheet?guideId=G-902&date=2026-08-29&slotIdx=4`, { waitUntil: "networkidle0" });
+    await p3.waitForSelector(".js-check-attachments", { timeout: 20000 }).catch(() => {});
+    const prompt = await p3.$eval(".js-check-attachments", (e) => e.innerText).catch(() => "");
+    check("an advance-paid row with an unchecked attachment is offered a check (it may be the transfer slip)", /ตรวจไฟล์แนบ/.test(prompt) && /สลิปโอนเงินทดรอง/.test(prompt), prompt.slice(0, 160));
+    void advSheet;
+    await p3.close();
+  }
 } finally {
   await browser.close();
   server.kill();

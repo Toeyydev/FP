@@ -8,7 +8,7 @@ import { signOut } from "next-auth/react";
 // drops its Google Drive status here), and Sign out pinned at the bottom.
 // Grouped Operations / Finance / Reporting / Settings — existing pages only
 // (no dead links; Expenses / PEAK Sync / Logs pages join their groups when built).
-const GROUPS: { label?: string; items: { key: string; label: string; href: string }[] }[] = [
+const GROUPS: { label?: string; items: { key: string; label: string; href: string; adminOnly?: boolean }[] }[] = [
   {
     items: [
       { key: "dashboard", label: "Dashboard", href: "/dashboard" },
@@ -39,6 +39,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
     items: [
       { key: "peak-sync", label: "PEAK sync", href: "/peak-sync" },
       { key: "accounting-logs", label: "Accounting logs", href: "/accounting-logs" },
+      { key: "certificates", label: "Certificates to issue", href: "/admin/certificates", adminOnly: true },
     ],
   },
   {
@@ -69,6 +70,14 @@ export function OperatorNav({ active, children }: { active?: string; children?: 
     return () => { ok = false; };
   }, []);
 
+  // Admin-only pages are left out of an operator's menu (their pages refuse them anyway).
+  const [admin, setAdmin] = useState(false);
+  useEffect(() => {
+    let ok = true;
+    fetch("/api/auth/session", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (ok) setAdmin(j?.user?.role === "ADMIN"); }).catch(() => {});
+    return () => { ok = false; };
+  }, []);
+
   return (
     <div className="op-side">
       <nav className="op-nav" aria-label="Sections">
@@ -79,7 +88,7 @@ export function OperatorNav({ active, children }: { active?: string; children?: 
         {GROUPS.map((g, gi) => (
           <Fragment key={gi}>
             {g.label && <span className="op-nav-group">{g.label}</span>}
-            {g.items.map((s) => (
+            {g.items.filter((s) => !s.adminOnly || admin).map((s) => (
               <a
                 key={s.key}
                 href={s.href}

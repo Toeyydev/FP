@@ -7,7 +7,7 @@ import { localSwitches, type ServiceName } from "@/lib/peak-switches";
 
 /** Tables these tests write, in an order safe to truncate together. */
 const TABLES = [
-  "AuditLog", "ServiceStatus", "Checkin", "TourReport", "PushSubscription", "Notification",
+  "AuditLog", "ServiceStatus", "ReceiptClassification", "Checkin", "TourReport", "PushSubscription", "Notification",
   // The advance ledger and everything that hangs off it. Listed before JobSheet
   // and User because these rows reference them.
   "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",
