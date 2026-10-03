@@ -5,6 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { GuideTabs } from "@/components/GuideTabs";
 import { useLang } from "@/components/Providers";
 import { REQUIRED_PROFILE_FIELDS } from "@/lib/profile";
+import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 
 const REQUIRED = new Set(REQUIRED_PROFILE_FIELDS);
 
@@ -73,27 +74,15 @@ export default function ProfileForm({ targetUserId, isGuideOwn = false }: { targ
   }
 
   // Downscale big photos in the browser so phone images don't hit the size limit.
-  async function shrink(file: File): Promise<Blob> {
-    if (!file.type.startsWith("image/")) return file; // PDFs etc. upload as-is
-    const bmp = await createImageBitmap(file).catch(() => null);
-    if (!bmp) return file;
-    const max = 1600, scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
-    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
-    const c = document.createElement("canvas"); c.width = w; c.height = h;
-    const ctx = c.getContext("2d"); if (!ctx) return file;
-    ctx.drawImage(bmp, 0, 0, w, h);
-    const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", 0.82));
-    return blob && blob.size < file.size ? blob : file;
-  }
   async function upload(kind: string, file: File) {
     // Only PDF / JPG / PNG are accepted.
     const okType = ["application/pdf", "image/jpeg", "image/jpg", "image/png"].includes((file.type || "").toLowerCase()) || /\.(pdf|jpe?g|png)$/i.test(file.name);
     if (!okType) { setDocMsg(t("docBadType")); return; }
     setDocMsg(t("uploading"));
     try {
-      const blob = await shrink(file);
+      const blob = await shrinkImage(file);
       const fd = new FormData();
-      const name = blob.type === "image/jpeg" ? file.name.replace(/\.[^.]+$/, "") + ".jpg" : file.name;
+      const name = shrunkName(file.name, blob);
       fd.append("kind", kind); fd.append("file", blob, name || "upload");
       if (targetUserId) fd.append("userId", targetUserId);
       const r = await fetch("/api/profile/document", { method: "POST", body: fd });
