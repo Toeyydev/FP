@@ -283,6 +283,13 @@ try {
     await pause(800);
     const opMenu = await p3.$$eval(".op-side a", (as) => as.map((a) => a.innerText.trim()));
     check("an operator's menu does not offer Certificates to issue", !opMenu.includes("Certificates to issue"), JSON.stringify(opMenu));
+    // A ticket "receipted" with a file nobody has checked: the advance panel asks for a check.
+    await prisma.jobSheet.update({ where: { id: advSheet.id }, data: { expenses: [{ description: "Temple ticket", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance", paidBySource: "operator", paidByAt: "2026-08-29T12:00:00Z", paidByBy: data.users.ADMIN.id, receiptUrl: "https://drive.example.test/attached", receiptFileId: "e2e-attached-1" }] } });
+    await p3.setCookie(await sessionCookie(data.users.ADMIN.email));
+    await p3.goto(`${BASE}/job-sheet?guideId=G-902&date=2026-08-29&slotIdx=4`, { waitUntil: "networkidle0" });
+    await p3.waitForSelector(".js-check-attachments", { timeout: 20000 }).catch(() => {});
+    const prompt = await p3.$eval(".js-check-attachments", (e) => e.innerText).catch(() => "");
+    check("an advance-paid row with an unchecked attachment is offered a check (it may be the transfer slip)", /ตรวจไฟล์แนบ/.test(prompt) && /สลิปโอนเงินทดรอง/.test(prompt), prompt.slice(0, 160));
     void advSheet;
     await p3.close();
   }

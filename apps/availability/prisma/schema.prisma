@@ -1937,3 +1937,21 @@ model HistoricalEvidenceReview {
 
   @@index([decision])
 }
+
+// What an attached receipt file turned out to be (lib/certificates/receipt-kind), by its
+// Drive file id — a Drive file under one id never changes, so neither does the answer.
+// Kept apart from the expense row on purpose: the row is round-tripped through the
+// browser on every save, and a fact the server read out of a file is not the browser's
+// to carry or to change.
+//
+//   TRANSFER_SLIP  a bank transfer slip (K BIZ text layer read in-process). On a row paid
+//                  from a company advance it is the advance going OUT, not the ticket the
+//                  advance bought — so it is not evidence of that cost.
+//   DOCUMENT       anything else: a ticket, a receipt, a photo FolkOPS does not read.
+model ReceiptClassification {
+  fileId    String   @id // Drive file id of the attachment
+  kind      String // TRANSFER_SLIP | DOCUMENT
+  txRef     String? // the slip's transaction ID, when it is one
+  checkedAt DateTime @default(now())
+  checkedBy String? // User.id who pressed the check, or null when classified at upload
+}

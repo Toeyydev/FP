@@ -93,7 +93,11 @@ export const NO_RECEIPT_REASON_TH =
   "ผู้ให้บริการเป็นผู้ประกอบการรายย่อยที่ไม่ออกใบเสร็จรับเงิน เช่น เรือข้ามฟาก รถโดยสารประจำทาง และน้ำดื่มจากร้านค้าริมทาง";
 
 /** What a certificate needs to know about the job besides its rows. */
-export type SheetContext = { tourName?: string | null };
+export type SheetContext = {
+  tourName?: string | null;
+  /** Drive file ids of attachments that turned out to be bank transfer slips (lib/certificates/receipt-kind). */
+  transferSlipFileIds?: ReadonlySet<string>;
+};
 
 /**
  * A food tour's food cost: a meal row that is not the drinking water every tour buys.
@@ -164,7 +168,10 @@ function advanceRows(expenses: readonly Expense[] | null | undefined, ctx: Sheet
   (expenses ?? []).forEach((e, index) => {
     if (isReviewExpense(e) || expenseAmount(e) <= 0) return;
     if (isFoodCostRow(e) && !isFoodTour(ctx.tourName)) return;
-    if (!advanceFundedConfirmed(e) || hasReceipt(e)) return;
+    // A transfer slip attached to the row is the advance going out, not the ticket it bought.
+    const fileId = String((e as ExpenseWithEvidence).receiptFileId ?? "").trim();
+    const slipOnly = !!fileId && !!ctx.transferSlipFileIds?.has(fileId);
+    if (!advanceFundedConfirmed(e) || (hasReceipt(e) && !slipOnly)) return;
     out.push({
       index, identity: financialIdentity(e as ProtectedRow), description: (e.description ?? "").trim(),
       pax: Number(e.pax ?? 0), price: Number(e.price ?? 0), amountSatang: satang(expenseAmount(e)), category: String(e.expenseType ?? "other"),
@@ -270,11 +277,11 @@ export function checkDrift(
     kind?: CertificateKind;
   },
   /** `advances`: for a COMPANY_ADVANCE certificate, the advances its rows point at NOW. */
-  sheetNow: { facts: SheetFacts; expenses: Expense[]; advances?: string[]; tourName?: string | null },
+  sheetNow: { facts: SheetFacts; expenses: Expense[]; advances?: string[]; tourName?: string | null; transferSlipFileIds?: ReadonlySet<string> },
 ): DriftResult {
   const reasons: string[] = [];
   const kind = stored.kind ?? "GUIDE_PAID";
-  const nowRows = certifiableRows(sheetNow.expenses, kind, { tourName: sheetNow.tourName });
+  const nowRows = certifiableRows(sheetNow.expenses, kind, { tourName: sheetNow.tourName, transferSlipFileIds: sheetNow.transferSlipFileIds });
   // Rebuilt with the signature the certificate already carries, because this asks one
   // question only: has the JOB SHEET moved? A signature replaced since would make every
   // rebuild differ and report the sheet as changed when nothing on it had. Whether the

@@ -19,7 +19,7 @@ type Sheet = { id: string; ref: string | null; guideId: string; date: string; sl
 type Cert = { jobSheetId: string; kind: string; status: string; certificateNo: string };
 
 /** Pure: the outstanding list from sheets, tour names and certificates. */
-export function outstandingCertificates(sheets: Sheet[], tourNames: Map<string, string>, certs: Cert[]): OutstandingJob[] {
+export function outstandingCertificates(sheets: Sheet[], tourNames: Map<string, string>, certs: Cert[], transferSlipFileIds: ReadonlySet<string> = new Set()): OutstandingJob[] {
   const byKey = new Map<string, Cert>();
   for (const c of certs) if (c.status !== "VOID") byKey.set(`${c.jobSheetId}|${c.kind === "COMPANY_ADVANCE" ? "COMPANY_ADVANCE" : "GUIDE_PAID"}`, c);
   const out: OutstandingJob[] = [];
@@ -27,7 +27,7 @@ export function outstandingCertificates(sheets: Sheet[], tourNames: Map<string, 
     const tourName = s.tourId ? tourNames.get(s.tourId) ?? null : null;
     const expenses = (Array.isArray(s.expenses) ? s.expenses : []) as Expense[];
     for (const kind of ["GUIDE_PAID", "COMPANY_ADVANCE"] as const) {
-      const rows = certifiableRows(expenses, kind, { tourName });
+      const rows = certifiableRows(expenses, kind, { tourName, transferSlipFileIds });
       if (!rows.length) continue;
       const live = byKey.get(`${s.id}|${kind}`);
       if (live?.status === "LINKED") continue;
@@ -42,10 +42,11 @@ export function outstandingCertificates(sheets: Sheet[], tourNames: Map<string, 
 }
 
 export async function readOutstandingCertificates(db: PrismaClient): Promise<OutstandingJob[]> {
-  const [sheets, tours, certs] = await Promise.all([
+  const [sheets, tours, certs, slips] = await Promise.all([
     db.jobSheet.findMany({ select: { id: true, ref: true, guideId: true, date: true, slotIdx: true, tourId: true, expenses: true, approvalStatus: true } }),
     db.tour.findMany({ select: { id: true, name: true } }),
     db.expenseCertificate.findMany({ select: { jobSheetId: true, kind: true, status: true, certificateNo: true } }),
+    db.receiptClassification.findMany({ where: { kind: "TRANSFER_SLIP" }, select: { fileId: true } }),
   ]);
-  return outstandingCertificates(sheets, new Map(tours.map((t) => [t.id, t.name])), certs);
+  return outstandingCertificates(sheets, new Map(tours.map((t) => [t.id, t.name])), certs, new Set(slips.map((s) => s.fileId)));
 }

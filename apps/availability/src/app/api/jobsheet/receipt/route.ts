@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { classifyBytes, recordClassification } from "@/lib/certificates/receipt-kind";
 import { audit } from "@/lib/audit";
 import { isAdmin, isOps } from "@/lib/roles";
 import { redactRowsForNonAdmin } from "@/lib/certificates/access";
@@ -68,6 +69,12 @@ export async function POST(req: NextRequest) {
     ? { ...e, receiptUrl: up.link, receiptFileId: up.id, receiptName: (file.name || name).slice(0, 200), receiptAt: at, receiptBy: session!.user!.id ?? undefined }
     : e));
   const updated = await prisma.jobSheet.update({ where: key, data: { expenses: next } });
+  // What the file is (lib/certificates/receipt-kind): a transfer slip attached to an
+  // advance-paid row is not that row's ticket. Read here, from the bytes just uploaded;
+  // best-effort — the receipt is attached whatever the answer.
+  try {
+    await recordClassification(prisma, up.id, await classifyBytes(new Uint8Array(Buffer.from(base64, "base64")), mime, file.name ?? name), session!.user!.id ?? null);
+  } catch { /* the admin's "check attachments" can classify it later */ }
 
   await audit({
     actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,

@@ -51,6 +51,8 @@ type Info = {
   rowsNeedingCertificate: Covered[]; totalSatang: number; canIssue: boolean; blockers: string[];
   /** Costs paid from a company advance with no ticket or receipt — their own certificate. */
   advanceRowsNeedingCertificate?: Covered[]; advanceTotalSatang?: number; canIssueAdvance?: boolean; advanceBlockers?: string[];
+  /** Advance-paid rows with an attachment nobody has checked — it may be the transfer slip. */
+  advanceAttachmentsUnchecked?: number;
   certificates: Certificate[];
   attachEnabled: boolean;
   reconciliation: Reconciliation;
@@ -137,7 +139,8 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
   const live = info.certificates.find((c) => c.status !== "VOID") ?? null;
   const rows = live ? live.coveredRows : info.rowsNeedingCertificate;
   const total = live ? live.totalSatang : info.totalSatang;
-  if (!rows.length && !info.certificates.length) return null;
+  const unchecked = advance ? info.advanceAttachmentsUnchecked ?? 0 : 0;
+  if (!rows.length && !info.certificates.length && !unchecked) return null;
 
   return (
     <section className="card" style={{ marginTop: 14 }}>
@@ -147,6 +150,15 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
           ? "สำหรับค่าใช้จ่ายที่ไกด์จ่ายด้วยเงินทดรองของบริษัท แต่ไม่ได้เก็บตั๋วหรือใบเสร็จไว้ · ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน ไม่ใช่ใบกำกับภาษี"
           : "สำหรับค่าใช้จ่ายที่ไกด์สำรองจ่ายและผู้ให้บริการไม่ออกใบเสร็จ · ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน ไม่ใช่ใบกำกับภาษี"}
       </div>
+
+      {unchecked > 0 && (
+        <div className="js-check-attachments" style={{ fontSize: 12, marginBottom: 8, border: "1px solid #e0b964", background: "#fff7e8", borderRadius: 6, padding: "6px 10px" }}>
+          มี {unchecked} แถวที่จ่ายจากเงินทดรองและแนบไฟล์ไว้ ยังไม่ได้ตรวจว่าไฟล์เป็นตั๋ว/ใบเสร็จ หรือเป็นสลิปโอนเงินทดรอง
+          (สลิปโอนเงินไม่ใช่หลักฐานของค่าตั๋ว)
+          <button type="button" className="btn sm" style={{ marginLeft: 8 }} disabled={busy}
+            onClick={() => act("/api/jobsheet/certificate/check-attachments", { guideId, date, slotIdx }, "ตรวจไฟล์แนบแล้ว")}>ตรวจไฟล์แนบ</button>
+        </div>
+      )}
 
       {info.guideReportedAt && (
         <div style={{ fontSize: 11.5, marginBottom: 8 }}>

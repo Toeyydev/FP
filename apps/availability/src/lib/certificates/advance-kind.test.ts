@@ -83,3 +83,11 @@ describe("the outstanding list", () => {
     ]);
   });
 });
+
+describe("a transfer slip attached as a ticket's receipt", () => {
+  const withSlip = ticket({ receiptUrl: "https://drive.example.test/slip", receiptFileId: "file-slip-1" } as Partial<Expense>);
+  it("is not the ticket: once the file is known to be a transfer slip, the row needs a certificate again", () => {
+    expect(certifiableRows([withSlip], "COMPANY_ADVANCE")).toHaveLength(0); // unknown file: taken as a ticket
+    expect(certifiableRows([withSlip], "COMPANY_ADVANCE", { transferSlipFileIds: new Set(["file-slip-1"]) })).toHaveLength(1);
+  });
+});

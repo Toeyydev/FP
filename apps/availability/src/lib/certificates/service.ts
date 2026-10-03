@@ -5,6 +5,7 @@ import { audit } from "@/lib/audit";
 import { type Expense } from "@/lib/jobsheet";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { type EvidenceWaiver } from "@/lib/reimbursement-evidence";
+import { transferSlipFileIds } from "@/lib/certificates/receipt-kind";
 import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificateKind, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { certificateFileName, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
@@ -216,7 +217,7 @@ export async function createCertificate(
     if (badSource) refuse([badSource]);
     const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
     const tourName = await tourNameOf(tx, sheet.tourId);
-    const rows = certifiableRows(expenses, kind, { tourName });
+    const rows = certifiableRows(expenses, kind, { tourName, transferSlipFileIds: await transferSlipFileIds(tx, expenses) });
     const problems = eligibility(sheet, rows, chosen, kind);
     if (problems.length) refuse(problems);
 
@@ -324,7 +325,7 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
     const expenses = (sheet!.expenses as unknown as Expense[]) ?? [];
     const kind = kindOf(cert!);
     const tourName = await tourNameOf(tx, sheet!.tourId);
-    const rows = certifiableRows(expenses, kind, { tourName });
+    const rows = certifiableRows(expenses, kind, { tourName, transferSlipFileIds: await transferSlipFileIds(tx, expenses) });
     const problems = eligibility(sheet!, rows, (cert!.source as ExpenseSource) ?? "GUIDE_REPORTED", kind);
     if (problems.length) refuse(problems);
     const advance = kind === "COMPANY_ADVANCE" ? { advances: await advanceNosFor(tx, expenses, rows) } : null;
@@ -334,8 +335,8 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
         signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
         origin: originOf(cert!), kind: kindOf(cert!) },
-      { facts: factsFor(cert!, sheet!, name), expenses, tourName: await tourNameOf(tx, sheet!.tourId),
-        advances: kindOf(cert!) === "COMPANY_ADVANCE" ? await advanceNosFor(tx, expenses, certifiableRows(expenses, "COMPANY_ADVANCE", { tourName: await tourNameOf(tx, sheet!.tourId) })) : undefined },
+      { facts: factsFor(cert!, sheet!, name), expenses, tourName: await tourNameOf(tx, sheet!.tourId), transferSlipFileIds: await transferSlipFileIds(tx, expenses),
+        advances: kindOf(cert!) === "COMPANY_ADVANCE" ? await advanceNosFor(tx, expenses, certifiableRows(expenses, "COMPANY_ADVANCE", { tourName: await tourNameOf(tx, sheet!.tourId), transferSlipFileIds: await transferSlipFileIds(tx, expenses) })) : undefined },
     );
     if (drift.drifted) {
       refuse(["This job sheet has changed since the certificate was prepared, so it no longer describes the sheet:", ...drift.reasons, "Withdraw this certificate and issue a new one."]);
@@ -814,8 +815,8 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
         signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
         origin: originOf(cert!), kind: kindOf(cert!) },
-      { facts: factsFor(cert!, sheet!, name), expenses, tourName: await tourNameOf(tx, sheet!.tourId),
-        advances: kindOf(cert!) === "COMPANY_ADVANCE" ? await advanceNosFor(tx, expenses, certifiableRows(expenses, "COMPANY_ADVANCE", { tourName: await tourNameOf(tx, sheet!.tourId) })) : undefined },
+      { facts: factsFor(cert!, sheet!, name), expenses, tourName: await tourNameOf(tx, sheet!.tourId), transferSlipFileIds: await transferSlipFileIds(tx, expenses),
+        advances: kindOf(cert!) === "COMPANY_ADVANCE" ? await advanceNosFor(tx, expenses, certifiableRows(expenses, "COMPANY_ADVANCE", { tourName: await tourNameOf(tx, sheet!.tourId), transferSlipFileIds: await transferSlipFileIds(tx, expenses) })) : undefined },
     );
     if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);
 

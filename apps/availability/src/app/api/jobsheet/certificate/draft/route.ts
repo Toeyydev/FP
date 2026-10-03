@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { transferSlipFileIds } from "@/lib/certificates/receipt-kind";
 import { isAdmin } from "@/lib/roles";
 import { denied } from "@/lib/certificates/denied";
 import type { Expense } from "@/lib/jobsheet";
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
   const kind = kindRaw;
   const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
   const tourName = sheet.tourId ? (await prisma.tour.findUnique({ where: { id: sheet.tourId }, select: { name: true } }))?.name ?? null : null;
-  const rows = certifiableRows(expenses, kind, { tourName });
+  const rows = certifiableRows(expenses, kind, { tourName, transferSlipFileIds: await transferSlipFileIds(prisma, expenses) });
   const blockers = [...ineligibleRows(expenses), ...duplicateIdentities(rows, expenses)];
   if (!rows.length) {
     blockers.push(kind === "COMPANY_ADVANCE"

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { transferSlipFileIds, uncheckedAdvanceAttachments } from "@/lib/certificates/receipt-kind";
 import { isAdmin } from "@/lib/roles";
 import type { Expense } from "@/lib/jobsheet";
 import { certifiableRows, isCertificateKind, duplicateIdentities, ineligibleRows } from "@/lib/certificates/payload";
@@ -55,7 +56,10 @@ export async function GET(req: NextRequest) {
   const tourName = sheet.tourId ? (await prisma.tour.findUnique({ where: { id: sheet.tourId }, select: { name: true } }))?.name ?? null : null;
   const rows = certifiableRows(expenses, "GUIDE_PAID", { tourName });
   // Costs paid from a company advance with no ticket or receipt — their own certificate.
-  const advanceRows = certifiableRows(expenses, "COMPANY_ADVANCE", { tourName });
+  const transferSlips = await transferSlipFileIds(prisma, expenses);
+  const advanceRows = certifiableRows(expenses, "COMPANY_ADVANCE", { tourName, transferSlipFileIds: transferSlips });
+  // Advance-paid rows whose attachment nobody has checked: it may be the transfer slip.
+  const advanceAttachmentsUnchecked = (await uncheckedAdvanceAttachments(prisma, expenses)).length;
   const certificates = await prisma.expenseCertificate.findMany({
     where: { jobSheetId: sheet.id },
     orderBy: { createdAt: "desc" },
@@ -101,6 +105,7 @@ export async function GET(req: NextRequest) {
     advanceTotalSatang: advanceRows.reduce((t, r) => t + r.amountSatang, 0),
     canIssueAdvance: advanceRows.length > 0 && advanceBlockers.length === 0,
     advanceBlockers,
+    advanceAttachmentsUnchecked,
     // Where the rows may be said to have come from, and which to offer first. The admin
     // who would be recorded is named from the SESSION — the browser is told who it is
     // about to become, it does not get to say.
