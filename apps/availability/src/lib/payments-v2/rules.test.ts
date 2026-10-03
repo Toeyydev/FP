@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkPayment, jobFigures, paymentNoFor, reconciliationLine, type JobFacts, type PaymentRequest } from "@/lib/payments-v2/rules";
+import { checkPayment, isHistoricalPayment, jobFigures, paymentNoFor, reconciliationLine, type JobFacts, type PaymentRequest } from "@/lib/payments-v2/rules";
 
 // Payments v2 rules. Fictional guide, jobs and amounts that follow the real patterns
 // (a paid job not in PEAK, a ฿0 fee, an advance settled in the transfer, a double payment).
@@ -102,5 +102,19 @@ describe("paymentNoFor", () => {
   it("numbers within the month the money moved: FOLK-PMT-YYYYMM-NNN", () => {
     expect(paymentNoFor("2099-09-15", 1)).toBe("FOLK-PMT-209909-001");
     expect(paymentNoFor("2099-12-01", 42)).toBe("FOLK-PMT-209912-042");
+  });
+});
+
+describe("isHistoricalPayment", () => {
+  const now = Date.parse("2026-10-04T05:00:00Z"); // 12:00 in Bangkok
+  it("a transfer more than 7 days before today is historical; within the week it is not", () => {
+    expect(isHistoricalPayment("2026-02-14", now)).toBe(true);
+    expect(isHistoricalPayment("2026-09-26", now)).toBe(true);
+    expect(isHistoricalPayment("2026-09-27", now)).toBe(false);
+    expect(isHistoricalPayment("2026-10-04", now)).toBe(false);
+  });
+  it("no date is not historical", () => {
+    expect(isHistoricalPayment(null, now)).toBe(false);
+    expect(isHistoricalPayment("", now)).toBe(false);
   });
 });

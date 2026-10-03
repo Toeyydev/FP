@@ -1,3 +1,4 @@
+import { isHistoricalPayment } from "@/lib/payments-v2/rules";
 import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
@@ -116,7 +117,9 @@ export async function POST(req: NextRequest) {
   const result = await recordPayment(prisma, { ...body, source: "MANUAL", slip, actor });
   if (!result.ok) return NextResponse.json({ error: result.code === "conflict" ? "conflict" : "not-recordable", reasons: result.reasons, reconciliation: result.reconciliation ?? null }, { status: 409 });
 
-  // Tell the guide their money is on the way — best effort, never blocks the record.
+  // Tell the guide their money is on the way — best effort, never blocks the record. Not for
+  // a payment recorded long after it was made (payments-v2/rules isHistoricalPayment).
+  if (isHistoricalPayment(body.paymentDate)) return NextResponse.json({ ok: true, payment: result.payment, reconciliation: result.reconciliation, notified: false });
   try {
     if (result.payment.supplements.length) {
       const kinds = [...new Set(result.payment.supplements.map((x) => SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en.toLowerCase() ?? "extra payment"))].join(" and ");

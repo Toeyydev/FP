@@ -1,6 +1,7 @@
 // Server half of "Pay N jobs together": reads the jobs, enforces every guard that needs
 // the database, and supplies the side effects lib/peak-payment-document orders — for
 // stage 1 (create the PEAK expense document) and stage 2 (record its payment).
+import { isHistoricalPayment } from "@/lib/payments-v2/rules";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
@@ -764,6 +765,9 @@ export function prismaPayDeps(opts: {
     async notifyGuide({ paymentRef, slipLink }) {
       // The guide was told when the money moved; putting it in PEAK afterwards is bookkeeping.
       if (doc.alreadyPaid) return;
+      // Recorded long after the transfer: bookkeeping, not news to the guide.
+      const paid = await prisma.guidePaymentDocument.findUnique({ where: { paymentRef }, select: { paymentDate: true } });
+      if (isHistoricalPayment(paid?.paymentDate)) return;
       await sendPaymentNotice(doc.guideId, jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, slipLink);
       await audit({ ...actor, action: "pay.peak_payment_notice_sent", entityType: "GuidePaymentDocument", detail: { paymentRef, guideId: doc.guideId, jobs: jobs.length } });
     },
@@ -962,6 +966,7 @@ export async function resolvePaymentDocument(
     await audit({ ...actor, action: "pay.peak_payment_resolved_found", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: doc.peakDocumentNo } });
     // Already paid: the guide heard when the money moved.
     if (doc.alreadyPaid) return { ok: true };
+    if (isHistoricalPayment(doc.paymentDate)) return { ok: true };
     return { ok: true, notify: { guideId: doc.guideId, jobs: documentJobs(doc).map((j) => ({ date: j.date, slotIdx: j.slotIdx })), slipUrl: doc.slipUrl } };
   }
 
