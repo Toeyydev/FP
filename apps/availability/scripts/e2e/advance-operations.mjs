@@ -477,6 +477,7 @@ try {
   // PEAK. Read-only — looking at it must send and change nothing.
   const outboxBefore = JSON.stringify(await prisma.advancePeakSync.findMany({ orderBy: { id: "asc" } }));
   await p2.waitForSelector(".js-account-journal .js-journal-entry", { timeout: 15000 }).catch(() => {});
+  if (SHOTS) await p2.screenshot({ path: join(SHOTS, "advances-page.png"), fullPage: true });
   const journal = await p2.evaluate(async () => {
     const panel = document.querySelector(".js-account-journal");
     const rows = [...document.querySelectorAll(".js-account-journal .js-journal-entry")];
