@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isDirectWebsiteBooking } from "@/lib/bookings";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -114,14 +115,6 @@ export async function GET(req: NextRequest) {
       where: {
         status: { in: ["PENDING", "OFFERED", "ASSIGNED"] },
         OR: [{ date: null }, { date: { gte: today } }],
-        // Incoming bookings are OTA only (GetYourGuide GET-xxxx, Viator). Hide direct
-        // FOLK-xxxx website bookings so they never clutter the dispatch inbox.
-        NOT: {
-          OR: [
-            { confirmationCode: { startsWith: "FOLK-", mode: "insensitive" } },
-            { externalRef: { startsWith: "FOLK-", mode: "insensitive" } },
-          ],
-        },
       },
       orderBy: [{ date: "asc" }, { slotIdx: "asc" }, { createdAt: "asc" }],
       take: 500,
@@ -137,7 +130,11 @@ export async function GET(req: NextRequest) {
   const aUsers = aGuideIds.length ? await prisma.user.findMany({ where: { guideId: { in: aGuideIds } }, select: { guideId: true, displayName: true } }) : [];
   const aName = new Map(aUsers.map((g) => [g.guideId, g.displayName]));
   const aMap = new Map(aRows.map((a) => [`${a.date}|${a.slotIdx}`, a.guideId]));
-  const withGuide = bookings.map((b) => { const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined; return { ...b, guideId: gid ?? null, guide: gid ? (aName.get(gid) ?? gid) : null }; });
+  // Incoming bookings are OTA only: a direct website booking never belongs in the dispatch
+  // inbox. Decided per row (lib/bookings isDirectWebsiteBooking), not by the FOLK- prefix
+  // alone — Bókun's webhook gives an OTA booking a FOLK-T… confirmation code too, and hiding
+  // on the prefix hid every booking that arrived by webhook (3 Oct 2026).
+  const withGuide = bookings.filter((b) => !isDirectWebsiteBooking(b)).map((b) => { const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined; return { ...b, guideId: gid ?? null, guide: gid ? (aName.get(gid) ?? gid) : null }; });
   // "Incoming" = tours still to come: drop today's slots whose start time has already
   // passed (e.g. this morning's 08:30 once it's run). Future + undated bookings stay.
   const nowMin = (() => { const d = new Date(Date.now() + 7 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes(); })();

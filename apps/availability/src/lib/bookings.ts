@@ -272,3 +272,18 @@ export function isCancellation(raw: unknown): boolean {
   collectAll(raw, ["action", "eventType", "status", "state", "bookingStatus", "confirmationStatus", "productConfirmationStatus"], vals);
   return vals.some((v) => v.toUpperCase().includes("CANCEL"));
 }
+
+/**
+ * A booking made directly on the Folkpaths website — not one that came through an OTA.
+ *
+ * Its own number starts FOLK- and it has no OTA reference. The prefix alone does not say so:
+ * Bókun's webhook delivers an OTA booking under a FOLK-T… confirmation code, with the OTA's
+ * reference (GYG…, a Viator number) beside it. That one is an OTA booking and must stay in
+ * the dispatch inbox.
+ */
+export function isDirectWebsiteBooking(b: { confirmationCode?: string | null; externalRef?: string | null }): boolean {
+  const folk = (v: string | null | undefined) => /^folk-/i.test((v ?? "").trim());
+  const ref = (b.externalRef ?? "").trim();
+  if (folk(ref)) return true;
+  return folk(b.confirmationCode) && !ref;
+}
