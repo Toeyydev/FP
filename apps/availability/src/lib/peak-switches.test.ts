@@ -87,3 +87,18 @@ describe("what a service may report as its last error", () => {
     expect(scrub("x".repeat(500))).toHaveLength(300);
   });
 });
+
+describe("the worker's last successful run is recorded", () => {
+  it("a success right after the plain report of the same pass is still written — at most once a minute", async () => {
+    const { recordServiceStatus } = await import("./peak-switches");
+    const writes: { lastSuccessAt?: Date }[] = [];
+    const db = { serviceStatus: { upsert: async ({ update }: { update: { lastSuccessAt?: Date } }) => { writes.push(update); } } } as never;
+    const t0 = Date.parse("2099-03-09T10:00:00Z");
+    await recordServiceStatus(db, "payment-worker", {}, t0);                    // start of a pass
+    await recordServiceStatus(db, "payment-worker", { success: true }, t0 + 5); // end of it
+    await recordServiceStatus(db, "payment-worker", {}, t0 + 15_000);           // next pass: throttled
+    await recordServiceStatus(db, "payment-worker", { success: true }, t0 + 15_005); // throttled too
+    await recordServiceStatus(db, "payment-worker", { success: true }, t0 + 61_000); // a minute on: written
+    expect(writes.filter((w) => w.lastSuccessAt).map((w) => w.lastSuccessAt!.getTime())).toEqual([t0 + 5, t0 + 61_000]);
+  });
+});
