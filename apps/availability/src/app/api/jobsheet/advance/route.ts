@@ -1,3 +1,4 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -12,8 +13,9 @@ import { issueAdvance } from "@/lib/advances/service";
 import { issueVoucherFor } from "@/lib/advances/voucher-issue";
 import { jobAdvanceView } from "@/lib/advances/job-view";
 import type { Expense } from "@/lib/jobsheet";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { bangkokToday } from "@/lib/payments-v2/rules";
+import { duplicateTransferBody, liveAdvanceForTransfer } from "@/lib/advances/tx-ref";
+import { gateSlip, slipDecisionFrom, type StoredSlipCheck } from "@/lib/advances/slip-check";
 
 // Guide advances + returns for one job (guideId + date + slotIdx). An advance is a
 // cash movement, never an expense (see lib/advance). Operators/admin record both;
@@ -40,7 +42,7 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   // Cutover: no advance or return may be written while the ledger is being migrated.
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
 
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "bad-body" }, { status: 400 });
@@ -104,6 +106,19 @@ export async function POST(req: NextRequest) {
     : await prisma.guideAdvanceReturn.findFirst({ where: { ...key(guideId, date, slotIdx), amount, createdAt: { gte: dupWindow } } });
   if (dup) return NextResponse.json({ error: "duplicate", hint: "This amount was just recorded — refresh before recording it again." }, { status: 409 });
 
+  // An advance, before anything is uploaded: one transfer is one advance
+  // (lib/advances/tx-ref), and the slip shows this transfer to this guide — or a person
+  // said why it is still right (lib/advances/slip-check).
+  let slipCheck: StoredSlipCheck | null = null;
+  if (kind === "advance") {
+    const existing = await liveAdvanceForTransfer(prisma, txRef);
+    if (existing) return NextResponse.json(duplicateTransferBody(existing, { amount, advanceDate: bangkokDate(at) }), { status: 409 });
+    const gate = await gateSlip(prisma, file, guideId, { txRef, amount, advanceDate: bangkokDate(at) }, slipDecisionFrom((k) => form.get(k)),
+      { actorId: session.user.id ?? null, actorRole: session.user.role ?? null });
+    if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
+    slipCheck = gate.stored;
+  }
+
   let slip: { url: string; fileId: string } | null = null;
   if (file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0) {
     // Same naming convention as every other Drive file of this job
@@ -122,10 +137,13 @@ export async function POST(req: NextRequest) {
       guideId, advanceDate: bangkokDate(at), amount, jobNo: sheet.ref ?? null,
       method, bankAccount, bankRef: txRef, note, today: bangkokToday(), purpose,
       allowedCategories: allowedCategories.length ? allowedCategories : null, otherReason,
-      slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null,
+      slipUrl: slip?.url ?? null, slipFileId: slip?.fileId ?? null, slipCheck,
       date, slotIdx, actor: { actorId: createdById, actorRole: session.user.role ?? null },
     });
-    if (!issued.ok) return NextResponse.json({ error: "not-allowed", reasons: issued.reasons, detail: issued.reasons.join("\n") }, { status: issued.status });
+    if (!issued.ok) {
+      if (issued.duplicateOf) return NextResponse.json(duplicateTransferBody(issued.duplicateOf, { amount, advanceDate: bangkokDate(at) }), { status: 409 });
+      return NextResponse.json({ error: "not-allowed", reasons: issued.reasons, detail: issued.reasons.join("\n") }, { status: issued.status });
+    }
     const row = { id: issued.advance.id };
     if (peakRef) await prisma.guideAdvance.update({ where: { id: row.id }, data: { peakRef } });
     // File the guide's voucher first, so the message that tells them the money is

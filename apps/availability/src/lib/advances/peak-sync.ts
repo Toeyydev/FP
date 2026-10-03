@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { createDailyJournal, sanitizePeakError } from "@/lib/peak-api";
 import { advanceJournal, type AdvancePeakConfig, type JournalSource } from "./peak-journal";
 import { advanceWritesFrozen, existingPeakLinksEnabled } from "./freeze";
+import { localSwitches, readServiceReport, workerMayPost } from "@/lib/peak-switches";
 import { amountsByAccount, expenseAccountsFrom, settlementLines } from "./expense-accounts";
 
 // Explicit configuration is shared by web and worker. Never infer bank IDs or journal
@@ -83,6 +84,10 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
   // Three ways to be off, and reconciliation is one of them: while an admin is
   // matching old movements to documents PEAK already holds, nothing may be sent.
   if (process.env.PEAK_ADVANCE_AUTO_SYNC !== "1" || advanceWritesFrozen() || existingPeakLinksEnabled()) return 0;
+  // And across services (lib/peak-switches): an FP that is linking, or that holds other
+  // switches, stops this sender — its own environment is only half the picture.
+  const may = workerMayPost(localSwitches(), await readServiceReport(db, "FP"), Date.now());
+  if (!may.ok) return 0;
   let config: AdvancePeakConfig;
   try { config = advancePeakConfig(); } catch { return 0; }
   // An advance may fund entrance / meal / transport / other (owner 2026-10-01). Each

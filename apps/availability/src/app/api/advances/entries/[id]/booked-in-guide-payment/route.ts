@@ -1,8 +1,8 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isAdmin } from "@/lib/roles";
 import { markBookedInGuidePayment } from "@/lib/advances/booked-in-guide-payment";
 
@@ -19,7 +19,7 @@ const body = z.object({
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!isAdmin(session?.user?.role)) return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can close a PEAK outbox item without posting it"] }, { status: 403 });
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   const { id } = await ctx.params;

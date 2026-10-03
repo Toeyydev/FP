@@ -1,7 +1,7 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isAccountant, isOps } from "@/lib/roles";
 import { approveRefund } from "@/lib/advances/service";
 
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const session = await auth();
   const role = session?.user?.role;
   if (!isOps(role) && !isAccountant(role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
   const { id } = await ctx.params;
   const body = (await req.json().catch(() => ({}))) as Record<string, never>;
   const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };

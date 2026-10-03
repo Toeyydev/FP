@@ -89,7 +89,7 @@ function encrypt(plain) {
 async function seed() {
   // The tables src/test/db.ts resets, plus the Drive connection — never the reference rows the
   // migrations seed (PeakAccountMapping), which later suites on the same database rely on.
-  const tables = ["AuditLog", "Checkin", "TourReport", "PushSubscription", "Notification", "GoogleCalendar",
+  const tables = ["AuditLog", "ServiceStatus", "Checkin", "TourReport", "PushSubscription", "Notification", "GoogleCalendar",
     "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry", "GuideAdvanceRefund", "GuideAdvanceReceipt", "GuideAdvanceReturn", "GuideAdvance",
     "GuidePaymentSupplementLine", "SupplementalPayment", "Bonus", "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
     "ExpenseCertificate", "AttesterSignature", "HistoricalEvidenceReview",
@@ -181,6 +181,16 @@ async function fillAmountRef(page, amount, txRef) {
     for (const [el, v] of [[field("Amount"), String(amount)], [field("Transfer ref"), txRef]]) { set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }
   }, amount, txRef);
 }
+// The slip check (P0): the e2e slip is a picture, which FolkOPS never reads — UNKNOWN,
+// so a person ticks that they checked it by eye before Record is offered.
+async function confirmSlipByEye(page) {
+  await page.waitForFunction(() => { const c = document.querySelector(".js-slip-check"); return c && c.getAttribute("data-result"); }, { timeout: 15000 });
+  const result = await page.$eval(".js-slip-check", (c) => c.getAttribute("data-result"));
+  await page.evaluate(() => { const c = document.querySelector(".js-slip-confirm"); if (c && !c.checked) c.click(); });
+  await pause(300);
+  return result;
+}
+
 async function createAdvanceInEditor(page, { amount, txRef, cats, otherReason }) {
   await openCreate(page);
   const form = await page.$(".js-advance-create-categories");
@@ -196,9 +206,13 @@ async function createAdvanceInEditor(page, { amount, txRef, cats, otherReason })
   const file = await box.$('input[type="file"]');
   await file.uploadFile(SLIP);
   await pause(200);
+  const submitBefore = await page.$eval(".js-advance-submit", (b) => b.disabled);
+  const result = await confirmSlipByEye(page);
+  slipChecks.push({ result, disabledBeforeConfirm: submitBefore });
   await page.click(".js-advance-submit");
   await pause(2500);
 }
+const slipChecks = [];
 
 try {
   const page = await browser.newPage();
@@ -478,6 +492,28 @@ try {
   const outboxBefore = JSON.stringify(await prisma.advancePeakSync.findMany({ orderBy: { id: "asc" } }));
   await p2.waitForSelector(".js-account-journal .js-journal-entry", { timeout: 15000 }).catch(() => {});
   if (SHOTS) await p2.screenshot({ path: join(SHOTS, "advances-page.png"), fullPage: true });
+  // P0 — the PEAK status shows both services. This test server is FP alone: no worker has
+  // reported, so the state is UNKNOWN and the panel says what to check.
+  await p2.waitForFunction(() => document.querySelector(".js-peak-status")?.getAttribute("data-state"), { timeout: 15000 });
+  const peak = await p2.evaluate(() => ({
+    state: document.querySelector(".js-peak-status").getAttribute("data-state"),
+    services: [...document.querySelectorAll(".js-peak-status tr[data-service]")].map((r) => r.getAttribute("data-service")),
+    issues: [...document.querySelectorAll(".js-peak-status .js-peak-issue")].map((i) => i.getAttribute("data-code")),
+    refresh: !!document.querySelector(".js-peak-status .js-peak-refresh"),
+  }));
+  check("P0 · PEAK status shows FP and payment-worker side by side, the combined state, and Refresh",
+    peak.state === "UNKNOWN" && JSON.stringify(peak.services) === JSON.stringify(["FP", "payment-worker"]) && peak.issues.includes("WORKER_SILENT") && peak.refresh, JSON.stringify(peak));
+  // The worker now reports the same switches as this server (links on, sender off): the
+  // state is LINKS and an admin is offered "PEAK doc…" again. Without that report, linking
+  // is refused — the worker's own word is what proves its sender is off.
+  const offeredBefore = await p2.$$eval("button", (bs) => bs.filter((b) => b.innerText.trim() === "PEAK doc…").length);
+  const workerRow = { autoSync: false, existingLinks: true, writesFrozen: false, startedAt: new Date(), lastSeenAt: new Date() };
+  await prisma.serviceStatus.upsert({ where: { id: "payment-worker" }, create: { id: "payment-worker", ...workerRow }, update: workerRow });
+  await p2.goto(`${BASE}/payments?view=advances`, { waitUntil: "networkidle0" });
+  await p2.waitForFunction(() => document.querySelector(".js-peak-status")?.getAttribute("data-state") === "LINKS", { timeout: 15000 });
+  const offeredAfter = await p2.$$eval("button", (bs) => bs.filter((b) => b.innerText.trim() === "PEAK doc…").length);
+  check("P0 · linking is offered only once payment-worker has reported its sender off", offeredBefore === 0 && offeredAfter > 0, JSON.stringify({ offeredBefore, offeredAfter }));
+  if (SHOTS) await p2.screenshot({ path: join(SHOTS, "advances-peak-status.png"), fullPage: false });
   const journal = await p2.evaluate(async () => {
     const panel = document.querySelector(".js-account-journal");
     const rows = [...document.querySelectorAll(".js-account-journal .js-journal-entry")];
@@ -568,9 +604,61 @@ try {
   await p2.evaluate(() => { const s = [...document.querySelectorAll(".modal select")].find((x) => [...x.options].some((o) => o.value === "bank-e2e")); s.value = "bank-e2e"; s.dispatchEvent(new Event("change", { bubbles: true })); });
   await (await p2.$('.modal input[type="file"]')).uploadFile(SLIP);
   await pause(200);
-  await (await p2.$("xpath/.//div[contains(@class,'mfoot')]//button[normalize-space()='Record']")).click();
+  const recordBtn = async () => p2.$("xpath/.//div[contains(@class,'mfoot')]//button[normalize-space()='Record']");
+  await p2.waitForFunction(() => { const c = document.querySelector(".modal .js-slip-check"); return c && c.getAttribute("data-result"); }, { timeout: 15000 });
+  const blockedUntilTicked = await (await recordBtn()).evaluate((b) => b.disabled);
+  const dlgResult = await p2.$eval(".modal .js-slip-check", (c) => c.getAttribute("data-result"));
+  await p2.evaluate(() => document.querySelector(".modal .js-slip-confirm").click());
+  await pause(300);
+  check("P0 · slip check: a picture is UNKNOWN, and Record waits for a person to tick that they checked it", dlgResult === "UNKNOWN" && blockedUntilTicked === true && (await (await recordBtn()).evaluate((b) => !b.disabled)), JSON.stringify({ dlgResult, blockedUntilTicked }));
+  await (await recordBtn()).click();
   await pause(2500);
   const D = await prisma.guideAdvance.findFirst({ where: { txRef: "TX-E2E-D" } });
+  check("P0 · the person's confirmation is kept with the advance", D?.slipCheckResult === "UNKNOWN" && D?.slipCheckConfirmedById === data.admin.id, JSON.stringify({ r: D?.slipCheckResult, by: D?.slipCheckConfirmedById }));
+  check("P0 · on the job sheet too: UNKNOWN, Record held until ticked", slipChecks.length >= 2 && slipChecks.every((x) => x.result === "UNKNOWN" && x.disabledBeforeConfirm), JSON.stringify(slipChecks));
+
+  // P0 — a K BIZ PDF is read by the built server itself (no outside service): the dialog
+  // shows what the slip says and compares it. The e2e guide has no bank account on file and
+  // the slip prints a different name, so it cannot be a MATCH — but it must be READ.
+  const kbizPdf = (() => {
+    const items = [["Transfer Completed", 38, 703], ["(Transaction ID :", 38, 690], ["TRXXE2E0000001", 192, 690], ["Transaction Date", 487, 704], ["03/10/2026 10:15", 480, 685],
+      ["From", 38, 525], ["EXAMPLE TOURS CO.,LTD.", 38, 482], ["/ To", 272, 525], ["xxx-x-x4321-x", 272, 511], ["MR. NOBODY EXAMPLE", 272, 482], ["Example Bank", 272, 454],
+      ["/ Fee", 326, 400], ["0.00 Baht", 490, 400], ["/ Total", 311, 385], ["300.00 Baht", 472, 385], ["Issued by K BIZ", 38, 37]];
+    const content = items.map(([t, x, y]) => `BT /F1 9 Tf ${x} ${y} Td (${t.replace(/[()\\]/g, (c) => "\\" + c)}) Tj ET`).join("\n");
+    const objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+    let out = "%PDF-1.4\n"; const offs = [];
+    objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const x = out.length;
+    out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF\n`;
+    const f = join(tmpdir(), "folkops-e2e-kbiz.pdf"); writeFileSync(f, out, "latin1"); return f;
+  })();
+  await (await p2.$("xpath/.//button[normalize-space()='Record advance…']")).click();
+  await p2.waitForSelector(".js-issue-categories");
+  await typeIn("Guide ID", "G-993"); await typeIn("Amount", "300"); await typeIn("Job No.", data.j1.ref); await typeIn("Bank reference", "TRXXE2E0000001");
+  await (await p2.$('.modal input[type="file"]')).uploadFile(kbizPdf);
+  await p2.waitForSelector(".modal .js-slip-readout", { timeout: 20000 });
+  const readout = await p2.$eval(".modal .js-slip-check", (c) => ({ result: c.getAttribute("data-result"), text: c.innerText }));
+  if (SHOTS) await p2.screenshot({ path: join(SHOTS, "advances-slip-pdf.png"), fullPage: false });
+  check("P0 · the built server reads a K BIZ PDF itself: transaction, amount and the recipient's account are shown and compared",
+    /TRXXE2E0000001/.test(readout.text) && /xxx-x-x4321-x/.test(readout.text) && /฿300\.00/.test(readout.text) && readout.result !== "UNKNOWN" && readout.result !== "MATCH", JSON.stringify(readout).slice(0, 300));
+  await (await p2.$("xpath/.//div[contains(@class,'mfoot')]//button[normalize-space()='Cancel']")).click();
+  await pause(300);
+
+  // P0 — the same transfer again, typed differently: the form says which advance holds it
+  // and opens it; nothing is recorded.
+  await (await p2.$("xpath/.//button[normalize-space()='Record advance…']")).click();
+  await p2.waitForSelector(".js-issue-categories");
+  await typeIn("Guide ID", "G-993"); await typeIn("Amount", "300"); await typeIn("Job No.", data.j1.ref); await typeIn("Bank reference", " tx e2e d ");
+  await (await p2.$('.modal input[type="file"]')).uploadFile(SLIP);
+  await p2.waitForSelector(".modal .js-slip-duplicate", { timeout: 15000 });
+  const dupText = await p2.$eval(".modal .js-slip-duplicate", (e) => e.innerText);
+  const dupBlocked = await (await recordBtn()).evaluate((b) => b.disabled);
+  if (SHOTS) await p2.screenshot({ path: join(SHOTS, "advances-duplicate.png"), fullPage: false });
+  await (await p2.$(".modal .js-open-existing")).click();
+  await p2.waitForFunction((no) => [...document.querySelectorAll(".modal h3, .sheet h3")].some((h) => h.innerText.includes(no)), { timeout: 10000 }, D?.advanceNo ?? "");
+  check("P0 · a duplicate transfer is named, Record is held, and the existing advance opens",
+    dupText.includes(D?.advanceNo ?? "?") && dupBlocked && (await prisma.guideAdvance.count({ where: { txRefKey: "TXE2ED" } })) === 1, dupText.slice(0, 160));
+  await p2.keyboard.press("Escape").catch(() => {});
   check("1 · an advance created on the Advances page with nothing changed may pay for tickets only", JSON.stringify(D?.allowedCategories) === JSON.stringify(["entrance"]), JSON.stringify(D?.allowedCategories));
   await p2.close();
   // Issue #206 — a Company Advance row on a job with no advance on record is said out loud,

@@ -14,6 +14,7 @@
 // make — nothing here writes to the ledger by itself, and nothing is forced: whatever the
 // service refuses stays undone and is reported, exactly as the button would have reported
 // it. Anything left over (an excess return, a row no advance covers) waits for a person.
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import type { PrismaClient } from "@prisma/client";
 import { expenseAmount, isApproved, isReviewExpense } from "@/lib/jobsheet";
 import { effectivePayer } from "@/lib/payer-rules";
@@ -56,6 +57,9 @@ export function settleableRows(rows: readonly SheetRow[], advance: { id: string;
 export async function autoSettleSheet(prisma: PrismaClient, job: { guideId: string; date: string; slotIdx: number }, actor: Actor, trigger: "jobsheet.approve" | "jobsheet.save" = "jobsheet.approve"): Promise<AutoSettled[]> {
   if (advanceWritesFrozen()) return [];
   const out: AutoSettled[] = [];
+  // Unsafe PEAK switches (lib/peak-switches): the approval stands, the settlement waits.
+  const refused = await accountingWriteRefusal(prisma).catch(() => null);
+  if (refused) return [{ advanceNo: "", ok: false, amount: 0, rows: 0, reasons: [String((refused.body as { hint?: string }).hint ?? "New accounting entries are paused")] }];
   try {
     const advances = await prisma.guideAdvance.findMany({ where: { guideId: job.guideId, date: job.date, slotIdx: job.slotIdx, reversedAt: null }, orderBy: { advanceNo: "asc" } });
     for (const advance of advances) {
@@ -85,6 +89,7 @@ export type AutoAllocated = { advanceNo: string; ok: boolean; amount: number; le
  */
 export async function autoAllocateReturn(prisma: PrismaClient, receiptId: string, actor: Actor): Promise<AutoAllocated> {
   if (advanceWritesFrozen()) return null;
+  if (await accountingWriteRefusal(prisma).catch(() => null)) return null; // unsafe PEAK switches: a person allocates later
   try {
     const receipt = await prisma.guideAdvanceReceipt.findUnique({ where: { id: receiptId } });
     if (!receipt || receipt.status !== "VERIFIED" || !receipt.advanceId) return null;

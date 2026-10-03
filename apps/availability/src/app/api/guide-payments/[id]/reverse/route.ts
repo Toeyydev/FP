@@ -1,7 +1,7 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps } from "@/lib/roles";
 import { reversePayment } from "@/lib/payments-v2/service";
 
@@ -14,8 +14,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const { id } = await params;
   // Cutover: a payment that settled an advance is not reversed while advance writes are paused.
-  if (advanceWritesFrozen() && (await prisma.guideAdvanceEntry.count({ where: { paymentId: id, type: "PAYMENT_DEDUCTION", reversedByEntryId: null } }))) {
-    return NextResponse.json(advanceFrozenBody, { status: 503 });
+  if (await prisma.guideAdvanceEntry.count({ where: { paymentId: id, type: "PAYMENT_DEDUCTION", reversedByEntryId: null } })) {
+    const refused = await accountingWriteRefusal(prisma);
+    if (refused) return NextResponse.json(refused.body, { status: refused.status });
   }
   const body = await req.json().catch(() => ({}));
   const reason = String(body?.reason ?? "").slice(0, 500);

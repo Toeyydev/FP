@@ -1,8 +1,8 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps } from "@/lib/roles";
 import { settleFromExpenses } from "@/lib/advances/service";
 
@@ -24,7 +24,7 @@ const body = z.object({
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
   const { id } = await ctx.params;
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {

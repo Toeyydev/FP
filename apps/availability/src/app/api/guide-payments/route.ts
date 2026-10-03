@@ -1,8 +1,8 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps, canViewFinance } from "@/lib/roles";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { sendPaymentNotice } from "@/lib/jobsheet-send";
@@ -65,8 +65,9 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   const body = parsed.data;
   // Cutover: a payment may still be recorded, but not one that settles an advance.
-  if (advanceWritesFrozen() && (body.adjustments ?? []).some((a) => a.type === "ADVANCE_SETTLEMENT")) {
-    return NextResponse.json(advanceFrozenBody, { status: 503 });
+  if ((body.adjustments ?? []).some((a) => a.type === "ADVANCE_SETTLEMENT")) {
+    const refused = await accountingWriteRefusal(prisma);
+    if (refused) return NextResponse.json(refused.body, { status: refused.status });
   }
 
   const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;

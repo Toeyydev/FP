@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import OperatorNav from "@/components/OperatorNav";
+import PeakSystemStatus from "@/components/PeakSystemStatus";
 import AccountChartMapping from "@/components/AccountChartMapping";
 import PeakPaymentMethods from "@/components/PeakPaymentMethods";
 
@@ -68,6 +69,7 @@ export default function PeakSync({ canEdit }: { canEdit: boolean }) {
       <OperatorNav active="peak-sync" />
       <div className="op-main">
         <div className="subtabs"><span className="subtab active">PEAK sync</span></div>
+        <div style={{ marginBottom: 14 }}><PeakSystemStatus /></div>
 
         {/* Integration state — booleans only, never credentials. */}
         <section className="panel" style={{ marginBottom: 14 }}>

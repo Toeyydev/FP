@@ -1,9 +1,10 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
+import { prisma } from "@/lib/db";
 import { NextResponse } from "next/server";
 import { authenticateMobile } from "@/lib/mobile-auth";
 import { guideAdvanceSummary, recordAdvanceReturn } from "@/lib/guide-advance";
 import { assignedTourId } from "@/lib/guide-lifecycle";
 import { MAX_SLIP_BYTES } from "@/lib/advance-slip";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 
 // GET ?date&slotIdx — what the token's guide still owes on money the company
 // advanced them for that job: paid out, spent from it, returned, and what is left,
@@ -30,7 +31,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const a = await authenticateMobile(req);
   if (!a.ok) return NextResponse.json({ error: a.error }, { status: a.status });
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
 
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "bad-body" }, { status: 400 });

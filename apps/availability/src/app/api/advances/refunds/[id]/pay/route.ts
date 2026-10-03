@@ -1,7 +1,7 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
 import { isOps } from "@/lib/roles";
 import { payRefund } from "@/lib/advances/service";
 import { uploadSlip } from "@/lib/advance-slip";
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
   const { id } = await ctx.params;
   const multipart = req.headers.get("content-type")?.includes("multipart/form-data");
   const form = multipart ? await req.formData().catch(() => null) : null;

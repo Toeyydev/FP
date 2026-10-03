@@ -44,7 +44,8 @@ export default function AdvanceAccountJournal({ version }: { version: number }) 
       </p>
       {err && <div className="banner danger" role="alert">{err}</div>}
       {data && !data.configured && <div className="banner warn" role="status">The advance accounts are not configured for PEAK, so no entry can name its accounts yet.</div>}
-      {data && data.autoSync && <div className="banner warn js-journal-autosync" role="status">Automatic posting is ON: entries marked “Ready to post” are sent to PEAK by the worker without a further click.</div>}
+      {data && data.autoSync && <div className="banner warn js-journal-autosync" role="status">Automatic posting is ON in both FP and payment-worker: entries marked “Ready to post” are sent to PEAK by the worker without a further click. · ส่ง PEAK อัตโนมัติเปิดอยู่ทั้งสอง service</div>}
+      {data && !data.autoSync && (data.peakState === "UNSAFE" || data.peakState === "MISMATCH") && <div className="banner danger js-journal-autosync-blocked" role="status">Nothing is posted to PEAK right now: the switches of FP and payment-worker are not in a safe, matching state — see the PEAK status above. · ตอนนี้ไม่มีการส่ง PEAK เพราะสวิตช์ไม่ปลอดภัยหรือไม่ตรงกัน</div>}
       {data && (
         <>
           <div className="js-journal-totals" style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 13 }}>

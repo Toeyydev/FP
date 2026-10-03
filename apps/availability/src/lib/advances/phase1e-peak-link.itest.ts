@@ -15,7 +15,7 @@ vi.stubGlobal("fetch", fetchSpy);
 import { NextRequest } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
+import { requireTestDatabase, resetDatabase, seedGuide, workerMatchesEnv } from "@/test/db";
 import { financialIdentity } from "@/lib/protected-expense-fields";
 import { approveRefund, allocateReceipt, payRefund, recordReceipt, recordRefund, reverseEntry, settleFromExpenses, verifyReceipt } from "./service";
 import { linkExistingPeakDocument as recordOnly, previewLink, unlinkPeakDocument, type DocumentLookup, type PeakDocument } from "./peak-link";
@@ -103,6 +103,7 @@ beforeEach(async () => {
   vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "0");
   fetchSpy.mockClear(); lookupCalls.length = 0;
   await resetDatabase();
+  await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
   await seedGuide(G);
   const a = await prisma.user.create({ data: { email: "admin-1e@example.test", displayName: "Admin Example", role: "ADMIN", state: "ACTIVE" } });
   const b = await prisma.user.create({ data: { email: "admin2-1e@example.test", displayName: "Second Admin Example", role: "ADMIN", state: "ACTIVE" } });
@@ -359,6 +360,7 @@ describe("20–22 · nothing booked twice, nothing sent", () => {
     expect(payout.excludedTagged).toBe(500);
     // The sender, switched on with reconciliation closed, finds the settlement already in PEAK.
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1"); vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     const post = vi.fn();
     await syncAdvanceBatch(prisma, post);
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ reference: `FOLK-SET-${entryId}` }));

@@ -1424,6 +1424,23 @@ model GuideAdvance {
   reversedById     String?
   reversalReason   String?
 
+  // The bank transfer's identity (lib/advances/tx-ref). Set by the database from txRef —
+  // never written by the app — so every path that records an advance gets the same key.
+  // A partial unique index (live advances only) means one transfer is one advance, even
+  // across jobs, sessions and two requests arriving at once. A reversed advance leaves
+  // the index, so a transfer recorded against the wrong guide can be recorded again.
+  txRefKey         String?
+
+  // The slip check run when it was recorded (lib/advances/slip-check): MATCH | PARTIAL |
+  // MISMATCH | UNKNOWN, what was compared (statuses and masked digits — no names), and who
+  // confirmed a result short of MATCH, with their reason. Null on advances recorded before
+  // the check existed.
+  slipCheckResult      String?
+  slipCheck            Json?
+  slipCheckConfirmedById String?
+  slipCheckReason      String?
+  slipCheckAt          DateTime?
+
   returns          GuideAdvanceReturn[]
   entries          GuideAdvanceEntry[]
   adjustments      GuidePaymentAdjustment[]
@@ -1824,6 +1841,25 @@ model AdvancePeakSync {
 
   @@unique([kind, sourceId])
   @@index([status, nextAttemptAt])
+}
+
+// What each service says about itself (lib/peak-switches). FP and payment-worker are
+// separate processes with separate environments; neither can read the other's. Each
+// writes its own row — its PEAK switches, its build and when it last ran — so one screen
+// can show both and refuse when they disagree. Switch states and timestamps only: never
+// a value of any secret.
+model ServiceStatus {
+  id            String    @id // "FP" | "payment-worker"
+  version       String? // git SHA the service was built from (RAILWAY_GIT_COMMIT_SHA)
+  deploymentId  String? // RAILWAY_DEPLOYMENT_ID
+  autoSync      Boolean   @default(false) // PEAK_ADVANCE_AUTO_SYNC=1
+  existingLinks Boolean   @default(false) // ADVANCE_EXISTING_PEAK_LINKS_ENABLED=1
+  writesFrozen  Boolean   @default(false) // ADVANCE_WRITES_FROZEN=1
+  startedAt     DateTime // when this process started
+  lastSeenAt    DateTime // last time it reported (at most once a minute)
+  lastSuccessAt DateTime? // worker: last loop pass that finished without an error
+  lastError     String? // short, sanitised; never a secret
+  updatedAt     DateTime  @updatedAt
 }
 
 // A PEAK document that already existed before FolkOPS knew about it.

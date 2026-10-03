@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-// Nothing in FolkOPS reads a bank slip.
+// No machine verifies a bank slip.
 //
-// `lib/kbiz-slip` parses text a bank hands over; it has never seen an image, and no OCR
-// dependency is installed. The amount and the reference on a transfer are TYPED by an
-// operator looking at the slip, and the record says exactly that:
+// `lib/kbiz-slip` parses text a bank hands over, and `lib/advances/slip-read` reads the text
+// layer of a K BIZ PDF in-process to COMPARE it with what was typed (lib/advances/slip-match)
+// — a check that asks a person to confirm anything short of a full match. Neither has ever
+// seen an image, and no OCR dependency is installed. The amount and the reference on a
+// transfer are still TYPED by an operator looking at the slip, and the record says so:
 //
 //   USER_VERIFIED_SLIP · ตรวจสอบโดยผู้ใช้งานจากสลิป
 //

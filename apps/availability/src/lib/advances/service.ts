@@ -26,6 +26,8 @@ import { checkAllowedCategories, DEFAULT_ALLOWED, normaliseAllowed } from "@/lib
 import { expenseCategory } from "@/lib/jobsheet";
 import { MIN_REFUND_REASON, refundNoFor, returnLinkProblems, returnSummary } from "@/lib/advances/returns";
 import { summariesFor } from "@/lib/advances/summaries";
+import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, type ExistingAdvance } from "@/lib/advances/tx-ref";
+import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import {
   MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
@@ -150,7 +152,9 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
   allowedCategories?: readonly string[] | null;
   /** Required when "other" is allowed — kept in the audit history with who and when. */
   otherReason?: string | null;
-}): Promise<{ ok: true; advance: { id: string; advanceNo: string } } | Fail> {
+  /** The slip check, as the route ran and gated it (lib/advances/slip-check). */
+  slipCheck?: StoredSlipCheck | null;
+}): Promise<{ ok: true; advance: { id: string; advanceNo: string } } | (Fail & { code?: string; duplicateOf?: ExistingAdvance })> {
   const reasons = checkIssueAdvance(input);
   const wanted = input.allowedCategories?.length ? input.allowedCategories : DEFAULT_ALLOWED;
   reasons.push(...checkAllowedCategories(wanted, { otherReason: input.otherReason }));
@@ -158,6 +162,15 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
   const allowedCategories = normaliseAllowed(wanted);
   const purpose = (input.purpose ?? "").trim() || (allowedCategories.length === 1 && allowedCategories[0] === "entrance" ? "Ticket advance" : "Company advance");
   const amountSatang = toSatang(input.amount);
+
+  // One transfer, one advance (lib/advances/tx-ref). Asked first so the refusal can name
+  // the advance that holds it; the database's unique index is what actually guarantees
+  // it, including for a request racing this one.
+  const duplicate = () => liveAdvanceForTransfer(prisma, input.bankRef);
+  const refuseDuplicate = (existing: ExistingAdvance) =>
+    ({ ...fail(409, ...duplicateTransferReasons(existing, { amount: input.amount, advanceDate: input.advanceDate })), code: DUPLICATE_TRANSFER, duplicateOf: existing });
+  const already = await duplicate();
+  if (already) return refuseDuplicate(already);
 
   // Which job this advance belongs to decides which job sheet shows it (the legacy
   // columns date + slotIdx are the job key). A Job No. is resolved to its own sheet and
@@ -184,6 +197,10 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
             bankAccount: input.bankAccount ?? null, purpose, allowedCategories, method: input.method ?? "bank", txRef: input.bankRef ?? null,
             note: input.note ?? null, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null,
             evidenceId: input.evidenceId ?? null, createdById: input.actor.actorId,
+            ...(input.slipCheck ? {
+              slipCheckResult: input.slipCheck.result, slipCheck: input.slipCheck.detail as unknown as Prisma.InputJsonValue,
+              slipCheckConfirmedById: input.slipCheck.confirmedById, slipCheckReason: input.slipCheck.reason, slipCheckAt: new Date(),
+            } : {}),
             // legacy columns, kept in step so the job-sheet panel keeps working
             date: jobKey.date, slotIdx: jobKey.slotIdx,
             amount: fromSatang(amountSatang), paidAt: new Date(`${input.advanceDate}T05:00:00.000Z`),
@@ -192,6 +209,12 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
         });
       });
       await audit({ ...input.actor, action: "advance.issued", entityType: "GuideAdvance", entityId: advance.id, detail: { advanceNo: advance.advanceNo, guideId: input.guideId, advanceDate: input.advanceDate, amount: fromSatang(amountSatang), jobNo: input.jobNo ?? null, purpose, allowedCategories } });
+      if (input.slipCheck) {
+        await audit({ ...input.actor, action: "advance.slip_checked", entityType: "GuideAdvance", entityId: advance.id, detail: {
+          advanceNo: advance.advanceNo, result: input.slipCheck.result, confirmedById: input.slipCheck.confirmedById,
+          reason: input.slipCheck.reason, override: input.slipCheck.override, checks: input.slipCheck.detail.checks,
+        } });
+      }
       // The categories it was issued with are the first entry of its category history; with
       // "other", the reason is kept there — never only in a field that a later edit replaces.
       await audit({ ...input.actor, action: "advance.categories_changed", entityType: "GuideAdvance", entityId: advance.id, detail: {
@@ -200,7 +223,12 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
       } });
       return { ok: true, advance };
     } catch (e) {
-      if (isUnique(e) && attempt < 2) continue; // two advances numbered at the same moment
+      if (isUnique(e)) {
+        // The transfer's unique index, not the number: a request racing this one won.
+        const winner = await duplicate();
+        if (winner) return refuseDuplicate(winner);
+        if (attempt < 2) continue; // two advances numbered at the same moment
+      }
       throw e;
     }
   }
