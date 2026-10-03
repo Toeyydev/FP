@@ -31,7 +31,7 @@ type Certificate = {
 };
 type PeakLink = {
   paymentRef: string | null; documentNo: string | null; documentId: string | null;
-  documentLink: string | null; source: "COMBINED_PAYMENT" | "JOB_SHEET_SYNC";
+  documentLink: string | null; source: "COMBINED_PAYMENT" | "JOB_SHEET_SYNC" | "RECORDED_EXP";
   paidDate: string | null; jobCount: number;
 };
 type PeakView = { link: PeakLink | null; recorded: boolean; reason: string | null; conflict: string | null };
@@ -312,6 +312,20 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
                     {a.peakResCode && <span style={{ color: "var(--muted,#78716c)" }}> · PEAK {a.peakResCode}</span>}
                     {a.requestEncoding && <span style={{ color: "var(--muted,#78716c)" }}> · {a.requestEncoding}</span>}
                     <div style={{ color: "var(--muted,#78716c)" }}>{m.note}</div>
+                    {a.state === "REFUSED" && a.peakResDesc && <div style={{ color: "var(--muted,#78716c)" }}>PEAK: {a.peakResDesc}</div>}
+                    {info.attachEnabled && a.state === "REFUSED" && (
+                      <button className="btn sm js-peak-attach-retry" style={{ marginTop: 4 }} disabled={busy}
+                        onClick={() => act("/api/jobsheet/certificate/peak-attach", { action: "retry", attachmentId: a.id }, "ส่งไฟล์เข้า PEAK อีกครั้งแล้ว")}>ส่งใหม่</button>
+                    )}
+                    {(a.state === "PEAK_ACCEPTED" || a.state === "ATTACHMENT_UNCERTAIN") && (
+                      <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {live.peak?.link?.documentLink && <a className="btn sm" href={live.peak.link.documentLink} target="_blank" rel="noopener noreferrer">เปิดเอกสาร PEAK</a>}
+                        <button className="btn sm js-peak-attach-found" disabled={busy}
+                          onClick={() => act("/api/jobsheet/certificate/peak-attach", { action: "resolve", attachmentId: a.id, finding: "FOUND_IN_PEAK" }, "บันทึกแล้ว: เห็นไฟล์ใน PEAK")}>เห็นไฟล์ใน PEAK แล้ว</button>
+                        <button className="btn sm js-peak-attach-missing" disabled={busy}
+                          onClick={() => act("/api/jobsheet/certificate/peak-attach", { action: "resolve", attachmentId: a.id, finding: "NOT_FOUND_IN_PEAK" }, "บันทึกแล้ว: ไม่พบไฟล์ใน PEAK")}>ไม่พบใน PEAK</button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -319,10 +333,16 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
           ) : live.peak?.link && live.isEvidence ? (
             <div style={{ marginTop: 6 }}>
               <div style={{ color: "var(--muted,#78716c)" }}>
-                {info.attachEnabled
-                  ? "ยังไม่ได้แนบไฟล์กับเอกสาร PEAK"
-                  : "ระบบยังไม่เปิดการแนบไฟล์เข้า PEAK อัตโนมัติ — เปิดทั้งสองอย่างแล้วแนบด้วยมือใน PEAK"}
+                {advance
+                  ? "ค่าใช้จ่ายจากเงินทดรองบันทึกด้วยสมุดรายวัน (JV) ไม่ใช่ EXP และ PEAK ไม่มี API แนบไฟล์กับสมุดรายวัน — แนบไฟล์นี้ด้วยมือใน PEAK"
+                  : info.attachEnabled
+                    ? `ยังไม่ได้แนบไฟล์กับ ${live.peak.link.documentNo ?? "เอกสาร PEAK"} — ระบบจะแนบให้อัตโนมัติภายในไม่กี่นาที หรือกดแนบตอนนี้`
+                    : "ระบบยังไม่เปิดการแนบไฟล์เข้า PEAK อัตโนมัติ — เปิดทั้งสองอย่างแล้วแนบด้วยมือใน PEAK"}
               </div>
+              {info.attachEnabled && !advance && (
+                <button className="btn sm primary js-peak-attach" style={{ marginTop: 4 }} disabled={busy}
+                  onClick={() => act("/api/jobsheet/certificate/peak-attach", { action: "attach", certificateId: live.id }, `ส่งไฟล์เข้า ${live.peak?.link?.documentNo ?? "PEAK"} แล้ว`)}>แนบเข้า {live.peak.link.documentNo ?? "PEAK"} ตอนนี้</button>
+              )}
               {/* Both doors, side by side, because doing this by hand means having the
                   PDF and the document open at once. Split across two boxes it reads as
                   two unrelated links. */}

@@ -436,6 +436,28 @@ export async function insertExpenseFile(input: InsertFileInput): Promise<{ ok: b
   return second.ok ? second : { ok: false, desc: `${first.desc} (data URI); ${second.desc} (plain base64)` };
 }
 
+/**
+ * One insertfile request, and PEAK's answer exactly as it came — for a caller that keeps
+ * its own ledger of what an answer means (lib/certificates/peak-attach classifyPeakReply)
+ * rather than the yes/no above. One encoding per call, no fallback here: the caller
+ * records which encoding it sent. `sent: false` means the request never left (no token,
+ * or this service may not write to PEAK), so nothing can have been stored.
+ */
+export async function insertExpenseFileReply(input: InsertFileInput, encoding: "data-uri" | "plain"):
+  Promise<{ sent: boolean; httpStatus: number; body: Record<string, unknown> | null; transportError: string | null }> {
+  if (!peakEnabled) return { sent: false, httpStatus: 0, body: null, transportError: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (peakWritesUnsafe()) return { sent: false, httpStatus: 0, body: null, transportError: PEAK_WRITE_UNSAFE };
+  if (!input.transactionId && !input.transactionCode) return { sent: false, httpStatus: 0, body: null, transportError: "No PEAK document to attach the file to" };
+  const call = await authedCall(
+    `${API}/Expenses/insertfile`,
+    { method: "POST", body: JSON.stringify(insertFileBody(input, encoding)) },
+    "peakExpenses",
+    { fresh: false, retry: true, timeoutMs: WRITE_TIMEOUT_MS },
+  );
+  if ("error" in call) return { sent: call.sent !== false, httpStatus: 0, body: null, transportError: call.error };
+  return { sent: true, httpStatus: call.r.status, body: call.j, transportError: null };
+}
+
 // ── An expense that already exists: read it, pay it ───────────────────────────
 //
 // The combined guide payment is two stages (lib/peak-payment-document): the expense

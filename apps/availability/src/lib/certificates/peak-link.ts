@@ -26,7 +26,9 @@ import { audit } from "@/lib/audit";
 //         → GuidePaymentDocument.paymentRef            — unique
 //           → peakDocumentNo / peakDocumentId
 //
-// or, for a sheet posted to PEAK on its own, JobSheet.peakDocumentNo directly. A guide's
+// or, for a sheet posted to PEAK on its own, JobSheet.peakDocumentNo directly — or, for a
+// job paid before payments were recorded, the EXP an admin typed in with "Record EXP…"
+// (TourPayment.peakRef). That one carries no PEAK id; whoever uses it reads PEAK first. A guide's
 // name is never compared, a nearby date is never compared, and nothing is matched by its
 // position in a list.
 
@@ -39,7 +41,7 @@ export type PeakLink = {
   documentId: string | null;
   documentLink: string | null;
   /** Which arrangement this job's accounting is in. */
-  source: "COMBINED_PAYMENT" | "JOB_SHEET_SYNC";
+  source: "COMBINED_PAYMENT" | "JOB_SHEET_SYNC" | "RECORDED_EXP";
   /** The date the money actually moved, when it has. */
   paidDate: string | null;
   /** How many job sheets share this document. One EXP, many jobs, many certificates. */
@@ -73,12 +75,13 @@ export async function peakDocumentForJob(
     }),
     db.tourPayment.findUnique({
       where: { guideId_date_slotIdx: job },
-      select: { peakPaymentRef: true, paidAt: true },
+      select: { peakPaymentRef: true, paidAt: true, peakRef: true },
     }),
   ]);
 
   const ownDocNo = (sheet?.peakDocumentNo ?? "").trim();
   const paymentRef = (tourPay?.peakPaymentRef ?? "").trim();
+  const recordedNo = (tourPay?.peakRef ?? "").trim();
 
   const combined = paymentRef
     ? await db.guidePaymentDocument.findUnique({
@@ -94,6 +97,16 @@ export async function peakDocumentForJob(
       found: false,
       conflict: "two-documents",
       reason: `This job sheet names two PEAK documents — ${ownDocNo} from its own sync and ${live.peakDocumentNo} from ${live.paymentRef}. One job belongs in one document, so which one this certificate accompanies cannot be answered until that is sorted out in PEAK.`,
+    };
+  }
+
+  // The EXP typed in by hand must be the same document as any the system recorded itself.
+  const systemNo = live?.peakDocumentNo || ownDocNo;
+  if (recordedNo && systemNo && recordedNo !== systemNo) {
+    return {
+      found: false,
+      conflict: "two-documents",
+      reason: `This job names two PEAK documents — ${systemNo}, which the system recorded, and ${recordedNo}, recorded by hand with "Record EXP…". One job belongs in one document, so which one this certificate accompanies cannot be answered until that is sorted out.`,
     };
   }
 
@@ -122,6 +135,23 @@ export async function peakDocumentForJob(
         documentLink: null,
         source: "JOB_SHEET_SYNC",
         paidDate: tourPay?.paidAt ? tourPay.paidAt.toISOString().slice(0, 10) : sheet?.paymentDate ?? null,
+        jobCount: 1,
+      },
+    };
+  }
+
+  // Paid before payments were recorded; an admin typed in the EXP afterwards. No PEAK id is
+  // on record, so this names the document and nothing more.
+  if (recordedNo) {
+    return {
+      found: true,
+      link: {
+        paymentRef: null,
+        documentNo: recordedNo,
+        documentId: null,
+        documentLink: null,
+        source: "RECORDED_EXP",
+        paidDate: tourPay?.paidAt ? tourPay.paidAt.toISOString().slice(0, 10) : null,
         jobCount: 1,
       },
     };
@@ -226,7 +256,9 @@ export async function linkCertificatesForPayment(
   // Active only. A voided certificate keeps its history and is not evidence, so it is
   // not given a document it never accompanied.
   const certs = await db.expenseCertificate.findMany({
-    where: { jobSheetId: { in: sheets.map((s) => s.id) }, status: { not: "VOID" } },
+    // Guide-paid only: advance-paid costs are not in the guide's payment document — they
+    // are booked by journal against the advance — so an advance certificate never names it.
+    where: { jobSheetId: { in: sheets.map((s) => s.id) }, status: { not: "VOID" }, kind: { not: "COMPANY_ADVANCE" } },
     select: { id: true, certificateNo: true, peakDocumentNo: true, peakDocumentId: true },
   });
 
@@ -259,9 +291,13 @@ export async function linkCertificatesForPayment(
  * audited; otherwise the same chain is followed live.
  */
 export async function certificatePeakView(
-  cert: Pick<ExpenseCertificate, "guideId" | "tourDate" | "slotIdx" | "peakPaymentRef" | "peakDocumentNo" | "peakDocumentId" | "peakDocumentLink" | "peakDocumentSource" | "peakPaidDate" | "peakLinkedAt">,
+  cert: Pick<ExpenseCertificate, "guideId" | "tourDate" | "slotIdx" | "peakPaymentRef" | "peakDocumentNo" | "peakDocumentId" | "peakDocumentLink" | "peakDocumentSource" | "peakPaidDate" | "peakLinkedAt"> & { kind?: string | null },
   db: Db = prisma,
 ): Promise<{ link: PeakLink | null; recorded: boolean; reason: string | null; conflict: string | null }> {
+  if (cert.kind === "COMPANY_ADVANCE") {
+    return { link: null, recorded: false, conflict: null,
+      reason: "Advance-paid costs are booked by journal against the advance, not in the guide's payment EXP, so this certificate goes with that journal. · ค่าใช้จ่ายจากเงินทดรองบันทึกด้วยสมุดรายวัน ไม่ใช่ EXP ค่าจ้างไกด์" };
+  }
   if (cert.peakDocumentNo || cert.peakDocumentId) {
     return {
       recorded: true,

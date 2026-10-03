@@ -74,7 +74,8 @@ async function seed() {
   const identity = ["Ferry", 1500, 200, "transport", "guide"].join("|");
   const cert = await prisma.expenseCertificate.create({ data: { certificateNo: CERT_NO, jobSheetId: withCert.id, activeJobSheetId: withCert.id, guideId: "G-901", jobRef: withCert.ref, tourDate: withCert.date, slotIdx: 0,
     status: "LINKED", payload: {}, payloadHash: "a".repeat(64), coveredRows: [{ index: 0, identity, description: "Ferry", pax: 2, price: 15, amountSatang: 3000, category: "transport" }], totalSatang: 3000,
-    source: "ADMIN_RECORDED", sourceSheetUpdatedAt: withCert.updatedAt, pdfHash: "b".repeat(64), driveFileId: "fileCertificateE2E00001", driveUrl: DRIVE, linkedAt: new Date("2099-01-02T00:00:00Z") } });
+    source: "ADMIN_RECORDED", sourceSheetUpdatedAt: withCert.updatedAt, pdfHash: "b".repeat(64), driveFileId: "fileCertificateE2E00001", driveUrl: DRIVE, linkedAt: new Date("2099-01-02T00:00:00Z"),
+    peakDocumentNo: "EXP-20990100001", peakDocumentId: "peak-doc-e2e-0001", peakDocumentSource: "JOB_SHEET_SYNC", peakLinkedAt: new Date("2099-01-03T00:00:00Z") } });
   await prisma.jobSheet.update({ where: { id: withCert.id }, data: { expenses: [{ ...e("Ferry", 15, 2), evidenceWaiver: { by: users.ADMIN.id, at: "2099-01-02T00:00:00Z", reason: "ใบรับรองแทนใบเสร็จ (ตัวอย่าง)", certificateId: cert.id, certificateNo: CERT_NO } }] } });
   const needs = await mk("2099-01-02", [e("Bus", 15, 3)]);
   return { users, withCert, needs };
@@ -85,7 +86,8 @@ async function startServer() {
   const nextBin = join(appDir, "node_modules", "next", "dist", "bin", "next");
   const child = spawn(process.execPath, ["--require", join(appDir, "scripts/e2e/outbound-guard.cjs"), nextBin, "start", "-p", String(PORT)], {
     cwd: appDir, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, OUTBOUND_LOG: OUTBOUND, AUTH_TRUST_HOST: "true", NEXT_TELEMETRY_DISABLED: "1", AUTH_SECRET: process.env.AUTH_SECRET || "e2e-only-not-a-real-secret-0123456789" },
+    // Attaching to PEAK switched on, so the admin's button is on the page — opening it must still send nothing.
+    env: { ...process.env, CERTIFICATE_PEAK_ATTACH: "1", OUTBOUND_LOG: OUTBOUND, AUTH_TRUST_HOST: "true", NEXT_TELEMETRY_DISABLED: "1", AUTH_SECRET: process.env.AUTH_SECRET || "e2e-only-not-a-real-secret-0123456789" },
   });
   let log = "";
   child.stdout.on("data", (d) => { log += d; });
@@ -148,6 +150,8 @@ try {
       const refText = ref ? await page.$eval(REF, (x) => x.innerText) : "";
       const href = ref ? await page.$eval(`${REF} a`, (a) => a.getAttribute("href")).catch(() => null) : null;
       check("ADMIN: the certificate is named by number with its Drive link", refText.includes(CERT_NO) && href === DRIVE, refText.replace(/\s+/g, " ").slice(0, 160));
+      const attach = await page.$eval(".js-peak-attach", (b) => b.innerText).catch(() => "");
+      check("ADMIN: a filed certificate in an EXP offers to attach it to that EXP in PEAK", attach.includes("EXP-20990100001"), attach);
     } else {
       check("OPERATOR: nothing about the certificate is shown", !ref && !text.includes(CERT_NO));
     }
@@ -164,6 +168,7 @@ try {
   if (SHOTS) await (await page.$(REF)).screenshot({ path: join(SHOTS, "certificate-reference-none.png") });
   await page.close();
   check("opening job sheets created no certificate", (await prisma.expenseCertificate.count()) === certsBefore);
+  check("opening job sheets sent nothing to PEAK and wrote no attachment record", !/peakaccount|peak\.co/i.test(readFileSync(OUTBOUND, "utf8")) && (await prisma.peakAttachment.count()) === 0);
   check("no certificate audit was written", (await prisma.auditLog.count({ where: { action: { startsWith: "certificate." } } })) === 0 && auditsBefore >= 0);
 } finally {
   await browser.close();
