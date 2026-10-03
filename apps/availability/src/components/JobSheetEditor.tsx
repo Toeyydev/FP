@@ -2097,7 +2097,9 @@ export default function JobSheetEditor() {
        })()}
        {isAdmin && sheet.ref && (
          <div className="no-print">
-           <CertificateReference guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />
+           {/* Re-read after every save or approval: a payer confirmed a moment ago changes which
+               rows need a certificate, and the panel must not keep saying "none". */}
+           <CertificateReference key={`${sheet.updatedAt ?? ""}|${(sheet as { approvalStatus?: string | null }).approvalStatus ?? ""}`} guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />
          </div>
        )}
        {/* HISTORY & FILES — everything here is a record that already exists:
