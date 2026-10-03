@@ -720,6 +720,25 @@ try {
   await gapPage.goto(`${BASE}/job-sheet?guideId=G-993&date=${GAP_DATE}&slotIdx=3`, { waitUntil: "networkidle0" });
   await pause(800);
   check("206 · …and the job sheet no longer asks for it", !(await gapPage.$('.js-recheck li[data-code="ADVANCE_NOT_RECORDED"]')) && gapErrors.length === 0, gapErrors.join(" | ").slice(0, 200));
+
+  // The ticket was confirmed as Company Advance before the advance existed, so the server left
+  // it unlinked (lib/advances/link) — and with only one advance on the job there used to be no
+  // control to link it: the advance read "return due" for money the guide had spent. The row
+  // offers "Choose advance…"; choosing it and saving the approved sheet links and settles it.
+  const pick = await gapPage.evaluate(() => [...document.querySelectorAll(".js-advance-pick")].map((b) => b.innerText.trim()));
+  check("206 · an unlinked Company Advance row with one fitting advance offers Choose advance…", pick.length === 1 && /Choose advance/.test(pick[0]), JSON.stringify(pick));
+  await gapPage.click(".js-advance-pick");
+  await gapPage.waitForSelector(".js-advance-chooser");
+  await gapPage.click('.js-advance-choose[data-advance="FOLK-ADV-209910-903"]');
+  await pause(200);
+  await clickSave(gapPage); await pause(2500);
+  const gapRow = (await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.jgap.id } })).expenses[0];
+  const gapAdv = await prisma.guideAdvance.findUniqueOrThrow({ where: { advanceNo: "FOLK-ADV-209910-903" } });
+  const gapEntries = await prisma.guideAdvanceEntry.findMany({ where: { advanceId: gapAdv.id, type: "EXPENSE_SETTLEMENT" } });
+  check("206 · …saved: the row is linked and the approved sheet settles it — ฿600 used, nothing outstanding",
+    gapRow.advanceId === gapAdv.id && !!gapRow.advanceSettlement && gapEntries.length === 1 && gapEntries[0].amountSatang === 60000 && gapAdv.settledSatang === 60000,
+    JSON.stringify({ linked: gapRow.advanceId === gapAdv.id, entries: gapEntries.map((e) => e.amountSatang), settled: gapAdv.settledSatang }));
+  check("206 · …and no Choose advance… is left once it is linked", (await gapPage.$(".js-advance-pick")) === null && gapErrors.length === 0, gapErrors.join(" | ").slice(0, 200));
   await gapPage.close();
 } finally {
   await browser.close();

@@ -1360,7 +1360,11 @@ export default function JobSheetEditor() {
                       → {liveAdvances.find((a) => a.id === (advanceChoices[i] || (e as { advanceId?: string }).advanceId))?.advanceNo ?? "an advance"}{advanceChoices[i] ? " (chosen — saved with the sheet)" : ""}
                     </div>
                   )}
-                  {paid === "GUIDE_ADVANCE" && advancesFor(expenseCategory(e)).length > 1 && (
+                  {/* One advance fits but the row has no link: it was confirmed before the advance was
+                      recorded, and the server never links such a row by itself (lib/advances/link) —
+                      so a person must choose it here, or it can never be settled. */}
+                  {paid === "GUIDE_ADVANCE" && (advancesFor(expenseCategory(e)).length > 1
+                    || (advancesFor(expenseCategory(e)).length === 1 && !(advanceChoices[i] || (e as { advanceId?: string }).advanceId))) && (
                     <button type="button" className="btn sm js-advance-pick" style={{ marginTop: 4 }} onClick={() => setChooser({ index: i, options: advancesFor(expenseCategory(e)) })}>
                       {(advanceChoices[i] || (e as { advanceId?: string }).advanceId) ? "Change advance…" : "Choose advance…"}
                     </button>
