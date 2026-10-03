@@ -66,4 +66,15 @@ describe("a duplicate that knows the booking's tour hands it to the copy that st
     expect(first.tourId).toBeNull();
     expect(await prisma.booking.count({ where: { status: { notIn: ["IGNORED", "CANCELLED"] } } })).toBe(2);
   });
+
+  it("an unmapped product name alerts operators once — not again for its next booking, and not for a mapped one", async () => {
+    const op = await prisma.user.create({ data: { email: "op-twin@example.test", displayName: "Op Example", role: "OPERATOR", state: "ACTIVE" } });
+    const alerts = () => prisma.notification.findMany({ where: { userId: op.id, message: { contains: "is not mapped to a tour" } } });
+    await importParsed(parsed("FOLK-TEXAMPLE5", RENAMED), { source: "GetYourGuide", cancelled: false, via: "webhook" });
+    expect((await alerts()).map((n) => n.message)).toEqual([`New product name "${RENAMED}" is not mapped to a tour — its bookings are on no board. Map it on Product map.`]);
+    await importParsed(parsed("FOLK-TEXAMPLE6", RENAMED, { externalRef: "GYGEXAMPLETWIN6", customerName: "Another Guest Example" }), { source: "GetYourGuide", cancelled: false, via: "webhook" });
+    expect(await alerts()).toHaveLength(1);
+    await importParsed(parsed("GET-EXAMPLE7", CHANNEL, { externalRef: "GYGEXAMPLETWIN7", customerName: "Third Guest Example" }), { source: "GetYourGuide", cancelled: false, via: "autosync" });
+    expect(await alerts()).toHaveLength(1);
+  });
 });

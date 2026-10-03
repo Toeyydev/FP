@@ -464,6 +464,17 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       if (!eveningChannelOnly) tourId = map.tourId;
     }
   }
+  // A product name nobody has mapped to a tour yet — usually the channel renamed a product.
+  // Its bookings land on no board until someone maps it, so say so the same day, once per
+  // name (notifyOps de-duplicates on the message). Not for a cancellation, and not for a
+  // name that IS mapped but deliberately left without a tour (an evening channel-only slot).
+  if (p.productName && !opts.cancelled && !(await prisma.productMap.findUnique({ where: { productKey: productKey(p.productName) } }).catch(() => null))) {
+    await notifyOps(
+      `New product name "${p.productName}" is not mapped to a tour — its bookings are on no board. Map it on Product map.`,
+      "Unmapped product", `"${p.productName}" — map it to a tour`,
+      { date: p.date ?? undefined },
+    );
+  }
   // Correct the resolved tour by departure time: the 14:00 slot is the palace-only tour,
   // not the combined day tour a channel product maps to by name. (No-op for other slots.)
   tourId = slotAwareTourId(tourId, p.slotIdx);
