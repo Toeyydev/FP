@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeAll, beforeEach, onTestFinished } from "vitest";
 
 // Supplemental guide payments, against a real database and the real routes.
 //
@@ -95,6 +95,9 @@ describe("a review incentive left out of a payout that already went", () => {
   });
 
   it("3–4 · paying it records a separate transfer; history shows both, each for its own amount", async () => {
+    // Recorded the day after the transfer, so the guide is told (a weeks-old one is not: payments-v2/rules).
+    vi.useFakeTimers({ now: new Date("2025-07-03T03:00:00Z"), toFake: ["Date"] });
+    onTestFinished(() => { vi.useRealTimers(); });
     const before = await snapshotOriginal();
     const { body } = await create(review({ originalPaymentId: original.id }));
     const paid = await pay([body.id]);

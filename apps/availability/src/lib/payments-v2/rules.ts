@@ -308,3 +308,16 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
 
   return { reasons, blocks, reconciliation, jobs: resolved, supplements, accountingPeriod: periods[0] ?? null, periods };
 }
+
+/**
+ * A payment recorded long after the money moved is bookkeeping, not news: recording what was
+ * paid in February must not tell a guide today that "a payment is on the way". Dated more than
+ * this many days before today (Bangkok) and the guide is not notified; the record is the same.
+ */
+export const HISTORICAL_PAYMENT_DAYS = 7;
+export function isHistoricalPayment(paymentDate: string | null | undefined, now = Date.now()): boolean {
+  if (!paymentDate || !/^\d{4}-\d{2}-\d{2}/.test(paymentDate)) return false;
+  const today = new Date(now + 7 * 3600_000).toISOString().slice(0, 10);
+  const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - HISTORICAL_PAYMENT_DAYS * 86400_000).toISOString().slice(0, 10);
+  return paymentDate.slice(0, 10) < cutoff;
+}

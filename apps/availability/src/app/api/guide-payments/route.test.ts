@@ -39,13 +39,25 @@ beforeEach(() => { vi.clearAllMocks(); mem.current = memoryDb({ jobSheet: [sheet
 
 describe("POST /api/guide-payments", () => {
   it("records the transfer, pays the job and tells the guide once", async () => {
-    const res = await post(body());
+    vi.useFakeTimers({ now: new Date("2026-07-21T05:00:00Z"), toFake: ["Date"] });
+    const res = await post(body()).finally(() => vi.useRealTimers());
     expect(res.status).toBe(200);
     const d = await res.json();
     expect(d.payment.paymentNo).toBe("FOLK-PMT-202607-001");
     expect(d.reconciliation).toMatchObject({ jobTotal: 1616, amountTransferred: 1616, balanced: true });
     expect(mem.current!.tables.tourPayment[0]).toMatchObject({ status: "PAID", guidePaymentId: mem.current!.tables.guidePayment[0].id });
     expect(noticeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a payment recorded weeks after the transfer is recorded the same, and the guide is not told", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-04T05:00:00Z"), toFake: ["Date"] });
+    const res = await post(body()).finally(() => vi.useRealTimers());
+    expect(res.status).toBe(200);
+    const d = await res.json();
+    expect(d.payment.paymentNo).toBe("FOLK-PMT-202607-001");
+    expect(d.notified).toBe(false);
+    expect(mem.current!.tables.tourPayment[0]).toMatchObject({ status: "PAID" });
+    expect(noticeMock).not.toHaveBeenCalled();
   });
 
   it("files the slip in Drive as evidence of that transfer", async () => {
