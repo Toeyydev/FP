@@ -21,6 +21,7 @@ import { defaultAccountingDates, expenseDisposition, expenseMappingStatus, expen
 import { peakJobStatus } from "@/lib/peak-job-status";
 import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
+import { readPastSheetGaps } from "@/lib/past-sheet-sync";
 import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, sheetRefs, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
 import { applyRateDefaults, expectedPayerFrom, jobRates } from "@/lib/rate-payer";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
@@ -342,7 +343,10 @@ export async function GET(req: NextRequest) {
     // those bookings belong to the original guide at this slot, and reconciling would
     // take every one of them off again. Kept exactly as saved, like a past tour.
     if (date < todayBKK || handover?.role === "to") {
-      return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      // Nothing is added by itself — but a person is told what is missing, and may add it
+      // with one button (lib/past-sheet-sync). Not on a replacement's copy of the list.
+      const pastBookingGaps = isOps && date < todayBKK && handover?.role !== "to" ? await readPastSheetGaps(prisma, { guideId, date, slotIdx }).catch(() => null) : null;
+      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
