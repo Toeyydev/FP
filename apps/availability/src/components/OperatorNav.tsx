@@ -23,6 +23,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "guides", label: "Guides", href: "/guides" },
       { key: "tours", label: "Tours", href: "/tours" },
       { key: "blocked-slots", label: "Block slots", href: "/blocked-slots" },
+      { key: "restore-bookings", label: "Restore archived bookings", href: "/admin/restore-bookings", adminOnly: true },
     ],
   },
   {

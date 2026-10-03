@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { ARCHIVED_NOTE } from "@/lib/archived-restore";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const bkk = (o = 0) => new Date(Date.now() + 7 * 3600 * 1000 + o * 86400 * 1000).toISOString().slice(0, 10);
@@ -22,7 +23,10 @@ export async function POST() {
   });
   const ids = cands.filter((b) => !aset.has(`${b.date}|${b.slotIdx}`)).map((b) => b.id);
   if (!ids.length) return NextResponse.json({ ok: true, count: 0 });
-  const r = await prisma.booking.updateMany({ where: { id: { in: ids } }, data: { status: "IGNORED" } });
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.archive_stale", entityType: "Booking", detail: { count: r.count, upTo: today } });
+  // Each archived booking says so, and the audit names them: the first run (2026-06-15)
+  // recorded only a count, and 398 tours that did run could not be told apart from
+  // bookings hidden by hand (lib/archived-restore).
+  const r = await prisma.booking.updateMany({ where: { id: { in: ids } }, data: { status: "IGNORED", notes: `${ARCHIVED_NOTE} ${today}` } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.archive_stale", entityType: "Booking", detail: { count: r.count, upTo: today, ids } });
   return NextResponse.json({ ok: true, count: r.count });
 }
