@@ -11,7 +11,7 @@ vi.stubGlobal("fetch", fetchSpy);
 
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
+import { requireTestDatabase, resetDatabase, seedGuide, workerMatchesEnv } from "@/test/db";
 import { financialIdentity } from "@/lib/protected-expense-fields";
 import { allocateReceipt, recordReceipt, settleFromExpenses, verifyReceipt } from "./service";
 import { accountJournal, journalLines, type JournalEntry } from "./account-journal";
@@ -83,6 +83,7 @@ beforeEach(async () => {
   vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "0");
   fetchSpy.mockClear();
   await resetDatabase();
+  await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
   await seedGuide(G);
   const a = await prisma.user.create({ data: { email: "admin-jrn@example.test", displayName: "Admin Example", role: "ADMIN", state: "ACTIVE" } });
   admin = { actorId: a.id, actorRole: "ADMIN" };
@@ -170,6 +171,7 @@ describe("where each entry stands, and why", () => {
   it("an entry linked to an existing PEAK document shows that document, and whether it was fully checked", async () => {
     const { advance } = await seedJob([{ description: "Temple ticket", price: 250, pax: 2, expenseType: "entrance" }]);
     vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     const doc: PeakDocument = { code: "JV-JRN-0001", documentType: "DAILY_JOURNAL", contactId: null, entries: [{ accountCode: "111100", accountSubId: "sub-advance", debit: 1000, credit: 0 }, { accountCode: "111300", accountSubId: "sub-bank", debit: 0, credit: 1000 }] };
     const look = async () => ({ ok: true as const, document: doc });
     const req = { kind: "ADVANCE" as const, advanceId: advance.id, documentNo: "JV-JRN-0001", documentType: "DAILY_JOURNAL" as const, note: "the transfer on the statement (example)", requestKey: "rk-jrn-1", actor: admin };
@@ -207,6 +209,7 @@ describe("what is shown as READY is what the sender sends", () => {
 
     // The real sender, with PEAK replaced by a recorder: nothing leaves this process.
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     const sent: { reference: string; journalEntries: { accountCode: string; debit: string; credit: string }[] }[] = [];
     const posted = await syncAdvanceBatch(prisma, (async (payload: (typeof sent)[number]) => { sent.push(payload); return { ok: true, id: "peak-jrn-1", code: "JV-TEST-0001" }; }) as never);
     expect(posted).toBe(1);
@@ -253,6 +256,7 @@ describe("it is a read", () => {
   it("says when automatic posting is on", async () => {
     await seedJob([{ description: "Temple ticket", price: 250, pax: 2, expenseType: "entrance" }]);
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     expect((await accountJournal(prisma)).autoSync).toBe(true);
   });
 });

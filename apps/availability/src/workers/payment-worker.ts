@@ -23,6 +23,7 @@
 
 import { advancePeakConfig, syncAdvanceBatch } from "@/lib/advances/peak-sync";
 import { existingPeakLinksEnabled } from "@/lib/advances/freeze";
+import { localSwitches, readServiceReport, recordServiceStatus, switchesUnsafe, UNSAFE_LOCAL_MESSAGE, workerMayPost } from "@/lib/peak-switches";
 import { prisma } from "@/lib/db";
 import { extractFromText } from "@/lib/payments/slip-evidence";
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
@@ -108,15 +109,40 @@ async function processQueuedBatch(): Promise<number> {
   return handled;
 }
 
+// The last refusal reported, so a refusal is logged when it starts or changes — not
+// every 15 seconds while it lasts.
+let lastRefusal: string | null = null;
+
+/**
+ * Whether the advance sender may post, across both services (lib/peak-switches), logged
+ * as a structured line when the answer changes. Switch NAMES and states only — never a
+ * value of any configuration.
+ */
+async function reportPostingDecision(): Promise<void> {
+  const own = localSwitches();
+  if (!own.autoSync) { lastRefusal = null; return; } // off is not an error
+  const may = workerMayPost(own, await readServiceReport(prisma, "FP"), Date.now());
+  const code = may.ok ? null : may.code;
+  if (code !== lastRefusal) {
+    if (may.ok) log("peak-posting-resumed", {});
+    else log("peak-posting-refused", { level: "error", code: may.code, reason: may.message, autoSync: own.autoSync, existingLinks: own.existingLinks });
+  }
+  lastRefusal = code;
+}
+
 async function tick(): Promise<void> {
   if (ticking || shuttingDown) return;
   ticking = true;
   try {
+    await recordServiceStatus(prisma, "payment-worker");
+    await reportPostingDecision();
     await syncAdvanceBatch(prisma);
     const n = await processQueuedBatch();
     if (n > 0) log("batch-processed", { count: n });
+    await recordServiceStatus(prisma, "payment-worker", { success: true });
   } catch (err) {
     log("tick-error", { error: String(err) });
+    await recordServiceStatus(prisma, "payment-worker", { error: String(err).slice(0, 200) });
   } finally {
     ticking = false;
   }
@@ -190,6 +216,9 @@ async function main(): Promise<void> {
     advanceLinksMode: existingPeakLinksEnabled(),
     node: process.version,
   });
+  // Both switches on in this environment: the sender refuses every batch (lib/advances/
+  // peak-sync), and this says why at the top of the log rather than leaving it silent.
+  if (switchesUnsafe(localSwitches())) log("peak-switch-unsafe", { level: "error", reason: UNSAFE_LOCAL_MESSAGE });
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));

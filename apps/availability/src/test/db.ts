@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { localSwitches, type ServiceName } from "@/lib/peak-switches";
 
 // Helpers for tests that use a real database. Importing this file at all is a
 // declaration that the test needs one; guard() fails loudly rather than letting a
@@ -6,7 +7,7 @@ import { prisma } from "@/lib/db";
 
 /** Tables these tests write, in an order safe to truncate together. */
 const TABLES = [
-  "AuditLog", "Checkin", "TourReport", "PushSubscription", "Notification",
+  "AuditLog", "ServiceStatus", "Checkin", "TourReport", "PushSubscription", "Notification",
   // The advance ledger and everything that hangs off it. Listed before JobSheet
   // and User because these rows reference them.
   "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",
@@ -68,3 +69,16 @@ export async function seedAdvance(job: { guideId: string; date: string; slotIdx:
     allowedCategories: over.allowedCategories ?? ["entrance"], reversedAt: over.reversedAt ?? null,
   } });
 }
+
+/**
+ * A service's report of its own PEAK switches (lib/peak-switches), as if it had just
+ * written it — or `ageMs` ago.
+ */
+export async function reportService(service: ServiceName, s: { autoSync: boolean; existingLinks: boolean; writesFrozen?: boolean }, ageMs = 0, version: string | null = null) {
+  const at = new Date(Date.now() - ageMs);
+  const data = { autoSync: s.autoSync, existingLinks: s.existingLinks, writesFrozen: s.writesFrozen ?? false, startedAt: at, lastSeenAt: at, version };
+  await prisma.serviceStatus.upsert({ where: { id: service }, create: { id: service, ...data }, update: data });
+}
+
+/** payment-worker holds the same switches as this process — a deployment set up consistently. */
+export const workerMatchesEnv = () => reportService("payment-worker", localSwitches());

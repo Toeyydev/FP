@@ -5,6 +5,8 @@ import { explain, RefundRow, type OpsRefund } from "./AdvanceOperations";
 import AdvanceBankSelect from "./AdvanceBankSelect";
 import RefundReviewPanel from "./RefundReview";
 import AdvancePeakStatus, { type AdvancePeakState } from "./AdvancePeakStatus";
+import SlipCheckPanel, { type SlipDecisionFields } from "./SlipCheckPanel";
+import PeakSystemStatus from "./PeakSystemStatus";
 import RecordExistingPeakDialog, { type LinkTarget } from "./RecordExistingPeakDialog";
 import { thb } from "@/lib/jobsheet";
 
@@ -65,7 +67,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
   const [linking, setLinking] = useState<LinkTarget | null>(null);
-  const [mode, setMode] = useState<{ reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean } | null>(null);
+  const [mode, setMode] = useState<{ reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean; peakState?: string; linkingAllowed?: boolean; accountingWritesAllowed?: boolean } | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -74,7 +76,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
         jfetch("/api/advances"), jfetch("/api/advances/returns"), jfetch("/api/advances/unbooked-expenses"),
         jfetch("/api/advances/peak-config").catch(() => null),
       ]);
-      if (m) setMode(m as unknown as { reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean });
+      if (m) setMode(m as unknown as { reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean; peakState?: string; linkingAllowed?: boolean; accountingWritesAllowed?: boolean });
       setAdvances((a.advances ?? []) as Advance[]);
       setFrozen(a.frozen === true);
       setReceipts((r.receipts ?? []) as Receipt[]);
@@ -101,13 +103,25 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
 
   // While the cutover freeze is on the server refuses every ordinary advance write.
   // Offering the buttons anyway only produces a 503 the operator cannot act on.
-  const canWrite = canEdit && !mode?.writesFrozen && !frozen;
-  const canLink = isAdmin && !!mode?.existingLinks;
+  const canWrite = canEdit && !mode?.writesFrozen && !frozen && mode?.accountingWritesAllowed !== false;
+  // Linking needs both services to agree that the sender is off (lib/peak-switches).
+  const canLink = isAdmin && !!mode?.existingLinks && !!mode?.linkingAllowed;
+  // ?advance=<id>: open that advance's ledger once the list has loaded (a duplicate transfer
+  // refused on a job sheet links here).
+  const [deepLinked, setDeepLinked] = useState(false);
+  useEffect(() => {
+    if (deepLinked || !advances.length || typeof window === "undefined") return;
+    const id = new URLSearchParams(window.location.search).get("advance");
+    const a = id ? advances.find((x) => x.id === id) : undefined;
+    if (a) setDetail(a);
+    setDeepLinked(true);
+  }, [advances, deepLinked]);
   const open = useMemo(() => advances.filter((a) => a.status === "OPEN" || a.status === "IN_USE" || a.status === "RETURN_DUE"), [advances]);
   const waiting = useMemo(() => receipts.filter((r) => r.status === "CLAIMED"), [receipts]);
 
   return (
     <section style={{ display: "grid", gap: 18 }}>
+      <PeakSystemStatus />
       {mode?.reconciliation && (
         <div className="banner warn" role="status">โหมดเชื่อมเอกสาร PEAK เดิม — การสร้าง Advance และการ Sync อัตโนมัติยังปิดอยู่</div>
       )}
@@ -293,7 +307,8 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
         </>
       )}
 
-      {issuing && <IssueAdvanceDialog onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }} />}
+      {issuing && <IssueAdvanceDialog isAdmin={isAdmin} onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }}
+        onOpenExisting={(id) => { const a = advances.find((x) => x.id === id); setIssuing(false); if (a) setDetail(a); }} />}
       {detail && <LedgerDialog advance={detail} canEdit={canEdit} isAdmin={isAdmin} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
       {linking && <RecordExistingPeakDialog target={linking} bankAccount={returnBank || undefined} onClose={() => setLinking(null)} onDone={async (m) => { setLinking(null); setMsg(m); await load(); }} />}
       {allocating && <AllocateDialog receipt={allocating} advances={open.filter((a) => a.guideId === allocating.guideId)} onClose={() => setAllocating(null)} onDone={async (m) => { setAllocating(null); setMsg(m); await load(); }} />}
@@ -326,7 +341,12 @@ function LinkedBadge({ link, onUnlink }: { link: PeakLink; onUnlink?: () => void
   );
 }
 
-function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
+function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onClose: () => void; onDone: (msg: string) => void; isAdmin: boolean; onOpenExisting: (advanceId: string) => void }) {
+  // The slip check (components/SlipCheckPanel): whether it lets this record through, and
+  // the person's answer that goes with it. The server checks the same file again.
+  const [slipReady, setSlipReady] = useState(false);
+  const [slipFields, setSlipFields] = useState<SlipDecisionFields>({});
+  const [existingId, setExistingId] = useState<{ id: string; advanceNo: string } | null>(null);
   const [guideId, setGuideId] = useState("");
   const [advanceDate, setAdvanceDate] = useState(new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10));
   const [amount, setAmount] = useState("");
@@ -356,8 +376,15 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
       body.set("allowedCategories", cats.join(","));
       if (cats.includes("other")) body.set("otherReason", otherReason.trim());
       if (purpose.trim()) body.set("purpose", purpose.trim());
-      const r = await jfetch("/api/advances", { method: "POST", body });
-      onDone(`${(r.advance as { advanceNo: string }).advanceNo} recorded`);
+      for (const [k, v] of Object.entries(slipFields)) if (v) body.set(k, v);
+      const res = await fetch("/api/advances", { method: "POST", body });
+      const r = await res.json().catch(() => ({})) as { advance?: { advanceNo: string }; detail?: string; reasons?: string[]; error?: string; duplicateOf?: { id: string; advanceNo: string } };
+      if (!res.ok) {
+        // One transfer is one advance: say which one holds it, and offer to open it.
+        setExistingId(res.status === 409 && r.duplicateOf ? r.duplicateOf : null);
+        throw new Error(r.detail || r.reasons?.join("\n") || r.error || `HTTP ${res.status}`);
+      }
+      onDone(`${r.advance!.advanceNo} recorded`);
     } catch (e) { setErr(String((e as Error).message)); setBusy(false); }
   };
 
@@ -370,7 +397,9 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
           Money the company transferred to a guide to buy customer tickets for this Job No. It is cleared by the approved ticket
           rows or by unused money the guide returns.
         </p>
-        {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}</div>}
+        {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}
+          {existingId && <div><button type="button" className="btn sm js-open-existing" style={{ marginTop: 6 }} onClick={() => onOpenExisting(existingId.id)}>Open {existingId.advanceNo} · เปิดรายการเดิม</button></div>}
+        </div>}
         <div style={{ display: "grid", gap: 8 }}>
           <label>Guide ID<input value={guideId} onChange={(e) => setGuideId(e.target.value)} placeholder="G-000" disabled={busy} /></label>
           <label>Date the money left the bank<input type="date" value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} disabled={busy} /></label>
@@ -387,11 +416,13 @@ function IssueAdvanceDialog({ onClose, onDone }: { onClose: () => void; onDone: 
           </div>
           {cats.includes("other") && <label>Why may it pay for other costs?<input value={otherReason} onChange={(e) => setOtherReason(e.target.value)} disabled={busy} /></label>}
           <label>Purpose (optional)<input value={purpose} onChange={(e) => setPurpose(e.target.value)} maxLength={200} disabled={busy} /></label>
+          <SlipCheckPanel file={file} guideId={guideId} amount={amount} advanceDate={advanceDate} bankRef={bankRef} isAdmin={isAdmin}
+            onChange={(ready, fields) => { setSlipReady(ready); setSlipFields(fields); }} onOpenExisting={onOpenExisting} />
         </div>
         </div>
         <div className="mfoot">
           <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={submit} disabled={busy || !guideId.trim() || !amount.trim() || !jobNo.trim() || !bankAccount || !bankRef.trim() || !file}>Record</button>
+          <button className="btn primary" onClick={submit} disabled={busy || !guideId.trim() || !amount.trim() || !jobNo.trim() || !bankAccount || !bankRef.trim() || !file || !slipReady}>Record</button>
         </div>
       </div>
     </div>

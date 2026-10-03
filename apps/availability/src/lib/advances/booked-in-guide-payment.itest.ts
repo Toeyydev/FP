@@ -13,7 +13,7 @@ vi.stubGlobal("fetch", fetchSpy);
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
+import { requireTestDatabase, resetDatabase, seedGuide, workerMatchesEnv } from "@/test/db";
 import { financialIdentity } from "@/lib/protected-expense-fields";
 import { markBookedInGuidePayment } from "./booked-in-guide-payment";
 import { linkAsScreen as linkExistingPeakDocument } from "@/test/peak-link-screen";
@@ -102,6 +102,7 @@ describe("Booked in guide payment", () => {
     const { entry } = await fixture();
     await mark(entry.id);
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1"); vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     vi.stubEnv("PEAK_ADVANCE_CONFIG", JSON.stringify({ advanceAccountCode: "111100", bankAccountCode: "111300", bankAccountSubId: "sub-bank", journalTypeIds: { ADVANCE: "5", RETURN: "5", EXPENSE: "5" }, expenseAccounts: {} }));
     const post = vi.fn();
     await syncAdvanceBatch(prisma, post);
@@ -188,6 +189,7 @@ describe("Booked in guide payment", () => {
     const { entry, advance, sheet } = await fixture();
     expect(await mark(entry.id)).toMatchObject({ ok: true });
     vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "1"); vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "0");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     vi.stubEnv("PEAK_ADVANCE_CONFIG", JSON.stringify({ advanceAccountCode: "111100", bankAccountCode: "111300", bankAccountSubId: "sub-bank", journalTypeIds: { ADVANCE: "5", RETURN: "5", EXPENSE: "5" }, expenseAccounts: {} }));
     const doc = { code: "JV-209903-9", documentType: "DAILY_JOURNAL" as const, contactId: null, entries: [{ accountCode: "510104", debit: 300, credit: 0 }, { accountCode: "111100", debit: 0, credit: 300 }] };
     const r = await linkExistingPeakDocument(prisma, { kind: "EXPENSE", advanceId: advance.id, jobSheetId: sheet.id, documentNo: "JV-209903-9", documentType: "DAILY_JOURNAL", note: "trying to link a second document (example)", acknowledgeWarnings: true, requestKey: "rk-booked-link", actor }, async () => ({ ok: true, document: doc }));

@@ -79,7 +79,10 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
   const [recordPay, setRecordPay] = useState<{ guideId: string; guide: string; jobs: PayableJob[]; preselect: string[] } | null>(null);
   // Two views of the same money: the month board (legacy history included) and the
   // canonical Guide Payments workflow (one bank transfer at a time).
+  // ?view=advances&advance=<id> opens one advance — where a refused duplicate transfer
+  // points the person (lib/advances/tx-ref).
   const [view, setView] = useState<"board" | "guide-payments" | "advances">("board");
+  useEffect(() => { if (new URLSearchParams(window.location.search).get("view") === "advances") setView("advances"); }, []);
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });

@@ -1,3 +1,4 @@
+import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { uploadSlip } from "@/lib/advance-slip";
 import { NextRequest, NextResponse } from "next/server";
 import { advanceSyncStates } from "@/lib/advances/peak-sync";
@@ -5,13 +6,15 @@ import { peakLinksFor } from "@/lib/advances/peak-link";
 import { issueVoucherFor } from "@/lib/advances/voucher-issue";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { advanceFrozenBody, advanceWritesFrozen } from "@/lib/advances/freeze";
+import { advanceWritesFrozen } from "@/lib/advances/freeze";
 import { canViewFinance, isOps } from "@/lib/roles";
 import { issueAdvance } from "@/lib/advances/service";
 import { fromSatang } from "@/lib/advances/rules";
 import { summariesFor } from "@/lib/advances/summaries";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { advanceBody } from "@/lib/advances/request-schema";
+import { duplicateTransferBody, liveAdvanceForTransfer } from "@/lib/advances/tx-ref";
+import { gateSlip, slipDecisionFrom } from "@/lib/advances/slip-check";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +57,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (advanceWritesFrozen()) return NextResponse.json(advanceFrozenBody, { status: 503 });
+  { const refused = await accountingWriteRefusal(prisma); if (refused) return NextResponse.json(refused.body, { status: refused.status }); }
   const form = req.headers.get("content-type")?.includes("multipart/form-data") ? await req.formData().catch(() => null) : null;
   const raw = form ? { ...Object.fromEntries(form), amount: Number(form.get("amount")) } : await req.json().catch(() => null);
   const parsed = advanceBody.safeParse(raw);
@@ -67,14 +70,24 @@ export async function POST(req: NextRequest) {
   if (!(file instanceof File) || !file.size) return NextResponse.json({ error: "Attach the transfer slip" }, { status: 400 });
   const sheet = await prisma.jobSheet.findFirst({ where: { ref: parsed.data.jobNo, guideId: parsed.data.guideId }, select: { id: true } });
   if (!sheet) return NextResponse.json({ error: "Choose an existing Job No. for this guide before uploading" }, { status: 400 });
+  // Before anything is uploaded: one transfer is one advance (lib/advances/tx-ref) …
+  const existing = await liveAdvanceForTransfer(prisma, parsed.data.bankRef);
+  if (existing) return NextResponse.json(duplicateTransferBody(existing, { amount: parsed.data.amount, advanceDate: parsed.data.advanceDate }), { status: 409 });
+  // … and the slip shows this transfer to this guide, or a person said why it is still right.
+  const actor = { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null };
+  const gate = await gateSlip(prisma, file, parsed.data.guideId, { txRef: parsed.data.bankRef ?? null, amount: parsed.data.amount, advanceDate: parsed.data.advanceDate },
+    slipDecisionFrom((k) => form?.get(k) ?? (raw as Record<string, unknown> | null)?.[k]), actor);
+  if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
   const uploaded = await uploadSlip(session!.user!.id, file, `${parsed.data.jobNo} — advance`, parsed.data.advanceDate);
   if ("error" in uploaded) return NextResponse.json({ error: uploaded.error }, { status: uploaded.status });
   const slip = uploaded;
   const result = await issueAdvance(prisma, {
-    ...parsed.data, slipUrl: slip?.url, slipFileId: slip?.fileId, today: bangkokToday(),
-    actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null },
+    ...parsed.data, slipUrl: slip?.url, slipFileId: slip?.fileId, today: bangkokToday(), slipCheck: gate.stored, actor,
   });
-  if (!result.ok) return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
+  if (!result.ok) {
+    if (result.duplicateOf) return NextResponse.json(duplicateTransferBody(result.duplicateOf, { amount: parsed.data.amount, advanceDate: parsed.data.advanceDate }), { status: 409 });
+    return NextResponse.json({ error: "not-allowed", reasons: result.reasons, detail: result.reasons.join("\n") }, { status: result.status });
+  }
   // The guide gets a voucher for money they are now holding. Best-effort: a Drive
   // hiccup must not undo a recorded transfer, and the document can be re-filed.
   const voucherUrl = await issueVoucherFor(result.advance.id);

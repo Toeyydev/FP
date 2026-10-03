@@ -1,6 +1,7 @@
 "use client";
 
 import { liveJobAdvances } from "@/lib/advances/coverage";
+import SlipCheckPanel, { existingAdvanceHref, type SlipDecisionFields } from "./SlipCheckPanel";
 import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -111,6 +112,9 @@ export default function JobSheetEditor() {
   // The Rates this job's guests booked (lib/rate-payer): what a row's payer is SUGGESTED from.
   const [rates, setRates] = useState<JobRates | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // The slip check for a new advance (components/SlipCheckPanel); the server runs it again.
+  const [slipReady, setSlipReady] = useState(false);
+  const [slipFields, setSlipFields] = useState<SlipDecisionFields>({});
   // Who is looking (from the server): the Advance panel shows only what this role may do.
   const [role, setRole] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -391,6 +395,7 @@ export default function JobSheetEditor() {
     if (advForm.note.trim()) fd.append("note", advForm.note.trim());
     if (kind === "return" && canEdit && advForm.confirmedArrived) fd.append("confirmedArrived", "1");
     if (kind === "advance") {
+      for (const [k, v] of Object.entries(slipFields)) if (v) fd.append(k, v);
       fd.append("allowedCategories", advCats.join(","));
       if (advPurpose.trim()) fd.append("purpose", advPurpose.trim());
       if (advCats.includes("other")) fd.append("otherReason", advOtherReason.trim());
@@ -403,7 +408,12 @@ export default function JobSheetEditor() {
     const r = await jfetch("/api/jobsheet/advance", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setAdvBusy(false);
-    if (!r.ok) { setMsg(advError(d, r.status)); return; }
+    if (!r.ok) {
+      setMsg(advError(d, r.status));
+      // One transfer is one advance: open the one that already holds it, in a new tab.
+      if (r.status === 409 && d.duplicateOf?.id && window.confirm(`${d.hint ?? "This transfer is already recorded."}\n\nOpen ${d.duplicateOf.advanceNo} on Payments → Advances?`)) window.open(existingAdvanceHref(d.duplicateOf.id), "_blank");
+      return;
+    }
     setAdvance({ ...EMPTY_ADVANCE, ...d });
     setAdvKind(null); setAdvForm({ amount: "", at: "", method: "bank", txRef: "", note: "", file: null, confirmedArrived: false });
     setMsg(kind === "advance" ? "Advance recorded ✓"
@@ -1860,7 +1870,13 @@ export default function JobSheetEditor() {
                 <input className="js-create-purpose" style={{ ...L, minWidth: 200 }} placeholder="Purpose (optional)" maxLength={200} value={advPurpose} onChange={(ev) => setAdvPurpose(ev.target.value)} />
               </div>
             )}
-            <button className="btn sm primary js-advance-submit" disabled={advBusy} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record advance" : "Record return"}</button>
+            {advKind === "advance" && (
+              <div style={{ flexBasis: "100%" }}>
+                <SlipCheckPanel file={advForm.file} guideId={sheet.guideId} amount={advForm.amount} advanceDate={advForm.at ? advForm.at.slice(0, 10) : new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)}
+                  bankRef={advForm.txRef} isAdmin={isAdmin} onChange={(ready, fields) => { setSlipReady(ready); setSlipFields(fields); }} />
+              </div>
+            )}
+            <button className="btn sm primary js-advance-submit" disabled={advBusy || (advKind === "advance" && !!advForm.file && !slipReady)} onClick={() => submitAdvance(advKind)}>{advBusy ? "…" : advKind === "advance" ? "Record advance" : "Record return"}</button>
           </div>
         )}
         <AdvanceOperations data={advance as unknown as OpsData} guideId={sheet.guideId} role={role} userId={userId}

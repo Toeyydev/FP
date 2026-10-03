@@ -6,7 +6,7 @@ const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
+import { requireTestDatabase, resetDatabase, seedGuide, workerMatchesEnv } from "@/test/db";
 import { type DocumentLookup, type PeakDocument } from "./peak-link";
 import { linkAsScreen as linkExistingPeakDocument } from "@/test/peak-link-screen";
 import { syncAdvanceBatch } from "./peak-sync";
@@ -84,6 +84,7 @@ beforeEach(async () => {
   vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "0");
   authMock.auth.mockResolvedValue({ user: { id: "u_admin", role: "ADMIN" } });
   await resetDatabase();
+  await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -313,6 +314,7 @@ describe("the sender", () => {
     const { advance } = await fixture();
     await prisma.advancePeakSync.update({ where: { id: `ADVANCE:${advance.id}` }, data: { status: "PENDING" } });
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1"); // even with the sender switched on
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     const post = vi.fn();
 
     expect(await syncAdvanceBatch(prisma, post)).toBe(0);
@@ -333,6 +335,7 @@ describe("the sender", () => {
     // a forgotten PENDING row would otherwise produce a second document.
     vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     const post = vi.fn();
     const sent = await syncAdvanceBatch(prisma, post);
 
@@ -351,6 +354,7 @@ describe("the reconciliation switch", () => {
   it("records an existing document while ordinary writes are frozen", async () => {
     const { advance } = await fixture();
     vi.stubEnv("ADVANCE_WRITES_FROZEN", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
 
     expect(await linkTheAdvance(advance.id)).toMatchObject({ ok: true, documentNo: "JV-000100" });
     expect(await prisma.advancePeakDocumentLink.count()).toBe(1);
@@ -359,6 +363,7 @@ describe("the reconciliation switch", () => {
   it("refuses when the reconciliation switch is off", async () => {
     const { advance } = await fixture();
     vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
 
     const result = await linkTheAdvance(advance.id);
     expect(result).toMatchObject({ ok: false, status: 503 });
@@ -370,6 +375,7 @@ describe("the reconciliation switch", () => {
     // The opening is for existing documents only: recording a NEW advance is still
     // refused, by the route that has always refused it.
     vi.stubEnv("ADVANCE_WRITES_FROZEN", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
     const res = await createAdvance(new Request("http://localhost/api/advances", { method: "POST", body: new FormData() }) as unknown as NextRequest);
     expect(res.status).toBe(503);
     expect(await prisma.guideAdvance.count()).toBe(0);
@@ -378,6 +384,7 @@ describe("the reconciliation switch", () => {
   it("refuses while the automatic sender is on", async () => {
     const { advance } = await fixture();
     vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "1");
+    await workerMatchesEnv(); // both services hold the same switches (lib/peak-switches)
 
     const result = await linkTheAdvance(advance.id);
     expect(result).toMatchObject({ ok: false, status: 409 });

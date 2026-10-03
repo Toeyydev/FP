@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { advanceWritesFrozen } from "@/lib/advances/freeze";
 import { ADVANCE_BUILD, DB_APPLICATION_NAME } from "@/lib/advances/build";
 import { readLoopHealth } from "@/lib/heartbeat";
+import { readPeakSafety } from "@/lib/peak-switches";
 import { lineEnabled } from "@/lib/line";
 import { pushEnabled } from "@/lib/push";
 import { emailEnabled } from "@/lib/email";
@@ -40,6 +41,14 @@ export async function GET() {
       certificateRenderer: rendererStatusForHealth(),
 
       advances: { build: ADVANCE_BUILD, dbApplicationName: DB_APPLICATION_NAME, writes: advanceWritesFrozen() ? "frozen" : "open", switch: advanceWritesFrozen() ? "on" : "off" },
+      // The PEAK switches across both services (lib/peak-switches): states only. `state`
+      // is UNSAFE when posting and linking could both reach one movement.
+      peak: await readPeakSafety(prisma).then((p) => ({
+        state: p.state, postingAllowed: p.postingAllowed, linkingAllowed: p.linkingAllowed, accountingWritesAllowed: p.accountingWritesAllowed,
+        fp: { autoSync: p.fp.autoSync, existingLinks: p.fp.existingLinks },
+        worker: p.worker ? { autoSync: p.worker.autoSync, existingLinks: p.worker.existingLinks, lastSeenAt: p.worker.lastSeenAt, stale: p.worker.stale } : null,
+        issues: p.issues.map((i) => i.code),
+      })).catch(() => null),
     });
   } catch {
     return NextResponse.json(

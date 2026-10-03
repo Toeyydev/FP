@@ -1,3 +1,4 @@
+import { readPeakSafety } from "@/lib/peak-switches";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
 import {
@@ -176,6 +177,23 @@ export function checkLinkMode(): Fail | null {
   return null;
 }
 
+/**
+ * The same question across BOTH services (lib/peak-switches): FP's switch is not enough,
+ * because the sender runs in payment-worker with its own environment. Linking needs the
+ * worker's own recent report that its sender is off, and the two services to agree.
+ */
+export async function checkLinkSafety(prisma: Pick<PrismaClient, "serviceStatus">): Promise<Fail | null> {
+  const local = checkLinkMode();
+  if (local) return local;
+  const safety = await readPeakSafety(prisma);
+  if (safety.linkingAllowed) return null;
+  const why = safety.issues.filter((i) => i.code !== "VERSION_DIFFERS");
+  return fail(409,
+    "ยังผูกเอกสาร PEAK เดิมไม่ได้: ต้องยืนยันว่าตัวส่งอัตโนมัติใน payment-worker ปิดอยู่ และสวิตช์ของทั้งสอง service ตรงกัน",
+    "Recording an existing PEAK document needs payment-worker's own recent report that its sender is off, and both services' switches to agree.",
+    ...why.map((i) => `${i.en} ${i.fix}`));
+}
+
 /** Statuses that mean the sender may already have created a document for this event. */
 const IN_FLIGHT = ["SENDING", "PROCESSING", "UNCERTAIN", "POSTED"];
 
@@ -213,7 +231,7 @@ type Ctx = { documentNo: string; document: PeakDocument | null; verified: boolea
 export async function previewLink(prisma: PrismaClient, req: LinkRequest, lookup?: DocumentLookup): Promise<
   { ok: true; documentNo: string; amount: number; verified: boolean; warnings: string[]; describes: string } | Fail
 > {
-  const blocked = checkLinkMode();
+  const blocked = await checkLinkSafety(prisma);
   if (blocked) return blocked;
   // A preview REPORTS warnings so a person can read them and decide; it never accepts them.
   // Only the write path can, and only for the very warnings a person was shown.
@@ -423,7 +441,7 @@ function defaultLookup(): DocumentLookup | null {
  * never has a window in which to act.
  */
 export async function linkExistingPeakDocument(prisma: PrismaClient, req: LinkRequest, lookup?: DocumentLookup): Promise<LinkResult> {
-  const blocked = checkLinkMode();
+  const blocked = await checkLinkSafety(prisma);
   if (blocked) return blocked;
 
   const documentNo = normalizeDocumentNo(req.documentNo);
@@ -580,7 +598,7 @@ async function closeOutbox(tx: Prisma.TransactionClient, kind: LinkKind, sourceI
  * under some number; the next step is linking the right document.
  */
 export async function unlinkPeakDocument(prisma: PrismaClient, input: { kind: LinkKind; sourceId: string; reason: string; actor: Actor }): Promise<{ ok: true; documentNo: string } | Fail> {
-  const blocked = checkLinkMode();
+  const blocked = await checkLinkSafety(prisma);
   if (blocked) return blocked;
   if ((input.reason ?? "").trim().length < MIN_REASON) return fail(400, "Say why this link is wrong — the auditor reads this");
   const link = await peakLinkFor(prisma, input.kind, input.sourceId);

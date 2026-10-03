@@ -9,6 +9,7 @@
 // entry may not be posted yet, before anything is sent — the sender (lib/advances/peak-sync)
 // builds its journal with the very same two functions, so what is shown here is what goes.
 // Nothing is claimed, written, or sent to PEAK from this file.
+import { readPeakSafety, type SafetyState } from "@/lib/peak-switches";
 import type { PrismaClient } from "@prisma/client";
 import { sanitizePeakError } from "@/lib/peak-api";
 import { advanceJournal, type AdvancePeakConfig } from "./peak-journal";
@@ -61,8 +62,11 @@ export type JournalEntry = {
 export type AccountJournal = {
   /** The deployment has its advance accounts configured. Without them no entry can name an account. */
   configured: boolean;
-  /** PEAK_ADVANCE_AUTO_SYNC: when on, READY entries are posted by the worker without a further click. */
+  /** READY entries are posted by the worker without a further click: the sender is on AND
+   *  both services agree it may post (lib/peak-switches) — never one service's variable alone. */
   autoSync: boolean;
+  /** The combined state of the PEAK switches across FP and payment-worker. */
+  peakState: SafetyState;
   entries: JournalEntry[];
   totals: {
     byState: Partial<Record<JournalState, { count: number; amount: number }>>;
@@ -164,5 +168,6 @@ export async function accountJournal(db: PrismaClient): Promise<AccountJournal> 
     if (e.state === "CANCELLED" || unconfirmed.has(e.id)) continue;
     net += e.kind === "ADVANCE" ? Math.round(e.amount * 100) : -Math.round(e.amount * 100);
   }
-  return { configured: !!config, autoSync: (process.env.PEAK_ADVANCE_AUTO_SYNC ?? "").trim() === "1", entries, totals: { byState, advanceAccountNet: net / 100 } };
+  const safety = await readPeakSafety(db);
+  return { configured: !!config, autoSync: safety.postingAllowed, peakState: safety.state, entries, totals: { byState, advanceAccountNet: net / 100 } };
 }

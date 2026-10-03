@@ -3,6 +3,8 @@ import { sweepExpiredOffers } from "@/lib/offers";
 import { sweepTourReminders, sweepUnstaffedDepartures } from "@/lib/tour-reminders";
 import { sweepExpenseReminders } from "@/lib/expense-reminders";
 import { recordLoopHeartbeat } from "@/lib/heartbeat";
+import { prisma } from "@/lib/db";
+import { localSwitches, recordServiceStatus, switchesUnsafe, UNSAFE_LOCAL_MESSAGE } from "@/lib/peak-switches";
 
 // A self-scheduling background loop that keeps the board current even when nobody
 // has the app open — so it never again depends on the Bokun webhook being alive.
@@ -10,6 +12,7 @@ import { recordLoopHeartbeat } from "@/lib/heartbeat";
 // across replicas via the audit log), re-syncs assignment pax / self-heals, and
 // expires timed-out offers. All best-effort; one bad tick never stops the loop.
 let started = false;
+let warnedUnsafe = false;
 export function startSyncLoop(): void {
   if (started) return;
   started = true;
@@ -41,5 +44,17 @@ export function startSyncLoop(): void {
   };
   setTimeout(() => { void remind(); }, 20_000);        // shortly after boot
   setInterval(() => { void remind(); }, 300_000);      // then every 5 min
+
+  // FP's own PEAK switches, for payment-worker to read before it posts and for the
+  // status bar (lib/peak-switches). Every minute: a row written once and never again
+  // would let an old report outlive a switch change. One small upsert, throttled inside.
+  const report = async () => {
+    const unsafe = switchesUnsafe(localSwitches());
+    if (unsafe && !warnedUnsafe) console.error(JSON.stringify({ t: new Date().toISOString(), svc: "FP", msg: "peak-switch-unsafe", level: "error", reason: UNSAFE_LOCAL_MESSAGE }));
+    warnedUnsafe = unsafe;
+    try { await recordServiceStatus(prisma, "FP"); } catch { /* observing must not break it */ }
+  };
+  void report();
+  setInterval(() => { void report(); }, 60_000);
 }
 
