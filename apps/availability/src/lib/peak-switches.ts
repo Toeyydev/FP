@@ -136,6 +136,7 @@ export function selfReport(service: ServiceName, nowMs: number = Date.now()): Se
 }
 
 let lastWritten: { at: number; key: string } | null = null;
+let lastSuccessWritten: number | null = null;
 
 /** An error as a service may report it: no URL (a connection string carries credentials), short. */
 export const scrub = (msg: string) => msg.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]").replace(/\s+/g, " ").trim().slice(0, 300);
@@ -147,7 +148,10 @@ export const scrub = (msg: string) => msg.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi,
 export async function recordServiceStatus(db: StatusDb, service: ServiceName, extra: { success?: boolean; error?: string | null } = {}, nowMs: number = Date.now()): Promise<void> {
   const me = selfReport(service, nowMs);
   const key = JSON.stringify([me.autoSync, me.existingLinks, me.writesFrozen, me.version, extra.error ?? null]);
-  if (lastWritten && lastWritten.key === key && nowMs - lastWritten.at < STATUS_EVERY_MS) return;
+  // A success is its own news: the plain report at the start of a pass must not swallow the
+  // success at its end, or "last successful run" is never written.
+  const successDue = !!extra.success && (!lastSuccessWritten || nowMs - lastSuccessWritten >= STATUS_EVERY_MS);
+  if (!successDue && lastWritten && lastWritten.key === key && nowMs - lastWritten.at < STATUS_EVERY_MS) return;
   const at = new Date(nowMs);
   const data = {
     version: me.version, deploymentId: me.deploymentId, autoSync: me.autoSync, existingLinks: me.existingLinks, writesFrozen: me.writesFrozen,
@@ -159,6 +163,7 @@ export async function recordServiceStatus(db: StatusDb, service: ServiceName, ex
   try {
     await db.serviceStatus.upsert({ where: { id: service }, create: { id: service, ...data }, update: data });
     lastWritten = { at: nowMs, key };
+    if (extra.success) lastSuccessWritten = nowMs;
   } catch { /* the table may not exist yet during a deploy; next pass tries again */ }
 }
 
