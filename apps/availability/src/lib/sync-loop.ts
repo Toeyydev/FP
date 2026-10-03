@@ -1,3 +1,4 @@
+import { attachNextCertificate } from "@/lib/certificates/peak-attach-send";
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { sweepTourReminders, sweepUnstaffedDepartures } from "@/lib/tour-reminders";
@@ -53,6 +54,9 @@ export function startSyncLoop(): void {
     if (unsafe && !warnedUnsafe) console.error(JSON.stringify({ t: new Date().toISOString(), svc: "FP", msg: "peak-switch-unsafe", level: "error", reason: UNSAFE_LOCAL_MESSAGE }));
     warnedUnsafe = unsafe;
     try { await recordServiceStatus(prisma, "FP"); } catch { /* observing must not break it */ }
+    // Filed certificates onto their EXP in PEAK, one a minute at most (PEAK allows two
+    // uploads a minute). Off unless CERTIFICATE_PEAK_ATTACH=1 (lib/certificates/peak-attach-send).
+    try { await attachNextCertificate(prisma); } catch { /* keep looping */ }
   };
   void report();
   setInterval(() => { void report(); }, 60_000);
