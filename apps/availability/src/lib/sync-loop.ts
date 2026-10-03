@@ -1,6 +1,6 @@
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
-import { sweepTourReminders } from "@/lib/tour-reminders";
+import { sweepTourReminders, sweepUnstaffedDepartures } from "@/lib/tour-reminders";
 import { sweepExpenseReminders } from "@/lib/expense-reminders";
 import { recordLoopHeartbeat } from "@/lib/heartbeat";
 
@@ -32,6 +32,7 @@ export function startSyncLoop(): void {
   // third timer. Separate try so a failure in one sweep never skips the other.
   const remind = async () => {
     try { await sweepTourReminders(); } catch { /* keep looping */ }
+    try { await sweepUnstaffedDepartures(); } catch { /* keep looping */ }
     try { await sweepExpenseReminders(); } catch { /* keep looping */ }
     // Leave a pulse last, so /api/health can tell "nothing was due" from "the loop
     // stopped". These sweeps only write when they send something, so without it the
