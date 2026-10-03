@@ -176,6 +176,37 @@ try {
     if (SHOTS) await page.screenshot({ path: join(SHOTS, "booking-reconcile-stale-approval.png"), fullPage: false });
     await page.close();
   }
+
+  // A tour that already ran, with guests that never reached its sheet: the sheet says so
+  // and one press adds them (append-only) and marks every waiting booking as guided.
+  {
+    const PAST = "2025-03-09";
+    await prisma.assignment.create({ data: { guideId: "G-907", date: PAST, slotIdx: 2, tourId: "T-900", pax: 2 } });
+    const pk = (ref, pax, status) => prisma.booking.create({ data: { source: "GetYourGuide", externalRef: ref, customerName: `Guest ${ref}`, date: PAST, slotIdx: 2, tourId: "T-900", pax, status } });
+    await pk("GYGPAST01", 2, "OFFERED"); await pk("GYGPAST02", 2, "PENDING"); await pk("GYGPAST03", 1, "PENDING");
+    await prisma.jobSheet.create({ data: { ref: "FOLK-TEST-E2E-PAST", guideId: "G-907", date: PAST, slotIdx: 2, tourId: "T-900", status: "Confirmed",
+      bookings: [{ name: "Guest GYGPAST01", bookingNo: "GYGPAST01", bookedPax: 2, actualPax: 2, tickets: "", status: "" }], expenses: [] } });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.setCookie(await sessionCookie(data.op.email));
+    await page.goto(`${BASE}/job-sheet?guideId=G-907&date=${PAST}&slotIdx=2`, { waitUntil: "networkidle0" });
+    await page.waitForSelector(".js-past-gaps", { timeout: 20000 });
+    const banner = await page.$eval(".js-past-gaps", (e) => e.innerText);
+    check("past sheet: the guests missing from it, and the booking still waiting, are named",
+      /2 bookings at this departure are not on this sheet/.test(banner) && /GYGPAST02 ×2/.test(banner) && /GYGPAST03 ×1/.test(banner) && /GYGPAST01 · OFFERED/.test(banner), banner.replace(/\s+/g, " ").slice(0, 220));
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "past-sheet-gaps.png"), fullPage: false });
+    await page.click(".js-past-gaps-fix");
+    await page.waitForFunction(() => !document.querySelector(".js-past-gaps"), { timeout: 15000 });
+    const sheetAfter = await prisma.jobSheet.findFirstOrThrow({ where: { ref: "FOLK-TEST-E2E-PAST" } });
+    const statuses = (await prisma.booking.findMany({ where: { date: PAST }, orderBy: { externalRef: "asc" } })).map((b) => b.status);
+    const rowsShown = await page.$$eval("table.js-table tbody tr:not(.js-total)", (trs) => trs.length);
+    check("past sheet: one press appends the two bookings after the existing row and marks all three guided",
+      sheetAfter.bookings.map((r) => r.bookingNo).join(",") === "GYGPAST01,GYGPAST02,GYGPAST03" && statuses.join(",") === "ASSIGNED,ASSIGNED,ASSIGNED" && rowsShown >= 3 && errors.length === 0,
+      JSON.stringify({ rows: sheetAfter.bookings.map((r) => r.bookingNo), statuses, rowsShown, errors }));
+    await page.close();
+  }
 } finally {
   await browser.close();
   server.kill();

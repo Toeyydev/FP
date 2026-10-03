@@ -112,6 +112,11 @@ export default function JobSheetEditor() {
   // The Rates this job's guests booked (lib/rate-payer): what a row's payer is SUGGESTED from.
   const [rates, setRates] = useState<JobRates | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // A tour that already ran: bookings at its departure missing from this sheet, or on it
+  // but still waiting in Bookings (lib/past-sheet-sync). Shown, never added by itself.
+  type GapBooking = { id: string; ref: string; pax: number | null; source: string | null; status: string };
+  const [pastGaps, setPastGaps] = useState<{ missing: GapBooking[]; unsettled: GapBooking[] } | null>(null);
+  const [gapBusy, setGapBusy] = useState(false);
   // The slip check for a new advance (components/SlipCheckPanel); the server runs it again.
   const [slipReady, setSlipReady] = useState(false);
   const [slipFields, setSlipFields] = useState<SlipDecisionFields>({});
@@ -190,6 +195,7 @@ export default function JobSheetEditor() {
     const r = await fetch(`/api/jobsheet?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, { cache: "no-store" });
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
+    setPastGaps(d.pastBookingGaps ?? null);
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setAdvanceLoaded(!!d.advance);
@@ -1226,6 +1232,25 @@ export default function JobSheetEditor() {
         <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายละเอียดงาน"}</small></h3>
         <GuestCounts rows={sheet.bookings} sync={bookingSync} />
+        {canEdit && pastGaps && (pastGaps.missing.length > 0 || pastGaps.unsettled.length > 0) && (
+          <div className="banner warn no-print js-past-gaps" role="status" style={{ display: "grid", gap: 6, background: "#fff7e8", border: "1px solid #e0b964", borderRadius: 8, padding: "8px 12px", margin: "6px 0", fontSize: 13 }}>
+            {pastGaps.missing.length > 0 && <div><b>{pastGaps.missing.length} booking{pastGaps.missing.length === 1 ? "" : "s"} at this departure {pastGaps.missing.length === 1 ? "is" : "are"} not on this sheet</b> ({pastGaps.missing.reduce((t, g) => t + (g.pax ?? 0), 0)} pax): {pastGaps.missing.map((g) => `${g.ref} ×${g.pax ?? "?"}`).join(", ")} · มีบุ๊กกิ้งของรอบนี้ที่ยังไม่อยู่ใน job sheet</div>}
+            {pastGaps.unsettled.length > 0 && <div>{pastGaps.unsettled.length} booking{pastGaps.unsettled.length === 1 ? "" : "s"} on this sheet still {pastGaps.unsettled.length === 1 ? "waits" : "wait"} in Bookings ({pastGaps.unsettled.map((g) => `${g.ref} · ${g.status}`).join(", ")}) · บุ๊กกิ้งยังค้างสถานะรอในหน้า Bookings</div>}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button className="btn sm primary js-past-gaps-fix" disabled={gapBusy || !saved || !sheet.updatedAt} title={!saved ? "Save or discard your changes first" : undefined} onClick={async () => {
+                setGapBusy(true); setMsg("");
+                const r = await fetch("/api/jobsheet/past-bookings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, bookingIds: [...pastGaps.missing, ...pastGaps.unsettled].map((g) => g.id), sheetVersion: sheet.updatedAt }) });
+                const d = await r.json().catch(() => ({}));
+                setGapBusy(false);
+                if (!r.ok) { setMsg(d.detail || d.reasons?.join(" · ") || "Could not update the bookings — reload and try again."); return; }
+                await load();
+                setMsg(`${d.added?.length ? `Added ${d.added.length} booking${d.added.length === 1 ? "" : "s"} · ` : ""}${d.settled?.length ?? 0} marked as guided by ${sheet.guideId} ✓ — check Actual Pax and Tickets`);
+              }}>{gapBusy ? "…" : `${pastGaps.missing.length ? `Add ${pastGaps.missing.length} to this sheet and mark` : "Mark"} as guided by ${sheet.guideId}`}</button>
+              {!saved && <span className="muted" style={{ fontSize: 12 }}>Save your changes first.</span>}
+              <span className="muted" style={{ fontSize: 12 }}>Adds rows only — nothing on the sheet is changed or removed.</span>
+            </div>
+          </div>
+        )}
         <table className="js-table">
           <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print" /></tr></thead>
           <tbody>

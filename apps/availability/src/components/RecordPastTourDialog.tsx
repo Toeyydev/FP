@@ -163,7 +163,16 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
           {staffed.length > 0 && (
             <div style={{ fontSize: 12.5, color: "var(--ink-soft)", display: "grid", gap: 2 }}>
               <span style={{ fontWeight: 700 }}>Also on this day</span>
-              {staffed.map((s) => <span key={s.slotIdx}>{[s.time, s.tours.map((t) => t.name).join(" + "), s.pax > 0 ? `${s.pax} pax` : "", s.staffedBy.map((g) => `${g.guideId} ${g.name}`).join(", ")].filter(Boolean).join(" · ")}</span>)}
+              {staffed.map((s) => {
+                // A guide is recorded, but some guests still wait: they reached the departure
+                // late and never made it onto the job sheet. Fixed on the sheet itself.
+                const waiting = s.bookings.filter((b) => b.status === "PENDING" || b.status === "OFFERED");
+                return (
+                  <span key={s.slotIdx}>{[s.time, s.tours.map((t) => t.name).join(" + "), s.pax > 0 ? `${s.pax} pax` : "", s.staffedBy.map((g) => `${g.guideId} ${g.name}`).join(", ")].filter(Boolean).join(" · ")}
+                    {waiting.length > 0 && <> · <b style={{ color: "var(--danger, #b3402f)" }}>{waiting.length} booking{waiting.length === 1 ? "" : "s"} still waiting</b>{s.staffedBy.map((g) => <a key={g.guideId} className="btn sm js-past-waiting" style={{ marginLeft: 6 }} href={`/job-sheet?guideId=${encodeURIComponent(g.guideId)}&date=${date}&slotIdx=${s.slotIdx}`}>Open {g.guideId}&rsquo;s job sheet →</a>)}</>}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
