@@ -191,7 +191,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
                     <button className="btn sm primary" disabled={busy || !returnBank} title={returnBank ? "You have seen this money in the company bank account" : "เลือกบัญชีธนาคารบริษัทก่อนยืนยัน"}
                       onClick={() => {
                         const bankRef = window.prompt(`Confirm that ${thb(r.amount)} from ${r.guideId} reached the company account.\n\nFind the transfer on the company bank statement and enter that line's reference. Leave this unconfirmed if you cannot find it.`);
-                        if (bankRef && bankRef.trim()) void act(() => jfetch(`/api/advances/returns/${r.id}/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bankRef: bankRef.trim(), bankAccount: returnBank }) }), `${r.receiptNo} confirmed`);
+                        if (bankRef && bankRef.trim()) void act(() => jfetch(`/api/advances/returns/${r.id}/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bankRef: bankRef.trim(), bankAccount: returnBank }) }), `${r.receiptNo} confirmed — put against its advance automatically when the guide named one; anything left over is shown as unallocated`);
                       }}>Confirm received</button>
                     <button className="btn sm ghost" disabled={busy}
                       onClick={() => { const reason = window.prompt("Why can this return not be confirmed?"); if (reason) void act(() => jfetch(`/api/advances/returns/${r.id}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) }), `${r.receiptNo} rejected`); }}>Reject…</button>

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { autoSettleSheet } from "@/lib/advances/auto";
 import { liveJobAdvances } from "@/lib/advances/coverage";
 import { sheetRowFate, rowStays } from "@/lib/sheet-reconcile";
 import { paymentCoverage } from "@/lib/payment-coverage";
@@ -572,6 +573,14 @@ export async function PUT(req: NextRequest) {
   if (paxTotal > 0) {
     await prisma.assignment.updateMany({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, data: { pax: paxTotal } });
   }
+  // A sheet that is already approved and has just had a row confirmed as paid from an
+  // advance: settle it now, as approval would have (lib/advances/auto). Operators only —
+  // a guide's own save decides nothing about the ledger.
+  let advanceSettled: Awaited<ReturnType<typeof autoSettleSheet>> = [];
+  if (ops(session!.user!.role) && isApproved(sheet.approvalStatus)) {
+    advanceSettled = await autoSettleSheet(prisma, { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null }, "jobsheet.save");
+    if (advanceSettled.some((x) => x.ok)) sheet = (await prisma.jobSheet.findUnique({ where: { id: sheet.id } })) ?? sheet;
+  }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
@@ -580,7 +589,7 @@ export async function PUT(req: NextRequest) {
   // The row they just saved is unchanged in the database; what they are not told is that
   // a certificate is what is holding it up.
   const out = isAdmin(session!.user!.role) ? sheet : { ...sheet, expenses: redactRowsForNonAdmin(sheet.expenses as Record<string, unknown>[]) };
-  return NextResponse.json({ ok: true, sheet: out, restoredNoShows, noShowMismatches });
+  return NextResponse.json({ ok: true, sheet: out, restoredNoShows, noShowMismatches, advanceSettled });
 }
 
 // POST { date: "YYYY-MM-DD", guideId? }  — operator/admin only.

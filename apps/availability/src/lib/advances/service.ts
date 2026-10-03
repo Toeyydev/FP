@@ -35,6 +35,14 @@ import {
 
 type Tx = Prisma.TransactionClient;
 export type Actor = { actorId: string | null; actorRole: string | null };
+
+/**
+ * What a person did that made FolkOPS write a ledger entry by itself (lib/advances/auto).
+ * The entry keeps that person as its actor — they made the decision — and is marked SYSTEM,
+ * and its audit row says it was automatic and why, so it is never mistaken for a click.
+ */
+export type AutomaticTrigger = "jobsheet.approve" | "jobsheet.save" | "return.verify";
+const automaticDetail = (t: AutomaticTrigger | undefined) => (t ? { automatic: true, trigger: t } : {});
 export type Fail = { ok: false; status: number; reasons: string[] };
 const fail = (status: number, ...reasons: string[]): Fail => ({ ok: false, status, reasons });
 
@@ -309,6 +317,8 @@ export type AllocateResult = { ok: true; entries: { id: string; advanceId: strin
  */
 export async function allocateReceipt(prisma: PrismaClient, input: {
   receiptId: string; allocations: AllocationRequest[]; requestKey: string; actor: Actor;
+  /** Set when FolkOPS writes this itself after a person's action (lib/advances/auto): what that action was. */
+  automatic?: AutomaticTrigger;
 }): Promise<AllocateResult> {
   if (!(input.requestKey ?? "").trim()) return fail(400, "Missing request key");
   const replay = await existingRequest(prisma, input.requestKey);
@@ -349,11 +359,12 @@ export async function allocateReceipt(prisma: PrismaClient, input: {
           advanceId: l.advanceId, type: "RETURN_ALLOCATION", amountSatang: l.amountSatang,
           effectiveDate: receipt.receivedDate, sourceType: "RECEIPT", sourceId: receipt.id,
           receiptId: receipt.id, requestKey: input.requestKey,
+          ...(input.automatic ? { provenance: "SYSTEM" } : {}),
         }, input.actor));
       }
       return out;
     });
-    await audit({ ...input.actor, action: "advance.return_allocated", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: { receiptNo: receipt.receiptNo, guideId: receipt.guideId, total: fromSatang(total), lines: lines.map((l) => ({ advanceId: l.advanceId, amount: fromSatang(l.amountSatang) })), requestKey: input.requestKey } });
+    await audit({ ...input.actor, action: "advance.return_allocated", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: { ...automaticDetail(input.automatic), receiptNo: receipt.receiptNo, guideId: receipt.guideId, total: fromSatang(total), lines: lines.map((l) => ({ advanceId: l.advanceId, amount: fromSatang(l.amountSatang) })), requestKey: input.requestKey } });
     return { ok: true, entries: entries.map((e) => ({ id: e.id, advanceId: e.advanceId, amountSatang: e.amountSatang })), replayed: false };
   } catch (e) {
     if (e instanceof LedgerConflict) return fail(409, e.message);
@@ -591,6 +602,8 @@ const ledgerEntriesOf = (db: Tx | PrismaClient, advanceId: string) =>
 export async function settleFromExpenses(prisma: PrismaClient, input: {
   advanceId: string; jobSheetId: string; sheetVersion: string; lines: LineRequest[];
   requestKey?: string | null; actor: Actor;
+  /** Set when FolkOPS writes this itself after a person's action (lib/advances/auto): what that action was. */
+  automatic?: AutomaticTrigger;
 }): Promise<SettleResult> {
   const advance = await prisma.guideAdvance.findUnique({ where: { id: input.advanceId } });
   if (!advance) return fail(404, "No such advance");
@@ -638,6 +651,7 @@ export async function settleFromExpenses(prisma: PrismaClient, input: {
       const written = await writeEntry(tx, {
         advanceId: advance.id, type: "EXPENSE_SETTLEMENT", amountSatang: checked.amountSatang,
         effectiveDate: sheet.date, sourceType: "JOB_SHEET", sourceId: sheet.id, jobNo: sheet.ref,
+        ...(input.automatic ? { provenance: "SYSTEM" } : {}),
         snapshot: {
           lines: checked.lines,
           total: checked.amountSatang,
@@ -655,6 +669,7 @@ export async function settleFromExpenses(prisma: PrismaClient, input: {
     });
     const after = advanceSummary({ ...advance, settledSatang: advance.settledSatang + checked.amountSatang }, await ledgerEntriesOf(prisma, advance.id), sheet);
     await audit({ ...input.actor, action: "advance.expenses_settled", entityType: "GuideAdvance", entityId: advance.id, detail: {
+      ...automaticDetail(input.automatic),
       advanceNo: advance.advanceNo, jobSheetId: sheet.id, jobNo: sheet.ref, entryId: entry.id, requestKey,
       amount: fromSatang(checked.amountSatang),
       lines: checked.lines.map((l) => ({ index: l.index, identity: l.identity, category: l.category, amount: fromSatang(l.amountSatang) })),
