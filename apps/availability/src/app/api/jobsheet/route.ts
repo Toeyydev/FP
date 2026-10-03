@@ -578,7 +578,7 @@ export async function PUT(req: NextRequest) {
   // a guide's own save decides nothing about the ledger.
   let advanceSettled: Awaited<ReturnType<typeof autoSettleSheet>> = [];
   if (ops(session!.user!.role) && isApproved(sheet.approvalStatus)) {
-    advanceSettled = await autoSettleSheet(prisma, { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null });
+    advanceSettled = await autoSettleSheet(prisma, { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx }, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null }, "jobsheet.save");
     if (advanceSettled.some((x) => x.ok)) sheet = (await prisma.jobSheet.findUnique({ where: { id: sheet.id } })) ?? sheet;
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);

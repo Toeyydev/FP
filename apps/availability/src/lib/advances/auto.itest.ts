@@ -95,7 +95,11 @@ describe("approving a job sheet settles the advance rows it covers", () => {
     expect(new Date(res.body.updatedAt).getTime()).toBe((await prisma.jobSheet.findUniqueOrThrow({ where: sheetKey })).updatedAt.getTime());
     // the settlement is queued for PEAK like any other, by the database's own trigger
     expect(await prisma.advancePeakSync.count({ where: { id: `EXPENSE:${entries[0].id}` } })).toBe(1);
-    expect(await prisma.auditLog.count({ where: { action: "advance.expenses_settled" } })).toBe(1);
+    // Marked as automatic, with the action that caused it — and still the approver's, who made the decision.
+    const settledAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "advance.expenses_settled" } });
+    expect(settledAudit.actorId).toBe(admin.actorId);
+    expect(settledAudit.detail).toMatchObject({ automatic: true, trigger: "jobsheet.approve" });
+    expect(entries[0].provenance).toBe("SYSTEM");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -197,7 +201,10 @@ describe("confirming a return puts it against the advance the guide named", () =
     expect(res.body.allocated).toEqual({ advanceNo: adv.advanceNo, ok: true, amount: 300, left: 0, reasons: [] });
     expect(await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: receiptId } })).toMatchObject({ status: "VERIFIED", allocatedSatang: 30000 });
     expect(await summaryOf(adv.id)).toMatchObject({ used: 60000, returned: 30000, outstanding: 10000, driftSatang: 0 });
-    expect(await prisma.auditLog.count({ where: { action: "advance.return_allocated" } })).toBe(1);
+    const allocAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "advance.return_allocated" } });
+    expect(allocAudit.detail).toMatchObject({ automatic: true, trigger: "return.verify" });
+    expect(allocAudit.actorId).toBe(admin.actorId);
+    expect((await prisma.guideAdvanceEntry.findFirstOrThrow({ where: { type: "RETURN_ALLOCATION" } })).provenance).toBe("SYSTEM");
   });
 
   it("a return larger than what the advance holds: the advance is cleared and the excess is left for a person, never allocated away", async () => {

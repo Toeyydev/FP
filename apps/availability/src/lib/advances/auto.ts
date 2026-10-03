@@ -53,7 +53,7 @@ export function settleableRows(rows: readonly SheetRow[], advance: { id: string;
  * save of a sheet that is already approved). Does nothing for a sheet that is not approved
  * or a job with no live advance. Never throws: a failure here must not undo the approval.
  */
-export async function autoSettleSheet(prisma: PrismaClient, job: { guideId: string; date: string; slotIdx: number }, actor: Actor): Promise<AutoSettled[]> {
+export async function autoSettleSheet(prisma: PrismaClient, job: { guideId: string; date: string; slotIdx: number }, actor: Actor, trigger: "jobsheet.approve" | "jobsheet.save" = "jobsheet.approve"): Promise<AutoSettled[]> {
   if (advanceWritesFrozen()) return [];
   const out: AutoSettled[] = [];
   try {
@@ -64,7 +64,7 @@ export async function autoSettleSheet(prisma: PrismaClient, job: { guideId: stri
       if (!sheet || !isApproved(sheet.approvalStatus)) return out;
       const lines = settleableRows((sheet.expenses as unknown as SheetRow[]) ?? [], advance);
       if (!lines.length) continue;
-      const res = await settleFromExpenses(prisma, { advanceId: advance.id, jobSheetId: sheet.id, sheetVersion: sheet.updatedAt.toISOString(), lines, actor });
+      const res = await settleFromExpenses(prisma, { advanceId: advance.id, jobSheetId: sheet.id, sheetVersion: sheet.updatedAt.toISOString(), lines, actor, automatic: trigger });
       out.push(res.ok
         ? { advanceNo: advance.advanceNo, ok: true, amount: fromSatang(res.amountSatang), rows: lines.length, reasons: [] }
         : { advanceNo: advance.advanceNo, ok: false, amount: 0, rows: lines.length, reasons: res.reasons });
@@ -95,7 +95,7 @@ export async function autoAllocateReturn(prisma: PrismaClient, receiptId: string
     const outstanding = summary && summary.status !== null && summary.driftSatang === 0 ? summary.outstanding : 0;
     const amountSatang = Math.min(free, outstanding);
     if (!(amountSatang > 0)) return null;
-    const res = await allocateReceipt(prisma, { receiptId, allocations: [{ advanceId: advance.id, amount: fromSatang(amountSatang) }], requestKey: `auto-allocate:${receiptId}`, actor });
+    const res = await allocateReceipt(prisma, { receiptId, allocations: [{ advanceId: advance.id, amount: fromSatang(amountSatang) }], requestKey: `auto-allocate:${receiptId}`, actor, automatic: "return.verify" });
     return res.ok
       ? { advanceNo: advance.advanceNo, ok: true, amount: fromSatang(amountSatang), left: fromSatang(free - amountSatang), reasons: [] }
       : { advanceNo: advance.advanceNo, ok: false, amount: 0, left: fromSatang(free), reasons: res.reasons };
