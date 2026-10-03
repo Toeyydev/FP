@@ -67,6 +67,9 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
   const [linking, setLinking] = useState<LinkTarget | null>(null);
+  // The "Company advances" report filed in Drive (lib/advances/report).
+  const [filing, setFiling] = useState(false);
+  const [reportLink, setReportLink] = useState<string | null>(null);
   const [mode, setMode] = useState<{ reconciliation: boolean; existingLinks: boolean; writesFrozen: boolean; autoSync: boolean; peakState?: string; linkingAllowed?: boolean; accountingWritesAllowed?: boolean } | null>(null);
 
   const load = useCallback(async () => {
@@ -134,7 +137,17 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
         <span className="muted" style={{ fontSize: 12.5 }}>
           {open.length} outstanding · {thb(open.reduce((s, a) => s + a.outstanding, 0))} with guides
         </span>
-        {canWrite && <button className="btn sm primary" disabled={busy || frozen} onClick={() => setIssuing(true)} style={{ marginLeft: "auto" }}>Record advance…</button>}
+        <button className="btn sm js-file-report" disabled={busy || filing} style={{ marginLeft: "auto" }} title="Make a PDF of this list and file it in the company Drive (Folkpaths Job Sheets / month / Advances)"
+          onClick={async () => {
+            setFiling(true); setErr(null); setMsg(null);
+            try {
+              const r = await jfetch("/api/advances/report", { method: "POST" }) as { link: string; name: string; folder: string };
+              setReportLink(r.link); setMsg(`${r.name} filed in Drive · ${r.folder} ✓`);
+            } catch (e) { setErr(String((e as Error).message)); }
+            finally { setFiling(false); }
+          }}>{filing ? "Filing…" : "File report to Drive"}</button>
+        {reportLink && <a className="btn sm ghost js-report-link" href={reportLink} target="_blank" rel="noreferrer">Open report</a>}
+        {canWrite && <button className="btn sm primary" disabled={busy || frozen} onClick={() => setIssuing(true)}>Record advance…</button>}
       </div>
 
       {canWrite && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}

@@ -530,6 +530,17 @@ try {
     journal.buttons === 0 && /posts nothing/.test(journal.text) && JSON.stringify(await prisma.advancePeakSync.findMany({ orderBy: { id: "asc" } })) === outboxBefore);
   const listed = await p2.$$eval(".js-refunds-section .js-refund-row", (xs) => xs.map((x) => x.getAttribute("data-status")).sort().join(","));
   check("the Advances page lists the refunds with their state — paid and voided", listed === "PAID,VOIDED", listed);
+  // The Company advances report, filed in the company Drive like the other documents.
+  {
+    const before = readFileSync(DRIVE_LOG, "utf8").length;
+    await p2.click(".js-file-report");
+    await p2.waitForSelector(".js-report-link", { timeout: 60000 }).catch(() => {});
+    const filedMsg = await p2.evaluate(() => document.querySelector(".banner.ok")?.innerText ?? document.querySelector(".banner.danger")?.innerText ?? "");
+    const driveLog = readFileSync(DRIVE_LOG, "utf8").slice(before);
+    check("the Company advances report is filed as a PDF in Drive, in the month's Advances folder",
+      /Company advances \d{4}-\d{2}-\d{2}\.pdf filed in Drive · Folkpaths Job Sheets \/ \d{4}-\d{2} \w+ \/ Advances/.test(filedMsg) && /FOLDER[^\n]*\nFOLDER[^\n]*\nFOLDER[^\n]*\nUPLOAD /.test(driveLog) && !!(await p2.$(".js-report-link")),
+      filedMsg.slice(0, 200));
+  }
   // Phase 1E — linking a settlement: chosen from the ledger with its exact amount, never typed.
   await p2.evaluate((no) => { const tr = [...document.querySelectorAll("tr")].find((x) => x.innerText.includes(no)); [...tr.querySelectorAll("button")].find((b) => b.innerText.trim() === "PEAK doc…").click(); }, A.advanceNo);
   await p2.waitForSelector(".sheet select");
