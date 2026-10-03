@@ -28,6 +28,9 @@ import { readBackCount, unmappedGlyphCount } from "@/lib/certificates/text-layer
 //
 // All data invented — this repo is public.
 
+// These rows include a food cost (ก๋วยเตี๋ยว): certified only on a food tour (owner rule
+// 2026-10-04, lib/certificates/payload isFoodTour), so the sample job is one.
+const FOOD_TOUR = { tourName: "Eat Like a Local — Example" };
 const FACTS: SheetFacts = {
   jobRef: "FOLK-TEST-20990401-01", tourDate: "2099-04-01", slotIdx: 0,
   guideId: "G-900", guideName: "สมชาย ทดสอบ",
@@ -157,7 +160,7 @@ const THAI_ROWS: Expense[] = [
   { description: "ค่ารถตุ๊กตุ๊ก", price: 15, pax: 2, expenseType: "transport", paidBy: "guide", paidBySource: "operator" } as Expense,
 ];
 const thaiHtml = (rows: Expense[] = THAI_ROWS) => {
-  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-TEST-20990401-02", guideName: "ศรีสุดา ผู้ทดสอบ" }, certifiableRows(rows));
+  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-TEST-20990401-02", guideName: "ศรีสุดา ผู้ทดสอบ" }, certifiableRows(rows, "GUIDE_PAID", FOOD_TOUR));
   return renderCertificateHtml({
     certificateNo: "CERT-FOLK-TEST-20990401-02-01",
     payload, payloadHash: payloadHash(payload),
@@ -279,7 +282,7 @@ const EXAMPLE_PHRASES = [
 ];
 const exampleHtml = () => {
   // slotIdx 2: were anything to read the slot, the page would say รอบที่ 2 or 3.
-  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-BKK-20260925-01", tourDate: "2026-09-25", slotIdx: 2 }, certifiableRows(THAI_ROWS));
+  const payload = buildPayload({ ...FACTS, jobRef: "FOLK-BKK-20260925-01", tourDate: "2026-09-25", slotIdx: 2 }, certifiableRows(THAI_ROWS, "GUIDE_PAID", FOOD_TOUR));
   return renderCertificateHtml({
     certificateNo: "CERT-FOLK-BKK-TEST-01",
     payload, payloadHash: payloadHash(payload),
