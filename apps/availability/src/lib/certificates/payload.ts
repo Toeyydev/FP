@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expenseAmount, isReviewExpense, type Expense } from "@/lib/jobsheet";
 import { canonicalPaidBy } from "@/lib/peak-sync";
-import { guideMoneyConfirmed } from "@/lib/payer-rules";
+import { effectivePayer, guideMoneyConfirmed } from "@/lib/payer-rules";
 import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import type { ExpenseSource } from "@/lib/certificates/source";
@@ -34,8 +34,28 @@ export type CertifiableRow = {
   category: string;
 };
 
+/**
+ * Whose money paid the rows a certificate speaks for. Two documents, never one mixed:
+ *
+ *   GUIDE_PAID       the guide paid with their own money and the company owes it back —
+ *                    the original certificate, its wording and its fingerprint unchanged.
+ *   COMPANY_ADVANCE  the guide paid with a company advance (money the company sent ahead
+ *                    for this job). The cost is the company's own; nothing is owed to the
+ *                    guide, and the document says so instead of "reimburse the guide".
+ *
+ * Every certificate issued before this existed is GUIDE_PAID, and its fingerprint is
+ * computed exactly as it was: the kind enters the hash only when it is COMPANY_ADVANCE.
+ */
+export type CertificateKind = "GUIDE_PAID" | "COMPANY_ADVANCE";
+export const CERTIFICATE_KINDS: readonly CertificateKind[] = ["GUIDE_PAID", "COMPANY_ADVANCE"];
+export const isCertificateKind = (v: unknown): v is CertificateKind => v === "GUIDE_PAID" || v === "COMPANY_ADVANCE";
+
 export type CertificatePayload = {
   v: 1;
+  /** Present only on a COMPANY_ADVANCE certificate (see CertificateKind). */
+  kind?: "COMPANY_ADVANCE";
+  /** COMPANY_ADVANCE only: the advances (FOLK-ADV-…) the covered rows were paid from. */
+  advances?: string[];
   jobRef: string;
   tourDate: string;
   slotIdx: number;
@@ -72,6 +92,31 @@ export type CertificatePayload = {
 export const NO_RECEIPT_REASON_TH =
   "ผู้ให้บริการเป็นผู้ประกอบการรายย่อยที่ไม่ออกใบเสร็จรับเงิน เช่น เรือข้ามฟาก รถโดยสารประจำทาง และน้ำดื่มจากร้านค้าริมทาง";
 
+/** What a certificate needs to know about the job besides its rows. */
+export type SheetContext = { tourName?: string | null };
+
+/**
+ * A food tour's food cost: a meal row that is not the drinking water every tour buys.
+ * Owner rule (2026-10-04): a certificate covers food costs ONLY on the food tours — tours
+ * whose name begins "Eat like a local". On any other tour a meal is not a cost the company
+ * certifies without a receipt. A job whose tour is not known is treated as not a food tour.
+ */
+export const isFoodCostRow = (e: Pick<Expense, "expenseType" | "description">) =>
+  String(e.expenseType ?? "") === "meal" && !/water|น้ำ/i.test(String(e.description ?? ""));
+export const isFoodTour = (tourName: string | null | undefined) => /^\s*eat like a local/i.test(tourName ?? "");
+
+/** Why a row paid from a company advance has no receipt. Kept with the document. */
+export const ADVANCE_NO_RECEIPT_REASON_TH =
+  "ไม่มีตั๋วหรือใบเสร็จรับเงินจากผู้รับเงินสำหรับรายการนี้ หรือหลักฐานดังกล่าวไม่ได้ถูกเก็บไว้ บริษัทจึงจัดทำเอกสารฉบับนี้แทน";
+
+/** The row was paid from a company advance, and a person (not a Rate suggestion) said so. */
+export function advanceFundedConfirmed(e: Expense): boolean {
+  const { payer, basis } = effectivePayer(e as Parameters<typeof effectivePayer>[0]);
+  return payer === "GUIDE_ADVANCE" && (basis === "OPERATOR" || basis === "GUIDE");
+}
+
+const hasReceipt = (e: Expense) => !!(((e as ExpenseWithEvidence).receiptUrl ?? "").trim() || ((e as ExpenseWithEvidence).receiptFileId ?? "").trim());
+
 const satang = (n: number) => Math.round(n * 100);
 
 /**
@@ -83,10 +128,12 @@ const satang = (n: number) => Math.round(n * 100);
  * has asked for one on it (lib/certificates/request). `evidenceState` already draws that line, and
  * this uses it rather than drawing a second one that could drift from it.
  */
-export function certifiableRows(expenses: readonly Expense[] | null | undefined): CertifiableRow[] {
+export function certifiableRows(expenses: readonly Expense[] | null | undefined, kind: CertificateKind = "GUIDE_PAID", ctx: SheetContext = {}): CertifiableRow[] {
+  if (kind === "COMPANY_ADVANCE") return advanceRows(expenses, ctx);
   const out: CertifiableRow[] = [];
   (expenses ?? []).forEach((e, index) => {
     if (isReviewExpense(e)) return;
+    if (isFoodCostRow(e) && !isFoodTour(ctx.tourName)) return;
     // Only Guide Own Money an operator or the guide confirmed (lib/payer-rules). A category
     // rule, a Rate suggestion or the old after-tour default is not evidence, whatever paidBy
     // says: nothing to certify until a person confirms the payer.
@@ -107,6 +154,25 @@ export function certifiableRows(expenses: readonly Expense[] | null | undefined)
   return out;
 }
 
+/**
+ * COMPANY_ADVANCE: rows a person confirmed were paid from a company advance, with an
+ * amount, and no ticket or receipt attached. A row with its ticket attached needs no
+ * certificate — the ticket is the evidence.
+ */
+function advanceRows(expenses: readonly Expense[] | null | undefined, ctx: SheetContext): CertifiableRow[] {
+  const out: CertifiableRow[] = [];
+  (expenses ?? []).forEach((e, index) => {
+    if (isReviewExpense(e) || expenseAmount(e) <= 0) return;
+    if (isFoodCostRow(e) && !isFoodTour(ctx.tourName)) return;
+    if (!advanceFundedConfirmed(e) || hasReceipt(e)) return;
+    out.push({
+      index, identity: financialIdentity(e as ProtectedRow), description: (e.description ?? "").trim(),
+      pax: Number(e.pax ?? 0), price: Number(e.price ?? 0), amountSatang: satang(expenseAmount(e)), category: String(e.expenseType ?? "other"),
+    });
+  });
+  return out;
+}
+
 export type SheetFacts = {
   jobRef: string | null;
   tourDate: string;
@@ -121,9 +187,12 @@ export function buildPayload(
   rows: readonly CertifiableRow[],
   signature: { userId: string; version: number; sha256: string } | null = null,
   origin: { source: ExpenseSource; recordedBy: CertificatePayload["recordedBy"] } = { source: "GUIDE_REPORTED", recordedBy: null },
+  /** COMPANY_ADVANCE, with the advances its rows were paid from. Absent for GUIDE_PAID. */
+  advance: { advances: string[] } | null = null,
 ): CertificatePayload {
   return {
     v: 1,
+    ...(advance ? { kind: "COMPANY_ADVANCE" as const, advances: [...advance.advances].sort() } : {}),
     jobRef: sheet.jobRef ?? "",
     tourDate: sheet.tourDate,
     slotIdx: sheet.slotIdx,
@@ -134,7 +203,7 @@ export function buildPayload(
     recordedBy: origin.recordedBy ? { ...origin.recordedBy } : null,
     rows: rows.map((r) => ({ ...r })),
     totalSatang: rows.reduce((t, r) => t + r.amountSatang, 0),
-    reason: NO_RECEIPT_REASON_TH,
+    reason: advance ? ADVANCE_NO_RECEIPT_REASON_TH : NO_RECEIPT_REASON_TH,
     signature: signature ? { ...signature } : null,
   };
 }
@@ -157,6 +226,8 @@ export function canonicalString(p: CertificatePayload): string {
     `total=${p.totalSatang}`,
     `reason=${p.reason}`,
     `sig=${p.signature ? `${p.signature.userId}:${p.signature.version}:${p.signature.sha256}` : ""}`,
+    // Only on an advance certificate, so every GUIDE_PAID fingerprint is what it always was.
+    ...(p.kind === "COMPANY_ADVANCE" ? [`kind=${p.kind}`, `advances=${(p.advances ?? []).join(",")}`] : []),
   ].join(";");
 }
 
@@ -195,11 +266,15 @@ export function checkDrift(
       /** The guide-report fact AS AT ISSUE, for a document that does not stand on it. */
       guideReportedAt?: string | null;
     };
+    /** Which certificate this is. GUIDE_PAID when not said. */
+    kind?: CertificateKind;
   },
-  sheetNow: { facts: SheetFacts; expenses: Expense[] },
+  /** `advances`: for a COMPANY_ADVANCE certificate, the advances its rows point at NOW. */
+  sheetNow: { facts: SheetFacts; expenses: Expense[]; advances?: string[]; tourName?: string | null },
 ): DriftResult {
   const reasons: string[] = [];
-  const nowRows = certifiableRows(sheetNow.expenses);
+  const kind = stored.kind ?? "GUIDE_PAID";
+  const nowRows = certifiableRows(sheetNow.expenses, kind, { tourName: sheetNow.tourName });
   // Rebuilt with the signature the certificate already carries, because this asks one
   // question only: has the JOB SHEET moved? A signature replaced since would make every
   // rebuild differ and report the sheet as changed when nothing on it had. Whether the
@@ -221,7 +296,7 @@ export function checkDrift(
   const facts: SheetFacts = origin.source === "ADMIN_RECORDED"
     ? { ...sheetNow.facts, guideReportedAt: origin.guideReportedAt ? new Date(origin.guideReportedAt) : null }
     : sheetNow.facts;
-  const now = buildPayload(facts, nowRows, stored.signature ?? null, origin);
+  const now = buildPayload(facts, nowRows, stored.signature ?? null, origin, kind === "COMPANY_ADVANCE" ? { advances: sheetNow.advances ?? [] } : null);
   if (payloadHash(now) === stored.payloadHash) return { drifted: false, reasons };
 
   const was = new Map(stored.coveredRows.map((r) => [r.identity, r]));

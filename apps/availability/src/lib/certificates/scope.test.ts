@@ -39,21 +39,24 @@ const SHEET: Expense[] = [
   { description: "Boat with a receipt", price: 150, pax: 1, expenseType: "transport", paidBy: "guide", paidBySource: "operator", receiptUrl: "https://drive.example.test/r" },
 ] as Expense[];
 
+// The sheet below is a food tour: its lunch is a food cost (owner rule 2026-10-04, lib/certificates/payload isFoodTour).
+const FOOD_TOUR = { tourName: "Eat Like a Local — Example" };
+
 describe("a certificate covers the unreceipted reimbursements and nothing else", () => {
   it("picks up the two rows the guide fronted with no receipt, and only those", () => {
-    const rows = certifiableRows(SHEET);
+    const rows = certifiableRows(SHEET, "GUIDE_PAID", FOOD_TOUR);
     expect(rows.map((r) => r.description)).toEqual(["Lunch, no receipt issued", "Ferry and bus"]);
   });
 
   it("the total is the covered rows' total — ฿324, not the ฿1,924 the transfer was", () => {
-    const payload = buildPayload(FACTS, certifiableRows(SHEET));
+    const payload = buildPayload(FACTS, certifiableRows(SHEET, "GUIDE_PAID", FOOD_TOUR));
     expect(payload.totalSatang).toBe(CERTIFIED * 100);
     expect(payload.totalSatang).not.toBe(EXP_TOTAL * 100);
     expect(payload.rows).toHaveLength(2);
   });
 
   it("no wage, reward, advance or company row can reach the payload at all", () => {
-    const json = JSON.stringify(buildPayload(FACTS, certifiableRows(SHEET)));
+    const json = JSON.stringify(buildPayload(FACTS, certifiableRows(SHEET, "GUIDE_PAID", FOOD_TOUR)));
     for (const forbidden of ["Review reward", "Temple tickets", "Van hire", "Boat with a receipt"]) {
       expect(json, `${forbidden} reached the certificate`).not.toContain(forbidden);
     }
@@ -67,8 +70,8 @@ describe("the figures that must never be printed on it", () => {
   const html = () =>
     renderCertificateHtml({
       certificateNo: "CERT-FOLK-TEST-20990401-01-01",
-      payload: buildPayload(FACTS, certifiableRows(SHEET)),
-      payloadHash: payloadHash(buildPayload(FACTS, certifiableRows(SHEET))),
+      payload: buildPayload(FACTS, certifiableRows(SHEET, "GUIDE_PAID", FOOD_TOUR)),
+      payloadHash: payloadHash(buildPayload(FACTS, certifiableRows(SHEET, "GUIDE_PAID", FOOD_TOUR))),
       attestedByName: "Anong Testsuite", attestedByRole: "ADMIN",
       attestedAt: "2099-04-03T04:00:00.000Z", auditRef: "cert_test_1",
     } as never);
@@ -127,7 +130,7 @@ describe("the figures that must never be printed on it", () => {
     // notice must not move it: -01 is รอบที่ 1, whatever departure slot the job ran in.
     const cell = (slotIdx: number, jobRef = FACTS.jobRef) => renderCertificateHtml({
       certificateNo: "CERT-FOLK-TEST-20990401-01-01",
-      payload: buildPayload({ ...FACTS, slotIdx, jobRef }, certifiableRows(SHEET)),
+      payload: buildPayload({ ...FACTS, slotIdx, jobRef }, certifiableRows(SHEET, "GUIDE_PAID", FOOD_TOUR)),
       payloadHash: "0".repeat(64),
       attestedByName: "Anong Testsuite", attestedByRole: "ADMIN",
       attestedAt: "2099-04-03T04:00:00.000Z", auditRef: "cert_test_1",
@@ -145,5 +148,11 @@ describe("the figures that must never be printed on it", () => {
   it("the notice stands above the rows it is talking about", () => {
     const out = html();
     expect(out.indexOf(SCOPE_NOTICE_TH)).toBeLessThan(out.indexOf("Lunch, no receipt issued"));
+  });
+});
+
+describe("a food cost on a tour that is not a food tour", () => {
+  it("is not covered — only 'Eat like a local' tours certify food costs", () => {
+    expect(certifiableRows(SHEET, "GUIDE_PAID", { tourName: "Riverside Temples" }).map((r) => r.description)).toEqual(["Ferry and bus"]);
   });
 });

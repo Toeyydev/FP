@@ -168,8 +168,41 @@ export const SCOPE_NOTICE_TH =
  */
 export const FONT_STACK = `"Umpush", "Loma", "Noto Sans Thai", "Leelawadee UI", sans-serif`;
 
+/**
+ * Whether every row is charged at the company's fixed rate (water, ferry, bus — the
+ * "Inc. guide" lines). A food tour's food cost is what was actually spent and varies; the
+ * sentence that says "fixed standard rate" must not be printed over it.
+ */
+export function allFixedRate(rows: readonly { category: string; description: string }[]): boolean {
+  return rows.every((r) => r.category === "transport" || (r.category === "meal" && /water|น้ำ/i.test(r.description)));
+}
+
+/** The sentences that differ between a guide-paid and an advance-paid certificate. */
+export function wordingFor(p: Pick<CertificateView["payload"], "kind" | "advances" | "rows">) {
+  const advance = p.kind === "COMPANY_ADVANCE";
+  const fixed = allFixedRate(p.rows);
+  return {
+    advance,
+    guideLabel: advance ? "ไกด์ผู้ชำระแทนบริษัท" : "ไกด์ผู้สำรองจ่าย",
+    statement: advance
+      ? "บริษัทขอรับรองว่า ค่าใช้จ่ายตามรายการข้างล่างนี้เกิดขึ้นจริงในการปฏิบัติงานนำเที่ยวตามใบงานที่อ้างถึง โดยไกด์ชำระด้วยเงินทดรองจ่ายที่บริษัทโอนให้ไว้ล่วงหน้าสำหรับงานนี้ จึงเป็นค่าใช้จ่ายของบริษัทโดยตรง และไม่มียอดที่บริษัทต้องจ่ายคืนไกด์"
+      : "บริษัทขอรับรองว่า ค่าใช้จ่ายตามรายการข้างล่างนี้เกิดขึ้นจริงในการปฏิบัติงานนำเที่ยวตามใบงานที่อ้างถึง โดยไกด์เป็นผู้สำรองจ่ายไปก่อนและบริษัทมีหน้าที่ต้องจ่ายคืน",
+    amounts: advance
+      ? "จำนวนเงินเป็นยอดที่ชำระจริงตามอัตราที่ผู้รับเงินเรียกเก็บ และจำนวนตรงกับจำนวนผู้เดินทางจริง"
+      : fixed
+        ? "อัตราที่เบิกเป็นราคาคงที่ที่บริษัทใช้เป็นมาตรฐานเดียวกันทุกงาน และจำนวนคนตรงกับจำนวนผู้เดินทางจริงรวมไกด์"
+        : "จำนวนเงินเป็นยอดที่จ่ายจริงตามที่รายงานและตรวจสอบแล้ว สำหรับค่าน้ำ ค่าเรือ และค่ารถใช้อัตราคงที่ที่บริษัทใช้เป็นมาตรฐานเดียวกันทุกงาน",
+    sumLabel: advance ? "รวมค่าใช้จ่ายที่ชำระจากเงินทดรองของบริษัท" : "รวมเป็นเงินที่ต้องจ่ายคืนไกด์",
+    tax: advance
+      ? "รายการข้างต้นชำระจากเงินทดรองของบริษัท ไม่ใช่เงินได้ของไกด์ จึงไม่อยู่ในฐานคำนวณภาษีเงินได้หัก ณ ที่จ่าย"
+      : "รายการข้างต้นเป็นการจ่ายคืนเงินที่ไกด์สำรองจ่าย ไม่ถือเป็นค่าตอบแทนของไกด์ จึงไม่อยู่ในฐานคำนวณภาษีเงินได้หัก ณ ที่จ่าย",
+    advances: advance ? (p.advances ?? []).join(", ") || "—" : null,
+  };
+}
+
 export function renderCertificateHtml(v: CertificateView): string {
   const p = v.payload;
+  const w = wordingFor(p);
   const rows = p.rows.map((r, i) => `<tr>
       <td class="c">${i + 1}</td>
       <td>${esc(r.description)}</td>
@@ -242,7 +275,7 @@ ${v.draft ? `<div class="draft-mark">ร่าง — ยังไม่รั�
 </div>
 
 <h1>ใบรับรองแทนใบเสร็จรับเงิน</h1>
-<div class="kind">Certificate in lieu of receipt · ใบงานเลขที่ ${esc(p.jobRef)}</div>
+<div class="kind">Certificate in lieu of receipt${w.advance ? " · จ่ายจากเงินทดรองของบริษัท" : ""} · ใบงานเลขที่ ${esc(p.jobRef)}</div>
 
 ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รับรอง · ยังไม่ใช่หลักฐานบัญชี</div>` : ""}
 <div class="notice">
@@ -254,7 +287,8 @@ ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รั
 <table class="facts">
   <tr><th>ใบงานเลขที่</th><td>${esc(p.jobRef)}</td></tr>
   <tr><th>วันที่ปฏิบัติงาน</th><td>${esc(thaiDate(p.tourDate))}${roundLabelTh(p.jobRef) ? ` (${esc(roundLabelTh(p.jobRef))})` : ""}</td></tr>
-  <tr><th>ไกด์ผู้สำรองจ่าย</th><td>${esc(p.guideName)} (รหัส ${esc(p.guideId)})</td></tr>
+  <tr><th>${w.guideLabel}</th><td>${esc(p.guideName)} (รหัส ${esc(p.guideId)})</td></tr>
+${w.advances ? `  <tr><th>เงินทดรองที่ใช้ชำระ</th><td>${esc(w.advances)}</td></tr>` : ""}
   <tr><th>ที่มาของรายการ</th><td>${esc(sourceSentenceTh({
     source: p.source ?? "GUIDE_REPORTED",
     guideReportedAt: p.guideReportedAt,
@@ -266,19 +300,19 @@ ${v.draft ? `<div class="draft-banner">ร่าง — ยังไม่รั
   <tr><th>จำนวนรายการ</th><td>${int(p.rows.length)} รายการ รวม ${money(p.totalSatang)} บาท</td></tr>
 </table>
 
-<p>บริษัทขอรับรองว่า ค่าใช้จ่ายตามรายการข้างล่างนี้เกิดขึ้นจริงในการปฏิบัติงานนำเที่ยวตามใบงานที่อ้างถึง โดยไกด์เป็นผู้สำรองจ่ายไปก่อนและบริษัทมีหน้าที่ต้องจ่ายคืน</p>
-<p>เหตุที่ไม่มีใบเสร็จรับเงินประกอบ: ${esc(p.reason)} อัตราที่เบิกเป็นราคาคงที่ที่บริษัทใช้เป็นมาตรฐานเดียวกันทุกงาน และจำนวนคนตรงกับจำนวนผู้เดินทางจริงรวมไกด์</p>
+<p>${w.statement}</p>
+<p>เหตุที่ไม่มีใบเสร็จรับเงินประกอบ: ${esc(p.reason)} ${w.amounts}</p>
 
 <table class="items">
   <thead><tr><th style="width:5%" class="c">ที่</th><th>รายการ</th><th style="width:25%" class="c">ประเภท</th><th style="width:9%" class="c">จำนวน</th><th style="width:15%" class="r">ราคา/หน่วย</th><th style="width:17%" class="r">จำนวนเงิน</th></tr></thead>
   <tbody>
 ${rows}
-    <tr class="sum"><td colspan="5" class="r">รวมเป็นเงินที่ต้องจ่ายคืนไกด์</td><td class="r">${money(p.totalSatang)}</td></tr>
+    <tr class="sum"><td colspan="5" class="r">${w.sumLabel}</td><td class="r">${money(p.totalSatang)}</td></tr>
   </tbody>
 </table>
 <div class="words">จำนวนเงิน (ตัวอักษร) ${esc(bahtText(p.totalSatang / 100))}</div>
 
-<p>รายการข้างต้นเป็นการจ่ายคืนเงินที่ไกด์สำรองจ่าย ไม่ถือเป็นค่าตอบแทนของไกด์ จึงไม่อยู่ในฐานคำนวณภาษีเงินได้หัก ณ ที่จ่าย</p>
+<p>${w.tax}</p>
 
 ${v.draft ? `<div class="notice" style="border-color:#fca5a5;background:#fef2f2">
   เอกสารนี้เป็นเพียงตัวอย่างสำหรับตรวจทานก่อนออกใบรับรอง ยังไม่มีผู้รับรอง ยังไม่มีเลขอ้างอิง audit และยังใช้เป็นหลักฐานประกอบการบันทึกบัญชีไม่ได้

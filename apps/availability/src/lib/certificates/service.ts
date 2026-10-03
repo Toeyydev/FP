@@ -5,7 +5,7 @@ import { audit } from "@/lib/audit";
 import { type Expense } from "@/lib/jobsheet";
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { type EvidenceWaiver } from "@/lib/reimbursement-evidence";
-import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
+import { buildPayload, certifiableRows, checkDrift, duplicateIdentities, fileHash, ineligibleRows, payloadHash, type CertifiableRow, type CertificateKind, type CertificatePayload, type SheetFacts } from "@/lib/certificates/payload";
 import { renderCertificateHtml } from "@/lib/certificates/document";
 import { certificateFileName, pdfRendererAvailable, renderPdf as defaultRenderPdf, type RenderPdf } from "@/lib/certificates/pdf";
 import { certificateFolder, folderPathOf, folderPathString, folderPermissionProblems, permissionProblems } from "@/lib/certificates/access";
@@ -120,7 +120,7 @@ function originOf(cert: ExpenseCertificate): { source: ExpenseSource; recordedBy
   };
 }
 
-function eligibility(sheet: JobSheet, rows: CertifiableRow[], source: ExpenseSource = "GUIDE_REPORTED"): string[] {
+function eligibility(sheet: JobSheet, rows: CertifiableRow[], source: ExpenseSource = "GUIDE_REPORTED", kind: CertificateKind = "GUIDE_PAID"): string[] {
   const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
   const out: string[] = [];
   // Only a GUIDE_REPORTED document needs the guide to have filed — that claim cannot be
@@ -133,7 +133,9 @@ function eligibility(sheet: JobSheet, rows: CertifiableRow[], source: ExpenseSou
   }
   out.push(...ineligibleRows(expenses));
   out.push(...duplicateIdentities(rows, expenses));
-  if (!rows.length) out.push("No row on this job sheet needs a certificate — every reimbursement either has a receipt or is not the guide's own money.");
+  if (!rows.length) out.push(kind === "COMPANY_ADVANCE"
+    ? "No row on this job sheet was paid from a company advance without a ticket or receipt — there is nothing for this certificate to cover."
+    : "No row on this job sheet needs a certificate — every reimbursement either has a receipt or is not the guide's own money.");
   return out;
 }
 
@@ -149,6 +151,25 @@ async function loadSheet(db: PrismaClient | Prisma.TransactionClient, key: { gui
   return sheet!;
 }
 
+/** The tour's name — the food-tour rule (lib/certificates/payload isFoodTour) needs it. */
+async function tourNameOf(db: PrismaClient | Prisma.TransactionClient, tourId: string | null | undefined): Promise<string | null> {
+  if (!tourId) return null;
+  return (await db.tour.findUnique({ where: { id: tourId }, select: { name: true } }))?.name ?? null;
+}
+
+/**
+ * COMPANY_ADVANCE: the advances (FOLK-ADV-…) the covered rows point at, as the sheet holds
+ * them now. A row with no advance linked contributes none — the document then lists fewer.
+ */
+async function advanceNosFor(db: PrismaClient | Prisma.TransactionClient, expenses: Expense[], rows: CertifiableRow[]): Promise<string[]> {
+  const ids = [...new Set(rows.map((r) => String((expenses[r.index] as { advanceId?: string | null })?.advanceId ?? "")).filter(Boolean))];
+  if (!ids.length) return [];
+  const found = await db.guideAdvance.findMany({ where: { id: { in: ids } }, select: { advanceNo: true } });
+  return found.map((a) => a.advanceNo).sort();
+}
+
+const kindOf = (cert: { kind?: string | null }): CertificateKind => (cert.kind === "COMPANY_ADVANCE" ? "COMPANY_ADVANCE" : "GUIDE_PAID");
+
 // ── 1. Issue a draft ─────────────────────────────────────────────────────────
 //
 // One transaction. The unique index on activeJobSheetId is what stops a second
@@ -161,6 +182,8 @@ export async function createCertificate(
   deps: Deps = {},
   /** Where the rows came from. Decided here, once, and never edited afterwards. */
   source?: ExpenseSource,
+  /** Whose money paid the rows. GUIDE_PAID unless said. */
+  kind: CertificateKind = "GUIDE_PAID",
 ): Promise<ExpenseCertificate> {
   const db = deps.db ?? prisma;
   const now = deps.now ?? (() => new Date());
@@ -192,12 +215,14 @@ export async function createCertificate(
     const badSource = sourceRefusal(chosen, sheet);
     if (badSource) refuse([badSource]);
     const expenses = (sheet.expenses as unknown as Expense[]) ?? [];
-    const rows = certifiableRows(expenses);
-    const problems = eligibility(sheet, rows, chosen);
+    const tourName = await tourNameOf(tx, sheet.tourId);
+    const rows = certifiableRows(expenses, kind, { tourName });
+    const problems = eligibility(sheet, rows, chosen, kind);
     if (problems.length) refuse(problems);
 
-    const existing = await tx.expenseCertificate.findUnique({ where: { activeJobSheetId: sheet.id } });
-    if (existing) refuse([`This job sheet already has certificate ${existing.certificateNo}. Withdraw it first, with a reason, if it needs replacing.`]);
+    const existing = await tx.expenseCertificate.findUnique({ where: { activeJobSheetId_kind: { activeJobSheetId: sheet.id, kind } } });
+    if (existing) refuse([`This job sheet already has certificate ${existing.certificateNo}${kind === "COMPANY_ADVANCE" ? " for its advance-paid costs" : ""}. Withdraw it first, with a reason, if it needs replacing.`]);
+    const advance = kind === "COMPANY_ADVANCE" ? { advances: await advanceNosFor(tx, expenses, rows) } : null;
 
     const name = await guideNameOf(tx, sheet.guideId);
     // An admin recording rows is an act by a named person at a known time, so it is
@@ -207,13 +232,13 @@ export async function createCertificate(
     const recordedBy = chosen === "ADMIN_RECORDED"
       ? { id: actor.id, name: actor.name, role: actor.role, at: now().toISOString() }
       : null;
-    const payload = buildPayload(facts(sheet, name), rows, null, { source: chosen, recordedBy });
+    const payload = buildPayload(facts(sheet, name), rows, null, { source: chosen, recordedBy }, advance);
     const issued = await tx.expenseCertificate.count({ where: { jobSheetId: sheet.id } });
     const certificateNo = `CERT-${sheet.ref ?? `${sheet.date}-${sheet.slotIdx}`}-${String(issued + 1).padStart(2, "0")}`;
 
     return tx.expenseCertificate.create({
       data: {
-        certificateNo, jobSheetId: sheet.id, activeJobSheetId: sheet.id,
+        certificateNo, jobSheetId: sheet.id, activeJobSheetId: sheet.id, kind,
         source: chosen,
         ...(recordedBy ? { recordedById: recordedBy.id, recordedByName: recordedBy.name, recordedByRole: recordedBy.role, recordedAt: new Date(recordedBy.at) } : {}),
         guideId: sheet.guideId, jobRef: sheet.ref, tourDate: sheet.date, slotIdx: sheet.slotIdx,
@@ -230,7 +255,7 @@ export async function createCertificate(
     });
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.created", entityType: "ExpenseCertificate", entityId: made.id,
-    detail: { certificateNo: made.certificateNo, jobRef: made.jobRef, rows: (made.coveredRows as unknown as CertifiableRow[]).length, totalSatang: made.totalSatang, payloadHash: made.payloadHash, source: made.source } });
+    detail: { certificateNo: made.certificateNo, kind: made.kind, jobRef: made.jobRef, rows: (made.coveredRows as unknown as CertifiableRow[]).length, totalSatang: made.totalSatang, payloadHash: made.payloadHash, source: made.source } });
 
   // Recording the rows is its own event, written separately even when the same person
   // goes on to attest. Merging them would leave an audit that cannot say whether what is
@@ -297,16 +322,20 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
     const sheet = await tx.jobSheet.findUnique({ where: { id: cert!.jobSheetId } });
     if (!sheet) refuse(["The job sheet this certificate belongs to is gone"], 404);
     const expenses = (sheet!.expenses as unknown as Expense[]) ?? [];
-    const rows = certifiableRows(expenses);
-    const problems = eligibility(sheet!, rows, (cert!.source as ExpenseSource) ?? "GUIDE_REPORTED");
+    const kind = kindOf(cert!);
+    const tourName = await tourNameOf(tx, sheet!.tourId);
+    const rows = certifiableRows(expenses, kind, { tourName });
+    const problems = eligibility(sheet!, rows, (cert!.source as ExpenseSource) ?? "GUIDE_REPORTED", kind);
     if (problems.length) refuse(problems);
+    const advance = kind === "COMPANY_ADVANCE" ? { advances: await advanceNosFor(tx, expenses, rows) } : null;
 
     const name = await guideNameOf(tx, sheet!.guideId);
     const drift = checkDrift(
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
         signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
-        origin: originOf(cert!) },
-      { facts: factsFor(cert!, sheet!, name), expenses },
+        origin: originOf(cert!), kind: kindOf(cert!) },
+      { facts: factsFor(cert!, sheet!, name), expenses, tourName: await tourNameOf(tx, sheet!.tourId),
+        advances: kindOf(cert!) === "COMPANY_ADVANCE" ? await advanceNosFor(tx, expenses, certifiableRows(expenses, "COMPANY_ADVANCE", { tourName: await tourNameOf(tx, sheet!.tourId) })) : undefined },
     );
     if (drift.drifted) {
       refuse(["This job sheet has changed since the certificate was prepared, so it no longer describes the sheet:", ...drift.reasons, "Withdraw this certificate and issue a new one."]);
@@ -330,7 +359,7 @@ export async function attestCertificate(id: string, actor: Actor, deps: Deps = {
     // of having one.
     // The origin is what it was issued as. Attesting does not get to change who the
     // document says entered the figures.
-    const payload = buildPayload(factsFor(cert!, sheet!, name), rows, stamp, originOf(cert!));
+    const payload = buildPayload(factsFor(cert!, sheet!, name), rows, stamp, originOf(cert!), advance);
 
     return tx.expenseCertificate.update({
       where: { id, status: cert!.status },
@@ -740,6 +769,7 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
   // existed before this certificate did. Retrying "link" is therefore idempotent: it
   // never rewrites the rows, but it does fill the missing, identity-resolved EXP stamp.
   if (checked.status === "LINKED") {
+    if (kindOf(checked) === "COMPANY_ADVANCE") return checked; // its costs are not in the guide payment's EXP
     const found = await peakDocumentForJob({ guideId: checked.guideId, date: checked.tourDate, slotIdx: checked.slotIdx }, db);
     if (found.found) {
       await stampPeakLink(checked, found.link, { actorId: actor.id, actorRole: actor.role }, db);
@@ -783,8 +813,9 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
     const drift = checkDrift(
       { payloadHash: cert!.payloadHash, coveredRows: cert!.coveredRows as unknown as CertifiableRow[],
         signature: (cert!.payload as unknown as CertificatePayload).signature ?? null,
-        origin: originOf(cert!) },
-      { facts: factsFor(cert!, sheet!, name), expenses },
+        origin: originOf(cert!), kind: kindOf(cert!) },
+      { facts: factsFor(cert!, sheet!, name), expenses, tourName: await tourNameOf(tx, sheet!.tourId),
+        advances: kindOf(cert!) === "COMPANY_ADVANCE" ? await advanceNosFor(tx, expenses, certifiableRows(expenses, "COMPANY_ADVANCE", { tourName: await tourNameOf(tx, sheet!.tourId) })) : undefined },
     );
     if (drift.drifted) refuse(["This job sheet has changed since the certificate was attested:", ...drift.reasons, "Withdraw this certificate and issue a new one — the document is never edited."]);
 
@@ -826,7 +857,10 @@ export async function linkCertificate(id: string, actor: Actor, deps: Deps = {})
     return tx.expenseCertificate.findUniqueOrThrow({ where: { id } });
   });
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.linked", entityType: "ExpenseCertificate", entityId: id,
-    detail: { certificateNo: linked.certificateNo, jobRef: linked.jobRef, rows: (linked.coveredRows as unknown as CertifiableRow[]).length, totalSatang: linked.totalSatang, pdfHash: linked.pdfHash, driveFileId: linked.driveFileId } });
+    detail: { certificateNo: linked.certificateNo, kind: linked.kind, jobRef: linked.jobRef, rows: (linked.coveredRows as unknown as CertifiableRow[]).length, totalSatang: linked.totalSatang, pdfHash: linked.pdfHash, driveFileId: linked.driveFileId } });
+  // An advance-paid certificate accompanies the advance's settlement journal, not the guide
+  // payment's EXP: the guide is paid nothing for these costs. Not stamped with that EXP.
+  if (kindOf(linked) === "COMPANY_ADVANCE") return linked;
   const found = await peakDocumentForJob({ guideId: linked.guideId, date: linked.tourDate, slotIdx: linked.slotIdx }, db);
   if (found.found) {
     await stampPeakLink(linked, found.link, { actorId: actor.id, actorRole: actor.role }, db);

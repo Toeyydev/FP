@@ -15,7 +15,7 @@ import { sourceSentenceTh } from "@/lib/certificates/source";
 
 type Covered = { index: number; description: string; pax: number; price: number; amountSatang: number };
 type Certificate = {
-  id: string; certificateNo: string; status: string; tourDate?: string | null; label: string; labelTh: string; isEvidence: boolean;
+  id: string; certificateNo: string; status: string; kind?: string | null; tourDate?: string | null; label: string; labelTh: string; isEvidence: boolean;
   totalSatang: number; payloadHash: string; pdfHash: string | null; driveUrl: string | null;
   attestedByName: string | null; attestedByRole: string | null; attestedAt: string | null;
   uploadedAt: string | null; linkedAt: string | null; voidedAt: string | null; voidReason: string | null;
@@ -49,6 +49,8 @@ type SourceOption = { source: "GUIDE_REPORTED" | "ADMIN_RECORDED"; available: bo
 type Info = {
   ok: true; jobRef: string | null; guideReportedAt: string | null;
   rowsNeedingCertificate: Covered[]; totalSatang: number; canIssue: boolean; blockers: string[];
+  /** Costs paid from a company advance with no ticket or receipt — their own certificate. */
+  advanceRowsNeedingCertificate?: Covered[]; advanceTotalSatang?: number; canIssueAdvance?: boolean; advanceBlockers?: string[];
   certificates: Certificate[];
   attachEnabled: boolean;
   reconciliation: Reconciliation;
@@ -80,9 +82,12 @@ const TONE: Record<string, string> = {
   UPLOADED: "#0369a1", LINKED: "#2f7d4f", VOID: "#b91c1c",
 };
 
-export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmin, onChanged }: {
+export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmin, onChanged, kind = "GUIDE_PAID" }: {
   guideId: string; date: string; slotIdx: number; isAdmin: boolean; onChanged?: () => void;
+  /** Which certificate this panel is for (lib/certificates/payload CertificateKind). */
+  kind?: "GUIDE_PAID" | "COMPANY_ADVANCE";
 }) {
+  const advance = kind === "COMPANY_ADVANCE";
   const [info, setInfo] = useState<Info | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
@@ -99,11 +104,16 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
     if (!isAdmin) { setInfo(null); return; }
     const r = await fetch(`/api/jobsheet/certificate?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`);
     if (!r.ok) { setInfo(null); return; }
-    const d = (await r.json()) as Info;
+    const all = (await r.json()) as Info;
+    // One panel per kind: its own rows, its own certificates, its own reasons.
+    const d: Info = advance
+      ? { ...all, rowsNeedingCertificate: all.advanceRowsNeedingCertificate ?? [], totalSatang: all.advanceTotalSatang ?? 0,
+          canIssue: !!all.canIssueAdvance, blockers: all.advanceBlockers ?? [], certificates: all.certificates.filter((c) => c.kind === "COMPANY_ADVANCE") }
+      : { ...all, certificates: all.certificates.filter((c) => c.kind !== "COMPANY_ADVANCE") };
     setInfo(d);
     // Offer the guide's own report when there is one; otherwise the only truthful option.
     setSource((cur) => cur ?? d.defaultSource);
-  }, [guideId, date, slotIdx, isAdmin]);
+  }, [guideId, date, slotIdx, isAdmin, advance]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -131,9 +141,11 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
 
   return (
     <section className="card" style={{ marginTop: 14 }}>
-      <h3 style={{ margin: "0 0 2px", fontSize: 14 }}>ใบรับรองแทนใบเสร็จรับเงิน</h3>
+      <h3 style={{ margin: "0 0 2px", fontSize: 14 }}>ใบรับรองแทนใบเสร็จรับเงิน{advance ? " · ค่าใช้จ่ายที่จ่ายจากเงินทดรอง" : ""}</h3>
       <div style={{ fontSize: 11.5, color: "var(--muted,#78716c)", marginBottom: 10 }}>
-        สำหรับค่าใช้จ่ายที่ไกด์สำรองจ่ายและผู้ให้บริการไม่ออกใบเสร็จ · ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน ไม่ใช่ใบกำกับภาษี
+        {advance
+          ? "สำหรับค่าใช้จ่ายที่ไกด์จ่ายด้วยเงินทดรองของบริษัท แต่ไม่ได้เก็บตั๋วหรือใบเสร็จไว้ · ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน ไม่ใช่ใบกำกับภาษี"
+          : "สำหรับค่าใช้จ่ายที่ไกด์สำรองจ่ายและผู้ให้บริการไม่ออกใบเสร็จ · ใช้เป็นหลักฐานประกอบการบันทึกบัญชีภายใน ไม่ใช่ใบกำกับภาษี"}
       </div>
 
       {info.guideReportedAt && (
@@ -242,7 +254,12 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
           the FOLK-PAY reference the transfer wrote, and the EXP PEAK gave back. Nothing
           is matched by a guide's name or a nearby date, and issuing a certificate creates
           no PEAK document and changes no amount on the one it names. */}
-      {live && (
+      {live && advance && (
+        <div style={{ border: "1px solid var(--line,#e7e5e4)", borderRadius: 6, padding: "8px 10px", marginTop: 8, fontSize: 11.5, color: "var(--muted,#78716c)" }}>
+          ค่าใช้จ่ายเหล่านี้ไม่อยู่ในเอกสารจ่ายเงินไกด์ (EXP) — บันทึกใน PEAK เป็นการตัดเงินทดรอง (journal ของการตัดเงินทดรอง) ให้นักบัญชีแนบใบรับรองนี้กับ journal นั้นใน PEAK
+        </div>
+      )}
+      {live && !advance && (
         <div style={{ border: "1px solid var(--line,#e7e5e4)", borderRadius: 6, padding: "8px 10px", marginTop: 8, fontSize: 11.5 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>เอกสารอ้างอิง</div>
           <table className="acct-table" style={{ width: "100%", fontSize: 11.5 }}>
@@ -316,7 +333,7 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
           as evidence for the part with no receipt. These figures are here so an admin can
           check that difference without opening another page, and they are labelled so
           nobody mistakes them for something the certificate says. */}
-      {live && info.reconciliation && (
+      {live && !advance && info.reconciliation && (
         <details style={{ marginTop: 8, fontSize: 11.5 }}>
           <summary style={{ cursor: "pointer", color: "var(--muted,#78716c)" }}>
             ข้อมูลประกอบการกระทบยอด — ไม่ใช่ส่วนหนึ่งของใบรับรอง
@@ -344,7 +361,7 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
           {!live && rows.length > 0 && (
             <a
               className="btn sm" target="_blank" rel="noopener noreferrer"
-              href={`/api/jobsheet/certificate/draft?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}${source ? `&source=${source}` : ""}`}
+              href={`/api/jobsheet/certificate/draft?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}${source ? `&source=${source}` : ""}${advance ? "&kind=COMPANY_ADVANCE" : ""}`}
             >ดู PDF ร่าง</a>
           )}
           {live?.pdfHash && (
@@ -353,7 +370,7 @@ export default function ExpenseCertificatePanel({ guideId, date, slotIdx, isAdmi
             </a>
           )}
           {!live && info.canIssue && (
-            <button type="button" className="btn" disabled={busy} onClick={() => act("/api/jobsheet/certificate", { guideId, date, slotIdx, source }, "สร้างใบรับรองแล้ว")}>
+            <button type="button" className="btn" disabled={busy} onClick={() => act("/api/jobsheet/certificate", { guideId, date, slotIdx, source, kind }, "สร้างใบรับรองแล้ว")}>
               สร้างใบรับรองแทนใบเสร็จ
             </button>
           )}

@@ -2074,6 +2074,8 @@ export default function JobSheetEditor() {
        {isAdmin && sheet.ref && (
          <div className="no-print">
            <ExpenseCertificatePanel guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} isAdmin={isAdmin} onChanged={() => void load()} />
+           {/* Costs paid from a company advance with no ticket kept: their own certificate. */}
+           <ExpenseCertificatePanel kind="COMPANY_ADVANCE" guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} isAdmin={isAdmin} onChanged={() => void load()} />
          </div>
        )}
 
