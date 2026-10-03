@@ -14,7 +14,8 @@
 --                                  build and last run here (lib/peak-switches).
 --
 -- Additive. The only UPDATE fills the new derived column on existing rows; no existing
--- value changes. If two LIVE advances already share a transfer reference, the migration
+-- value changes. Every statement is safe to run again (IF NOT EXISTS / OR REPLACE), so a
+-- run stopped part-way is finished by `prisma migrate resolve --rolled-back` + redeploy. If two LIVE advances already share a transfer reference, the migration
 -- stops BEFORE changing anything and names them: nothing is merged or deleted
 -- automatically — a person reverses the wrong one, then the deploy is retried.
 
@@ -41,13 +42,14 @@ BEGIN
 END $$;
 
 -- AlterTable
-ALTER TABLE "GuideAdvance" ADD COLUMN "txRefKey" TEXT,
-ADD COLUMN "slipCheckResult" TEXT,
-ADD COLUMN "slipCheck" JSONB,
-ADD COLUMN "slipCheckConfirmedById" TEXT,
-ADD COLUMN "slipCheckReason" TEXT,
-ADD COLUMN "slipCheckAt" TIMESTAMP(3);
+ALTER TABLE "GuideAdvance" ADD COLUMN IF NOT EXISTS "txRefKey" TEXT,
+ADD COLUMN IF NOT EXISTS "slipCheckResult" TEXT,
+ADD COLUMN IF NOT EXISTS "slipCheck" JSONB,
+ADD COLUMN IF NOT EXISTS "slipCheckConfirmedById" TEXT,
+ADD COLUMN IF NOT EXISTS "slipCheckReason" TEXT,
+ADD COLUMN IF NOT EXISTS "slipCheckAt" TIMESTAMP(3);
 
+ALTER TABLE "GuideAdvance" DROP CONSTRAINT IF EXISTS "GuideAdvance_slipCheckResult_check";
 ALTER TABLE "GuideAdvance" ADD CONSTRAINT "GuideAdvance_slipCheckResult_check"
   CHECK ("slipCheckResult" IS NULL OR "slipCheckResult" IN ('MATCH', 'PARTIAL', 'MISMATCH', 'UNKNOWN'));
 
@@ -58,17 +60,18 @@ BEGIN
   RETURN NEW;
 END $$;
 
+DROP TRIGGER IF EXISTS guide_advance_tx_ref_key ON "GuideAdvance";
 CREATE TRIGGER guide_advance_tx_ref_key BEFORE INSERT OR UPDATE OF "txRef", "txRefKey" ON "GuideAdvance"
   FOR EACH ROW EXECUTE FUNCTION guide_advance_tx_ref_key();
 
 -- Fill the new column on the rows that exist (fires the trigger above).
 UPDATE "GuideAdvance" SET "txRefKey" = folk_tx_ref_key("txRef") WHERE "txRef" IS NOT NULL;
 
-CREATE UNIQUE INDEX "GuideAdvance_txRefKey_live_key" ON "GuideAdvance"("txRefKey")
+CREATE UNIQUE INDEX IF NOT EXISTS "GuideAdvance_txRefKey_live_key" ON "GuideAdvance"("txRefKey")
   WHERE "txRefKey" IS NOT NULL AND "reversedAt" IS NULL;
 
 -- CreateTable
-CREATE TABLE "ServiceStatus" (
+CREATE TABLE IF NOT EXISTS "ServiceStatus" (
     "id" TEXT NOT NULL,
     "version" TEXT,
     "deploymentId" TEXT,

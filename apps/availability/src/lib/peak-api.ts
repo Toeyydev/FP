@@ -1,4 +1,13 @@
 import { createHmac } from "crypto";
+import { advanceAutoSyncEnabled, existingPeakLinksEnabled } from "@/lib/advances/freeze";
+
+// Nothing is written to PEAK from a service whose PEAK switches are unsafe (automatic
+// posting AND existing-document links both on — lib/peak-switches). Checked here, in the
+// client every write goes through, so no caller can be missed. Refused before anything is
+// sent: never "uncertain".
+export const PEAK_WRITE_UNSAFE =
+  "PEAK writes are stopped: PEAK_ADVANCE_AUTO_SYNC and ADVANCE_EXISTING_PEAK_LINKS_ENABLED are both 1 on this service. Set one to 0. · หยุดส่ง PEAK เพราะเปิดสวิตช์ทั้งสองพร้อมกัน";
+const peakWritesUnsafe = () => advanceAutoSyncEnabled() && existingPeakLinksEnabled();
 
 // PEAK accounting API client — https://developers.peakaccount.com (API Core v1).
 // Goal: auto-post a guide payout as a PEAK expense and read back its document
@@ -322,6 +331,7 @@ async function authedCall(
 // treat that as "nothing was created": see lib/peak-payment-document.
 export async function createExpenseAllInOne(expense: Record<string, unknown>): Promise<Res<{ id?: string; link?: string; uncertain?: boolean }>> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (peakWritesUnsafe()) return { ok: false, desc: PEAK_WRITE_UNSAFE };
   // A write gets a fresh token up front and is never replayed — see authedCall.
   const call = await authedCall(
     `${API}/Expenses/allinone`,
@@ -407,6 +417,7 @@ export function insertFileEncodingRejected(desc: string | null | undefined): boo
 
 export async function insertExpenseFile(input: InsertFileInput): Promise<{ ok: boolean; desc: string }> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (peakWritesUnsafe()) return { ok: false, desc: PEAK_WRITE_UNSAFE };
   if (!input.transactionId && !input.transactionCode) return { ok: false, desc: "No PEAK document to attach the slip to" };
   const send = async (encoding: "data-uri" | "plain") => {
     const call = await authedCall(
@@ -603,6 +614,7 @@ export async function payExistingExpense(input: {
   withholdingTaxAmount?: number | null;
 }): Promise<PaidPaymentResult> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (peakWritesUnsafe()) return { ok: false, desc: PEAK_WRITE_UNSAFE };
   const body = paidPaymentBody(input);
   const call = await authedCall(
     `${API}/Expenses/paidpaymentallinone`,
@@ -895,6 +907,7 @@ export function readCreatedContact(httpStatus: number, j: Record<string, unknown
 
 export async function createContact(c: NewPeakContact): Promise<CreatedContact> {
   if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  if (peakWritesUnsafe()) return { ok: false, desc: PEAK_WRITE_UNSAFE };
   const call = await authedCall(
     `${API}/Contacts`,
     { method: "POST", body: JSON.stringify(createContactBody(c)) },
@@ -1044,6 +1057,7 @@ export async function getDailyJournal(code: string): Promise<Res<{ journal?: Pea
 
 export async function createDailyJournal(journal: DailyJournalPayload): Promise<Res<{ id?: string; uncertain?: boolean }>> {
   if (!peakEnabled) return { ok: false, uncertain: false, desc: "PEAK connection is not configured" };
+  if (peakWritesUnsafe()) return { ok: false, uncertain: false, desc: PEAK_WRITE_UNSAFE };
   const call = await authedCall(`${API}/DailyJournals`, {
     method: "POST", body: JSON.stringify({ peakDailyJournals: { dailyJournals: [journal] } }),
   }, "peakDailyJournals", { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS });
