@@ -14,6 +14,7 @@ Review date: 2026-06-08. Checked against `folkpaths-dispatch-handoff-spec.md` §
 1. **Security headers** — added HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, and a partial CSP (`frame-ancestors/base-uri/object-src`) in `next.config.mjs`.
 2. **AUTH_SECRET production guard** — `src/lib/crypto.ts` now refuses to boot in production without `AUTH_SECRET`, so encrypted PII can't silently use the dev key.
 3. **Capacity cap** — `src/lib/capacity.ts` reset to `PAX_PER_GUIDE = 10`, `SPLIT_AT = 11` to match the agreed 10-seat rule (was 14/15).
+   *Superseded 7 Aug 2026:* raised to `12`/`13` per operator decision (PR #53). `capacity.ts` is the single source of truth.
 
 ## ⛔ Still TODO — need code design (do before launch)
 
