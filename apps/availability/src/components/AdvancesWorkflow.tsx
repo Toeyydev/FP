@@ -125,7 +125,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
 
       {canWrite && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}
       <div className="tablewrap">
-        <table className="grid">
+        <table className="adv-table">
           <thead><tr><th>Advance</th><th>Guide</th><th>Date</th><th>Job</th><th className="r">Amount</th><th className="r">Settled</th><th className="r">Outstanding</th><th>Status</th><th /></tr></thead>
           <tbody>
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
@@ -139,7 +139,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
                 <td className="r num">{thb(a.settled)}</td>
                 <td className="r num"><b>{thb(a.outstanding)}</b></td>
                 <td><span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "VOID" ? " muted" : a.status === null ? " warn" : ""}`} title={a.problems?.join(", ") || undefined}>{STATUS_LABEL[a.status ?? "NEEDS_REVIEW"]}</span></td>
-                <td style={{ display: "flex", gap: 6 }}>
+                <td className="adv-actions">
                   <button className="btn sm ghost" onClick={() => setDetail(a)}>Ledger</button>
                   {canLink && (
                     <button className="btn sm ghost" disabled={busy} title="This transfer, or its ticket costs, are already in PEAK under a document your accountant created"
@@ -166,7 +166,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
         </p>
       )}
       <div className="tablewrap">
-        <table className="grid">
+        <table className="adv-table">
           <thead><tr><th>Return</th><th>Guide</th><th>Received</th><th className="r">Amount</th><th className="r">Allocated</th><th>Status</th><th>Evidence</th><th /></tr></thead>
           <tbody>
             {receipts.length === 0 && <tr><td colSpan={8} className="muted">No return has been recorded.</td></tr>}
@@ -182,7 +182,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
                   {r.status === "VERIFIED" && r.unallocated > 0 && <span className="muted" style={{ fontSize: 11.5 }}> · {thb(r.unallocated)} to allocate</span>}
                 </td>
                 <td>{r.slipUrl ? <a href={r.slipUrl} target="_blank" rel="noreferrer">slip</a> : <span className="muted">no slip</span>}{r.bankRef ? <span className="muted" style={{ fontSize: 11.5 }}> · {r.bankRef}</span> : null}</td>
-                <td style={{ display: "flex", gap: 6 }}>
+                <td className="adv-actions">
                   {canLink && !r.peakLink && r.status !== "REJECTED" && (
                     <button className="btn sm ghost" disabled={busy} title="This return is already in PEAK — confirm it, put it against its advance and record that document, in one step"
                       onClick={() => setLinking({ kind: "RETURN", receiptId: r.id, guideId: r.guideId, label: r.receiptNo, amount: r.amount, unallocated: r.unallocated, refunded: r.refunded ?? 0, bankRef: r.bankRef, status: r.status, advances: open.filter((a) => a.guideId === r.guideId).map((a) => ({ id: a.id, advanceNo: a.advanceNo, outstanding: a.outstanding })) })}>PEAK doc…</button>
@@ -242,7 +242,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
             {unbooked.totals.advanceWithoutRecord > 0 && <span style={{ color: "var(--danger, #b3402f)" }}>{thb(unbooked.totals.advanceWithoutRecord)} says “from an advance” with no advance on record</span>}
           </div>
           <div className="tablewrap js-unbooked-ready">
-            <table className="grid">
+            <table className="adv-table">
               <thead><tr><th>Date</th><th>Job</th><th>Guide</th><th>Row</th><th className="r">Amount</th><th>Funded by</th><th>Notes</th></tr></thead>
               <tbody>
                 {unbooked.rows.filter((r) => r.state !== "AWAITING_PAYER").length === 0 && <tr><td colSpan={7} className="muted">Nothing outstanding.</td></tr>}
@@ -272,7 +272,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
                 <span className="muted">Not ready to book and not in the totals above: the payer is a suggestion nobody confirmed. Confirm it on the job sheet first.</span>
               </div>
               <div className="tablewrap">
-                <table className="grid">
+                <table className="adv-table">
                   <thead><tr><th>Date</th><th>Job</th><th>Guide</th><th>Row</th><th className="r">Amount</th><th>Suggested payer</th></tr></thead>
                   <tbody>
                     {unbooked.rows.filter((r) => r.state === "AWAITING_PAYER").map((row, i) => (
@@ -499,7 +499,7 @@ function LedgerDialog({ advance, canEdit, isAdmin, onClose, onChanged }: { advan
         {head && <p style={{ marginTop: 0, fontSize: 13 }}>Advanced <b>{thb(head.amount)}</b> · settled <b>{thb(head.settled)}</b> · outstanding <b>{thb(head.outstanding)}</b> · {STATUS_LABEL[head.status] ?? head.status}</p>}
         {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}</div>}
         <div className="tablewrap">
-          <table className="grid">
+          <table className="adv-table">
             <thead><tr><th>Date</th><th>Entry</th><th>Source</th><th className="r">Amount</th><th>Reason</th><th /></tr></thead>
             <tbody>
               {entries === null && <tr><td colSpan={6} className="muted">Loading…</td></tr>}

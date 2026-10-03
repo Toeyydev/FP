@@ -54,14 +54,14 @@ export default function AdvanceAccountJournal({ version }: { version: number }) 
             <span className="muted js-journal-net">Advance account, by these entries: <b>{thb(data.totals.advanceAccountNet)}</b> still with guides</span>
           </div>
           <div className="tablewrap">
-            <table className="js-journal-table">
+            <table className="adv-table js-journal-table">
               <thead><tr><th>Date</th><th>Movement</th><th>Account</th><th className="r">Debit</th><th className="r">Credit</th><th>PEAK</th></tr></thead>
               <tbody>
                 {data.entries.length === 0 && <tr><td colSpan={6} className="muted">No advance movements yet.</td></tr>}
                 {data.entries.map((e) => {
                   const rows = e.lines.length ? e.lines : [null];
                   return rows.map((l, i) => (
-                    <tr key={`${e.id}-${i}`} className={i === 0 ? "js-journal-entry" : undefined} data-id={i === 0 ? e.id : undefined} data-state={i === 0 ? e.state : undefined} style={i === 0 ? { borderTop: "1px solid var(--line, #e6e0d6)" } : undefined}>
+                    <tr key={`${e.id}-${i}`} className={i === 0 ? "js-journal-entry adv-entry-first" : undefined} data-id={i === 0 ? e.id : undefined} data-state={i === 0 ? e.state : undefined}>
                       {i === 0 && (
                         <>
                           <td rowSpan={rows.length} style={{ whiteSpace: "nowrap", verticalAlign: "top" }}>{e.date}</td>
