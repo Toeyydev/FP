@@ -1461,3 +1461,19 @@ body:has(.op-layout) .wrap{max-width:1440px}
    the total. The sub-totals are quiet; the total is the one that carries. */
 .js-comp-sub td { font-weight: 600; }
 .js-comp-total td { border-top: 1.5px solid var(--ink, #1a1a1a); font-weight: 800; }
+
+/* Column ☰ filter (components/ColumnFilter) */
+.colf{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.colf-btn{border:1px solid transparent;background:none;color:var(--ink-soft);border-radius:6px;padding:1px 5px;font-size:12px;line-height:1.4;cursor:pointer;display:inline-flex;gap:3px;align-items:center}
+.colf-btn:hover{border-color:var(--line-strong);color:var(--ink)}
+.colf-btn.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.colf-btn b{font-size:10.5px;font-weight:700}
+.colf-pop{position:fixed;z-index:60;width:240px;max-height:min(360px,70vh);display:flex;flex-direction:column;gap:6px;background:var(--card);color:var(--ink);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 12px 32px rgba(22,32,28,.18);padding:8px;text-transform:none;letter-spacing:0;font-family:inherit;font-size:13px;font-weight:400}
+.colf-search{border:1px solid var(--line-strong);border-radius:8px;padding:6px 9px;font:inherit;background:var(--paper);color:var(--ink)}
+.colf-actions{display:flex;gap:6px}
+.colf-actions button{flex:1;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:8px;padding:4px 0;font:inherit;font-size:12px;cursor:pointer}
+.colf-list{overflow:auto;display:grid;gap:1px}
+.colf-item{display:flex;gap:8px;align-items:center;padding:5px 6px;border-radius:6px;cursor:pointer}
+.colf-item:hover{background:var(--paper)}
+.colf-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.colf-empty{color:var(--ink-soft);padding:6px}

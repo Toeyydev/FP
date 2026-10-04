@@ -298,6 +298,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/missing-transfer
 
+      # The ☰ column filters on Guide Payments: tick values to narrow either table, columns
+      # combine, Clear filters restores, and the list stays on screen on a phone.
+      - name: Guide Payments column filters in a real browser
+        run: node scripts/e2e/guide-payments-filters.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-payments-filters
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.

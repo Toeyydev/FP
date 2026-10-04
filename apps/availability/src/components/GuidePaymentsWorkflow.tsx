@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import RecordGuidePaymentDialog, { type PayableJob } from "@/components/RecordGuidePaymentDialog";
+import ColumnFilter, { applyColumnFilters, columnValues, type ColumnFilters } from "@/components/ColumnFilter";
 
 // Guide payments: the jobs waiting for a transfer, the transfer itself, and what was
 // recorded. Eligibility shown here comes from the canonical facts (/api/guide-payments/
@@ -43,6 +44,24 @@ const key = (j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`;
 const dShort = (d: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
 const thisMonth = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
 const STATUS_LABEL: Record<string, string> = { unpaid: "Unpaid", paid: "Paid", "legacy-paid": "Paid · no payment record", "payroll-paid": "Paid by payroll" };
+const READINESS_LABEL: Record<string, string> = { approved: "Approved", "not-approved": "Not approved" };
+
+// What each ☰ filter compares — the text the column shows.
+const CANDIDATE_COLS: Record<string, (r: Candidate) => string> = {
+  jobNo: (r) => r.jobNo ?? "—",
+  date: (r) => dShort(r.date),
+  guide: (r) => `${r.guideId} ${r.guide}`,
+  tour: (r) => r.tour,
+  month: (r) => r.accountingMonth,
+  readiness: (r) => READINESS_LABEL[r.readiness] ?? "No job sheet",
+  payment: (r) => (r.eligible ? "Unpaid" : r.paidBy ? "Paid" : STATUS_LABEL[r.paymentStatus] ?? "Blocked"),
+};
+const PAYMENT_COLS: Record<string, (p: PaymentRow) => string> = {
+  payment: (p) => paymentKindLabel(p),
+  guide: (p) => `${p.guideId} ${p.guide}`,
+  date: (p) => p.paymentDate,
+  status: (p) => (p.status === "REVERSED" ? "Reversed" : "Recorded"),
+};
 
 export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { canEdit: boolean; isAdmin?: boolean }) {
   const [period, setPeriod] = useState(thisMonth());
@@ -55,6 +74,8 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
   const [openPayment, setOpenPayment] = useState<Detail | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [candF, setCandF] = useState<ColumnFilters>({});
+  const [payF, setPayF] = useState<ColumnFilters>({});
   // Correcting a payment recorded as one transfer that was really several (ADMIN only).
   const [fix, setFix] = useState<{ recorded: string; amount: string; date: string; bankRef: string; file: File | null; reason: string; error: string } | null>(null);
 
@@ -142,13 +163,20 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
   }
 
   const eligible = rows.filter((r) => r.eligible).length;
+  const shownRows = applyColumnFilters(rows, candF, CANDIDATE_COLS);
+  const shownPayments = applyColumnFilters(payments, payF, PAYMENT_COLS);
+  const candFiltering = Object.values(candF).some(Boolean);
+  const payFiltering = Object.values(payF).some(Boolean);
+  const candHead = (k: string, label: string) => <ColumnFilter label={label} values={columnValues(rows, CANDIDATE_COLS[k])} selected={candF[k] ?? null} onChange={(v) => setCandF((f) => ({ ...f, [k]: v }))} />;
+  const payHead = (k: string, label: string) => <ColumnFilter label={label} values={columnValues(payments, PAYMENT_COLS[k])} selected={payF[k] ?? null} onChange={(v) => setPayF((f) => ({ ...f, [k]: v }))} />;
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <section className="panel">
         <div className="op-toolbar" style={{ gap: 10 }}>
           <label style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-soft)" }}>Accounting month</label>
           <input className="search" style={{ flex: "none", width: 160 }} type="month" value={period} onChange={(e) => setPeriod(e.target.value)} />
-          <span style={{ fontSize: 13, color: "var(--ink-soft)" }}>{loading ? "Loading…" : `${eligible} job${eligible === 1 ? "" : "s"} waiting for a transfer`}</span>
+          <span style={{ fontSize: 13, color: "var(--ink-soft)" }}>{loading ? "Loading…" : `${eligible} job${eligible === 1 ? "" : "s"} waiting for a transfer`}{candFiltering ? ` · showing ${shownRows.length} of ${rows.length}` : ""}</span>
+          {candFiltering && <button className="btn sm ghost js-clear-cand-filters" onClick={() => setCandF({})}>✕ Clear filters</button>}
           {pickedRows.length > 0 && (
             <span style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
               <b style={{ fontVariantNumeric: "tabular-nums" }}>{pickedRows.length} selected · {thb(selectedTotal)}</b>
@@ -162,13 +190,14 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
           <table className="acct-table pay-cand">
             <thead>
               <tr>
-                <th style={{ width: 30 }} /><th>Job No.</th><th>Tour date</th><th>Guide</th><th>Tour</th>
-                <th className="r">Payable</th><th className="r">Adjustments</th><th className="r">Amount due</th><th>Accounting month</th><th>Readiness</th><th>Payment</th>
+                <th style={{ width: 30 }} /><th>{candHead("jobNo", "Job No.")}</th><th>{candHead("date", "Tour date")}</th><th>{candHead("guide", "Guide")}</th><th>{candHead("tour", "Tour")}</th>
+                <th className="r">Payable</th><th className="r">Adjustments</th><th className="r">Amount due</th><th>{candHead("month", "Accounting month")}</th><th>{candHead("readiness", "Readiness")}</th><th>{candHead("payment", "Payment")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && !loading && <tr><td colSpan={11} className="op-empty">No jobs in {period} yet.</td></tr>}
-              {rows.map((r) => {
+              {rows.length > 0 && shownRows.length === 0 && <tr><td colSpan={11} className="op-empty">No job matches the filters.</td></tr>}
+              {shownRows.map((r) => {
                 const k = `${r.guideId}|${key(r)}`;
                 const otherGuide = !!payingGuide && r.guideId !== payingGuide;
                 return (
@@ -203,13 +232,15 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
       </section>
 
       <section className="panel">
-        <div className="panel-head"><h2>Recorded payments · {period}</h2><span className="hint">{payments.length} payment{payments.length === 1 ? "" : "s"}</span></div>
+        <div className="panel-head"><h2>Recorded payments · {period}</h2><span className="hint">{payFiltering ? `${shownPayments.length} of ${payments.length}` : payments.length} payment{payments.length === 1 ? "" : "s"}</span>
+          {payFiltering && <button className="btn sm ghost js-clear-pay-filters" style={{ marginLeft: "auto" }} onClick={() => setPayF({})}>✕ Clear filters</button>}</div>
         <div className="grid-scroll">
           <table className="acct-table">
-            <thead><tr><th>Payment</th><th>Guide</th><th>Transfer date</th><th className="r">Amount transferred</th><th className="r">Jobs</th><th>Status</th><th>Recorded</th><th /></tr></thead>
+            <thead><tr><th>{payHead("payment", "Payment")}</th><th>{payHead("guide", "Guide")}</th><th>{payHead("date", "Transfer date")}</th><th className="r">Amount transferred</th><th className="r">Jobs</th><th>{payHead("status", "Status")}</th><th>Recorded</th><th /></tr></thead>
             <tbody>
               {payments.length === 0 && <tr><td colSpan={8} className="op-empty">No guide payments recorded for {period}.</td></tr>}
-              {payments.map((p) => (
+              {payments.length > 0 && shownPayments.length === 0 && <tr><td colSpan={8} className="op-empty">No payment matches the filters.</td></tr>}
+              {shownPayments.map((p) => (
                 <tr key={p.id}>
                   <td className="num">{p.paymentNo}<small style={{ display: "block", fontSize: 11, color: p.kind === "SUPPLEMENTAL" ? "var(--primary)" : "var(--ink-soft)", fontWeight: p.kind === "SUPPLEMENTAL" ? 600 : 400 }}>{paymentKindLabel(p)}</small></td>
                   <td><span className="gid">{p.guideId}</span> {p.guide}</td>
