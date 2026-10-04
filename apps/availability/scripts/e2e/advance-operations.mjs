@@ -251,6 +251,8 @@ try {
   await page.reload({ waitUntil: "networkidle0" });
   await page.waitForSelector(".js-payer-select");
   check("8 · Company Advance is offered for the meal row (one advance allows meals)", (await payerOptions(page, 0)).includes("advance"));
+  const memos = await page.$$eval(".js-advance-memos .js-bank-memo code", (xs) => xs.map((x) => x.innerText));
+  check("the job sheet gives the bank memos: ADV before the advance transfer, RTN for the guide's return", memos.includes("ADV FOLK-TEST-OPS-01") && memos.includes("RTN FOLK-TEST-OPS-01"), JSON.stringify(memos));
   await setPayer(page, 0, "advance");
   await pause(300);
   check("8 · …and choosing it opens no chooser", (await page.$(".js-advance-chooser")) === null);

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { Note } from "@/components/PeakPaymentDialog";
 import { ADJUSTMENT_LABEL, ADJUSTMENT_TYPES, reconciliationLine, toSatang, type AdjustmentType } from "@/lib/payments-v2/rules";
+import CopyMemo from "@/components/CopyMemo";
+import { payMemo } from "@/lib/bank-memo";
 
 // Record one bank transfer to a guide: which jobs it pays, the date the money actually
 // left, the amount, any adjustment that makes those agree, and the slip. The jobs become
@@ -230,6 +232,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
         <h3 id="recpay-h">Record payment</h3>
         <div className="mctx">{guideId} · {guide} · {split ? `${parts.length} bank transfers, one payment` : "one bank transfer"}</div>
         <div className="mbody" style={{ display: "grid", gap: 14 }}>
+          {chosen.length > 0 && <CopyMemo memo={payMemo({ guideId, jobs: chosen.map((j) => ({ jobNo: j.ref, date: j.date })), withReview: chosenReviews.length > 0 })} label="Before you transfer" />}
           <Note tone="warn">A job becomes paid because this payment exists. Give the date the money actually left the bank — not today, if the transfer was earlier.</Note>
 
           <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 4 }}>
