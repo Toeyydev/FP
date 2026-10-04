@@ -85,6 +85,10 @@ describe("the result", () => {
     expect(checkSlip(slip(), null, { ...typed, txRef: "TRXX99031099999" }, guide, []).result).toBe("MISMATCH");
     expect(checkSlip(slip(), null, { ...typed, amount: 1600 }, guide, []).result).toBe("MISMATCH");
     expect(checkSlip(slip(), null, { ...typed, advanceDate: "2099-03-10" }, guide, []).result).toBe("MISMATCH");
+    // A พ.ศ. year typed into the Gregorian field: still a mismatch, but it says why.
+    const be = checkSlip(slip(), null, { ...typed, advanceDate: "2642-03-09" }, guide, []);
+    expect(be.result).toBe("MISMATCH");
+    expect(be.reasons.join(" ")).toMatch(/Buddhist-era year/);
   });
 
   it("the reference is compared by its key: spaces and case do not make it different", () => {

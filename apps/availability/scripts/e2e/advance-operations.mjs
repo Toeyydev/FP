@@ -252,6 +252,17 @@ try {
   await page.waitForSelector(".js-payer-select");
   check("8 · Company Advance is offered for the meal row (one advance allows meals)", (await payerOptions(page, 0)).includes("advance"));
   const memos = await page.$$eval(".js-advance-memos .js-bank-memo code", (xs) => xs.map((x) => x.innerText));
+  // A พ.ศ. year typed into the advance's date becomes ค.ศ. (2569 → 2026).
+  await openCreate(page);
+  await page.evaluate(() => {
+    const el = document.querySelector('input[type="datetime-local"]');
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(el, "2569-10-04T22:42"); el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await pause(200);
+  const typedAt = await page.$eval('input[type="datetime-local"]', (x) => x.value);
+  check("a Buddhist-era year typed into the advance date becomes Gregorian (2569 → 2026)", typedAt === "2026-10-04T22:42", typedAt);
+  await page.reload({ waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
   check("the job sheet gives the bank memos: ADV before the advance transfer, RTN for the guide's return", memos.includes("ADV FOLK-TEST-OPS-01") && memos.includes("RTN FOLK-TEST-OPS-01"), JSON.stringify(memos));
   await setPayer(page, 0, "advance");
   await pause(300);

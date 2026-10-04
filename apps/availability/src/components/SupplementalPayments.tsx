@@ -6,6 +6,7 @@ import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { REVIEW_RATE, reviewIncentiveFigures, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 import CopyMemo from "@/components/CopyMemo";
 import { reviewMemo } from "@/lib/bank-memo";
+import { ceDate } from "@/lib/ce-date";
 
 // Supplemental payments: an amount left out of a payout that already went — a review
 // incentive, a bonus, an adjustment. Each is its own obligation and is paid by its own
@@ -433,7 +434,7 @@ function PayDialog({ row, onClose, onDone }: { row: Row; onClose: () => void; on
         <h3 id="supp-pay-h">Record payment · {row.typeLabel}</h3>
         <div className="mctx">{row.guideId} · {row.guide} · {thb(row.grossAmount)} − WHT {thb(row.wht)} = <b>{thb(row.netAmount)}</b>. A transfer of its own — no earlier payment changes.</div>
         <div className="mbody" style={{ display: "grid", gap: 10 }}>
-          <label className="js-field" style={FIELD}>Transfer date<input className="search" name="paymentDate" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} /></label>
+          <label className="js-field" style={FIELD}>Transfer date<input className="search" name="paymentDate" type="date" value={paymentDate} onChange={(e) => setPaymentDate(ceDate(e.target.value))} /></label>
           <label className="js-field" style={FIELD}>Amount transferred (฿)<input className="search" name="amountTransferred" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           <label className="js-field" style={FIELD}>Bank reference <small style={{ color: "var(--ink-soft)" }}>optional</small><input className="search" name="bankRef" value={bankRef} onChange={(e) => setBankRef(e.target.value)} /></label>
           <label className="js-field" style={FIELD}>Bank slip<input type="file" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>

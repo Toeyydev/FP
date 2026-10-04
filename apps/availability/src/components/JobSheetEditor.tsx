@@ -27,6 +27,7 @@ import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 import ExpenseCertificatePanel from "@/components/ExpenseCertificatePanel";
 import CopyMemo from "@/components/CopyMemo";
 import { advanceMemo, returnMemo } from "@/lib/bank-memo";
+import { ceDate } from "@/lib/ce-date";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -1878,7 +1879,7 @@ export default function JobSheetEditor() {
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Amount (฿)<br />
               <input style={{ ...L, width: 110, marginTop: 2 }} type="number" min={1} value={advForm.amount} onChange={(e) => setAdvForm((f) => ({ ...f, amount: e.target.value }))} placeholder="1000" /></label>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>{advKind === "advance" ? "Paid at" : "Returned at"}<br />
-              <input style={{ ...L, width: 190, marginTop: 2 }} type="datetime-local" value={advForm.at} onChange={(e) => setAdvForm((f) => ({ ...f, at: e.target.value }))} title="Leave blank for now" /></label>
+              <input style={{ ...L, width: 190, marginTop: 2 }} type="datetime-local" value={advForm.at} onChange={(e) => setAdvForm((f) => ({ ...f, at: ceDate(e.target.value) }))} title="Leave blank for now" /></label>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Method<br />
               <select style={{ ...L, width: 120, marginTop: 2 }} value={advForm.method} onChange={(e) => setAdvForm((f) => ({ ...f, method: e.target.value }))}>
                 <option value="bank">Bank transfer</option><option value="cash">Cash</option><option value="other">Other</option>

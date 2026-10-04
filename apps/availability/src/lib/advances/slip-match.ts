@@ -18,6 +18,7 @@
 // One matching word is never a MATCH: a first name and the start of a surname, printed for
 // a guide whose surname runs on for many more letters, is PARTIAL — a bank truncating a
 // surname and two people sharing a first name look the same from here.
+import { differsByBuddhistEra } from "@/lib/ce-date";
 import type { SlipRead } from "@/lib/advances/slip-read";
 import { txRefKey } from "@/lib/advances/tx-ref";
 
@@ -153,7 +154,10 @@ export function checkSlip(read: SlipRead | null, unreadable: string | null, type
   const say = (t: string, e: string) => { th.push(t); en.push(e); };
   if (checks.transactionId === "DIFFERENT") say("เลขอ้างอิงบน slip ไม่ตรงกับที่กรอก", "The reference on the slip is not the one typed.");
   if (checks.amount === "DIFFERENT") say("ยอดบน slip ไม่ตรงกับที่กรอก", "The amount on the slip is not the one typed.");
-  if (checks.date === "DIFFERENT") say("วันที่โอนบน slip ไม่ตรงกับที่กรอก", "The transfer date on the slip is not the one typed.");
+  if (checks.date === "DIFFERENT") {
+    if (differsByBuddhistEra(typed.advanceDate, read.transferDate)) say(`ปีที่กรอก (${typed.advanceDate?.slice(0, 4)}) เป็นปี พ.ศ. — ช่องวันที่ใช้ ค.ศ. (${read.transferDate?.slice(0, 4)}) แก้ปีแล้วตรวจใหม่`, `The year typed (${typed.advanceDate?.slice(0, 4)}) is the Buddhist-era year — the date field is Gregorian (${read.transferDate?.slice(0, 4)}). Fix the year.`);
+    else say("วันที่โอนบน slip ไม่ตรงกับที่กรอก", "The transfer date on the slip is not the one typed.");
+  }
   if (checks.account === "MISMATCH") say("เลขบัญชีปลายทางบน slip ไม่ใช่บัญชีของไกด์คนนี้", "The destination account on the slip is not this guide's account.");
   if (checks.otherGuideId) say(`slip นี้ดูเป็นของ ${checks.otherGuideId}`, `This slip looks like a transfer to ${checks.otherGuideId}.`);
   if (checks.name === "NONE") say("ชื่อผู้รับบน slip ไม่ตรงกับชื่อไกด์", "The recipient's name on the slip does not match this guide.");
