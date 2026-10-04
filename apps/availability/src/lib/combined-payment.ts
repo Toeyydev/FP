@@ -127,7 +127,7 @@ export function paidJobPeakBlock(job: CombinedJobState): CombinedBlock | null {
 /** The calendar date in Bangkok of an instant, "YYYY-MM-DD". */
 export const bangkokDateOf = (at: Date | string) => new Date(new Date(at).getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
-export type PaidTransferJob = { ref: string; paidAt: Date | string | null; eslipUrl?: string | null; slips?: unknown };
+export type PaidTransferJob = { ref: string; paidAt: Date | string | null; eslipUrl?: string | null; slips?: unknown; paymentId?: string | null };
 
 /**
  * The one transfer that already paid these jobs — its date and its slip — or every reason
@@ -139,13 +139,17 @@ export function paidTransferOf(jobs: PaidTransferJob[]): { paidDate: string | nu
   const reasons: string[] = [];
   const dates = new Set<string>();
   const links = new Set<string>();
+  const payments = new Set<string>();
   for (const j of jobs) {
+    if ((j.paymentId ?? "").trim()) payments.add(j.paymentId!.trim());
     if (!j.paidAt) reasons.push(`${j.ref} has no paid date on record`);
     else dates.add(bangkokDateOf(j.paidAt));
     if ((j.eslipUrl ?? "").trim()) links.add(j.eslipUrl!.trim());
     for (const s of Array.isArray(j.slips) ? (j.slips as { url?: string | null }[]) : []) if ((s?.url ?? "").trim()) links.add(s.url!.trim());
   }
   if (dates.size > 1) reasons.push(`These jobs were paid on different days (${[...dates].sort().join(", ")}) — one transfer is one PEAK document, so put each day's jobs in separately`);
+  // A recorded payment (FOLK-PMT-…) IS one transfer: two of them are two transfers, whatever the day or slip says.
+  if (payments.size > 1) reasons.push(`These jobs were paid by ${payments.size} different recorded payments — one transfer is one PEAK document, so put each payment's jobs in separately`);
   if (links.size > 1) reasons.push(`These jobs were paid with ${links.size} different slips — one transfer is one PEAK document, so put each transfer's jobs in separately`);
   return { paidDate: dates.size === 1 ? [...dates][0] : null, slipLink: links.size === 1 ? [...links][0] : null, reasons };
 }

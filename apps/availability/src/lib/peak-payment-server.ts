@@ -100,7 +100,7 @@ export async function loadPaymentContext(
     prisma.assignment.findMany({ where: { OR: or }, select: { date: true, slotIdx: true, createdAt: true } }),
     prisma.tourPayment.findMany({
       where: { OR: or },
-      select: { date: true, slotIdx: true, status: true, eslipUrl: true, slips: true, peakPaymentRef: true, peakRef: true, paidAt: true },
+      select: { date: true, slotIdx: true, status: true, eslipUrl: true, slips: true, peakPaymentRef: true, peakRef: true, paidAt: true, guidePaymentId: true },
     }),
     prisma.payrollStatus.findMany({ where: { guideId, period: { in: periods } }, select: { period: true, status: true, paidAt: true } }),
     peakAccountMap(),
@@ -157,7 +157,7 @@ export async function loadPaymentContext(
     // Unpaid jobs were refused above; only the paid ones say which transfer it was.
     const paid = keys.flatMap((k) => {
       const pay = at(pays, k) as (typeof pays)[number] | undefined;
-      return pay?.status === "PAID" ? [{ ref: (at(sheets, k) as (typeof sheets)[number] | undefined)?.ref || `${k.date} slot ${k.slotIdx}`, paidAt: pay.paidAt, eslipUrl: pay.eslipUrl, slips: pay.slips }] : [];
+      return pay?.status === "PAID" ? [{ ref: (at(sheets, k) as (typeof sheets)[number] | undefined)?.ref || `${k.date} slot ${k.slotIdx}`, paidAt: pay.paidAt, eslipUrl: pay.eslipUrl, slips: pay.slips, paymentId: pay.guidePaymentId }] : [];
     });
     const t = paidTransferOf(paid);
     reasons.push(...t.reasons);
