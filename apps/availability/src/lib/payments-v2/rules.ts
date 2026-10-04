@@ -93,7 +93,16 @@ export type PaymentRequest = {
    * is paid on its own, so the earlier transfer is never re-read as larger than it was.
    */
   supplements?: string[];
+  /**
+   * Paid in several bank transfers (a mistyped amount topped up, or split on purpose). Each
+   * is a transfer in its own right; together they are this one payment: their amounts add
+   * up to `amountTransferred`, and `paymentDate` is the last of their dates.
+   */
+  transfers?: TransferPart[];
 };
+
+export type TransferPart = { amount: number; date: string; bankRef?: string | null; hasSlip: boolean };
+export const MAX_TRANSFERS = 10;
 
 /** What the rules need to know about one supplemental payment, loaded by the service. */
 export type SupplementFacts = {
@@ -172,7 +181,9 @@ const blank = (s: string | null | undefined) => !(s ?? "").trim();
 const tooShort = (s: string | null | undefined) => (s ?? "").trim().length < MIN_REASON;
 
 /** Every reason the payment cannot be recorded — all at once — plus its reconciliation. */
-export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { today: string; bankRefUsedBy?: string | null; slipUsedBy?: string | null; supplements?: SupplementFacts[] }): PaymentCheck {
+export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { today: string; bankRefUsedBy?: string | null; slipUsedBy?: string | null; supplements?: SupplementFacts[];
+  /** Per transfer part (same order): the payment that already holds its bank reference or slip, if any. */
+  partsUsedBy?: (string | null)[] }): PaymentCheck {
   const reasons: string[] = [];
   const wanted = req.supplements ?? [];
   if (blank(req.guideId)) reasons.push("Choose the guide being paid");
@@ -305,8 +316,39 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     blocks.push(advanceBlock({ jobNo: f.sheet.ref, date: f.date, slotIdx: f.slotIdx }, gap));
   }
 
+  // Several transfers: each one real and dated by the bank; together, exactly this payment.
+  const parts = req.transfers ?? [];
+  if (parts.length) {
+    if (parts.length < 2) reasons.push("Several transfers means two or more — for one transfer, leave the list out");
+    if (parts.length > MAX_TRANSFERS) reasons.push(`At most ${MAX_TRANSFERS} transfers in one payment`);
+    let sum = 0;
+    const refs = new Set<string>();
+    const latestTour = [...req.jobs.map((j) => j.date)].sort().pop();
+    for (const [i, p] of parts.entries()) {
+      const n = `Transfer ${i + 1}`;
+      if (!Number.isFinite(p.amount) || p.amount <= 0 || !hasAtMostTwoDecimals(p.amount)) reasons.push(`${n}: enter the amount the bank sent, in baht and satang`);
+      else sum += toSatang(p.amount);
+      if (!DATE.test(p.date ?? "")) reasons.push(`${n}: enter the date the bank sent it`);
+      else {
+        if (p.date > ctx.today) reasons.push(`${n}: ${p.date} is in the future`);
+        if (latestTour && p.date < latestTour) reasons.push(`${n}: ${p.date} is before the tour on ${latestTour}`);
+      }
+      const ref = (p.bankRef ?? "").trim();
+      if (ref) {
+        if (refs.has(ref)) reasons.push(`${n}: bank reference ${ref} is given twice — each transfer has its own`);
+        refs.add(ref);
+      }
+      if (!p.hasSlip && tooShort(req.noSlipReason)) reasons.push(`${n}: attach its slip, or give the reason there is none`);
+      if (ctx.partsUsedBy?.[i]) reasons.push(`${n}: its ${ref ? `bank reference ${ref}` : "slip"} is already recorded on ${ctx.partsUsedBy[i]}`);
+    }
+    if (Number.isFinite(req.amountTransferred) && sum !== toSatang(req.amountTransferred)) reasons.push(`The transfers add up to ${(sum / 100).toFixed(2)}, not the ${Number(req.amountTransferred).toFixed(2)} given as transferred`);
+    const last = parts.map((p) => p.date).filter((d) => DATE.test(d ?? "")).sort().pop();
+    if (last && req.paymentDate !== last) reasons.push(`The payment date is the last transfer's date, ${last} — the day the guide had been paid in full`);
+    if ((req.supplements ?? []).length && req.jobs.length) reasons.push("A payment made in several transfers carries its jobs only — record the review incentive in a payment of its own");
+  }
+
   // Evidence.
-  if (!req.hasSlip && tooShort(req.noSlipReason)) reasons.push("Attach the bank slip, or give the reason there is none");
+  if (!parts.length && !req.hasSlip && tooShort(req.noSlipReason)) reasons.push("Attach the bank slip, or give the reason there is none");
   if (ctx.slipUsedBy) reasons.push(`This slip is already the evidence for ${ctx.slipUsedBy}`);
   const bankRef = (req.bankRef ?? "").trim();
   if (bankRef.length > 120) reasons.push("The bank reference is too long");

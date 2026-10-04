@@ -1078,6 +1078,10 @@ model GuidePayment {
   jobs           GuidePaymentJob[]
   adjustments    GuidePaymentAdjustment[]
   supplements    GuidePaymentSupplementLine[]
+  // Paid in several bank transfers (a mistyped amount topped up, or split on purpose): each
+  // transfer with its own amount, date, reference and slip. Empty for one transfer — the
+  // usual case, whose evidence is on the payment itself.
+  transfers      GuidePaymentTransfer[]
   // Supplemental payments that name this payment as the one they were omitted from.
   // A link only: this payment is never changed by them.
   supplementedBy SupplementalPayment[]        @relation("SupplementOriginal")
@@ -1092,6 +1096,26 @@ model GuidePayment {
 // One job in a payment, with the figures it was paid on. The Job No. is copied in full.
 // `active` turns false when the payment is reversed; a partial unique index (migration
 // SQL) allows only ONE active payment per job — the database refuses a double payment.
+/// One bank transfer of a payment made in several (lib/payments-v2). The payment's
+/// amountTransferred is their sum and its paymentDate the last of their dates — the day the
+/// guide had been paid in full, which is the withholding date.
+model GuidePaymentTransfer {
+  id           String       @id @default(cuid())
+  payment      GuidePayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentId    String
+  seq          Int // 1, 2, … in the order they were made
+  amount       Decimal      @db.Decimal(12, 2)
+  transferDate String // "YYYY-MM-DD" (Bangkok) the bank sent it
+  bankRef      String?
+  slipUrl      String?
+  evidenceId   String?
+  createdAt    DateTime     @default(now())
+
+  @@unique([paymentId, seq])
+  @@index([bankRef])
+  @@index([evidenceId])
+}
+
 model GuidePaymentJob {
   id             String       @id @default(cuid())
   payment        GuidePayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)

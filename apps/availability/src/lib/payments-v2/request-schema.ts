@@ -16,4 +16,7 @@ export const paymentBody = z.object({
   mismatchReason: z.string().max(500).nullish(),
   periodOverrideReason: z.string().max(500).nullish(),
   note: z.string().max(500).nullish(),
+  // Paid in several bank transfers: each with its own amount, date and reference; its slip
+  // comes as the multipart field file_<index>.
+  transfers: z.array(z.object({ amount: z.number(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), bankRef: z.string().max(120).nullish() })).max(10).optional(),
 });

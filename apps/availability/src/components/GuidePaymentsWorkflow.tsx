@@ -31,6 +31,7 @@ type Detail = {
   note: string | null; createdAt: string; createdBy: string | null; reversedAt: string | null; reversedBy: string | null; reversalReason: string | null;
   jobs: { jobNo: string; date: string; slotIdx: number; payable: number; feeGross: number; wht: number; reimbursement: number; reviewReward: number; peakDocumentNo: string | null; active: boolean }[];
   adjustments: { type: string; amount: number; description: string; jobNo: string | null }[];
+  transfers?: { seq: number; amount: number; date: string; bankRef: string | null; slipUrl: string | null }[];
   supplements?: SupplementLine[];
 };
 
@@ -210,6 +211,18 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
                 <div className="pay-drift" role="alert">
                   <b>Reversed{openPayment.reversedAt ? ` on ${new Date(openPayment.reversedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}{openPayment.reversedBy ? ` by ${openPayment.reversedBy}` : ""}</b>
                   <span>Reversal reason: {openPayment.reversalReason}</span>
+                </div>
+              )}
+              {(openPayment.transfers ?? []).length > 0 && (
+                <div className="js-payment-transfers">
+                  <span className="paydoc-label">Paid in {openPayment.transfers!.length} transfers · โอนหลายครั้ง</span>
+                  <table className="acct-table" aria-label="The bank transfers of this payment">
+                    <thead><tr><th>#</th><th>Date</th><th>Bank reference</th><th>Slip</th><th className="r">Amount</th></tr></thead>
+                    <tbody>{openPayment.transfers!.map((x) => (
+                      <tr key={x.seq}><td>{x.seq}</td><td>{x.date}</td><td className="num">{x.bankRef ?? "—"}</td>
+                        <td>{x.slipUrl ? <a href={x.slipUrl} target="_blank" rel="noopener noreferrer">Slip</a> : "—"}</td><td className="r num">{thb(x.amount)}</td></tr>
+                    ))}</tbody>
+                  </table>
                 </div>
               )}
               {openPayment.kind === "SUPPLEMENTAL" ? (
