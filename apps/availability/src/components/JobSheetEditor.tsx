@@ -1877,7 +1877,7 @@ export default function JobSheetEditor() {
         {advKind && (
           <div className="no-print" style={{ marginTop: 8, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg,#fafafa)", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Amount (฿)<br />
-              <input style={{ ...L, width: 110, marginTop: 2 }} type="number" min={1} value={advForm.amount} onChange={(e) => setAdvForm((f) => ({ ...f, amount: e.target.value }))} placeholder="1000" /></label>
+              <input style={{ ...L, width: 110, marginTop: 2 }} type="number" min={1} value={advForm.amount} onChange={(e) => setAdvForm((f) => ({ ...f, amount: e.target.value }))} placeholder="฿ ยอดโอน" /></label>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>{advKind === "advance" ? "Paid at" : "Returned at"}<br />
               <input style={{ ...L, width: 190, marginTop: 2 }} type="datetime-local" value={advForm.at} onChange={(e) => setAdvForm((f) => ({ ...f, at: ceDate(e.target.value) }))} title="Leave blank for now" /></label>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Method<br />

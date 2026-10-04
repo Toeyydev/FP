@@ -89,6 +89,10 @@ describe("the result", () => {
     const be = checkSlip(slip(), null, { ...typed, advanceDate: "2642-03-09" }, guide, []);
     expect(be.result).toBe("MISMATCH");
     expect(be.reasons.join(" ")).toMatch(/Buddhist-era year/);
+    // An amount not typed yet is said as such — not blamed on the slip.
+    const empty = checkSlip(slip(), null, { ...typed, amount: null }, guide, []);
+    expect(empty.reasons.join(" ")).toMatch(/The amount is not typed yet/);
+    expect(empty.reasons.join(" ")).not.toMatch(/could not all be read from the slip/);
   });
 
   it("the reference is compared by its key: spaces and case do not make it different", () => {
