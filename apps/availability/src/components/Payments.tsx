@@ -553,15 +553,21 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
             ))}
             {mode === "paid" && canEdit && (() => {
               const cands = jobs.filter(expCandidate);
-              // One transfer, one document: offer the jobs paid on each day together.
-              const byDay = new Map<string, Job[]>();
-              for (const j of jobs) if (j.canPutInPeak && notInPeak(j) && j.paidAt) byDay.set(bkkDateOf(j.paidAt), [...(byDay.get(bkkDateOf(j.paidAt)) ?? []), j]);
+              // One transfer, one document. A recorded payment (FOLK-PMT-…) is one transfer; for
+              // jobs paid before those existed, a shared slip is; failing both, the day is.
+              const transferKey = (j: Job) => j.payment?.id ? `pmt:${j.payment.id}`
+                : (j.slips?.find((s) => s.url)?.url ?? j.eslipUrl) ? `slip:${j.slips?.find((s) => s.url)?.url ?? j.eslipUrl}` : `day:${bkkDateOf(j.paidAt!)}`;
+              const byTransfer = new Map<string, Job[]>();
+              for (const j of jobs) if (j.canPutInPeak && notInPeak(j) && j.paidAt) byTransfer.set(transferKey(j), [...(byTransfer.get(transferKey(j)) ?? []), j]);
+              const groups = [...byTransfer.values()].map((js) => ({ js, day: bkkDateOf(js[0].paidAt!), paymentNo: js[0].payment?.paymentNo ?? null }))
+                .sort((a, b) => a.day.localeCompare(b.day) || (a.paymentNo ?? "").localeCompare(b.paymentNo ?? ""));
+              const sameDay = (day: string) => groups.filter((g) => g.day === day).length > 1;
               const missingCount = jobs.filter((j) => notInPeak(j) && (expCandidate(j) || j.canPutInPeak)).length;
               return missingCount > 0 && (
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
-                  {[...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, js]) => (
-                    <button key={day} className="btn sm primary" title={`Create ONE PEAK document for the ${js.length} job${js.length === 1 ? "" : "s"} paid on ${dShort(day)}, then record that payment against it. Check PEAK first: if a document for this transfer was made by hand, use Record EXP… instead.`} onClick={() => setPutInPeak({ guideId: r.guideId, guide: r.guide, jobs: js, paidDate: day })}>
-                      Put {js.length} job{js.length === 1 ? "" : "s"} paid {dShort(day)} in PEAK · 1 document
+                  {groups.map(({ js, day, paymentNo }) => (
+                    <button key={transferKey(js[0])} className="btn sm primary" title={`Create ONE PEAK document for the ${js.length} job${js.length === 1 ? "" : "s"} paid on ${dShort(day)}, then record that payment against it. Check PEAK first: if a document for this transfer was made by hand, use Record EXP… instead.`} onClick={() => setPutInPeak({ guideId: r.guideId, guide: r.guide, jobs: js, paidDate: day })}>
+                      Put {js.length} job{js.length === 1 ? "" : "s"} paid {dShort(day)}{paymentNo ? ` (${paymentNo})` : sameDay(day) ? ` · ${js.map((j) => j.ref ?? j.date).join(", ")}` : ""} in PEAK · 1 document
                     </button>
                   ))}
                   {cands.length > 0 && <button className="btn sm" title="These jobs were paid, but FolkOPS has no PEAK document for them. If one was made by hand in PEAK, record its number here." onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: cands, preselect: cands.length === 1 ? [`${cands[0].date}|${cands[0].slotIdx}`] : [] })}>Record EXP…</button>}

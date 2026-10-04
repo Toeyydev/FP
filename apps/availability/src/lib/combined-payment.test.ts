@@ -106,6 +106,10 @@ describe("paidTransferOf — the one transfer that already paid these jobs", () 
     expect(paidTransferOf([a, { ...b, slips: [{ amount: 1, url: "https://drive.google.com/file/d/slipBBBBBBBBBB/view", at: "x" }] }]).reasons.join(" ")).toContain("2 different slips");
     expect(paidTransferOf([{ ...b, paidAt: null }]).reasons).toEqual(["FOLK-BKK-20300305-01 has no paid date on record"]);
   });
+  it("two recorded payments are two transfers even on the same day with no slip; one payment is one", () => {
+    expect(paidTransferOf([{ ...b, paymentId: "pmt_1" }, { ...b, ref: "FOLK-BKK-20300306-01", paymentId: "pmt_2" }]).reasons.join(" ")).toContain("2 different recorded payments");
+    expect(paidTransferOf([{ ...b, paymentId: "pmt_1" }, { ...b, ref: "FOLK-BKK-20300306-01", paymentId: "pmt_1" }]).reasons).toEqual([]);
+  });
 });
 
 describe("perSheetSyncRefusal — one transfer, one PEAK document", () => {
