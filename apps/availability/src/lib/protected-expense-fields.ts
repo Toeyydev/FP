@@ -81,7 +81,9 @@ export function financialIdentity(row: ProtectedRow | null | undefined): string 
   return [text(r.description), money(r.price), money(r.pax), text(r.expenseType), text(r.paidBy)].join("|");
 }
 
-export type MergeResult = { rows: ProtectedRow[]; conflicts: string[] };
+export type MergeResult = { rows: ProtectedRow[]; conflicts: string[];
+  /** Rows whose recorded payer an operator changed in this save (allowPayerChange). */
+  payerChanges?: { row: string; from: string | null; to: string | null }[] };
 
 /** The phrase every duplicate-identity refusal carries, so the case is greppable. */
 export const DUPLICATE_IDENTITY = "duplicate protected expense identity";
@@ -92,6 +94,11 @@ function stampOnly(row: ProtectedRow): boolean {
   if (row.certificateRequest && typeof row.certificateRequest === "object") return false;
   if (row.advanceSettlement && typeof row.advanceSettlement === "object") return false; // a settled row keeps its category too
   return isProtected(row);
+}
+
+/** financialIdentity without the payer. */
+function identityWithoutPayer(row: ProtectedRow): string {
+  return financialIdentity({ ...row, paidBy: undefined });
 }
 
 /** financialIdentity without the accounting category. */
@@ -123,6 +130,14 @@ export function mergeServerOwned(
   stored: readonly ProtectedRow[] | null | undefined,
   incoming: readonly ProtectedRow[] | null | undefined,
   where = "This job sheet",
+  /**
+   * An operator may change the payer recorded on a row of a job that is not paid yet — the
+   * same expense, a different payer, newly stamped with who chose it. Without this, a payer
+   * recorded once could never be corrected (a ticket bought from an advance recorded before
+   * the advance existed: owner report 2026-10-05). Only a row protected by its payer stamp
+   * alone; a waiver, a certificate request or a settlement still needs the exact expense.
+   */
+  opts: { allowPayerChange?: boolean } = {},
 ): MergeResult {
   const prev = (stored ?? []) as ProtectedRow[];
   const next = stripServerOwned(incoming ?? []);
@@ -130,6 +145,7 @@ export function mergeServerOwned(
 
   const count = (rows: readonly ProtectedRow[], id: string) => rows.reduce((n, r) => n + (financialIdentity(r) === id ? 1 : 0), 0);
   const reported = new Set<string>();
+  const payerChanges: NonNullable<MergeResult["payerChanges"]> = [];
 
   prev.forEach((old, i) => {
     if (!isProtected(old)) return;
@@ -165,6 +181,17 @@ export function mergeServerOwned(
       const before = prev.filter((r) => identityWithoutCategory(r) === loose).length;
       if (hits.length === 1 && before === 1) at = hits[0];
     }
+    // The same expense with another payer, chosen by an operator on an unpaid job: the old
+    // stamp is not carried — the new choice is stamped afresh with who made it.
+    if (at < 0 && stampOnly(old) && opts.allowPayerChange) {
+      const loose = identityWithoutPayer(old);
+      const hits = next.flatMap((r, j) => (identityWithoutPayer(r) === loose ? [j] : []));
+      const before = prev.filter((r) => identityWithoutPayer(r) === loose).length;
+      if (hits.length === 1 && before === 1) {
+        payerChanges.push({ row: what, from: old.paidBy ?? null, to: next[hits[0]].paidBy ?? null });
+        return;
+      }
+    }
     if (at < 0) {
       const replacing = next[i] ? ` The row now in position ${i + 1} is ${describe(next[i])}.` : "";
       conflicts.push(`${where} row ${i + 1} "${what}" carries ${carries}, and the expense it was granted for (${describe(old)}) is not in this save.${replacing} Withdraw the record first if this row really changed — the acceptance was given for what it used to say.`);
@@ -176,7 +203,7 @@ export function mergeServerOwned(
     }
   });
 
-  return { rows: next, conflicts };
+  return { rows: next, conflicts, ...(payerChanges.length ? { payerChanges } : {}) };
 }
 
 function describe(row: ProtectedRow): string {
