@@ -29,6 +29,7 @@ import { summariesFor } from "@/lib/advances/summaries";
 import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, type ExistingAdvance } from "@/lib/advances/tx-ref";
 import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
+import { parseBangkokDateTime } from "@/lib/bangkok-time";
 import {
   MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
   fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
@@ -574,7 +575,7 @@ export async function payRefund(prisma: PrismaClient, input: { refundId: string;
   const bankRef = (input.bankRef ?? "").trim();
   const missing = checkConfirmation(bankRef);
   if (missing.length) return fail(400, ...missing.map((m) => m.replace("this money arrived", "this transfer to the guide")));
-  const paidAt = new Date(input.paidAt);
+  const paidAt = parseBangkokDateTime(input.paidAt);
   if (Number.isNaN(paidAt.getTime()) || paidAt.getTime() > Date.now() + 60_000) return fail(400, "Give the date and time the transfer was made — not in the future");
   if (f.status === "PAID") return f.bankRef === bankRef ? { ok: true, replayed: true } : fail(409, `${f.refundNo} is already paid (${f.bankRef})`);
   if (f.status !== "APPROVED") return fail(409, `${f.refundNo} is ${f.status.toLowerCase()} — a refund is paid only after it is approved`);

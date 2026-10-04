@@ -16,6 +16,7 @@ import type { Expense } from "@/lib/jobsheet";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { duplicateTransferBody, liveAdvanceForTransfer } from "@/lib/advances/tx-ref";
 import { gateSlip, slipDecisionFrom, type StoredSlipCheck } from "@/lib/advances/slip-check";
+import { parseBangkokDateTime } from "@/lib/bangkok-time";
 
 // Guide advances + returns for one job (guideId + date + slotIdx). An advance is a
 // cash movement, never an expense (see lib/advance). Operators/admin record both;
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
   const slotIdx = Number(form.get("slotIdx"));
   const amount = Number(String(form.get("amount") || "").replace(/[,\s]/g, ""));
   const atRaw = String(form.get("at") || "");
-  const at = atRaw ? new Date(atRaw) : new Date();
+  const at = atRaw ? parseBangkokDateTime(atRaw) : new Date();
   const method = (String(form.get("method") || "bank").slice(0, 24)) || "bank";
   const bankAccount = String(form.get("bankAccount") || "").slice(0,120) || null;
   const txRef = String(form.get("txRef") || "").slice(0, 120) || null;

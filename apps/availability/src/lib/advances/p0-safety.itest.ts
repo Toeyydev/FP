@@ -145,6 +145,18 @@ describe("the record route: duplicate first, then the slip, then the upload", ()
     expect(audit.detail).toMatchObject({ result: "MATCH" });
   });
 
+  it("from the job sheet, an evening transfer (22:42 Bangkok) is checked against its own day, not the next", async () => {
+    await guides(); await sheet();
+    const { POST: sheetAdvance } = await import("@/app/api/jobsheet/advance/route");
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ kind: "advance", guideId: GUIDE, date: "2025-03-10", slotIdx: "0", amount: "1500", at: "2025-03-09T22:42", method: "bank", bankAccount: "sub-bank", txRef: "TRXX99031012345", allowedCategories: "entrance" })) fd.set(k, v);
+    fd.set("file", new File([kbizSlipPdf({ id: "TRXX99031012345", date: "09/03/2025", amount: "1,500.00", to: "MR. SOMCHAI JAIDEEMAKSAKUL", account: "xxx-x-x4321-x" })], "slip.pdf", { type: "application/pdf" }));
+    const res = await sheetAdvance(new Request("http://localhost/api/jobsheet/advance", { method: "POST", body: fd }) as unknown as NextRequest);
+    expect(res.status, JSON.stringify(await res.clone().json())).toBe(200);
+    const a = await prisma.guideAdvance.findFirstOrThrow({ where: { guideId: GUIDE } });
+    expect(a.advanceDate).toBe("2025-03-09"); // the Bangkok day of the transfer — read as UTC it was the 10th
+  });
+
   it("PARTIAL (a bank-cut surname) is refused until confirmed with a reason — then kept with who and why", async () => {
     await guides(); await sheet();
     const cut = kbizSlipPdf({ id: "TRXX99031012345", date: "09/03/2025", amount: "1,500.00", to: "MR. SOMCHAI JAIDEEMA", account: "xxx-x-x4321-x" });

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { recordAndMatch } from "@/lib/payments/record";
+import { parseBangkokDateTime } from "@/lib/bangkok-time";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
   const amount = amountRaw ? Number(amountRaw.replace(/,/g, "")) : null;
   const guideId = String(form?.get("guideId") || "").trim() || null;
   const paidAtRaw = String(form?.get("paidAt") || "").trim();
-  const paidAt = paidAtRaw ? new Date(paidAtRaw) : null;
+  const paidAt = paidAtRaw ? parseBangkokDateTime(paidAtRaw) : null;
 
   if (!file || typeof file.arrayBuffer !== "function") return NextResponse.json({ error: "bad-body", hint: "A slip file is required." }, { status: 400 });
   if ((file.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", hint: "Max 10 MB." }, { status: 400 });
