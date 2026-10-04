@@ -187,6 +187,21 @@ try {
   check("4 · recorded as ONE payment of ฿1,455 dated 11 Jan, with both transfers kept",
     !!split && Number(split.amountTransferred) === 1455 && split.paymentDate === "2026-01-11" && split.transfers.map((x) => `${Number(x.amount)}@${x.transferDate}#${x.bankRef}`).join() === "100@2026-01-10#BANK-E2E-P1,1355@2026-01-11#BANK-E2E-P2",
     JSON.stringify(split && { a: Number(split.amountTransferred), d: split.paymentDate, t: split.transfers.length }));
+  // 5 — the slip on a recorded payment's tag opens the slip (it was plain text: "· slip" could not be clicked).
+  const SLIP_LINK = "https://drive.google.com/file/d/slipE2ECCCCCCCC/view";
+  await prisma.guidePayment.updateMany({ where: { paymentNo: "FOLK-PMT-202601-001" }, data: { slipUrl: SLIP_LINK } });
+  await page.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+  await page.evaluate((m) => {
+    const el = document.querySelector('input[type="month"]');
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(el, m); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, MONTH);
+  await pause(1500);
+  await page.evaluate(() => { const tr = [...document.querySelectorAll("tr")].find((t) => /G-952/.test(t.innerText) && /\bPAID\b/.test(t.innerText) && !/Total/.test(t.innerText)); tr?.click(); });
+  await page.waitForSelector(".js-pmt-slip", { timeout: 15000 }).catch(() => {});
+  const links = await page.$$eval(".js-pmt-slip", (as) => as.map((a) => ({ href: a.href, target: a.target, chip: a.closest(".pay-pmt")?.innerText })));
+  check("5 · a recorded payment's slip opens from its tag, in a new tab", links.length === 2 && links.every((l) => l.href === SLIP_LINK && l.target === "_blank" && /FOLK-PMT-202601-001 · slip/.test(l.chip)), JSON.stringify(links));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "payment-chip-slip.png"), fullPage: true });
   check("no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "paid-transfer-groups.png"), fullPage: true });
 } finally {

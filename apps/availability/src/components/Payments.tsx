@@ -231,7 +231,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
   // What paid this job: the payment record, or — for jobs paid before Payments v2 — a plain
   // "paid" with whatever evidence was kept then.
   const paymentChip = (j: Job) => j.payment
-    ? <span className="pay-pmt" title={`Recorded payment · ${thb(j.payment.amountTransferred)} on ${j.payment.paymentDate}${j.payment.slipUrl ? " · slip attached" : j.payment.noSlipReason ? ` · no slip: ${j.payment.noSlipReason}` : ""}`}>{j.payment.paymentNo}{j.payment.slipUrl ? " · slip" : ""}</span>
+    ? <span className="pay-pmt" title={`Recorded payment · ${thb(j.payment.amountTransferred)} on ${j.payment.paymentDate}${j.payment.slipUrl ? " · slip attached" : j.payment.noSlipReason ? ` · no slip: ${j.payment.noSlipReason}` : ""}`}>{j.payment.paymentNo}{j.payment.slipUrl && <> · <a className="js-pmt-slip" href={j.payment.slipUrl} target="_blank" rel="noopener noreferrer" title="Open the bank slip in Drive" onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "underline" }}>slip</a></>}</span>
     : j.paid ? <span className="pay-pmt legacy" title="Marked paid before payments were recorded — there is no payment record behind it">paid · no payment record</span> : null;
   const paymentBlocked = (d: PaymentDoc) => !!d.drift && d.drift.changed.length > 0;
   const docTag = (j: Job) => { const d = docFor(j); return d?.peakDocumentNo ? `Combined PEAK document ${d.peakDocumentNo}` : j.peakPaymentRef ?? ""; };
