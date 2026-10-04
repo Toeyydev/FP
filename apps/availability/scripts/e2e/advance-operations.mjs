@@ -227,8 +227,18 @@ try {
   // 7 — no advance on the job: Company Advance is not offered.
   check("7 · Company Advance is not offered while no advance on the job may pay for it", !(await payerOptions(page, 0)).includes("advance"));
 
-  // 2 — create an advance for entrance + meal through the job sheet.
+  // 2 — create an advance for entrance + meal through the job sheet — with an unsaved edit on
+  // the page: recording the advance must not save it (an edit waiting for this very advance
+  // could not be saved yet, and blocked the advance — owner report 2026-10-05).
+  const sheetBefore = await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.j0.id }, select: { updatedAt: true, expenses: true } });
+  await setPayer(page, 2, "company");
+  await pause(200);
   await createAdvanceInEditor(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });
+  const sheetAfter = await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.j0.id }, select: { updatedAt: true, expenses: true } });
+  const stillOnPage = await page.evaluate(() => [...document.querySelectorAll(".js-payer-select")][2]?.value);
+  check("2 · recording an advance does not save the page's other edits — the sheet is untouched and the edit is still there",
+    sheetAfter.updatedAt.getTime() === sheetBefore.updatedAt.getTime() && JSON.stringify(sheetAfter.expenses) === JSON.stringify(sheetBefore.expenses) && stillOnPage === "company",
+    JSON.stringify({ same: sheetAfter.updatedAt.getTime() === sheetBefore.updatedAt.getTime(), stillOnPage }));
   const all1 = await prisma.guideAdvance.findMany({ where: { date: DATE, slotIdx: 0 }, orderBy: { createdAt: "asc" } });
   const A = all1[0];
   check("2 · an advance created on the job sheet with meals allowed (slip stored through the upload)", !!A && JSON.stringify(A.allowedCategories) === JSON.stringify(["entrance", "meal"]) && /fake-upload/.test(A.slipUrl ?? ""), JSON.stringify(A?.allowedCategories));

@@ -392,7 +392,10 @@ export default function JobSheetEditor() {
     if (kind === "advance" && advCats.includes("other") && advOtherReason.trim().length < 8) { setMsg("Say why this advance may pay for other costs (at least 8 characters)."); return; }
     if (!advForm.file) { setMsg("แนบสลิปโอนเงินก่อนบันทึก"); return; }
     if (advForm.method === "bank" && canEdit && !advanceBank) { setMsg("เลือกบัญชีธนาคารบริษัทที่เงินจริงเข้า–ออก"); return; }
-    if (canEdit && !saved) { const ok = await save(); if (!ok) return; } // the row keys off the persisted sheet
+    // The advance keys off the job sheet existing — not off this page's unsaved edits. A sheet
+    // never saved is saved first; one that exists is left as it is, so an edit that cannot be
+    // saved yet (a ticket row waiting for this very advance) does not block recording it.
+    if (canEdit && !saved && !sheet.updatedAt) { const ok = await save(); if (!ok) return; }
     setAdvBusy(true); setMsg("");
     const fd = new FormData();
     fd.append("kind", kind); fd.append("guideId", sheet.guideId); fd.append("date", sheet.date); fd.append("slotIdx", String(sheet.slotIdx));
