@@ -40,15 +40,44 @@ export const normalizePeakRef = (ref: string | null | undefined) => (ref ?? "").
 export const MIN_OVERRIDE_REASON = 10;
 
 /**
- * Owner policy (2026-10-04): a review incentive paid on its own for LESS than ฿1,000 is not
- * withheld — the Revenue Department does not require withholding on a service payment under
- * ฿1,000 per payment. Paid with other money in one transfer of ฿1,000 or more, it is
- * withheld again (lib/payments-v2/rules refuses that transfer). Satang, so ฿999.99 is under.
+ * Review incentives — owner policy 2026-10-06 (replaces the ฿1,000 threshold of 2026-10-04).
+ *
+ * The guide is paid in full: ฿50 for each review that names them. The company bears the
+ * withholding on their behalf, once (ผู้จ่ายออกให้ครั้งเดียว), so the income on the 50 ทวิ and
+ * the 510110 expense are the transfer plus the tax, and the tax goes into ภ.ง.ด.3:
+ *
+ *     transfer = reviews × 50          tax = transfer × 3%   (1% through e-Withholding)
+ *     income   = expense = transfer + tax
+ *
+ * Every amount is taxed — there is no ฿1,000 threshold. A review names the guide, not a
+ * booking, so it carries no job: it books into the month the guide worked (`workMonth`),
+ * one unpaid incentive per guide and month, to which later reviews are added.
  */
-export const REVIEW_WHT_THRESHOLD = 1000;
-export type WhtSource = "CONFIGURED" | "ENTERED" | "BELOW_THRESHOLD";
-export const belowReviewThreshold = (type: string, gross: number) =>
-  type === "REVIEW_INCENTIVE" && Number.isFinite(gross) && Math.round(gross * 100) < REVIEW_WHT_THRESHOLD * 100;
+export const REVIEW_RATE = 50;
+export const REVIEW_WHT_PCT = 3;
+export const REVIEW_EWHT_PCT = 1;
+export const MAX_REVIEWS = 999;
+export type WhtSource = "CONFIGURED" | "ENTERED" | "BELOW_THRESHOLD" | "POLICY";
+export type WhtBearer = "GUIDE" | "COMPANY_ONCE";
+
+/** Transfer, company-borne tax and income for a number of reviews — each to the satang. */
+export function reviewIncentiveFigures(reviews: number, eWithholding = false): { gross: number; wht: number; net: number; whtPct: number } {
+  const whtPct = eWithholding ? REVIEW_EWHT_PCT : REVIEW_WHT_PCT;
+  const net = reviews * REVIEW_RATE * 100;
+  const wht = Math.floor((net * whtPct * 100 + 5000) / 10000);
+  return { gross: fromSatang(net + wht), wht: fromSatang(wht), net: fromSatang(net), whtPct };
+}
+
+const YM = /^\d{4}-(0[1-9]|1[0-2])$/;
+/** A review count is a whole number of reviews, at least one. */
+export const validReviewCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= MAX_REVIEWS;
+/** The work month: a real month, not after this one (Bangkok). */
+export function workMonthProblem(m: string | null | undefined, now: Date = new Date()): string | null {
+  if (!YM.test((m ?? "").trim())) return "Choose the month the guide worked the tours these reviews are for";
+  const thisMonth = new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 7);
+  if (m!.trim() > thisMonth) return `${m} has not happened yet — choose the month the guide worked`;
+  return null;
+}
 
 const toSatang = (v: number) => Math.round(v * 100);
 const fromSatang = (s: number) => s / 100;
@@ -82,6 +111,12 @@ export type CreateInput = {
   duplicateOverrideReason?: string | null;
   /** The earlier Bonus this converts. Type must be BONUS and the amount exactly the bonus's. */
   legacyBonusId?: string | null;
+  /** Review incentive: how many reviews named the guide (the amount is worked out from it). */
+  reviewCount?: number | null;
+  /** Review incentive: "YYYY-MM" the guide worked. */
+  workMonth?: string | null;
+  /** Review incentive paid through e-Withholding Tax: 1% instead of 3%. */
+  eWithholding?: boolean | null;
 };
 
 export type LegacyBonus = { id: string; guideId: string; amount: number; period: string; paid: boolean;
@@ -103,14 +138,16 @@ export type CreateFacts = {
   categories: string[];
   original: { guideId: string; paymentNo: string; status: string } | null;
   /** Non-void supplemental payments for this guide and type, for the duplicate check. */
-  existing: { id: string; jobs: SupplementalJob[]; grossAmount: number; originalPaymentId: string | null; paidBy: string | null; createdAt: Date }[];
+  existing: { id: string; jobs: SupplementalJob[]; grossAmount: number; originalPaymentId: string | null; paidBy: string | null; createdAt: Date; whtBearer?: string | null; workMonth?: string | null }[];
 };
 
 export type CreateCheck = {
   reasons: string[];
   /** Matches that look like this payment already exists. Refused unless overridden with a reason. */
   duplicates: string[];
-  figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: WhtSource } | null;
+  figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: WhtSource; whtBearer: WhtBearer } | null;
+  /** A company-borne review incentive: what it is for. */
+  review: { reviewCount: number; workMonth: string; eWithholding: boolean } | null;
   accountingCategory: string | null;
 };
 
@@ -121,6 +158,7 @@ const monthOf = (d: Date) => new Date(d.getTime() + 7 * 3600 * 1000).toISOString
 
 /** Every reason this supplemental payment cannot be created — all at once — and what it would be. */
 export function checkCreate(input: CreateInput, facts: CreateFacts, now: Date = new Date()): CreateCheck {
+  if (input.type === "REVIEW_INCENTIVE") return checkReviewIncentive(input, facts, now);
   const reasons: string[] = [];
   const type = input.type as SupplementalType;
   if (blank(input.guideId) || !facts.guideExists) reasons.push("Choose the guide this is paid to");
@@ -156,8 +194,7 @@ export function checkCreate(input: CreateInput, facts: CreateFacts, now: Date = 
   let whtPct: number | null = null;
   let whtSource: WhtSource = "ENTERED";
   if (SUPPLEMENTAL_TYPES.includes(type)) {
-    if (amountOk && belowReviewThreshold(type, input.grossAmount)) { whtPct = 0; whtSource = "BELOW_THRESHOLD"; }
-    else if (facts.configuredWhtPct !== null) { whtPct = facts.configuredWhtPct; whtSource = "CONFIGURED"; }
+    if (facts.configuredWhtPct !== null) { whtPct = facts.configuredWhtPct; whtSource = "CONFIGURED"; }
     else if (validPct(input.whtPct)) whtPct = input.whtPct;
     else reasons.push(`No withholding rate is configured for a ${label.toLowerCase()} — enter the rate your accountant confirmed (0 if none is withheld)`);
   }
@@ -225,9 +262,37 @@ export function checkCreate(input: CreateInput, facts: CreateFacts, now: Date = 
     reasons.push("This looks like a payment that already exists — check the matches above, or give the reason it is a separate payment");
   }
 
-  const figures = amountOk && whtPct !== null ? { ...supplementalFigures(input.grossAmount, whtPct), whtPct, whtSource } : null;
+  const figures = amountOk && whtPct !== null ? { ...supplementalFigures(input.grossAmount, whtPct), whtPct, whtSource, whtBearer: "GUIDE" as const } : null;
   if (figures && !(figures.net > 0)) reasons.push("After withholding nothing is left to pay");
-  return { reasons, duplicates, figures, accountingCategory };
+  return { reasons, duplicates, figures, accountingCategory, review: null };
+}
+
+/**
+ * A review incentive (owner policy 2026-10-06): reviews × ฿50 to the guide in full, the tax
+ * borne by the company. It names the guide and the month they worked — never a booking or
+ * job, which a review that mentions the guide cannot point to.
+ */
+function checkReviewIncentive(input: CreateInput, facts: CreateFacts, now: Date): CreateCheck {
+  const reasons: string[] = [];
+  if (blank(input.guideId) || !facts.guideExists) reasons.push("Choose the guide this is paid to");
+  const countOk = validReviewCount(input.reviewCount);
+  if (!countOk) reasons.push(`Enter how many reviews named the guide — a whole number from 1 to ${MAX_REVIEWS}`);
+  const monthProblem = workMonthProblem(input.workMonth, now);
+  if (monthProblem) reasons.push(monthProblem);
+  if ((input.jobs ?? []).length) reasons.push("A review incentive is for the guide and the month they worked — it does not name jobs");
+  if (input.originalPaymentId || input.legacyBonusId) reasons.push("A review incentive is paid on its own terms — it is not linked to an earlier payment or bonus");
+  if ((input.reason ?? "").trim().length < MIN_REASON) reasons.push("Say where the reviews came from (e.g. GetYourGuide reviews naming the guide)");
+  const workMonth = (input.workMonth ?? "").trim();
+  // One open incentive per guide and month: later reviews are added to it, not paid apart.
+  const open = facts.existing.find((e) => e.whtBearer === "COMPANY_ONCE" && e.workMonth === workMonth && !e.paidBy);
+  if (!monthProblem && open) reasons.push(`There is already an unpaid review incentive for ${workMonth} — add these reviews to it instead`);
+  if (!facts.categories.includes(REVIEW_INCENTIVE_CATEGORY)) reasons.push(`${REVIEW_INCENTIVE_CATEGORY} has no PEAK account mapped`);
+  const eWithholding = !!input.eWithholding;
+  const figures = countOk ? { ...reviewIncentiveFigures(input.reviewCount as number, eWithholding), whtSource: "POLICY" as const, whtBearer: "COMPANY_ONCE" as const } : null;
+  return {
+    reasons, duplicates: [], figures, accountingCategory: REVIEW_INCENTIVE_CATEGORY,
+    review: countOk && !monthProblem ? { reviewCount: input.reviewCount as number, workMonth, eWithholding } : null,
+  };
 }
 
 export type PaymentState = "UNPAID" | "PAID" | "VOID";

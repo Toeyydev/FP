@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows, newReviewRows } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -387,3 +387,19 @@ describe("uncategorisedExpenseRows — rows a PEAK document would refuse", () =>
   });
 });
 
+
+describe("newReviewRows — review incentives are paid monthly, not added to a job sheet (2026-10-06)", () => {
+  const ferry = { description: "Ferry", price: 15, pax: 2 } as Expense;
+  const r50 = (pax: number) => ({ description: "Review reward", price: 50, pax }) as Expense;
+  it("rows already on the sheet are not new, wherever they move", () => {
+    expect(newReviewRows([ferry, r50(2)], [r50(2), ferry])).toBe(0);
+  });
+  it("an added row, or a changed count, is new", () => {
+    expect(newReviewRows([ferry], [ferry, r50(1)])).toBe(1);
+    expect(newReviewRows([r50(2)], [r50(3)])).toBe(1);
+    expect(newReviewRows([r50(2)], [r50(2), r50(2)])).toBe(1);
+  });
+  it("removing a row adds nothing", () => {
+    expect(newReviewRows([ferry, r50(2)], [ferry])).toBe(0);
+  });
+});

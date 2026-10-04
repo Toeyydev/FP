@@ -6,7 +6,8 @@ import { SUPPLEMENTAL_TYPES } from "@/lib/supplemental-payments/rules";
 export const supplementalBody = z.object({
   guideId: z.string().min(1).max(40),
   type: z.enum(SUPPLEMENTAL_TYPES),
-  grossAmount: z.number(),
+  // A review incentive's amount is worked out from its review count — it may be sent as 0.
+  grossAmount: z.number().default(0),
   whtPct: z.number().nullish(),
   accountingCategory: z.string().max(40).nullish(),
   reason: z.string().max(300),
@@ -16,4 +17,7 @@ export const supplementalBody = z.object({
   duplicateOverrideReason: z.string().max(500).nullish(),
   requestKey: z.string().max(80).nullish(),
   legacyBonusId: z.string().max(64).nullish(),
+  reviewCount: z.number().int().nullish(),
+  workMonth: z.string().max(7).nullish(),
+  eWithholding: z.boolean().nullish(),
 });

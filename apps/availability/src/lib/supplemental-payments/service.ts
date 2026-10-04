@@ -10,7 +10,7 @@ import { reviewRewardTotal, type Expense } from "@/lib/jobsheet";
 import { isMapped } from "@/lib/peak-accounts";
 import { configuredWhtPct } from "@/lib/supplemental-payments/policy";
 import {
-  checkCreate, normalizePeakRef, supplementalState, MIN_REASON, PEAK_EXPENSE_REF, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES,
+  MAX_REVIEWS, reviewIncentiveFigures, validReviewCount, checkCreate, normalizePeakRef, supplementalState, MIN_REASON, PEAK_EXPENSE_REF, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES,
   type AccountingState, type CreateCheck, type CreateFacts, type CreateInput, type PaymentState, type SupplementalJob, type SupplementalType,
 } from "@/lib/supplemental-payments/rules";
 
@@ -24,7 +24,7 @@ const jobsOf = (v: unknown): SupplementalJob[] => (Array.isArray(v) ? (v as Supp
  * RECORDED payment. A line left active on a reversed payment (only possible if a build
  * without this feature reversed it) does not count as paid.
  */
-async function activePaymentNos(db: Db, ids: string[]): Promise<Map<string, { paymentNo: string; paymentDate: string; paymentId: string }>> {
+export async function activePaymentNos(db: Db, ids: string[]): Promise<Map<string, { paymentNo: string; paymentDate: string; paymentId: string }>> {
   if (!ids.length) return new Map();
   const lines = await db.guidePaymentSupplementLine.findMany({ where: { supplementalId: { in: ids }, active: true }, select: { supplementalId: true, paymentId: true } });
   const pays = lines.length ? await db.guidePayment.findMany({ where: { id: { in: [...new Set(lines.map((l) => l.paymentId))] }, status: "RECORDED" }, select: { id: true, paymentNo: true, paymentDate: true } }) : [];
@@ -52,7 +52,7 @@ export async function loadCreateFacts(db: Db, input: CreateInput): Promise<Creat
     or.length ? db.guidePaymentJob.findMany({ where: { OR: or, active: true }, select: { date: true, slotIdx: true, reviewReward: true, paymentId: true } }) : [],
     mappedCategories(db),
     input.originalPaymentId ? db.guidePayment.findUnique({ where: { id: input.originalPaymentId }, select: { guideId: true, paymentNo: true, status: true } }) : null,
-    input.guideId && input.type ? db.supplementalPayment.findMany({ where: { guideId: input.guideId, type: input.type, voidedAt: null }, select: { id: true, jobs: true, grossAmount: true, originalPaymentId: true, createdAt: true } }) : [],
+    input.guideId && input.type ? db.supplementalPayment.findMany({ where: { guideId: input.guideId, type: input.type, voidedAt: null }, select: { id: true, jobs: true, grossAmount: true, originalPaymentId: true, createdAt: true, whtBearer: true, workMonth: true } }) : [],
     input.legacyBonusId ? db.bonus.findUnique({ where: { id: input.legacyBonusId }, select: { id: true, guideId: true, amount: true, period: true, eslipUrl: true, supplementals: { where: { voidedAt: null }, select: { id: true } } } }) : null,
     input.guideId ? db.bonus.findMany({ where: { guideId: input.guideId, eslipUrl: null, supplementals: { none: { voidedAt: null } } }, select: { id: true, amount: true, period: true } }) : [],
   ]);
@@ -75,7 +75,7 @@ export async function loadCreateFacts(db: Db, input: CreateInput): Promise<Creat
     }),
     categories,
     original,
-    existing: existing.map((e) => ({ id: e.id, jobs: jobsOf(e.jobs), grossAmount: Number(e.grossAmount), originalPaymentId: e.originalPaymentId, paidBy: held.get(e.id)?.paymentNo ?? null, createdAt: e.createdAt })),
+    existing: existing.map((e) => ({ id: e.id, jobs: jobsOf(e.jobs), grossAmount: Number(e.grossAmount), originalPaymentId: e.originalPaymentId, paidBy: held.get(e.id)?.paymentNo ?? null, createdAt: e.createdAt, whtBearer: e.whtBearer, workMonth: e.workMonth })),
   };
 }
 
@@ -96,11 +96,13 @@ export type CreateResult =
 export async function createSupplemental(prisma: PrismaClient, input: CreateInput & { requestKey?: string | null; actor: Actor }): Promise<CreateResult> {
   const requestKey = (input.requestKey ?? "").trim() || null;
   if (requestKey) {
-    const prior = await prisma.supplementalPayment.findUnique({ where: { requestKey }, select: { id: true, guideId: true, type: true, grossAmount: true } });
+    const prior = await prisma.supplementalPayment.findUnique({ where: { requestKey }, select: { id: true, guideId: true, type: true, grossAmount: true, reviewCount: true, workMonth: true } });
     if (prior) {
-      const same = prior.guideId === input.guideId && prior.type === input.type && Math.round(Number(prior.grossAmount) * 100) === Math.round(input.grossAmount * 100);
+      const same = prior.guideId === input.guideId && prior.type === input.type && (prior.reviewCount
+        ? prior.reviewCount === input.reviewCount && prior.workMonth === (input.workMonth ?? "").trim()
+        : Math.round(Number(prior.grossAmount) * 100) === Math.round(input.grossAmount * 100));
       if (!same) return { ok: false, status: 409, reasons: ["This request was already used for a different payment — reload and try again"], duplicates: [] };
-      return { ok: true, id: prior.id, replayed: true, check: { reasons: [], duplicates: [], figures: null, accountingCategory: null } };
+      return { ok: true, id: prior.id, replayed: true, check: { reasons: [], duplicates: [], figures: null, accountingCategory: null, review: null } };
     }
   }
   const check = await previewSupplemental(prisma, input);
@@ -116,6 +118,8 @@ export async function createSupplemental(prisma: PrismaClient, input: CreateInpu
         grossAmount: check.figures!.gross, whtPct: check.figures!.whtPct, whtSource: check.figures!.whtSource, wht: check.figures!.wht, netAmount: check.figures!.net,
         reason: input.reason.trim(), note: t(input.note), jobs, originalPaymentId: t(input.originalPaymentId), legacyBonusId: t(input.legacyBonusId),
         duplicateOverrideReason: override, requestKey, createdById: input.actor.actorId,
+        whtBearer: check.figures!.whtBearer,
+        ...(check.review ? { reviewCount: check.review.reviewCount, workMonth: check.review.workMonth, eWithholding: check.review.eWithholding } : {}),
       },
       select: { id: true },
     });
@@ -137,6 +141,7 @@ export async function createSupplemental(prisma: PrismaClient, input: CreateInpu
     detail: {
       guideId: input.guideId, type: input.type, accountingCategory: check.accountingCategory,
       gross: check.figures!.gross, whtPct: check.figures!.whtPct, whtSource: check.figures!.whtSource, wht: check.figures!.wht, net: check.figures!.net,
+      whtBearer: check.figures!.whtBearer, ...(check.review ?? {}),
       legacyBonusId: t(input.legacyBonusId),
       jobs: jobs.map((j) => j.jobNo), reason: input.reason.trim(), originalPaymentNo: original?.paymentNo ?? null,
       note: "a separate obligation; the original payment is not changed",
@@ -153,6 +158,38 @@ export async function createSupplemental(prisma: PrismaClient, input: CreateInpu
 }
 
 type ChangeResult = { ok: true } | { ok: false; status: number; reasons: string[] };
+
+/**
+ * Change an UNPAID company-borne review incentive: more reviews for the same month, or paid
+ * through e-Withholding (1%) or not (3%). The figures are worked out again from the count;
+ * nothing is typed. A paid one is never changed — later reviews start a new incentive.
+ */
+export async function changeReviewIncentive(prisma: PrismaClient, input: { id: string; addReviews?: number | null; eWithholding?: boolean | null; reason: string; actor: Actor }): Promise<ChangeResult> {
+  const row = await prisma.supplementalPayment.findUnique({ where: { id: input.id } });
+  if (!row) return { ok: false, status: 404, reasons: ["No such supplemental payment"] };
+  if (row.whtBearer !== "COMPANY_ONCE" || !row.reviewCount) return { ok: false, status: 409, reasons: ["Only a review incentive counted in reviews can be changed this way"] };
+  if (row.voidedAt) return { ok: false, status: 409, reasons: ["It is void"] };
+  const held = (await activePaymentNos(prisma, [row.id])).get(row.id);
+  if (held) return { ok: false, status: 409, reasons: [`It is paid by ${held.paymentNo} — later reviews go into a new review incentive`] };
+  const add = input.addReviews ?? 0;
+  if (add !== 0 && !validReviewCount(add)) return { ok: false, status: 400, reasons: ["Enter how many more reviews — a whole number, at least 1"] };
+  const count = row.reviewCount + add;
+  if (count > MAX_REVIEWS) return { ok: false, status: 400, reasons: [`That makes ${count} reviews — more than ${MAX_REVIEWS} in one month`] };
+  const eWithholding = input.eWithholding ?? row.eWithholding;
+  if (!add && eWithholding === row.eWithholding) return { ok: false, status: 400, reasons: ["Nothing to change"] };
+  const reason = (input.reason ?? "").trim();
+  if (reason.length < MIN_REASON) return { ok: false, status: 400, reasons: ["Say why it changes (e.g. two more reviews this week)"] };
+  const f = reviewIncentiveFigures(count, eWithholding);
+  const moved = await prisma.supplementalPayment.updateMany({
+    where: { id: row.id, voidedAt: null, reviewCount: row.reviewCount, eWithholding: row.eWithholding },
+    data: { reviewCount: count, eWithholding, grossAmount: f.gross, whtPct: f.whtPct, wht: f.wht, netAmount: f.net },
+  });
+  if (moved.count !== 1) return { ok: false, status: 409, reasons: ["It changed while this was being saved — reload"] };
+  await audit({ ...input.actor, action: "supplemental.review_incentive_changed", entityType: "SupplementalPayment", entityId: row.id,
+    detail: { workMonth: row.workMonth, before: { reviews: row.reviewCount, eWithholding: row.eWithholding, net: Number(row.netAmount), wht: Number(row.wht), gross: Number(row.grossAmount) },
+      after: { reviews: count, eWithholding, net: f.net, wht: f.wht, gross: f.gross }, reason } });
+  return { ok: true };
+}
 
 /** Withdraw an UNPAID supplemental payment. A paid one is undone by reversing its payment, never here. */
 export async function voidSupplemental(prisma: PrismaClient, input: { id: string; reason: string; actor: Actor }): Promise<ChangeResult> {
@@ -219,6 +256,8 @@ export type SupplementalView = {
   id: string; guideId: string; guide: string; type: SupplementalType; typeLabel: string;
   grossAmount: number; whtPct: number; wht: number; netAmount: number; accountingCategory: string;
   whtSource: string;
+  whtBearer: string; reviewCount: number | null; workMonth: string | null; eWithholding: boolean;
+  peakStatus: string | null; peakError: string | null; peakDocumentLink: string | null;
   reason: string; note: string | null; jobs: SupplementalJob[];
   originalPaymentNo: string | null; duplicateOverrideReason: string | null;
   legacyBonus: { id: string; period: string } | null;
@@ -244,6 +283,8 @@ export async function listSupplementals(db: Db, where: { guideId?: string | null
       type: r.type as SupplementalType, typeLabel: SUPPLEMENTAL_LABEL[r.type as SupplementalType]?.en ?? r.type,
       grossAmount: Number(r.grossAmount), whtPct: Number(r.whtPct), wht: Number(r.wht), netAmount: Number(r.netAmount),
       accountingCategory: r.accountingCategory, whtSource: r.whtSource, reason: r.reason, note: r.note, jobs: jobsOf(r.jobs),
+      whtBearer: r.whtBearer, reviewCount: r.reviewCount, workMonth: r.workMonth, eWithholding: r.eWithholding,
+      peakStatus: r.peakStatus, peakError: r.peakError, peakDocumentLink: r.peakDocumentLink,
       legacyBonus: r.legacyBonus ? { id: r.legacyBonus.id, period: r.legacyBonus.period } : null,
       originalPaymentNo: originals.find((o) => o.id === r.originalPaymentId)?.paymentNo ?? null,
       duplicateOverrideReason: r.duplicateOverrideReason,

@@ -42,6 +42,20 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
   const [periodReason, setPeriodReason] = useState("");
   const [step, setStep] = useState<"compose" | "review">("compose");
   const [done, setDone] = useState<RecordedPaymentResult | null>(null);
+  const [linked, setLinked] = useState<RecordedPaymentResult | null>(null);
+  // This guide's unpaid review incentives (company-borne): they may go in the same bank
+  // transfer, and are then recorded as their own payment beside the jobs' (owner policy 2026-10-06).
+  type ReviewDue = { id: string; reviewCount: number; workMonth: string; netAmount: number; wht: number; grossAmount: number; eWithholding: boolean };
+  const [reviewsDue, setReviewsDue] = useState<ReviewDue[]>([]);
+  const [pickedReviews, setPickedReviews] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/supplemental-payments?guideId=${encodeURIComponent(guideId)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { rows: [] }))
+      .then((d) => { if (live) setReviewsDue(((d.rows ?? []) as (ReviewDue & { whtBearer: string; payment: string })[]).filter((x) => x.whtBearer === "COMPANY_ONCE" && x.payment === "UNPAID")); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [guideId]);
   // The guide's advances that still hold a balance — what an advance settlement can clear.
   const [openAdvances, setOpenAdvances] = useState<OpenAdvance[] | null>(null);
   useEffect(() => {
@@ -60,16 +74,18 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
   }, [close]);
 
   const chosen = jobs.filter((j) => picked.has(key(j)));
+  const chosenReviews = reviewsDue.filter((x) => pickedReviews.has(x.id));
   const recon = useMemo(() => {
     const jobTotal = chosen.reduce((s, j) => s + toSatang(j.amount), 0);
     const adjustmentTotal = adjustments.reduce((s, a) => s + (Number.isFinite(Number(a.amount)) ? toSatang(Number(a.amount)) : 0), 0);
-    const expected = jobTotal + adjustmentTotal;
+    const reviewTotal = chosenReviews.reduce((s, x) => s + toSatang(x.netAmount), 0);
+    const expected = jobTotal + adjustmentTotal + reviewTotal;
     const transferred = Number.isFinite(Number(amount)) && amount.trim() !== "" ? toSatang(Number(amount)) : 0;
     return {
-      jobTotal: jobTotal / 100, adjustmentTotal: adjustmentTotal / 100, expectedTransfer: expected / 100,
+      jobTotal: jobTotal / 100, adjustmentTotal: adjustmentTotal / 100, expectedTransfer: expected / 100, supplementTotal: reviewTotal / 100,
       amountTransferred: transferred / 100, difference: (transferred - expected) / 100, balanced: transferred === expected && amount.trim() !== "",
     };
-  }, [chosen, adjustments, amount]);
+  }, [chosen, chosenReviews, adjustments, amount]);
 
   // The amount follows the jobs until someone types their own.
   useEffect(() => { if (!amountTouched) setAmount(recon.expectedTransfer ? recon.expectedTransfer.toFixed(2) : ""); }, [recon.expectedTransfer, amountTouched]);
@@ -89,6 +105,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
       noSlipReason: file ? null : noSlipReason.trim() || null,
       mismatchReason: recon.balanced ? null : mismatchReason.trim() || null,
       periodOverrideReason: crossMonth ? periodReason.trim() || null : null,
+      ...(chosenReviews.length ? { supplements: chosenReviews.map((x) => x.id) } : {}),
     };
     const fd = new FormData();
     fd.append("payload", JSON.stringify(payload));
@@ -96,7 +113,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
     const r = await fetch("/api/guide-payments", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (r.ok && d.ok) { setDone(d.payment as RecordedPaymentResult); return; }
+    if (r.ok && d.ok) { setDone(d.payment as RecordedPaymentResult); setLinked((d.linked ?? null) as RecordedPaymentResult | null); return; }
     setStep("compose");
     setReasons(Array.isArray(d.reasons) && d.reasons.length ? d.reasons : [`Not recorded (${r.status})`]);
   }
@@ -115,6 +132,12 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
             <span>Transfer date {done.paymentDate} · amount transferred <b className="num">{thb(done.amountTransferred)}</b></span>
             <span>{done.jobs.length} job{done.jobs.length === 1 ? "" : "s"} paid · accounting month {done.accountingPeriod} · status RECORDED</span>
           </div>
+          {linked && (
+            <div className="pay-recon ok js-linked-review-payment" role="status" style={{ display: "grid", gap: 4 }}>
+              <b className="num" style={{ fontSize: 16 }}>{linked.paymentNo}</b>
+              <span>Review incentive · {thb(linked.amountTransferred)} · its own payment, voucher, PEAK document and 50 ทวิ — from the same bank transfer</span>
+            </div>
+          )}
           <div>
             <span className="paydoc-label">Job Nos. paid</span>
             <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
@@ -142,6 +165,9 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
               <tbody>
                 {chosen.map((j) => (
                   <tr key={key(j)}><td className="num">{j.ref ?? "—"}</td><td>{dShort(j.date)}</td><td className="r num">{thb(j.amount)}</td><td className="r num">{thb(j.amount)}</td></tr>
+                ))}
+                {chosenReviews.map((x) => (
+                  <tr key={x.id}><td>Review incentive · {x.workMonth}</td><td>{x.reviewCount} reviews — separate payment</td><td className="r num">{thb(x.netAmount)}</td><td className="r num">{thb(x.netAmount)}</td></tr>
                 ))}
                 {adjustments.filter((a) => a.description.trim() && a.amount.trim()).map((a, i) => (
                   <tr key={`adj${i}`}><td>{ADJUSTMENT_LABEL[a.type]}</td><td>{a.description}</td><td className="r">—</td><td className="r num">{thb(Number(a.amount) || 0)}</td></tr>
@@ -208,6 +234,20 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
               </label>
             ))}
           </fieldset>
+
+          {reviewsDue.length > 0 && (
+            <fieldset disabled={busy} className="js-review-due" style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 4 }}>
+              <legend className="paydoc-label">Review incentives in the same transfer <small style={{ fontWeight: 400 }}>— recorded as their own payment</small></legend>
+              {reviewsDue.map((x) => (
+                <label key={x.id} className="paydoc-job">
+                  <input type="checkbox" checked={pickedReviews.has(x.id)} onChange={() => setPickedReviews((s) => { const n = new Set(s); n.has(x.id) ? n.delete(x.id) : n.add(x.id); return n; })} />
+                  <span style={{ minWidth: 64 }}>{x.workMonth}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>{x.reviewCount} review{x.reviewCount === 1 ? "" : "s"} <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>· tax {thb(x.wht)} borne by the company</span></span>
+                  <b className="num">{thb(x.netAmount)}</b>
+                </label>
+              ))}
+            </fieldset>
+          )}
 
           <div style={{ display: "grid", gap: 6 }}>
             <div className="paydoc-label">Adjustments</div>

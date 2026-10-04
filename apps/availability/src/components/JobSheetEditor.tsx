@@ -1765,7 +1765,10 @@ export default function JobSheetEditor() {
                   )}
                 </tbody>
               </table>
-              {canEdit && <button className="btn sm no-print" title="Reward for reviews — rate × number of reviews (e.g. 2 × ฿50)" onClick={() => up({ expenses: [...sheet.expenses, { description: "Review reward", price: 50, pax: 1 }] })}>★ + Review reward</button>}
+              {canEdit && <div className="no-print js-review-moved" style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>
+                Review incentives are recorded monthly per guide on <a href="/payments">Payments → Supplemental payments</a> — paid in full, the company bears the tax.
+                <br />ค่ารีวิวบันทึกรายเดือนต่อไกด์ที่ Payments → Supplemental payments · ไกด์ได้เต็มจำนวน บริษัทออกภาษีให้
+              </div>}
             </div>
           );
         })()}

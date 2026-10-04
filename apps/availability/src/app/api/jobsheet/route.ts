@@ -10,7 +10,7 @@ import { jobAdvanceView } from "@/lib/advances/job-view";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, newReviewRows, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
 import { approverNameOf } from "@/lib/jobsheet-approval";
 import { guestContactsFor } from "@/lib/guest-contacts";
@@ -510,6 +510,11 @@ export async function PUT(req: NextRequest) {
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
       return { kind: "stale" as const };
     }
+    // Review incentives are paid monthly per guide, apart from the job (owner policy
+    // 2026-10-06, lib/supplemental-payments/rules). Rows already on a sheet stay as they were
+    // paid; a new one is refused — it would pay the review with the fee and withhold on it.
+    const newReviews = newReviewRows((current?.expenses as Expense[]) ?? [], (d.expenses as Expense[]) ?? []);
+    if (newReviews) return { kind: "review-row" as const };
     const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet");
     if (merged.conflicts.length) return { kind: "conflicts" as const, conflicts: merged.conflicts };
     // Stamped AFTER the merge, so a carried stamp is seen and left alone. Stamping the
@@ -553,6 +558,10 @@ export async function PUT(req: NextRequest) {
   });
   if (written.kind === "stale") {
     return NextResponse.json({ error: "stale", reasons: ["This job sheet was saved by someone else while you had it open. Reload it and make the change again — saving now would quietly undo theirs."] }, { status: 409 });
+  }
+  if (written.kind === "review-row") {
+    const reason = "Review incentives are no longer added to a job sheet. Record them on Payments → Supplemental payments → Review incentive, by guide and the month they worked. · ค่ารีวิวบันทึกรายเดือนต่อไกด์ที่ Payments → Supplemental payments ไม่ใส่ในใบงานแล้ว";
+    return NextResponse.json({ error: "review-row", reasons: [reason], detail: reason }, { status: 409 });
   }
   if (written.kind === "advance-link") {
     return NextResponse.json({ error: "advance-link", reasons: written.problems, detail: written.problems.join("\n") }, { status: 409 });
