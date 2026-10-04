@@ -105,6 +105,8 @@ export type SupplementFacts = {
   grossAmount: number;
   wht: number;
   netAmount: number;
+  /** BELOW_THRESHOLD: a review incentive under ฿1,000 that nothing was withheld from. */
+  whtSource?: string | null;
   voided: boolean;
   /** FOLK-PMT-… of the ACTIVE payment already holding it, if any. */
   activePaymentNo: string | null;
@@ -191,6 +193,14 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     if (!(f.netAmount > 0)) { reasons.push(`${name} pays nothing`); continue; }
     const { voided: _v, activePaymentNo: _a, ...rest } = f;
     supplements.push(rest);
+  }
+
+  // Not withheld because it was under ฿1,000 on its own: paid with others in a transfer of
+  // ฿1,000 or more, the threshold no longer holds, so the transfer is refused.
+  const unwithheld = supplements.filter((x) => x.whtSource === "BELOW_THRESHOLD");
+  const grossTotal = supplements.reduce((t, x) => t + Math.round(x.grossAmount * 100), 0);
+  if (unwithheld.length && supplements.length > 1 && grossTotal >= 100_000) {
+    reasons.push(`These come to ฿${(grossTotal / 100).toLocaleString("en-US", { minimumFractionDigits: 2 })} in one transfer — ฿1,000 or more — but ${unwithheld.map((x) => `${x.label} ${x.grossAmount.toFixed(2)}`).join(", ")} had nothing withheld because it was under ฿1,000 on its own. Pay ${unwithheld.length > 1 ? "them" : "it"} in a separate transfer, or void and re-create ${unwithheld.length > 1 ? "them" : "it"} with withholding.`);
   }
 
   const seen = new Set<string>();

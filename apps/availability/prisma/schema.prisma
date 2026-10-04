@@ -1127,7 +1127,7 @@ model SupplementalPayment {
   accountingCategory      String // PeakAccountMapping.folkopsCategory — REVIEW_REWARD for a review incentive
   grossAmount             Decimal       @db.Decimal(12, 2) // what it costs Folkpaths
   whtPct                  Decimal       @db.Decimal(5, 2)
-  whtSource               String // CONFIGURED (SUPPLEMENTAL_WHT_PCT_<TYPE>) | ENTERED (by the operator — no rate configured)
+  whtSource               String // CONFIGURED (SUPPLEMENTAL_WHT_PCT_<TYPE>) | ENTERED (by the operator — no rate configured) | BELOW_THRESHOLD (review incentive under ฿1,000 on its own: 0%)
   wht                     Decimal       @db.Decimal(12, 2)
   netAmount               Decimal       @db.Decimal(12, 2) // what the guide receives
   reason                  String
