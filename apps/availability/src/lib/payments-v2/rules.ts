@@ -369,3 +369,63 @@ export function isHistoricalPayment(paymentDate: string | null | undefined, now 
   const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - HISTORICAL_PAYMENT_DAYS * 86400_000).toISOString().slice(0, 10);
   return paymentDate.slice(0, 10) < cutoff;
 }
+
+/**
+ * A payment recorded as ONE transfer when the bank actually sent it in several — a slip read
+ * as ฿1,000 that said ฿100, topped up later with ฿900. What was paid does not change: the
+ * jobs, their figures, the WHT and the PEAK document stay exactly as recorded. Only the
+ * evidence is corrected: the recorded transfer keeps its slip and reference at the amount it
+ * really carried, and the missing transfers are added with their own slips.
+ *
+ * The payment date (the date PEAK holds the payment on, and the WHT month) stays as recorded,
+ * so a missing transfer must be in that same month — one in another month changes the tax
+ * period, which is the accountant's call, not a correction.
+ */
+export const MIN_CORRECTION_REASON = 10;
+export type MissingTransferRequest = {
+  payment: { status: string; amountTransferred: number; paymentDate: string; bankRef: string | null; transfers: number };
+  /** What the transfer already on the payment really sent. */
+  recordedAmount: number;
+  added: { amount: number; date: string; bankRef?: string | null; hasSlip: boolean }[];
+  reason: string;
+  today: string;
+  /** The payment that already holds each added transfer's reference or slip, if any (same order). */
+  addedUsedBy?: (string | null)[];
+};
+export function checkMissingTransfers(req: MissingTransferRequest): string[] {
+  const reasons: string[] = [];
+  const p = req.payment;
+  if (p.status !== "RECORDED") return ["Only a recorded payment can have a transfer added — this one is reversed"];
+  if (p.transfers > 0) return [`This payment is already recorded as ${p.transfers} transfers`];
+  if ((req.reason ?? "").trim().length < MIN_CORRECTION_REASON) reasons.push(`Say what happened (at least ${MIN_CORRECTION_REASON} characters) — it is kept with the correction`);
+  const total = toSatang(p.amountTransferred);
+  const first = req.recordedAmount;
+  if (!Number.isFinite(first) || first <= 0 || !hasAtMostTwoDecimals(first)) reasons.push("Enter the amount the recorded slip really shows");
+  else if (toSatang(first) >= total) reasons.push(`The recorded slip must show less than the ${fromSatang(total).toFixed(2)} this payment records — otherwise nothing is missing`);
+  if (!req.added.length) reasons.push("Add the transfer that is missing");
+  if (req.added.length + 1 > MAX_TRANSFERS) reasons.push(`At most ${MAX_TRANSFERS} transfers in one payment`);
+  const month = p.paymentDate.slice(0, 7);
+  const refs = new Set<string>((p.bankRef ?? "").trim() ? [(p.bankRef ?? "").trim()] : []);
+  let sum = Number.isFinite(first) && hasAtMostTwoDecimals(first) ? toSatang(first) : 0;
+  for (const [i, t] of req.added.entries()) {
+    const n = `Transfer ${i + 2}`;
+    if (!Number.isFinite(t.amount) || t.amount <= 0 || !hasAtMostTwoDecimals(t.amount)) reasons.push(`${n}: enter the amount the bank sent, in baht and satang`);
+    else sum += toSatang(t.amount);
+    if (!DATE.test(t.date ?? "")) reasons.push(`${n}: enter the date the bank sent it`);
+    else {
+      if (t.date > req.today) reasons.push(`${n}: ${t.date} is in the future`);
+      if (t.date < p.paymentDate) reasons.push(`${n}: ${t.date} is before the recorded transfer on ${p.paymentDate}`);
+      else if (t.date.slice(0, 7) !== month) reasons.push(`${n}: ${t.date} is in another month — this payment and its WHT are in ${month}; ask the accountant how to book a transfer in a different month`);
+    }
+    if (!t.hasSlip) reasons.push(`${n}: attach its bank slip`);
+    const ref = (t.bankRef ?? "").trim();
+    if (ref) {
+      if (refs.has(ref)) reasons.push(`${n}: bank reference ${ref} is already on this payment — each transfer has its own`);
+      refs.add(ref);
+      if (ref.length > 120) reasons.push(`${n}: the bank reference is too long`);
+    }
+    if (req.addedUsedBy?.[i]) reasons.push(`${n}: its ${ref ? `bank reference ${ref}` : "slip"} is already recorded on ${req.addedUsedBy[i]}`);
+  }
+  if (!reasons.length && sum !== total) reasons.push(`The transfers add up to ${fromSatang(sum).toFixed(2)}, not the ${fromSatang(total).toFixed(2)} this payment records — this records the transfer that was missing; it does not change what was paid`);
+  return reasons;
+}

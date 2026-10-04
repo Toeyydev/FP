@@ -20,7 +20,7 @@ import { peakJobStatus } from "@/lib/peak-job-status";
 import { documentHoldsJobs } from "@/lib/peak-payment-document";
 import { applyDeductionsInTx, LedgerConflict, reverseDeductionsForPaymentInTx } from "@/lib/advances/service";
 import {
-  bangkokToday, checkPayment, paidAtFor, paymentNoFor, toSatang, ADJUSTMENT_TYPES,
+  bangkokToday, checkMissingTransfers, checkPayment, paidAtFor, paymentNoFor, toSatang, ADJUSTMENT_TYPES,
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
 import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
@@ -427,4 +427,82 @@ export async function reversePayment(prisma: PrismaClient, input: { paymentId: s
       detail: { paymentNo: p.paymentNo, reason, type: x.type, net: Number(x.netAmount), note: "unpaid again; the reversed payment stays on record" } });
   }
   return { ok: true, paymentNo: p.paymentNo, jobs: p.jobs.map((j) => j.jobNo), advancesReopened: restoredAdvances.map((a) => ({ advanceNo: a.advanceNo, amount: a.amountSatang / 100 })) };
+}
+
+export type MissingTransferInput = {
+  paymentId: string;
+  recordedAmount: number;
+  added: { amount: number; date: string; bankRef?: string | null; slip?: SlipRef | null }[];
+  reason: string;
+  actor: Actor;
+};
+export type MissingTransferResult =
+  | { ok: true; paymentNo: string; transfers: { seq: number; amount: number; date: string; bankRef: string | null; slipUrl: string | null }[] }
+  | { ok: false; status: number; reasons: string[] };
+
+async function missingTransferCheck(db: Db, input: MissingTransferInput) {
+  const p = await db.guidePayment.findUnique({ where: { id: input.paymentId }, include: { _count: { select: { transfers: true } } } });
+  if (!p) return { p: null, reasons: ["No such payment"] };
+  const addedUsedBy = await Promise.all(input.added.map(async (t) => {
+    const h = await evidenceHolder(db, t);
+    return h.byRef ?? h.bySlip;
+  }));
+  const reasons = checkMissingTransfers({
+    payment: { status: p.status, amountTransferred: Number(p.amountTransferred), paymentDate: p.paymentDate, bankRef: p.bankRef, transfers: p._count.transfers },
+    recordedAmount: input.recordedAmount,
+    added: input.added.map((t) => ({ amount: t.amount, date: t.date, bankRef: t.bankRef ?? null, hasSlip: !!(t.slip?.url || t.slip?.evidenceId) })),
+    reason: input.reason, today: bangkokToday(), addedUsedBy,
+  });
+  return { p, reasons };
+}
+
+/** The checks of addMissingTransfers with nothing written — run before any slip is filed. */
+export async function previewMissingTransfers(db: Db, input: MissingTransferInput): Promise<string[]> {
+  return (await missingTransferCheck(db, input)).reasons;
+}
+
+/**
+ * Record the transfers missing from a payment recorded as one (see checkMissingTransfers).
+ * The recorded transfer becomes transfer 1 at the amount its slip really shows, keeping its
+ * slip and reference; the missing ones follow. Jobs, figures, WHT, the payment date and the
+ * PEAK document are untouched — the total is the same, only the evidence is completed.
+ */
+export async function addMissingTransfers(prisma: PrismaClient, input: MissingTransferInput): Promise<MissingTransferResult> {
+  const reason = (input.reason ?? "").trim();
+  const { p, reasons } = await missingTransferCheck(prisma, input);
+  if (!p) return { ok: false, status: 404, reasons };
+  if (reasons.length) return { ok: false, status: 409, reasons };
+  const t = (s: string | null | undefined) => (s ?? "").trim() || null;
+  const parts = [
+    { seq: 1, amount: input.recordedAmount, transferDate: p.paymentDate, bankRef: t(p.bankRef), slipUrl: p.slipUrl, evidenceId: p.evidenceId },
+    ...input.added.map((a, i) => ({ seq: i + 2, amount: a.amount, transferDate: a.date, bankRef: t(a.bankRef), slipUrl: a.slip?.url ?? null, evidenceId: a.slip?.evidenceId ?? null })),
+  ];
+  const last = parts[parts.length - 1];
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Only while it is still recorded as one transfer — a second press, or a reversal in
+      // between, changes nothing.
+      const moved = await tx.guidePayment.updateMany({
+        where: { id: p.id, status: "RECORDED", transfers: { none: {} } },
+        // As recordPayment keeps a payment made in several transfers: the references live on
+        // the transfers, and the payment's own evidence is the last slip.
+        data: { bankRef: null, slipUrl: last.slipUrl, evidenceId: last.evidenceId, slipUploadedAt: new Date(), slipUploadedById: input.actor.actorId },
+      });
+      if (moved.count !== 1) throw new PaymentConflict(`${p.paymentNo} changed while its transfers were being added`);
+      await tx.guidePaymentTransfer.createMany({ data: parts.map((x) => ({ ...x, paymentId: p.id })) });
+    });
+  } catch (e) {
+    if (e instanceof PaymentConflict) return { ok: false, status: 409, reasons: [e.message] };
+    throw e;
+  }
+  await audit({
+    ...input.actor, action: "payment.transfers_added", entityType: "GuidePayment", entityId: p.id,
+    detail: {
+      paymentNo: p.paymentNo, guideId: p.guideId, reason,
+      note: "evidence corrected; jobs, figures, WHT, payment date and PEAK document unchanged",
+      before: { amountTransferred: Number(p.amountTransferred), transfers: 1, bankRef: p.bankRef, slip: !!p.slipUrl },
+      after: { amountTransferred: Number(p.amountTransferred), transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slip: !!x.slipUrl })) },
+    },
+  });
+  return { ok: true, paymentNo: p.paymentNo, transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slipUrl: x.slipUrl })) };
 }

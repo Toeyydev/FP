@@ -676,7 +676,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
         </div>
         <div className="nav"><a className="btn sm" href="/dashboard">Dashboard</a><a className="btn sm" href="/bookings">Bookings</a></div>
       </div>
-      {view === "advances" ? <AdvancesWorkflow canEdit={canEdit} isAdmin={isAdmin} role={role} userId={userId} /> : view === "guide-payments" ? <GuidePaymentsWorkflow canEdit={canEdit} /> : (<>
+      {view === "advances" ? <AdvancesWorkflow canEdit={canEdit} isAdmin={isAdmin} role={role} userId={userId} /> : view === "guide-payments" ? <GuidePaymentsWorkflow canEdit={canEdit} isAdmin={isAdmin} /> : (<>
 
       {/* Payment execution at a glance: who needs paying, how much, done or not.
           Pending payment carries the emphasis; paid-to-date is a footnote. */}

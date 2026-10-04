@@ -44,7 +44,7 @@ const dShort = (d: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString(
 const thisMonth = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
 const STATUS_LABEL: Record<string, string> = { unpaid: "Unpaid", paid: "Paid", "legacy-paid": "Paid · no payment record", "payroll-paid": "Paid by payroll" };
 
-export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean }) {
+export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { canEdit: boolean; isAdmin?: boolean }) {
   const [period, setPeriod] = useState(thisMonth());
   const [rows, setRows] = useState<Candidate[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
@@ -55,6 +55,8 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
   const [openPayment, setOpenPayment] = useState<Detail | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  // Correcting a payment recorded as one transfer that was really several (ADMIN only).
+  const [fix, setFix] = useState<{ recorded: string; amount: string; date: string; bankRef: string; file: File | null; reason: string; error: string } | null>(null);
 
   const load = useCallback(async (p: string) => {
     setLoading(true);
@@ -94,6 +96,29 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
   async function openDetail(id: string) {
     const r = await fetch(`/api/guide-payments/${id}`, { cache: "no-store" });
     if (r.ok) setOpenPayment(await r.json());
+  }
+
+  async function addMissingTransfer(d: Detail) {
+    if (!fix) return;
+    setBusy(true);
+    const form = new FormData();
+    form.set("payload", JSON.stringify({
+      recordedAmount: Number(fix.recorded), reason: fix.reason,
+      added: [{ amount: Number(fix.amount), date: fix.date, bankRef: fix.bankRef.trim() || null }],
+    }));
+    if (fix.file) form.set("file_0", fix.file);
+    const r = await fetch(`/api/guide-payments/${d.id}/transfers`, { method: "POST", body: form });
+    const j = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok || !j.ok) { setFix({ ...fix, error: (j.reasons ?? []).join("\n") || `Couldn't add the transfer (${r.status}).` }); return; }
+    setFix(null);
+    setMsg(
+      `${j.paymentNo} is now ${j.transfers.length} transfers: ${j.transfers.map((x: { amount: number; date: string }) => `${thb(x.amount)} on ${x.date}`).join(" + ")}.` +
+      (j.peak?.error ? ` PEAK: ${j.peak.error}.` : j.peak?.attached ? ` Slip attached to ${j.peak.documentNo} in PEAK.` : "") +
+      (j.notified ? " The guide was told the rest has arrived." : "")
+    );
+    await openDetail(d.id);
+    load(period);
   }
 
   async function reverse(p: PaymentRow) {
@@ -202,7 +227,7 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
       </section>
 
       {openPayment && (
-        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setOpenPayment(null); }}>
+        <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) { setFix(null); setOpenPayment(null); } }}>
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pmt-h" style={{ width: "min(720px, 100%)" }}>
             <h3 id="pmt-h">{openPayment.paymentNo}</h3>
             <div className="mctx">{paymentKindLabel(openPayment)} · {openPayment.guideId} · {openPayment.guide} · transfer date {openPayment.paymentDate} · accounting month {openPayment.accountingPeriod}</div>
@@ -284,13 +309,53 @@ export default function GuidePaymentsWorkflow({ canEdit }: { canEdit: boolean })
                 {openPayment.periodOverrideReason && <div><span className="paydoc-label">Cross-month reason</span><b>{openPayment.periodOverrideReason}</b></div>}
                 {openPayment.note && <div><span className="paydoc-label">Note</span><b>{openPayment.note}</b></div>}
               </div>
+              {fix && (
+                <div className="js-missing-transfer" style={{ display: "grid", gap: 10, borderTop: "1px solid var(--line)", paddingTop: 12 }} aria-label="Add the missing transfer">
+                  <b>Add the missing transfer · เพิ่มยอดโอนที่ขาด</b>
+                  <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+                    For a payment recorded as {thb(openPayment.reconciliation.amountTransferred)} in one transfer when the bank sent less, and the rest went later.
+                    Jobs, WHT, the payment date and the PEAK document stay exactly as they are — only the transfers and their slips are recorded.
+                  </span>
+                  <label style={{ display: "grid", gap: 4 }}><span className="paydoc-label">The recorded slip ({openPayment.bankRef ?? "no reference"}) really shows ฿</span>
+                    <input name="recorded" inputMode="decimal" value={fix.recorded} onChange={(e) => setFix({ ...fix, recorded: e.target.value, error: "" })} placeholder="฿ ยอดในสลิปเดิม" /></label>
+                  <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+                    <label style={{ display: "grid", gap: 4 }}><span className="paydoc-label">Missing transfer ฿</span>
+                      <input name="amount" inputMode="decimal" value={fix.amount} onChange={(e) => setFix({ ...fix, amount: e.target.value, error: "" })} placeholder="฿ ยอดโอน" /></label>
+                    <label style={{ display: "grid", gap: 4 }}><span className="paydoc-label">Date sent</span>
+                      <input name="date" type="date" value={fix.date} onChange={(e) => setFix({ ...fix, date: e.target.value, error: "" })} /></label>
+                    <label style={{ display: "grid", gap: 4 }}><span className="paydoc-label">Bank reference</span>
+                      <input name="bankRef" value={fix.bankRef} onChange={(e) => setFix({ ...fix, bankRef: e.target.value, error: "" })} /></label>
+                  </div>
+                  <label style={{ display: "grid", gap: 4 }}><span className="paydoc-label">Its bank slip</span>
+                    <input name="slip" type="file" accept="image/*,application/pdf" onChange={(e) => setFix({ ...fix, file: e.target.files?.[0] ?? null, error: "" })} /></label>
+                  <label style={{ display: "grid", gap: 4 }}><span className="paydoc-label">What happened</span>
+                    <textarea name="reason" rows={2} style={{ font: "inherit" }} value={fix.reason} onChange={(e) => setFix({ ...fix, reason: e.target.value, error: "" })} placeholder="e.g. first transfer was ฿100, not ฿1,000; the rest sent later" /></label>
+                  {(() => {
+                    const sum = (Number(fix.recorded) || 0) + (Number(fix.amount) || 0);
+                    const ok = Math.round(sum * 100) === Math.round(openPayment.reconciliation.amountTransferred * 100);
+                    return <div className={`pay-recon${ok ? " ok" : ""}`} role="status"><b className="num">{thb(Number(fix.recorded) || 0)} + {thb(Number(fix.amount) || 0)} = {thb(sum)}{ok ? " ✓" : ` · must be ${thb(openPayment.reconciliation.amountTransferred)}`}</b></div>;
+                  })()}
+                  {fix.error && <div className="pay-drift" role="alert" style={{ whiteSpace: "pre-line" }}>{fix.error}</div>}
+                </div>
+              )}
             </div>
             <div className="mfoot">
-              {canEdit && openPayment.status === "RECORDED" && (
+              {isAdmin && openPayment.status === "RECORDED" && !(openPayment.transfers ?? []).length && (
+                fix ? (
+                  <>
+                    <button className="btn ghost" disabled={busy} onClick={() => setFix(null)}>Cancel</button>
+                    <button className="btn primary js-add-transfer-submit" disabled={busy || !fix.file} onClick={() => addMissingTransfer(openPayment)}>{busy ? "Saving…" : "Add transfer"}</button>
+                  </>
+                ) : (
+                  <button className="btn ghost js-add-missing-transfer" disabled={busy}
+                    onClick={() => { setFix({ recorded: "", amount: "", date: "", bankRef: "", file: null, reason: "", error: "" }); setTimeout(() => document.querySelector(".js-missing-transfer")?.scrollIntoView({ block: "start" }), 50); }}>Add the missing transfer…</button>
+                )
+              )}
+              {canEdit && openPayment.status === "RECORDED" && !fix && (
                 <button className="btn ghost danger" disabled={busy} style={{ marginRight: "auto" }}
                   onClick={() => reverse(payments.find((p) => p.id === openPayment.id)!)}>Reverse payment…</button>
               )}
-              <button className="btn" onClick={() => setOpenPayment(null)}>Close</button>
+              <button className="btn" onClick={() => { setFix(null); setOpenPayment(null); }}>Close</button>
             </div>
           </div>
         </div>
