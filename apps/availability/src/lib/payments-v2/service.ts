@@ -109,7 +109,7 @@ export async function loadSupplementFacts(db: Db, ids: string[] | null | undefin
       id: r.id, guideId: r.guideId, type: r.type,
       label: SUPPLEMENTAL_LABEL[r.type as SupplementalType]?.en ?? r.type,
       accountingCategory: r.accountingCategory,
-      grossAmount: Number(r.grossAmount), wht: Number(r.wht), netAmount: Number(r.netAmount),
+      grossAmount: Number(r.grossAmount), wht: Number(r.wht), netAmount: Number(r.netAmount), whtSource: r.whtSource,
       voided: !!r.voidedAt,
       activePaymentNo: line ? pays.find((p) => p.id === line.paymentId)!.paymentNo : null,
     };

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
-import { SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
+import { belowReviewThreshold, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 
 // Supplemental payments: an amount left out of a payout that already went — a review
 // incentive, a bonus, an adjustment. Each is its own obligation and is paid by its own
@@ -24,7 +24,7 @@ type Options = {
   jobs?: { jobNo: string; date: string; slotIdx: number }[];
   payments?: { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; kind: string }[];
 };
-type Preview = { reasons: string[]; duplicates: string[]; figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: "CONFIGURED" | "ENTERED" } | null; accountingCategory: string | null };
+type Preview = { reasons: string[]; duplicates: string[]; figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: "CONFIGURED" | "BELOW_THRESHOLD" | "ENTERED" } | null; accountingCategory: string | null };
 /** Pre-fill for the Add dialog: from "Reward a review", or converting an earlier bonus (amount fixed). */
 export type SupplementalPrefill = { guideId: string; type: SupplementalType; date?: string; slotIdx?: number; reason?: string; legacyBonus?: { id: string; amount: number; period: string } };
 
@@ -113,7 +113,7 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
                   </td>
                   <td style={{ maxWidth: 220 }}>{r.reason}{r.duplicateOverrideReason && <small style={{ display: "block", color: "#b45309" }}>Created despite a match: {r.duplicateOverrideReason}</small>}</td>
                   <td className="r num">{thb(r.grossAmount)}</td>
-                  <td className="r num">{thb(r.wht)}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.whtPct}% · {r.whtSource === "CONFIGURED" ? "configured" : "entered"}</small></td>
+                  <td className="r num">{thb(r.wht)}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.whtPct}% · {r.whtSource === "CONFIGURED" ? "configured" : r.whtSource === "BELOW_THRESHOLD" ? "under ฿1,000" : "entered"}</small></td>
                   <td className="r num"><b>{thb(r.netAmount)}</b></td>
                   <td><span className={`chip-pay ${r.payment === "PAID" ? "recorded" : r.payment === "VOID" ? "reversed" : ""}`}>{STATE_LABEL[r.payment]}</span>{r.voidReason && <small style={{ display: "block", color: "var(--ink-soft)" }}>{r.voidReason}</small>}</td>
                   <td className="num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{r.paymentNo ? <>{r.paymentNo}<div style={{ color: "var(--ink-soft)" }}>{r.paidDate}</div></> : "—"}</td>
@@ -179,6 +179,7 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
   const chosen = useMemo(() => (opts?.jobs ?? []).filter((j) => jobs.includes(j.jobNo)), [opts, jobs]);
   // Withholding comes from configured accounting policy; with none, the operator enters it.
   const policy: Policy = opts?.whtPolicy?.[type] ?? { pct: null, invalid: false };
+  const underThreshold = Number(amount) > 0 && belowReviewThreshold(type, Number(amount));
   useEffect(() => { setPreview(null); setErr([]); }, [guideId, type, jobs, amount, whtPct, category, original, reason, note]);
 
   const body = () => ({
@@ -245,7 +246,9 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
           <label className="js-field" style={FIELD}>Amount (฿, before withholding)
             <input className="search" name="amount" type="number" min={0} step="0.01" value={amount} readOnly={!!legacy} onChange={(e) => setAmount(e.target.value)} />
           </label>
-          {policy.pct !== null ? (
+          {underThreshold ? (
+            <div style={{ fontSize: 12.5 }} className="js-wht-rule">Withholding tax <b>0%</b> — a review incentive under ฿1,000 paid on its own is not withheld (company policy). Paid together with other amounts of ฿1,000 or more, it would be.</div>
+          ) : policy.pct !== null ? (
             <div style={{ fontSize: 12.5 }} className="js-wht-rule">Withholding tax <b>{policy.pct}%</b> — configured accounting policy for a {SUPPLEMENTAL_LABEL[type].en.toLowerCase()}.</div>
           ) : (
             <label className="js-field js-wht-rule" style={FIELD}>Withholding tax % <small style={{ fontWeight: 400, color: "#b45309" }}>No rate is configured for a {SUPPLEMENTAL_LABEL[type].en.toLowerCase()}{policy.invalid ? " (the configured value is not a valid rate)" : ""} — enter the rate your accountant confirmed, 0 if none is withheld.</small>
@@ -287,7 +290,7 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
               <div><span className="paydoc-label">Related jobs</span><b>{jobs.join(", ") || "guide-level"}</b></div>
               {preview.figures && <>
                 <div><span className="paydoc-label">Amount</span><b>{thb(preview.figures.gross)}</b></div>
-                <div><span className="paydoc-label">WHT {preview.figures.whtPct}% · {preview.figures.whtSource === "CONFIGURED" ? "configured policy" : "entered"}</span><b>−{thb(preview.figures.wht)}</b></div>
+                <div><span className="paydoc-label">WHT {preview.figures.whtPct}% · {preview.figures.whtSource === "CONFIGURED" ? "configured policy" : preview.figures.whtSource === "BELOW_THRESHOLD" ? "not withheld — a review incentive under ฿1,000 paid on its own" : "entered"}</span><b>−{thb(preview.figures.wht)}</b></div>
                 <div><span className="paydoc-label">To transfer</span><b>{thb(preview.figures.net)}</b></div>
               </>}
               {preview.accountingCategory && <div><span className="paydoc-label">Account</span><b>{preview.accountingCategory}</b></div>}
@@ -307,7 +310,7 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
         <div className="mfoot">
           <button className="btn" onClick={onClose}>Cancel</button>
           {!preview
-            ? <button className="btn primary" disabled={busy || !guideId || !(Number(amount) > 0) || (policy.pct === null && whtPct.trim() === "")} onClick={review}>Review</button>
+            ? <button className="btn primary" disabled={busy || !guideId || !(Number(amount) > 0) || (policy.pct === null && !underThreshold && whtPct.trim() === "")} onClick={review}>Review</button>
             : <button className="btn primary js-create-supplemental" disabled={busy || blocking.length > 0} onClick={create}>Create as unpaid</button>}
         </div>
       </div>

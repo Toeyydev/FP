@@ -21,27 +21,52 @@ const facts = (over: Partial<CreateFacts> = {}): CreateFacts => ({
   existing: [],
   ...over,
 });
-const review = (over: Partial<CreateInput> = {}): CreateInput => ({ guideId: "G-901", type: "REVIEW_INCENTIVE", grossAmount: 200, reason: "5★ review from a guest", jobs: [JOB], ...over });
+const review = (over: Partial<CreateInput> = {}): CreateInput => ({ guideId: "G-901", type: "REVIEW_INCENTIVE", grossAmount: 1200, reason: "5★ review from a guest", jobs: [JOB], ...over });
 const NOW = new Date("2099-09-05T03:00:00Z");
 
+describe("a review incentive under ฿1,000 paid on its own (owner policy 2026-10-04)", () => {
+  it("is not withheld, whatever is configured or entered, and says why", () => {
+    for (const f of [facts(), facts({ configuredWhtPct: null })]) {
+      expect(checkCreate(review({ grossAmount: 200 }), f, NOW).figures).toEqual({ gross: 200, wht: 0, net: 200, whtPct: 0, whtSource: "BELOW_THRESHOLD" });
+      expect(checkCreate(review({ grossAmount: 999.99, whtPct: 3 }), f, NOW).figures).toMatchObject({ wht: 0, whtSource: "BELOW_THRESHOLD" });
+    }
+    expect(checkCreate(review({ grossAmount: 200 }), facts({ configuredWhtPct: null }), NOW).reasons).toEqual([]);
+  });
+  it("at ฿1,000 or more the usual rule applies", () => {
+    expect(checkCreate(review({ grossAmount: 1000 }), facts(), NOW).figures).toEqual({ gross: 1000, wht: 30, net: 970, whtPct: 3, whtSource: "CONFIGURED" });
+  });
+  it("only a review incentive: a ฿200 bonus follows its configured rate", () => {
+    const bonus = checkCreate({ ...review({ grossAmount: 200 }), type: "BONUS", accountingCategory: "GUIDE_FEE" }, facts(), NOW);
+    expect(bonus.figures).toMatchObject({ wht: 6, whtSource: "CONFIGURED" });
+  });
+  it("paid with others in one transfer of ฿1,000 or more, the transfer is refused; on its own it is paid", () => {
+    const sup = (id: string, gross: number, whtSource: string): SupplementFacts => ({ id, guideId: "G-901", type: "REVIEW_INCENTIVE", label: "Review incentive", accountingCategory: "REVIEW_REWARD", grossAmount: gross, wht: 0, netAmount: gross, whtSource, voided: false, activePaymentNo: null });
+    const req = (ids: string[], amount: number): PaymentRequest => ({ guideId: "G-901", jobs: [], supplements: ids, paymentDate: "2099-09-05", amountTransferred: amount, source: "MANUAL", noSlipReason: "cash at the office (example)" } as PaymentRequest);
+    const ctx = { today: "2099-09-06", supplements: [sup("a", 600, "BELOW_THRESHOLD"), sup("b", 500, "BELOW_THRESHOLD"), sup("c", 300, "BELOW_THRESHOLD")] };
+    expect(checkPayment(req(["a", "b"], 1100), [], ctx).reasons.join(" ")).toMatch(/1,100\.00 in one transfer/);
+    expect(checkPayment(req(["b", "c"], 800), [], ctx).reasons).toEqual([]);
+    expect(checkPayment(req(["a"], 600), [], ctx).reasons).toEqual([]);
+  });
+});
+
 describe("a review incentive", () => {
-  it("books to REVIEW_REWARD; with 3% configured: 200 → 6 tax → 194 to transfer, recorded as CONFIGURED", () => {
+  it("books to REVIEW_REWARD; with 3% configured: 1,200 → 36 tax → 1,164 to transfer, recorded as CONFIGURED", () => {
     const c = checkCreate(review(), facts(), NOW);
     expect(c.reasons).toEqual([]);
     expect(c.accountingCategory).toBe("REVIEW_REWARD");
-    expect(c.figures).toEqual({ gross: 200, wht: 6, net: 194, whtPct: 3, whtSource: "CONFIGURED" });
+    expect(c.figures).toEqual({ gross: 1200, wht: 36, net: 1164, whtPct: 3, whtSource: "CONFIGURED" });
   });
   it("a configured rate is the rate — whatever the form sends", () => {
     expect(checkCreate(review({ whtPct: 0 }), facts(), NOW).figures?.whtPct).toBe(3);
   });
   it("a configured zero withholds nothing", () => {
-    expect(checkCreate(review(), facts({ configuredWhtPct: 0 }), NOW).figures).toEqual({ gross: 200, wht: 0, net: 200, whtPct: 0, whtSource: "CONFIGURED" });
+    expect(checkCreate(review(), facts({ configuredWhtPct: 0 }), NOW).figures).toEqual({ gross: 1200, wht: 0, net: 1200, whtPct: 0, whtSource: "CONFIGURED" });
   });
   it("with NO rate configured, nothing is assumed — not 3%, not the guide fee's rate: the operator must state it", () => {
     const unconfigured = facts({ configuredWhtPct: null });
     expect(checkCreate(review(), unconfigured, NOW).reasons.join(" ")).toMatch(/No withholding rate is configured for a review incentive/);
     expect(checkCreate(review(), unconfigured, NOW).figures).toBeNull();
-    expect(checkCreate(review({ whtPct: 5 }), unconfigured, NOW).figures).toEqual({ gross: 200, wht: 10, net: 190, whtPct: 5, whtSource: "ENTERED" });
+    expect(checkCreate(review({ whtPct: 5 }), unconfigured, NOW).figures).toEqual({ gross: 1200, wht: 60, net: 1140, whtPct: 5, whtSource: "ENTERED" });
     expect(checkCreate(review({ whtPct: 0 }), unconfigured, NOW).figures).toMatchObject({ wht: 0, whtSource: "ENTERED" });
   });
   it("guide-level, with no job, is allowed", () => {
@@ -65,7 +90,7 @@ describe("configured withholding policy", () => {
 });
 
 describe("bonus, adjustment and other", () => {
-  const bonus = (over: Partial<CreateInput> = {}) => review({ type: "BONUS", whtPct: 3, accountingCategory: "GUIDE_FEE", jobs: [], ...over });
+  const bonus = (over: Partial<CreateInput> = {}) => review({ type: "BONUS", grossAmount: 200, whtPct: 3, accountingCategory: "GUIDE_FEE", jobs: [], ...over });
   const none = facts({ configuredWhtPct: null });
   it("take the rate stated when none is configured", () => {
     expect(checkCreate(bonus(), none, NOW).figures).toEqual({ gross: 200, wht: 6, net: 194, whtPct: 3, whtSource: "ENTERED" });
@@ -96,7 +121,7 @@ describe("what is refused", () => {
 });
 
 describe("duplicates are named, and refused unless someone says why", () => {
-  const existing = (over: Partial<CreateFacts["existing"][number]> = {}) => ({ id: "s1", jobs: [JOB], grossAmount: 200, originalPaymentId: null, paidBy: "FOLK-PMT-209909-004", createdAt: new Date("2099-09-01T03:00:00Z"), ...over });
+  const existing = (over: Partial<CreateFacts["existing"][number]> = {}) => ({ id: "s1", jobs: [JOB], grossAmount: 1200, originalPaymentId: null, paidBy: "FOLK-PMT-209909-004", createdAt: new Date("2099-09-01T03:00:00Z"), ...over });
   it("the same review incentive for the same job", () => {
     const c = checkCreate(review(), facts({ existing: [existing()] }), NOW);
     expect(c.duplicates).toEqual(["Review incentive for FOLK-BKK-20990810-01 is already recorded in payment FOLK-PMT-209909-004"]);

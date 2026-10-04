@@ -1,13 +1,13 @@
 // Supplemental guide payments in a real browser, against a real server and database.
 //
 // Proves, on the Payments page itself:
-//   1. Add Supplemental Payment → review incentive for a paid job, ฿200 → the review shows
-//      ฿6 withheld and ฿194 to transfer, booked to REVIEW_REWARD; Create makes it UNPAID
+//   1. Add Supplemental Payment → review incentive for a paid job, ฿1,200 → the review shows
+//      ฿36 withheld and ฿1,164 to transfer, booked to REVIEW_REWARD; Create makes it UNPAID
 //   2. the same again is shown as a possible duplicate, and cannot be created without a reason
-//   3. Record payment makes a NEW transfer of ฿194 — the original payout is untouched
+//   3. Record payment makes a NEW transfer of ฿1,164 — the original payout is untouched
 //   4. a PEAK reference turns "Accounting pending" into "Reconciled"
 //   5. Guide Payments history lists the original as "Guide payment" for its own amount and
-//      the new one as "Supplemental · Review incentive" for ฿194
+//      the new one as "Supplemental · Review incentive" for ฿1,164
 //   6. a guide cannot read supplemental payments, but sees the paid one in their own My Pay
 //   7. the withholding rate shown comes from configured policy; with none, it must be entered
 //   8. an earlier unpaid bonus converts into a supplemental payment, once, from its row
@@ -135,6 +135,7 @@ async function clickText(page, scope, label) {
   if (!ok) throw new Error(`no enabled "${label}" in ${scope}`);
   await pause(400);
 }
+let underThresholdRule = "";
 async function fillReview(page, original) {
   await click(page, ".js-add-supplemental");
   await page.waitForSelector(DLG);
@@ -142,7 +143,11 @@ async function fillReview(page, original) {
   await page.waitForFunction((dlg, job) => [...document.querySelectorAll(`${dlg} label`)].some((l) => l.textContent.includes(job)), { timeout: 15000 }, DLG, JOB.jobNo);
   await page.evaluate((dlg, job) => { [...document.querySelectorAll(`${dlg} label`)].find((l) => l.textContent.includes(job)).querySelector("input").click(); }, DLG, JOB.jobNo);
   await pause(250);
-  await setField(page, DLG, "amount", "200");
+  // Under ฿1,000 on its own a review incentive is not withheld (owner policy 2026-10-04).
+  await setField(page, DLG, "amount", "300");
+  await pause(200);
+  underThresholdRule = await text(page, ".js-wht-rule");
+  await setField(page, DLG, "amount", "1200");
   if (original) await setField(page, DLG, "original", original);
   await setField(page, DLG, "reason", "5★ review from a guest (example)");
   await clickText(page, DLG, "Review");
@@ -167,14 +172,15 @@ try {
   // 1
   await fillReview(page, data.originalId);
   const rule = await text(page, ".js-wht-rule");
+  check("a review incentive under ฿1,000 shows 0% — not withheld on its own", /0%/.test(underThresholdRule) && /under ฿1,000/.test(underThresholdRule), underThresholdRule);
   check("the withholding rate shown is the configured policy", /3%/.test(rule) && /configured accounting policy/.test(rule), rule);
   const rev = await text(page, ".js-supplemental-review");
-  check("the review shows ฿200, ฿6 withheld, ฿194 to transfer, booked to REVIEW_REWARD", /฿200\.00/.test(rev) && /−฿6\.00/.test(rev) && /฿194\.00/.test(rev) && /REVIEW_REWARD/.test(rev) && /FOLK-BKK-20250710-01/.test(rev), rev.replace(/\s+/g, " ").slice(0, 200));
+  check("the review shows ฿1,200, ฿36 withheld, ฿1,164 to transfer, booked to REVIEW_REWARD", /฿1,200\.00/.test(rev) && /−฿36\.00/.test(rev) && /฿1,164\.00/.test(rev) && /REVIEW_REWARD/.test(rev) && /FOLK-BKK-20250710-01/.test(rev), rev.replace(/\s+/g, " ").slice(0, 200));
   if (SHOTS) await (await page.$(DLG)).screenshot({ path: join(SHOTS, "add-review.png") });
   await click(page, ".js-create-supplemental");
   await page.waitForFunction(() => !document.querySelector(".js-add-supplemental-dialog"), { timeout: 15000 }).catch(() => {});
   let row = await text(page, ".js-supplemental-table tbody tr");
-  check("Create makes it unpaid, linked to the payout it was left out of", /Unpaid/.test(row) && /omitted from FOLK-PMT-202507-001/.test(row) && /฿194\.00/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
+  check("Create makes it unpaid, linked to the payout it was left out of", /Unpaid/.test(row) && /omitted from FOLK-PMT-202507-001/.test(row) && /฿1,164\.00/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
 
   // 2
   await fillReview(page, null);
@@ -195,7 +201,7 @@ try {
   await pause(800);
   row = await text(page, ".js-supplemental-table tbody tr");
   const supp = await prisma.guidePayment.findFirst({ where: { kind: "SUPPLEMENTAL" } });
-  check("Record payment makes a new transfer of ฿194", !!supp && Number(supp.amountTransferred) === 194 && supp.paymentNo !== ORIGINAL_NO && /Paid/.test(row) && row.includes(supp.paymentNo) && /Accounting pending/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
+  check("Record payment makes a new transfer of ฿1,164", !!supp && Number(supp.amountTransferred) === 1164 && supp.paymentNo !== ORIGINAL_NO && /Paid/.test(row) && row.includes(supp.paymentNo) && /Accounting pending/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
   check("the original payout is untouched", JSON.stringify(await prisma.guidePayment.findUnique({ where: { id: data.originalId }, include: { jobs: true } })) === before);
 
   const banner = await text(page, ".js-accounting-pending");
@@ -241,7 +247,7 @@ try {
   const origLine = hist.find((t) => t.trim().startsWith(ORIGINAL_NO)) ?? "";
   const suppLine = hist.find((t) => supp && t.trim().startsWith(supp.paymentNo)) ?? "";
   check("history: the original is a guide payment for its own amount", /Guide payment/.test(origLine) && /฿1,477\.00/.test(origLine), origLine);
-  check("history: the new one is Supplemental · Review incentive for ฿194", /Supplemental · Review incentive/.test(suppLine) && /฿194\.00/.test(suppLine), suppLine);
+  check("history: the new one is Supplemental · Review incentive for ฿1,164", /Supplemental · Review incentive/.test(suppLine) && /฿1,164\.00/.test(suppLine), suppLine);
   check("the Payments page ran without a crash", errors.length === 0, errors.join(" | ").slice(0, 200));
 
   // 6
@@ -258,7 +264,7 @@ try {
   await gp.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Show all history").click());
   await gp.waitForSelector(".js-my-additional", { timeout: 15000 }).catch(() => {});
   const mine = await text(gp, ".js-my-additional");
-  check("the guide sees the paid supplemental payment in My Pay, apart from the tours", /Review incentive/.test(mine) && /฿194/.test(mine) && supp && mine.includes(supp.paymentNo), mine.replace(/\s+/g, " ").slice(0, 160));
+  check("the guide sees the paid supplemental payment in My Pay, apart from the tours", /Review incentive/.test(mine) && /฿1,164/.test(mine) && supp && mine.includes(supp.paymentNo), mine.replace(/\s+/g, " ").slice(0, 160));
   if (SHOTS) await gp.screenshot({ path: join(SHOTS, "my-pay-additional.png") });
   await gp.close();
   await page.close();

@@ -49,10 +49,10 @@ const list = async () => (await call(await LIST(json(`/api/supplemental-payments
 const patch = async (id: string, body: Record<string, unknown>) => call(await PATCH(json(`/api/supplemental-payments/${id}`, "PATCH", body), { params: Promise.resolve({ id }) }));
 async function pay(supplements: string[], over: Record<string, unknown> = {}) {
   const fd = new FormData();
-  fd.append("payload", JSON.stringify({ guideId: G, jobs: [], supplements, paymentDate: "2025-07-02", amountTransferred: 194, noSlipReason: "paid in cash at the office (example)", ...over }));
+  fd.append("payload", JSON.stringify({ guideId: G, jobs: [], supplements, paymentDate: "2025-07-02", amountTransferred: 1164, noSlipReason: "paid in cash at the office (example)", ...over }));
   return call(await RECORD(new NextRequest("http://test.local/api/guide-payments", { method: "POST", body: fd })));
 }
-const review = (over: Record<string, unknown> = {}) => ({ guideId: G, type: "REVIEW_INCENTIVE", grossAmount: 200, reason: "5★ review from a guest (example)", jobs: [JOB1], ...over });
+const review = (over: Record<string, unknown> = {}) => ({ guideId: G, type: "REVIEW_INCENTIVE", grossAmount: 1200, reason: "5★ review from a guest (example)", jobs: [JOB1], ...over });
 
 let original: { id: string; paymentNo: string };
 const snapshotOriginal = async () => {
@@ -84,12 +84,12 @@ beforeEach(async () => {
 });
 
 describe("a review incentive left out of a payout that already went", () => {
-  it("1–2 · creates a NEW unpaid obligation of ฿200 (฿194 after 3% WHT); the original payment is unchanged", async () => {
+  it("1–2 · creates a NEW unpaid obligation of ฿1,200 (฿1,164 after 3% WHT); the original payment is unchanged", async () => {
     const before = await snapshotOriginal();
     const c = await create(review({ originalPaymentId: original.id, requestKey: "k-1" }));
     expect(c.status, JSON.stringify(c.body)).toBe(200);
     const [row] = await list();
-    expect(row).toMatchObject({ type: "REVIEW_INCENTIVE", grossAmount: 200, whtPct: 3, wht: 6, netAmount: 194, accountingCategory: "REVIEW_REWARD", payment: "UNPAID", accounting: "NOT_PAID", originalPaymentNo: original.paymentNo });
+    expect(row).toMatchObject({ type: "REVIEW_INCENTIVE", grossAmount: 1200, whtPct: 3, wht: 36, netAmount: 1164, accountingCategory: "REVIEW_REWARD", payment: "UNPAID", accounting: "NOT_PAID", originalPaymentNo: original.paymentNo });
     expect(await snapshotOriginal()).toBe(before);
     expect(await prisma.auditLog.count({ where: { action: "supplemental.created", entityId: c.body.id } })).toBe(1);
   });
@@ -102,20 +102,20 @@ describe("a review incentive left out of a payout that already went", () => {
     const { body } = await create(review({ originalPaymentId: original.id }));
     const paid = await pay([body.id]);
     expect(paid.status, JSON.stringify(paid.body)).toBe(200);
-    expect(paid.body.payment.amountTransferred).toBe(194);
+    expect(paid.body.payment.amountTransferred).toBe(1164);
     expect(paid.body.payment.paymentNo).not.toBe(original.paymentNo);
     expect(await snapshotOriginal()).toBe(before);
 
     const h = await call(await PAYMENTS(json(`/api/guide-payments?guideId=${G}&period=2025-07`, "GET")));
     const supp = h.body.payments.find((p: { paymentNo: string }) => p.paymentNo === paid.body.payment.paymentNo);
-    expect(supp).toMatchObject({ kind: "SUPPLEMENTAL", amountTransferred: 194, jobTotal: 0, supplementTotal: 194, jobs: [] });
-    expect(supp.supplements).toEqual([expect.objectContaining({ type: "REVIEW_INCENTIVE", grossAmount: 200, wht: 6, netAmount: 194 })]);
+    expect(supp).toMatchObject({ kind: "SUPPLEMENTAL", amountTransferred: 1164, jobTotal: 0, supplementTotal: 1164, jobs: [] });
+    expect(supp.supplements).toEqual([expect.objectContaining({ type: "REVIEW_INCENTIVE", grossAmount: 1200, wht: 36, netAmount: 1164 })]);
     const h6 = await call(await PAYMENTS(json(`/api/guide-payments?guideId=${G}&period=2025-06`, "GET")));
     const orig = h6.body.payments.find((p: { paymentNo: string }) => p.paymentNo === original.paymentNo);
     expect(orig).toMatchObject({ kind: "REGULAR", supplementTotal: 0, amountTransferred: jobFigures(EXPENSES as Expense[], FEE).payable });
 
     const detail = await call(await PAYMENT(json(`/api/guide-payments/${supp.id}`, "GET"), { params: Promise.resolve({ id: supp.id }) }));
-    expect(detail.body).toMatchObject({ kind: "SUPPLEMENTAL", reconciliation: { supplementTotal: 194, expectedTransfer: 194, balanced: true } });
+    expect(detail.body).toMatchObject({ kind: "SUPPLEMENTAL", reconciliation: { supplementTotal: 1164, expectedTransfer: 1164, balanced: true } });
     expect(detail.body.supplements[0]).toMatchObject({ originalPaymentNo: original.paymentNo, jobs: [JOB1.jobNo] });
     expect(notify.notifyGuide).toHaveBeenCalledTimes(1);
     expect(notify.sendPaymentNotice).not.toHaveBeenCalled();
@@ -162,15 +162,25 @@ describe("duplicates", () => {
 });
 
 describe("shapes", () => {
-  it("7 · several jobs in one supplemental payment", async () => {
+  it("7 · several jobs in one supplemental payment — under ฿1,000 on its own, nothing is withheld (owner policy 2026-10-04)", async () => {
     const c = await create(review({ jobs: [JOB1, JOB2], grossAmount: 300 }));
     expect(c.status).toBe(200);
-    expect((await list())[0]).toMatchObject({ jobs: [JOB1, JOB2], grossAmount: 300, wht: 9, netAmount: 291 });
+    expect((await list())[0]).toMatchObject({ jobs: [JOB1, JOB2], grossAmount: 300, whtPct: 0, wht: 0, netAmount: 300, whtSource: "BELOW_THRESHOLD" });
+  });
+  it("two review incentives under ฿1,000, withheld from neither, are refused in one transfer of ฿1,000 or more", async () => {
+    const a = await create(review({ jobs: [JOB1], grossAmount: 600 }));
+    const b = await create(review({ jobs: [JOB2], grossAmount: 500 }));
+    expect([a.status, b.status]).toEqual([200, 200]);
+    const both = await pay([a.body.id, b.body.id], { amountTransferred: 1100 });
+    expect(both.status).toBe(409);
+    expect(JSON.stringify(both.body)).toMatch(/1,100\.00 in one transfer/);
+    const one = await pay([a.body.id], { amountTransferred: 600 });
+    expect(one.status, JSON.stringify(one.body)).toBe(200);
   });
   it("8 · a guide-level incentive with no job", async () => {
     const c = await create(review({ jobs: [] }));
     expect(c.status).toBe(200);
-    expect((await list())[0]).toMatchObject({ jobs: [], whtPct: 3, netAmount: 194 });
+    expect((await list())[0]).toMatchObject({ jobs: [], whtPct: 3, netAmount: 1164 });
   });
   it("a bonus takes the rate and account given", async () => {
     const c = await create({ guideId: G, type: "BONUS", grossAmount: 500, whtPct: 0, accountingCategory: "GUIDE_FEE", reason: "busy-season bonus (example)", jobs: [] });
@@ -226,7 +236,7 @@ describe("accounting state, reversal, and what cannot be changed", () => {
 
   it("a supplemental payment is never paid together with jobs", async () => {
     const { body } = await create(review());
-    const p = await pay([body.id], { jobs: [JOB2], amountTransferred: 194 + jobFigures(EXPENSES as Expense[], FEE).payable });
+    const p = await pay([body.id], { jobs: [JOB2], amountTransferred: 1164 + jobFigures(EXPENSES as Expense[], FEE).payable });
     expect(p.status).toBe(409);
     expect(p.body.reasons.join(" ")).toMatch(/paid on its own/);
   });
@@ -276,7 +286,7 @@ describe("17 · replay and idempotency", () => {
     expect(again.status).toBe(409);
     expect(again.body.reasons.join(" ")).toMatch(/already paid by FOLK-PMT-/);
     const line = await prisma.guidePaymentSupplementLine.findFirstOrThrow({});
-    await expect(prisma.guidePaymentSupplementLine.create({ data: { paymentId: line.paymentId, supplementalId: body.id, guideId: G, type: "REVIEW_INCENTIVE", accountingCategory: "REVIEW_REWARD", grossAmount: 200, wht: 6, netAmount: 194 } })).rejects.toThrow();
+    await expect(prisma.guidePaymentSupplementLine.create({ data: { paymentId: line.paymentId, supplementalId: body.id, guideId: G, type: "REVIEW_INCENTIVE", accountingCategory: "REVIEW_REWARD", grossAmount: 1200, wht: 36, netAmount: 1164 } })).rejects.toThrow();
   });
 });
 
@@ -298,7 +308,7 @@ describe("withholding comes from configured policy, never assumed", () => {
     const ok = await create(review({ whtPct: 0 }));
     expect(ok.status).toBe(200);
     const row = await prisma.supplementalPayment.findUniqueOrThrow({ where: { id: ok.body.id } });
-    expect({ whtSource: row.whtSource, whtPct: Number(row.whtPct), wht: Number(row.wht), net: Number(row.netAmount) }).toEqual({ whtSource: "ENTERED", whtPct: 0, wht: 0, net: 200 });
+    expect({ whtSource: row.whtSource, whtPct: Number(row.whtPct), wht: Number(row.wht), net: Number(row.netAmount) }).toEqual({ whtSource: "ENTERED", whtPct: 0, wht: 0, net: 1200 });
   });
   it("a configured rate is recorded as CONFIGURED", async () => {
     const { body } = await create(review());
@@ -319,7 +329,7 @@ describe("the original payment is immutable", () => {
     expect((await prisma.guidePaymentJob.findFirstOrThrow({ where: { jobNo: JOB1.jobNo } })).paymentId).toBe(original.id);
   });
   it("the database refuses a supplemental total on a job payment — its history can never read larger than its transfer", async () => {
-    await expect(prisma.guidePayment.update({ where: { id: original.id }, data: { supplementTotal: 194 } })).rejects.toThrow();
+    await expect(prisma.guidePayment.update({ where: { id: original.id }, data: { supplementTotal: 1164 } })).rejects.toThrow();
   });
 });
 
@@ -331,7 +341,7 @@ describe("migration compatibility", () => {
   });
   it("money that does not add up is refused by the database itself", async () => {
     await expect(prisma.supplementalPayment.create({ data: { guideId: G, type: "BONUS", accountingCategory: "GUIDE_FEE", grossAmount: 200, whtPct: 3, whtSource: "ENTERED", wht: 6, netAmount: 195, reason: "bad maths (example)" } })).rejects.toThrow();
-    await expect(prisma.guidePayment.create({ data: { paymentNo: "FOLK-PMT-202506-098", guideId: G, accountingPeriod: "2025-06", paymentDate: "2025-06-20", jobTotal: 100, adjustmentTotal: 0, amountTransferred: 294, kind: "SUPPLEMENTAL", supplementTotal: 194 } })).rejects.toThrow();
+    await expect(prisma.guidePayment.create({ data: { paymentNo: "FOLK-PMT-202506-098", guideId: G, accountingPeriod: "2025-06", paymentDate: "2025-06-20", jobTotal: 100, adjustmentTotal: 0, amountTransferred: 294, kind: "SUPPLEMENTAL", supplementTotal: 1164 } })).rejects.toThrow();
   });
 });
 
@@ -386,7 +396,7 @@ describe("PEAK reference", () => {
   it("supplemental payments paid by ONE transfer may share its document; ones paid separately may not", async () => {
     const a = await create(review({ jobs: [JOB1] }));
     const b = await create(review({ jobs: [JOB2] }));
-    const both = await pay([a.body.id, b.body.id], { amountTransferred: 388 });
+    const both = await pay([a.body.id, b.body.id], { amountTransferred: 2328 });
     expect(both.status, JSON.stringify(both.body)).toBe(200);
     expect((await patch(a.body.id, { action: "peakRef", peakRef: "EXP-2025070050" })).status).toBe(200);
     expect((await patch(b.body.id, { action: "peakRef", peakRef: "EXP-2025070050" })).status).toBe(200);
@@ -400,9 +410,9 @@ describe("accounting pending stays in sight", () => {
   it("the month view counts unpaid and not-in-PEAK supplemental payments until each is settled", async () => {
     const { body } = await create(review());
     const month = async () => (await call(await MONTH(json("/api/payments?period=2025-07", "GET")))).body.supplemental;
-    expect(await month()).toMatchObject({ unpaid: { count: 1, total: 194 }, accountingPending: { count: 0 } });
+    expect(await month()).toMatchObject({ unpaid: { count: 1, total: 1164 }, accountingPending: { count: 0 } });
     await pay([body.id]);
-    expect(await month()).toMatchObject({ unpaid: { count: 0 }, accountingPending: { count: 1, total: 194 }, paidInPeriod: { count: 1, total: 194 } });
+    expect(await month()).toMatchObject({ unpaid: { count: 0 }, accountingPending: { count: 1, total: 1164 }, paidInPeriod: { count: 1, total: 1164 } });
     await patch(body.id, { action: "peakRef", peakRef: "EXP-2025070061" });
     expect(await month()).toMatchObject({ accountingPending: { count: 0 } });
   });
@@ -426,7 +436,7 @@ describe("the guide sees it", () => {
     expect((await guidePay(G, { all: true })).additional).toEqual([]);
     const paid = await pay([body.id]);
     const mine = await guidePay(G, { all: true });
-    expect(mine.additional).toEqual([expect.objectContaining({ paymentNo: paid.body.payment.paymentNo, label: "Review incentive", gross: 200, wht: 6, net: 194, jobs: [JOB1.jobNo] })]);
+    expect(mine.additional).toEqual([expect.objectContaining({ paymentNo: paid.body.payment.paymentNo, label: "Review incentive", gross: 1200, wht: 36, net: 1164, jobs: [JOB1.jobNo] })]);
   });
 });
 

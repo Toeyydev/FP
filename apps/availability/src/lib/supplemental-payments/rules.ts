@@ -39,6 +39,17 @@ export const MIN_REASON = 5;
 export const normalizePeakRef = (ref: string | null | undefined) => (ref ?? "").trim().toUpperCase().replace(/^EXP-(\d{6})-/, "EXP-$1");
 export const MIN_OVERRIDE_REASON = 10;
 
+/**
+ * Owner policy (2026-10-04): a review incentive paid on its own for LESS than ฿1,000 is not
+ * withheld — the Revenue Department does not require withholding on a service payment under
+ * ฿1,000 per payment. Paid with other money in one transfer of ฿1,000 or more, it is
+ * withheld again (lib/payments-v2/rules refuses that transfer). Satang, so ฿999.99 is under.
+ */
+export const REVIEW_WHT_THRESHOLD = 1000;
+export type WhtSource = "CONFIGURED" | "ENTERED" | "BELOW_THRESHOLD";
+export const belowReviewThreshold = (type: string, gross: number) =>
+  type === "REVIEW_INCENTIVE" && Number.isFinite(gross) && Math.round(gross * 100) < REVIEW_WHT_THRESHOLD * 100;
+
 const toSatang = (v: number) => Math.round(v * 100);
 const fromSatang = (s: number) => s / 100;
 const hasAtMostTwoDecimals = (v: number) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6;
@@ -99,7 +110,7 @@ export type CreateCheck = {
   reasons: string[];
   /** Matches that look like this payment already exists. Refused unless overridden with a reason. */
   duplicates: string[];
-  figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: "CONFIGURED" | "ENTERED" } | null;
+  figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: WhtSource } | null;
   accountingCategory: string | null;
 };
 
@@ -143,9 +154,10 @@ export function checkCreate(input: CreateInput, facts: CreateFacts, now: Date = 
   // Withholding: configured policy when there is one; otherwise the operator states it.
   // Never a rate borrowed from the guide fee, and never a default nobody chose.
   let whtPct: number | null = null;
-  let whtSource: "CONFIGURED" | "ENTERED" = "ENTERED";
+  let whtSource: WhtSource = "ENTERED";
   if (SUPPLEMENTAL_TYPES.includes(type)) {
-    if (facts.configuredWhtPct !== null) { whtPct = facts.configuredWhtPct; whtSource = "CONFIGURED"; }
+    if (amountOk && belowReviewThreshold(type, input.grossAmount)) { whtPct = 0; whtSource = "BELOW_THRESHOLD"; }
+    else if (facts.configuredWhtPct !== null) { whtPct = facts.configuredWhtPct; whtSource = "CONFIGURED"; }
     else if (validPct(input.whtPct)) whtPct = input.whtPct;
     else reasons.push(`No withholding rate is configured for a ${label.toLowerCase()} — enter the rate your accountant confirmed (0 if none is withheld)`);
   }
