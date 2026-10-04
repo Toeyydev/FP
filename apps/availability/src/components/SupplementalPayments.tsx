@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
 import { REVIEW_RATE, reviewIncentiveFigures, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
+import CopyMemo from "@/components/CopyMemo";
+import { reviewMemo } from "@/lib/bank-memo";
 
 // Supplemental payments: an amount left out of a payout that already went — a review
 // incentive, a bonus, an adjustment. Each is its own obligation and is paid by its own
@@ -183,6 +185,7 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
                     {canEdit && r.payment === "UNPAID" && <>
                       <button className="btn sm primary" onClick={() => setPaying(r)}>Record payment</button>{" "}
                       {r.reviewCount ? <><button className="btn sm js-add-reviews" onClick={() => addReviews(r)}>+ Reviews</button>{" "}</> : null}
+                      {r.reviewCount && r.workMonth ? <div style={{ marginTop: 4 }}><CopyMemo memo={reviewMemo(r.guideId, r.workMonth)} label="Review transfer" /></div> : null}
                       <button className="btn sm ghost danger" onClick={() => voidRow(r)}>Void</button>
                     </>}
                   </td>

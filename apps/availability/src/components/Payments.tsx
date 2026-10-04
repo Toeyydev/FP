@@ -19,6 +19,8 @@ import SupplementalPayments, { type SupplementalPrefill } from "@/components/Sup
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 import { type DocumentDrift } from "@/lib/payment-document-drift";
+import CopyMemo from "@/components/CopyMemo";
+import { payMemo } from "@/lib/bank-memo";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
@@ -582,6 +584,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
               </>}
               {leftOut && <span className="pay-doc-note" title="These jobs stay listed below and can still be paid on their own">Not in it: {leftOut}</span>}
               {canEdit && <button className="btn sm" title="Record the transfer that paid these jobs — date, amount, slip" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record payment · {unlocked.length} unpaid</button>}
+              {canEdit && unlocked.length > 0 && <CopyMemo memo={payMemo({ guideId: r.guideId, jobs: unlocked.map((j) => ({ jobNo: j.ref ?? null, date: j.date })) })} label="Transfer" />}
               <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>A job is paid by a recorded payment — one per bank transfer.</span>
             </div>}
             {jobs.map((j, i) => {

@@ -25,6 +25,8 @@ import RecordPaymentDialog from "@/components/RecordPaymentDialog";
 import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover";
 import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 import ExpenseCertificatePanel from "@/components/ExpenseCertificatePanel";
+import CopyMemo from "@/components/CopyMemo";
+import { advanceMemo, returnMemo } from "@/lib/bank-memo";
 
 const UNIT_OPTIONS = ["คน", "เที่ยว", "ครั้ง"];
 
@@ -1790,6 +1792,12 @@ export default function JobSheetEditor() {
           <span>Advance / Settlement<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"การเคลียร์เงินทดรองจ่าย"}</small></span>
           <span className="no-print">{advChip}</span>
         </h3>
+        {sheet.ref && (
+          <div className="no-print js-advance-memos" style={{ display: "flex", gap: 14, flexWrap: "wrap", margin: "4px 0 6px" }}>
+            {canEdit && <CopyMemo memo={advanceMemo([sheet.ref])} label="Advance transfer" />}
+            {hasAdvance && <CopyMemo memo={returnMemo(sheet.ref)} label="Guide returning money" />}
+          </div>
+        )}
         {advance.frozen && (
           <div className="no-print" role="status" style={{ margin: "6px 0", padding: "8px 12px", borderRadius: 8, background: "var(--warn-bg,#fbf4e4)", border: "1px solid var(--warn-line,#e2c27a)", fontSize: 12.5 }}>
             Recording advances and returns is paused while they move to the new ledger. The figures below are safe to read.

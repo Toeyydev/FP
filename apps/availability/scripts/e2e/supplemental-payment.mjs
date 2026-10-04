@@ -182,6 +182,8 @@ try {
   await click(page, ".js-create-supplemental");
   await page.waitForFunction(() => !document.querySelector(".js-add-supplemental-dialog"), { timeout: 15000 }).catch(() => {});
   let row = await text(page, ".js-supplemental-table tbody tr");
+  const memo = await page.$eval(".js-supplemental-table .js-bank-memo code", (x) => x.innerText).catch(() => "");
+  check("the unpaid review incentive shows the bank memo to type before transferring", memo === "REV G-951 2025-07", memo);
   check("Create makes it unpaid: 4 reviews for July, ฿200 to transfer", /Unpaid/.test(row) && /4 reviews · 2025-07/.test(row) && /฿200\.00/.test(row) && /borne by the company/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
 
   // 2 — the same month again: added to the open one, not a second incentive

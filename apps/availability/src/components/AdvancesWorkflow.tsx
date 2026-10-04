@@ -9,6 +9,8 @@ import SlipCheckPanel, { type SlipDecisionFields } from "./SlipCheckPanel";
 import PeakSystemStatus from "./PeakSystemStatus";
 import RecordExistingPeakDialog, { type LinkTarget } from "./RecordExistingPeakDialog";
 import { thb } from "@/lib/jobsheet";
+import CopyMemo from "@/components/CopyMemo";
+import { advanceMemo } from "@/lib/bank-memo";
 
 // The operator's view of company money a guide is holding.
 //
@@ -418,6 +420,7 @@ function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onCl
           <label>Date the money left the bank<input type="date" value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} disabled={busy} /></label>
           <label>Amount (฿)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} /></label>
           <label>Job No.<input value={jobNo} onChange={(e) => setJobNo(e.target.value)} placeholder="FOLK-BKK-…" disabled={busy} /></label>
+          {/^FOLK-[A-Z]+-\d{8}-\d+$/.test(jobNo.trim()) && <CopyMemo memo={advanceMemo([jobNo.trim()])} label="Advance transfer" />}
           <AdvanceBankSelect value={bankAccount} onChange={setBankAccount} disabled={busy} />
           <label>สลิปโอนเงิน<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={e=>setFile(e.target.files?.[0]??null)} /></label>
           <label>Bank reference<input value={bankRef} onChange={(e) => setBankRef(e.target.value)} disabled={busy} /></label>

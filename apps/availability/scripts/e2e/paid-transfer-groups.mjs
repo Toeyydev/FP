@@ -163,6 +163,8 @@ try {
   await pause(600);
   await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click());
   await page.waitForSelector(".js-split-transfers", { timeout: 15000 });
+  const memo = await page.$eval(".modal .js-bank-memo code", (x) => x.innerText).catch(() => "");
+  check("4 · Record payment shows the bank memo for the job, before the transfer", memo === "PAY FOLK-BKK-20260104-01", memo);
   await page.click(".js-split-transfers");
   const typeIn = (name, v) => page.evaluate((name, v) => {
     const el = document.querySelector(`.modal [name="${name}"]`);
