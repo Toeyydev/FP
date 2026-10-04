@@ -10,7 +10,7 @@ import { GuideTabs } from "@/components/GuideTabs";
 // guide-readable breakdown: fee (after WHT) + reimbursed expenses = total.
 type Tour = { date: string; slotIdx: number; time: string; tour: string; ref: string | null; amount: number; fee?: number; expenses?: number; reviewReward: number; paid: boolean; paidAt: string | null; slip: string | null };
 type Month = { period: string; label: string; tourCount: number; total: number; reviewReward: number; paidCount: number; monthly: { paid: boolean; paidAt: string | null; slip: string | null }; tours: Tour[] };
-type Additional = { paymentNo: string; paidDate: string; label: string; gross: number; wht: number; net: number; jobs: string[]; slip: string | null };
+type Additional = { paymentNo: string; paidDate: string; label: string; gross: number; wht: number; net: number; jobs: string[]; slip: string | null ; taxBorneByCompany?: boolean; reviewCount?: number | null; workMonth?: string | null };
 type Data = { months: Month[]; additional?: Additional[]; yearTotal: number; paidThisMonth: number; pendingTotal?: number; pendingCount?: number; guideId: string; all?: boolean };
 
 const thb = (v: number) => `฿${v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -96,7 +96,7 @@ export default function MyPay() {
               <div style={{ fontSize: 12, color: "var(--ink-soft)", margin: "2px 0 8px" }}>Paid separately from your tour payments.</div>
               {(d.additional ?? []).map((a) => (
                 <div key={a.paymentNo + a.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--line)", fontSize: 13 }}>
-                  <span>{a.label}{a.jobs.length ? ` · ${a.jobs.join(", ")}` : ""}<small style={{ display: "block", color: "var(--ink-soft)" }}>{a.paymentNo} · paid {dLabel(a.paidDate)}{a.wht > 0 ? ` · ${thb(a.gross)} − WHT ${thb(a.wht)}` : ""}{a.slip ? <> · <a href={a.slip} target="_blank" rel="noopener noreferrer">slip</a></> : null}</small></span>
+                  <span>{a.label}{a.jobs.length ? ` · ${a.jobs.join(", ")}` : ""}<small style={{ display: "block", color: "var(--ink-soft)" }}>{a.paymentNo} · paid {dLabel(a.paidDate)}{a.taxBorneByCompany ? ` · ${a.reviewCount ?? ""} reviews · ${a.workMonth ?? ""} · paid in full — tax ${thb(a.wht)} paid by Folkpaths for you · ภาษี ${thb(a.wht)} บริษัทออกให้` : a.wht > 0 ? ` · ${thb(a.gross)} − WHT ${thb(a.wht)}` : ""}{a.slip ? <> · <a href={a.slip} target="_blank" rel="noopener noreferrer">slip</a></> : null}</small></span>
                   <b style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{thb(a.net)}</b>
                 </div>
               ))}

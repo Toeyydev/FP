@@ -37,11 +37,15 @@ export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip"> & {
   actor: Actor;
   /** Injected in tests; the Bangkok calendar date otherwise. */
   today?: string;
+  /** Set by recordPayment when one transfer is recorded as two linked payments. */
+  transferGroup?: string | null;
 };
 
 export type RecordedPayment = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[]; supplements: { id: string; type: string; netAmount: number }[] };
 export type RecordPaymentResult =
-  | { ok: true; payment: RecordedPayment; reconciliation: Reconciliation; audits: AuditEntry[] }
+  | { ok: true; payment: RecordedPayment; reconciliation: Reconciliation; audits: AuditEntry[];
+      /** The company-borne review incentive recorded from the same transfer, as its own payment. */
+      linked?: RecordedPayment | null }
   | { ok: false; code: "invalid" | "conflict"; reasons: string[]; reconciliation?: Reconciliation };
 
 /** A write raced another one (a job paid or changed in between): the transaction is rolled back. */
@@ -109,28 +113,65 @@ export async function loadSupplementFacts(db: Db, ids: string[] | null | undefin
       id: r.id, guideId: r.guideId, type: r.type,
       label: SUPPLEMENTAL_LABEL[r.type as SupplementalType]?.en ?? r.type,
       accountingCategory: r.accountingCategory,
-      grossAmount: Number(r.grossAmount), wht: Number(r.wht), netAmount: Number(r.netAmount), whtSource: r.whtSource,
+      grossAmount: Number(r.grossAmount), wht: Number(r.wht), netAmount: Number(r.netAmount), whtSource: r.whtSource, whtBearer: r.whtBearer, workMonth: r.workMonth,
       voided: !!r.voidedAt,
       activePaymentNo: line ? pays.find((p) => p.id === line.paymentId)!.paymentNo : null,
     };
   });
 }
 
-async function evidenceContext(db: Db, input: Pick<RecordPaymentInput, "bankRef" | "slip">) {
+async function evidenceContext(db: Db, input: Pick<RecordPaymentInput, "bankRef" | "slip" | "transferGroup">) {
   const bankRef = (input.bankRef ?? "").trim();
+  // The other half of the same transfer shares the slip and the bank reference by design.
+  const others = input.transferGroup ? { OR: [{ transferGroup: null }, { transferGroup: { not: input.transferGroup } }] } : {};
   const [byRef, bySlip] = await Promise.all([
-    bankRef ? db.guidePayment.findFirst({ where: { bankRef, status: "RECORDED" }, select: { paymentNo: true } }) : null,
+    bankRef ? db.guidePayment.findFirst({ where: { bankRef, status: "RECORDED", ...others }, select: { paymentNo: true } }) : null,
     input.slip?.evidenceId
-      ? db.guidePayment.findFirst({ where: { evidenceId: input.slip.evidenceId, status: "RECORDED" }, select: { paymentNo: true } })
-      : input.slip?.url ? db.guidePayment.findFirst({ where: { slipUrl: input.slip.url, status: "RECORDED" }, select: { paymentNo: true } }) : null,
+      ? db.guidePayment.findFirst({ where: { evidenceId: input.slip.evidenceId, status: "RECORDED", ...others }, select: { paymentNo: true } })
+      : input.slip?.url ? db.guidePayment.findFirst({ where: { slipUrl: input.slip.url, status: "RECORDED", ...others }, select: { paymentNo: true } }) : null,
   ]);
   return { bankRefUsedBy: byRef?.paymentNo ?? null, slipUsedBy: bySlip?.paymentNo ?? null };
 }
 
 const request = (input: RecordPaymentInput): PaymentRequest => ({ ...input, hasSlip: !!(input.slip?.url || input.slip?.evidenceId) });
 
+/**
+ * One bank transfer that pays a guide's jobs AND their company-borne review incentives
+ * (owner policy 2026-10-06) is recorded as two payments: the jobs, and the incentives —
+ * each with its own number, voucher, PEAK document and 50 ทวิ, sharing the slip, the bank
+ * reference and the date. The review payment is exactly the incentives' net; whatever the
+ * transfer differs by stays with the jobs, where a reason for it is asked for.
+ * Null when the transfer is not of that shape (the rules then judge it whole).
+ */
+async function splitTransfer(db: Db, input: RecordPaymentInput): Promise<{ jobs: RecordPaymentInput; reviews: RecordPaymentInput; reviewNet: number } | null> {
+  if (!input.jobs.length || !(input.supplements ?? []).length) return null;
+  const sups = await loadSupplementFacts(db, input.supplements);
+  if (sups.length !== (input.supplements ?? []).length || !sups.every((x) => x.whtBearer === "COMPANY_ONCE")) return null;
+  const reviewNetSatang = sups.reduce((t, x) => t + toSatang(x.netAmount), 0);
+  const group = input.transferGroup ?? `tg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return {
+    reviewNet: reviewNetSatang / 100,
+    jobs: { ...input, supplements: [], amountTransferred: (toSatang(input.amountTransferred) - reviewNetSatang) / 100, transferGroup: group },
+    reviews: { ...input, jobs: [], adjustments: [], mismatchReason: null, amountTransferred: reviewNetSatang / 100, transferGroup: group },
+  };
+}
+
+const merged = (a: Reconciliation, b: Reconciliation, total: number): Reconciliation => {
+  const expected = toSatang(a.expectedTransfer) + toSatang(b.expectedTransfer);
+  return {
+    jobTotal: a.jobTotal, supplementTotal: b.supplementTotal ?? 0, adjustmentTotal: a.adjustmentTotal,
+    expectedTransfer: expected / 100, amountTransferred: total, difference: (toSatang(total) - expected) / 100,
+    balanced: toSatang(total) === expected,
+  };
+};
+
 /** The checks Record payment runs, with nothing written. */
 export async function previewPayment(db: Db, input: RecordPaymentInput): Promise<PaymentCheck> {
+  const split = await splitTransfer(db, input);
+  if (split) {
+    const [j, r] = [await previewPayment(db, split.jobs), await previewPayment(db, split.reviews)];
+    return { ...j, reasons: [...j.reasons, ...r.reasons], supplements: r.supplements, reconciliation: merged(j.reconciliation, r.reconciliation, input.amountTransferred) };
+  }
   const { facts } = await loadJobFacts(db, input.guideId, input.jobs);
   const supplements = await loadSupplementFacts(db, input.supplements);
   return checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), supplements, ...(await evidenceContext(db, input)) });
@@ -177,6 +218,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
       mismatchReason: check.reconciliation.balanced ? null : t(input.mismatchReason),
       periodOverrideReason: check.periods.length > 1 ? t(input.periodOverrideReason) : null,
       peakPaymentRef: input.source === "PEAK_DOCUMENT" ? t(input.peakPaymentRef) : null,
+      transferGroup: input.transferGroup ?? null,
       note: t(input.note), createdById: input.actor.actorId,
       jobs: {
         create: check.jobs.map((j) => {
@@ -269,7 +311,15 @@ const uniqueTarget = (e: unknown): string => {
 export async function recordPayment(prisma: PrismaClient, input: RecordPaymentInput): Promise<RecordPaymentResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const result = await prisma.$transaction((tx) => recordPaymentInTx(tx, input), { timeout: 20_000 });
+      const result = await prisma.$transaction(async (tx) => {
+        const split = await splitTransfer(tx, input);
+        if (!split) return recordPaymentInTx(tx, input);
+        const jobs = await recordPaymentInTx(tx, split.jobs);
+        if (!jobs.ok) return jobs;
+        const reviews = await recordPaymentInTx(tx, split.reviews);
+        if (!reviews.ok) throw new PaymentConflict(reviews.reasons.join(" "));
+        return { ...jobs, linked: reviews.payment, audits: [...jobs.audits, ...reviews.audits], reconciliation: merged(jobs.reconciliation, reviews.reconciliation, input.amountTransferred) };
+      }, { timeout: 20_000 });
       if (result.ok) for (const a of result.audits) await audit(a);
       return result;
     } catch (e) {

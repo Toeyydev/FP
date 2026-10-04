@@ -1064,6 +1064,10 @@ model GuidePayment {
   mismatchReason       String? // required when jobs + adjustments ≠ amount transferred
   periodOverrideReason String? // required when the jobs span more than one accounting month
   peakPaymentRef       String? // FOLK-PAY-… when paid through a combined PEAK document
+  // Payments recorded together from ONE bank transfer: a guide's jobs and their company-borne
+  // review incentive go out as one transfer but are separate payments — separate vouchers,
+  // PEAK documents and 50 ทวิ (owner policy 2026-10-06). They share the slip and bank reference.
+  transferGroup        String?
   note                 String?
   createdById          String?
   createdAt            DateTime  @default(now())
@@ -1082,6 +1086,7 @@ model GuidePayment {
   @@index([paymentDate])
   @@index([status])
   @@index([bankRef])
+  @@index([transferGroup])
 }
 
 // One job in a payment, with the figures it was paid on. The Job No. is copied in full.
@@ -1127,7 +1132,23 @@ model SupplementalPayment {
   accountingCategory      String // PeakAccountMapping.folkopsCategory — REVIEW_REWARD for a review incentive
   grossAmount             Decimal       @db.Decimal(12, 2) // what it costs Folkpaths
   whtPct                  Decimal       @db.Decimal(5, 2)
-  whtSource               String // CONFIGURED (SUPPLEMENTAL_WHT_PCT_<TYPE>) | ENTERED (by the operator — no rate configured) | BELOW_THRESHOLD (review incentive under ฿1,000 on its own: 0%)
+  whtSource               String // CONFIGURED (SUPPLEMENTAL_WHT_PCT_<TYPE>) | ENTERED (by the operator — no rate configured) | BELOW_THRESHOLD (superseded) | POLICY (review incentive, company-borne)
+  // Who bears the withholding (owner policy 2026-10-06). GUIDE: deducted, net = gross − wht.
+  // COMPANY_ONCE: the company pays the tax on the guide's behalf, once (ผู้จ่ายออกให้ครั้งเดียว):
+  // the guide receives net = reviews × ฿50 in full, gross (the income on the 50 ทวิ and the
+  // 510110 expense) = net + wht. Review incentives only.
+  whtBearer               String        @default("GUIDE")
+  reviewCount             Int? // COMPANY_ONCE review incentives: how many reviews named the guide
+  workMonth               String? // "YYYY-MM" the guide worked the tours the reviews are for — the month it books into
+  eWithholding            Boolean       @default(false) // paid through e-Withholding Tax: 1% instead of 3%
+  // Its own PEAK document, created through the API (lib/supplemental-payments/peak):
+  // CREATING → AWAITING_PAYMENT → PAYING → PAID, or FAILED (PEAK refused — nothing exists),
+  // CREATE_UNCERTAIN / PAYMENT_UNCERTAIN (the answer was lost — a person looks in PEAK first).
+  peakStatus              String?
+  peakDocumentId          String?
+  peakDocumentLink        String?
+  peakError               String?
+  peakPaymentMethodId     String?
   wht                     Decimal       @db.Decimal(12, 2)
   netAmount               Decimal       @db.Decimal(12, 2) // what the guide receives
   reason                  String

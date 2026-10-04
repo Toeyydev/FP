@@ -177,6 +177,24 @@ export function isReviewExpense(e: { description?: string | null }): boolean {
   // outcome for choosing the wrong keyboard.
   return d.startsWith("review") || d.includes("รีวิว");
 }
+/**
+ * Review rows the incoming sheet has that the stored one did not — by what they say, so a
+ * row moved or re-saved unchanged is not new. Since 2026-10-06 review incentives are paid
+ * monthly per guide (lib/supplemental-payments), never added to a job sheet.
+ */
+export function newReviewRows(stored: readonly Expense[], incoming: readonly Expense[]): number {
+  const sig = (e: Expense) => [(e.description ?? "").trim(), Number(e.price) || 0, Number(e.pax) || 0].join("|");
+  const left = new Map<string, number>();
+  for (const e of stored ?? []) if (isReviewExpense(e)) left.set(sig(e), (left.get(sig(e)) ?? 0) + 1);
+  let added = 0;
+  for (const e of incoming ?? []) {
+    if (!isReviewExpense(e)) continue;
+    const n = left.get(sig(e)) ?? 0;
+    if (n > 0) left.set(sig(e), n - 1); else added++;
+  }
+  return added;
+}
+
 export function reviewRewardTotal(expenses: Expense[]): number {
   return (expenses ?? []).filter(isReviewExpense).reduce((s, e) => s + expenseAmount(e), 0);
 }

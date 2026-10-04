@@ -48,7 +48,9 @@ export type PayMonth = {
  * earlier payout, a bonus — shown apart from the tours, so neither looks larger than the
  * transfer it was. Paid ones only: the guide sees money that moved.
  */
-export type AdditionalPayment = { paymentNo: string; paidDate: string; type: string; label: string; gross: number; wht: number; net: number; jobs: string[]; slip: string | null };
+export type AdditionalPayment = { paymentNo: string; paidDate: string; type: string; label: string; gross: number; wht: number; net: number; jobs: string[]; slip: string | null;
+  /** The company paid the tax on the guide's behalf (a review incentive since 2026-10-06): nothing was deducted. */
+  taxBorneByCompany: boolean; reviewCount: number | null; workMonth: string | null };
 
 export type GuidePay = {
   months: PayMonth[];
@@ -79,7 +81,7 @@ export async function guidePay(guideId: string, opts: { all?: boolean } = {}, no
     prisma.tour.findMany({ select: { id: true, name: true } }),
     prisma.guidePaymentSupplementLine.findMany({
       where: { guideId, active: true, payment: { status: "RECORDED", paymentDate: { gte: from } } },
-      select: { type: true, grossAmount: true, wht: true, netAmount: true, payment: { select: { paymentNo: true, paymentDate: true, slipUrl: true } }, supplemental: { select: { jobs: true } } },
+      select: { type: true, grossAmount: true, wht: true, netAmount: true, payment: { select: { paymentNo: true, paymentDate: true, slipUrl: true } }, supplemental: { select: { jobs: true, whtBearer: true, reviewCount: true, workMonth: true } } },
     }),
   ]);
 
@@ -148,6 +150,7 @@ export async function guidePay(guideId: string, opts: { all?: boolean } = {}, no
       gross: Number(l.grossAmount), wht: Number(l.wht), net: Number(l.netAmount),
       jobs: Array.isArray(l.supplemental.jobs) ? (l.supplemental.jobs as { jobNo: string }[]).map((j) => j.jobNo) : [],
       slip: l.payment.slipUrl,
+      taxBorneByCompany: l.supplemental.whtBearer === "COMPANY_ONCE", reviewCount: l.supplemental.reviewCount ?? null, workMonth: l.supplemental.workMonth ?? null,
     }))
     .sort((a, b) => b.paidDate.localeCompare(a.paidDate));
 

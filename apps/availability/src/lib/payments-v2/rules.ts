@@ -105,8 +105,11 @@ export type SupplementFacts = {
   grossAmount: number;
   wht: number;
   netAmount: number;
-  /** BELOW_THRESHOLD: a review incentive under ฿1,000 that nothing was withheld from. */
   whtSource?: string | null;
+  /** COMPANY_ONCE: a review incentive whose tax the company bears (owner policy 2026-10-06). */
+  whtBearer?: string | null;
+  /** "YYYY-MM" a review incentive books into — the month the guide worked. */
+  workMonth?: string | null;
   voided: boolean;
   /** FOLK-PMT-… of the ACTIVE payment already holding it, if any. */
   activePaymentNo: string | null;
@@ -195,14 +198,6 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
     supplements.push(rest);
   }
 
-  // Not withheld because it was under ฿1,000 on its own: paid with others in a transfer of
-  // ฿1,000 or more, the threshold no longer holds, so the transfer is refused.
-  const unwithheld = supplements.filter((x) => x.whtSource === "BELOW_THRESHOLD");
-  const grossTotal = supplements.reduce((t, x) => t + Math.round(x.grossAmount * 100), 0);
-  if (unwithheld.length && supplements.length > 1 && grossTotal >= 100_000) {
-    reasons.push(`These come to ฿${(grossTotal / 100).toLocaleString("en-US", { minimumFractionDigits: 2 })} in one transfer — ฿1,000 or more — but ${unwithheld.map((x) => `${x.label} ${x.grossAmount.toFixed(2)}`).join(", ")} had nothing withheld because it was under ฿1,000 on its own. Pay ${unwithheld.length > 1 ? "them" : "it"} in a separate transfer, or void and re-create ${unwithheld.length > 1 ? "them" : "it"} with withholding.`);
-  }
-
   const seen = new Set<string>();
   const resolved: ResolvedJob[] = [];
   for (const j of req.jobs) {
@@ -231,7 +226,8 @@ export function checkPayment(req: PaymentRequest, facts: JobFacts[], ctx: { toda
 
   // One accounting month per payment, unless someone says why. A supplemental payment books
   // into the month it is paid: it has no tour of its own to take a month from.
-  const supplementPeriod = supplements.length && DATE.test(req.paymentDate ?? "") ? [req.paymentDate.slice(0, 7)] : [];
+  // A review incentive books into the month the guide worked (owner policy 2026-10-06).
+  const supplementPeriod = DATE.test(req.paymentDate ?? "") ? [...new Set(supplements.map((x) => x.workMonth || req.paymentDate.slice(0, 7)))] : [];
   const periods = [...new Set([...resolved.map((j) => j.accountingDate.slice(0, 7)), ...supplementPeriod])].sort();
   if (periods.length > 1 && tooShort(req.periodOverrideReason)) reasons.push(`These jobs book into ${periods.join(" and ")} — pay each month separately, or give the reason they belong in one transfer`);
 

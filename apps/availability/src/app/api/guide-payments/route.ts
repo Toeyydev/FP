@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
 
   // Tell the guide their money is on the way — best effort, never blocks the record. Not for
   // a payment recorded long after it was made (payments-v2/rules isHistoricalPayment).
-  if (isHistoricalPayment(body.paymentDate)) return NextResponse.json({ ok: true, payment: result.payment, reconciliation: result.reconciliation, notified: false });
+  if (isHistoricalPayment(body.paymentDate)) return NextResponse.json({ ok: true, payment: result.payment, linked: result.linked ?? null, reconciliation: result.reconciliation, notified: false });
   try {
     if (result.payment.supplements.length) {
       const kinds = [...new Set(result.payment.supplements.map((x) => SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en.toLowerCase() ?? "extra payment"))].join(" and ");
@@ -129,5 +129,5 @@ export async function POST(req: NextRequest) {
       await sendPaymentNotice(body.guideId, result.payment.jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, slip?.url);
     }
   } catch { /* notifying is best-effort */ }
-  return NextResponse.json({ ok: true, payment: result.payment, reconciliation: result.reconciliation });
+  return NextResponse.json({ ok: true, payment: result.payment, linked: result.linked ?? null, reconciliation: result.reconciliation });
 }

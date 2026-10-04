@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
-import { belowReviewThreshold, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
+import { REVIEW_RATE, reviewIncentiveFigures, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
 
 // Supplemental payments: an amount left out of a payout that already went — a review
 // incentive, a bonus, an adjustment. Each is its own obligation and is paid by its own
@@ -12,6 +12,8 @@ import { belowReviewThreshold, SUPPLEMENTAL_LABEL, SUPPLEMENTAL_TYPES, STATE_LAB
 type Row = {
   id: string; guideId: string; guide: string; type: SupplementalType; typeLabel: string;
   grossAmount: number; whtPct: number; whtSource: string; wht: number; netAmount: number; accountingCategory: string;
+  whtBearer?: string; reviewCount?: number | null; workMonth?: string | null; eWithholding?: boolean;
+  peakStatus?: string | null; peakError?: string | null; peakDocumentLink?: string | null;
   legacyBonus: { id: string; period: string } | null;
   reason: string; note: string | null; jobs: { jobNo: string; date: string; slotIdx: number }[];
   originalPaymentNo: string | null; duplicateOverrideReason: string | null;
@@ -24,7 +26,7 @@ type Options = {
   jobs?: { jobNo: string; date: string; slotIdx: number }[];
   payments?: { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; kind: string }[];
 };
-type Preview = { reasons: string[]; duplicates: string[]; figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: "CONFIGURED" | "BELOW_THRESHOLD" | "ENTERED" } | null; accountingCategory: string | null };
+type Preview = { reasons: string[]; duplicates: string[]; figures: { gross: number; wht: number; net: number; whtPct: number; whtSource: string; whtBearer?: string } | null; accountingCategory: string | null; review?: { reviewCount: number; workMonth: string; eWithholding: boolean } | null };
 /** Pre-fill for the Add dialog: from "Reward a review", or converting an earlier bonus (amount fixed). */
 export type SupplementalPrefill = { guideId: string; type: SupplementalType; date?: string; slotIdx?: number; reason?: string; legacyBonus?: { id: string; amount: number; period: string } };
 
@@ -44,6 +46,21 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
   const [msg, setMsg] = useState("");
   const [msgOk, setMsgOk] = useState(false); // a confirmation, not a refusal
   const [peakDraft, setPeakDraft] = useState<Record<string, string>>({});
+  // PEAK's bank accounts, for a review incentive's own document (lib/supplemental-payments/peak).
+  const [methods, setMethods] = useState<{ id: string; label: string }[] | null>(null);
+  const [method, setMethod] = useState<Record<string, string>>({});
+  const loadMethods = useCallback(async () => {
+    if (methods) return;
+    const r = await fetch("/api/peak/payment-methods", { cache: "no-store" }).catch(() => null);
+    const d = r && r.ok ? await r.json().catch(() => ({})) : {};
+    setMethods(((d.methods ?? []) as { id: string; name?: string; bankName?: string; accountNumber?: string }[]).map((m) => ({ id: m.id, label: [m.bankName, m.accountNumber].filter(Boolean).join(" ") || m.name || m.id })));
+  }, [methods]);
+  async function peakCall(id: string, init: { method: "POST" | "PATCH"; body: Record<string, unknown> }) {
+    const r = await fetch(`/api/supplemental-payments/${id}/peak`, { method: init.method, headers: { "content-type": "application/json" }, body: JSON.stringify(init.body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { setMsgOk(false); setMsg((d.reasons ?? ["Not done"]).join(" ")); await load(); return; }
+    setMsgOk(true); setMsg(d.documentNo ? `In PEAK as ${d.documentNo}${d.peakStatus === "PAID" ? " — payment recorded" : ""}` : "Recorded"); await load();
+  }
 
   const load = useCallback(async () => {
     const r = await fetch("/api/supplemental-payments", { cache: "no-store" });
@@ -69,6 +86,14 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
     const reason = window.prompt(`Why is ${r.peakRef} being corrected to ${next.trim().toUpperCase()}? (kept in the audit)`, "");
     if (reason === null) return;
     await act(r.id, { action: "peakRef", peakRef: next, reason });
+  }
+  async function addReviews(r: Row) {
+    const more = window.prompt(`How many more reviews named ${r.guide} for ${r.workMonth}? (now ${r.reviewCount})`, "1");
+    if (more === null) return;
+    const n = Number(more);
+    const reason = window.prompt("Where did they come from? (kept in the audit)", "");
+    if (reason === null) return;
+    await act(r.id, { action: "reviews", addReviews: n, reason });
   }
   async function voidRow(r: Row) {
     const reason = window.prompt(`Void this ${r.typeLabel.toLowerCase()} of ${thb(r.grossAmount)} for ${r.guide}? It has not been paid.\n\nReason:`, "");
@@ -107,19 +132,47 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
                   <td style={{ whiteSpace: "nowrap" }}><span className="gid">{r.guideId}</span> {r.guide}</td>
                   <td>{r.typeLabel}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.accountingCategory}</small></td>
                   <td className="num" style={{ fontSize: 12 }}>
-                    {r.jobs.length ? r.jobs.map((j) => <div key={j.jobNo} style={{ whiteSpace: "nowrap" }}>{j.jobNo}</div>) : <span style={{ color: "var(--ink-soft)" }}>guide-level</span>}
+                    {r.reviewCount ? <div className="js-review-month" style={{ whiteSpace: "nowrap" }}>{r.reviewCount} review{r.reviewCount === 1 ? "" : "s"} · {r.workMonth}{r.eWithholding ? " · e-WHT" : ""}</div>
+                      : r.jobs.length ? r.jobs.map((j) => <div key={j.jobNo} style={{ whiteSpace: "nowrap" }}>{j.jobNo}</div>) : <span style={{ color: "var(--ink-soft)" }}>guide-level</span>}
                     {r.originalPaymentNo && <div style={{ color: "var(--ink-soft)", whiteSpace: "nowrap" }}>omitted from {r.originalPaymentNo}</div>}
                     {r.legacyBonus && <div style={{ color: "var(--ink-soft)", whiteSpace: "nowrap" }}>converted from earlier bonus ({r.legacyBonus.period})</div>}
                   </td>
                   <td style={{ maxWidth: 220 }}>{r.reason}{r.duplicateOverrideReason && <small style={{ display: "block", color: "#b45309" }}>Created despite a match: {r.duplicateOverrideReason}</small>}</td>
                   <td className="r num">{thb(r.grossAmount)}</td>
-                  <td className="r num">{thb(r.wht)}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.whtPct}% · {r.whtSource === "CONFIGURED" ? "configured" : r.whtSource === "BELOW_THRESHOLD" ? "under ฿1,000" : "entered"}</small></td>
+                  <td className="r num">{thb(r.wht)}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.whtPct}% · {r.whtBearer === "COMPANY_ONCE" ? "borne by the company" : r.whtSource === "CONFIGURED" ? "configured" : r.whtSource === "BELOW_THRESHOLD" ? "under ฿1,000" : "entered"}</small></td>
                   <td className="r num"><b>{thb(r.netAmount)}</b></td>
                   <td><span className={`chip-pay ${r.payment === "PAID" ? "recorded" : r.payment === "VOID" ? "reversed" : ""}`}>{STATE_LABEL[r.payment]}</span>{r.voidReason && <small style={{ display: "block", color: "var(--ink-soft)" }}>{r.voidReason}</small>}</td>
                   <td className="num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{r.paymentNo ? <>{r.paymentNo}<div style={{ color: "var(--ink-soft)" }}>{r.paidDate}</div></> : "—"}</td>
                   <td style={{ fontSize: 12 }}>{STATE_LABEL[r.accounting]}</td>
                   <td className="num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-                    {r.peakRef ? <>{r.peakRef}{canEdit && r.payment !== "VOID" && <> <button className="btn sm ghost" onClick={() => correctPeak(r)}>Correct</button></>}</> : (canEdit && r.payment !== "VOID" ? (
+                    {r.whtBearer === "COMPANY_ONCE" && r.payment === "PAID" && r.peakStatus !== "PAID" && canEdit ? (
+                      <div className="js-review-peak" style={{ display: "grid", gap: 4 }}>
+                        {r.peakRef && <span>{r.peakRef} · payment not recorded yet</span>}
+                        {r.peakError && <small style={{ color: "#b45309", whiteSpace: "normal", maxWidth: 240 }}>{r.peakError}</small>}
+                        {r.peakStatus === "CREATE_UNCERTAIN" ? (
+                          <span style={{ display: "inline-flex", gap: 4 }}>
+                            <input className="search" aria-label="EXP found in PEAK" style={{ width: 120, fontSize: 12 }} placeholder="EXP-… found" value={peakDraft[r.id] ?? ""} onChange={(e) => setPeakDraft((d) => ({ ...d, [r.id]: e.target.value }))} />
+                            <button className="btn sm" disabled={!(peakDraft[r.id] ?? "").trim()} onClick={() => peakCall(r.id, { method: "PATCH", body: { resolution: { kind: "created", documentNo: peakDraft[r.id] } } })}>It is in PEAK</button>
+                            <button className="btn sm ghost" onClick={() => peakCall(r.id, { method: "PATCH", body: { resolution: { kind: "not-created" } } })}>Not in PEAK</button>
+                          </span>
+                        ) : r.peakStatus === "PAYMENT_UNCERTAIN" ? (
+                          <span style={{ display: "inline-flex", gap: 4 }}>
+                            <button className="btn sm" onClick={() => peakCall(r.id, { method: "PATCH", body: { resolution: { kind: "payment-found" } } })}>Payment is in PEAK</button>
+                            <button className="btn sm ghost" onClick={() => peakCall(r.id, { method: "PATCH", body: { resolution: { kind: "payment-not-found" } } })}>No payment in PEAK</button>
+                          </span>
+                        ) : (
+                          <span style={{ display: "inline-flex", gap: 4 }}>
+                            <select className="search" aria-label="Bank account the money left from" style={{ fontSize: 12, maxWidth: 160 }} value={method[r.id] ?? ""} onFocus={loadMethods} onChange={(e) => setMethod((m) => ({ ...m, [r.id]: e.target.value }))}>
+                              <option value="">Bank account…</option>
+                              {(methods ?? []).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                            </select>
+                            <button className="btn sm primary js-put-review-in-peak" disabled={!method[r.id]} onClick={() => peakCall(r.id, { method: "POST", body: { paymentMethodId: method[r.id] } })}>Put in PEAK</button>
+                          </span>
+                        )}
+                      </div>
+                    ) : r.whtBearer === "COMPANY_ONCE" && r.peakStatus === "PAID" ? (
+                      r.peakDocumentLink ? <a href={r.peakDocumentLink} target="_blank" rel="noopener noreferrer">{r.peakRef}</a> : <>{r.peakRef}</>
+                    ) : r.peakRef ? <>{r.peakRef}{canEdit && r.payment !== "VOID" && <> <button className="btn sm ghost" onClick={() => correctPeak(r)}>Correct</button></>}</> : (canEdit && r.payment !== "VOID" ? (
                       <span style={{ display: "inline-flex", gap: 4 }}>
                         <input className="search" aria-label="PEAK document number" style={{ width: 130, fontSize: 12 }} placeholder="EXP-…" value={peakDraft[r.id] ?? ""} onChange={(e) => setPeakDraft((d) => ({ ...d, [r.id]: e.target.value }))} />
                         <button className="btn sm" disabled={!(peakDraft[r.id] ?? "").trim()} onClick={async () => { if (await act(r.id, { action: "peakRef", peakRef: peakDraft[r.id] })) setPeakDraft((d) => ({ ...d, [r.id]: "" })); }}>Save</button>
@@ -129,6 +182,7 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
                   <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                     {canEdit && r.payment === "UNPAID" && <>
                       <button className="btn sm primary" onClick={() => setPaying(r)}>Record payment</button>{" "}
+                      {r.reviewCount ? <><button className="btn sm js-add-reviews" onClick={() => addReviews(r)}>+ Reviews</button>{" "}</> : null}
                       <button className="btn sm ghost danger" onClick={() => voidRow(r)}>Void</button>
                     </>}
                   </td>
@@ -162,6 +216,13 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string[]>([]);
   const [requestKey] = useState(newKey);
+  const isReview = type === "REVIEW_INCENTIVE";
+  const [reviews, setReviews] = useState("");
+  // The month the guide worked — from "Reward a review" its tour date, else this month.
+  const [workMonth, setWorkMonth] = useState("date" in start && start.date ? start.date.slice(0, 7) : new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 7));
+  const [eWht, setEWht] = useState(false);
+  const reviewCount = Number(reviews);
+  const reviewEst = isReview && Number.isInteger(reviewCount) && reviewCount > 0 ? reviewIncentiveFigures(reviewCount, eWht) : null;
 
   useEffect(() => {
     fetch(`/api/supplemental-payments/options${guideId ? `?guideId=${encodeURIComponent(guideId)}` : ""}`, { cache: "no-store" })
@@ -169,7 +230,7 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
         if (!d) return;
         setOpts(d);
         // From "Reward a review": the job the review was for, chosen for the operator.
-        if ("date" in start && start.date && guideId === start.guideId) {
+        if ("date" in start && start.date && guideId === start.guideId && (start.type as string) !== "REVIEW_INCENTIVE") {
           const hit = d.jobs?.find((j) => j.date === start.date && j.slotIdx === start.slotIdx);
           if (hit) setJobs([hit.jobNo]);
         }
@@ -179,13 +240,15 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
   const chosen = useMemo(() => (opts?.jobs ?? []).filter((j) => jobs.includes(j.jobNo)), [opts, jobs]);
   // Withholding comes from configured accounting policy; with none, the operator enters it.
   const policy: Policy = opts?.whtPolicy?.[type] ?? { pct: null, invalid: false };
-  const underThreshold = Number(amount) > 0 && belowReviewThreshold(type, Number(amount));
-  useEffect(() => { setPreview(null); setErr([]); }, [guideId, type, jobs, amount, whtPct, category, original, reason, note]);
+  useEffect(() => { setPreview(null); setErr([]); }, [guideId, type, jobs, amount, whtPct, category, original, reason, note, reviews, workMonth, eWht]);
 
-  const body = () => ({
+  const body = () => isReview ? {
+    guideId, type, grossAmount: 0, reason, note: note || null, jobs: [], requestKey,
+    reviewCount, workMonth, eWithholding: eWht,
+  } : ({
     guideId, type, grossAmount: Number(amount), reason, note: note || null,
     whtPct: policy.pct !== null || whtPct.trim() === "" ? null : Number(whtPct),
-    accountingCategory: type === "REVIEW_INCENTIVE" ? null : category || null,
+    accountingCategory: category || null,
     jobs: chosen.map((j) => ({ jobNo: j.jobNo, date: j.date, slotIdx: j.slotIdx })),
     originalPaymentId: original || null, duplicateOverrideReason: override || null, requestKey,
     legacyBonusId: legacy?.id ?? null,
@@ -227,7 +290,27 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
               {SUPPLEMENTAL_TYPES.map((t) => <option key={t} value={t}>{SUPPLEMENTAL_LABEL[t].en} / {SUPPLEMENTAL_LABEL[t].th}</option>)}
             </select>
           </label>
-          {guideId && (
+          {isReview && (
+            <div className="js-review-fields" style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <label className="js-field" style={FIELD}>Reviews naming the guide · จำนวนรีวิว
+                  <input className="search" name="reviews" type="number" min={1} step={1} value={reviews} onChange={(e) => setReviews(e.target.value)} style={{ width: 120 }} />
+                </label>
+                <label className="js-field" style={FIELD}>Month the guide worked · เดือนที่ทำงาน
+                  <input className="search" name="workMonth" type="month" value={workMonth} onChange={(e) => setWorkMonth(e.target.value)} />
+                </label>
+              </div>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                <input type="checkbox" name="ewht" style={{ width: "auto", margin: 0 }} checked={eWht} onChange={(e) => setEWht(e.target.checked)} />
+                Paid through e-Withholding Tax (1% instead of 3%)
+              </label>
+              <div className="js-wht-rule" style={{ fontSize: 12.5 }}>
+                ฿{REVIEW_RATE} a review, paid to the guide in full. The company bears the {eWht ? "1" : "3"}% withholding once (ผู้จ่ายออกภาษีให้ครั้งเดียว) — it is not deducted.
+                {reviewEst && <> {reviewCount} × ฿{REVIEW_RATE} = <b>{thb(reviewEst.net)}</b> to the guide · tax <b>{thb(reviewEst.wht)}</b> · income on the 50 ทวิ <b>{thb(reviewEst.gross)}</b>.</>}
+              </div>
+            </div>
+          )}
+          {guideId && !isReview && (
             <div>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Related job(s) <small style={{ fontWeight: 400, color: "var(--ink-soft)" }}>— optional; none for a guide-level amount</small></div>
               <input className="search" placeholder="Search Job No." value={jobSearch} onChange={(e) => setJobSearch(e.target.value)} style={{ width: "100%", boxSizing: "border-box", margin: "4px 0" }} />
@@ -243,12 +326,10 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
               {jobs.length > 0 && <div style={{ fontSize: 12, marginTop: 4 }}>Chosen: {jobs.join(", ")}</div>}
             </div>
           )}
-          <label className="js-field" style={FIELD}>Amount (฿, before withholding)
+          {!isReview && <label className="js-field" style={FIELD}>Amount (฿, before withholding)
             <input className="search" name="amount" type="number" min={0} step="0.01" value={amount} readOnly={!!legacy} onChange={(e) => setAmount(e.target.value)} />
-          </label>
-          {underThreshold ? (
-            <div style={{ fontSize: 12.5 }} className="js-wht-rule">Withholding tax <b>0%</b> — a review incentive under ฿1,000 paid on its own is not withheld (company policy). Paid together with other amounts of ฿1,000 or more, it would be.</div>
-          ) : policy.pct !== null ? (
+          </label>}
+          {isReview ? null : policy.pct !== null ? (
             <div style={{ fontSize: 12.5 }} className="js-wht-rule">Withholding tax <b>{policy.pct}%</b> — configured accounting policy for a {SUPPLEMENTAL_LABEL[type].en.toLowerCase()}.</div>
           ) : (
             <label className="js-field js-wht-rule" style={FIELD}>Withholding tax % <small style={{ fontWeight: 400, color: "#b45309" }}>No rate is configured for a {SUPPLEMENTAL_LABEL[type].en.toLowerCase()}{policy.invalid ? " (the configured value is not a valid rate)" : ""} — enter the rate your accountant confirmed, 0 if none is withheld.</small>
@@ -267,7 +348,7 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
               </label>
             </div>
           )}
-          {guideId && (
+          {guideId && !isReview && (
             <label className="js-field" style={FIELD}>Omitted from a previous payout? <small style={{ color: "var(--ink-soft)" }}>optional</small>
               <select className="search" name="original" value={original} onChange={(e) => setOriginal(e.target.value)}>
                 <option value="">No — not linked to a payout</option>
@@ -287,10 +368,16 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
             <div className="pay-review-facts js-supplemental-review" role="status">
               <div><span className="paydoc-label">Supplemental payment</span><b>{SUPPLEMENTAL_LABEL[type].en}</b></div>
               <div><span className="paydoc-label">Guide</span><b>{guideId}</b></div>
-              <div><span className="paydoc-label">Related jobs</span><b>{jobs.join(", ") || "guide-level"}</b></div>
-              {preview.figures && <>
+              {preview.review ? <div><span className="paydoc-label">Reviews · month worked</span><b>{preview.review.reviewCount} · {preview.review.workMonth}</b></div>
+                : <div><span className="paydoc-label">Related jobs</span><b>{jobs.join(", ") || "guide-level"}</b></div>}
+              {preview.figures && preview.figures.whtBearer === "COMPANY_ONCE" && <>
+                <div><span className="paydoc-label">To the guide (in full)</span><b>{thb(preview.figures.net)}</b></div>
+                <div><span className="paydoc-label">Tax {preview.figures.whtPct}% — borne by the company, once</span><b>{thb(preview.figures.wht)}</b></div>
+                <div><span className="paydoc-label">Income on the 50 ทวิ · 510110 expense</span><b>{thb(preview.figures.gross)}</b></div>
+              </>}
+              {preview.figures && preview.figures.whtBearer !== "COMPANY_ONCE" && <>
                 <div><span className="paydoc-label">Amount</span><b>{thb(preview.figures.gross)}</b></div>
-                <div><span className="paydoc-label">WHT {preview.figures.whtPct}% · {preview.figures.whtSource === "CONFIGURED" ? "configured policy" : preview.figures.whtSource === "BELOW_THRESHOLD" ? "not withheld — a review incentive under ฿1,000 paid on its own" : "entered"}</span><b>−{thb(preview.figures.wht)}</b></div>
+                <div><span className="paydoc-label">WHT {preview.figures.whtPct}% · {preview.figures.whtSource === "CONFIGURED" ? "configured policy" : "entered"}</span><b>−{thb(preview.figures.wht)}</b></div>
                 <div><span className="paydoc-label">To transfer</span><b>{thb(preview.figures.net)}</b></div>
               </>}
               {preview.accountingCategory && <div><span className="paydoc-label">Account</span><b>{preview.accountingCategory}</b></div>}
@@ -310,7 +397,7 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
         <div className="mfoot">
           <button className="btn" onClick={onClose}>Cancel</button>
           {!preview
-            ? <button className="btn primary" disabled={busy || !guideId || !(Number(amount) > 0) || (policy.pct === null && !underThreshold && whtPct.trim() === "")} onClick={review}>Review</button>
+            ? <button className="btn primary" disabled={busy || !guideId || (isReview ? !reviewEst || !workMonth : !(Number(amount) > 0) || (policy.pct === null && whtPct.trim() === ""))} onClick={review}>Review</button>
             : <button className="btn primary js-create-supplemental" disabled={busy || blocking.length > 0} onClick={create}>Create as unpaid</button>}
         </div>
       </div>
