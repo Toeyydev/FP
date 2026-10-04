@@ -84,6 +84,7 @@ const prismaMock = vi.hoisted(() => {
     // Supplemental payments — none in these cases.
     supplementalPayment: table(() => []),
     guidePaymentSupplementLine: table(() => []),
+    guidePaymentTransfer: table(() => []),
   };
   client.$transaction = vi.fn(async (arg: any) => (typeof arg === "function" ? arg(client) : Promise.all(arg)));
   return client;

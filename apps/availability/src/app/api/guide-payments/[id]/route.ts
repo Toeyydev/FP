@@ -13,7 +13,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const session = await auth();
   if (!canViewFinance(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const { id } = await params;
-  const p = await prisma.guidePayment.findUnique({ where: { id }, include: { jobs: { orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }, adjustments: true, supplements: { include: { supplemental: { select: { reason: true, jobs: true, originalPayment: { select: { paymentNo: true } } } } } } } });
+  const p = await prisma.guidePayment.findUnique({ where: { id }, include: { jobs: { orderBy: [{ date: "asc" }, { slotIdx: "asc" }] }, adjustments: true, transfers: { orderBy: { seq: "asc" } }, supplements: { include: { supplemental: { select: { reason: true, jobs: true, originalPayment: { select: { paymentNo: true } } } } } } } });
   if (!p) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const [guide, people] = await Promise.all([
@@ -41,6 +41,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       peakDocumentNo: j.peakDocumentNo, peakSource: j.peakSource,
     })),
     adjustments: p.adjustments.map((a) => ({ type: a.type, amount: Number(a.amount), description: a.description, jobNo: a.jobNo })),
+    // Paid in several bank transfers: each one, in order. Empty for a single transfer.
+    transfers: p.transfers.map((x) => ({ seq: x.seq, amount: Number(x.amount), date: x.transferDate, bankRef: x.bankRef, slipUrl: x.slipUrl })),
     supplements: p.supplements.map((x) => ({
       supplementalId: x.supplementalId, type: x.type, typeLabel: SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en ?? x.type, accountingCategory: x.accountingCategory,
       grossAmount: Number(x.grossAmount), wht: Number(x.wht), netAmount: Number(x.netAmount), active: x.active,

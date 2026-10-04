@@ -57,7 +57,7 @@ async function seed() {
   const hash = bcrypt.hashSync(PASSWORD, 8);
   const admin = await prisma.user.create({ data: { email: "admin@example.test", displayName: "Malee Testsuite", fullName: "Malee Testsuite", role: "ADMIN", state: "ACTIVE", passwordHash: hash } });
   await prisma.user.create({ data: { email: "g952@example.test", displayName: "Nok Example", fullName: "Nok Example", guideId: G, role: "GUIDE", state: "ACTIVE", passwordHash: hash } });
-  for (const n of [5, 6, 7, 8, 9]) {
+  for (const n of [4, 5, 6, 7, 8, 9]) {
     const j = job(n);
     await prisma.assignment.create({ data: { guideId: G, date: j.date, slotIdx: 0, tourId: "T-900", pax: 2 } });
     await prisma.jobSheet.create({ data: { ref: j.jobNo, guideId: G, date: j.date, slotIdx: 0, tourId: "T-900", status: "Confirmed", bookings: [], approvalStatus: "APPROVED", approvedAt: new Date("2026-01-10T01:00:00Z"), approvedBy: admin.id,
@@ -133,7 +133,7 @@ try {
     set.call(el, m); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
   }, MONTH);
   await pause(1500);
-  await page.evaluate(() => { const tr = [...document.querySelectorAll("tr")].find((t) => /G-952/.test(t.innerText) && !/Total/.test(t.innerText)); tr?.click(); });
+  await page.evaluate(() => { const tr = [...document.querySelectorAll("tr")].find((t) => /G-952/.test(t.innerText) && /\bPAID\b/.test(t.innerText) && !/Total/.test(t.innerText)); tr?.click(); });
   await pause(800);
   const buttons = await page.evaluate(() => [...document.querySelectorAll("button")].map((b) => b.innerText.trim()).filter((t) => /in PEAK · 1 document/.test(t)));
   const pmt = buttons.filter((t) => /FOLK-PMT-202601-00[12]/.test(t));
@@ -150,6 +150,41 @@ try {
   }, [job(5), job(7)].map((j) => ({ date: j.date, slotIdx: j.slotIdx })));
   check("3 · the server refuses jobs from two recorded payments in one document", /2 different recorded payments/.test(refused.text), `${refused.status} ${refused.text.slice(0, 240)}`);
   check("nothing was created in PEAK", (await prisma.guidePaymentDocument.count()) === 0 && !/peakaccount|peak\.co/i.test(readFileSync(OUTBOUND, "utf8")));
+  // 4 — one payment made in two bank transfers, through the Record payment dialog (job 4, unpaid).
+  await page.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+  await page.evaluate((m) => {
+    const el = document.querySelector('input[type="month"]');
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(el, m); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, MONTH);
+  await pause(1500);
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click()
+    ?? [...document.querySelectorAll("tr")].find((t) => /G-952/.test(t.innerText) && /PENDING|Pending/.test(t.innerText))?.click());
+  await pause(600);
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click());
+  await page.waitForSelector(".js-split-transfers", { timeout: 15000 });
+  await page.click(".js-split-transfers");
+  const typeIn = (name, v) => page.evaluate((name, v) => {
+    const el = document.querySelector(`.modal [name="${name}"]`);
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, name, v);
+  await typeIn("part-date-0", "2026-01-10"); await typeIn("part-amount-0", "100"); await typeIn("part-ref-0", "BANK-E2E-P1");
+  await typeIn("part-date-1", "2026-01-11"); await typeIn("part-amount-1", "1355"); await typeIn("part-ref-1", "BANK-E2E-P2");
+  await pause(300);
+  const totalText = await page.$eval(".js-parts-total", (x) => x.innerText);
+  const amountField = await page.$eval(".modal input[inputmode=decimal]:not([name])", (x) => x.value).catch(() => "");
+  check("4 · two transfers add up to the job's ฿1,455, dated the last one", /฿1,455\.00/.test(totalText) && /2026-01-11/.test(totalText) && amountField === "1455.00", `${totalText} | ${amountField}`);
+  await page.evaluate(() => { const el = [...document.querySelectorAll(".modal input")].find((x) => x.placeholder?.startsWith("e.g. cash paid")); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(el, "slips to follow (example)"); el.dispatchEvent(new Event("input", { bubbles: true })); });
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "record-payment-two-transfers.png"), fullPage: true });
+  await page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => /^Review ·/.test(b.textContent.trim())).click());
+  await page.waitForSelector(".js-review-parts", { timeout: 15000 });
+  await page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => /^Record payment ·/.test(b.textContent.trim())).click());
+  await page.waitForFunction(() => /Payment recorded/.test(document.body.innerText), { timeout: 20000 }).catch(() => {});
+  const split = await prisma.guidePayment.findFirst({ where: { transfers: { some: {} } }, include: { transfers: { orderBy: { seq: "asc" } } } });
+  check("4 · recorded as ONE payment of ฿1,455 dated 11 Jan, with both transfers kept",
+    !!split && Number(split.amountTransferred) === 1455 && split.paymentDate === "2026-01-11" && split.transfers.map((x) => `${Number(x.amount)}@${x.transferDate}#${x.bankRef}`).join() === "100@2026-01-10#BANK-E2E-P1,1355@2026-01-11#BANK-E2E-P2",
+    JSON.stringify(split && { a: Number(split.amountTransferred), d: split.paymentDate, t: split.transfers.length }));
   check("no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "paid-transfer-groups.png"), fullPage: true });
 } finally {

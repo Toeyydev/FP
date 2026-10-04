@@ -71,35 +71,48 @@ export async function POST(req: NextRequest) {
     if (refused) return NextResponse.json(refused.body, { status: refused.status });
   }
 
-  const file = form?.get("file") as unknown as { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> } | null;
-  const hasFile = !!file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0;
-  if (hasFile && (file!.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", reasons: ["The slip is over 10 MB"] }, { status: 400 });
-  const mime = (hasFile && file!.type) || "image/jpeg";
-  if (hasFile && !/^image\//.test(mime) && mime !== "application/pdf") return NextResponse.json({ error: "bad-file", reasons: ["The slip must be an image or a PDF"] }, { status: 400 });
-  if (hasFile && !googleDriveEnabled) return NextResponse.json({ error: "not-configured", reasons: ["Connect Google Drive first — the slip is filed there"] }, { status: 400 });
+  // The slip of a one-transfer payment is "file"; a payment made in several transfers sends
+  // one per transfer, "file_0", "file_1", … in the order of `transfers`.
+  type Upload = { size?: number; type?: string; arrayBuffer?: () => Promise<ArrayBuffer> };
+  const fileAt = (k: string): Upload | null => {
+    const f = form?.get(k) as unknown as Upload | null;
+    return f && typeof f.arrayBuffer === "function" && (f.size ?? 0) > 0 ? f : null;
+  };
+  const parts = body.transfers ?? [];
+  const files = parts.length ? parts.map((_, i) => fileAt(`file_${i}`)) : [fileAt("file")];
+  for (const f of files) {
+    if (!f) continue;
+    if ((f.size ?? 0) > 10 * 1024 * 1024) return NextResponse.json({ error: "too-large", reasons: ["A slip is over 10 MB"] }, { status: 400 });
+    const m = f.type || "image/jpeg";
+    if (!/^image\//.test(m) && m !== "application/pdf") return NextResponse.json({ error: "bad-file", reasons: ["A slip must be an image or a PDF"] }, { status: 400 });
+    if (!googleDriveEnabled) return NextResponse.json({ error: "not-configured", reasons: ["Connect Google Drive first — the slip is filed there"] }, { status: 400 });
+  }
+  const hasFile = !parts.length && !!files[0];
+  const pending = { url: "pending" };
+  const transfersFor = (slips: (RecordPaymentInput["slip"])[]) => parts.map((p, i) => ({ amount: p.amount, date: p.date, bankRef: p.bankRef ?? null, slip: slips[i] ?? null }));
 
-  // Check everything BEFORE the slip is filed, so a refused payment leaves no stray file.
-  const dry = await previewPayment(prisma, { ...body, source: "MANUAL", slip: hasFile ? { url: "pending" } : null, actor });
+  // Check everything BEFORE a slip is filed, so a refused payment leaves no stray file.
+  const dry = await previewPayment(prisma, { ...body, source: "MANUAL", slip: hasFile ? pending : null, transfers: transfersFor(files.map((f) => (f ? pending : null))), actor });
   if (dry.reasons.length) return NextResponse.json({ error: "not-recordable", reasons: dry.reasons, blocks: dry.blocks, reconciliation: dry.reconciliation }, { status: 409 });
 
-  let slip: RecordPaymentInput["slip"] = null;
-  if (hasFile) {
+  const guide = await prisma.user.findUnique({ where: { guideId: body.guideId }, select: { displayName: true, fullName: true } });
+  const guideName = guide?.fullName || guide?.displayName || body.guideId;
+  // Named after the transfer and the jobs it pays — never after another job's EXP. A
+  // supplemental payment has no job of its own to be named after.
+  const what = body.jobs.length ? `${body.jobs[0].jobNo}${body.jobs.length > 1 ? ` +${body.jobs.length - 1} more` : ""}` : "supplemental payment";
+  async function fileSlip(f: Upload, date: string, label: string): Promise<{ ok: true; slip: NonNullable<RecordPaymentInput["slip"]> } | { ok: false; res: NextResponse }> {
     const refreshToken = await folkpathsDriveToken(actor.actorId ?? undefined);
-    if (!refreshToken) return NextResponse.json({ error: "not-connected", reasons: ["Connect the Folkpaths Google account first"] }, { status: 400 });
-    const bytes = Buffer.from(await file!.arrayBuffer!());
+    if (!refreshToken) return { ok: false, res: NextResponse.json({ error: "not-connected", reasons: ["Connect the Folkpaths Google account first"] }, { status: 400 }) };
+    const mime = f.type || "image/jpeg";
+    const bytes = Buffer.from(await f.arrayBuffer!());
     const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
-    const guide = await prisma.user.findUnique({ where: { guideId: body.guideId }, select: { displayName: true, fullName: true } });
-    const guideName = guide?.fullName || guide?.displayName || body.guideId;
-    const monthFolder = `${body.paymentDate.slice(0, 7)} ${MONTHS[Number(body.paymentDate.slice(5, 7)) - 1] ?? ""}`.trim();
-    // Named after the transfer and the jobs it pays — never after another job's EXP. A
-    // supplemental payment has no job of its own to be named after.
-    const what = body.jobs.length ? `${body.jobs[0].jobNo}${body.jobs.length > 1 ? ` +${body.jobs.length - 1} more` : ""}` : "supplemental payment";
-    const name = `${body.guideId} ${guideName} — ${body.paymentDate} — ${what} — e-slip.${extOf(mime)}`;
+    const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+    const name = `${body.guideId} ${guideName} — ${date} — ${what}${label} — e-slip.${extOf(mime)}`;
     let link: string, fileId: string;
     try {
       ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
     } catch (e) {
-      return NextResponse.json({ error: "drive-failed", reasons: [(e as Error).message.slice(0, 200)] }, { status: 502 });
+      return { ok: false, res: NextResponse.json({ error: "drive-failed", reasons: [(e as Error).message.slice(0, 200)] }, { status: 502 }) };
     }
     // One slip, one evidence row: the same file recorded twice is the same evidence.
     const prior = await prisma.paymentEvidence.findFirst({ where: { OR: [{ googleDriveFileId: fileId }, { fileHash }] }, select: { id: true } });
@@ -111,12 +124,28 @@ export async function POST(req: NextRequest) {
       },
       select: { id: true },
     });
-    slip = { url: link, evidenceId: evidence.id, uploadedAt: new Date(), uploadedById: actor.actorId };
+    return { ok: true, slip: { url: link, evidenceId: evidence.id, uploadedAt: new Date(), uploadedById: actor.actorId } };
   }
 
-  const result = await recordPayment(prisma, { ...body, source: "MANUAL", slip, actor });
+  let slip: RecordPaymentInput["slip"] = null;
+  const partSlips: RecordPaymentInput["slip"][] = [];
+  if (hasFile) {
+    const r = await fileSlip(files[0]!, body.paymentDate, "");
+    if (!r.ok) return r.res;
+    slip = r.slip;
+  }
+  for (const [i, p] of parts.entries()) {
+    const f = files[i];
+    if (!f) { partSlips.push(null); continue; }
+    const r = await fileSlip(f, p.date, ` — transfer ${i + 1} of ${parts.length}`);
+    if (!r.ok) return r.res;
+    partSlips.push(r.slip);
+  }
+
+  const result = await recordPayment(prisma, { ...body, source: "MANUAL", slip, transfers: parts.length ? transfersFor(partSlips) : undefined, actor });
   if (!result.ok) return NextResponse.json({ error: result.code === "conflict" ? "conflict" : "not-recordable", reasons: result.reasons, reconciliation: result.reconciliation ?? null }, { status: 409 });
 
+  const noticeSlip = slip ?? [...partSlips].reverse().find((x) => !!x) ?? null;
   // Tell the guide their money is on the way — best effort, never blocks the record. Not for
   // a payment recorded long after it was made (payments-v2/rules isHistoricalPayment).
   if (isHistoricalPayment(body.paymentDate)) return NextResponse.json({ ok: true, payment: result.payment, linked: result.linked ?? null, reconciliation: result.reconciliation, notified: false });
@@ -124,9 +153,9 @@ export async function POST(req: NextRequest) {
     if (result.payment.supplements.length) {
       const kinds = [...new Set(result.payment.supplements.map((x) => SUPPLEMENTAL_LABEL[x.type as SupplementalType]?.en.toLowerCase() ?? "extra payment"))].join(" and ");
       const amount = thb(result.payment.amountTransferred);
-      await notifyGuide(body.guideId, `💸 An additional payment has been transferred — ${amount} (${kinds}). It is separate from your earlier payments.`, "Additional payment transferred 💸", `${amount} · ${kinds}`, undefined, slip?.url ? { url: slip.url } : {});
+      await notifyGuide(body.guideId, `💸 An additional payment has been transferred — ${amount} (${kinds}). It is separate from your earlier payments.`, "Additional payment transferred 💸", `${amount} · ${kinds}`, undefined, noticeSlip?.url ? { url: noticeSlip.url } : {});
     } else {
-      await sendPaymentNotice(body.guideId, result.payment.jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, slip?.url);
+      await sendPaymentNotice(body.guideId, result.payment.jobs.map((j) => ({ date: j.date, slotIdx: j.slotIdx })), undefined, noticeSlip?.url);
     }
   } catch { /* notifying is best-effort */ }
   return NextResponse.json({ ok: true, payment: result.payment, linked: result.linked ?? null, reconciliation: result.reconciliation });

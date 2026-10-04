@@ -31,13 +31,14 @@ const unique = (target: string[]) => new Prisma.PrismaClientKnownRequestError("U
 
 export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
   const t: Record<string, Row[]> = {};
-  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "guideAdvanceReceipt", "guideAdvanceEntry", "paymentTransaction", "paymentEvidence", "auditLog", "supplementalPayment", "guidePaymentSupplementLine"];
+  const names = ["user", "tour", "jobSheet", "tourPayment", "guidePayment", "guidePaymentJob", "guidePaymentAdjustment", "assignment", "payrollStatus", "guidePaymentDocument", "paymentBatchItem", "paymentBatch", "guideAdvance", "guideAdvanceReturn", "guideAdvanceReceipt", "guideAdvanceEntry", "paymentTransaction", "paymentEvidence", "auditLog", "supplementalPayment", "guidePaymentSupplementLine", "guidePaymentTransfer"];
   for (const n of names) t[n] = (seed[n] ?? []).map((r, i) => ({ id: r.id ?? `${n}_${i}`, ...clone(r) }));
   let seq = 1000;
   const relations: Record<string, Record<string, (row: Row) => any>> = {
     guidePaymentJob: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId) },
     guidePaymentAdjustment: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId) },
-    guidePayment: { jobs: (r) => t.guidePaymentJob.filter((j) => j.paymentId === r.id), adjustments: (r) => t.guidePaymentAdjustment.filter((a) => a.paymentId === r.id), supplements: (r) => t.guidePaymentSupplementLine.filter((x) => x.paymentId === r.id) },
+    guidePayment: { jobs: (r) => t.guidePaymentJob.filter((j) => j.paymentId === r.id), adjustments: (r) => t.guidePaymentAdjustment.filter((a) => a.paymentId === r.id), supplements: (r) => t.guidePaymentSupplementLine.filter((x) => x.paymentId === r.id), transfers: (r) => t.guidePaymentTransfer.filter((x) => x.paymentId === r.id) },
+    guidePaymentTransfer: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId) },
     guidePaymentSupplementLine: { payment: (r) => t.guidePayment.find((p) => p.id === r.paymentId), supplemental: (r) => t.supplementalPayment.find((x) => x.id === r.supplementalId) },
     supplementalPayment: { lines: (r) => t.guidePaymentSupplementLine.filter((x) => x.supplementalId === r.id) },
     paymentBatchItem: { batch: (r) => t.paymentBatch.find((b) => b.id === r.batchId) },
@@ -74,7 +75,7 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
     findUnique: async (args: Row) => { const r = t[name].find((x) => matches(x, args.where)); return r ? shape(name, r, args) : null; },
     count: async (args: Row = {}) => t[name].filter((r) => matches(r, args.where)).length,
     create: async (args: Row) => {
-      const { jobs: nestedJobs, adjustments, supplements, ...data } = args.data;
+      const { jobs: nestedJobs, adjustments, supplements, transfers, ...data } = args.data;
       // A SupplementalPayment's `jobs` is a plain JSON column, not a nested create.
       const jobs = name === "guidePayment" ? nestedJobs : undefined;
       if (name !== "guidePayment" && nestedJobs !== undefined) data.jobs = nestedJobs;
@@ -85,6 +86,7 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
       for (const j of jobs?.create ?? []) await model("guidePaymentJob").create({ data: { ...j, paymentId: row.id } });
       for (const a of adjustments?.create ?? []) await model("guidePaymentAdjustment").create({ data: { ...a, paymentId: row.id } });
       for (const x of supplements?.create ?? []) await model("guidePaymentSupplementLine").create({ data: { ...x, paymentId: row.id } });
+      for (const x of transfers?.create ?? []) await model("guidePaymentTransfer").create({ data: { ...x, paymentId: row.id } });
       return shape(name, row, args);
     },
     update: async (args: Row) => { const r = t[name].find((x) => matches(x, args.where)); if (!r) throw new Error("not found"); Object.assign(r, args.data); return shape(name, r, args); },

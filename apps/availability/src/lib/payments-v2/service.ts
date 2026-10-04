@@ -31,8 +31,10 @@ type AuditEntry = Parameters<typeof audit>[0];
 
 export type SlipRef = { url: string; evidenceId?: string | null; uploadedAt?: Date | null; uploadedById?: string | null };
 
-export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip"> & {
+export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip" | "transfers"> & {
   slip?: SlipRef | null;
+  /** Several bank transfers, each with its own slip (same order). See PaymentRequest.transfers. */
+  transfers?: { amount: number; date: string; bankRef?: string | null; slip?: SlipRef | null }[];
   note?: string | null;
   actor: Actor;
   /** Injected in tests; the Bangkok calendar date otherwise. */
@@ -120,20 +122,35 @@ export async function loadSupplementFacts(db: Db, ids: string[] | null | undefin
   });
 }
 
-async function evidenceContext(db: Db, input: Pick<RecordPaymentInput, "bankRef" | "slip" | "transferGroup">) {
-  const bankRef = (input.bankRef ?? "").trim();
+/** The RECORDED payment, if any, that already holds this bank reference or slip — on the payment itself, or on one of its transfers. */
+async function evidenceHolder(db: Db, ev: { bankRef?: string | null; slip?: SlipRef | null }, transferGroup?: string | null): Promise<{ byRef: string | null; bySlip: string | null }> {
+  const bankRef = (ev.bankRef ?? "").trim();
   // The other half of the same transfer shares the slip and the bank reference by design.
-  const others = input.transferGroup ? { OR: [{ transferGroup: null }, { transferGroup: { not: input.transferGroup } }] } : {};
-  const [byRef, bySlip] = await Promise.all([
+  const others = transferGroup ? { OR: [{ transferGroup: null }, { transferGroup: { not: transferGroup } }] } : {};
+  const slipWhere = ev.slip?.evidenceId ? { evidenceId: ev.slip.evidenceId } : ev.slip?.url ? { slipUrl: ev.slip.url } : null;
+  const [refPay, refPart, slipPay, slipPart] = await Promise.all([
     bankRef ? db.guidePayment.findFirst({ where: { bankRef, status: "RECORDED", ...others }, select: { paymentNo: true } }) : null,
-    input.slip?.evidenceId
-      ? db.guidePayment.findFirst({ where: { evidenceId: input.slip.evidenceId, status: "RECORDED", ...others }, select: { paymentNo: true } })
-      : input.slip?.url ? db.guidePayment.findFirst({ where: { slipUrl: input.slip.url, status: "RECORDED", ...others }, select: { paymentNo: true } }) : null,
+    bankRef ? db.guidePaymentTransfer.findFirst({ where: { bankRef, payment: { status: "RECORDED" } }, select: { payment: { select: { paymentNo: true } } } }) : null,
+    slipWhere ? db.guidePayment.findFirst({ where: { ...slipWhere, status: "RECORDED", ...others }, select: { paymentNo: true } }) : null,
+    slipWhere ? db.guidePaymentTransfer.findFirst({ where: { ...slipWhere, payment: { status: "RECORDED" } }, select: { payment: { select: { paymentNo: true } } } }) : null,
   ]);
-  return { bankRefUsedBy: byRef?.paymentNo ?? null, slipUsedBy: bySlip?.paymentNo ?? null };
+  return { byRef: refPay?.paymentNo ?? refPart?.payment.paymentNo ?? null, bySlip: slipPay?.paymentNo ?? slipPart?.payment.paymentNo ?? null };
 }
 
-const request = (input: RecordPaymentInput): PaymentRequest => ({ ...input, hasSlip: !!(input.slip?.url || input.slip?.evidenceId) });
+async function evidenceContext(db: Db, input: Pick<RecordPaymentInput, "bankRef" | "slip" | "transferGroup" | "transfers">) {
+  const top = await evidenceHolder(db, input, input.transferGroup);
+  const partsUsedBy = await Promise.all((input.transfers ?? []).map(async (p) => {
+    const h = await evidenceHolder(db, p);
+    return h.byRef ?? h.bySlip;
+  }));
+  return { bankRefUsedBy: top.byRef, slipUsedBy: top.bySlip, partsUsedBy };
+}
+
+const request = (input: RecordPaymentInput): PaymentRequest => ({
+  ...input,
+  hasSlip: !!(input.slip?.url || input.slip?.evidenceId),
+  transfers: input.transfers?.map((p) => ({ amount: p.amount, date: p.date, bankRef: p.bankRef ?? null, hasSlip: !!(p.slip?.url || p.slip?.evidenceId) })),
+});
 
 /**
  * One bank transfer that pays a guide's jobs AND their company-borne review incentives
@@ -144,7 +161,7 @@ const request = (input: RecordPaymentInput): PaymentRequest => ({ ...input, hasS
  * Null when the transfer is not of that shape (the rules then judge it whole).
  */
 async function splitTransfer(db: Db, input: RecordPaymentInput): Promise<{ jobs: RecordPaymentInput; reviews: RecordPaymentInput; reviewNet: number } | null> {
-  if (!input.jobs.length || !(input.supplements ?? []).length) return null;
+  if (!input.jobs.length || !(input.supplements ?? []).length || (input.transfers ?? []).length) return null;
   const sups = await loadSupplementFacts(db, input.supplements);
   if (sups.length !== (input.supplements ?? []).length || !sups.every((x) => x.whtBearer === "COMPANY_ONCE")) return null;
   const reviewNetSatang = sups.reduce((t, x) => t + toSatang(x.netAmount), 0);
@@ -206,15 +223,19 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
   const adjustments = (input.adjustments ?? []).filter((a): a is AdjustmentInput & { type: (typeof ADJUSTMENT_TYPES)[number] } => ADJUSTMENT_TYPES.includes(a.type as never));
   const t = (s: string | null | undefined) => (s ?? "").trim() || null;
 
+  // Several transfers: each is kept; the payment's own evidence is the last one that has a slip.
+  const parts = (input.transfers ?? []).map((p, i) => ({ ...p, seq: i + 1 }));
+  const lastSlip = [...parts].reverse().find((p) => p.slip?.url || p.slip?.evidenceId)?.slip ?? null;
+  const evidence = parts.length ? lastSlip : input.slip ?? null;
   const payment = await tx.guidePayment.create({
     data: {
       paymentNo, guideId: input.guideId, accountingPeriod: check.accountingPeriod!, paymentDate: input.paymentDate,
       jobTotal: check.reconciliation.jobTotal, adjustmentTotal: check.reconciliation.adjustmentTotal, amountTransferred: check.reconciliation.amountTransferred,
       kind: check.supplements.length ? "SUPPLEMENTAL" : "REGULAR", supplementTotal: check.reconciliation.supplementTotal ?? 0,
       status: "RECORDED", source: input.source as PaymentSource,
-      bankRef: t(input.bankRef), evidenceId: input.slip?.evidenceId ?? null, slipUrl: input.slip?.url ?? null,
-      slipUploadedAt: input.slip ? input.slip.uploadedAt ?? new Date() : null, slipUploadedById: input.slip?.uploadedById ?? null,
-      noSlipReason: input.slip ? null : t(input.noSlipReason),
+      bankRef: parts.length ? null : t(input.bankRef), evidenceId: evidence?.evidenceId ?? null, slipUrl: evidence?.url ?? null,
+      slipUploadedAt: evidence ? evidence.uploadedAt ?? new Date() : null, slipUploadedById: evidence?.uploadedById ?? null,
+      noSlipReason: parts.length ? (parts.every((p) => p.slip?.url || p.slip?.evidenceId) ? null : t(input.noSlipReason)) : input.slip ? null : t(input.noSlipReason),
       mismatchReason: check.reconciliation.balanced ? null : t(input.mismatchReason),
       periodOverrideReason: check.periods.length > 1 ? t(input.periodOverrideReason) : null,
       peakPaymentRef: input.source === "PEAK_DOCUMENT" ? t(input.peakPaymentRef) : null,
@@ -245,6 +266,9 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
       supplements: {
         create: check.supplements.map((x) => ({ supplementalId: x.id, guideId: input.guideId, type: x.type, accountingCategory: x.accountingCategory, grossAmount: x.grossAmount, wht: x.wht, netAmount: x.netAmount })),
       },
+      transfers: {
+        create: parts.map((p) => ({ seq: p.seq, amount: p.amount, transferDate: p.date, bankRef: t(p.bankRef), slipUrl: p.slip?.url ?? null, evidenceId: p.slip?.evidenceId ?? null })),
+      },
     },
     select: { id: true, paymentNo: true },
   });
@@ -269,7 +293,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
 
   for (const j of check.jobs) {
     const where = { guideId: input.guideId, date: j.date, slotIdx: j.slotIdx };
-    const data = { status: "PAID", paidAt, approvedBy: input.actor.actorId, guidePaymentId: payment.id, ...(input.slip?.url ? { eslipUrl: input.slip.url } : {}) };
+    const data = { status: "PAID", paidAt, approvedBy: input.actor.actorId, guidePaymentId: payment.id, ...(evidence?.url ? { eslipUrl: evidence.url } : {}) };
     const moved = await tx.tourPayment.updateMany({ where: { ...where, guidePaymentId: null, status: { not: "PAID" } }, data });
     if (moved.count === 1) continue;
     const existing = await tx.tourPayment.findUnique({ where: { guideId_date_slotIdx: where }, select: { id: true } });
@@ -286,6 +310,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
     balanced: check.reconciliation.balanced, mismatchReason: check.reconciliation.balanced ? null : t(input.mismatchReason),
     periodOverrideReason: check.periods.length > 1 ? t(input.periodOverrideReason) : null,
     bankRef: t(input.bankRef), slip: !!input.slip?.url, noSlipReason: input.slip ? null : t(input.noSlipReason), peakPaymentRef: t(input.peakPaymentRef),
+    ...(parts.length ? { transfers: parts.map((p) => ({ seq: p.seq, amount: p.amount, date: p.date, bankRef: t(p.bankRef), slip: !!(p.slip?.url || p.slip?.evidenceId) })) } : {}),
   };
   const audits: AuditEntry[] = [
     { ...input.actor, action: "payment.recorded", entityType: "GuidePayment", entityId: payment.id, detail: summary },

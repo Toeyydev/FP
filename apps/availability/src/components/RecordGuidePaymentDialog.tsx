@@ -29,6 +29,13 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
   const payable = jobs.filter((j) => !j.payBlock);
   const [picked, setPicked] = useState<Set<string>>(new Set(preselect.length ? preselect : payable.map(key)));
   const [paymentDate, setPaymentDate] = useState(today);
+  // Paid in several bank transfers (e.g. a mistyped ฿100, then the rest): each one listed.
+  type Part = { amount: string; date: string; bankRef: string; file: File | null };
+  const [split, setSplit] = useState(false);
+  const [parts, setParts] = useState<Part[]>([{ amount: "", date: today, bankRef: "", file: null }, { amount: "", date: today, bankRef: "", file: null }]);
+  const setPart = (i: number, patch: Partial<Part>) => setParts((ps) => ps.map((p, n) => (n === i ? { ...p, ...patch } : p)));
+  const partsTotal = parts.reduce((t, p) => t + (Number.isFinite(Number(p.amount)) && p.amount.trim() ? Math.round(Number(p.amount) * 100) : 0), 0) / 100;
+  const partsLast = parts.map((p) => p.date).filter(Boolean).sort().pop() ?? today;
   const [amount, setAmount] = useState("");
   const [amountTouched, setAmountTouched] = useState(false);
   const [adjustments, setAdjustments] = useState<Adjustment[]>([]);
@@ -87,8 +94,10 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
     };
   }, [chosen, chosenReviews, adjustments, amount]);
 
-  // The amount follows the jobs until someone types their own.
-  useEffect(() => { if (!amountTouched) setAmount(recon.expectedTransfer ? recon.expectedTransfer.toFixed(2) : ""); }, [recon.expectedTransfer, amountTouched]);
+  // The amount follows the jobs until someone types their own — or, in several transfers,
+  // is their sum, dated the last of them (the day the guide had been paid in full).
+  useEffect(() => { if (!amountTouched && !split) setAmount(recon.expectedTransfer ? recon.expectedTransfer.toFixed(2) : ""); }, [recon.expectedTransfer, amountTouched, split]);
+  useEffect(() => { if (split) { setAmount(partsTotal ? partsTotal.toFixed(2) : ""); setPaymentDate(partsLast); } }, [split, partsTotal, partsLast]);
 
   const setAdj = (i: number, patch: Partial<Adjustment>) => setAdjustments((a) => a.map((x, n) => (n === i ? { ...x, ...patch } : x)));
 
@@ -101,15 +110,17 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
       guideId, jobs: chosen.map((j) => ({ jobNo: (j.ref ?? "").trim(), date: j.date, slotIdx: j.slotIdx })),
       paymentDate, amountTransferred: Number(amount),
       adjustments: adjustments.filter((a) => a.description.trim() && a.amount.trim()).map((a) => ({ type: a.type, amount: Number(a.amount), description: a.description.trim(), ...(a.type === "ADVANCE_SETTLEMENT" ? { advanceId: a.advanceId || null } : {}) })),
-      bankRef: bankRef.trim() || null, note: note.trim() || null,
-      noSlipReason: file ? null : noSlipReason.trim() || null,
+      bankRef: split ? null : bankRef.trim() || null, note: note.trim() || null,
+      noSlipReason: (split ? parts.every((p) => p.file) : !!file) ? null : noSlipReason.trim() || null,
+      ...(split ? { transfers: parts.map((p) => ({ amount: Number(p.amount), date: p.date, bankRef: p.bankRef.trim() || null })) } : {}),
       mismatchReason: recon.balanced ? null : mismatchReason.trim() || null,
       periodOverrideReason: crossMonth ? periodReason.trim() || null : null,
       ...(chosenReviews.length ? { supplements: chosenReviews.map((x) => x.id) } : {}),
     };
     const fd = new FormData();
     fd.append("payload", JSON.stringify(payload));
-    if (file) fd.append("file", file);
+    if (split) parts.forEach((p, i) => { if (p.file) fd.append(`file_${i}`, p.file); });
+    else if (file) fd.append("file", file);
     const r = await fetch("/api/guide-payments", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
@@ -187,7 +198,9 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
           </div>
           <div className="pay-review-facts">
             <div><span className="paydoc-label">Transfer date</span><b>{paymentDate}</b></div>
-            <div><span className="paydoc-label">Bank reference</span><b>{bankRef.trim() || "—"}</b></div>
+            {split
+              ? <div className="js-review-parts"><span className="paydoc-label">Transfers</span><b>{parts.map((p, i) => `${i + 1}. ${p.date} · ${thb(Number(p.amount) || 0)}${p.bankRef.trim() ? ` · ${p.bankRef.trim()}` : ""}${p.file ? " · slip" : ""}`).join("  ")}</b></div>
+              : <div><span className="paydoc-label">Bank reference</span><b>{bankRef.trim() || "—"}</b></div>}
             <div><span className="paydoc-label">Evidence</span><b>{file ? `Slip: ${file.name}` : noSlipReason.trim() ? `No slip — ${noSlipReason.trim()}` : "No slip, no reason given"}</b></div>
             <div><span className="paydoc-label">Accounting month</span><b>{months.join(" + ") || "—"}</b></div>
           </div>
@@ -215,7 +228,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
     <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="recpay-h" style={{ width: "min(680px, 100%)" }}>
         <h3 id="recpay-h">Record payment</h3>
-        <div className="mctx">{guideId} · {guide} · one bank transfer</div>
+        <div className="mctx">{guideId} · {guide} · {split ? `${parts.length} bank transfers, one payment` : "one bank transfer"}</div>
         <div className="mbody" style={{ display: "grid", gap: 14 }}>
           <Note tone="warn">A job becomes paid because this payment exists. Give the date the money actually left the bank — not today, if the transfer was earlier.</Note>
 
@@ -288,21 +301,51 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
             </label>
           )}
 
+          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+            <input type="checkbox" className="js-split-transfers" style={{ width: "auto", margin: 0 }} checked={split} onChange={(e) => setSplit(e.target.checked)} disabled={busy} />
+            Paid in several transfers · โอนหลายครั้ง <small style={{ color: "var(--ink-soft)" }}>(e.g. a wrong amount sent first, then the rest)</small>
+          </label>
+          {split && (
+            <div className="js-transfer-parts" style={{ display: "grid", gap: 6 }}>
+              {parts.map((p, i) => (
+                <div key={i} className="pay-form-grid js-transfer-part" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8 }}>
+                  <label><span className="paydoc-label">Transfer {i + 1} · date</span>
+                    <input type="date" name={`part-date-${i}`} value={p.date} max={today} onChange={(e) => setPart(i, { date: e.target.value })} disabled={busy} />
+                  </label>
+                  <label><span className="paydoc-label">Amount</span>
+                    <input name={`part-amount-${i}`} value={p.amount} inputMode="decimal" className="num" onChange={(e) => setPart(i, { amount: e.target.value })} disabled={busy} />
+                  </label>
+                  <label><span className="paydoc-label">Bank reference · optional</span>
+                    <input name={`part-ref-${i}`} value={p.bankRef} onChange={(e) => setPart(i, { bankRef: e.target.value })} disabled={busy} />
+                  </label>
+                  <label><span className="paydoc-label">Slip</span>
+                    <input type="file" accept="image/*,application/pdf" onChange={(e) => setPart(i, { file: e.target.files?.[0] ?? null })} disabled={busy} />
+                  </label>
+                  {parts.length > 2 && <button type="button" className="btn sm ghost" onClick={() => setParts((ps) => ps.filter((_, n) => n !== i))} disabled={busy}>Remove</button>}
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12.5 }}>
+                {parts.length < 10 && <button type="button" className="btn sm" onClick={() => setParts((ps) => [...ps, { amount: "", date: partsLast, bankRef: "", file: null }])} disabled={busy}>+ Another transfer</button>}
+                <span className="js-parts-total">Together <b className="num">{thb(partsTotal)}</b> · payment dated {partsLast} (the last transfer). Withholding is on the job's fee as usual — not on each transfer.</span>
+              </div>
+            </div>
+          )}
+
           <div className="pay-form-grid">
             <label><span className="paydoc-label">Payment date · when the bank sent it</span>
-              <input type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} disabled={busy} />
+              <input type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} disabled={busy || split} />
             </label>
             <label><span className="paydoc-label">Amount transferred</span>
-              <input value={amount} inputMode="decimal" className="num" onChange={(e) => { setAmountTouched(true); setAmount(e.target.value); }} disabled={busy} />
+              <input value={amount} inputMode="decimal" className="num" onChange={(e) => { setAmountTouched(true); setAmount(e.target.value); }} disabled={busy || split} />
             </label>
-            <label><span className="paydoc-label">Bank reference · optional</span>
+            {!split && <><label><span className="paydoc-label">Bank reference · optional</span>
               <input value={bankRef} onChange={(e) => setBankRef(e.target.value)} placeholder="Transaction id from the slip" disabled={busy} />
             </label>
             <label><span className="paydoc-label">Bank slip</span>
               <input type="file" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} disabled={busy} />
-            </label>
+            </label></>}
           </div>
-          {!file && (
+          {(split ? !parts.every((p) => p.file) : !file) && (
             <label><span className="paydoc-label">No slip? Say why</span>
               <input value={noSlipReason} onChange={(e) => setNoSlipReason(e.target.value)} placeholder="e.g. cash paid in person, slip to follow" disabled={busy} />
             </label>

@@ -17,7 +17,7 @@ const TABLES = [
   // Supplemental payments point at GuidePayment (their transfer and the payout they
   // followed), so they truncate first.
   "GuidePaymentSupplementLine", "SupplementalPayment", "Bonus",
-  "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
+  "GuidePaymentTransfer", "GuidePaymentAdjustment", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument",
   // Certificates in lieu of receipts hang off JobSheet, so they truncate before it.
   // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it
   // makes the NEXT test collide on a file id its own fake Drive just reissued.

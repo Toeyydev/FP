@@ -118,3 +118,41 @@ describe("isHistoricalPayment", () => {
     expect(isHistoricalPayment("", now)).toBe(false);
   });
 });
+
+describe("checkPayment — one payment made in several bank transfers", () => {
+  // A ฿1,000 fee: 3% withheld once, on the job — ฿970 owed, sent as ฿100 by mistake, then ฿870.
+  const facts = [fact("2099-09-10", 0, sheet("FOLK-BKK-20990910-01", fee(1000), []))];
+  const job = { jobNo: "FOLK-BKK-20990910-01", date: "2099-09-10", slotIdx: 0 };
+  const parts = (over: Partial<NonNullable<PaymentRequest["transfers"]>[number]>[] = []) => [
+    { amount: 100, date: "2099-09-12", bankRef: "BANK-A", hasSlip: true, ...over[0] },
+    { amount: 870, date: "2099-09-13", bankRef: "BANK-B", hasSlip: true, ...over[1] },
+  ];
+  const req = (over: Partial<PaymentRequest> = {}) => base({ jobs: [job], amountTransferred: 970, paymentDate: "2099-09-13", hasSlip: false, transfers: parts(), ...over });
+  it("฿100 + ฿870 = ฿970: the job's withholding (฿30 on ฿1,000) is unchanged, dated the last transfer", () => {
+    const c = checkPayment(req(), facts, { today: TODAY });
+    expect(c.reasons).toEqual([]);
+    expect(c.reconciliation).toMatchObject({ jobTotal: 970, amountTransferred: 970, balanced: true });
+    expect(c.jobs[0].figures).toMatchObject({ feeGross: 1000, wht: 30, payable: 970 });
+  });
+  it("the transfers must add up to the amount, and the payment is dated the last of them", () => {
+    expect(checkPayment(req({ amountTransferred: 1000 }), facts, { today: TODAY }).reasons.join(" ")).toMatch(/add up to 970\.00, not the 1000\.00/);
+    expect(checkPayment(req({ paymentDate: "2099-09-12" }), facts, { today: TODAY }).reasons.join(" ")).toMatch(/last transfer's date, 2099-09-13/);
+  });
+  it("each transfer is real: an amount, a date not in the future and not before the tour, its own reference", () => {
+    const r = (o: Parameters<typeof parts>[0]) => checkPayment(req({ transfers: parts(o) }), facts, { today: TODAY }).reasons.join(" | ");
+    expect(r([{ amount: 0 }])).toMatch(/Transfer 1: enter the amount/);
+    expect(r([{}, { date: "2099-09-25" }])).toMatch(/Transfer 2: 2099-09-25 is in the future/);
+    expect(r([{ date: "2099-09-09" }])).toMatch(/Transfer 1: 2099-09-09 is before the tour/);
+    expect(r([{}, { bankRef: "BANK-A" }])).toMatch(/given twice/);
+  });
+  it("each needs its slip, or the reason there is none", () => {
+    expect(checkPayment(req({ transfers: parts([{ hasSlip: false }]) }), facts, { today: TODAY }).reasons.join(" ")).toMatch(/Transfer 1: attach its slip/);
+    expect(checkPayment(req({ transfers: parts([{ hasSlip: false }]), noSlipReason: "the first slip was not kept (example)" }), facts, { today: TODAY }).reasons).toEqual([]);
+  });
+  it("a reference or slip another payment already holds is refused, by transfer", () => {
+    expect(checkPayment(req(), facts, { today: TODAY, partsUsedBy: [null, "FOLK-PMT-209909-004"] }).reasons.join(" ")).toMatch(/Transfer 2: its bank reference BANK-B is already recorded on FOLK-PMT-209909-004/);
+  });
+  it("one transfer is not 'several'; more than ten is refused", () => {
+    expect(checkPayment(req({ transfers: [parts()[0]], amountTransferred: 100, paymentDate: "2099-09-12" }), facts, { today: TODAY }).reasons.join(" ")).toMatch(/two or more/);
+  });
+});
