@@ -260,3 +260,33 @@ describe("15–17 · a late booking or a cancellation changes the Rate mix — t
     expect(byDesc(await rowsNow(), "Grand Palace")).toMatchObject({ paidBy: "company", paidBySource: "rate-default" });
   });
 });
+
+describe("a recorded payer can be corrected while the job is not paid (2026-10-05)", () => {
+  // A ticket confirmed as company-paid, with a reason, before the advance that bought it was
+  // recorded; then the advance is recorded and the operator switches the row to it.
+  const ticket = (paidBy: string, extra: Record<string, unknown> = {}) => ({ description: "Temple ticket (example)", price: 500, pax: 1, expenseType: "entrance", paidBy, paidBySource: "operator", ...extra });
+  async function sheetWithCompanyTicket() {
+    await prisma.assignment.create({ data: { guideId: G, date: DATE, slotIdx: 0, tourId: "T-900", pax: 1 } });
+    await prisma.jobSheet.create({ data: { ref: "FOLK-TEST-PAYER-01", guideId: G, date: DATE, slotIdx: 0, tourId: "T-900", status: "Confirmed", guideFee: FEE, bookings: [],
+      expenses: [ticket("company", { paidByReason: "waiting for the advance (example)", paidByBy: "u_someone", paidByAt: "2099-01-01T00:00:00.000Z" })] as never } });
+    return prisma.guideAdvance.create({ data: { guideId: G, date: DATE, slotIdx: 0, amount: 500, paidAt: new Date(), method: "bank", txRef: "TX-PAYER-1", advanceNo: "FOLK-ADV-209910-951",
+      advanceDate: DATE, amountSatang: 50000, accountingPeriod: DATE.slice(0, 7), jobNo: "FOLK-TEST-PAYER-01", allowedCategories: ["entrance"] } });
+  }
+  it("unpaid: switching the row to the advance saves, links it, stamps the operator and audits the change", async () => {
+    const adv = await sheetWithCompanyTicket();
+    const r = await put([ticket("advance")], { baseUpdatedAt: await versionNow() });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const row = (await rowsNow())[0];
+    expect({ paidBy: row.paidBy, advanceId: (row as { advanceId?: string }).advanceId, by: row.paidByBy }).toEqual({ paidBy: "advance", advanceId: adv.id, by: opId });
+    const log = await prisma.auditLog.findFirstOrThrow({ where: { action: "jobsheet.saved" }, orderBy: { createdAt: "desc" } });
+    expect((log.detail as { payerChanges?: unknown }).payerChanges).toEqual([{ row: "Temple ticket (example)", from: "company", to: "advance" }]);
+  });
+  it("paid: the recorded payer is part of what was paid and stays", async () => {
+    await sheetWithCompanyTicket();
+    await prisma.tourPayment.create({ data: { guideId: G, date: DATE, slotIdx: 0, tourId: "T-900", status: "PAID", paidAt: new Date() } });
+    const r = await put([ticket("advance")], { baseUpdatedAt: await versionNow() });
+    expect(r.status).toBe(409);
+    expect(JSON.stringify(r.body)).toMatch(/carries a recorded payer/);
+    expect((await rowsNow())[0].paidBy).toBe("company");
+  });
+});

@@ -504,6 +504,8 @@ export async function PUT(req: NextRequest) {
   // own fields onto what is being written, and refuse if either the sheet moved under
   // this request or a signed-for row is not the row it was signed for.
   let payerReasons: { row: string; paidBy: string | null; reason: string }[] = [];
+  let payerChanges: { row: string; from: string | null; to: string | null }[] = [];
+  const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
     const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, updatedAt: true } });
@@ -515,7 +517,15 @@ export async function PUT(req: NextRequest) {
     // paid; a new one is refused — it would pay the review with the fee and withhold on it.
     const newReviews = newReviewRows((current?.expenses as Expense[]) ?? [], (d.expenses as Expense[]) ?? []);
     if (newReviews) return { kind: "review-row" as const };
-    const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet");
+    // An operator may correct a recorded payer while the job is not paid; once it is paid,
+    // the payer is part of what was paid and stays.
+    const [tp, activeJob] = await Promise.all([
+      tx.tourPayment.findUnique({ where: key, select: { status: true } }),
+      tx.guidePaymentJob.findFirst({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, active: true }, select: { id: true } }),
+    ]);
+    const allowPayerChange = isOpsSave && tp?.status !== "PAID" && !activeJob;
+    const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet", { allowPayerChange });
+    payerChanges = merged.payerChanges ?? [];
     if (merged.conflicts.length) return { kind: "conflicts" as const, conflicts: merged.conflicts };
     // Stamped AFTER the merge, so a carried stamp is seen and left alone. Stamping the
     // request body instead would have put whoever pressed Save over the person who
@@ -596,7 +606,7 @@ export async function PUT(req: NextRequest) {
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(payerChanges.length ? { payerChanges } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
   // The saved sheet goes back to whoever saved it — an operator, usually — so the rows
   // that a certificate stands behind are stripped on the way out for anyone but an admin.
   // The row they just saved is unchanged in the database; what they are not told is that

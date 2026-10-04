@@ -9,6 +9,9 @@ const prismaMock = vi.hoisted(() => ({
   assignment: { updateMany: vi.fn(), count: vi.fn(), findUnique: vi.fn(async () => null) },
   // The job's company advances, read to link Company Advance rows (lib/advances/link) — none here.
   guideAdvance: { findMany: vi.fn(async () => []) },
+  // Read on save: may a recorded payer be corrected (the job not paid yet)?
+  guidePaymentJob: { findFirst: vi.fn(async () => null) },
+  tourPayment: { findUnique: vi.fn(async () => null) },
 }));
 const authMock = vi.hoisted(() => vi.fn());
 const auditMock = vi.hoisted(() => vi.fn());

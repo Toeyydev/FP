@@ -278,3 +278,26 @@ describe("two rows that say the same thing", () => {
     expect(rows[2].evidenceWaiver).toEqual(waiver);  // Ferry kept its own
   });
 });
+
+describe("mergeServerOwned — an operator correcting a recorded payer on an unpaid job (2026-10-05)", () => {
+  const ticket = (over: Partial<ProtectedRow> = {}) => stamped({ description: "Temple ticket (example)", price: 500, pax: 1, expenseType: "entrance", paidBy: "company", paidBySource: "operator", ...over } as Partial<ProtectedRow>);
+  it("with allowPayerChange the same expense may take another payer: the old stamp is dropped, the change reported", () => {
+    const m = mergeServerOwned([ticket()], [{ ...ticket({ paidBy: "advance" }), paidByBy: undefined, paidByAt: undefined }], "This sheet", { allowPayerChange: true });
+    expect(m.conflicts).toEqual([]);
+    expect(m.rows[0]).toMatchObject({ paidBy: "advance" });
+    expect(m.rows[0].paidByBy).toBeUndefined(); // stamped afresh by the save with who chose it
+    expect(m.payerChanges).toEqual([{ row: "Temple ticket (example)", from: "company", to: "advance" }]);
+  });
+  it("without it (a paid job, or not an operator) the recorded payer stays and the change is refused", () => {
+    const m = mergeServerOwned([ticket()], [ticket({ paidBy: "advance" })], "This sheet");
+    expect(m.conflicts.join(" ")).toMatch(/carries a recorded payer/);
+  });
+  it("only the payer may change: a new price is still refused", () => {
+    const m = mergeServerOwned([ticket()], [ticket({ paidBy: "advance", price: 600 })], "This sheet", { allowPayerChange: true });
+    expect(m.conflicts.join(" ")).toMatch(/carries a recorded payer/);
+  });
+  it("a row with an accepted waiver keeps needing the exact expense", () => {
+    const m = mergeServerOwned([ticket({ evidenceWaiver: waiver } as Partial<ProtectedRow>)], [ticket({ paidBy: "advance" })], "This sheet", { allowPayerChange: true });
+    expect(m.conflicts.join(" ")).toMatch(/accepted receipt waiver/);
+  });
+});
