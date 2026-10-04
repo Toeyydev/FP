@@ -18,11 +18,12 @@
 // One matching word is never a MATCH: a first name and the start of a surname, printed for
 // a guide whose surname runs on for many more letters, is PARTIAL — a bank truncating a
 // surname and two people sharing a first name look the same from here.
+import { differsByBuddhistEra } from "@/lib/ce-date";
 import type { SlipRead } from "@/lib/advances/slip-read";
 import { txRefKey } from "@/lib/advances/tx-ref";
 
 export type SlipResult = "MATCH" | "PARTIAL" | "MISMATCH" | "UNKNOWN";
-export type FactCheck = "SAME" | "DIFFERENT" | "NOT_ON_SLIP";
+export type FactCheck = "SAME" | "DIFFERENT" | "NOT_ON_SLIP" | "NOT_TYPED";
 export type NameCheck = "FULL" | "TRUNCATED" | "ONE_NAME" | "NONE" | "CANNOT_COMPARE";
 export type AccountCheck = "MATCH" | "MISMATCH" | "CANNOT_COMPARE";
 
@@ -119,7 +120,7 @@ export function compareAccount(mask: string | null, accountNo: string | null): A
 }
 
 const fact = <T>(onSlip: T | null, typed: T | null, same: (a: T, b: T) => boolean): FactCheck =>
-  onSlip == null || typed == null ? "NOT_ON_SLIP" : same(onSlip, typed) ? "SAME" : "DIFFERENT";
+  onSlip == null ? "NOT_ON_SLIP" : typed == null ? "NOT_TYPED" : same(onSlip, typed) ? "SAME" : "DIFFERENT";
 
 export type Typed = { txRef: string | null; amount: number | null; advanceDate: string | null };
 
@@ -153,7 +154,10 @@ export function checkSlip(read: SlipRead | null, unreadable: string | null, type
   const say = (t: string, e: string) => { th.push(t); en.push(e); };
   if (checks.transactionId === "DIFFERENT") say("เลขอ้างอิงบน slip ไม่ตรงกับที่กรอก", "The reference on the slip is not the one typed.");
   if (checks.amount === "DIFFERENT") say("ยอดบน slip ไม่ตรงกับที่กรอก", "The amount on the slip is not the one typed.");
-  if (checks.date === "DIFFERENT") say("วันที่โอนบน slip ไม่ตรงกับที่กรอก", "The transfer date on the slip is not the one typed.");
+  if (checks.date === "DIFFERENT") {
+    if (differsByBuddhistEra(typed.advanceDate, read.transferDate)) say(`ปีที่กรอก (${typed.advanceDate?.slice(0, 4)}) เป็นปี พ.ศ. — ช่องวันที่ใช้ ค.ศ. (${read.transferDate?.slice(0, 4)}) แก้ปีแล้วตรวจใหม่`, `The year typed (${typed.advanceDate?.slice(0, 4)}) is the Buddhist-era year — the date field is Gregorian (${read.transferDate?.slice(0, 4)}). Fix the year.`);
+    else say("วันที่โอนบน slip ไม่ตรงกับที่กรอก", "The transfer date on the slip is not the one typed.");
+  }
   if (checks.account === "MISMATCH") say("เลขบัญชีปลายทางบน slip ไม่ใช่บัญชีของไกด์คนนี้", "The destination account on the slip is not this guide's account.");
   if (checks.otherGuideId) say(`slip นี้ดูเป็นของ ${checks.otherGuideId}`, `This slip looks like a transfer to ${checks.otherGuideId}.`);
   if (checks.name === "NONE") say("ชื่อผู้รับบน slip ไม่ตรงกับชื่อไกด์", "The recipient's name on the slip does not match this guide.");
@@ -172,6 +176,9 @@ export function checkSlip(read: SlipRead | null, unreadable: string | null, type
   if (checks.name === "CANNOT_COMPARE") say("ไม่มีชื่อเต็มของไกด์ในภาษาเดียวกับ slip ให้เทียบ", "No full name of this guide in the slip's script to compare with.");
   if (checks.account === "CANNOT_COMPARE") say("เทียบเลขบัญชีไม่ได้ (ไม่มีเลขบัญชีของไกด์ในระบบ หรือรูปแบบต่างกัน)", "The account could not be compared (no account on file for this guide, or a different format).");
   if (checks.transactionId === "NOT_ON_SLIP" || checks.amount === "NOT_ON_SLIP" || checks.date === "NOT_ON_SLIP") say("อ่านเลขอ้างอิง ยอด หรือวันที่จาก slip ได้ไม่ครบ", "The reference, amount or date could not all be read from the slip.");
+  // Nothing typed yet is not something the slip failed to show: say which field is empty.
+  const empty = [checks.amount === "NOT_TYPED" ? ["ยอด", "amount"] : null, checks.date === "NOT_TYPED" ? ["วันที่", "date"] : null, checks.transactionId === "NOT_TYPED" ? ["เลขอ้างอิง", "reference"] : null].filter((x): x is string[] => !!x);
+  if (empty.length) say(`ยังไม่ได้กรอก${empty.map((x) => x[0]).join(" ")} — กรอกให้ตรงกับ slip`, `The ${empty.map((x) => x[1]).join(", ")} ${empty.length > 1 ? "are" : "is"} not typed yet — type ${empty.length > 1 ? "them" : "it"} as on the slip.`);
   const positive = checks.name === "FULL" || checks.name === "TRUNCATED" || checks.name === "ONE_NAME" || checks.account === "MATCH";
   return { result: positive ? "PARTIAL" : "UNKNOWN", checks, slip, unreadable: null, reasons: [...th, ...en] };
 }

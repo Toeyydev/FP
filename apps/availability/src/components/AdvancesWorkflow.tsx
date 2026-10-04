@@ -11,6 +11,7 @@ import RecordExistingPeakDialog, { type LinkTarget } from "./RecordExistingPeakD
 import { thb } from "@/lib/jobsheet";
 import CopyMemo from "@/components/CopyMemo";
 import { advanceMemo } from "@/lib/bank-memo";
+import { ceDate } from "@/lib/ce-date";
 
 // The operator's view of company money a guide is holding.
 //
@@ -417,7 +418,7 @@ function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onCl
         </div>}
         <div style={{ display: "grid", gap: 8 }}>
           <label>Guide ID<input value={guideId} onChange={(e) => setGuideId(e.target.value)} placeholder="G-000" disabled={busy} /></label>
-          <label>Date the money left the bank<input type="date" value={advanceDate} onChange={(e) => setAdvanceDate(e.target.value)} disabled={busy} /></label>
+          <label>Date the money left the bank<input type="date" value={advanceDate} onChange={(e) => setAdvanceDate(ceDate(e.target.value))} disabled={busy} /></label>
           <label>Amount (฿)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} /></label>
           <label>Job No.<input value={jobNo} onChange={(e) => setJobNo(e.target.value)} placeholder="FOLK-BKK-…" disabled={busy} /></label>
           {/^FOLK-[A-Z]+-\d{8}-\d+$/.test(jobNo.trim()) && <CopyMemo memo={advanceMemo([jobNo.trim()])} label="Advance transfer" />}

@@ -6,6 +6,7 @@ import { Note } from "@/components/PeakPaymentDialog";
 import { ADJUSTMENT_LABEL, ADJUSTMENT_TYPES, reconciliationLine, toSatang, type AdjustmentType } from "@/lib/payments-v2/rules";
 import CopyMemo from "@/components/CopyMemo";
 import { payMemo } from "@/lib/bank-memo";
+import { ceDate } from "@/lib/ce-date";
 
 // Record one bank transfer to a guide: which jobs it pays, the date the money actually
 // left, the amount, any adjustment that makes those agree, and the slip. The jobs become
@@ -313,7 +314,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
               {parts.map((p, i) => (
                 <div key={i} className="pay-form-grid js-transfer-part" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8 }}>
                   <label><span className="paydoc-label">Transfer {i + 1} · date</span>
-                    <input type="date" name={`part-date-${i}`} value={p.date} max={today} onChange={(e) => setPart(i, { date: e.target.value })} disabled={busy} />
+                    <input type="date" name={`part-date-${i}`} value={p.date} max={today} onChange={(e) => setPart(i, { date: ceDate(e.target.value) })} disabled={busy} />
                   </label>
                   <label><span className="paydoc-label">Amount</span>
                     <input name={`part-amount-${i}`} value={p.amount} inputMode="decimal" className="num" onChange={(e) => setPart(i, { amount: e.target.value })} disabled={busy} />
@@ -336,7 +337,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
 
           <div className="pay-form-grid">
             <label><span className="paydoc-label">Payment date · when the bank sent it</span>
-              <input type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} disabled={busy || split} />
+              <input type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(ceDate(e.target.value))} disabled={busy || split} />
             </label>
             <label><span className="paydoc-label">Amount transferred</span>
               <input value={amount} inputMode="decimal" className="num" onChange={(e) => { setAmountTouched(true); setAmount(e.target.value); }} disabled={busy || split} />

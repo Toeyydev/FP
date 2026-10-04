@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { isBookedInGuidePayment } from "@/lib/advances/rules";
 import CopyMemo from "@/components/CopyMemo";
 import { refundMemo } from "@/lib/bank-memo";
+import { ceDate } from "@/lib/ce-date";
 
 export type OpsAdvance = {
   id: string; advanceNo: string; amount: number; outstanding: number; status: string | null; problems?: string[];
@@ -333,7 +334,7 @@ export function RefundRow({ f, ops, accountant, userId, frozen, busy, run }: {
       {mode === "pay" && (
         <div className="js-refund-pay-form" style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
           <CopyMemo memo={refundMemo(f.refundNo)} label="Refund transfer" />
-          <input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+          <input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(ceDate(e.target.value))} />
           <input className="js-refund-bankref" placeholder="Bank reference of the transfer" value={bankRef} onChange={(e) => setBankRef(e.target.value)} />
           <label className="btn sm" style={{ cursor: "pointer" }}>{file ? `📎 ${file.name.slice(0, 18)}` : "📎 Slip"}<input className="js-refund-file" type="file" accept="image/*,application/pdf" hidden onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
           <button className="btn sm primary js-refund-pay-submit" disabled={busy || bankRef.trim().length < 4 || !paidAt}
