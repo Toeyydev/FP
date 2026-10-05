@@ -325,6 +325,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/payments-unstaffed
 
+      # A tour that already ran with two guides: recorded from Record who guided, each
+      # booking placed with one guide, each guide with their own job, nobody notified.
+      - name: Record two guides on a past tour in a real browser
+        run: node scripts/e2e/record-shared-guides.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/record-shared-guides
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.

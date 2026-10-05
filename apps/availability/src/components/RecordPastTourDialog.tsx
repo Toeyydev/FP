@@ -15,7 +15,7 @@ import { SLOTS } from "@/lib/slots";
 type Slot = {
   slotIdx: number; time: string; pax: number;
   tours: { id: string; name: string }[];
-  bookings: { id: string; ref: string; pax: number | null; source: string; status: string }[];
+  bookings: { id: string; ref: string; pax: number | null; source: string; status: string; guideId?: string | null }[];
   staffedBy: { guideId: string; name: string }[];
   onSheets: { guideId: string; name: string; slotIdx: number; time: string; jobRef: string | null; refs: string[] }[];
   /** Bookings with no tour connected (the channel sent no product name). */
@@ -24,7 +24,7 @@ type Slot = {
 };
 type TourOption = { id: string; name: string; time: string | null };
 type Guide = { guideId: string; name: string; external: boolean };
-type Done = { kind: "recorded"; guideId: string; name: string } | { kind: "closed"; count: number } | { kind: "moved"; count: number; date: string; slotIdx: number };
+type Done = { kind: "recorded"; guideId: string; name: string } | { kind: "shared"; guides: { guideId: string; name: string; pax: number | null }[] } | { kind: "closed"; count: number } | { kind: "moved"; count: number; date: string; slotIdx: number };
 
 /** The day after `d` ("YYYY-MM-DD"), the usual place a guest who could not come is moved to. */
 const nextDay = (d: string) => new Date(Date.parse(`${d}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10);
@@ -45,6 +45,11 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
   // Marking some of a departure's bookings cancelled: which slot's form is open, and the ticked bookings.
   const [cancelling, setCancelling] = useState<{ slotIdx: number; ids: Set<string> } | null>(null);
   const [notice, setNotice] = useState("");
+  // A tour that ran with more than one guide: the guides (the first `fixed` are already
+  // recorded and stay), and which of them each booking went with (index into `guides`).
+  const [sharing, setSharing] = useState<{ slotIdx: number; guides: string[]; fixed: number; place: Record<string, number> } | null>(null);
+  // Only a tour from an earlier day is shared here, quietly; today's is shared with Split, which tells the guides.
+  const isPast = date < new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   const [touched, setTouched] = useState(false);
   const changed = touched || Object.keys(done).length > 0;
 
@@ -148,6 +153,75 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
     setBusy(null);
   }
 
+  const startSharing = (s: Slot) => {
+    const have = s.staffedBy.map((g) => g.guideId);
+    const guides = have.length ? [...have, ""] : [pick[s.slotIdx] ?? "", ""];
+    setMoving(null); setCancelling(null);
+    setSharing({ slotIdx: s.slotIdx, guides, fixed: have.length, place: Object.fromEntries(s.bookings.map((b) => [b.id, Math.max(0, have.indexOf(b.guideId ?? ""))])) });
+  };
+  async function recordShared(s: Slot) {
+    if (!sharing || sharing.slotIdx !== s.slotIdx) return;
+    const chosenTour = tourPick[s.slotIdx];
+    const ids = sharing.guides;
+    if (ids.some((g) => !g) || new Set(ids).size !== ids.length) { setFailed((f) => ({ ...f, [s.slotIdx]: "Choose a different guide in each row" })); return; }
+    if (s.unmappedIds.length && !chosenTour) { setFailed((f) => ({ ...f, [s.slotIdx]: "Choose the tour first" })); return; }
+    setBusy(s.slotIdx); setFailed((f) => ({ ...f, [s.slotIdx]: "" }));
+    try {
+      for (const id of s.unmappedIds) {
+        const u = await fetch("/api/bookings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "update", id, tourId: chosenTour }) });
+        if (!u.ok) { setFailed((f) => ({ ...f, [s.slotIdx]: `Could not connect the tour (${u.status}) — nothing was recorded` })); setBusy(null); return; }
+      }
+      const groups = ids.map((guideId, i) => ({ guideId, bookingIds: s.bookings.filter((b) => (sharing.place[b.id] ?? 0) === i).map((b) => b.id) }));
+      const r = await fetch("/api/assignments/past", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date, slotIdx: s.slotIdx, tourId: s.tours[0]?.id ?? chosenTour, groups }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) {
+        const named = (d.guides as { guideId: string; pax: number | null }[]).map((g) => ({ ...g, name: guides.find((x) => x.guideId === g.guideId)?.name ?? s.staffedBy.find((x) => x.guideId === g.guideId)?.name ?? g.guideId }));
+        setTouched(true);
+        if (s.staffedBy.length) { await load(); setNotice(`✓ ${s.time} is now shared by ${named.map((g) => `${g.guideId} ${g.name}`).join(" and ")}. Nobody was notified.`); }
+        else setDone((x) => ({ ...x, [s.slotIdx]: { kind: "shared", guides: named } }));
+        setSharing(null);
+      } else setFailed((f) => ({ ...f, [s.slotIdx]: Array.isArray(d.reasons) && d.reasons.length ? d.reasons.join(" · ") : `Not recorded (${d.error ?? r.status})` }));
+    } catch { setFailed((f) => ({ ...f, [s.slotIdx]: "The connection dropped — reopen this day to see whether it was recorded" })); }
+    setBusy(null);
+  }
+  const shareForm = (s: Slot) => sharing?.slotIdx !== s.slotIdx ? null : (
+    <div className="js-share-form" style={{ display: "grid", gap: 8 }}>
+      <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>This tour ran with more than one guide · ทัวร์นี้มีไกด์มากกว่า 1 คน. Each guide gets their own job and job sheet; choose who each booking went with. Nobody is notified.</span>
+      {sharing.guides.map((g, i) => (
+        <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <b style={{ fontSize: 12.5, minWidth: 54 }}>Guide {i + 1}</b>
+          <select aria-label={`Guide ${i + 1} for ${s.time}`} className="search" style={{ flex: 1, minWidth: 0 }} value={g} disabled={busy !== null || i < sharing.fixed}
+            onChange={(e) => setSharing({ ...sharing, guides: sharing.guides.map((x, k) => (k === i ? e.target.value : x)) })}>
+            <option value="">Choose the guide…</option>
+            {guides.map((x) => <option key={x.guideId} value={x.guideId}>{x.guideId} · {x.name}{x.external ? " (one-off)" : ""}</option>)}
+            {i < sharing.fixed && !guides.some((x) => x.guideId === g) && <option value={g}>{g} · {s.staffedBy.find((x) => x.guideId === g)?.name ?? g}</option>}
+          </select>
+          {i >= Math.max(2, sharing.fixed) && <button type="button" className="btn sm ghost" disabled={busy !== null} aria-label={`Remove guide ${i + 1}`}
+            onClick={() => setSharing({ ...sharing, guides: sharing.guides.filter((_, k) => k !== i), place: Object.fromEntries(Object.entries(sharing.place).map(([id, k]) => [id, k === i ? 0 : k > i ? k - 1 : k])) })}>×</button>}
+        </div>
+      ))}
+      {sharing.guides.length < 4 && <button type="button" className="btn sm ghost" style={{ justifySelf: "start" }} disabled={busy !== null} onClick={() => setSharing({ ...sharing, guides: [...sharing.guides, ""] })}>+ Guide</button>}
+      {s.bookings.length > 0 && (
+        <div style={{ display: "grid", gap: 4 }}>
+          {s.bookings.map((b) => (
+            <label key={b.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>{b.ref} ×{b.pax ?? "?"} · {b.source}</span>
+              <select aria-label={`Guide for booking ${b.ref}`} className="search" style={{ flex: "0 0 130px", width: 130 }} value={sharing.place[b.id] ?? 0} disabled={busy !== null}
+                onChange={(e) => setSharing({ ...sharing, place: { ...sharing.place, [b.id]: Number(e.target.value) } })}>
+                {sharing.guides.map((g, i) => <option key={i} value={i}>Guide {i + 1}{g ? ` · ${g}` : ""}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="btn sm primary js-share-confirm" onClick={() => recordShared(s)} disabled={busy !== null || sharing.guides.some((g) => !g)}>{busy === s.slotIdx ? "Recording…" : `Record ${sharing.guides.length} guides`}</button>
+        <button className="btn sm ghost" onClick={() => setSharing(null)} disabled={busy !== null}>Back</button>
+      </div>
+      {s.staffedBy.length > 0 && failed[s.slotIdx] && <Note tone="danger">{failed[s.slotIdx]}</Note>}
+    </div>
+  );
+
   const open = (slots ?? []).filter((s) => !s.staffedBy.length);
   const staffed = (slots ?? []).filter((s) => s.staffedBy.length);
 
@@ -192,7 +266,16 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
                     <span className="badge active">✓ Recorded {d.guideId} · {d.name}</span>
                     <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(d.guideId)}&date=${date}&slotIdx=${s.slotIdx}`}>Open job sheet →</a>
                   </div>
-                ) : d?.kind === "closed" ? (
+                ) : d?.kind === "shared" ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }} aria-live="polite">
+                    {d.guides.map((g) => (
+                      <span key={g.guideId} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <span className="badge active">✓ {g.guideId} · {g.name}{g.pax != null ? ` · ${g.pax} pax` : ""}</span>
+                        <a className="btn sm" href={`/job-sheet?guideId=${encodeURIComponent(g.guideId)}&date=${date}&slotIdx=${s.slotIdx}`}>Job sheet →</a>
+                      </span>
+                    ))}
+                  </div>
+                ) : sharing?.slotIdx === s.slotIdx ? shareForm(s) : d?.kind === "closed" ? (
                   <span className="badge" aria-live="polite">Closed · {d.count} booking{d.count === 1 ? "" : "s"} archived</span>
                 ) : d?.kind === "moved" ? (
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }} aria-live="polite">
@@ -238,6 +321,7 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
                     <button className="btn sm ghost" onClick={() => closeBookings(s)} disabled={busy !== null} title="The tour did not really run with a guide — archive its bookings">Didn&rsquo;t run…</button>
                     <button className="btn sm ghost js-move-open" onClick={() => setMoving({ slotIdx: s.slotIdx, date: nextDay(date), to: 0 })} disabled={busy !== null} title="The guest changed to another date or time — move the booking there">Move…</button>
                     <button className="btn sm ghost js-cancel-open" onClick={() => { setMoving(null); setCancelling({ slotIdx: s.slotIdx, ids: new Set() }); }} disabled={busy !== null} title="The guest cancelled — mark the booking Cancelled">Cancelled…</button>
+                    {isPast && <button className="btn sm ghost js-share-open" onClick={() => startSharing(s)} disabled={busy !== null} title="This tour ran with more than one guide — record each, and who each booking went with">+ Add another guide</button>}
                   </div>
                 )}
                 {failed[s.slotIdx] && <Note tone="danger">{failed[s.slotIdx]}</Note>}
@@ -252,9 +336,13 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
                 // late and never made it onto the job sheet. Fixed on the sheet itself.
                 const waiting = s.bookings.filter((b) => b.status === "PENDING" || b.status === "OFFERED");
                 return (
-                  <span key={s.slotIdx}>{[s.time, s.tours.map((t) => t.name).join(" + "), s.pax > 0 ? `${s.pax} pax` : "", s.staffedBy.map((g) => `${g.guideId} ${g.name}`).join(", ")].filter(Boolean).join(" · ")}
+                  <div key={s.slotIdx} className="js-staffed-slot" style={{ display: "grid", gap: 6 }}>
+                  <span>{[s.time, s.tours.map((t) => t.name).join(" + "), s.pax > 0 ? `${s.pax} pax` : "", s.staffedBy.map((g) => `${g.guideId} ${g.name}`).join(", ")].filter(Boolean).join(" · ")}
+                    {isPast && sharing?.slotIdx !== s.slotIdx && <button type="button" className="btn sm ghost js-share-open-staffed" style={{ marginLeft: 6 }} disabled={busy !== null} onClick={() => startSharing(s)} title="This tour ran with more than one guide">+ Add another guide</button>}
                     {waiting.length > 0 && <> · <b style={{ color: "var(--danger, #b3402f)" }}>{waiting.length} booking{waiting.length === 1 ? "" : "s"} still waiting</b>{s.staffedBy.map((g) => <a key={g.guideId} className="btn sm js-past-waiting" style={{ marginLeft: 6 }} href={`/job-sheet?guideId=${encodeURIComponent(g.guideId)}&date=${date}&slotIdx=${s.slotIdx}`}>Open {g.guideId}&rsquo;s job sheet →</a>)}</>}
                   </span>
+                  {sharing?.slotIdx === s.slotIdx && <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 10, color: "var(--ink)" }}>{shareForm(s)}</div>}
+                  </div>
                 );
               })}
             </div>

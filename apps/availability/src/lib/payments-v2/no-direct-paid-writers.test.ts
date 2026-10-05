@@ -66,6 +66,8 @@ describe("repository invariant — only payments-v2 can make a job PAID", () => 
       "lib/advances/service.ts",
       // Skips cancelling a job that was already paid (a filter).
       "lib/booking-import.ts",
+      // Reads which guides on a past tour are already paid, to refuse changing their guests (a filter).
+      "lib/past-shared-guides.ts",
       // Takes a wrongly attached slip off a legacy PAID row: PAID only in the guard
       // (`where`), and the write sets PENDING. It can un-pay, never pay.
       "lib/payment-slip-correction.ts",

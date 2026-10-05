@@ -3,7 +3,10 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { bookingRef } from "@/lib/booking-ref";
+import { z } from "zod";
 import { pastDaySlots, suggestTourFor } from "@/lib/past-unstaffed";
+import { recordPastSharedGuides } from "@/lib/past-shared-guides";
+import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +34,7 @@ export async function GET(req: NextRequest) {
       // Bookings with no tour connected are included: a channel that sent no product
       // name leaves tourId empty, and those tours must not vanish from the record.
       where: { date, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-      select: { id: true, slotIdx: true, tourId: true, pax: true, externalRef: true, confirmationCode: true, customerName: true, source: true, status: true },
+      select: { id: true, slotIdx: true, tourId: true, pax: true, externalRef: true, confirmationCode: true, customerName: true, source: true, status: true, assignedGuideId: true },
       orderBy: [{ slotIdx: "asc" }, { createdAt: "asc" }],
     }),
     prisma.assignment.findMany({ where: { date }, select: { guideId: true, slotIdx: true, tourId: true } }),
@@ -55,8 +58,27 @@ export async function GET(req: NextRequest) {
       staffedBy: s.staffedBy.map((g) => ({ guideId: g, name: names.get(g) ?? g })),
       onSheets: s.onSheets.map((o) => ({ ...o, name: names.get(o.guideId) ?? o.guideId, time: SLOT_TIMES[o.slotIdx] ?? "" })),
       suggestTourId: s.unmappedIds.length ? suggestTourFor(SLOT_TIMES[s.slotIdx] ?? "", tours) : null,
+      // Which guide each booking is placed with, when the tour is shared between guides.
+      bookings: s.bookings.map((b) => ({ ...b, guideId: bookings.find((x) => x.id === b.id)?.assignedGuideId ?? null })),
     })),
     tours: tours.map((t) => ({ id: t.id, name: t.name, time: t.time })),
     guides: guides.map((g) => ({ guideId: g.guideId!, name: g.displayName, external: g.external })),
   });
+}
+
+// POST { date, slotIdx, tourId, groups: [{ guideId, bookingIds[] }] } — a tour that already
+// ran had more than one guide: each gets their own job and each booking goes with one of
+// them. Nobody is notified (lib/past-shared-guides). Operators only.
+export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!isOps(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const parsed = z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), slotIdx: z.number().int().min(0).max(SLOT_TIMES.length - 1), tourId: z.string().min(1),
+    groups: z.array(z.object({ guideId: z.string().min(1), bookingIds: z.array(z.string().min(1)).max(60) })).min(1).max(8),
+  }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: ["The request was not understood"] }, { status: 400 });
+  const r = await recordPastSharedGuides(prisma, { ...parsed.data, today: bkkToday(), actor: { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null } });
+  if (!r.ok) return NextResponse.json({ error: "not-recorded", reasons: r.reasons }, { status: r.status });
+  forgetCached(DASHBOARD_CACHE_KEY);
+  return NextResponse.json({ ok: true, guides: r.guides });
 }
