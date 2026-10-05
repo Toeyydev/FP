@@ -161,7 +161,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
             {advances.map((a) => (
               <tr key={a.id}>
-                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}<VoucherLine advance={a} /></td>
+                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}<VoucherLine advance={a} canReissue={canEdit} onReissued={() => void load()} /></td>
                 <td>{a.guideId}</td>
                 <td>{a.advanceDate}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
@@ -333,11 +333,24 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
 }
 
 /** The guide's own copy: where it is filed, and whether they have confirmed it. */
-function VoucherLine({ advance }: { advance: Advance }) {
-  if (!advance.voucherUrl && !advance.acknowledgedAt) return null;
+function VoucherLine({ advance, canReissue = false, onReissued }: { advance: Advance; canReissue?: boolean; onReissued?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  if (!advance.voucherUrl && !advance.acknowledgedAt && !canReissue) return null;
+  // File the Drive copy again from the ledger as it is now — picks up the approver's
+  // signature, the PEAK document number and the guide's acknowledgement.
+  async function reissue() {
+    setBusy(true);
+    const r = await fetch(`/api/advances/${advance.id}/voucher`, { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok || !d.ok) { alert((d.reasons ?? []).join("\n") || `Could not file the voucher again (${r.status}).`); return; }
+    onReissued?.();
+    window.open(d.voucherUrl, "_blank", "noopener");
+  }
   return (
     <div style={{ fontSize: 11.5, marginTop: 2 }}>
       {advance.voucherUrl && <a href={advance.voucherUrl} target="_blank" rel="noreferrer">ใบสำคัญจ่าย</a>}
+      {canReissue && <button type="button" className="js-voucher-reissue" disabled={busy} onClick={() => void reissue()} title="File the voucher in Drive again from the current record — adds the approver's signature if it was filed without one · ออกใบสำคัญจ่ายใหม่" style={{ marginLeft: 6, border: 0, background: "none", color: "var(--primary)", cursor: "pointer", font: "inherit", textDecoration: "underline", padding: 0 }}>{busy ? "กำลังออกใหม่…" : "ออกใหม่"}</button>}
       {advance.acknowledgedAt
         ? <span className="badge ok" style={{ marginLeft: 6 }}>ไกด์ยืนยันรับแล้ว</span>
         : <span className="muted" style={{ marginLeft: 6 }}>รอไกด์ยืนยันรับ</span>}

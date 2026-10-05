@@ -118,3 +118,46 @@ describe("filing the voucher", () => {
       .resolves.toBeNull();
   });
 });
+
+describe("the approver's signature on the voucher", () => {
+  const SIG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const advance = {
+    id: "adv_1", advanceNo: "FOLK-ADV-209901-001", guideId: "G-901", jobNo: "FOLK-TEST-0001", createdById: "u_admin",
+    advanceDate: "2099-01-20", amountSatang: 100_000, purpose: null, method: "bank",
+    txRef: "TRTS209901000000001", slipUrl: null, peakDocumentNo: null, acknowledgedAt: null,
+  };
+  const db = () => ({
+    guideAdvance: { findUnique: vi.fn(async () => advance), update: vi.fn() },
+    user: { findUnique: vi.fn(async () => ({ displayName: "Nok Example" })) },
+    jobSheet: { findFirst: vi.fn(async () => ({ date: "2099-01-20", tourId: "T-900" })) },
+    tour: { findUnique: vi.fn(async () => ({ name: "Riverside Temples" })) },
+  }) as never;
+
+  it("prints the signature and the name in Approved by; without one the line is left for a pen", () => {
+    const signed = advanceVoucherHtml({ ...base, approver: { name: "Malee Testsuite", signatureDataUri: SIG } });
+    expect(signed).toContain(`<img src="${SIG}"`);
+    expect(signed).toContain("ผู้อนุมัติ / Approved by — Malee Testsuite");
+    const blank = advanceVoucherHtml(base);
+    expect(blank).not.toContain("<img");
+    expect(blank).toContain("ผู้อนุมัติ / Approved by</small>");
+  });
+
+  it("the filed copy is signed by whoever recorded the advance, and says so to the caller", async () => {
+    const saveHtml = vi.fn(async () => ({ id: "file_1", link: "https://drive.example.test/voucher" }));
+    const approver = vi.fn(async () => ({ name: "Malee Testsuite", signatureDataUri: SIG }));
+    const onIssued = vi.fn();
+    await saveAdvanceVoucher(db(), "adv_1", { enabled: true, token: async () => "t", saveHtml, approver, onIssued });
+    expect(approver).toHaveBeenCalledWith("u_admin");
+    expect(saveHtml.mock.calls[0][0].html).toContain(`<img src="${SIG}"`);
+    expect(onIssued).toHaveBeenCalledWith({ advanceId: "adv_1", advanceNo: "FOLK-ADV-209901-001", signed: true, fileId: "file_1" });
+  });
+
+  it("a signature that cannot be resolved never stops the voucher — it is filed unsigned", async () => {
+    const saveHtml = vi.fn(async () => ({ id: "file_1", link: "https://drive.example.test/voucher" }));
+    const onIssued = vi.fn();
+    const link = await saveAdvanceVoucher(db(), "adv_1", { enabled: true, token: async () => "t", saveHtml, approver: async () => { throw new Error("drive down"); }, onIssued });
+    expect(link).toBe("https://drive.example.test/voucher");
+    expect(saveHtml.mock.calls[0][0].html).not.toContain("<img");
+    expect(onIssued).toHaveBeenCalledWith(expect.objectContaining({ signed: false }));
+  });
+});
