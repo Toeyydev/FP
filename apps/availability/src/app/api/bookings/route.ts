@@ -272,6 +272,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, closed: r.count });
   }
 
+  // The guest cancelled and the channel never said so (or said so somewhere FolkOPS did not
+  // read): the operator marks the bookings CANCELLED. Only bookings nobody guides — one on a
+  // guide's job is cancelled through the job, where the sheet and the pay follow. The status
+  // is the operator's word, so cancelledAtSource (the CHANNEL's own time) stays empty.
+  if (action === "cancelUnstaffed") {
+    const parsed = z.object({ ids: z.array(z.string().min(1)).min(1).max(50), reason: z.string().max(200).optional() }).safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
+    const where = { id: { in: parsed.data.ids }, status: { in: ["PENDING", "OFFERED"] }, assignedGuideId: null };
+    const rows = await prisma.booking.findMany({ where, select: { id: true, confirmationCode: true, externalRef: true, date: true, slotIdx: true, status: true } });
+    const r = await prisma.booking.updateMany({ where: { ...where, id: { in: rows.map((b) => b.id) } }, data: { status: "CANCELLED" } });
+    await audit({ actorId, actorRole, action: "booking.cancelled_by_operator", entityType: "Booking",
+      detail: { reason: (parsed.data.reason ?? "").trim() || null, cancelled: r.count, asked: parsed.data.ids.length,
+        bookings: rows.map((b) => ({ id: b.id, ref: b.confirmationCode ?? b.externalRef ?? null, date: b.date, slotIdx: b.slotIdx, from: b.status })) } });
+    forgetCached(DASHBOARD_CACHE_KEY);
+    return NextResponse.json({ ok: true, cancelled: r.count });
+  }
+
   // Mark a set of bookings as offered (after the operator sent the job offer).
   if (action === "markOffered") {
     const parsed = z.object({ ids: z.array(z.string().min(1)).min(1) }).safeParse(body);

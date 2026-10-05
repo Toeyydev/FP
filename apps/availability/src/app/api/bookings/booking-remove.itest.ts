@@ -206,3 +206,29 @@ describe("an operator moves a booking to another date or time", () => {
     expect(await moves()).toHaveLength(0);
   });
 });
+
+describe("an operator marks bookings cancelled that nobody guides", () => {
+  it("they become CANCELLED, on record with who and which; a booking on a guide's job, or already cancelled, is left alone", async () => {
+    const a = await mk("CXL-1", 2, { status: "PENDING" }), b = await mk("CXL-2", 1, { status: "OFFERED" });
+    const onJob = await mk("CXL-JOB", 3, { status: "OFFERED", assignedGuideId: A });
+    const already = await mk("CXL-OLD", 1, { status: "CANCELLED" });
+    const r = await act({ action: "cancelUnstaffed", ids: [a.id, b.id, onJob.id, already.id], reason: "guest cancelled (example)" });
+    expect(r).toMatchObject({ status: 200, body: { ok: true, cancelled: 2 } });
+    const status = async (id: string) => (await prisma.booking.findUniqueOrThrow({ where: { id } })).status;
+    expect([await status(a.id), await status(b.id), await status(onJob.id), await status(already.id)]).toEqual(["CANCELLED", "CANCELLED", "OFFERED", "CANCELLED"]);
+    // The operator's word, not the channel's: the channel's cancellation time stays empty.
+    expect((await prisma.booking.findUniqueOrThrow({ where: { id: a.id } })).cancelledAtSource).toBeNull();
+    const log = await prisma.auditLog.findFirstOrThrow({ where: { action: "booking.cancelled_by_operator" } });
+    expect(log).toMatchObject({ actorId: ops.id });
+    expect(log.detail).toMatchObject({ cancelled: 2, asked: 4, reason: "guest cancelled (example)" });
+    expect(((log.detail as { bookings: { ref: string }[] }).bookings).map((x) => x.ref).sort()).toEqual(["CODE-CXL-1", "CODE-CXL-2"]);
+  });
+
+  it("a guide cannot", async () => {
+    const a = await mk("CXL-3", 2, { status: "PENDING" });
+    authMock.auth.mockResolvedValue({ user: { id: guideA.id, role: "GUIDE" } });
+    const r = await act({ action: "cancelUnstaffed", ids: [a.id] });
+    expect(r.status).toBe(403);
+    expect((await prisma.booking.findUniqueOrThrow({ where: { id: a.id } })).status).toBe("PENDING");
+  });
+});
