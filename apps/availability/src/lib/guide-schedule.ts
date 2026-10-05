@@ -29,12 +29,31 @@ export function bangkokToday(nowMs: number = Date.now()): string {
   return new Date(nowMs + 7 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-// The guide's upcoming assigned tours (today onward).
-export async function guideSchedule(guideId: string, nowMs: number = Date.now()): Promise<ScheduleItem[]> {
+/** How far back FolkOPS Mobile still lists a tour the guide has not reported on.
+ *  Long enough to catch up after a few days off; anything older is the operator's
+ *  to chase, not a reminder a guide scrolls past every morning. */
+export const UNREPORTED_LOOKBACK_DAYS = 7;
+
+function shiftDay(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// The guide's assigned tours from today onward — and, with `unreportedDays`, the
+// ones from the days before that still owe their end-of-tour report.
+//
+// Without that, a tour vanished from the app at midnight whether or not it had
+// been reported: a guide who finished at 18:30 and meant to report in the morning
+// woke to nothing to report, and no badge saying they owed one. Nothing on the
+// server stops a late report; only the list did.
+export async function guideSchedule(guideId: string, nowMs: number = Date.now(), opts: { unreportedDays?: number } = {}): Promise<ScheduleItem[]> {
   const today = bangkokToday(nowMs);
+  const lookback = Math.max(0, Math.floor(opts.unreportedDays ?? 0));
+  const since = lookback > 0 ? shiftDay(today, -lookback) : today;
 
   const rows = await prisma.assignment.findMany({
-    where: { guideId, date: { gte: today } },
+    where: { guideId, date: { gte: since } },
     include: { tour: true },
     orderBy: [{ date: "asc" }, { slotIdx: "asc" }],
     take: 200,
@@ -73,7 +92,9 @@ export async function guideSchedule(guideId: string, nowMs: number = Date.now())
     for (const r of reports) reported.add(`${r.date}|${r.slotIdx}`);
   }
 
-  return rows.map((a) => {
+  // Before today, only what is still owed: a past tour already reported is done.
+  // Without a lookback the list is exactly what it always was.
+  return rows.filter((a) => lookback === 0 || a.date >= today || !reported.has(`${a.date}|${a.slotIdx}`)).map((a) => {
     const real = livePax.for(a.tourId, a.date, a.slotIdx, guideId);
     return {
       date: a.date, slotIdx: a.slotIdx, time: SLOT_TIMES[a.slotIdx] ?? "",
