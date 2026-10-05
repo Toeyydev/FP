@@ -8,7 +8,7 @@ import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { productKey, isChannelProductName } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
-import { reconcileWithdrawn, type Withdrawn } from "@/lib/booking-reconcile";
+import { reconcileBookingChange, reconcileWithdrawn, type Withdrawn } from "@/lib/booking-reconcile";
 import { withTimeout } from "@/lib/api-cache";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 
@@ -197,6 +197,7 @@ export async function POST(req: NextRequest) {
     // The pin is only ever set here, by a human act; it is never inferred, and the
     // sync already honours it (lib/booking-import slotFields).
     const moved = rest.date !== undefined || rest.slotIdx !== undefined;
+    const before = moved ? await prisma.booking.findUnique({ where: { id }, select: { date: true, slotIdx: true } }) : null;
     const b = await prisma.booking.update({
       where: { id },
       data: moved ? { ...rest, datePinned: true } : rest,
@@ -217,6 +218,16 @@ export async function POST(req: NextRequest) {
         where: { productName: b.productName, tourId: null, status: { in: ["PENDING"] } },
         data: { tourId: rest.tourId },
       });
+    }
+    // A real move (another date or departure time): on record with where it was, and the
+    // departure it LEFT is reconciled too — its job sheet must stop listing the guest.
+    if (before && (before.date !== b.date || before.slotIdx !== b.slotIdx)) {
+      await audit({ actorId, actorRole, action: "booking.moved", entityType: "Booking", entityId: b.id,
+        detail: { ref: b.confirmationCode ?? b.externalRef ?? null, from: { date: before.date, slotIdx: before.slotIdx }, to: { date: b.date, slotIdx: b.slotIdx }, pinned: true } });
+      const previous = before.date && before.slotIdx != null ? [{ date: before.date, slotIdx: before.slotIdx }] : [];
+      try { await reconcileBookingChange(b.id, { source: "manual-sync", reason: "booking moved by an operator", previous }); } catch { /* best-effort; the move is saved */ }
+      forgetCached(DASHBOARD_CACHE_KEY);
+      return NextResponse.json({ ok: true, booking: b, moved: true });
     }
     // Setting a tour/slot may now match an assigned slot — attach to that guide.
     await autoAttachLate(b, "manual-sync");
