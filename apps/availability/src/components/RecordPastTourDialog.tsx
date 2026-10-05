@@ -42,7 +42,11 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
   const [failed, setFailed] = useState<Record<number, string>>({});
   // Moving a departure's bookings to another date / time: which slot's form is open, and its target.
   const [moving, setMoving] = useState<{ slotIdx: number; date: string; to: number } | null>(null);
-  const changed = Object.keys(done).length > 0;
+  // Marking some of a departure's bookings cancelled: which slot's form is open, and the ticked bookings.
+  const [cancelling, setCancelling] = useState<{ slotIdx: number; ids: Set<string> } | null>(null);
+  const [notice, setNotice] = useState("");
+  const [touched, setTouched] = useState(false);
+  const changed = touched || Object.keys(done).length > 0;
 
   const load = useCallback(async () => {
     setError("");
@@ -125,6 +129,25 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
     setBusy(null);
   }
 
+  // The guest cancelled: the ticked bookings become Cancelled and leave this departure. The
+  // rest stay, and a guide can still be recorded for them.
+  async function cancelBookings(s: Slot) {
+    if (!cancelling || cancelling.slotIdx !== s.slotIdx || !cancelling.ids.size) return;
+    const chosen = s.bookings.filter((b) => cancelling.ids.has(b.id));
+    setBusy(s.slotIdx); setFailed((f) => ({ ...f, [s.slotIdx]: "" }));
+    try {
+      const r = await fetch("/api/bookings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancelUnstaffed", ids: chosen.map((b) => b.id), reason: "marked cancelled on Record who guided" }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) {
+        setTouched(true);
+        await load();
+        setCancelling(null);
+        setNotice(`✓ ${d.cancelled} booking${d.cancelled === 1 ? "" : "s"} marked cancelled (${s.time}): ${chosen.map((b) => b.ref).join(", ")}`);
+      } else setFailed((f) => ({ ...f, [s.slotIdx]: `Not cancelled (${d.error ?? r.status})` }));
+    } catch { setFailed((f) => ({ ...f, [s.slotIdx]: "The connection dropped — reopen this day to check" })); }
+    setBusy(null);
+  }
+
   const open = (slots ?? []).filter((s) => !s.staffedBy.length);
   const staffed = (slots ?? []).filter((s) => s.staffedBy.length);
 
@@ -136,6 +159,7 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
         <div className="mbody" style={{ display: "grid", gap: 12 }}>
           {slots === null && <div className="skel-row" />}
           {error && <Note tone="danger">{error}</Note>}
+          {notice && <Note tone="ok">{notice}</Note>}
           {slots !== null && !error && open.length === 0 && <Note tone="ok">Every tour on this day has a guide recorded.</Note>}
           {open.map((s) => {
             const d = done[s.slotIdx];
@@ -175,6 +199,23 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
                     <span className="badge active">✓ Moved {d.count} booking{d.count === 1 ? "" : "s"} to {dLong(d.date)} · {SLOTS[d.slotIdx]?.start}</span>
                     <a className="btn sm" href={`/bookings?date=${d.date}`}>Open that day →</a>
                   </div>
+                ) : cancelling?.slotIdx === s.slotIdx ? (
+                  <div className="js-cancel-form" style={{ display: "grid", gap: 8 }}>
+                    <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Tick the bookings the guest cancelled · ติ๊กบุ๊คกิ้งที่ลูกค้ายกเลิก. They are kept, marked Cancelled, and leave this tour; the others stay.</span>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      {s.bookings.map((b) => (
+                        <label key={b.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                          <input type="checkbox" style={{ width: "auto", padding: 0 }} checked={cancelling.ids.has(b.id)} disabled={busy !== null}
+                            onChange={() => setCancelling((c) => { if (!c) return c; const ids = new Set(c.ids); ids.has(b.id) ? ids.delete(b.id) : ids.add(b.id); return { ...c, ids }; })} />
+                          <span>{b.ref} ×{b.pax ?? "?"} · {b.source}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <button className="btn sm primary js-cancel-confirm" onClick={() => cancelBookings(s)} disabled={busy !== null || !cancelling.ids.size}>{busy === s.slotIdx ? "Saving…" : `Mark ${cancelling.ids.size || ""} cancelled`.replace("  ", " ")}</button>
+                      <button className="btn sm ghost" onClick={() => setCancelling(null)} disabled={busy !== null}>Back</button>
+                    </div>
+                  </div>
                 ) : moving?.slotIdx === s.slotIdx ? (
                   <div className="js-move-form" style={{ display: "grid", gap: 8 }}>
                     <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Move {s.bookings.length === 1 ? "this booking" : `these ${s.bookings.length} bookings`} to another date or time · ย้ายบุ๊คกิ้งไปวัน/รอบอื่น. The move is kept even when the channel syncs again.</span>
@@ -196,6 +237,7 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
                     <button className="btn sm primary" onClick={() => record(s)} disabled={!pick[s.slotIdx] || (s.unmappedIds.length > 0 && !tourPick[s.slotIdx]) || busy !== null}>{busy === s.slotIdx ? "Recording…" : "Record guide"}</button>
                     <button className="btn sm ghost" onClick={() => closeBookings(s)} disabled={busy !== null} title="The tour did not really run with a guide — archive its bookings">Didn&rsquo;t run…</button>
                     <button className="btn sm ghost js-move-open" onClick={() => setMoving({ slotIdx: s.slotIdx, date: nextDay(date), to: 0 })} disabled={busy !== null} title="The guest changed to another date or time — move the booking there">Move…</button>
+                    <button className="btn sm ghost js-cancel-open" onClick={() => { setMoving(null); setCancelling({ slotIdx: s.slotIdx, ids: new Set() }); }} disabled={busy !== null} title="The guest cancelled — mark the booking Cancelled">Cancelled…</button>
                   </div>
                 )}
                 {failed[s.slotIdx] && <Note tone="danger">{failed[s.slotIdx]}</Note>}

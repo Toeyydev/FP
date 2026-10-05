@@ -59,7 +59,10 @@ async function seed() {
   const hash = bcrypt.hashSync(PASSWORD, 8);
   const op = await prisma.user.create({ data: { email: "op-mv@example.test", displayName: "Op Example", fullName: "Op Example", role: "OPERATOR", state: "ACTIVE", passwordHash: hash } });
   const b = await prisma.booking.create({ data: { source: "Viator.com", externalRef: "E2E-MOVE-1", confirmationCode: "E2E-MOVE-1", customerName: "Guest Example", date: YESTERDAY, slotIdx: 2, tourId: "T-900", pax: 1, status: "PENDING" } });
-  return { op, b };
+  // Two days ago, 08:30: three bookings and no guide — two of them were cancelled by the guest.
+  const mk = (ref, pax) => prisma.booking.create({ data: { source: "Example OTA", externalRef: ref, confirmationCode: ref, customerName: `Guest ${ref}`, date: day(-2), slotIdx: 0, tourId: "T-900", pax, status: "PENDING" } });
+  const cxl = [await mk("E2E-CXL-1", 2), await mk("E2E-CXL-2", 1), await mk("E2E-KEEP-1", 4)];
+  return { op, b, cxl };
 }
 
 async function startServer(extraEnv = {}) {
@@ -130,7 +133,26 @@ try {
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "move-booking-done.png") });
   await page.evaluate(() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => /Done|Close/.test(b.innerText)).click());
   await pause(1500);
-  check("yesterday no longer asks for a guide", !(await page.$(".att-past")));
+  check("yesterday no longer asks for a guide", (await page.$$(".att-past")).length === 1);
+
+  // Cancelled…: two of three bookings on a departure were cancelled by the guest.
+  await page.waitForSelector(".att-past", { timeout: 20000 });
+  await page.$eval(".att-past", (b) => b.click());
+  await page.waitForSelector(".js-cancel-open", { timeout: 15000 });
+  await page.$eval(".js-cancel-open", (b) => b.click());
+  await page.waitForSelector(".js-cancel-form");
+  check("Cancelled… lists the departure's bookings, none ticked, and cannot be confirmed empty",
+    (await page.$$eval(".js-cancel-form input[type=checkbox]", (xs) => xs.map((x) => x.checked).join())) === "false,false,false" && (await page.$eval(".js-cancel-confirm", (b) => b.disabled)));
+  await page.evaluate(() => { const boxes = [...document.querySelectorAll(".js-cancel-form label")]; for (const l of boxes) if (/E2E-CXL-/i.test(l.innerText)) l.querySelector("input").click(); });
+  await pause(300);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "cancel-bookings-form.png") });
+  await page.$eval(".js-cancel-confirm", (b) => b.click());
+  await page.waitForFunction(() => /2 bookings marked cancelled/i.test(document.querySelector(".modal")?.innerText ?? ""), { timeout: 20000 });
+  const st = await prisma.booking.findMany({ where: { id: { in: data.cxl.map((x) => x.id) } }, orderBy: { externalRef: "asc" }, select: { externalRef: true, status: true } });
+  check("the ticked bookings are Cancelled; the other is untouched", JSON.stringify(st.map((x) => x.status)) === JSON.stringify(["CANCELLED", "CANCELLED", "PENDING"]), JSON.stringify(st));
+  const left = await page.$eval(".recpast-slot", (x) => x.innerText.replace(/\s+/g, " "));
+  check("the departure now shows only the booking that stays, and still asks who guided", /E2E-KEEP-1/i.test(left) && !/E2E-CXL/i.test(left) && /4 pax/.test(left) && !!(await page.$('select[aria-label="Guide for 08:30"]')), left.slice(0, 160));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "cancel-bookings-done.png") });
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("run", false, String(e?.stack ?? e).slice(0, 800));
