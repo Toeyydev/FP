@@ -6,6 +6,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // All data is invented — this repo is public.
 const prismaMock = vi.hoisted(() => ({
   assignment: { findMany: vi.fn() },
+  booking: { findMany: vi.fn(async () => []) },
   jobSheet: { findMany: vi.fn() },
   payrollStatus: { findMany: vi.fn() },
   user: { findMany: vi.fn() },

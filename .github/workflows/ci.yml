@@ -316,6 +316,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/move-booking
 
+      # Tours with guests and no guide recorded are listed on Payments for their month, one
+      # line per departure; recording the guide moves the tour into the guide's jobs.
+      - name: Payments lists tours with no guide in a real browser
+        run: node scripts/e2e/payments-unstaffed.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/payments-unstaffed
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.
