@@ -48,7 +48,14 @@ export type VoucherInput = {
   peakDocumentNo?: string | null;
   issuedBy?: string | null;
   acknowledgedAt?: Date | null;
+  /**
+   * The admin who recorded this advance, with their registered signature — printed in
+   * "Approved by". Absent when the person who recorded it is not an authorised signer or
+   * has no signature on file: the line is then left for a pen, as before.
+   */
+  approver?: VoucherApprover | null;
 };
+export type VoucherApprover = { name: string; signatureDataUri: string };
 
 const PURPOSE_FALLBACK = "ค่าบัตรเข้าชมสถานที่สำหรับลูกค้า / Customer entrance tickets";
 
@@ -133,8 +140,10 @@ export function advanceVoucherHtml(v: VoucherInput): string {
         <small style="color:#666">ผู้รับเงิน / Received by — ${esc(v.guideId)}${v.guideName ? ` ${esc(v.guideName)}` : ""}</small>
       </td>
       <td style="width:50%;vertical-align:bottom">
-        <div style="border-bottom:1px solid #111;height:34px"></div>
-        <small style="color:#666">ผู้อนุมัติ / Approved by${v.issuedBy ? ` — ${esc(v.issuedBy)}` : ""}</small>
+        ${v.approver
+          ? `<div style="border-bottom:1px solid #111;height:44px"><img src="${esc(v.approver.signatureDataUri)}" alt="ลายเซ็นผู้อนุมัติ" height="40" style="height:40px;max-width:220px"></div>`
+          : `<div style="border-bottom:1px solid #111;height:34px"></div>`}
+        <small style="color:#666">ผู้อนุมัติ / Approved by${v.approver ? ` — ${esc(v.approver.name)}` : v.issuedBy ? ` — ${esc(v.issuedBy)}` : ""}</small>
       </td>
     </tr>
   </table>
@@ -145,6 +154,9 @@ export type VoucherDeps = {
   enabled: boolean;
   token: () => Promise<string | null>;
   saveHtml: (o: { refreshToken: string; name: string; html: string; folderPath: string[] }) => Promise<{ id: string; link: string }>;
+  /** Who signs "Approved by" for an advance recorded by this user (lib/advances/voucher-approver). */
+  approver?: (recordedById: string | null) => Promise<VoucherApprover | null>;
+  onIssued?: (o: { advanceId: string; advanceNo: string; signed: boolean; fileId: string }) => void;
 };
 
 /**
@@ -174,6 +186,8 @@ export async function saveAdvanceVoucher(
         : Promise.resolve(null),
     ]);
     const tour = sheet?.tourId ? await db.tour.findUnique({ where: { id: sheet.tourId }, select: { name: true } }) : null;
+    // A signature that cannot be resolved never stops the voucher: it is filed unsigned.
+    const approver = deps.approver ? await deps.approver(advance.createdById).catch(() => null) : null;
 
     const html = advanceVoucherHtml({
       advanceNo: advance.advanceNo, guideId: advance.guideId, guideName: guide?.displayName,
@@ -181,7 +195,7 @@ export async function saveAdvanceVoucher(
       advanceDate: advance.advanceDate, amountSatang: advance.amountSatang,
       purpose: advance.purpose, method: advance.method, txRef: advance.txRef,
       slipUrl: advance.slipUrl, peakDocumentNo: advance.peakDocumentNo,
-      acknowledgedAt: advance.acknowledgedAt,
+      acknowledgedAt: advance.acknowledgedAt, approver,
     });
 
     const up = await deps.saveHtml({
@@ -194,6 +208,7 @@ export async function saveAdvanceVoucher(
       where: { id: advanceId },
       data: { voucherUrl: up.link, voucherFileId: up.id, voucherIssuedAt: new Date() },
     });
+    deps.onIssued?.({ advanceId, advanceNo: advance.advanceNo, signed: !!approver, fileId: up.id });
     return up.link;
   } catch {
     return null;
