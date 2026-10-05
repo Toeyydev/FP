@@ -171,3 +171,38 @@ describe("an operator deletes or hides a booking: the guide's job follows", () =
     expect(await paxOf(A)).toBe(0);
   });
 });
+
+describe("an operator moves a booking to another date or time", () => {
+  const NEXT = new Date(Date.parse(`${DATE}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10);
+  const moves = () => prisma.auditLog.findMany({ where: { action: "booking.moved" } });
+
+  it("a booking nobody guides yet goes to the new departure, pinned, with where it was on record", async () => {
+    const b = await mk("MOVE-1", 1, { status: "PENDING", slotIdx: 2 });
+    const r = await act({ action: "update", id: b.id, date: NEXT, slotIdx: 0 });
+    expect(r.status).toBe(200);
+    expect(r.body.moved).toBe(true);
+    expect(await prisma.booking.findUniqueOrThrow({ where: { id: b.id } })).toMatchObject({ date: NEXT, slotIdx: 0, datePinned: true, status: "PENDING" });
+    const a = await moves();
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ actorId: ops.id, entityId: b.id });
+    expect(a[0].detail).toMatchObject({ from: { date: DATE, slotIdx: 2 }, to: { date: NEXT, slotIdx: 0 } });
+  });
+
+  it("moved off a guide's editable job: the row leaves that job sheet and its pax follows", async () => {
+    await assign(A, 6);
+    const stay = await mk("MOVE-STAY", 4), go = await mk("MOVE-GO", 2);
+    await sheet(A, [stay, go].map(toSheetBooking));
+    const r = await act({ action: "update", id: go.id, date: NEXT, slotIdx: 0 });
+    expect(r.status).toBe(200);
+    expect(await refsOn(A)).toEqual(["MOVE-STAY"]);
+    expect(await paxOf(A)).toBe(4);
+  });
+
+  it("saving the same date and time again is not a move", async () => {
+    const b = await mk("MOVE-SAME", 1, { status: "PENDING" });
+    const r = await act({ action: "update", id: b.id, date: DATE, slotIdx: 0, customerName: "Guest Renamed" });
+    expect(r.status).toBe(200);
+    expect(r.body.moved).toBeUndefined();
+    expect(await moves()).toHaveLength(0);
+  });
+});

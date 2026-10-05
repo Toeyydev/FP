@@ -307,6 +307,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-payments-filters
 
+      # A guest who changed to another day: "Move…" on Record who guided sends the booking to
+      # the new date and time, pinned and audited, and the old day stops asking for a guide.
+      - name: Move a booking from Record who guided in a real browser
+        run: node scripts/e2e/move-booking.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/move-booking
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.
