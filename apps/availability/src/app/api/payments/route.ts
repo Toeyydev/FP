@@ -18,6 +18,7 @@ import { advanceGap, advanceGapMessage, advanceJobKey, type AdvanceGap } from "@
 import { liveAdvancesByJob } from "@/lib/advances/coverage-server";
 import { recordExpBlockers } from "@/lib/record-exp";
 import { documentStatus } from "@/lib/peak-payment-document";
+import { unstaffedDays } from "@/lib/unstaffed-departures";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
@@ -199,7 +200,11 @@ export async function GET(req: NextRequest) {
   // Supplemental payments still owed, and paid but not yet in PEAK — whatever month they
   // belong to, so the month view never loses sight of them.
   const supplemental = await supplementalSummary(prisma, period);
-  return NextResponse.json({ period, rows, totals, paymentDocs: docsOut, supplemental });
+  // Tours that ran with guests and no guide recorded: they have no job, so nothing above
+  // shows them. Listed so the month says what is still missing (lib/unstaffed-departures).
+  const liveBookings = await prisma.booking.findMany({ where: { date: { gte: `${period}-01`, lte: cap }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] }, slotIdx: { not: null } }, select: { date: true, slotIdx: true, tourId: true, pax: true, confirmationCode: true, externalRef: true, source: true } });
+  const unstaffed = unstaffedDays(liveBookings.map((b) => ({ ...b, ref: b.confirmationCode ?? b.externalRef })), assigns, tName);
+  return NextResponse.json({ period, rows, totals, paymentDocs: docsOut, supplemental, unstaffed });
 }
 
 // POST { period, guideId, status } — mark a guide's payroll paid / pending.

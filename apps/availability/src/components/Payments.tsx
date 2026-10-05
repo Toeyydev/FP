@@ -20,6 +20,8 @@ import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 import { type DocumentDrift } from "@/lib/payment-document-drift";
 import CopyMemo from "@/components/CopyMemo";
+import RecordPastTourDialog from "@/components/RecordPastTourDialog";
+import { type UnstaffedDay } from "@/lib/unstaffed-departures";
 import { payMemo } from "@/lib/bank-memo";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
@@ -286,9 +288,13 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
     load(period);
   }
 
+  // Tours of the month with guests and no guide recorded — not in Payments until one is.
+  const [unstaffed, setUnstaffed] = useState<UnstaffedDay[]>([]);
+  const [recordDay, setRecordDay] = useState<string | null>(null);
+  const [showUnstaffed, setShowUnstaffed] = useState(true);
   const load = useCallback(async (p?: string) => {
     const r = await fetch(`/api/payments${p ? `?period=${p}` : ""}`, { cache: "no-store" });
-    if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); setPaymentDocs(d.paymentDocs ?? []); setSupSummary(d.supplemental ?? null); }
+    if (r.ok) { const d = await r.json(); setPeriod(d.period); setRows(d.rows ?? []); setTotals(d.totals); setPaymentDocs(d.paymentDocs ?? []); setSupSummary(d.supplemental ?? null); setUnstaffed(d.unstaffed ?? []); }
   }, []);
   useEffect(() => { load(); }, [load]);
   // Job sheets are saved and approved in another tab, and this list — each job's payout
@@ -698,6 +704,46 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
         {supSummary && supSummary.accountingPending.count > 0 && <> · <b className="js-sup-pending" style={{ color: "#b45309" }}>⚠ {supSummary.accountingPending.count} supplemental not in PEAK ({thb(supSummary.accountingPending.total)})</b></>}
         {" "}· month total {thb(totals.payout)} across {totals.tours} job{totals.tours === 1 ? "" : "s"}
       </div>
+
+      {unstaffed.length > 0 && (() => {
+        const deps = unstaffed.reduce((s, d) => s + d.departures.length, 0);
+        const bks = unstaffed.reduce((s, d) => s + d.bookings, 0);
+        const pax = unstaffed.reduce((s, d) => s + d.pax, 0);
+        return (
+          <details open={showUnstaffed} onToggle={(e) => setShowUnstaffed((e.currentTarget as HTMLDetailsElement).open)} className="panel js-unstaffed" style={{ marginBottom: 14 }}>
+            <summary style={{ padding: "12px 14px", cursor: "pointer", display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+              <b style={{ color: "var(--danger, #b3402f)" }}>⚠ {deps} tour{deps === 1 ? "" : "s"} with no guide recorded</b>
+              <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{bks} booking{bks === 1 ? "" : "s"} · {pax} guests · ทัวร์ที่ยังไม่ได้บันทึกไกด์ — not in Payments until a guide is recorded</span>
+            </summary>
+            <div style={{ display: "grid", gap: 8, padding: "0 14px 14px" }}>
+              {unstaffed.map((d) => (
+                <div key={d.date} className="js-unstaffed-day" style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 10, display: "grid", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <b>{dShort(d.date)}</b>
+                    <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{d.departures.length} tour{d.departures.length === 1 ? "" : "s"} · {d.pax} guests</span>
+                    <span style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <a className="btn sm ghost" href={`/bookings?date=${d.date}`} title="Edit a booking, or split this day's guests between guides">Open in Bookings</a>
+                      {canEdit && <button type="button" className="btn sm primary js-unstaffed-record" onClick={() => setRecordDay(d.date)} title="Name who guided each tour, or move its bookings to another date or time">Record who guided…</button>}
+                    </span>
+                  </div>
+                  {/* One line per departure: every booking of the same date and time together. */}
+                  {d.departures.map((x) => (
+                    <div key={x.slotIdx} className="js-unstaffed-dep" style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", fontSize: 13 }}>
+                      <b className="num" style={{ minWidth: 44 }}>{x.time}</b>
+                      <span>{x.tours.join(" + ")}</span>
+                      <span className="num" style={{ color: "var(--ink-soft)", fontSize: 12.5 }}>{x.pax} pax</span>
+                      <span style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                        {x.refs.map((b, i) => <span key={i} className="badge" style={{ fontWeight: 600 }}>{b.ref} ×{b.pax ?? "?"}{b.source ? ` · ${b.source}` : ""}</span>)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </details>
+        );
+      })()}
+      {recordDay && <RecordPastTourDialog date={recordDay} onClose={() => setRecordDay(null)} onChanged={() => load(period || undefined)} />}
 
       <section className="panel">
         <div className="op-toolbar" style={{ gap: 10 }}>

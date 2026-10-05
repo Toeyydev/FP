@@ -60,6 +60,7 @@ const prismaMock = vi.hoisted(() => {
     user: table(() => db.users),
     jobSheet: table(() => db.sheets),
     assignment: table(() => db.assigns),
+    booking: { findMany: vi.fn(async () => []) },
     tourPayment: table(() => db.pays),
     payrollStatus: table(() => db.payrolls),
     guidePaymentDocument: table(() => db.docs),
