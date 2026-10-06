@@ -96,7 +96,7 @@ export default function MyPay() {
               <div style={{ fontSize: 12, color: "var(--ink-soft)", margin: "2px 0 8px" }}>Paid separately from your tour payments.</div>
               {(d.additional ?? []).map((a) => (
                 <div key={a.paymentNo + a.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--line)", fontSize: 13 }}>
-                  <span>{a.label}{a.jobs.length ? ` · ${a.jobs.join(", ")}` : ""}<small style={{ display: "block", color: "var(--ink-soft)" }}>{a.paymentNo} · paid {dLabel(a.paidDate)}{a.taxBorneByCompany ? ` · ${a.reviewCount ?? ""} reviews · ${a.workMonth ?? ""} · paid in full — tax ${thb(a.wht)} paid by Folkpaths for you · ภาษี ${thb(a.wht)} บริษัทออกให้` : a.wht > 0 ? ` · ${thb(a.gross)} − WHT ${thb(a.wht)}` : ""}{a.slip ? <> · <a href={a.slip} target="_blank" rel="noopener noreferrer">slip</a></> : null}</small></span>
+                  <span>{a.label}{a.jobs.length ? ` · ${a.jobs.join(", ")}` : ""}<small style={{ display: "block", color: "var(--ink-soft)" }}>{a.paymentNo} · paid {dLabel(a.paidDate)}{a.taxBorneByCompany ? ` · ${a.reviewCount ?? ""} reviews · ${a.workMonth ?? ""} · paid in full${a.wht > 0 ? ` — tax ${thb(a.wht)} paid by Folkpaths for you · ภาษี ${thb(a.wht)} บริษัทออกให้` : " · no tax · ไม่หักภาษี"}` : a.wht > 0 ? ` · ${thb(a.gross)} − WHT ${thb(a.wht)}` : ""}{a.slip ? <> · <a href={a.slip} target="_blank" rel="noopener noreferrer">slip</a></> : null}</small></span>
                   <b style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{thb(a.net)}</b>
                 </div>
               ))}

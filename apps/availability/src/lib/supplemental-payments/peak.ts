@@ -52,11 +52,11 @@ export function reviewIncentiveExpense(input: {
     dueDate: compact(due),
     contact: { id: input.peakContactId },
     products: [{
-      description: `Review incentive ${input.workMonth} · ${input.reviewCount} × ฿${REVIEW_RATE} = ${thb(input.net)} to the guide · tax ${input.whtPct}% ${thb(input.wht)} borne by the company (ผู้จ่ายออกภาษีให้ครั้งเดียว)`,
+      description: `Review incentive ${input.workMonth} · ${input.reviewCount} × ฿${REVIEW_RATE} = ${thb(input.net)} to the guide · ${input.wht > 0 ? `tax ${input.whtPct}% ${thb(input.wht)} borne by the company (ผู้จ่ายออกภาษีให้ครั้งเดียว)` : "no withholding tax"}`,
       quantity: 1, price: input.gross, accountCode: input.accountCode, withHoldingTaxAmount: input.wht,
     }],
     reference: input.paymentNo,
-    remark: `Folkpaths review incentive ${input.paymentNo} · ${input.guideId} · ${input.workMonth} · income ${thb(input.gross)} · tax ${thb(input.wht)} paid by Folkpaths once · transfer ${thb(input.net)}`,
+    remark: `Folkpaths review incentive ${input.paymentNo} · ${input.guideId} · ${input.workMonth} · ${input.wht > 0 ? `income ${thb(input.gross)} · tax ${thb(input.wht)} paid by Folkpaths once · ` : "no withholding tax · "}transfer ${thb(input.net)}`,
   };
 }
 

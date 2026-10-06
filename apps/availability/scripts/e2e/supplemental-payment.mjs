@@ -174,17 +174,17 @@ try {
   // 1 — a review incentive: 4 reviews naming the guide in July (owner policy 2026-10-06)
   await fillReview(page);
   const rule = await text(page, ".js-wht-rule");
-  check("the form says the guide is paid in full and the company bears the 3% once", /in full/.test(rule) && /company bears the 3%/.test(rule) && /฿200\.00/.test(rule) && /฿206\.00/.test(rule), rule.replace(/\s+/g, " ").slice(0, 200));
+  check("the form says the guide is paid in full with no withholding tax (owner 2026-10-06)", /in full/.test(rule) && /No withholding tax/.test(rule) && /฿200\.00/.test(rule) && !/฿206/.test(rule), rule.replace(/\s+/g, " ").slice(0, 200));
   const rev = await text(page, ".js-supplemental-review");
-  check("the review shows ฿200 to the guide, ฿6 tax borne by the company, ฿206 income, booked to REVIEW_REWARD",
-    /฿200\.00/.test(rev) && /฿6\.00/.test(rev) && /฿206\.00/.test(rev) && /borne by the company/i.test(rev) && /REVIEW_REWARD/.test(rev) && /4 · 2025-07/.test(rev), rev.replace(/\s+/g, " ").slice(0, 240));
+  check("the review shows ฿200 to the guide, no tax, booked to REVIEW_REWARD",
+    /฿200\.00/.test(rev) && /None · ไม่มีภาษี/.test(rev) && !/฿206/.test(rev) && /REVIEW_REWARD/.test(rev) && /4 · 2025-07/.test(rev), rev.replace(/\s+/g, " ").slice(0, 240));
   if (SHOTS) await (await page.$(DLG)).screenshot({ path: join(SHOTS, "add-review.png") });
   await click(page, ".js-create-supplemental");
   await page.waitForFunction(() => !document.querySelector(".js-add-supplemental-dialog"), { timeout: 15000 }).catch(() => {});
   let row = await text(page, ".js-supplemental-table tbody tr");
   const memo = await page.$eval(".js-supplemental-table .js-bank-memo code", (x) => x.innerText).catch(() => "");
   check("the unpaid review incentive shows the bank memo to type before transferring", memo === "REV G-951 2025-07", memo);
-  check("Create makes it unpaid: 4 reviews for July, ฿200 to transfer", /Unpaid/.test(row) && /4 reviews · 2025-07/.test(row) && /฿200\.00/.test(row) && /borne by the company/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
+  check("Create makes it unpaid: 4 reviews for July, ฿200 to transfer", /Unpaid/.test(row) && /4 reviews · 2025-07/.test(row) && /฿200\.00/.test(row) && /no tax/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
 
   // 2 — the same month again: added to the open one, not a second incentive
   await fillReview(page);
@@ -197,7 +197,7 @@ try {
   await page.waitForFunction(async () => /6 reviews · 2025-07/.test(document.querySelector(".js-supplemental-table tbody tr")?.innerText ?? ""), { timeout: 15000 }).catch(() => {});
   const six = await prisma.supplementalPayment.findFirst();
   row = await text(page, ".js-supplemental-table tbody tr");
-  check("+ Reviews adds to it and the figures follow the count (6 → ฿300, tax ฿9)", six?.reviewCount === 6 && Number(six?.netAmount) === 300 && Number(six?.wht) === 9 && /฿300\.00/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
+  check("+ Reviews adds to it and the figures follow the count (6 → ฿300, no tax)", six?.reviewCount === 6 && Number(six?.netAmount) === 300 && Number(six?.wht) === 0 && /฿300\.00/.test(row), row.replace(/\s+/g, " ").slice(0, 200));
 
   // 3 — its own transfer
   await page.evaluate(() => [...document.querySelectorAll(".js-supplemental-table button")].find((b) => b.textContent.trim() === "Record payment").click());
@@ -270,13 +270,13 @@ try {
   await gp.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Show all history").click());
   await gp.waitForSelector(".js-my-additional", { timeout: 15000 }).catch(() => {});
   const mine = await text(gp, ".js-my-additional");
-  check("the guide sees the review incentive in My Pay, apart from the tours: paid in full, tax paid by Folkpaths — nothing deducted", /Review incentive/.test(mine) && /฿300/.test(mine) && /paid in full/.test(mine) && /tax ฿9(\.00)? paid by Folkpaths/.test(mine) && !/− WHT/.test(mine) && supp && mine.includes(supp.paymentNo), mine.replace(/\s+/g, " ").slice(0, 160));
+  check("the guide sees the review incentive in My Pay, apart from the tours: paid in full, no tax — nothing deducted", /Review incentive/.test(mine) && /฿300/.test(mine) && /paid in full/.test(mine) && /no tax · ไม่หักภาษี/.test(mine) && !/paid by Folkpaths/.test(mine) && !/− WHT/.test(mine) && supp && mine.includes(supp.paymentNo), mine.replace(/\s+/g, " ").slice(0, 160));
   if (SHOTS) await gp.screenshot({ path: join(SHOTS, "my-pay-additional.png") });
   await gp.close();
   await page.close();
 
   // 7 — one bank transfer for the July tour AND a review incentive: two payments, one transfer.
-  await prisma.supplementalPayment.create({ data: { guideId: G, type: "REVIEW_INCENTIVE", accountingCategory: "REVIEW_REWARD", grossAmount: 103, whtPct: 3, whtSource: "POLICY", wht: 3, netAmount: 100,
+  await prisma.supplementalPayment.create({ data: { guideId: G, type: "REVIEW_INCENTIVE", accountingCategory: "REVIEW_REWARD", grossAmount: 100, whtPct: 0, whtSource: "POLICY", wht: 0, netAmount: 100,
     whtBearer: "COMPANY_ONCE", reviewCount: 2, workMonth: "2025-07", reason: "GetYourGuide reviews naming the guide (example)" } });
   const p2 = await browser.newPage();
   await p2.setViewport({ width: 1400, height: 1600 });
@@ -291,7 +291,7 @@ try {
   await p2.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click());
   await p2.waitForSelector(".js-review-due", { timeout: 15000 }).catch(() => {});
   const due = await text(p2, ".js-review-due");
-  check("Record payment offers this guide's unpaid review incentive for the same transfer", /2 reviews/.test(due) && /฿100\.00/.test(due) && /borne by the company/.test(due), due.replace(/\s+/g, " ").slice(0, 160));
+  check("Record payment offers this guide's unpaid review incentive for the same transfer", /2 reviews/.test(due) && /฿100\.00/.test(due) && /paid in full, no tax/.test(due), due.replace(/\s+/g, " ").slice(0, 160));
   await p2.evaluate(() => document.querySelector(".js-review-due input[type=checkbox]").click());
   await pause(300);
   const amount = await p2.evaluate(() => document.querySelector(".modal input[inputmode=decimal]")?.value ?? "");

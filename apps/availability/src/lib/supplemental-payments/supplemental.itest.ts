@@ -443,21 +443,21 @@ describe("owner accounting policy (2026-10-01): a review incentive is a cost of 
 
 const reviewIncentive = (over: Record<string, unknown> = {}) => ({ guideId: G, type: "REVIEW_INCENTIVE", grossAmount: 0, reviewCount: 4, workMonth: "2025-06", reason: "GetYourGuide reviews naming the guide (example)", jobs: [], ...over });
 
-describe("a review incentive: paid in full, the tax borne by the company once", () => {
-  it("4 reviews → ฿200 to the guide, ฿6 tax, ฿206 income — recorded with who bears it and the month worked", async () => {
+describe("a review incentive: paid in full, no withholding tax (owner decision 2026-10-06)", () => {
+  it("4 reviews → ฿200 to the guide, no tax, ฿200 income — recorded with the month worked", async () => {
     const c = await create(reviewIncentive());
     expect(c.status, JSON.stringify(c.body)).toBe(200);
     const row = await prisma.supplementalPayment.findUniqueOrThrow({ where: { id: c.body.id } });
     expect({ net: Number(row.netAmount), wht: Number(row.wht), gross: Number(row.grossAmount), pct: Number(row.whtPct), src: row.whtSource, bearer: row.whtBearer, n: row.reviewCount, m: row.workMonth, e: row.eWithholding, cat: row.accountingCategory })
-      .toEqual({ net: 200, wht: 6, gross: 206, pct: 3, src: "POLICY", bearer: "COMPANY_ONCE", n: 4, m: "2025-06", e: false, cat: "REVIEW_REWARD" });
+      .toEqual({ net: 200, wht: 0, gross: 200, pct: 0, src: "POLICY", bearer: "COMPANY_ONCE", n: 4, m: "2025-06", e: false, cat: "REVIEW_REWARD" });
   });
-  it("later reviews for the same month are added to the open one; e-Withholding switches it to 1%; a paid one is never changed", async () => {
+  it("later reviews for the same month are added to the open one; the e-Withholding flag changes no figure; a paid one is never changed", async () => {
     const { body } = await create(reviewIncentive());
     expect((await create(reviewIncentive())).status).toBe(409);
     expect((await patch(body.id, { action: "reviews", addReviews: 2, reason: "two more reviews this week (example)" })).status).toBe(200);
     expect((await patch(body.id, { action: "reviews", eWithholding: true, reason: "paid through e-Withholding (example)" })).status).toBe(200);
     const row = await prisma.supplementalPayment.findUniqueOrThrow({ where: { id: body.id } });
-    expect({ n: row.reviewCount, net: Number(row.netAmount), wht: Number(row.wht), gross: Number(row.grossAmount), pct: Number(row.whtPct) }).toEqual({ n: 6, net: 300, wht: 3, gross: 303, pct: 1 });
+    expect({ n: row.reviewCount, net: Number(row.netAmount), wht: Number(row.wht), gross: Number(row.grossAmount), pct: Number(row.whtPct) }).toEqual({ n: 6, net: 300, wht: 0, gross: 300, pct: 0 });
     const paid = await pay([body.id], { amountTransferred: 300 });
     expect(paid.status, JSON.stringify(paid.body)).toBe(200);
     expect((await patch(body.id, { action: "reviews", addReviews: 1, reason: "one more review (example)" })).status).toBe(409);
@@ -517,16 +517,16 @@ describe("a review incentive in PEAK, through the API (fake PEAK)", () => {
     if (p.status !== 200) throw new Error(JSON.stringify(p.body));
     return body.id as string;
   }
-  it("its own document: one 510110 line of income ฿206 with ฿6 withholding, dated in the month worked; paid ฿200 on the transfer date", async () => {
+  it("its own document: one 510110 line of ฿200 with no withholding, dated in the month worked; paid ฿200 on the transfer date", async () => {
     const { putReviewIncentiveInPeak } = await import("@/lib/supplemental-payments/peak");
     const id = await paidIncentive();
     const f = fakes();
     const r = await putReviewIncentiveInPeak(prisma, { id, paymentMethodId: "bank-1", actor }, f.deps);
     expect(r).toMatchObject({ ok: true, peakStatus: "PAID", documentNo: "EXP-TEST-20250600099" });
     expect(f.created).toHaveLength(1);
-    expect(f.created[0]).toMatchObject({ issuedDate: "20250630", contact: { id: "peak-contact-g950" }, products: [{ quantity: 1, price: 206, accountCode: "510110", withHoldingTaxAmount: 6 }] });
-    expect(f.created[0].products[0].description).toMatch(/borne by the company/);
-    expect(f.paid).toEqual([expect.objectContaining({ documentNo: "EXP-TEST-20250600099", paymentDate: "20250702", amount: 200, withholdingTaxAmount: 6, paymentMethodId: "bank-1" })]);
+    expect(f.created[0]).toMatchObject({ issuedDate: "20250630", contact: { id: "peak-contact-g950" }, products: [{ quantity: 1, price: 200, accountCode: "510110", withHoldingTaxAmount: 0 }] });
+    expect(f.created[0].products[0].description).toMatch(/no withholding tax/);
+    expect(f.paid).toEqual([expect.objectContaining({ documentNo: "EXP-TEST-20250600099", paymentDate: "20250702", amount: 200, withholdingTaxAmount: 0, paymentMethodId: "bank-1" })]);
     const row = await prisma.supplementalPayment.findUniqueOrThrow({ where: { id } });
     expect({ s: row.peakStatus, ref: row.peakRef, doc: row.peakDocumentId }).toEqual({ s: "PAID", ref: "EXP-TEST-20250600099", doc: "peak-doc-review-1" });
     expect((await list()).find((x) => x.id === id)).toMatchObject({ accounting: "RECONCILED" });
@@ -565,7 +565,7 @@ describe("a review incentive in PEAK, through the API (fake PEAK)", () => {
     const pay2 = fakes();
     expect(await putReviewIncentiveInPeak(prisma, { id, paymentMethodId: "bank-1", actor }, pay2.deps)).toMatchObject({ ok: true, peakStatus: "PAID", documentNo: "EXP-2025060077" });
     expect(pay2.created).toHaveLength(0);
-    expect(pay2.paid).toEqual([expect.objectContaining({ documentNo: "EXP-2025060077", amount: 200, withholdingTaxAmount: 6 })]);
+    expect(pay2.paid).toEqual([expect.objectContaining({ documentNo: "EXP-2025060077", amount: 200, withholdingTaxAmount: 0 })]);
   });
   it("a refused payment leaves the document waiting; pressing again pays it without a second document", async () => {
     const { putReviewIncentiveInPeak } = await import("@/lib/supplemental-payments/peak");
