@@ -74,6 +74,11 @@ export type Expense = {
   sourceDocumentNo?: string;
   peakExistingDocumentId?: string | null;
   alreadyRecordedInPeak?: boolean;
+  // Review-reward rows only: no withholding on this row (owner decision 2026-10-06 — review
+  // incentives carry no tax). Set by the SERVER on review rows added from that day
+  // (stampReviewTaxFree); never accepted from a browser. A review row without it was paid
+  // under the earlier rule and keeps the tax it was paid with.
+  taxFree?: boolean;
   // Review-reward rows only: the BOOKING the review came from (GYG ref etc.).
   // Empty = a guest of this job; a booking no. on this sheet's guest list =
   // earned here; any other booking no. = reward earned on an earlier job,
@@ -178,21 +183,33 @@ export function isReviewExpense(e: { description?: string | null }): boolean {
   return d.startsWith("review") || d.includes("รีวิว");
 }
 /**
- * Review rows the incoming sheet has that the stored one did not — by what they say, so a
- * row moved or re-saved unchanged is not new. Since 2026-10-06 review incentives are paid
- * monthly per guide (lib/supplemental-payments), never added to a job sheet.
+ * Mark which review rows carry no withholding — owner decision 2026-10-06: review
+ * incentives are paid in full, with no tax, from that day; rows already paid keep theirs.
+ *
+ * A review row that matches a stored one by what it says (moved or re-saved unchanged)
+ * keeps that row's mark — an old row stays taxed, a tax-free one stays tax-free. A review
+ * row the stored sheet did not have, or one whose amount changed, is from today and is
+ * tax-free. Only the server calls this; whatever a browser sent for `taxFree` is ignored.
  */
-export function newReviewRows(stored: readonly Expense[], incoming: readonly Expense[]): number {
+export function stampReviewTaxFree<T extends Expense>(stored: readonly Expense[], incoming: readonly T[]): { rows: T[]; added: number } {
   const sig = (e: Expense) => [(e.description ?? "").trim(), Number(e.price) || 0, Number(e.pax) || 0].join("|");
-  const left = new Map<string, number>();
-  for (const e of stored ?? []) if (isReviewExpense(e)) left.set(sig(e), (left.get(sig(e)) ?? 0) + 1);
+  const left = new Map<string, boolean[]>();
+  for (const e of stored ?? []) if (isReviewExpense(e)) left.set(sig(e), [...(left.get(sig(e)) ?? []), e.taxFree === true]);
   let added = 0;
-  for (const e of incoming ?? []) {
-    if (!isReviewExpense(e)) continue;
-    const n = left.get(sig(e)) ?? 0;
-    if (n > 0) left.set(sig(e), n - 1); else added++;
-  }
-  return added;
+  const rows = (incoming ?? []).map((e) => {
+    const { taxFree: _client, ...rest } = e;
+    if (!isReviewExpense(e)) return rest as T;
+    const marks = left.get(sig(e)) ?? [];
+    if (marks.length) { const was = marks.shift()!; return (was ? { ...rest, taxFree: true } : rest) as T; }
+    added++;
+    return { ...rest, taxFree: true } as T;
+  });
+  return { rows, added };
+}
+
+/** Review incentive rows that are withheld on — those paid before 2026-10-06 (no `taxFree`). */
+export function taxableReviewTotal(expenses: Expense[]): number {
+  return (expenses ?? []).filter((e) => isReviewExpense(e) && e.taxFree !== true).reduce((s, e) => s + expenseAmount(e), 0);
 }
 
 export function reviewRewardTotal(expenses: Expense[]): number {
@@ -207,6 +224,9 @@ export function reviewRewardTotal(expenses: Expense[]): number {
  *
  *     base = guide fee + review incentive          (NOT meals, transport, tickets)
  *     wht  = base × whtPct
+ *
+ * …until 2026-10-06: from then review incentives carry no tax (owner decision), so only a
+ * review row WITHOUT `taxFree` — one paid under the earlier rule — is in the base.
  *
  * Reimbursements are the guide's own money coming back and are never taxed, so
  * nothing else in the expense table joins the base.
@@ -223,7 +243,7 @@ export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   const gross = n(guideFee?.price) * n(guideFee?.time);
   const rate = n(guideFee?.whtPct) / 100;
   const reviewReward = reviewRewardTotal(expenses);
-  const whtBase = gross + reviewReward;
+  const whtBase = gross + taxableReviewTotal(expenses);
   const wht = whtBase * rate;
   const whtOnFee = gross * rate;
   const whtOnReview = wht - whtOnFee;

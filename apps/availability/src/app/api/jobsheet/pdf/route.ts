@@ -296,8 +296,8 @@ export async function GET(req: NextRequest) {
         ${money.awaitingConfirmationTotal > 0 ? `<div class="sub"><span>of which awaiting payer confirmation <small>รอยืนยันผู้ชำระ</small></span><b>${thb(money.awaitingConfirmationTotal)}</b></div>` : ""}
         ${cost.reviewOwn > 0 ? `<div><span>Review Reward <small>ค่าตอบแทนรีวิว</small></span><b>${thb(cost.reviewOwn)}</b></div>` : ""}
         <div><span>Guide Fee <small>ค่าจ้างมัคคุเทศก์</small></span><b>${thb(t.gross)}</b></div>
-        <div class="sub"><span>of which withheld as tax (WHT)${payer.reviewReward > 0 ? " — on the fee" : ""} <small>ภาษีหัก ณ ที่จ่าย — ค่าจ้าง</small></span><b>${thb(payer.whtOnFee)}</b></div>
-        ${payer.reviewReward > 0 ? `<div class="sub"><span>and on the review incentive <small>ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว</small></span><b>${thb(payer.whtOnReview)}</b></div>` : ""}
+        <div class="sub"><span>of which withheld as tax (WHT)${payer.whtOnReview > 0 ? " — on the fee" : ""} <small>ภาษีหัก ณ ที่จ่าย — ค่าจ้าง</small></span><b>${thb(payer.whtOnFee)}</b></div>
+        ${payer.whtOnReview > 0 ? `<div class="sub"><span>and on the review incentive <small>ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว</small></span><b>${thb(payer.whtOnReview)}</b></div>` : ""}
         <!-- id kept on the figure the fillable prep script actually recomputes
              (expenses + review + gross fee). It previously sat on "Net Pay to
              Guide", so typing into the prep sheet overwrote the payment figure
@@ -312,7 +312,7 @@ export async function GET(req: NextRequest) {
           <b>${thb(money.netPayToGuide)}</b>
         </div>
         <div><span>Guide fee after WHT <small>ค่าจ้างหลังหักภาษี</small></span><b>${thb(payer.feeNet)}</b></div>
-        ${payer.reviewReward > 0 ? `<div><span>Review incentive after WHT <small>ค่าตอบแทนรีวิวหลังหักภาษี</small></span><b>${thb(payer.reviewNet)}</b></div>` : ""}
+        ${payer.reviewReward > 0 ? `<div><span>${payer.whtOnReview > 0 ? "Review incentive after WHT <small>ค่าตอบแทนรีวิวหลังหักภาษี</small>" : "Review incentive · no tax <small>ค่าตอบแทนรีวิว ไม่หักภาษี</small>"}</span><b>${thb(payer.reviewNet)}</b></div>` : ""}
         ${money.additionalGuidePayment - payer.reviewReward > 0.005 ? `<div><span>Additional payment <small>รายการจ่ายเพิ่มเติม</small></span><b>${thb(money.additionalGuidePayment - payer.reviewReward)}</b></div>` : ""}
         ${money.reimbursementDue > 0 ? `<div><span>Reimbursement for expenses <small>คืนเงินสำรองจ่าย</small></span><b>${thb(money.reimbursementDue)}</b></div>` : ""}
         ${money.awaitingConfirmationTotal > 0 ? `<div class="note">${thb(money.awaitingConfirmationTotal)} of tour expenses is not in this transfer — its payer is a suggestion awaiting confirmation.<br><small>รอยืนยันผู้ชำระ — ยังไม่รวมในยอดโอน</small></div>` : ""}
