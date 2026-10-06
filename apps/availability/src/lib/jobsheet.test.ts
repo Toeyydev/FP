@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows, newReviewRows } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -388,18 +388,28 @@ describe("uncategorisedExpenseRows — rows a PEAK document would refuse", () =>
 });
 
 
-describe("newReviewRows — review incentives are paid monthly, not added to a job sheet (2026-10-06)", () => {
+describe("review rows carry no tax from 2026-10-06 — stampReviewTaxFree and computeTotals", () => {
   const ferry = { description: "Ferry", price: 15, pax: 2 } as Expense;
-  const r50 = (pax: number) => ({ description: "Review reward", price: 50, pax }) as Expense;
-  it("rows already on the sheet are not new, wherever they move", () => {
-    expect(newReviewRows([ferry, r50(2)], [r50(2), ferry])).toBe(0);
+  const r50 = (pax: number, taxFree?: boolean) => ({ description: "Review reward", price: 50, pax, ...(taxFree ? { taxFree: true } : {}) }) as Expense;
+  const fee = { price: 1000, time: 1, whtPct: 3 };
+  it("a review row the sheet did not have is tax-free; an old one stays taxed wherever it moves", () => {
+    const { rows, added } = stampReviewTaxFree([ferry, r50(2)], [r50(2), ferry, r50(4)]);
+    expect(added).toBe(1);
+    expect(rows.map((r) => r.taxFree === true)).toEqual([false, false, true]);
   });
-  it("an added row, or a changed count, is new", () => {
-    expect(newReviewRows([ferry], [ferry, r50(1)])).toBe(1);
-    expect(newReviewRows([r50(2)], [r50(3)])).toBe(1);
-    expect(newReviewRows([r50(2)], [r50(2), r50(2)])).toBe(1);
+  it("a changed count is a new row (tax-free); a tax-free row re-saved stays tax-free", () => {
+    expect(stampReviewTaxFree([r50(2)], [r50(3)]).rows[0].taxFree).toBe(true);
+    expect(stampReviewTaxFree([r50(2, true)], [r50(2)]).rows[0].taxFree).toBe(true);
   });
-  it("removing a row adds nothing", () => {
-    expect(newReviewRows([ferry, r50(2)], [ferry])).toBe(0);
+  it("what a browser sends for taxFree is ignored — an old taxed row cannot be made tax-free, and no other row carries it", () => {
+    const { rows } = stampReviewTaxFree([r50(2)], [r50(2, true), { ...ferry, taxFree: true } as Expense]);
+    expect(rows[0].taxFree).toBeUndefined();
+    expect(rows[1].taxFree).toBeUndefined();
+  });
+  it("a tax-free review is paid in full; an old one is still withheld on with the fee", () => {
+    const now = computeTotals([r50(4, true)], fee);
+    expect({ base: now.whtBase, wht: now.wht, onReview: now.whtOnReview, review: now.reviewReward }).toEqual({ base: 1000, wht: 30, onReview: 0, review: 200 });
+    const before = computeTotals([r50(4)], fee);
+    expect({ base: before.whtBase, wht: before.wht, onReview: before.whtOnReview }).toEqual({ base: 1200, wht: 36, onReview: 6 });
   });
 });

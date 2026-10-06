@@ -334,6 +334,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/record-shared-guides
 
+      # A review incentive put on a job sheet (from 2026-10-06): added with the button, paid in
+      # full with the job, no tax — the server marks the row; the fee is still withheld on.
+      - name: Review incentive on a job sheet, no tax, in a real browser
+        run: node scripts/e2e/jobsheet-review-no-tax.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-review-no-tax
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.

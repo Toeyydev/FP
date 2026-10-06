@@ -1058,7 +1058,7 @@ export default function JobSheetEditor() {
                       so a guide comparing the two against their bank statement found
                       neither figure. The sum is the same; the lines are now true. */}
                   <div className="gs-payout-row"><span>Guide fee · after {sheet.guideFee.whtPct ?? 3}% WHT<br /><small className="gs-calc">ค่าจ้างไกด์ หลังหักภาษี {thb(payer.whtOnFee)}</small></span><b>{thb(payer.feeNet)}</b></div>
-                  {reviewReward > 0 && <div className="gs-payout-row"><span>Review reward · after {sheet.guideFee.whtPct ?? 3}% WHT<br /><small className="gs-calc">ค่าตอบแทนรีวิว หลังหักภาษี {thb(payer.whtOnReview)}</small></span><b>{thb(payer.reviewNet)}</b></div>}
+                  {reviewReward > 0 && <div className="gs-payout-row"><span>{payer.whtOnReview > 0 ? <>Review reward · after {sheet.guideFee.whtPct ?? 3}% WHT<br /><small className="gs-calc">ค่าตอบแทนรีวิว หลังหักภาษี {thb(payer.whtOnReview)}</small></> : <>Review reward · no tax<br /><small className="gs-calc">ค่าตอบแทนรีวิว ไม่หักภาษี</small></>}</span><b>{thb(payer.reviewNet)}</b></div>}
                   <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
                 {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — it is not in the figure above, and the payment waits until the operator records who paid. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย ยังไม่รวมในยอดข้างบน และจะยังจ่ายไม่ได้จนกว่า operator จะระบุ</div>}
@@ -1180,7 +1180,7 @@ export default function JobSheetEditor() {
              top of the sheet said 2,815 while the bottom said 1,815 — and
              "Reimbursement" was total expenses, not what the guide is owed back. */}
          <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.feeNet)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
-         {payer.reviewReward > 0 && <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.reviewNet)}</b><span>Review incentive · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>}
+         {payer.reviewReward > 0 && <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.reviewNet)}</b><span>{payer.whtOnReview > 0 ? `Review incentive · net of ${sheet.guideFee.whtPct ?? 3}% WHT` : "Review incentive · no tax"}</span></div>}
          <div className="kpi"><b style={{ fontSize: 19 }}>{thb(money.reimbursementDue)}</b><span>Reimbursement due</span></div>
          <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(money.netPayToGuide)}</b><span>Net pay to guide</span></div>
        </div>
@@ -1709,7 +1709,9 @@ export default function JobSheetEditor() {
             {payer.reviewReward > 0 && (
               <>
                 <tr><td><TH en="Review incentive" th="ค่าตอบแทนรีวิวไกด์" /></td><td className="js-amt"><b>{thb(payer.reviewReward)}</b></td></tr>
-                <tr><td><TH en="WHT on review incentive" th="ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว" /></td><td className="js-amt"><b>−{thb(payer.whtOnReview)}</b></td></tr>
+                {payer.whtOnReview > 0
+                  ? <tr><td><TH en="WHT on review incentive" th="ภาษีหัก ณ ที่จ่าย — ค่าตอบแทนรีวิว" /></td><td className="js-amt"><b>−{thb(payer.whtOnReview)}</b></td></tr>
+                  : <tr className="js-review-no-tax"><td><TH en="Review incentive — no tax" th="ค่าตอบแทนรีวิว ไม่หักภาษี" /></td><td className="js-amt"><b>{thb(0)}</b></td></tr>}
                 <tr className="js-total js-comp-sub"><td><TH en="Review incentive, net" th="ค่าตอบแทนรีวิวสุทธิ" /></td><td className="js-amt"><b>{thb(payer.reviewNet)}</b></td></tr>
                 <tr className="js-total js-comp-total">
                   <td><TH en="Total compensation, net" th="รวมค่าตอบแทนสุทธิ" /><small style={{ display: "block", fontSize: 9.5, fontWeight: 400, color: "var(--ink-soft)" }}>{`gross ${thb(payer.feeGross + payer.reviewReward)} − WHT ${thb(payer.withholding)}`}</small></td>
@@ -1771,9 +1773,13 @@ export default function JobSheetEditor() {
                   )}
                 </tbody>
               </table>
-              {canEdit && <div className="no-print js-review-moved" style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>
-                Review incentives are recorded monthly per guide on <a href="/payments">Payments → Supplemental payments</a> — paid in full, the company bears the tax.
-                <br />ค่ารีวิวบันทึกรายเดือนต่อไกด์ที่ Payments → Supplemental payments · ไกด์ได้เต็มจำนวน บริษัทออกภาษีให้
+              {canEdit && <div className="no-print" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+                {/* The row is marked tax-free here for the figures on screen; the server marks it
+                    again on save and ignores what the browser sent (lib/jobsheet stampReviewTaxFree). */}
+                <button className="btn sm js-add-review" title="Reward for reviews — ฿50 × number of reviews. Paid in full, no tax · ค่ารีวิวไม่หักภาษี" onClick={() => up({ expenses: [...sheet.expenses, { description: "Review reward", price: 50, pax: 1, taxFree: true }] })}>★ + Review reward</button>
+                <span className="js-review-note" style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                  Reviews are paid in full with this job, no tax · ค่ารีวิวจ่ายพร้อมงานนี้ ไม่หักภาษี. Put them on any one of the guide&rsquo;s job sheets.
+                </span>
               </div>}
             </div>
           );
