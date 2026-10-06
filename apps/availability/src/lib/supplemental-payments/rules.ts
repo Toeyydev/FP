@@ -40,27 +40,27 @@ export const normalizePeakRef = (ref: string | null | undefined) => (ref ?? "").
 export const MIN_OVERRIDE_REASON = 10;
 
 /**
- * Review incentives — owner policy 2026-10-06 (replaces the ฿1,000 threshold of 2026-10-04).
+ * Review incentives — owner decision 2026-10-06 (later the same day than the company-borne
+ * 3% it replaces): NO withholding tax on review incentives at all. The guide is paid in full,
+ * ฿50 for each review that names them, nothing is deducted, the company bears no tax on their
+ * behalf, and nothing goes into ภ.ง.ด.3 for it:
  *
- * The guide is paid in full: ฿50 for each review that names them. The company bears the
- * withholding on their behalf, once (ผู้จ่ายออกให้ครั้งเดียว), so the income on the 50 ทวิ and
- * the 510110 expense are the transfer plus the tax, and the tax goes into ภ.ง.ด.3:
+ *     transfer = income = 510110 expense = reviews × 50          tax = 0
  *
- *     transfer = reviews × 50          tax = transfer × 3%   (1% through e-Withholding)
- *     income   = expense = transfer + tax
- *
- * Every amount is taxed — there is no ฿1,000 threshold. A review names the guide, not a
- * booking, so it carries no job: it books into the month the guide worked (`workMonth`),
- * one unpaid incentive per guide and month, to which later reviews are added.
+ * Still paid apart from the guide fee, in its own payment and PEAK document. A review names
+ * the guide, not a booking, so it carries no job: it books into the month the guide worked
+ * (`workMonth`), one unpaid incentive per guide and month, to which later reviews are added.
+ * (The stored bearer stays COMPANY_ONCE — the kind of record, not a tax — so the incentives
+ * keep their own rules; the e-Withholding flag no longer changes anything.)
  */
 export const REVIEW_RATE = 50;
-export const REVIEW_WHT_PCT = 3;
-export const REVIEW_EWHT_PCT = 1;
+export const REVIEW_WHT_PCT = 0;
+export const REVIEW_EWHT_PCT = 0;
 export const MAX_REVIEWS = 999;
 export type WhtSource = "CONFIGURED" | "ENTERED" | "BELOW_THRESHOLD" | "POLICY";
 export type WhtBearer = "GUIDE" | "COMPANY_ONCE";
 
-/** Transfer, company-borne tax and income for a number of reviews — each to the satang. */
+/** Transfer, tax (none — owner 2026-10-06) and income for a number of reviews — each to the satang. */
 export function reviewIncentiveFigures(reviews: number, eWithholding = false): { gross: number; wht: number; net: number; whtPct: number } {
   const whtPct = eWithholding ? REVIEW_EWHT_PCT : REVIEW_WHT_PCT;
   const net = reviews * REVIEW_RATE * 100;

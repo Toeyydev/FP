@@ -259,7 +259,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
                 <label key={x.id} className="paydoc-job">
                   <input type="checkbox" checked={pickedReviews.has(x.id)} onChange={() => setPickedReviews((s) => { const n = new Set(s); n.has(x.id) ? n.delete(x.id) : n.add(x.id); return n; })} />
                   <span style={{ minWidth: 64 }}>{x.workMonth}</span>
-                  <span style={{ flex: 1, minWidth: 0 }}>{x.reviewCount} review{x.reviewCount === 1 ? "" : "s"} <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>· tax {thb(x.wht)} borne by the company</span></span>
+                  <span style={{ flex: 1, minWidth: 0 }}>{x.reviewCount} review{x.reviewCount === 1 ? "" : "s"} <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>· {x.wht > 0 ? `tax ${thb(x.wht)} borne by the company` : "paid in full, no tax"}</span></span>
                   <b className="num">{thb(x.netAmount)}</b>
                 </label>
               ))}

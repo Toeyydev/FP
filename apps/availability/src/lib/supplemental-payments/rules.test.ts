@@ -27,28 +27,27 @@ const generic = (over: Partial<CreateInput> = {}): CreateInput => ({ guideId: "G
 const review = (over: Partial<CreateInput> = {}): CreateInput => ({ guideId: "G-901", type: "REVIEW_INCENTIVE", grossAmount: 0, reason: "GetYourGuide reviews naming the guide (example)", jobs: [], reviewCount: 4, workMonth: "2099-08", ...over });
 const NOW = new Date("2099-09-05T03:00:00Z");
 
-describe("a review incentive (owner policy 2026-10-06): paid in full, the company bears the tax once", () => {
-  it("4 reviews: transfer 200 · tax 6 · income on the 50 ทวิ and 510110 expense 206 — whatever is configured", () => {
-    for (const f of [facts(), facts({ configuredWhtPct: null }), facts({ configuredWhtPct: 0 })]) {
+describe("a review incentive (owner decision 2026-10-06): paid in full, no withholding tax at all", () => {
+  it("4 reviews: transfer 200 · no tax · income and 510110 expense 200 — whatever is configured", () => {
+    for (const f of [facts(), facts({ configuredWhtPct: null }), facts({ configuredWhtPct: 3 })]) {
       const c = checkCreate(review(), f, NOW);
       expect(c.reasons).toEqual([]);
-      expect(c.figures).toEqual({ gross: 206, wht: 6, net: 200, whtPct: 3, whtSource: "POLICY", whtBearer: "COMPANY_ONCE" });
+      expect(c.figures).toEqual({ gross: 200, wht: 0, net: 200, whtPct: 0, whtSource: "POLICY", whtBearer: "COMPANY_ONCE" });
       expect(c.review).toEqual({ reviewCount: 4, workMonth: "2099-08", eWithholding: false });
       expect(c.accountingCategory).toBe("REVIEW_REWARD");
     }
   });
-  it("every amount is taxed — one review too, no ฿1,000 threshold — and rounds to the satang", () => {
-    expect(reviewIncentiveFigures(1)).toEqual({ gross: 51.5, wht: 1.5, net: 50, whtPct: 3 });
-    expect(reviewIncentiveFigures(7)).toEqual({ gross: 360.5, wht: 10.5, net: 350, whtPct: 3 });
-    expect(reviewIncentiveFigures(40)).toEqual({ gross: 2060, wht: 60, net: 2000, whtPct: 3 });
+  it("no amount is taxed — one review, or forty", () => {
+    expect(reviewIncentiveFigures(1)).toEqual({ gross: 50, wht: 0, net: 50, whtPct: 0 });
+    expect(reviewIncentiveFigures(40)).toEqual({ gross: 2000, wht: 0, net: 2000, whtPct: 0 });
   });
-  it("through e-Withholding Tax the rate is 1%, chosen per incentive — never hard-coded", () => {
-    expect(reviewIncentiveFigures(4, true)).toEqual({ gross: 202, wht: 2, net: 200, whtPct: 1 });
-    expect(checkCreate(review({ eWithholding: true }), facts(), NOW).figures).toMatchObject({ gross: 202, wht: 2, net: 200, whtPct: 1 });
+  it("the e-Withholding flag no longer changes anything", () => {
+    expect(reviewIncentiveFigures(4, true)).toEqual({ gross: 200, wht: 0, net: 200, whtPct: 0 });
+    expect(checkCreate(review({ eWithholding: true }), facts(), NOW).figures).toMatchObject({ gross: 200, wht: 0, net: 200 });
   });
   it("the amount, the rate and the account sent by the form are ignored: the count decides", () => {
-    const c = checkCreate(review({ grossAmount: 999, whtPct: 0, accountingCategory: "ENTRANCE_TICKET" }), facts(), NOW);
-    expect(c.figures).toMatchObject({ gross: 206, net: 200 });
+    const c = checkCreate(review({ grossAmount: 999, whtPct: 3, accountingCategory: "ENTRANCE_TICKET" }), facts(), NOW);
+    expect(c.figures).toMatchObject({ gross: 200, wht: 0, net: 200 });
     expect(c.accountingCategory).toBe("REVIEW_REWARD");
   });
   it("needs a whole number of reviews, a month worked that has happened, a reason — and names no job", () => {

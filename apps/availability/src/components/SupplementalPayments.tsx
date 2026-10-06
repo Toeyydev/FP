@@ -142,7 +142,7 @@ export default function SupplementalPayments({ canEdit, prefill, onPrefillUsed, 
                   </td>
                   <td style={{ maxWidth: 220 }}>{r.reason}{r.duplicateOverrideReason && <small style={{ display: "block", color: "#b45309" }}>Created despite a match: {r.duplicateOverrideReason}</small>}</td>
                   <td className="r num">{thb(r.grossAmount)}</td>
-                  <td className="r num">{thb(r.wht)}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.whtPct}% · {r.whtBearer === "COMPANY_ONCE" ? "borne by the company" : r.whtSource === "CONFIGURED" ? "configured" : r.whtSource === "BELOW_THRESHOLD" ? "under ฿1,000" : "entered"}</small></td>
+                  <td className="r num">{thb(r.wht)}<small style={{ display: "block", color: "var(--ink-soft)" }}>{r.whtPct}% · {r.whtBearer === "COMPANY_ONCE" ? (r.wht > 0 ? "borne by the company" : "no tax") : r.whtSource === "CONFIGURED" ? "configured" : r.whtSource === "BELOW_THRESHOLD" ? "under ฿1,000" : "entered"}</small></td>
                   <td className="r num"><b>{thb(r.netAmount)}</b></td>
                   <td><span className={`chip-pay ${r.payment === "PAID" ? "recorded" : r.payment === "VOID" ? "reversed" : ""}`}>{STATE_LABEL[r.payment]}</span>{r.voidReason && <small style={{ display: "block", color: "var(--ink-soft)" }}>{r.voidReason}</small>}</td>
                   <td className="num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{r.paymentNo ? <>{r.paymentNo}<div style={{ color: "var(--ink-soft)" }}>{r.paidDate}</div></> : "—"}</td>
@@ -304,13 +304,9 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
                   <input className="search" name="workMonth" type="month" value={workMonth} onChange={(e) => setWorkMonth(e.target.value)} />
                 </label>
               </div>
-              <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-                <input type="checkbox" name="ewht" style={{ width: "auto", margin: 0 }} checked={eWht} onChange={(e) => setEWht(e.target.checked)} />
-                Paid through e-Withholding Tax (1% instead of 3%)
-              </label>
               <div className="js-wht-rule" style={{ fontSize: 12.5 }}>
-                ฿{REVIEW_RATE} a review, paid to the guide in full. The company bears the {eWht ? "1" : "3"}% withholding once (ผู้จ่ายออกภาษีให้ครั้งเดียว) — it is not deducted.
-                {reviewEst && <> {reviewCount} × ฿{REVIEW_RATE} = <b>{thb(reviewEst.net)}</b> to the guide · tax <b>{thb(reviewEst.wht)}</b> · income on the 50 ทวิ <b>{thb(reviewEst.gross)}</b>.</>}
+                ฿{REVIEW_RATE} a review, paid to the guide in full. No withholding tax · ค่ารีวิวไม่มีภาษีหัก ณ ที่จ่าย — nothing is deducted and the company pays none on it.
+                {reviewEst && <> {reviewCount} × ฿{REVIEW_RATE} = <b>{thb(reviewEst.net)}</b> to the guide{reviewEst.wht > 0 ? <> · tax <b>{thb(reviewEst.wht)}</b> · income on the 50 ทวิ <b>{thb(reviewEst.gross)}</b></> : null}.</>}
               </div>
             </div>
           )}
@@ -376,8 +372,10 @@ function AddDialog({ start, onClose, onDone }: { start: SupplementalPrefill | { 
                 : <div><span className="paydoc-label">Related jobs</span><b>{jobs.join(", ") || "guide-level"}</b></div>}
               {preview.figures && preview.figures.whtBearer === "COMPANY_ONCE" && <>
                 <div><span className="paydoc-label">To the guide (in full)</span><b>{thb(preview.figures.net)}</b></div>
-                <div><span className="paydoc-label">Tax {preview.figures.whtPct}% — borne by the company, once</span><b>{thb(preview.figures.wht)}</b></div>
-                <div><span className="paydoc-label">Income on the 50 ทวิ · 510110 expense</span><b>{thb(preview.figures.gross)}</b></div>
+                {preview.figures.wht > 0
+                  ? <><div><span className="paydoc-label">Tax {preview.figures.whtPct}% — borne by the company, once</span><b>{thb(preview.figures.wht)}</b></div>
+                    <div><span className="paydoc-label">Income on the 50 ทวิ · 510110 expense</span><b>{thb(preview.figures.gross)}</b></div></>
+                  : <div><span className="paydoc-label">Withholding tax</span><b>None · ไม่มีภาษี</b></div>}
               </>}
               {preview.figures && preview.figures.whtBearer !== "COMPANY_ONCE" && <>
                 <div><span className="paydoc-label">Amount</span><b>{thb(preview.figures.gross)}</b></div>
