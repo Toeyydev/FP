@@ -1477,3 +1477,33 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .colf-item:hover{background:var(--paper)}
 .colf-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .colf-empty{color:var(--ink-soft);padding:6px}
+
+/* Job process board (components/JobProcessBoard): two lanes, nine steps. */
+.proc-board{display:grid;gap:8px;padding:6px 14px 14px;min-width:980px}
+.proc-lane{display:grid;grid-template-columns:150px repeat(9,minmax(86px,1fr));gap:6px;align-items:stretch;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:8px}
+.proc-lane-name{display:flex;flex-direction:column;justify-content:center;font-size:12px;line-height:1.3}
+.proc-lane-name small{color:var(--ink-soft);font-size:11px}
+.proc-cell{display:grid;gap:6px;align-content:center;min-height:74px;border-left:1px dashed var(--line)}
+.proc-cell:empty::after{content:"";}
+.proc-node{display:grid;gap:1px;justify-items:start;text-align:left;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:10px;padding:7px 9px;margin-left:6px;cursor:pointer;font:inherit}
+.proc-node b{font-size:20px;font-weight:800;line-height:1}
+.proc-node span{font-size:11.5px;font-weight:700;line-height:1.25}
+.proc-node small{font-size:10.5px;color:var(--ink-soft);line-height:1.25}
+.proc-node:hover{border-color:var(--ink-soft)}
+.proc-node.on{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary) inset}
+.proc-node.empty b{color:var(--grey)}
+.proc-node.back{border-style:dashed}
+.proc-node.back:not(.empty){background:var(--danger-bg);border-color:var(--danger-line)}
+.proc-node.back:not(.empty) b{color:var(--danger)}
+.proc-node.done:not(.empty){background:var(--green-bg);border-color:var(--green-line)}
+.proc-chip{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid var(--line-strong);white-space:nowrap}
+.proc-chip.lane-admin{background:var(--assign-bg);border-color:var(--assign-line);color:var(--assign)}
+.proc-chip.lane-guide{background:var(--grey-bg);color:var(--ink)}
+.proc-chip.lane-done{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.proc-strip{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:10px 12px;margin-bottom:14px;display:grid;gap:8px}
+.proc-strip ol{list-style:none;margin:0;padding:0;display:flex;gap:4px;overflow-x:auto}
+.proc-strip li{flex:1 0 auto;font-size:11px;font-weight:600;color:var(--ink-soft);padding:5px 9px;border-radius:999px;border:1px solid var(--line);white-space:nowrap;text-align:center}
+.proc-strip li.past{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
+.proc-strip li.now{background:var(--primary);border-color:var(--primary);color:#fff}
+.proc-strip-next{font-size:12.5px}
+.proc-strip-next small{color:var(--ink-soft)}

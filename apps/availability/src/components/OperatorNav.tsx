@@ -12,6 +12,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
   {
     items: [
       { key: "dashboard", label: "Dashboard", href: "/dashboard" },
+      { key: "process", label: "Job process", href: "/process" },
     ],
   },
   {

@@ -343,6 +343,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-review-no-tax
 
+      # The Job process board: the TO-BE path in two lanes with the jobs standing on each
+      # step, the list with the next thing to do, and the same stage on the job sheet.
+      - name: Job process board in a real browser
+        run: node scripts/e2e/job-process.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/job-process
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.
