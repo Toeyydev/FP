@@ -3,21 +3,16 @@ import { paxIndex } from "@/lib/assigned-pax";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { SLOT_COUNT, SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
+import { SLOT_COUNT, clashingSlotIdxs } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
-import { sweepExpiredOffers, createOffer, untagGuideSlotBookings } from "@/lib/offers";
-import { removeTourEvents } from "@/lib/tour-calendar-sync";
-import { sendPushToUser } from "@/lib/push";
-import { linePush, lineEnabled } from "@/lib/line";
+import { sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { audit } from "@/lib/audit";
-import { financialHistoryBlockers } from "@/lib/payments-v2/history";
-import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
-import { handoverLock } from "@/lib/tour-handover-server";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 import { manualAssignBlockers } from "@/lib/manual-assign";
 import { sendTourCalendarInvite } from "@/lib/calendar";
 import { notifyGuide } from "@/lib/booking-import";
 import { directAssignmentNotice } from "@/lib/assignment-notice";
+import { removeGuideFromDeparture } from "@/lib/assignment-removal";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -198,6 +193,11 @@ export async function POST(req: NextRequest) {
     tourId, date, slotIdx, pax: pax ?? null, note: note ?? null,
     ttlMinutes: 120, onlyGuideId: guideId, createdById: session!.user!.id ?? null,
   });
+  // Already guided by someone: an offer from here never doubles a job (lib/offers createOffer).
+  if (r.staffed) {
+    const who = r.staffed.map((g) => `${g.guideId} ${g.name}`).join(", ");
+    return NextResponse.json({ error: "slot-staffed", staffed: r.staffed, reasons: [`This tour already has a guide: ${who}. Replace them from the Bookings inbox, or add a second guide with Split on Jobs.`] }, { status: 409 });
+  }
   // No candidate means this guide can't take the slot (already booked it, on
   // leave, inactive, or offers-blocked) — surface that instead of silently no-op.
   if (r.candidates === 0) return NextResponse.json({ error: "guide-unavailable" }, { status: 409 });
@@ -226,69 +226,10 @@ export async function DELETE(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad body" }, { status: 400 });
   const { guideId, date, slotIdx, release } = parsed.data;
 
-  // Safety guard: once the guide has checked in (arrived/started/completed), the
-  // tour is in progress or done — it must not be re-offered or removed from
-  // Dispatch by accident (that's what stranded a live tour before). To undo a
-  // started/completed tour, remove it from the Tour Log instead.
-  const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
-  if (started > 0) return NextResponse.json({ error: "tour-in-progress" }, { status: 409 });
-  const handover = await handoverLock(date, slotIdx, guideId);
-  if (handover) return NextResponse.json({ error: "handover-on-slot", reason: handover }, { status: 409 });
-
-  // Clean up the Google Calendar events first (guide + operator master) so a
-  // removed/re-offered tour doesn't linger as a ghost event. Never blocks delete.
-  const existing = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
-  if (existing) { try { await removeTourEvents(existing); } catch { /* calendar cleanup is best-effort */ } }
-
-  await prisma.assignment.deleteMany({ where: { guideId, date, slotIdx } });
-  // Removing the assignment un-does the guide's work on this slot: clear the
-  // leftover job sheet, check-ins, report and rating so the tour doesn't linger
-  // in the Tour Log or show as a phantom payable on Payments, and cancel any
-  // offer this guide had accepted for the slot. (Completed tours are removed from
-  // the Tour Log instead, which keeps the sheet for the payment record.)
-  if (existing) {
-    // A reconstructed historical sheet must not be swept away by un-assigning a
-    // guide. Refuse before anything is deleted, so the operator is told what to
-    // do rather than losing the record.
-    if (await hasHistoricalJobSheet({ guideId, date, slotIdx })) {
-      const c = historicalDeleteConflict();
-      return NextResponse.json(c.body, { status: c.status });
-    }
-    const history = await financialHistoryBlockers(prisma, [{ guideId, date, slotIdx }]);
-    if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
-    await Promise.all([
-      prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } }),
-      prisma.checkin.deleteMany({ where: { guideId, date, slotIdx } }),
-      prisma.tourReport.deleteMany({ where: { guideId, date, slotIdx } }),
-      prisma.guideRating.deleteMany({ where: { guideId, date, slotIdx } }),
-      prisma.jobOffer.updateMany({ where: { date, slotIdx, assignedGuideId: guideId, status: { not: "EXPIRED" } }, data: { status: "CANCELLED", assignedGuideId: null } }),
-    ]);
-    // The removed guide holds the slot no longer — clear their tag from its
-    // bookings so none are left orphaned (pointing at a guide with no assignment).
-    await untagGuideSlotBookings(guideId, date, slotIdx);
-  }
-  // Plain Remove: send the slot's remaining (untagged) offered bookings back to the
-  // inbox (PENDING) so they can be re-dispatched instead of stranded as "offered".
-  if (release) {
-    await prisma.booking.updateMany({ where: { date, slotIdx, status: "OFFERED", assignedGuideId: null }, data: { status: "PENDING" } });
-  }
-
-  // Tell the guide their job was removed (in-app + push + LINE if linked).
-  if (existing) {
-    try {
-      const [g, tour] = await Promise.all([
-        prisma.user.findFirst({ where: { guideId, state: "ACTIVE" }, select: { id: true, lineUserId: true } }),
-        existing.tourId ? prisma.tour.findUnique({ where: { id: existing.tourId }, select: { name: true } }) : Promise.resolve(null),
-      ]);
-      if (g) {
-        const when = `${date} · ${SLOT_TIMES[slotIdx] ?? ""}`;
-        const tname = tour?.name ?? existing.tourId ?? "your tour";
-        const msg = `Your tour was removed: ${tname} · ${when}. You are no longer assigned to it.`;
-        await prisma.notification.create({ data: { userId: g.id, kind: "job-change", message: msg } });
-        await sendPushToUser(g.id, { title: "Tour removed", body: `${tname} · ${when}`, url: "/", tag: `removed-${date}-${slotIdx}` });
-        if (lineEnabled && g.lineUserId) await linePush(g.lineUserId, msg);
-      }
-    } catch { /* notifying the guide is best-effort */ }
-  }
+  // The guide comes off the departure (lib/assignment-removal): refused once the tour has
+  // started, under a handover, or with financial history; otherwise their work on the slot is
+  // undone, their tag comes off its bookings, and they are told.
+  const r = await removeGuideFromDeparture({ guideId, date, slotIdx, release });
+  if (!r.ok) return NextResponse.json(r.refusal.body, { status: r.refusal.status });
   return NextResponse.json({ ok: true });
 }

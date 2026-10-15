@@ -104,18 +104,25 @@ export async function POST(req: NextRequest) {
     note: z.string().max(300).optional(),
     ttlMinutes: z.number().int().min(5).max(1440).optional(),
     guideId: z.string().min(1).optional(), // offer to one specific guide
+    replacesGuideId: z.string().min(1).optional(), // the departure has this guide: the offer replaces them
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
-  const { tourId, date, slotIdx, pax, note, durationMin, guideId } = parsed.data;
+  const { tourId, date, slotIdx, pax, note, durationMin, guideId, replacesGuideId } = parsed.data;
 
-  const r = await createOffer({ tourId, date, slotIdx, pax, note, durationMin, ttlMinutes: parsed.data.ttlMinutes, createdById: session!.user!.id ?? null, onlyGuideId: guideId ?? null });
+  const r = await createOffer({ tourId, date, slotIdx, pax, note, durationMin, ttlMinutes: parsed.data.ttlMinutes, createdById: session!.user!.id ?? null, onlyGuideId: guideId ?? null, replacesGuideId: replacesGuideId ?? null });
   if (r.noTour) return NextResponse.json({ error: "no-tour" }, { status: 400 });
+  // Already guided: say by whom, and that the offer must say it replaces them (or use Split).
+  if (r.staffed) {
+    const who = r.staffed.map((g) => `${g.guideId} ${g.name}`).join(", ");
+    return NextResponse.json({ error: "slot-staffed", staffed: r.staffed, reasons: [`This tour already has a guide: ${who}. Offer it again only to replace them, or add a second guide with Split on Jobs.`] }, { status: 409 });
+  }
+  if (r.replaceBlocked) return NextResponse.json({ error: "replace-blocked", reasons: [r.replaceBlocked] }, { status: 409 });
   // The tour already ran — offering it would ask a guide to accept the past.
   if (r.past) return NextResponse.json({ error: "past-date" }, { status: 400 });
   await audit({
     actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
     action: "offer.created", entityType: "JobOffer", entityId: r.offerId ?? undefined,
-    detail: { date, slotIdx, tourId, candidates: r.candidates, lineSent: r.lineSent },
+    detail: { date, slotIdx, tourId, candidates: r.candidates, lineSent: r.lineSent, ...(replacesGuideId ? { replacesGuideId } : {}) },
   });
   return NextResponse.json({ ok: true, offerId: r.offerId, candidates: r.candidates, lineSent: r.lineSent });
 }

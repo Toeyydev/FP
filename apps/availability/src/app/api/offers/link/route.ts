@@ -17,12 +17,13 @@ export async function GET(req: NextRequest) {
   const guideId = req.nextUrl.searchParams.get("guideId") || "";
   if (!offerId || !guideId) return NextResponse.json({ error: "bad-query" }, { status: 400 });
 
-  const offer = await prisma.jobOffer.findUnique({ where: { id: offerId }, select: { id: true, status: true, tourId: true, date: true, slotIdx: true, pax: true, durationMin: true, note: true } });
+  const offer = await prisma.jobOffer.findUnique({ where: { id: offerId }, select: { id: true, status: true, tourId: true, date: true, slotIdx: true, pax: true, durationMin: true, note: true, replacesGuideId: true } });
   if (!offer) return NextResponse.json({ error: "no-offer" }, { status: 404 });
 
   let liveId = offer.id;
   if (offer.status !== "OPEN") {
-    const r = await createOffer({ tourId: offer.tourId, date: offer.date, slotIdx: offer.slotIdx, pax: offer.pax, note: offer.note, durationMin: offer.durationMin, ttlMinutes: 120, onlyGuideId: guideId, createdById: session!.user!.id ?? null });
+    const r = await createOffer({ tourId: offer.tourId, date: offer.date, slotIdx: offer.slotIdx, pax: offer.pax, note: offer.note, durationMin: offer.durationMin, ttlMinutes: 120, onlyGuideId: guideId, createdById: session!.user!.id ?? null, replacesGuideId: offer.replacesGuideId });
+    if (r.staffed) return NextResponse.json({ error: "slot-staffed", staffed: r.staffed }, { status: 409 });
     if (!r.offerId) return NextResponse.json({ error: "guide-unavailable" }, { status: 409 });
     liveId = r.offerId;
   }

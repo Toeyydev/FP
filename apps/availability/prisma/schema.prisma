@@ -384,6 +384,10 @@ model JobOffer {
   expiresAt       DateTime
   createdById     String?
   createdAt       DateTime @default(now())
+  /// A departure that already has a guide is only offered to replace that guide: set here,
+  /// and when the offer is accepted this guide comes off the job (lib/offers acceptOffer).
+  /// Null = the departure had nobody when it was offered.
+  replacesGuideId String?
 
   responses JobOfferResponse[]
 

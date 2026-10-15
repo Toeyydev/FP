@@ -178,7 +178,8 @@ describe("offers — acceptOffer (first-to-accept race)", () => {
   it("refuses a slot that clashes with a job the guide already holds, without claiming the offer", async () => {
     // Offer for slot 3 (14:00); the guide already holds slot 2 (13:30) — 30 min apart.
     prismaMock.jobOffer.findUnique.mockResolvedValue(openOffer({ slotIdx: 3 }));
-    prismaMock.assignment.findFirst.mockResolvedValue({ slotIdx: 2 });
+    // First lookup: nobody else holds slot 3. Second: the guide's own clashing job at slot 2.
+    prismaMock.assignment.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ slotIdx: 2 });
     const r = await acceptOffer("of1", "G-007");
     expect(r).toEqual({ ok: false, reason: "clash", clashSlotIdx: 2 });
     // The offer is left OPEN for another guide, and no assignment is written.

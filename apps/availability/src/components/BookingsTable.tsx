@@ -76,6 +76,7 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
     for (const b of chosen) { const k = `${b.tourId}|${b.date}|${b.slotIdx}`; (groups[k] ??= []).push(b); }
     let made = 0;
     const past: string[] = [];
+    const staffed: string[] = [];
     for (const [k, items] of Object.entries(groups)) {
       const [tourId, date, slotIdx] = k.split("|");
       const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
@@ -86,11 +87,13 @@ export default function BookingsTable({ onOpen, initialMonth = "", onRecordPast,
       // mis-click. Say so instead of reporting a silent "Created 0 offer(s)".
       const err = await r.json().catch(() => ({}));
       if (err?.error === "past-date" && !past.includes(date)) past.push(date);
+      // Already guided: a bulk offer never replaces anyone — that is asked one tour at a time in the Inbox.
+      if (err?.error === "slot-staffed") staffed.push(`${date} ${(err.staffed ?? []).map((g: { name: string }) => g.name).join(" & ")}`);
     }
     setSel(new Set());
     setMsg(past.length
       ? `${past.join(", ")} already happened — no offer sent. Select that day\u2019s bookings on their own and use Record who guided.`
-      : `Created ${made} offer(s) from ${chosen.length} booking(s).`);
+      : `Created ${made} offer(s) from ${chosen.length} booking(s).${staffed.length ? ` Not offered — already guided: ${staffed.join(", ")} (replace from the Inbox, or Split on Jobs).` : ""}`);
     await load();
   }
 
