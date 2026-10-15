@@ -6,6 +6,7 @@ import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import JobProcessStrip from "@/components/JobProcessStrip";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
@@ -1173,6 +1174,8 @@ export default function JobSheetEditor() {
            <button key={k} type="button" className={`subtab${secTab === k ? " active" : ""}`} onClick={() => setSecTab(k)}>{l}</button>
          ))}
        </div>
+       {/* Where this job is in the process, and who it is waiting for (lib/job-process). */}
+       {canEdit && <JobProcessStrip guideId={guideId} date={date} slotIdx={slotIdx} refresh={`${sheet.updatedAt ?? ""}|${sheet.approvalStatus ?? ""}`} />}
        {/* Financial summary — live from the same computeTotals the payout uses. */}
        <div className="kpi-row no-print" style={{ marginBottom: 14 }}>
          {/* Must match the Summary at the bottom of this same page. These read
