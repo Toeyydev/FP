@@ -120,9 +120,22 @@ try {
     check(`${who}: check-in 18 min before start, at the meeting point`, /18 min before start/.test(s[0].text) && /At the meeting point · 25 m/.test(s[0].text), s[0].text);
     check(`${who}: the start recorded by the operator says so`, /5 min after start/.test(s[1].text) && /Recorded by the operator/.test(s[1].text), s[1].text);
     check(`${who}: the report carries its facts`, /3 completed · 1 no-show/.test(s[3].text), s[3].text);
-    if (who === "guide") check("guide (phone): the step details stay in the tooltip, not on screen", !/18 min before start/.test(s[0].visible) && /08:12/.test(s[0].visible), s[0].visible);
-    else check("operator (desktop): the step details are on screen", /18 min before start/.test(s[0].visible), s[0].visible);
+    check(`${who}: on screen only the step and its time — details in the tooltip`, s.every((x) => x.visible.split(" ").length <= 4) && !/before start|after start|meeting point/.test(s.map((x) => x.visible).join(" ")) && /Check-in 08:12/.test(s[0].visible), s.map((x) => x.visible).join(" | "));
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `tour-day-${who}.png`), fullPage: false });
+    await page.close();
+  }
+  // Checked out 2.4 km from the meeting point: the one detail that stays on screen.
+  await prisma.checkin.updateMany({ where: { type: "COMPLETE" }, data: { lat: 13.77, lng: 100.49, distanceM: 2400, withinGeofence: false } });
+  {
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.setViewport({ width: 390, height: 900 });
+    await page.setCookie(await sessionCookie("op-td@example.test"));
+    await page.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
+    await page.waitForSelector(".js-tour-day", { timeout: 20000 });
+    const co = (await read(page))[2];
+    check("away from the meeting point shows a short red note on screen", /⚠ 2\.4 km away/.test(co.visible) && /Away from the meeting point · 2\.4 km/.test(co.text), co.visible);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "tour-day-away.png"), fullPage: false });
     await page.close();
   }
   // Nothing recorded yet: the steps say so.
@@ -133,7 +146,7 @@ try {
   await page.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-tour-day", { timeout: 20000 });
   const empty = await read(page);
-  check("with nothing recorded every step says Not recorded", empty.every((x) => !x.done && /Not recorded/.test(x.text)) && /0 of 4 recorded/.test(await page.$eval(".tday-sched", (x) => x.innerText)));
+  check("with nothing recorded every step says Not recorded", empty.every((x) => !x.done && /Not recorded/.test(x.text)) && /0 of 4 recorded/.test(await page.$eval(".tday-sched", (x) => x.title)));
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("run", false, String(e?.stack ?? e).slice(0, 600));

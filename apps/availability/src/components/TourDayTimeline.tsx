@@ -17,6 +17,11 @@ const where = (s: TimelineStep) =>
     : s.location === "NO_LOCATION" ? { text: "No location", th: "ไม่มีตำแหน่ง GPS", tone: "muted" }
     : null;
 
+const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+
+// On screen: the step, its time, and a short red note only when the guide was away from
+// the meeting point. Everything else (vs. the start, where, who recorded it, the report's
+// facts) is in the step's tooltip.
 export default function TourDayTimeline({ steps, scheduled, date }: { steps: TimelineStep[]; scheduled: string | null; date: string }) {
   if (!steps.length) return null;
   const done = steps.filter((s) => s.at).length;
@@ -24,27 +29,21 @@ export default function TourDayTimeline({ steps, scheduled, date }: { steps: Tim
     <section className="panel tday js-tour-day" aria-label="Tour day timeline">
       <div className="tday-head">
         <b>Tour day</b>
-        <span className="tday-sched">Scheduled {scheduled ?? "—"} · {done} of {steps.length} recorded</span>
+        <span className="tday-sched" title={`${done} of ${steps.length} recorded`}>Starts {scheduled ?? "—"}</span>
       </div>
       <ol className="tday-steps">
         {steps.map((s) => {
           const w = where(s);
           const meta = [vsStart(s.minutesFromStart), s.note].filter(Boolean).join(" · ");
+          const tip = s.at ? [s.th, meta, w?.text].filter(Boolean).join(" · ") : `${s.th} · Not recorded`;
           return (
-            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={[s.th, meta, w?.text].filter(Boolean).join(" · ")}>
+            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={tip}>
               <span className="tday-dot" aria-hidden="true">{s.at ? "✓" : ""}</span>
-              <span className="tday-line">
-                <b className="tday-label">{s.label}</b>
-                {s.at
-                  ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> {day(s.at)}</small> : null}</span>
-                  : <span className="tday-time tday-missing">--:--</span>}
-              </span>
+              <span className="tday-label">{s.label}</span>
               {s.at
-                ? <>
-                    {meta ? <span className="tday-meta">{meta}</span> : null}
-                    {w ? <span className={`tday-where ${w.tone}`} title={w.th}>{w.text}</span> : null}
-                  </>
-                : <span className="tday-meta">Not recorded</span>}
+                ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> {day(s.at)}</small> : null}</span>
+                : <span className="tday-time tday-missing">--:--</span>}
+              {s.at && w?.tone === "warn" ? <span className="tday-away">⚠ {s.distanceM != null ? `${km(s.distanceM)} away` : "Away"}</span> : null}
             </li>
           );
         })}

@@ -131,8 +131,9 @@ try {
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "checkout-guide-home.png") });
   await page.goto(`${BASE}/job-sheet?guideId=${G}&date=${TODAY}&slotIdx=${SLOT}`, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-tour-day", { timeout: 20000 });
-  const co = await page.$eval('.js-tour-day [data-step="CHECK_OUT"]', (x) => x.innerText.replace(/\s+/g, " "));
-  check("the job sheet timeline shows the check-out with its time and location", /Away from the meeting point · 2\.4 km/.test(co) && /\d\d:\d\d/.test(co) && !/Recorded with the report/.test(co), co);
+  const co = await page.$eval('.js-tour-day [data-step="CHECK_OUT"]', (x) => `${x.innerText} ${x.title}`.replace(/\s+/g, " "));
+  const coShown = await page.$eval('.js-tour-day [data-step="CHECK_OUT"]', (x) => x.innerText.replace(/\s+/g, " "));
+  check("the job sheet timeline shows the check-out with its time and location", /Away from the meeting point · 2\.4 km/.test(co) && /\d\d:\d\d/.test(co) && !/Recorded with the report/.test(co) && /⚠ 2\.4 km away/.test(coShown), `${co} || on screen: ${coShown}`);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "checkout-timeline.png") });
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
