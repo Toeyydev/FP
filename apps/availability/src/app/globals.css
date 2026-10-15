@@ -870,7 +870,34 @@ a.dash-row:hover{background:var(--grey-bg)}
 .ck-late{background:var(--danger-bg);color:var(--danger)}
 
 /* ---- Dashboard tour report summary ---- */
-.op-layout .today-row{padding:6px 10px;gap:10px}.today-row .dr-time{min-width:44px;font-size:12.5px}.today-row .dr-main{min-width:0}.today-row .dr-main b{font-size:13.5px}.today-row .dr-sub{font-size:11.5px;margin-top:0}.today-row .dr-main b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.today-row .dr-incident{color:var(--danger)}
+.today-head{flex-wrap:wrap;row-gap:6px}
+.today-chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.today-chip{height:26px;padding:0 10px;border-radius:999px;border:1px solid transparent;font:inherit;font-size:12px;font-weight:700;cursor:pointer;background:var(--grey-bg);color:var(--ink-soft)}
+.today-chip.k-late{background:var(--danger-bg);color:var(--danger)}
+.today-chip.k-live{background:var(--green-bg);color:var(--green)}
+.today-chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.today-chip.k-late.on{background:var(--danger);border-color:var(--danger)}
+.today-chip.k-live.on{background:var(--green);border-color:var(--green)}
+.op-layout .today-row{padding:6px 12px;gap:10px}
+.today-row .dr-time{flex:none;width:66px;min-width:0;font-size:12.5px;color:var(--ink);display:flex;flex-direction:column;align-items:center;line-height:1.2}
+.today-row .dr-time small{font-size:10.5px;font-weight:600;color:var(--ink-soft);white-space:nowrap}
+.today-row .dr-main{min-width:0}.today-row .dr-main b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.today-row .dr-sub{font-size:11.5px;margin-top:0}.today-row .dr-incident{color:var(--danger)}
+.today-row.k-late{background:#FDF5F3;box-shadow:inset 3px 0 0 var(--danger)}
+.today-row.k-late .dr-time small{color:var(--danger)}
+.today-row.k-done{opacity:.72}
+.today-dots{display:flex;gap:3px;flex:none}
+.today-dots i{width:9px;height:9px;border-radius:50%;box-sizing:border-box;border:2px solid var(--line-strong)}
+.today-dots i.on{background:var(--green);border-color:var(--green)}
+.today-row.k-late .today-dots i:first-child{border-color:var(--danger)}
+.today-ck{flex:none;min-width:118px;text-align:center;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.today-ck.t-bad{background:var(--danger-bg);color:var(--danger)}
+.today-ck.t-ok{background:var(--green-bg);color:var(--green)}
+.today-ck.t-warn{background:#FBF4E4;color:#8A5A0D}
+.today-ck.t-mut{background:var(--grey-bg);color:var(--ink-soft)}
+.today-now{display:flex;align-items:center;gap:8px;padding:1px 12px;color:var(--danger);font-size:10.5px;font-weight:800;letter-spacing:.04em}
+.today-now::after{content:"";flex:1;height:2px;border-radius:2px;background:var(--danger)}
+@media (max-width:560px){.today-dots{display:none}.today-ck{min-width:0;padding:3px 7px}.today-row .dr-time{width:56px}.today-row .dr-time small{font-size:9.5px}.today-chips{margin-left:0}}
 .dr-report{font-size:12px;color:var(--ink-soft);margin-top:3px;font-weight:600}
 .dr-report .dr-incident{color:var(--danger)}
 

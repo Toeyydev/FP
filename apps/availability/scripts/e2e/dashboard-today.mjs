@@ -4,7 +4,8 @@
 // Proves: each of today's tours is one row (time, tour, guide · pax, one status chip); the
 // row is a link to that tour's job sheet; a filed report shows "Reported" with its no-show
 // note; the old wide table (job no. / report / expense / pay columns) is gone; on a phone the
-// list fits without sideways scrolling.
+// list fits without sideways scrolling; four dots show the steps done; the chips count and
+// filter the list.
 //
 // Run after `next build`:  node scripts/e2e/dashboard-today.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and AUTH_SECRET.
@@ -125,11 +126,23 @@ try {
     check(`${who}: each row links to its job sheet`, rows.every((r) => /^\/job-sheet\?guideId=G-98\d&date=\d{4}-\d\d-\d\d&slotIdx=\d$/.test(r.href)), rows.map((r) => r.href).join(" "));
     check(`${who}: the reported tour says Reported with its no-show`, /Nok Example · 4 pax · 1 no-show/.test(rows[0].text) && /✓ Reported/.test(rows[0].text), rows[0].text);
     check(`${who}: the checked-in tour shows its check-in time`, /Checked in 09:50/.test(rows[1].text), rows[1].text);
-    check(`${who}: rows are one short line each`, rows.every((r) => r.h <= 50), rows.map((r) => Math.round(r.h)).join(","));
+    const kinds = await page.$$eval("#today .today-row", (xs) => xs.map((x) => [...x.classList].find((c) => c.startsWith("k-"))));
+    check(`${who}: reported is done, checked-in is on tour, the rest late or later`, kinds[0] === "k-done" && kinds[1] === "k-live" && kinds.slice(2).every((k) => k === "k-late" || k === "k-later"), kinds.join(","));
+    if (who === "desktop") {
+      const dots = await page.$$eval("#today .today-row", (xs) => xs.map((x) => x.querySelectorAll(".today-dots i.on").length));
+      check("desktop: four dots — the report fills all four, check-in one", dots[0] === 4 && dots[1] === 1 && dots[2] === 0, dots.join(","));
+    }
+    await page.evaluate(() => [...document.querySelectorAll("#today .today-chip")].find((b) => /^Done/.test(b.textContent)).click());
+    await page.waitForFunction(() => document.querySelectorAll("#today .today-row").length === 1, { timeout: 5000 }).catch(() => {});
+    const onlyDone = await page.$$eval("#today .today-row", (xs) => xs.map((x) => x.innerText.replace(/\s+/g, " ")));
+    check(`${who}: the Done chip filters to the reported tour`, onlyDone.length === 1 && /Nok Example/.test(onlyDone[0]), onlyDone.join(" | "));
+    await page.evaluate(() => [...document.querySelectorAll("#today .today-chip")].find((b) => /^All/.test(b.textContent)).click());
+    await page.waitForFunction(() => document.querySelectorAll("#today .today-row").length === 4, { timeout: 5000 }).catch(() => {});
+    check(`${who}: rows are one short line each`, rows.every((r) => r.h <= 52), rows.map((r) => Math.round(r.h)).join(","));
     check(`${who}: the wide table is gone`, (await page.$("#today table")) === null);
     const sideways = await page.$eval("#today", (x) => x.scrollWidth - x.clientWidth);
     const pageWide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    const chipsIn = await page.$$eval("#today .today-row .ck", (xs) => xs.every((x) => x.getBoundingClientRect().right <= window.innerWidth));
+    const chipsIn = await page.$$eval("#today .today-row .today-ck", (xs) => xs.every((x) => x.getBoundingClientRect().right <= window.innerWidth));
     check(`${who}: no sideways scrolling, every status chip on screen`, sideways <= 1 && pageWide <= 1 && chipsIn, `${sideways}/${pageWide}/${chipsIn}`);
     if (SHOTS) { await page.$eval("#today", (x) => x.scrollIntoView()); await page.screenshot({ path: join(SHOTS, `today-${who}.png`) }); }
     await page.close();

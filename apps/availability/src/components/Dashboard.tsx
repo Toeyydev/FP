@@ -5,19 +5,11 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import RecordPastTourDialog from "@/components/RecordPastTourDialog";
 import { groupByDate } from "@/lib/past-unstaffed";
+import { bangkokMinute, todayView, type TodayKind } from "@/lib/today-list";
 
 type Report = { noShow: number; leftEarly: number; completedPax: number | null; comments: string | null };
 type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number | null; state: string; checkedAt: string | null; overdue: boolean; report: Report | null; ref?: string | null; expenseReported?: boolean; payStatus?: string | null };
 
-const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
-function StateTag({ t }: { t: Tour }) {
-  if (t.state === "COMPLETE") return <span className="ck ck-done">✓ Done {hhmm(t.checkedAt)}</span>;
-  if (t.state === "END") return <span className="ck ck-in">✓ Checked out {hhmm(t.checkedAt)}</span>;
-  if (t.state === "START") return <span className="ck ck-live">● In progress</span>;
-  if (t.state === "ARRIVE") return <span className="ck ck-in">✓ Checked in {hhmm(t.checkedAt)}</span>;
-  if (t.overdue) return <span className="ck ck-late">⚠ Not checked in</span>;
-  return <span className="ck ck-none">Not checked in</span>;
-}
 type Unassigned = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number; offer?: "DECLINED" | "EXPIRED" | "OPEN" | null };
 type Understaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number };
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
@@ -176,6 +168,8 @@ export default function Dashboard() {
   const [bcBusy, setBcBusy] = useState(false);
   // Collapsible dashboard sections — default shows Tomorrow, hides Today + Upcoming.
   const [hidden, setHidden] = useState<Set<string>>(new Set(["tomorrow", "upcoming"]));
+  // Today list filter chip: all, or one kind (lib/today-list).
+  const [todayFilter, setTodayFilter] = useState<"ALL" | TodayKind>("ALL");
   const toggleSec = (k: string) => setHidden((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
   // Tap a KPI → expand its section (if collapsible) and scroll to it.
   const jumpTo = (id: string, section?: string) => {
@@ -250,25 +244,50 @@ export default function Dashboard() {
 
           <div className="dash-cols">
           <div className="dash-main">
-            {/* Today — one short line per tour: time, tour, guide and pax, and one
-                status chip (check-in → report). Job no., expense and pay live on the
-                job sheet the row opens. */}
+            {/* Today — what each tour needs from the operator (lib/today-list): late tours
+                turn red and say how late; chips count and filter; a "Now" line splits what
+                ran from what is coming; four dots = check-in · start · check-out · report.
+                Job no., expense and pay live on the job sheet each row opens. */}
+            {(() => {
+              const nowMin = bangkokMinute();
+              const rows = d.todayTours.map((a) => ({ a, v: todayView(a, nowMin) }));
+              const n = (k: TodayKind) => rows.filter((r) => r.v.kind === k).length;
+              const chips: ["ALL" | TodayKind, string, number][] = [["ALL", "All", rows.length], ["LATE", "⚠ Late", n("LATE")], ["LIVE", "On tour", n("LIVE")], ["DONE", "Done", n("DONE")], ["LATER", "Later", n("LATER")]];
+              const shown = rows.filter((r) => todayFilter === "ALL" || r.v.kind === todayFilter);
+              const firstLater = todayFilter === "ALL" ? shown.findIndex((r) => r.v.kind === "LATER") : -1;
+              const nowLabel = `${String(Math.floor(nowMin / 60)).padStart(2, "0")}:${String(nowMin % 60).padStart(2, "0")}`;
+              return (
             <section className="panel" id="today">
-              <div className="panel-head"><h2>Today</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${d.todayTours.length} tour${d.todayTours.length === 1 ? "" : "s"} · ${todayPax} guests${todayOverdue ? ` · ⚠ ${todayOverdue} not checked in` : ""}` : ""}</span></div>
+              <div className="panel-head today-head">
+                <h2>Today</h2><span className="hint">{dShort(d.today)}{rows.length ? ` · ${rows.length} tour${rows.length === 1 ? "" : "s"} · ${todayPax} guests` : ""}</span>
+                {rows.length > 0 && (
+                  <span className="today-chips" role="group" aria-label="Filter today's tours">
+                    {chips.filter(([k, , c]) => k === "ALL" || c > 0).map(([k, label, c]) => (
+                      <button key={k} type="button" className={`today-chip k-${k.toLowerCase()}${todayFilter === k ? " on" : ""}`} aria-pressed={todayFilter === k} onClick={() => setTodayFilter(todayFilter === k && k !== "ALL" ? "ALL" : k)}>{label} {c}</button>
+                    ))}
+                  </span>
+                )}
+              </div>
               <div className="dash-list today-list">
-                {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => {
+                {rows.length === 0 ? <div className="op-empty">No tours today.</div> : shown.length === 0 ? <div className="op-empty">Nothing here.</div> : shown.map(({ a, v }, i) => {
                   const r = a.report;
                   const note = r ? [r.noShow > 0 ? `${r.noShow} no-show` : "", r.leftEarly > 0 ? `${r.leftEarly} left early` : "", r.comments ? `⚠ ${r.comments}` : ""].filter(Boolean).join(" · ") : "";
                   return (
-                    <a key={i} className={`dash-row today-row${a.overdue ? " warn" : ""}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title={`Open the job sheet${a.ref ? ` · ${a.ref}` : ""}`}>
-                      <span className="dr-time">{a.time}</span>
-                      <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}{note ? <span className={r && (r.comments || r.leftEarly > 0) ? "dr-incident" : ""}> · {note}</span> : null}</div></span>
-                      {r ? <span className="ck ck-done">✓ Reported</span> : <StateTag t={a} />}
-                    </a>
+                    <div key={`${a.guideId}|${a.slotIdx}`}>
+                      {i === firstLater && firstLater > 0 && <div className="today-now" aria-label={`Now ${nowLabel}`}><span>NOW {nowLabel}</span></div>}
+                      <a className={`dash-row today-row k-${v.kind.toLowerCase()}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title={`Open the job sheet${a.ref ? ` · ${a.ref}` : ""}`}>
+                        <span className="dr-time">{a.time}{v.rel && <small>{v.rel}</small>}</span>
+                        <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}{note ? <span className={r && (r.comments || r.leftEarly > 0) ? "dr-incident" : ""}> · {note}</span> : null}</div></span>
+                        <span className="today-dots" title="Check-in · Start · Check-out · Report" aria-label={`${v.steps} of 4 steps`}>{[0, 1, 2, 3].map((k) => <i key={k} className={k < v.steps ? "on" : ""} />)}</span>
+                        <span className={`today-ck t-${v.tone}`}>{v.chip}</span>
+                      </a>
+                    </div>
                   );
                 })}
               </div>
             </section>
+              );
+            })()}
 
             <section className="panel" id="tomorrow">
               <div className="panel-head" onClick={() => toggleSec("tomorrow")} style={{ cursor: "pointer" }}><h2>{hidden.has("tomorrow") ? "▸ " : "▾ "}Tomorrow</h2><span className="hint">{d.tomorrowTours.length} tour(s)</span></div>
