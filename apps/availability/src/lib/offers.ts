@@ -42,7 +42,13 @@ export async function createOffer(o: {
   tourId: string; date: string; slotIdx: number; pax?: number | null; note?: string | null;
   durationMin?: number | null; ttlMinutes?: number; createdById?: string | null; excludeGuideId?: string | null;
   onlyGuideId?: string | null;
-}): Promise<{ offerId: string | null; candidates: number; lineSent: number; noTour?: boolean; past?: boolean }> {
+  /** The departure already has this guide: the offer is to REPLACE them (see below). */
+  replacesGuideId?: string | null;
+}): Promise<{ offerId: string | null; candidates: number; lineSent: number; noTour?: boolean; past?: boolean;
+  /** The departure already has a guide and the offer did not say it replaces them. */
+  staffed?: { guideId: string; name: string }[];
+  /** The guide to replace cannot be taken off the job (started, handover, paid…). */
+  replaceBlocked?: string }> {
   // A tour that already ran cannot be offered. On 2026-09-03 "Offer selected" on
   // a past departure pushed a LINE job offer to 16 guides for a tour from three
   // days earlier; one accepted within a minute and ended up on record for a job
@@ -53,6 +59,22 @@ export async function createOffer(o: {
 
   const tour = await prisma.tour.findUnique({ where: { id: o.tourId } });
   if (!tour) return { offerId: null, candidates: 0, lineSent: 0, noTour: true };
+
+  // A departure somebody already guides is not offered again as if it were empty. On
+  // 2026-10-09 a 1-guest departure was offered twice three minutes apart and both guides
+  // accepted — two jobs, two fees, for one booking. Offering it now means REPLACING the
+  // guide on it, said explicitly; a second guide alongside is a split (Jobs → Split).
+  const holders = await prisma.assignment.findMany({ where: { date: o.date, slotIdx: o.slotIdx }, select: { guideId: true, guide: { select: { displayName: true } } } });
+  const replaces = (o.replacesGuideId ?? "").trim() || null;
+  if (holders.length && !replaces) {
+    return { offerId: null, candidates: 0, lineSent: 0, staffed: holders.map((h) => ({ guideId: h.guideId, name: h.guide.displayName })) };
+  }
+  if (replaces) {
+    if (!holders.some((h) => h.guideId === replaces)) return { offerId: null, candidates: 0, lineSent: 0, replaceBlocked: `${replaces} is not on this tour any more — reload` };
+    const { removalRefusal } = await import("@/lib/assignment-removal");
+    const no = await removalRefusal(replaces, o.date, o.slotIdx);
+    if (no) return { offerId: null, candidates: 0, lineSent: 0, replaceBlocked: String(no.body.detail ?? no.body.reason ?? no.body.error ?? "the guide cannot be taken off this tour") };
+  }
 
   let candidates;
   if (o.onlyGuideId) {
@@ -89,7 +111,7 @@ export async function createOffer(o: {
   const offer = await prisma.jobOffer.create({
     data: {
       tourId: o.tourId, date: o.date, slotIdx: o.slotIdx, durationMin: o.durationMin ?? null, pax: o.pax ?? null, note: o.note ?? null,
-      status: "OPEN", expiresAt: new Date(Date.now() + ttl * 60_000), createdById: o.createdById ?? null,
+      status: "OPEN", expiresAt: new Date(Date.now() + ttl * 60_000), createdById: o.createdById ?? null, replacesGuideId: replaces,
       responses: { create: candidates.map((g) => ({ guideId: g.guideId!, response: "OFFERED" })) },
     },
   });
@@ -206,10 +228,18 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   if (late) {
     await prisma.jobOffer.updateMany({ where: { id: offerId, status: "OPEN" }, data: { status: "EXPIRED" } });
     const filled = await prisma.assignment.findFirst({
-      where: { date: offer.date, slotIdx: offer.slotIdx },
+      // The guide a replacement replaces does not count as the job being filled.
+      where: { date: offer.date, slotIdx: offer.slotIdx, ...(offer.replacesGuideId ? { NOT: { guideId: offer.replacesGuideId } } : {}) },
       select: { guideId: true },
     });
     if (filled) return { ok: false, reason: filled.guideId === guideId ? "already-yours" : "taken" };
+  }
+
+  // A plain offer (nobody held the departure when it was sent) is not taken by a second
+  // guide if someone has taken the job since — by hand, or through another offer.
+  if (!late) {
+    const other = await prisma.assignment.findFirst({ where: { date: offer.date, slotIdx: offer.slotIdx, guideId: { not: guideId }, ...(offer.replacesGuideId ? { NOT: { guideId: offer.replacesGuideId } } : {}) }, select: { guideId: true } });
+    if (other) return { ok: false, reason: "taken" };
   }
 
   // Don't let one guide hold two tours that clash in time. Offers are broadcast
@@ -244,6 +274,16 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
     update: { tourId: offer.tourId, pax: offer.pax ?? null, note: offer.note ?? null },
   });
   await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "ACCEPTED", respondedAt: new Date() } });
+  // A replacement: the guide it replaces comes off the job now that someone holds it.
+  if (offer.replacesGuideId && offer.replacesGuideId !== guideId) {
+    const { removeGuideFromDeparture } = await import("@/lib/assignment-removal");
+    const off = await removeGuideFromDeparture({ guideId: offer.replacesGuideId, date: offer.date, slotIdx: offer.slotIdx, message: `Another guide (${guideId}) is taking it over.` });
+    try {
+      const { audit } = await import("@/lib/audit");
+      await audit({ actorId: null, actorRole: "SYSTEM", action: off.ok ? "assign.replaced" : "assign.replace_failed", entityType: "JobOffer", entityId: offerId,
+        detail: { date: offer.date, slotIdx: offer.slotIdx, newGuideId: guideId, replacedGuideId: offer.replacesGuideId, ...(off.ok ? {} : { refusal: off.refusal.body }) } });
+    } catch { /* the audit never blocks the accept */ }
+  }
   // Offer is resolved — clear its notification from EVERY candidate's bell.
   await prisma.notification.deleteMany({ where: { offerId } });
   // Email the guide a calendar invite (with reminders).

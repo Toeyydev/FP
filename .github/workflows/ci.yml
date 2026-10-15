@@ -361,6 +361,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/tour-day-timeline
 
+      # A tour that already has a guide is offered only as an explicit replacement: the
+      # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.
+      - name: Offer on a staffed tour asks to replace, in a real browser
+        run: node scripts/e2e/offer-replace.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/offer-replace
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.

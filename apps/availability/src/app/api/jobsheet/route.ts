@@ -14,6 +14,8 @@ import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense,
 import { ensureJobRef } from "@/lib/jobref";
 import { scheduledStart, tourDayTimeline } from "@/lib/tour-day-timeline";
 import { SLOT_TIMES } from "@/lib/slots";
+import { tellGuideRemoved } from "@/lib/assignment-removal";
+import { untagGuideSlotBookings } from "@/lib/offers";
 import { approverNameOf } from "@/lib/jobsheet-approval";
 import { guestContactsFor } from "@/lib/guest-contacts";
 import { bookingZ, expenseZ, guideFeeZ, num } from "@/lib/jobsheet-schema";
@@ -698,7 +700,12 @@ export async function DELETE(req: NextRequest) {
     select: { id: true, source: true, externalRef: true, confirmationCode: true, customerName: true, pax: true, status: true, paymentStatus: true, assignedGuideId: true },
   });
   const splitHere = atSlot.some((b) => b.assignedGuideId);
-  const deletedBookings = splitHere ? atSlot.filter((b) => b.assignedGuideId === guideId) : atSlot;
+  // Another guide still holds this departure: its guests are theirs too. Deleting this
+  // guide's job must never take the guests away from the tour (2026-10-14: a duplicate
+  // job's sheet was deleted and the real guest went with it, leaving the remaining guide
+  // with an empty tour until the next channel sync brought the booking back).
+  const coGuides = await prisma.assignment.count({ where: { date, slotIdx, guideId: { not: guideId } } });
+  const deletedBookings = splitHere ? atSlot.filter((b) => b.assignedGuideId === guideId) : coGuides ? [] : atSlot;
   const doomedIds = deletedBookings.map((b) => b.id);
   if (await hasHistoricalJobSheet(where)) {
     const c = historicalDeleteConflict();
@@ -708,15 +715,22 @@ export async function DELETE(req: NextRequest) {
   // or advance on it means this is reversed or voided, not erased (lib/payments-v2/history).
   const history = await financialHistoryBlockers(prisma, [where]);
   if (history.length) return NextResponse.json({ error: "financial-history", reasons: history, detail: history.join("\n") }, { status: 409 });
+  const heldJob = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { tourId: true } });
   await prisma.$transaction([
     prisma.checkin.deleteMany({ where }),
     prisma.tourReport.deleteMany({ where }),
+    // The offer this guide had accepted for the slot is no longer theirs.
+    prisma.jobOffer.updateMany({ where: { date, slotIdx, assignedGuideId: guideId, status: { not: "EXPIRED" } }, data: { status: "CANCELLED", assignedGuideId: null } }),
     prisma.guideRating.deleteMany({ where }),
     prisma.tourPayment.deleteMany({ where }),
     prisma.assignment.deleteMany({ where }),
     prisma.jobSheet.deleteMany({ where }),
     ...(doomedIds.length ? [prisma.booking.deleteMany({ where: { id: { in: doomedIds } } })] : []),
   ]);
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, guardStarted, deletedBookings } });
-  return NextResponse.json({ ok: true });
+  // A booking still tagged to this guide on a shared tour would point at nobody.
+  if (coGuides) await untagGuideSlotBookings(guideId, date, slotIdx);
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.deleted", entityType: "JobSheet", detail: { guideId, date, slotIdx, guardStarted, deletedBookings, keptForOtherGuides: coGuides > 0 ? atSlot.length - deletedBookings.length : 0 } });
+  // The guide had this tour and no longer does — they are told, as Remove on Jobs tells them.
+  if (heldJob) await tellGuideRemoved(guideId, date, slotIdx, heldJob.tourId, "The job was deleted by the operator.");
+  return NextResponse.json({ ok: true, keptBookings: coGuides > 0 ? atSlot.length - deletedBookings.length : 0 });
 }

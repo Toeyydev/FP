@@ -270,9 +270,19 @@ export default function BookingsInbox() {
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
     const durMin = dur[key] && Number(dur[key]) > 0 ? Math.round(Number(dur[key]) * 60) : undefined;
     const note = `${items.length} booking(s): ${items.map((b) => bookingRef(b.externalRef, b.confirmationCode) || b.customerName || "—").join(", ")}`.slice(0, 280);
-    const r = await fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx, pax: pax && pax <= 50 ? pax : undefined, durationMin: durMin, note, ...(guideId ? { guideId } : {}) }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) { setMsg("Offer failed."); return; }
+    const send = (replacesGuideId?: string) => fetch("/api/offers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tourId, date, slotIdx, pax: pax && pax <= 50 ? pax : undefined, durationMin: durMin, note, ...(guideId ? { guideId } : {}), ...(replacesGuideId ? { replacesGuideId } : {}) }) });
+    let r = await send();
+    let d = await r.json().catch(() => ({}));
+    // The tour already has a guide: offering it again means replacing them — asked, never assumed.
+    if (r.status === 409 && d.error === "slot-staffed") {
+      const staffed = (d.staffed ?? []) as { guideId: string; name: string }[];
+      if (staffed.length !== 1) { setMsg(`⚠️ ${(d.reasons ?? []).join(" ")} Change who guides it on Jobs.`); return; }
+      const cur = staffed[0];
+      if (!confirm(`${date} · this tour already has a guide: ${cur.guideId} ${cur.name}.\n\nReplace ${cur.name}? They come off the job — and are told — only when the new guide accepts. Until then ${cur.name} keeps it.\n\nTo add a second guide instead, Cancel and use Split on Jobs.`)) { setMsg(`Not offered — ${cur.guideId} ${cur.name} keeps the tour.`); return; }
+      r = await send(cur.guideId);
+      d = await r.json().catch(() => ({}));
+    }
+    if (!r.ok) { setMsg(d.reasons?.length ? `⚠️ ${d.reasons.join(" ")}` : "Offer failed."); return; }
     if (!d.candidates) { setMsg(guideId ? "⚠️ That guide isn\u2019t available for this slot." : "⚠️ No available guides for that slot."); return; }
     await post({ action: "markOffered", ids: items.map((b) => b.id) });
     setMsg(guideId ? `\ud83d\udce8 Offered to ${guideId} \u2014 they accept or pass.` : `\ud83d\udce3 Offer sent \u2014 ${d.candidates} guide(s), LINE ${d.lineSent}.`);
