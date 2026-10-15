@@ -96,6 +96,8 @@ export function jobStage(f: JobProcessFacts): ProcessStage {
   // An operator already filled in the sheet for a tour that has run: it is theirs to review,
   // not the guide's to report (the guide may have told them by phone).
   if (f.sheetSaved && f.date < f.today) return "AWAITING_REVIEW";
+  // Checked out: the tour is over; the report is the guide's next step.
+  if (types.includes("END")) return "AWAITING_REPORT";
   if (f.date === f.today && (types.includes("ARRIVE") || types.includes("START"))) return "CHECKED_IN";
   if (tourStarted(f)) return "AWAITING_REPORT";
   return "ASSIGNED";

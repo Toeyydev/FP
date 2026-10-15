@@ -20,6 +20,8 @@ describe("jobStage — where a job is in the TO-BE process", () => {
     expect(f({ assigned: true, today: "2099-03-10", nowMin: 8 * 60, checkins: ["ARRIVE"] })).toBe("CHECKED_IN");
     expect(f({ assigned: true, today: "2099-03-10", nowMin: 9 * 60 })).toBe("AWAITING_REPORT"); // started, never checked in
     expect(f({ assigned: true, today: "2099-03-11", checkins: ["ARRIVE", "START"] })).toBe("AWAITING_REPORT"); // yesterday, no report
+    // Checked out today: the tour is over, the report is next.
+    expect(f({ assigned: true, today: "2099-03-10", nowMin: 13 * 60, checkins: ["ARRIVE", "START", "END"] })).toBe("AWAITING_REPORT");
   });
   it("the admin's part: review, pay, book", () => {
     const done = { assigned: true, today: "2099-03-11" };

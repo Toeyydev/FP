@@ -44,3 +44,19 @@ describe("tourDayTimeline", () => {
     expect(scheduledStart("2099-03-10", "")).toBeNull();
   });
 });
+
+describe("check-out on its own (END, from 2026-10-15)", () => {
+  it("is the check-out, with its own time and location; the report stays a separate line", () => {
+    const steps = tourDayTimeline({ start, checkins: [
+      { type: "START", at: at("08:35") },
+      { type: "END", at: at("12:30"), lat: 13.74, lng: 100.49, withinGeofence: false, distanceM: 2400 },
+      { type: "COMPLETE", at: at("13:05") },
+    ], report: { submittedAt: at("13:05") } });
+    expect(steps[2]).toMatchObject({ key: "CHECK_OUT", at: "2099-03-10T05:30:00.000Z", location: "AWAY", distanceM: 2400, note: null });
+    expect(steps[3].at).toBe("2099-03-10T06:05:00.000Z");
+  });
+  it("a tour finished straight from the report shows that time, marked so", () => {
+    const steps = tourDayTimeline({ start, checkins: [{ type: "COMPLETE", at: at("12:40") }], report: null });
+    expect(steps[2]).toMatchObject({ at: "2099-03-10T05:40:00.000Z", note: "Recorded with the report · บันทึกพร้อมรายงาน" });
+  });
+});

@@ -14,7 +14,10 @@ import { expenseReportAccess } from "@/lib/expense-report-access";
 // Mobile (/api/mobile/checkin, /api/mobile/noshow) differ only in how they know
 // who is asking — a session cookie or a bearer token — so the rules live here.
 
-export const CHECKIN_TYPES = ["ARRIVE", "START", "COMPLETE"] as const;
+// END is the check-out: the guide says the tour is over, where they are and when (TO-BE
+// flow, owner 2026-10-15). COMPLETE stays what it was — written with the tour report, which
+// still carries the expenses — so check-out never stands in for the report.
+export const CHECKIN_TYPES = ["ARRIVE", "START", "END", "COMPLETE"] as const;
 export type CheckinType = (typeof CHECKIN_TYPES)[number];
 
 // A guide may report no-shows from the start until this long after it.
@@ -67,7 +70,7 @@ export function haversineM(lat1: number, lng1: number, lat2: number, lng2: numbe
 export type CheckinResult =
   | { ok: true; type: CheckinType }
   | { ok: false; status: 400; error: "too-early" }
-  | { ok: false; status: 409; error: "use-the-report" }
+  | { ok: false; status: 409; error: "use-the-report" | "not-started" | "already-ended" }
   | { ok: false; status: 404; error: "not-assigned" };
 
 // Record a lifecycle event for a guide's assignment, with the GPS captured at the
@@ -93,6 +96,13 @@ export async function recordCheckin(o: {
   // they are not the one who spent the money and the job then shows up unreported
   // on the operator's own review list (lib/expense-review).
   if (type === "COMPLETE" && !o.recordedBy) return { ok: false, status: 409, error: "use-the-report" };
+
+  // Check-out comes after the tour has started, once.
+  if (type === "END") {
+    const had = await prisma.checkin.findMany({ where: { guideId, date, slotIdx, type: { in: ["START", "END", "COMPLETE"] } }, select: { type: true } });
+    if (!had.some((c) => c.type === "START")) return { ok: false, status: 409, error: "not-started" };
+    if (had.some((c) => c.type === "END" || c.type === "COMPLETE")) return { ok: false, status: 409, error: "already-ended" };
+  }
 
   // Time-gate: a tour can't be checked in / started / completed more than 45 min
   // before it starts (prevents a guide running the lifecycle days early).
