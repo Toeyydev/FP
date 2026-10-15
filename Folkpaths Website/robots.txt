@@ -1,0 +1,47 @@
+# Answer engines may retrieve and cite public Folkpaths pages.
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+# Model-training crawlers are not permitted.
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=no, use=reference
+Allow: /
+Disallow: /booking/?*
+
+Sitemap: https://folkpaths.com/sitemap.xml
