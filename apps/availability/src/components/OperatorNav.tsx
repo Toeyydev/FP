@@ -25,6 +25,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "tours", label: "Tours", href: "/tours" },
       { key: "blocked-slots", label: "Block slots", href: "/blocked-slots" },
       { key: "restore-bookings", label: "Restore archived bookings", href: "/admin/restore-bookings", adminOnly: true },
+      { key: "create-job-sheets", label: "Create job sheets", href: "/admin/create-job-sheets", adminOnly: true },
     ],
   },
   {
