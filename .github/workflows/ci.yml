@@ -361,6 +361,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/tour-day-timeline
 
+      # The dashboard's Today list: one short line per tour with one status chip, each a
+      # link to its job sheet, no sideways scrolling on a phone.
+      - name: Dashboard Today list in a real browser
+        run: node scripts/e2e/dashboard-today.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/dashboard-today
+
       # A tour that already has a guide is offered only as an explicit replacement: the
       # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.
       - name: Offer on a staffed tour asks to replace, in a real browser

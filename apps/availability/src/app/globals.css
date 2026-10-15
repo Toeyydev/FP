@@ -748,7 +748,7 @@ a.glink:hover{text-decoration:underline}
 .dash-sum .warn b{color:#b45309}.dash-sum .bad b{color:var(--danger)}
 .dash-grid{display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start}
 @media (max-width:880px){ .dash-grid{grid-template-columns:1fr} }
-.dash-main{display:flex;flex-direction:column;gap:16px}
+.dash-main{display:flex;flex-direction:column;gap:16px;min-width:0}
 .dash-side{display:flex;flex-direction:column;gap:16px}
 .dash-list{padding:6px 8px}
 .dash-row{display:flex;align-items:center;gap:12px;padding:9px 10px;border-bottom:1px solid var(--line);text-decoration:none;color:var(--ink)}
@@ -870,6 +870,18 @@ a.dash-row:hover{background:var(--grey-bg)}
 .ck-late{background:var(--danger-bg);color:var(--danger)}
 
 /* ---- Dashboard tour report summary ---- */
+.today-late-count{color:var(--danger)}
+.op-layout .today-row{padding:7px 12px;gap:12px}
+.today-row .dr-time{flex:none;width:44px;min-width:0;font-size:13px;color:var(--ink)}
+.today-row .dr-main{min-width:0}.today-row .dr-main b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.today-row .dr-sub{font-size:11.5px;margin-top:0}
+.today-row.k-late{background:#FDF5F3}
+.today-row.k-done{opacity:.6}
+.today-ck{flex:none;font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.today-ck.t-bad{background:var(--danger-bg);color:var(--danger)}
+.today-ck.t-ok{background:var(--green-bg);color:var(--green)}
+.today-ck.t-warn{background:#FBF4E4;color:#8A5A0D}
+.today-ck.t-mut{background:var(--grey-bg);color:var(--ink-soft)}
 .dr-report{font-size:12px;color:var(--ink-soft);margin-top:3px;font-weight:600}
 .dr-report .dr-incident{color:var(--danger)}
 
@@ -1291,7 +1303,7 @@ body:has(.op-layout) .wrap{max-width:1440px}
 /* — Two-column dashboard grid: operations wide, exceptions 320px — */
 .dash-cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
 .dash-side{display:flex;flex-direction:column;gap:16px;min-width:0}
-@media (max-width:1100px){.dash-cols{grid-template-columns:1fr}}
+@media (max-width:1100px){.dash-cols{grid-template-columns:minmax(0,1fr)}}
 /* — Today's Operations table — */
 .ops-table{width:100%;border-collapse:collapse;font-size:13px}
 .ops-table th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#A1A1AA;font-weight:700;text-align:left;padding:8px 10px;border-bottom:1px solid #E5E7EB;white-space:nowrap}
