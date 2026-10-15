@@ -25,7 +25,7 @@ import { ceDate } from "@/lib/ce-date";
 type PeakLink = { documentNo: string; documentType: string; linkedAt: string; note: string; warning: string | null; verified: boolean };
 type Advance = {
   peakSync?: AdvancePeakState | null; peakLink?: PeakLink | null;
-  id: string; advanceNo: string; guideId: string; jobNo: string | null; advanceDate: string;
+  id: string; advanceNo: string; guideId: string; jobNo: string | null; advanceDate: string; date?: string; slotIdx?: number;
   amount: number; settled: number; outstanding: number; status: "OPEN" | "IN_USE" | "RETURN_DUE" | "SETTLED" | "VOID" | null; problems?: string[];
   purpose: string | null; txRef: string | null; slipUrl: string | null; reversalReason: string | null;
   voucherUrl?: string | null; acknowledgedAt?: string | null;
@@ -67,6 +67,8 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
   const [err, setErr] = useState<string | null>(null);
   const [returnBank, setReturnBank] = useState("");
   const [issuing, setIssuing] = useState(false);
+  // "Record return…" on one advance: money the guide sent back (moved here from the job sheet).
+  const [returning, setReturning] = useState<Advance | null>(null);
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
   const [linking, setLinking] = useState<LinkTarget | null>(null);
@@ -174,6 +176,10 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
                   {canLink && (
                     <button className="btn sm ghost" disabled={busy} title="This transfer, or its ticket costs, are already in PEAK under a document your accountant created"
                       onClick={() => setLinking({ kind: "ADVANCE", advanceId: a.id, guideId: a.guideId, label: a.advanceNo, amount: a.amount, jobNo: a.jobNo, outstanding: a.outstanding })}>PEAK doc…</button>
+                  )}
+                  {canWrite && a.outstanding > 0 && a.status !== "VOID" && a.date && a.slotIdx != null && (
+                    <button className="btn sm ghost js-record-return" disabled={busy || frozen} title="The guide sent unused money back — record it with the slip"
+                      onClick={() => setReturning(a)}>Record return…</button>
                   )}
                   {canWrite && a.status === "OPEN" && !a.peakLink && (
                     <button className="btn sm ghost" disabled={busy} title="The transfer never happened, or went to the wrong guide"
@@ -323,6 +329,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
         </>
       )}
 
+      {returning && <RecordReturnDialog advance={returning} onClose={() => setReturning(null)} onDone={(m) => { setReturning(null); setMsg(m); void load(); }} />}
       {issuing && <IssueAdvanceDialog isAdmin={isAdmin} onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }}
         onOpenExisting={(id) => { const a = advances.find((x) => x.id === id); setIssuing(false); if (a) setDetail(a); }} />}
       {detail && <LedgerDialog advance={detail} canEdit={canEdit} isAdmin={isAdmin} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
@@ -366,6 +373,71 @@ function LinkedBadge({ link, onUnlink }: { link: PeakLink; onUnlink?: () => void
       <span className="mono">{link.documentNo}</span>
       {!link.verified && <span className="muted"> · figures not machine-checked</span>}
       {onUnlink && <> · <button type="button" className="btn sm ghost js-peak-unlink" onClick={onUnlink}>wrong document?</button></>}
+    </div>
+  );
+}
+
+// Money a guide sent back against one advance, recorded by the operator with its slip.
+// Posts to the same route the job sheet used (api/jobsheet/advance, kind=return), so the
+// return, its slip folder and its checks are exactly as before.
+function RecordReturnDialog({ advance, onClose, onDone }: { advance: Advance; onClose: () => void; onDone: (msg: string) => void }) {
+  const [amount, setAmount] = useState(String(advance.outstanding));
+  const [at, setAt] = useState("");
+  const [method, setMethod] = useState("bank");
+  const [txRef, setTxRef] = useState("");
+  const [bankAccount, setBankAccount] = useState("");
+  const [note, setNote] = useState("");
+  const [arrived, setArrived] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    if (!(Number(amount) > 0)) { setErr("Enter the amount returned"); return; }
+    if (method === "bank" && !txRef.trim()) { setErr("ใส่เลขอ้างอิงรายการโอนจากธนาคาร"); return; }
+    if (method === "bank" && !bankAccount) { setErr("เลือกบัญชีธนาคารบริษัทที่เงินเข้า"); return; }
+    if (!file) { setErr("แนบสลิปโอนเงินก่อนบันทึก"); return; }
+    setBusy(true); setErr(null);
+    try {
+      const fd = new FormData();
+      fd.set("kind", "return"); fd.set("guideId", advance.guideId); fd.set("date", advance.date ?? ""); fd.set("slotIdx", String(advance.slotIdx ?? ""));
+      fd.set("advanceId", advance.id); fd.set("amount", amount); fd.set("method", method);
+      if (at) fd.set("at", at);
+      if (txRef.trim()) fd.set("txRef", txRef.trim());
+      if (bankAccount) fd.set("bankAccount", bankAccount);
+      if (note.trim()) fd.set("note", note.trim());
+      if (arrived) fd.set("confirmedArrived", "1");
+      fd.set("file", file);
+      const res = await fetch("/api/jobsheet/advance", { method: "POST", body: fd });
+      const r = await res.json().catch(() => ({})) as { hint?: string; detail?: string; error?: string };
+      if (!res.ok) throw new Error(r.hint || r.detail || r.error || `HTTP ${res.status}`);
+      onDone(arrived ? `Return recorded as received against ${advance.advanceNo} ✓` : `Return recorded against ${advance.advanceNo} — waiting to be checked against the bank ✓`);
+    } catch (e) { setErr(String((e as Error).message)); setBusy(false); }
+  };
+  return (
+    <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="modal js-return-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-h" style={{ width: "min(520px, 100%)" }}>
+        <h3 id="ret-h">Record return · {advance.advanceNo}</h3>
+        <div className="mbody">
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>Unused money {advance.guideId} sent back for {advance.jobNo ?? "this job"}. Outstanding on this advance: <b>{thb(advance.outstanding)}</b>.</p>
+          {err && <div className="banner danger" role="alert" style={{ whiteSpace: "pre-line" }}>{err}</div>}
+          <div style={{ display: "grid", gap: 8 }}>
+            <label>Amount (฿)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} /></label>
+            <label>Returned at<input type="datetime-local" value={at} onChange={(e) => setAt(ceDate(e.target.value))} disabled={busy} title="Leave blank for now" /></label>
+            <label>Method<select value={method} onChange={(e) => setMethod(e.target.value)} disabled={busy}><option value="bank">Bank transfer</option><option value="cash">Cash</option><option value="other">Other</option></select></label>
+            <label>Bank reference{method === "bank" ? "" : " (optional)"}<input value={txRef} onChange={(e) => setTxRef(e.target.value)} disabled={busy} /></label>
+            {method === "bank" && <AdvanceBankSelect value={bankAccount} onChange={setBankAccount} disabled={busy} />}
+            <label>สลิปโอนเงิน<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
+            <label>Note (optional)<input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} disabled={busy} /></label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5 }} title="Tick only if you have seen this money in the company bank account">
+              <input type="checkbox" checked={arrived} onChange={(e) => setArrived(e.target.checked)} disabled={busy} /> I have seen it in the company account
+            </label>
+          </div>
+        </div>
+        <div className="mfoot">
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary js-return-submit" onClick={submit} disabled={busy || !file}>{busy ? "…" : "Record return"}</button>
+        </div>
+      </div>
     </div>
   );
 }

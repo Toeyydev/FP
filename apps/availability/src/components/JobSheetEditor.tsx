@@ -182,6 +182,11 @@ export default function JobSheetEditor() {
   const [advPurpose, setAdvPurpose] = useState("");
   const [advOtherReason, setAdvOtherReason] = useState("");
   const [advBusy, setAdvBusy] = useState(false);
+  // Operator: the advance details under the one-line summary, closed by default.
+  // Remembered on this device (a convenience only — the page works without it).
+  const [advOpen, setAdvOpenState] = useState(false);
+  useEffect(() => { try { if (localStorage.getItem("folkops.advanceDetailsOpen") === "1") setAdvOpenState(true); } catch { /* storage blocked */ } }, []);
+  const setAdvOpen = (f: (o: boolean) => boolean) => setAdvOpenState((o) => { const n = f(o); try { localStorage.setItem("folkops.advanceDetailsOpen", n ? "1" : "0"); } catch { /* storage blocked */ } return n; });
   const [showCross, setShowCross] = useState(false); // expand the cross-check again after approval
   const [jobMeta, setJobMeta] = useState<JobMeta>(null); // operator / OTA / lead guest / meeting point
   const [history, setHistory] = useState<HistoryEvent[]>([]); // real recorded events only
@@ -363,6 +368,8 @@ export default function JobSheetEditor() {
   const todayBKKstr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
   const tourCompleted = sheet.date < todayBKKstr || checkedIn;
   const hasAdvance = advance.advances.length > 0 || advance.returns.length > 0;
+  // Expense rows marked "From company advance" — the summary shows even before an advance exists.
+  const advRows = sheet ? sheet.expenses.filter((e) => e.paidBy === "advance").length : 0;
   const liveAdvances = advance.advances.filter((a) => a.status !== "VOID");
   // The older labels some summaries still use, derived from the ledger status (lib/advances/summaries).
   const advSt: "SETTLED" | "NOT_REQUIRED" | "PENDING_SETTLEMENT" | "OPEN" =
@@ -1808,8 +1815,30 @@ export default function JobSheetEditor() {
            from it (paidBy = "Guide Advance" expense rows above) and what came back.
            A cash-movement ledger: it never adds to the expense total. Lives outside
            the read-only fieldset so the GUIDE can still record their return. */}
-       {(hasAdvance || canEdit) && (
+       {(hasAdvance || (canEdit && advRows > 0)) && (
        <div className="advance-settlement" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
+        {/* Operator: one line — given · used · returned · to return — and a link to the
+            advance on Payments → Advances, where advances and returns are recorded. The
+            full settlement below stays one click away, and always prints with the sheet. */}
+        {canEdit && (
+          <div className="no-print js-advance-summary adv-sum">
+            <b>Company advance</b>
+            {hasAdvance ? <>
+              <span><small>Given</small> <b className="num">{thb(advT.totalAdvancePaid)}</b></span>
+              <span><small>Used</small> <b className="num">{thb(advT.usedFromAdvance)}</b></span>
+              <span><small>Returned</small> <b className="num">{thb(advT.totalReturned)}</b></span>
+              {advT.deductedFromPayments > 0 && <span><small>Deducted</small> <b className="num">{thb(advT.deductedFromPayments)}</b></span>}
+              {advT.outstanding !== 0 && <span><small>To return</small> <b className="num adv-due">{thb(advT.outstanding)}</b></span>}
+              <span className={`badge ${advance.status === "SETTLED" ? "ok" : advance.status === "NEEDS_REVIEW" ? "pending" : "invited"}`}>{advance.status === "SETTLED" ? "✓ Settled" : advance.status === "NEEDS_REVIEW" ? "Needs review" : advance.status === "RETURN_DUE" || tourCompleted ? "Return due" : advance.status === "IN_USE" ? "In use" : "Open"}</span>
+            </> : <span className="adv-missing">{advRows} row{advRows === 1 ? "" : "s"} marked “From company advance” · no advance recorded for this job</span>}
+            <span className="adv-sum-links">
+              {liveAdvances.map((a) => <a key={a.id} className="mono" href={existingAdvanceHref(a.id)}>{a.advanceNo} →</a>)}
+              {!hasAdvance && <a href="/payments?view=advances">Record on Payments → Advances →</a>}
+              {hasAdvance && <button type="button" className="btn sm js-advance-details" aria-expanded={advOpen} onClick={() => setAdvOpen((o) => !o)}>{advOpen ? "Hide details" : "Details"}</button>}
+            </span>
+          </div>
+        )}
+        <div className={canEdit && !advOpen ? "adv-details adv-closed" : "adv-details"}>
         <h3 className="js-section" style={{ background: "#e8f1ea", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <span>Advance / Settlement<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"การเคลียร์เงินทดรองจ่าย"}</small></span>
           <span className="no-print">{advChip}</span>
@@ -1891,9 +1920,9 @@ export default function JobSheetEditor() {
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
-          {(canEdit || (hasAdvance && advT.outstanding > 0)) && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
-          {hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
+          {!canEdit && hasAdvance && advT.outstanding > 0 && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
+          {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advances and returns are recorded on <a href="/payments?view=advances">Payments → Advances</a>.</span>}
+          {!canEdit && hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (
           <div className="no-print" style={{ marginTop: 8, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg,#fafafa)", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -1944,6 +1973,7 @@ export default function JobSheetEditor() {
         <AdvanceOperations data={advance as unknown as OpsData} guideId={sheet.guideId} role={role} userId={userId}
           approved={(sheet as { approvalStatus?: string | null }).approvalStatus === "APPROVED"} saved={saved}
           onChanged={refreshAdvance} setMsg={setMsg} />
+        </div>
         {chooser && (
           <div className="no-print js-advance-chooser" role="dialog" aria-label="Choose the advance" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "grid", placeItems: "center", zIndex: 50 }}>
             <div style={{ background: "var(--surface,#fff)", borderRadius: 12, padding: 16, maxWidth: 560, width: "92%" }}>
