@@ -106,7 +106,7 @@ await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const errors = [];
-const read = (page) => page.$$eval(".js-tour-day .tday-step", (xs) => xs.map((x) => ({ step: x.dataset.step, done: x.classList.contains("done"), time: x.querySelector(".js-tday-time")?.innerText ?? null, text: x.innerText.replace(/\s+/g, " ") })));
+const read = (page) => page.$$eval(".js-tour-day .tday-step", (xs) => xs.map((x) => ({ step: x.dataset.step, done: x.classList.contains("done"), time: x.querySelector(".js-tday-time")?.innerText ?? null, text: `${x.innerText} ${x.title}`.replace(/\s+/g, " "), visible: x.innerText.replace(/\s+/g, " ") })));
 try {
   for (const [who, email, width] of [["operator", "op-td@example.test", 1280], ["guide", "g986@example.test", 390]]) {
     const page = await browser.newPage();
@@ -120,6 +120,8 @@ try {
     check(`${who}: check-in 18 min before start, at the meeting point`, /18 min before start/.test(s[0].text) && /At the meeting point · 25 m/.test(s[0].text), s[0].text);
     check(`${who}: the start recorded by the operator says so`, /5 min after start/.test(s[1].text) && /Recorded by the operator/.test(s[1].text), s[1].text);
     check(`${who}: the report carries its facts`, /3 completed · 1 no-show/.test(s[3].text), s[3].text);
+    if (who === "guide") check("guide (phone): the step details stay in the tooltip, not on screen", !/18 min before start/.test(s[0].visible) && /08:12/.test(s[0].visible), s[0].visible);
+    else check("operator (desktop): the step details are on screen", /18 min before start/.test(s[0].visible), s[0].visible);
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `tour-day-${who}.png`), fullPage: false });
     await page.close();
   }

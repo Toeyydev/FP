@@ -31,12 +31,14 @@ export default function TourDayTimeline({ steps, scheduled, date }: { steps: Tim
           const w = where(s);
           const meta = [vsStart(s.minutesFromStart), s.note].filter(Boolean).join(" · ");
           return (
-            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={s.th}>
+            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={[s.th, meta, w?.text].filter(Boolean).join(" · ")}>
               <span className="tday-dot" aria-hidden="true">{s.at ? "✓" : ""}</span>
-              {s.at
-                ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> {day(s.at)}</small> : null}</span>
-                : <span className="tday-time tday-missing">--:--</span>}
-              <b className="tday-label">{s.label}</b>
+              <span className="tday-line">
+                <b className="tday-label">{s.label}</b>
+                {s.at
+                  ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> {day(s.at)}</small> : null}</span>
+                  : <span className="tday-time tday-missing">--:--</span>}
+              </span>
               {s.at
                 ? <>
                     {meta ? <span className="tday-meta">{meta}</span> : null}
