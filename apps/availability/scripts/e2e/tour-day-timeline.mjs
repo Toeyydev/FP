@@ -120,7 +120,7 @@ try {
     check(`${who}: check-in 18 min before start, at the meeting point`, /18 min before start/.test(s[0].text) && /At the meeting point · 25 m/.test(s[0].text), s[0].text);
     check(`${who}: the start recorded by the operator says so`, /5 min after start/.test(s[1].text) && /Recorded by the operator/.test(s[1].text), s[1].text);
     check(`${who}: the report carries its facts`, /3 completed · 1 no-show/.test(s[3].text), s[3].text);
-    check(`${who}: on screen only the step and its time — details in the tooltip`, s.every((x) => x.visible.split(" ").length <= 4) && !/before start|after start|meeting point/.test(s.map((x) => x.visible).join(" ")) && /Check-in 08:12/.test(s[0].visible), s.map((x) => x.visible).join(" | "));
+    check(`${who}: on screen only the step and its time — details in the tooltip`, s.every((x) => x.visible.split(" ").length <= 4) && !/before start|after start|meeting point/.test(s.map((x) => x.visible).join(" ")) && /08:12 Check-in/.test(s[0].visible), s.map((x) => x.visible).join(" | "));
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `tour-day-${who}.png`), fullPage: false });
     await page.close();
   }
