@@ -10,6 +10,7 @@ import { paxIndex } from "@/lib/assigned-pax";
 import { computeTotals, expenseAmount, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { money2 } from "@/lib/payment-batch";
 import { tourCostBreakdown } from "@/lib/peak-sync";
+import { loadJobProcess } from "@/lib/job-process-server";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 const bkk = (offsetDays = 0) => new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
@@ -155,7 +156,21 @@ async function buildDashboard() {
   }
 
   const sortKey = (a: { date: string; slotIdx: number }) => a.date + String(a.slotIdx).padStart(2, "0");
-  const unassigned: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number }[] = [];
+  // Why a tour with no guide has none: its last offer came back (declined by everyone, or
+  // expired) — the admin's task in the TO-BE flow — or is still waiting for a guide.
+  const unassignedKeys = Object.values(inst).map((i) => ({ date: i.date, slotIdx: i.slotIdx }));
+  const lastOffers = unassignedKeys.length ? await prisma.jobOffer.findMany({
+    where: { OR: unassignedKeys }, orderBy: { createdAt: "asc" },
+    select: { date: true, slotIdx: true, status: true, expiresAt: true, responses: { select: { response: true } } },
+  }) : [];
+  const offerState = (date: string, slotIdx: number): "DECLINED" | "EXPIRED" | "OPEN" | null => {
+    const o = lastOffers.filter((x) => x.date === date && x.slotIdx === slotIdx).pop();
+    if (!o || o.status === "CANCELLED" || o.status === "ASSIGNED") return null;
+    if (o.responses.length && o.responses.every((r) => r.response === "DENIED")) return "DECLINED";
+    if (o.status === "EXPIRED" || o.expiresAt.getTime() <= Date.now()) return "EXPIRED";
+    return "OPEN";
+  };
+  const unassigned: { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number; offer: "DECLINED" | "EXPIRED" | "OPEN" | null }[] = [];
   const understaffed: { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number }[] = [];
   for (const i of Object.values(inst)) {
     const have = guidesByInst[`${i.date}|${i.slotIdx}|${i.tourId}`] ?? 0;
@@ -170,7 +185,7 @@ async function buildDashboard() {
     // job was offered and nobody took it, it silently moved into understaffed as
     // "0/1 guides" — a row whose Assign button opened a split for a tour that had
     // no guide, and so did nothing at all.
-    if (have === 0) unassigned.push({ ...base, count: i.count, need });
+    if (have === 0) unassigned.push({ ...base, count: i.count, need, offer: offerState(i.date, i.slotIdx) });
     else if (have < need) understaffed.push({ ...base, have, need });
   }
   unassigned.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
@@ -207,7 +222,15 @@ async function buildDashboard() {
 
   const leaveRequests = pendingLeaves.map((l) => ({ id: l.id, guideId: l.guideId, guide: gName(l.guideId), fromDate: l.fromDate, toDate: l.toDate, reason: l.reason }));
   const { reportsPending, finance } = await buildFinance(today, nowMin, startMin);
-  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, pastUnstaffed, conflicts, orphaned, leaveRequests, reportsPending, finance };
+  // The admin's steps later in the process (lib/job-process), over the last 60 days: jobs to
+  // review, to pay, and paid but not in PEAK — each an admin task with a place to do it.
+  const recent = await loadJobProcess(prisma, { from: bkk(-60), to: today }).catch(() => []);
+  const process = {
+    awaitingReview: recent.filter((j) => j.stage === "AWAITING_REVIEW").length,
+    awaitingTransfer: recent.filter((j) => j.stage === "AWAITING_TRANSFER").length,
+    awaitingPeak: recent.filter((j) => j.stage === "AWAITING_PEAK").length,
+  };
+  return { today, todayTours, tomorrowTours, upcomingTours, unassigned, understaffed, pastUnstaffed, conflicts, orphaned, leaveRequests, reportsPending, finance, process };
 }
 
 // Money + follow-up state for the operator's "what needs me" view. All figures are
