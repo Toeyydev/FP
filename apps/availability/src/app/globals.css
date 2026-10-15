@@ -1536,3 +1536,15 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .tday-label{color:var(--ink)}
 .tday-step:not(.done) .tday-label{color:var(--ink-soft)}
 .tday-away{font-size:11.5px;font-weight:700;color:var(--danger)}
+
+/* Job sheet — Company advance one-line summary (operator) */
+.adv-sum{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card,#fff);font-size:13px}
+.adv-sum small{color:var(--ink-soft);font-size:11.5px}
+.adv-sum .num{font-variant-numeric:tabular-nums}
+.adv-sum .adv-due{color:#8A5A0D}
+.adv-sum .adv-missing{color:var(--danger);font-weight:600}
+.adv-sum-links{margin-left:auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.adv-sum-links a{font-weight:600;font-size:12.5px}
+.adv-details.adv-closed{display:none}
+.adv-details:not(.adv-closed){margin-top:8px}
+@media print{.adv-details.adv-closed{display:block}}

@@ -169,47 +169,43 @@ const rows = async () => (await prisma.jobSheet.findUniqueOrThrow({ where: { id:
 const adv = (no) => prisma.guideAdvance.findUniqueOrThrow({ where: { advanceNo: no } });
 const payerOptions = (page, i) => page.evaluate((i) => [...document.querySelectorAll(".js-payer-select")][i] ? [...[...document.querySelectorAll(".js-payer-select")][i].options].map((o) => o.value) : [], i);
 const setPayer = (page, i, v) => page.evaluate((i, v) => { const s = [...document.querySelectorAll(".js-payer-select")][i]; s.value = v; s.dispatchEvent(new Event("change", { bubbles: true })); }, i, v);
-async function openCreate(page) {
-  if (!(await page.$(".js-advance-create-categories"))) await clickText(page, ".advance-settlement", "+ Record advance");
-  await page.waitForSelector(".js-advance-create-categories");
-}
-async function fillAmountRef(page, amount, txRef) {
-  await page.evaluate((amount, txRef) => {
-    const f = document.querySelector(".js-advance-create-categories").parentElement;
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    const field = (start) => [...f.querySelectorAll("label")].find((l) => l.innerText.startsWith(start)).querySelector("input");
-    for (const [el, v] of [[field("Amount"), String(amount)], [field("Transfer ref"), txRef]]) { set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }
-  }, amount, txRef);
+// Advances are recorded on Payments → Advances (the job sheet only summarises them).
+const typeInto = (page, label, value) => page.evaluate((label, value) => { const l = [...document.querySelectorAll(".modal label")].find((x) => x.innerText.trim().startsWith(label)); const i = l.querySelector("input"); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(i, value); i.dispatchEvent(new Event("input", { bubbles: true })); }, label, value);
+async function openIssueDialog(page) {
+  await page.goto(`${BASE}/payments?view=advances`, { waitUntil: "networkidle0" });
+  await (await page.waitForSelector("xpath/.//button[normalize-space()='Record advance…']", { timeout: 15000 })).click();
+  await page.waitForSelector(".js-issue-categories");
 }
 // The slip check (P0): the e2e slip is a picture, which FolkOPS never reads — UNKNOWN,
 // so a person ticks that they checked it by eye before Record is offered.
 async function confirmSlipByEye(page) {
-  await page.waitForFunction(() => { const c = document.querySelector(".js-slip-check"); return c && c.getAttribute("data-result"); }, { timeout: 15000 });
-  const result = await page.$eval(".js-slip-check", (c) => c.getAttribute("data-result"));
-  await page.evaluate(() => { const c = document.querySelector(".js-slip-confirm"); if (c && !c.checked) c.click(); });
+  await page.waitForFunction(() => { const c = document.querySelector(".modal .js-slip-check"); return c && c.getAttribute("data-result"); }, { timeout: 15000 });
+  const result = await page.$eval(".modal .js-slip-check", (c) => c.getAttribute("data-result"));
+  await page.evaluate(() => { const c = document.querySelector(".modal .js-slip-confirm"); if (c && !c.checked) c.click(); });
   await pause(300);
   return result;
 }
-
-async function createAdvanceInEditor(page, { amount, txRef, cats, otherReason }) {
-  await openCreate(page);
-  const form = await page.$(".js-advance-create-categories");
-  const box = await form.evaluateHandle((f) => f.parentElement);
-  await fillAmountRef(page, amount, txRef);
-  await page.waitForFunction(() => [...document.querySelectorAll(".js-advance-create-categories")].length && [...document.querySelector(".js-advance-create-categories").parentElement.querySelectorAll("select")].some((s) => [...s.options].some((o) => o.value === "bank-e2e")), { timeout: 10000 });
-  await page.evaluate(() => { const s = [...document.querySelector(".js-advance-create-categories").parentElement.querySelectorAll("select")].find((x) => [...x.options].some((o) => o.value === "bank-e2e")); s.value = "bank-e2e"; s.dispatchEvent(new Event("change", { bubbles: true })); });
+const issueRecordBtn = (page) => page.$("xpath/.//div[contains(@class,'mfoot')]//button[normalize-space()='Record']");
+async function fillIssueDialog(page, { amount, txRef, cats, otherReason, jobNo }) {
+  await typeInto(page, "Guide ID", "G-993"); await typeInto(page, "Amount", String(amount)); await typeInto(page, "Job No.", jobNo); await typeInto(page, "Bank reference", txRef);
+  await page.waitForFunction(() => [...document.querySelectorAll(".modal select")].some((s) => [...s.options].some((o) => o.value === "bank-e2e")), { timeout: 10000 });
+  await page.evaluate(() => { const s = [...document.querySelectorAll(".modal select")].find((x) => [...x.options].some((o) => o.value === "bank-e2e")); s.value = "bank-e2e"; s.dispatchEvent(new Event("change", { bubbles: true })); });
   for (const k of ["entrance", "meal", "transport", "other"]) {
     const want = cats.includes(k);
-    await page.evaluate((k, want) => { const c = document.querySelector(`.js-create-cat[value="${k}"]`); if (c.checked !== want) c.click(); }, k, want);
+    const label = { entrance: "Entrance tickets", meal: "Meals", transport: "Transport", other: "Other" }[k];
+    await page.evaluate((label, want) => { const c = [...document.querySelectorAll(".js-issue-categories label")].find((l) => l.innerText.trim() === label).querySelector("input"); if (c.checked !== want) c.click(); }, label, want);
   }
-  if (otherReason) { await page.waitForSelector(".js-create-other-reason"); await page.type(".js-create-other-reason", otherReason); }
-  const file = await box.$('input[type="file"]');
-  await file.uploadFile(SLIP);
+  if (otherReason) await typeInto(page, "Why may it pay for other costs?", otherReason);
+  await (await page.$('.modal input[type="file"]')).uploadFile(SLIP);
   await pause(200);
-  const submitBefore = await page.$eval(".js-advance-submit", (b) => b.disabled);
+}
+async function createAdvanceOnPayments(page, opts) {
+  await openIssueDialog(page);
+  await fillIssueDialog(page, { jobNo: data.j0.ref, ...opts });
+  const submitBefore = await (await issueRecordBtn(page)).evaluate((b) => b.disabled);
   const result = await confirmSlipByEye(page);
   slipChecks.push({ result, disabledBeforeConfirm: submitBefore });
-  await page.click(".js-advance-submit");
+  await (await issueRecordBtn(page)).click();
   await pause(2500);
 }
 const slipChecks = [];
@@ -227,52 +223,46 @@ try {
   // 7 — no advance on the job: Company Advance is not offered.
   check("7 · Company Advance is not offered while no advance on the job may pay for it", !(await payerOptions(page, 0)).includes("advance"));
 
-  // 2 — create an advance for entrance + meal through the job sheet — with an unsaved edit on
-  // the page: recording the advance must not save it (an edit waiting for this very advance
-  // could not be saved yet, and blocked the advance — owner report 2026-10-05).
-  const sheetBefore = await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.j0.id }, select: { updatedAt: true, expenses: true } });
-  await setPayer(page, 2, "company");
-  await pause(200);
-  await createAdvanceInEditor(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });
-  const sheetAfter = await prisma.jobSheet.findUniqueOrThrow({ where: { id: data.j0.id }, select: { updatedAt: true, expenses: true } });
-  const stillOnPage = await page.evaluate(() => [...document.querySelectorAll(".js-payer-select")][2]?.value);
-  check("2 · recording an advance does not save the page's other edits — the sheet is untouched and the edit is still there",
-    sheetAfter.updatedAt.getTime() === sheetBefore.updatedAt.getTime() && JSON.stringify(sheetAfter.expenses) === JSON.stringify(sheetBefore.expenses) && stillOnPage === "company",
-    JSON.stringify({ same: sheetAfter.updatedAt.getTime() === sheetBefore.updatedAt.getTime(), stillOnPage }));
+  // 2 — the operator's job sheet records no advance itself: no Record advance, no form.
+  check("2 · the job sheet has no Record advance — advances are recorded on Payments → Advances", (await page.$(".js-advance-submit")) === null && !(await clickText(page, ".advance-settlement", "+ Record advance")));
+  // Details open on this device from here on (remembered — the summary line is closed by default).
+  await page.evaluate(() => localStorage.setItem("folkops.advanceDetailsOpen", "1"));
+  await createAdvanceOnPayments(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });
+  await page.goto(J0, { waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
+  const sumLine = await text(page, ".js-advance-summary");
+  check("2 · the job sheet shows one line for the advance — given, used, returned — and links to it", /Company advance/.test(sumLine) && /Given ฿1,000\.00/.test(sumLine.replace(/\s+/g, " ")) && /FOLK-ADV-/.test(sumLine), sumLine.replace(/\s+/g, " ").slice(0, 200));
   const all1 = await prisma.guideAdvance.findMany({ where: { date: DATE, slotIdx: 0 }, orderBy: { createdAt: "asc" } });
   const A = all1[0];
-  check("2 · an advance created on the job sheet with meals allowed (slip stored through the upload)", !!A && JSON.stringify(A.allowedCategories) === JSON.stringify(["entrance", "meal"]) && /fake-upload/.test(A.slipUrl ?? ""), JSON.stringify(A?.allowedCategories));
+  check("2 · an advance created on Payments → Advances with meals allowed (slip stored through the upload)", !!A && JSON.stringify(A.allowedCategories) === JSON.stringify(["entrance", "meal"]) && /fake-upload/.test(A.slipUrl ?? ""), JSON.stringify(A?.allowedCategories));
 
   // 4 — "other" without a reason is refused by the form; with one it is created and the reason is in the history.
-  await page.reload({ waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
-  await openCreate(page);
-  await fillAmountRef(page, 500, "TX-E2E-NOREASON");
-  for (const k of ["transport", "other"]) await page.evaluate((k) => document.querySelector(`.js-create-cat[value="${k}"]`).click(), k);
-  await page.click(".js-advance-submit");
+  await openIssueDialog(page);
+  await fillIssueDialog(page, { jobNo: data.j0.ref, amount: 500, txRef: "TX-E2E-NOREASON", cats: ["entrance", "transport", "other"] });
+  await confirmSlipByEye(page);
+  await (await issueRecordBtn(page)).click();
   await pause(700);
   check("4 · enabling 'other' without a reason is refused before anything is sent", /Say why this advance may pay for other costs/.test(await bodyText(page)) && (await prisma.guideAdvance.count({ where: { date: DATE, slotIdx: 0 } })) === 1);
-  await page.reload({ waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
-  await createAdvanceInEditor(page, { amount: 500, txRef: "TX-E2E-B", cats: ["entrance", "transport", "other"], otherReason: "longtail boat hire on the river (example)" });
+  await createAdvanceOnPayments(page, { amount: 500, txRef: "TX-E2E-B", cats: ["entrance", "transport", "other"], otherReason: "longtail boat hire on the river (example)" });
   const B = (await prisma.guideAdvance.findMany({ where: { date: DATE, slotIdx: 0 }, orderBy: { createdAt: "asc" } }))[1];
   const bHist = await prisma.auditLog.findFirst({ where: { action: "advance.categories_changed", entityId: B?.id } });
   check("3, 5 · an advance with transport and 'other' — the reason, who and when are in its history", !!B && bHist?.detail?.otherReason === "longtail boat hire on the river (example)" && bHist?.actorId === data.admin.id && !!bHist?.detail?.at, JSON.stringify(bHist?.detail));
 
   // 8 — one eligible advance (meals: only A): offered, no chooser.
-  await page.reload({ waitUntil: "networkidle0" });
+  await page.goto(J0, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-payer-select");
   check("8 · Company Advance is offered for the meal row (one advance allows meals)", (await payerOptions(page, 0)).includes("advance"));
   const memos = await page.$$eval(".js-advance-memos .js-bank-memo code", (xs) => xs.map((x) => x.innerText));
   // A พ.ศ. year typed into the advance's date becomes ค.ศ. (2569 → 2026).
-  await openCreate(page);
+  await openIssueDialog(page);
   await page.evaluate(() => {
-    const el = document.querySelector('input[type="datetime-local"]');
+    const el = [...document.querySelectorAll(".modal label")].find((l) => l.innerText.startsWith("Date the money left the bank")).querySelector("input");
     const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    set.call(el, "2569-10-04T22:42"); el.dispatchEvent(new Event("input", { bubbles: true }));
+    set.call(el, "2569-10-04"); el.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await pause(200);
-  const typedAt = await page.$eval('input[type="datetime-local"]', (x) => x.value);
-  check("a Buddhist-era year typed into the advance date becomes Gregorian (2569 → 2026)", typedAt === "2026-10-04T22:42", typedAt);
-  await page.reload({ waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
+  const typedAt = await page.evaluate(() => [...document.querySelectorAll(".modal label")].find((l) => l.innerText.startsWith("Date the money left the bank")).querySelector("input").value);
+  check("a Buddhist-era year typed into the advance date becomes Gregorian (2569 → 2026)", typedAt === "2026-10-04", typedAt);
+  await page.goto(J0, { waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
   check("the job sheet gives the bank memos: ADV before the advance transfer, RTN for the guide's return", memos.includes("ADV FOLK-TEST-OPS-01") && memos.includes("RTN FOLK-TEST-OPS-01"), JSON.stringify(memos));
   await setPayer(page, 0, "advance");
   await pause(300);
@@ -763,6 +753,35 @@ try {
     JSON.stringify({ linked: gapRow.advanceId === gapAdv.id, entries: gapEntries.map((e) => e.amountSatang), settled: gapAdv.settledSatang }));
   check("206 · …and no Choose advance… is left once it is linked", (await gapPage.$(".js-advance-pick")) === null && gapErrors.length === 0, gapErrors.join(" | ").slice(0, 200));
   await gapPage.close();
+
+  // Record return… on Payments → Advances — moved from the job sheet: the operator records
+  // money a guide sent back against one advance, with its slip; it waits to be checked.
+  const rp = await browser.newPage();
+  const rpErrors = [];
+  rp.on("pageerror", (e) => rpErrors.push(String(e)));
+  await rp.setViewport({ width: 1280, height: 1800 });
+  await rp.setCookie(await sessionCookie("admin-ops@example.test"));
+  await rp.goto(`${BASE}/payments?view=advances`, { waitUntil: "networkidle0" });
+  const openAdv = await prisma.guideAdvance.findMany({ where: { reversedAt: null }, orderBy: { createdAt: "asc" } });
+  const before = await prisma.guideAdvanceReceipt.count();
+  await rp.waitForSelector(".js-record-return", { timeout: 15000 });
+  await rp.click(".js-record-return");
+  await rp.waitForSelector(".js-return-dialog");
+  const title = await rp.$eval(".js-return-dialog h3", (h) => h.innerText);
+  const forAdv = openAdv.find((a) => title.includes(a.advanceNo));
+  await typeInto(rp, "Amount", "50"); await typeInto(rp, "Bank reference", "TX-E2E-RET-1");
+  await rp.waitForFunction(() => [...document.querySelectorAll(".js-return-dialog select")].some((s) => [...s.options].some((o) => o.value === "bank-e2e")), { timeout: 10000 });
+  await rp.evaluate(() => { const s = [...document.querySelectorAll(".js-return-dialog select")].find((x) => [...x.options].some((o) => o.value === "bank-e2e")); s.value = "bank-e2e"; s.dispatchEvent(new Event("change", { bubbles: true })); });
+  await (await rp.$('.js-return-dialog input[type="file"]')).uploadFile(SLIP);
+  await pause(200);
+  await rp.click(".js-return-submit");
+  await rp.waitForFunction(() => !document.querySelector(".js-return-dialog"), { timeout: 15000 }).catch(() => {});
+  const dlgErr = await rp.$eval(".js-return-dialog .banner", (b) => b.innerText).catch(() => "");
+  const ret = await prisma.guideAdvanceReceipt.findFirst({ where: { bankRef: "TX-E2E-RET-1" } });
+  check("Record return… on Payments → Advances records the guide's return against that advance, with its slip, waiting to be checked",
+    !!forAdv && (await prisma.guideAdvanceReceipt.count()) === before + 1 && !!ret && ret.amountSatang === 5000 && ret.guideId === forAdv.guideId && !!ret.slipUrl && ret.status === "CLAIMED" && rpErrors.length === 0,
+    JSON.stringify({ title, dlgErr, ret: ret && { amount: ret.amountSatang, guide: ret.guideId, slip: !!ret.slipUrl, status: ret.status }, rpErrors }));
+  await rp.close();
 } finally {
   await browser.close();
   server.kill();
