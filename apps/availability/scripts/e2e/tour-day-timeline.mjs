@@ -106,7 +106,7 @@ await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const errors = [];
-const read = (page) => page.$$eval(".js-tour-day .tday-step", (xs) => xs.map((x) => ({ step: x.dataset.step, done: x.classList.contains("done"), time: x.querySelector(".js-tday-time")?.innerText ?? null, text: x.innerText.replace(/\s+/g, " ") })));
+const read = (page) => page.$$eval(".js-tour-day .tday-step", (xs) => xs.map((x) => ({ step: x.dataset.step, done: x.classList.contains("done"), time: x.querySelector(".js-tday-time")?.innerText ?? null, text: `${x.innerText} ${x.title}`.replace(/\s+/g, " "), visible: x.innerText.replace(/\s+/g, " ") })));
 try {
   for (const [who, email, width] of [["operator", "op-td@example.test", 1280], ["guide", "g986@example.test", 390]]) {
     const page = await browser.newPage();
@@ -120,7 +120,22 @@ try {
     check(`${who}: check-in 18 min before start, at the meeting point`, /18 min before start/.test(s[0].text) && /At the meeting point · 25 m/.test(s[0].text), s[0].text);
     check(`${who}: the start recorded by the operator says so`, /5 min after start/.test(s[1].text) && /Recorded by the operator/.test(s[1].text), s[1].text);
     check(`${who}: the report carries its facts`, /3 completed · 1 no-show/.test(s[3].text), s[3].text);
+    check(`${who}: on screen only the step and its time — details in the tooltip`, s.every((x) => x.visible.split(" ").length <= 4) && !/before start|after start|meeting point/.test(s.map((x) => x.visible).join(" ")) && /08:12 Check-in/.test(s[0].visible), s.map((x) => x.visible).join(" | "));
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `tour-day-${who}.png`), fullPage: false });
+    await page.close();
+  }
+  // Checked out 2.4 km from the meeting point: the one detail that stays on screen.
+  await prisma.checkin.updateMany({ where: { type: "COMPLETE" }, data: { lat: 13.77, lng: 100.49, distanceM: 2400, withinGeofence: false } });
+  {
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.setViewport({ width: 390, height: 900 });
+    await page.setCookie(await sessionCookie("op-td@example.test"));
+    await page.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
+    await page.waitForSelector(".js-tour-day", { timeout: 20000 });
+    const co = (await read(page))[2];
+    check("away from the meeting point shows a short red note on screen", /⚠ 2\.4 km away/.test(co.visible) && /Away from the meeting point · 2\.4 km/.test(co.text), co.visible);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "tour-day-away.png"), fullPage: false });
     await page.close();
   }
   // Nothing recorded yet: the steps say so.
@@ -131,7 +146,7 @@ try {
   await page.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-tour-day", { timeout: 20000 });
   const empty = await read(page);
-  check("with nothing recorded every step says Not recorded", empty.every((x) => !x.done && /Not recorded/.test(x.text)) && /0 of 4 recorded/.test(await page.$eval(".tday-sched", (x) => x.innerText)));
+  check("with nothing recorded every step says Not recorded", empty.every((x) => !x.done && /Not recorded/.test(x.text)) && /0 of 4 recorded/.test(await page.$eval(".tday-sched", (x) => x.title)));
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("run", false, String(e?.stack ?? e).slice(0, 600));

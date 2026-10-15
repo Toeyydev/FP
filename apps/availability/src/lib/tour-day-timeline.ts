@@ -34,10 +34,10 @@ export type CheckinRow = { type: string; at: Date | string; lat?: number | null;
 export type ReportRow = { submittedAt: Date | string; noShow?: number | null; leftEarly?: number | null; completedPax?: number | null } | null;
 
 const LABELS: Record<TimelineStepKey, { label: string; th: string }> = {
-  CHECK_IN: { label: "Check-in at the meeting point", th: "เช็คอินที่จุดนัดพบ" },
+  CHECK_IN: { label: "Check-in", th: "เช็คอินที่จุดนัดพบ" },
   TOUR_START: { label: "Tour starts", th: "เริ่มทัวร์" },
-  CHECK_OUT: { label: "Check-out · tour ended", th: "เช็คเอาท์ · จบทัวร์" },
-  REPORT: { label: "Tour report filed", th: "ส่งรายงานทัวร์" },
+  CHECK_OUT: { label: "Check-out", th: "เช็คเอาท์ · จบทัวร์" },
+  REPORT: { label: "Report", th: "ส่งรายงานทัวร์" },
 };
 const TYPE_OF: Record<Exclude<TimelineStepKey, "REPORT">, string> = { CHECK_IN: "ARRIVE", TOUR_START: "START", CHECK_OUT: "END" };
 

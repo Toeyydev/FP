@@ -17,32 +17,33 @@ const where = (s: TimelineStep) =>
     : s.location === "NO_LOCATION" ? { text: "No location", th: "ไม่มีตำแหน่ง GPS", tone: "muted" }
     : null;
 
+const km = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+
+// A short log, one row per step: its time, the step, and a short red note only when the guide was away from
+// the meeting point. Everything else (vs. the start, where, who recorded it, the report's
+// facts) is in the step's tooltip.
 export default function TourDayTimeline({ steps, scheduled, date }: { steps: TimelineStep[]; scheduled: string | null; date: string }) {
   if (!steps.length) return null;
   const done = steps.filter((s) => s.at).length;
   return (
     <section className="panel tday js-tour-day" aria-label="Tour day timeline">
       <div className="tday-head">
-        <b>Tour day timeline</b> <small>ไทม์ไลน์วันทัวร์</small>
-        <span className="tday-sched">Scheduled {scheduled ?? "—"} · {done} of {steps.length} recorded</span>
+        <b>Tour day</b>
+        <span className="tday-sched" title={`${done} of ${steps.length} recorded`}>Starts {scheduled ?? "—"}</span>
       </div>
       <ol className="tday-steps">
         {steps.map((s) => {
           const w = where(s);
+          const meta = [vsStart(s.minutesFromStart), s.note].filter(Boolean).join(" · ");
+          const tip = s.at ? [s.th, meta, w?.text].filter(Boolean).join(" · ") : `${s.th} · Not recorded`;
           return (
-            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key}>
+            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={tip}>
               <span className="tday-dot" aria-hidden="true">{s.at ? "✓" : ""}</span>
-              <div className="tday-body">
-                <b>{s.label}</b><small>{s.th}</small>
-                {s.at ? (
-                  <>
-                    <div className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> · {day(s.at)}</small> : null}</div>
-                    {s.key !== "REPORT" || s.minutesFromStart != null ? <div className="tday-meta">{vsStart(s.minutesFromStart)}</div> : null}
-                    {w && <div className={`tday-where ${w.tone}`}>{w.text} <small>· {w.th}</small></div>}
-                    {s.note && <div className="tday-meta">{s.note}</div>}
-                  </>
-                ) : <div className="tday-meta tday-missing">Not recorded · ยังไม่ได้บันทึก</div>}
-              </div>
+              {s.at
+                ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> {day(s.at)}</small> : null}</span>
+                : <span className="tday-time tday-missing">--:--</span>}
+              <span className="tday-label">{s.label}</span>
+              {s.at && w?.tone === "warn" ? <span className="tday-away">⚠ {s.distanceM != null ? `${km(s.distanceM)} away` : "Away"}</span> : null}
             </li>
           );
         })}
