@@ -250,36 +250,24 @@ export default function Dashboard() {
 
           <div className="dash-cols">
           <div className="dash-main">
-            {/* Today's Operations — the centrepiece: one dense row per running job.
-                Row click opens the job sheet. Extra columns (job no. / report /
-                expense / pay) come from the same single dashboard request. */}
+            {/* Today — one short line per tour: time, tour, guide and pax, and one
+                status chip (check-in → report). Job no., expense and pay live on the
+                job sheet the row opens. */}
             <section className="panel" id="today">
-              <div className="panel-head"><h2>Today&rsquo;s operations</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${d.todayTours.length} tour${d.todayTours.length === 1 ? "" : "s"} · ${todayPax} guests${todayOverdue ? ` · ⚠ ${todayOverdue} not checked in` : ""}` : ""}</span></div>
-              {d.todayTours.length === 0 ? <div className="op-empty" style={{ padding: 18 }}>No tours today.</div> : (
-                <div className="grid-scroll" style={{ padding: "0 6px 8px" }}>
-                  <table className="ops-table">
-                    <thead><tr><th>Time</th><th>Job No.</th><th>Tour</th><th>Guide</th><th>Guests</th><th>Check-in</th><th>Report</th><th>Expense</th><th>Pay</th></tr></thead>
-                    <tbody>
-                      {d.todayTours.map((a, i) => {
-                        const reportNote = a.report && (a.report.noShow > 0 || a.report.leftEarly > 0 || a.report.comments);
-                        return (
-                          <tr key={i} onClick={() => { window.location.href = `/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`; }} title="Open this tour’s job sheet — full details">
-                            <td style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{a.time}</td>
-                            <td style={{ fontFamily: "monospace", fontSize: 11.5, whiteSpace: "nowrap" }}>{a.ref || "—"}</td>
-                            <td><b>{a.tour}</b>{reportNote ? <div className="dr-sub">{a.report!.noShow > 0 ? `${a.report!.noShow} no-show` : ""}{a.report!.leftEarly > 0 ? ` · ${a.report!.leftEarly} left early` : ""}{a.report!.comments ? ` · ⚠ ${a.report!.comments}` : ""}</div> : null}</td>
-                            <td>{a.guide}</td>
-                            <td style={{ fontVariantNumeric: "tabular-nums" }}>{a.pax ?? "—"}</td>
-                            <td><StateTag t={a} /></td>
-                            <td>{a.report ? <span className="ob ok">✓ Reported</span> : a.state === "COMPLETE" ? <span className="ob warn">Pending</span> : <span className="ob mut">—</span>}</td>
-                            <td>{a.expenseReported ? <span className="ob ok">✓ Reported</span> : <span className="ob mut">—</span>}</td>
-                            <td>{a.payStatus === "PAID" ? <span className="ob ok">Paid</span> : a.payStatus === "APPROVED" ? <span className="ob warn">Approved</span> : <span className="ob mut">—</span>}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <div className="panel-head"><h2>Today</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${d.todayTours.length} tour${d.todayTours.length === 1 ? "" : "s"} · ${todayPax} guests${todayOverdue ? ` · ⚠ ${todayOverdue} not checked in` : ""}` : ""}</span></div>
+              <div className="dash-list today-list">
+                {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a, i) => {
+                  const r = a.report;
+                  const note = r ? [r.noShow > 0 ? `${r.noShow} no-show` : "", r.leftEarly > 0 ? `${r.leftEarly} left early` : "", r.comments ? `⚠ ${r.comments}` : ""].filter(Boolean).join(" · ") : "";
+                  return (
+                    <a key={i} className={`dash-row today-row${a.overdue ? " warn" : ""}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title={`Open the job sheet${a.ref ? ` · ${a.ref}` : ""}`}>
+                      <span className="dr-time">{a.time}</span>
+                      <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}{note ? <span className={r && (r.comments || r.leftEarly > 0) ? "dr-incident" : ""}> · {note}</span> : null}</div></span>
+                      {r ? <span className="ck ck-done">✓ Reported</span> : <StateTag t={a} />}
+                    </a>
+                  );
+                })}
+              </div>
             </section>
 
             <section className="panel" id="tomorrow">
