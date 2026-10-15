@@ -23,25 +23,25 @@ export default function TourDayTimeline({ steps, scheduled, date }: { steps: Tim
   return (
     <section className="panel tday js-tour-day" aria-label="Tour day timeline">
       <div className="tday-head">
-        <b>Tour day timeline</b> <small>ไทม์ไลน์วันทัวร์</small>
+        <b>Tour day</b>
         <span className="tday-sched">Scheduled {scheduled ?? "—"} · {done} of {steps.length} recorded</span>
       </div>
       <ol className="tday-steps">
         {steps.map((s) => {
           const w = where(s);
+          const meta = [vsStart(s.minutesFromStart), s.note].filter(Boolean).join(" · ");
           return (
-            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key}>
+            <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={s.th}>
               <span className="tday-dot" aria-hidden="true">{s.at ? "✓" : ""}</span>
               <div className="tday-body">
-                <b>{s.label}</b><small>{s.th}</small>
-                {s.at ? (
-                  <>
-                    <div className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> · {day(s.at)}</small> : null}</div>
-                    {s.key !== "REPORT" || s.minutesFromStart != null ? <div className="tday-meta">{vsStart(s.minutesFromStart)}</div> : null}
-                    {w && <div className={`tday-where ${w.tone}`}>{w.text} <small>· {w.th}</small></div>}
-                    {s.note && <div className="tday-meta">{s.note}</div>}
-                  </>
-                ) : <div className="tday-meta tday-missing">Not recorded · ยังไม่ได้บันทึก</div>}
+                <div className="tday-line">
+                  <b>{s.label}</b>
+                  {s.at
+                    ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> · {day(s.at)}</small> : null}</span>
+                    : <span className="tday-meta tday-missing">Not recorded</span>}
+                </div>
+                {s.at && meta ? <div className="tday-meta">{meta}</div> : null}
+                {s.at && w ? <div className={`tday-where ${w.tone}`} title={w.th}>{w.text}</div> : null}
               </div>
             </li>
           );
