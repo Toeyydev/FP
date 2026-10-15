@@ -12,6 +12,7 @@ type Tour = { date: string; slotIdx: number; time: string; tour: string; guideId
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 function StateTag({ t }: { t: Tour }) {
   if (t.state === "COMPLETE") return <span className="ck ck-done">✓ Done {hhmm(t.checkedAt)}</span>;
+  if (t.state === "END") return <span className="ck ck-in">✓ Checked out {hhmm(t.checkedAt)}</span>;
   if (t.state === "START") return <span className="ck ck-live">● In progress</span>;
   if (t.state === "ARRIVE") return <span className="ck ck-in">✓ Checked in {hhmm(t.checkedAt)}</span>;
   if (t.overdue) return <span className="ck ck-late">⚠ Not checked in</span>;
@@ -207,7 +208,7 @@ export default function Dashboard() {
           <section className="panel"><div style={{ padding: 14 }}>{Array.from({ length: 4 }).map((_, i) => <div key={i} className="skel-row" />)}</div></section>
         </div>
       ) : ((() => {
-          const done = ["ARRIVE", "START", "COMPLETE"];
+          const done = ["ARRIVE", "START", "END", "COMPLETE"];
           const todayPax = d.todayTours.reduce((s, t) => s + (t.pax ?? 0), 0);
           const todayIn = d.todayTours.filter((t) => done.includes(t.state)).length;
           const todayOverdue = d.todayTours.filter((t) => t.overdue).length;

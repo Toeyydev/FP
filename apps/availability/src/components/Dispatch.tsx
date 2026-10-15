@@ -17,6 +17,7 @@ const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB",
 const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 function StateTag({ a }: { a: Assignment }) {
   if (a.state === "COMPLETE") return <span className="ck ck-done">✓ Done {hhmm(a.checkedAt)}</span>;
+  if (a.state === "END") return <span className="ck ck-in">✓ Checked out {hhmm(a.checkedAt)}</span>;
   if (a.state === "START") return <span className="ck ck-live">● On tour</span>;
   if (a.state === "ARRIVE") return <span className="ck ck-in">✓ Checked in {hhmm(a.checkedAt)}</span>;
   if (a.overdue) return <span className="ck ck-late">⚠ Not checked in</span>;
@@ -231,7 +232,7 @@ export default function Dispatch() {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>Job sheet</a>
                         <a className="btn sm" title="This guide fell sick or was injured and someone else is finishing the tour — record the handover and move the fee" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}&handover=1`}>🤒 Hand over…</a>
-                        {!["ARRIVE", "START", "COMPLETE"].includes(a.state) && <button className="btn sm" title="Split this tour across a second guide — each keeps their own job sheet" onClick={() => openSplit(a)}>Split</button>}
+                        {!["ARRIVE", "START", "END", "COMPLETE"].includes(a.state) && <button className="btn sm" title="Split this tour across a second guide — each keeps their own job sheet" onClick={() => openSplit(a)}>Split</button>}
                         <button className="btn sm" onClick={() => reoffer(a)}>Re-offer</button>
                         <button className="btn sm danger" onClick={() => removeAssignment(a)}>Remove</button>
                       </div>

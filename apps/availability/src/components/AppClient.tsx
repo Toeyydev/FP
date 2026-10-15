@@ -643,7 +643,7 @@ export default function AppClient({
     await load();
   }
   // Capture GPS (best-effort) and record a lifecycle check-in for a tour.
-  async function doCheckin(s: { date: string; slotIdx: number }, type: "ARRIVE" | "START" | "COMPLETE") {
+  async function doCheckin(s: { date: string; slotIdx: number }, type: "ARRIVE" | "START" | "END" | "COMPLETE") {
     const refresh = () => fetch("/api/schedule", { cache: "no-store" }).then((r) => r.json()).then((d) => { setSchedule(d.items ?? []); setExpensesDue(d.expensesDue ?? []); }).catch(() => {});
     const post = (lat?: number, lng?: number, accuracyM?: number) =>
       fetch("/api/checkin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: s.date, slotIdx: s.slotIdx, type, lat, lng, accuracyM }) })
@@ -655,10 +655,12 @@ export default function AppClient({
       );
     } else { await post(); }
   }
-  const CHECK_NEXT: Record<string, { type: "ARRIVE" | "START" | "COMPLETE"; label: string } | null> = {
+  // Check in → start → check out (with GPS) → the report (COMPLETE, with the expenses).
+  const CHECK_NEXT: Record<string, { type: "ARRIVE" | "START" | "END" | "COMPLETE"; label: string } | null> = {
     none: { type: "ARRIVE", label: t("checkIn") },
     ARRIVE: { type: "START", label: t("startTour") },
-    START: { type: "COMPLETE", label: t("completeTour") },
+    START: { type: "END", label: t("checkOut") },
+    END: { type: "COMPLETE", label: t("fileReport") },
     COMPLETE: null,
   };
   // Check-in opens 45 min before the tour (prevents starting/completing days early).
@@ -824,7 +826,7 @@ export default function AppClient({
                 <div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div>
                 {s.meetingPoint && <div className="sched-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
                 <div className="sched-meet"><a href={gcalUrl({ title: `Folkpaths — ${s.tourName}`, date: s.date, slotIdx: s.slotIdx, durationMin: s.durationMin, location: s.meetingPoint ?? undefined, details: `${s.pax != null ? `${s.pax} pax · ` : ""}Folkpaths tour` })} target="_blank" rel="noreferrer">{t("addToCalendar")}</a></div>
-                {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : `✓ ${t("tourDone")}`}</div>}
+                {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : s.checkinState === "END" ? `✓ ${t("checkedOut")}` : `✓ ${t("tourDone")}`}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
                 {showAction(s, next) && next && <button className="btn sm primary" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
@@ -1351,7 +1353,7 @@ export default function AppClient({
       {/* Active-tour reminder: appears the moment a guide checks in / starts, and
           stays until they mark the tour done. */}
       {role === "guide" && (() => {
-        const active = schedule.find((s) => s.checkinState === "ARRIVE" || s.checkinState === "START");
+        const active = schedule.find((s) => s.checkinState === "ARRIVE" || s.checkinState === "START" || s.checkinState === "END");
         if (!active) return null;
         return (
           <div className="active-tour" role="alert">
