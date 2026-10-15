@@ -352,6 +352,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/job-process
 
+      # The tour-day timeline on the job sheet — check-in, start, check-out, report — the
+      # same for the guide and the operator, with times, lateness, location and who recorded.
+      - name: Tour day timeline in a real browser
+        run: node scripts/e2e/tour-day-timeline.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/tour-day-timeline
+
       # The 13 Sep 2026 incident, end to end on the local server: a late booking through the
       # real webhook route reaches the guide's saved job sheet (8 guests, (Inc. Guide) = 9),
       # once, and the sheet shows expected vs actual guests.

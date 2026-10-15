@@ -7,6 +7,8 @@ import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import JobProcessStrip from "@/components/JobProcessStrip";
+import TourDayTimeline from "@/components/TourDayTimeline";
+import type { TimelineStep } from "@/lib/tour-day-timeline";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
@@ -138,6 +140,7 @@ export default function JobSheetEditor() {
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
+  const [tourDay, setTourDay] = useState<{ scheduled: string | null; steps: TimelineStep[] } | null>(null);
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
   // Another guide finished this tour, or this guide finished it for someone (api/tour-handover).
@@ -200,7 +203,7 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setPastGaps(d.pastBookingGaps ?? null);
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
@@ -957,6 +960,9 @@ export default function JobSheetEditor() {
         </div>
       )}
 
+      {/* …and the guide at the top of their page, before the payout. */}
+      {ro && tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
+
       {ro && (() => {
         const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
         const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0);
@@ -1163,6 +1169,9 @@ export default function JobSheetEditor() {
           <button className="btn primary" disabled={busy || !!saveProblem?.stale} onClick={() => save()}>{busy ? "…" : "Save · บันทึก"}</button>
         </div>
       )}
+
+      {/* Check-in → start → check-out → report: the operator sees it above the sheet. */}
+      {canEdit && tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
 
       {(canEdit || showFull) && (
       <div className="js-detail-grid">
