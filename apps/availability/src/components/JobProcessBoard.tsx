@@ -41,6 +41,11 @@ export default function JobProcessBoard() {
     setError(""); setData(d); setFrom(d.from); setTo(d.to);
   }, []);
   useEffect(() => { load(); }, [load]);
+  // Opened from a Dashboard task (?stage=AWAITING_REVIEW …): start on that step.
+  useEffect(() => {
+    const st = new URLSearchParams(window.location.search).get("stage");
+    if (st && /^[A-Z_]+$/.test(st)) setPick(st as ProcessStage);
+  }, []);
 
   const jobs = data?.jobs ?? [];
   const info = (s: ProcessStage) => data?.stages.find((x) => x.stage === s);

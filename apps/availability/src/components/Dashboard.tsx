@@ -17,7 +17,7 @@ function StateTag({ t }: { t: Tour }) {
   if (t.overdue) return <span className="ck ck-late">⚠ Not checked in</span>;
   return <span className="ck ck-none">Not checked in</span>;
 }
-type Unassigned = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number };
+type Unassigned = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; need: number; offer?: "DECLINED" | "EXPIRED" | "OPEN" | null };
 type Understaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; have: number; need: number };
 type Conflict = { guideId: string; guide: string; date: string; slots: string[] };
 type Orphaned = { date: string; slotIdx: number; time: string; tour: string; guideId: string; guide: string; pax: number; count: number };
@@ -29,7 +29,7 @@ type Finance = {
   peak: { synced: number; pendingRef: number };
 };
 type PastUnstaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; daysAgo: number };
-type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; pastUnstaffed?: PastUnstaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[]; reportsPending?: number; finance?: Finance };
+type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; pastUnstaffed?: PastUnstaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[]; reportsPending?: number; finance?: Finance ; process?: { awaitingReview: number; awaitingTransfer: number; awaitingPeak: number }};
 
 // Compact baht for KPI cards — whole-baht, no decimals (the tables keep 2dp via thb).
 const thb0 = (v: number) => `฿${Math.round(v).toLocaleString("en-US")}`;
@@ -213,7 +213,10 @@ export default function Dashboard() {
           const todayOverdue = d.todayTours.filter((t) => t.overdue).length;
           const orphaned = d.orphaned ?? [];
           const past = d.pastUnstaffed ?? [];
-          const attention = past.length + d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length;
+          // The admin's later steps in the process (lib/job-process), each a row of its own.
+          const proc = d.process ?? { awaitingReview: 0, awaitingTransfer: 0, awaitingPeak: 0 };
+          const procRows = ([["AWAITING_REVIEW", proc.awaitingReview, "job sheet", "to review and approve", "รอตรวจและอนุมัติ"], ["AWAITING_TRANSFER", proc.awaitingTransfer, "approved job", "to pay — transfer and upload the slip", "รอโอนเงิน"], ["AWAITING_PEAK", proc.awaitingPeak, "paid job", "not in PEAK yet", "จ่ายแล้ว รอลง PEAK"]] as const).filter((r) => r[1] > 0);
+          const attention = past.length + d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length + procRows.length;
           return (
         <div className="dash">
           {/* Page header — title left, primary actions right. */}
@@ -341,6 +344,13 @@ export default function Dashboard() {
                     <span className="att-go">Assign →</span>
                   </a>
                 ))}
+                {procRows.map(([stage, n, what, todo, th]) => (
+                  <a key={stage} className="att-row js-proc-task" data-stage={stage} href={`/process?stage=${stage}`} title="Open these jobs on the Job process board">
+                    <span className="att-dot" style={{ background: "var(--assign)" }} />
+                    <span><b>{n} {what}{n === 1 ? "" : "s"}</b> {todo}<div className="dr-sub">{th} · last 60 days</div></span>
+                    <span className="att-go">Open →</span>
+                  </a>
+                ))}
                 {orphaned.map((o, i) => (
                   <a key={`o${i}`} className="att-row" href={`/bookings?date=${o.date}`} title="Guests tagged to a guide with no assignment — re-dispatch them">
                     <span className="att-dot" style={{ background: "var(--danger)" }} />
@@ -357,7 +367,7 @@ export default function Dashboard() {
                     <>
                       <span className="att-dot" style={{ background: "var(--assign)" }} />
                       <span><b>{dShort(g.date)}</b>{g.items.length > 1 ? ` · ${g.items.length} tours need a guide` : ""}
-                        {g.items.map((u, i) => <div key={i} className="dr-sub">{u.time} · {u.tour} · {u.pax} pax · needs {u.need}</div>)}
+                        {g.items.map((u, i) => <div key={i} className="dr-sub">{u.time} · {u.tour} · {u.pax} pax · needs {u.need}{u.offer === "DECLINED" ? <b className="js-offer-back" style={{ color: "var(--danger)" }}> · offer declined — reassign</b> : u.offer === "EXPIRED" ? <b className="js-offer-back" style={{ color: "var(--danger)" }}> · offer expired — reassign</b> : u.offer === "OPEN" ? <span> · offered, waiting for the guide</span> : null}</div>)}
                       </span>
                       <span className="att-go">{startedToday ? "Record →" : "Assign →"}</span>
                     </>

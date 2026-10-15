@@ -151,6 +151,18 @@ try {
   check("approving the sheet moves the job to To pay", (await page.$eval(".js-proc-strip", (x) => x.dataset.stage)) === "AWAITING_TRANSFER");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "job-process-strip.png") });
 
+  // The Dashboard names why a tour has no guide, and the admin's later steps as tasks.
+  await page.goto(`${BASE}/dashboard`, { waitUntil: "networkidle0" });
+  await page.waitForSelector("#attention", { timeout: 20000 });
+  const att = await page.$eval("#attention", (x) => x.innerText.replace(/\s+/g, " "));
+  check("Dashboard: a declined offer is named, so the admin knows to reassign", /offer declined — reassign/.test(att), att.slice(0, 300));
+  const tasks = await page.$$eval(".js-proc-task", (xs) => xs.map((x) => x.dataset.stage));
+  check("Dashboard: the jobs to review and to pay are tasks of their own", tasks.includes("AWAITING_TRANSFER") && !tasks.includes("AWAITING_PEAK"), JSON.stringify(tasks));
+  await page.$eval('.js-proc-task[data-stage="AWAITING_TRANSFER"]', (a) => a.click());
+  await page.waitForSelector(".js-proc-table tbody tr[data-stage]", { timeout: 20000 });
+  await new Promise((r) => setTimeout(r, 400));
+  check("…and open the board on that step", (await tableStages(page)).every((x) => x === "AWAITING_TRANSFER") && (await tableStages(page)).length >= 1, (await tableStages(page)).join());
+
   await page.setViewport({ width: 390, height: 844 });
   await page.goto(`${BASE}/process`, { waitUntil: "networkidle0" });
   await page.waitForSelector(".proc-node");
