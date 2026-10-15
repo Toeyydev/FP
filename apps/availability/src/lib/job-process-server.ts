@@ -43,7 +43,7 @@ export async function loadJobProcess(prisma: PrismaClient, range: { from: string
     range.guideId ? Promise.resolve([]) : prisma.jobOffer.findMany({ where: { date: inRange }, select: { date: true, slotIdx: true, status: true, expiresAt: true, createdAt: true, responses: { select: { response: true } } }, orderBy: { createdAt: "asc" } }),
     prisma.checkin.findMany({ where: { date: inRange, ...mine }, select: { guideId: true, date: true, slotIdx: true, type: true } }),
     prisma.tourReport.findMany({ where: { date: inRange, ...mine }, select: { guideId: true, date: true, slotIdx: true } }),
-    prisma.jobSheet.findMany({ where: { date: inRange, ...mine }, select: { guideId: true, date: true, slotIdx: true, ref: true, guideExpensesAt: true, approvalStatus: true, peakDocumentNo: true, peakSyncStatus: true, expenses: true, guideFee: true, createdAt: true } }),
+    prisma.jobSheet.findMany({ where: { date: inRange, ...mine }, select: { guideId: true, date: true, slotIdx: true, ref: true, guideExpensesAt: true, approvalStatus: true, peakDocumentNo: true, peakSyncStatus: true, expenses: true, guideFee: true, createdAt: true, certifiedAt: true } }),
     prisma.tourPayment.findMany({ where: { date: inRange, ...mine }, select: { guideId: true, date: true, slotIdx: true, status: true, peakRef: true, peakPaymentRef: true } }),
     prisma.guidePaymentJob.findMany({ where: { date: inRange, active: true, ...mine }, select: { guideId: true, date: true, slotIdx: true } }),
     prisma.payrollStatus.findMany({ where: { period: { gte: months[0], lte: months[months.length - 1] } }, select: { guideId: true, period: true, status: true, paidAt: true, peakRef: true } }),
@@ -98,7 +98,8 @@ export async function loadJobProcess(prisma: PrismaClient, range: { from: string
     const stage = jobStage({
       date: a.date, startMin: slotStartMin(a.slotIdx), today, nowMin, assigned: true,
       checkins: checkinsOf.get(key) ?? [], reported: reported.has(key) || !!s?.guideExpensesAt,
-      sheetSaved: !!(s?.ref ?? "").trim(), approved: isApproved(s?.approvalStatus), paid, peak: peak.state,
+      // Sheets now exist from assignment (lib/jobsheet-auto): "an operator filled it in" is the first operator save.
+      sheetSaved: !!s?.certifiedAt, approved: isApproved(s?.approvalStatus), paid, peak: peak.state,
     });
     out.push(row({ date: a.date, slotIdx: a.slotIdx, tourIds: [a.tourId], guideId: a.guideId, jobNo: (s?.ref ?? "").trim() || null, pax: own.reduce((n, b) => n + (b.pax ?? 0), 0) || a.pax || 0, bookings: own.length }, stage));
   }

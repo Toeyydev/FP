@@ -274,6 +274,8 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
     update: { tourId: offer.tourId, pax: offer.pax ?? null, note: offer.note ?? null },
   });
   await prisma.jobOfferResponse.updateMany({ where: { offerId, guideId }, data: { response: "ACCEPTED", respondedAt: new Date() } });
+  // The job has its sheet and FOLK-BKK number from the moment the guide takes it (lib/jobsheet-auto).
+  { const { ensureJobSheetForAssignment } = await import("@/lib/jobsheet-auto"); await ensureJobSheetForAssignment(guideId, offer.date, offer.slotIdx, "offer-accepted"); }
   // A replacement: the guide it replaces comes off the job now that someone holds it.
   if (offer.replacesGuideId && offer.replacesGuideId !== guideId) {
     const { removeGuideFromDeparture } = await import("@/lib/assignment-removal");

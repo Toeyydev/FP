@@ -13,6 +13,7 @@ import { pushTourToCalendars, removeTourEvents } from "@/lib/tour-calendar-sync"
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import { hasHistoricalJobSheet, historicalDeleteConflict, isRestrictViolation } from "@/lib/historical-guard";
 import { handoverLock } from "@/lib/tour-handover-server";
+import { ensureJobSheetForAssignment } from "@/lib/jobsheet-auto";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 const CAP = PAX_PER_GUIDE;
@@ -88,6 +89,9 @@ export async function POST(req: NextRequest) {
       if (kept.length !== rows.length) await prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId: g.guideId, date, slotIdx } }, data: { bookings: kept as unknown as Prisma.InputJsonValue } });
     }
   }
+
+  // Every guide on the split has a job sheet and number of their own (lib/jobsheet-auto).
+  for (const g of groups) await ensureJobSheetForAssignment(g.guideId, date, slotIdx, "split");
 
   // Guides who held the slot but got no guests in the new split: undo their job
   // (mirrors the assignment DELETE cleanup) so it doesn't linger as a phantom.

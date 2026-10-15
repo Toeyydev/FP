@@ -93,6 +93,9 @@ export async function recordPastSharedGuides(prisma: PrismaClient, input: Shared
       await tx.jobSheet.update({ where: { guideId_date_slotIdx: { guideId: p.guideId, date, slotIdx } }, data: { bookings: p.kept as unknown as Prisma.InputJsonValue } });
     }
   });
+  // Each guide's job has its sheet and number from now (lib/jobsheet-auto).
+  const { ensureJobSheetForAssignment } = await import("@/lib/jobsheet-auto");
+  for (const g of groups) await ensureJobSheetForAssignment(g.guideId, date, slotIdx, "recorded-past-shared");
   await audit({
     ...input.actor, action: "assign.recorded_past_shared", entityType: "Assignment",
     detail: { date, slotIdx, tourId, when, notified: false, reason: "tour already ran — guides recorded by operator",

@@ -13,6 +13,7 @@ import { sendTourCalendarInvite } from "@/lib/calendar";
 import { notifyGuide } from "@/lib/booking-import";
 import { directAssignmentNotice } from "@/lib/assignment-notice";
 import { removeGuideFromDeparture } from "@/lib/assignment-removal";
+import { ensureJobSheetForAssignment } from "@/lib/jobsheet-auto";
 
 const monthRe = /^\d{4}-\d{2}$/;
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -116,6 +117,8 @@ export async function POST(req: NextRequest) {
     const settled = onSlot === 1
       ? await prisma.booking.updateMany({ where: { date, slotIdx, status: { in: ["PENDING", "OFFERED"] }, assignedGuideId: null }, data: { status: "ASSIGNED" } })
       : { count: 0 };
+    // The job has its sheet and FOLK-BKK number from the moment it exists (lib/jobsheet-auto).
+    await ensureJobSheetForAssignment(guideId, date, slotIdx, "recorded-past");
     await audit({
       actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
       action: "assign.recorded_past", entityType: "Assignment", entityId: a.id,
@@ -153,6 +156,7 @@ export async function POST(req: NextRequest) {
       await prisma.jobOffer.updateMany({ where: { id: { in: open.map((o) => o.id) }, status: "OPEN" }, data: { status: "EXPIRED" } });
       await prisma.notification.deleteMany({ where: { offerId: { in: open.map((o) => o.id) } } });
     }
+    await ensureJobSheetForAssignment(guideId, date, slotIdx, "direct-assign");
     await audit({
       actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
       action: "assign.manual", entityType: "Assignment", entityId: a.id,
