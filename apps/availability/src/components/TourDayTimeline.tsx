@@ -33,16 +33,16 @@ export default function TourDayTimeline({ steps, scheduled, date }: { steps: Tim
           return (
             <li key={s.key} className={`tday-step${s.at ? " done" : ""}`} data-step={s.key} title={s.th}>
               <span className="tday-dot" aria-hidden="true">{s.at ? "✓" : ""}</span>
-              <div className="tday-body">
-                <div className="tday-line">
-                  <b>{s.label}</b>
-                  {s.at
-                    ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> · {day(s.at)}</small> : null}</span>
-                    : <span className="tday-meta tday-missing">Not recorded</span>}
-                </div>
-                {s.at && meta ? <div className="tday-meta">{meta}</div> : null}
-                {s.at && w ? <div className={`tday-where ${w.tone}`} title={w.th}>{w.text}</div> : null}
-              </div>
+              {s.at
+                ? <span className="tday-time"><span className="num js-tday-time">{time(s.at)}</span>{s.at.slice(0, 10) !== date ? <small> {day(s.at)}</small> : null}</span>
+                : <span className="tday-time tday-missing">--:--</span>}
+              <b className="tday-label">{s.label}</b>
+              {s.at
+                ? <>
+                    {meta ? <span className="tday-meta">{meta}</span> : null}
+                    {w ? <span className={`tday-where ${w.tone}`} title={w.th}>{w.text}</span> : null}
+                  </>
+                : <span className="tday-meta">Not recorded</span>}
             </li>
           );
         })}
