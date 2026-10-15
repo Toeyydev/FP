@@ -133,6 +133,9 @@ try {
   await pause(800);
   const body = await page.evaluate(() => document.body.innerText);
   check("and the guide's job is now in Payments", /G-971/.test(body) && /Nok Example/.test(body));
+  // The job sheet exists from the moment the guide has the job, with its number (owner 2026-10-15).
+  const made = await prisma.jobSheet.findFirst({ where: { guideId: "G-971", date: DAY1, slotIdx: 0 } });
+  check("recording the guide made the job sheet, numbered, not yet filled in", !!made && /^FOLK-BKK-\d{8}-\d{2}$/.test(made.ref ?? "") && made.certifiedAt === null, JSON.stringify(made && { ref: made.ref }));
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("run", false, String(e?.stack ?? e).slice(0, 600));
