@@ -136,7 +136,14 @@ document.querySelectorAll('[data-review-carousel]').forEach((carousel) => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let index = 0;
   let timer;
-  let manuallyPaused = false;
+  const narrowViewport = window.matchMedia('(max-width: 56rem)');
+  let manuallyPaused = narrowViewport.matches;
+
+  if (manuallyPaused && toggleAutoplay) {
+    toggleAutoplay.textContent = 'Play';
+    toggleAutoplay.setAttribute('aria-pressed', 'true');
+    toggleAutoplay.setAttribute('aria-label', 'Play automatic review rotation');
+  }
 
   const show = (nextIndex, behavior = 'smooth') => {
     index = (nextIndex + slides.length) % slides.length;
