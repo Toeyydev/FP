@@ -188,7 +188,10 @@ export async function submitGuideExpenses(o: {
   const paidRule = await guidePaidRule({ guideId, date, slotIdx, actorRole: o.actorRole, now });
   const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true, expenses: true, guideExpenses: true } });
   const rates = await jobRates(prisma, { guideId, date, slotIdx });
-  const payers = classifyPayers(o.expenses, { official: existing?.expenses as Expense[] | undefined, previous: existing?.guideExpenses as Expense[] | undefined, defaultApplies: paidRule.apply, rates });
+  // A review reward is the operator's to record — compensation, not something the guide
+  // paid on tour. A report never carries one (the form used to be seeded with it).
+  const reported = o.expenses.filter((e) => !isReviewExpense(e));
+  const payers = classifyPayers(reported, { official: existing?.expenses as Expense[] | undefined, previous: existing?.guideExpenses as Expense[] | undefined, defaultApplies: paidRule.apply, rates });
   const expenses = payers.rows;
 
   // Submitting the report is the moment Actual Pax becomes real: fill each booking

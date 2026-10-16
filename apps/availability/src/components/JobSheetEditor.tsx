@@ -215,7 +215,8 @@ export default function JobSheetEditor() {
     // Seed the guide's expense report: their last submission if any, else the standard
     // expense lines (with prices) as a starting template to fill in.
     const s = d.sheet as Sheet;
-    setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).map((e: Expense) => ({ ...e })));
+    // The guide reports what they paid on tour — never the review reward (the operator's to record).
+    setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).filter((e: Expense) => !isReviewExpense(e)).map((e: Expense) => ({ ...e })));
     setGuideNote(s?.guideExpensesNote ?? "");
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
@@ -972,7 +973,8 @@ export default function JobSheetEditor() {
 
       {ro && (() => {
         const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);
-        const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0);
+        // Tour expenses only: the review reward is pay, shown on its own line in the payout.
+        const exp = sheet.expenses.filter((e) => expenseAmount(e) > 0 && !isReviewExpense(e));
         const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
         const paid = !!payment?.paid;
         // Once paid (slip uploaded), the report flow closes and the summary shows the
@@ -1056,7 +1058,7 @@ export default function JobSheetEditor() {
                         <b>{thb(expenseAmount(e))}</b>
                       </li>
                     ))}
-                    <li className="gs-total"><span>Total expenses</span><b>{thb(t.totalExpenses)}</b></li>
+                    <li className="gs-total"><span>Total expenses</span><b>{thb(exp.reduce((a, e) => a + expenseAmount(e), 0))}</b></li>
                   </ul>
                   </>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
