@@ -387,6 +387,14 @@ jobs:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-checklist
+      # Every page at phone width (390px): nothing reaches past the screen edge outside a
+      # box that scrolls on purpose (owner rule 2026-10-16: everything responsive).
+      - name: Every page fits a phone, in a real browser
+        run: node scripts/e2e/responsive.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/responsive
 
       # A tour that already has a guide is offered only as an explicit replacement: the
       # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.

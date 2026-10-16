@@ -308,7 +308,7 @@ table.grid tbody tr:hover td.gname{background:var(--grey-bg)}
 .acct-table .gid{color:var(--grey);font-family:"Sarabun";font-weight:700;margin-right:6px}
 .codeflash{background:var(--ink);color:#fff;border-radius:10px;padding:10px 13px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between;margin:10px 0}
 .codeflash code{font-family:"Sarabun";font-weight:800;font-size:15px;letter-spacing:.06em}
-.subtabs{display:flex;gap:5px;background:var(--grey-bg);border:1px solid var(--line);border-radius:12px;padding:4px;width:fit-content}
+.subtabs{display:flex;gap:5px;background:var(--grey-bg);border:1px solid var(--line);border-radius:12px;padding:4px;width:fit-content;max-width:100%;overflow-x:auto;box-sizing:border-box}
 .subtab{border:none;background:transparent;font-family:"Sarabun";font-weight:600;font-size:13px;color:var(--ink-soft);padding:7px 14px;border-radius:8px;cursor:pointer}
 .subtab.active{background:var(--ink);color:#fff}
 .linkrow{display:flex;gap:14px;align-items:center}
@@ -403,6 +403,7 @@ a.glink:hover{text-decoration:underline}
 
 /* ---- Job sheet editor ---- */
 .jobsheet .js-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;flex-wrap:wrap}
+.jobsheet .js-bar>div{flex-wrap:wrap;min-width:0}
 .jobsheet .js-sheet{max-width:1000px;margin:0 auto}
 .js-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #2f7d32;padding-bottom:10px;margin-bottom:12px}
 /* Without wrapping, the meta table overflowed the panel next to the finance
@@ -1222,7 +1223,10 @@ body::before{background:color-mix(in srgb, var(--day) 78%, #fff)}
    margins here restores stretch sizing; the auto-centring still applies in the
    single-column layout below, where it is what makes the sheet look right. */
 @media screen and (min-width: 1101px) { .js-detail-grid > .js-sheet { width: 100%; margin-left: 0; margin-right: 0; } }
-@media (max-width: 1100px) { .js-detail-grid { grid-template-columns: 1fr; } .js-fin-side { position: static; grid-column: 1; } }
+/* …and in the single column too: without a width the auto margins still make it
+   fit-content, so on a phone the sheet stayed ~994px wide and was cut off at the right
+   (html/body clip sideways overflow). width:100% + max-width keeps the centring. */
+@media (max-width: 1100px) { .js-detail-grid { grid-template-columns: minmax(0, 1fr); } .js-detail-grid > .js-sheet { width: 100%; } .js-fin-side { position: static; grid-column: 1; } }
 
 /* ════════════════════════════════════════════════════════════════════════════
    OPERATOR SHELL THEME — neutral SaaS look (Linear/Stripe-like), Folkpaths green.
@@ -1574,3 +1578,9 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .gns-btn{width:100%;min-height:54px;border-radius:14px;font-size:17px;font-weight:800;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;line-height:1.2}
 .gns-btn small{font-size:11.5px;font-weight:600;opacity:.85}
 .gns-err{font-size:12.5px;color:var(--danger);font-weight:600;text-align:center}
+/* Phones: every FolkOPS page fits 390px (owner rule 2026-10-16, scripts/e2e/responsive.mjs).
+   html/body clip sideways overflow, so anything wider is CUT, not scrollable — a wide
+   data table therefore scrolls inside its own box instead. */
+@media (max-width:640px){
+  .acct-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+}
