@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
+import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
 import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
@@ -969,6 +970,9 @@ export default function JobSheetEditor() {
 
       {/* …and the guide at the top of their page, before the payout. */}
       {ro && tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
+      {/* …and the one thing to do next, as one big button (Idea B). */}
+      {ro && tourDay && <GuideNextStep steps={tourDay.steps} date={sheet.date} slotIdx={sheet.slotIdx} time={tourDay.scheduled} tourName={tour?.name ?? ""}
+        pax={sheet.bookings.reduce((a, b) => a + (b.bookedPax ?? 0), 0) || null} paid={!!payment?.paid} onDone={() => void load()} />}
 
       {ro && (() => {
         const totalPax = sheet.bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0);

@@ -234,6 +234,19 @@ export default function AppClient({
     } catch { toast(t("alertsNeedInstall")); }
   }
 
+  // ?report=YYYY-MM-DD:slot&tour=…&pax=… — the job sheet's "File the tour report" button
+  // opens the same report here, so there is one report form, not two.
+  useEffect(() => {
+    if (role !== "guide") return;
+    const q = new URLSearchParams(window.location.search);
+    const m = /^(\d{4}-\d{2}-\d{2}):(\d+)$/.exec(q.get("report") ?? "");
+    if (!m) return;
+    const pax = Number(q.get("pax"));
+    openReport({ date: m[1], slotIdx: Number(m[2]), tourName: q.get("tour") ?? "", pax: Number.isFinite(pax) && pax > 0 ? pax : null });
+    window.history.replaceState(null, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role]);
+
   // Guide: load their upcoming confirmed tours (schedule).
   useEffect(() => {
     if (role !== "guide") return;
