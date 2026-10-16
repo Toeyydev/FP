@@ -121,7 +121,7 @@ try {
   });
   await pause(400);
   const before = await page.evaluate(() => document.body.innerText);
-  check("before saving, the payout shows the review in full with no tax", /Review incentive · no tax/i.test(before) && !/net of 3% WHT[^\n]*Review|Review incentive · net of/i.test(before), (before.match(/Review[^\n]*/gi) ?? []).join(" | ").slice(0, 200));
+  check("before saving, the payout shows the review in full with no tax", /review ฿200\.00 \(no tax\)/i.test(before) && !/net of 3% WHT[^\n]*Review|Review incentive · net of/i.test(before), (before.match(/Review[^\n]*/gi) ?? []).join(" | ").slice(0, 200));
   await page.evaluate(() => [...document.querySelectorAll(".js-bar button")].find((x) => x.textContent.trim() === "Save").click());
   await page.waitForFunction(() => /saved/i.test([...document.querySelectorAll(".js-bar span")].map((s) => s.textContent).join(" ")), { timeout: 20000 }).catch(() => {});
   await pause(800);

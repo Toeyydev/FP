@@ -1548,3 +1548,23 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .adv-details.adv-closed{display:none}
 .adv-details:not(.adv-closed){margin-top:8px}
 @media print{.adv-details.adv-closed{display:block}}
+
+/* Job sheet — Check this job (operator checklist) */
+.js-check{border:1px solid var(--line);border-radius:14px;background:var(--card,#fff);padding:12px 14px;margin-bottom:14px}
+.js-check-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+.js-check-head b{font-size:15px}
+.js-check-head span{font-size:12px;color:var(--ink-soft)}
+.js-check ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.js-check-card{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;min-width:0}
+.js-check-card>.btn{align-self:flex-start}
+.js-check-n{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;background:var(--grey-bg);color:var(--ink-soft)}
+.js-check-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.js-check-body b{font-size:13.5px}
+.js-check-body small{font-size:12px;color:var(--ink-soft);line-height:1.35}
+.js-check-card.done{opacity:.7}
+.js-check-card.done .js-check-n{background:var(--green);color:#fff}
+.js-check-card.now{border:2px solid var(--primary);box-shadow:0 6px 18px rgba(14,59,46,.08)}
+.js-check-card.now .js-check-n{background:var(--primary);color:#fff}
+.js-check-card.warn .js-check-body small{color:#8A5A0D}
+@media (max-width:900px){.js-check ol{grid-template-columns:1fr 1fr}}
+@media (max-width:520px){.js-check ol{grid-template-columns:1fr}.js-check-card{flex-direction:row;align-items:center}.js-check-body{flex:1}.js-check-card>.btn{align-self:center}}

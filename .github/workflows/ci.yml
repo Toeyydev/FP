@@ -370,6 +370,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/dashboard-today
 
+      # "Check this job" on the operator's job sheet: who came, what the guide spent, approve,
+      # pay & PEAK — each read from the sheet, the next one highlighted, Approve on the card.
+      - name: Job sheet checklist in a real browser
+        run: node scripts/e2e/jobsheet-checklist.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-checklist
+
       # A tour that already has a guide is offered only as an explicit replacement: the
       # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.
       - name: Offer on a staffed tour asks to replace, in a real browser
