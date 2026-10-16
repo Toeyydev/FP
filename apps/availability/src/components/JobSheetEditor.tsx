@@ -1192,17 +1192,53 @@ export default function JobSheetEditor() {
        </div>
        {/* Where this job is in the process, and who it is waiting for (lib/job-process). */}
        {canEdit && <JobProcessStrip guideId={guideId} date={date} slotIdx={slotIdx} refresh={`${sheet.updatedAt ?? ""}|${sheet.approvalStatus ?? ""}`} />}
-       {/* Financial summary — live from the same computeTotals the payout uses. */}
-       <div className="kpi-row no-print" style={{ marginBottom: 14 }}>
-         {/* Must match the Summary at the bottom of this same page. These read
-             computeTotals() directly and showed the pre-correction payout, so the
-             top of the sheet said 2,815 while the bottom said 1,815 — and
-             "Reimbursement" was total expenses, not what the guide is owed back. */}
-         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.feeNet)}</b><span>Guide fee · net of {sheet.guideFee.whtPct ?? 3}% WHT</span></div>
-         {payer.reviewReward > 0 && <div className="kpi"><b style={{ fontSize: 19 }}>{thb(payer.reviewNet)}</b><span>{payer.whtOnReview > 0 ? `Review incentive · net of ${sheet.guideFee.whtPct ?? 3}% WHT` : "Review incentive · no tax"}</span></div>}
-         <div className="kpi"><b style={{ fontSize: 19 }}>{thb(money.reimbursementDue)}</b><span>Reimbursement due</span></div>
-         <div className="kpi" style={{ borderColor: "var(--primary)" }}><b style={{ fontSize: 19, color: "var(--primary)" }}>{thb(money.netPayToGuide)}</b><span>Net pay to guide</span></div>
-       </div>
+       {/* Check this job — Idea B (owner, 2026-10-16): the operator's four questions, in order.
+           Each card says where it stands from the sheet's own data, the next one open is
+           highlighted, and its button goes to the part of the sheet that answers it. The
+           figures are the same jobSheetTotals the Summary and the transfer use. */}
+       {canEdit && (() => {
+         const goTo = (tab: "details" | "expenses", id: string) => { setSecTab(tab); setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); };
+         const bookedPax = sheet.bookings.reduce((a, b) => a + (b.bookedPax ?? 0), 0);
+         const allCounted = sheet.bookings.length > 0 && sheet.bookings.every((b) => b.actualPax != null);
+         const came = sheet.bookings.reduce((a, b) => a + (b.actualPax ?? 0), 0);
+         const tourRows = sheet.expenses.filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
+         // What still needs the operator: the same rechecks the Summary marks (lib/peak-sync).
+         const lookList = [...(uncategorisedExpenseRows(sheet.expenses).length ? [`${uncategorisedExpenseRows(sheet.expenses).length} row(s) with no category`] : []), ...recheck.map((r) => r.short)];
+         const toLook = lookList.length;
+         const approvedNow = isApproved(sheet.approvalStatus);
+         const inPeak = peakStatus?.state !== "NOT_IN_PEAK";
+         const cards: { key: string; title: string; th: string; summary: string; done: boolean; warn?: boolean; tip?: string; action: React.ReactNode }[] = [
+           { key: "guests", title: "Who came", th: "ลูกค้ามากี่คน", done: allCounted,
+             summary: sheet.bookings.length === 0 ? "No bookings on this sheet" : allCounted ? `${came} of ${bookedPax} came${bookedPax - came > 0 ? ` · ${bookedPax - came} no-show` : ""}` : `${sheet.bookings.length} booking${sheet.bookings.length === 1 ? "" : "s"} · ${bookedPax} booked · not counted yet`,
+             action: <button type="button" className="btn sm" onClick={() => goTo("details", "js-guests")}>Guests</button> },
+           { key: "expenses", title: "What the guide spent", th: "ค่าใช้จ่าย", done: toLook === 0 && (!!sheet.guideExpensesAt || approvedNow), warn: toLook > 0, tip: lookList.join("\n"),
+             summary: `${tourRows.length} row${tourRows.length === 1 ? "" : "s"} · ${thb(money.totalTourExpenses)}${toLook > 0 ? ` · ${toLook} need${toLook === 1 ? "s" : ""} a look` : sheet.guideExpensesAt ? " · guide reported" : " · guide has not reported"}`,
+             action: <button type="button" className="btn sm" onClick={() => goTo("expenses", "js-expenses")}>Expenses</button> },
+           { key: "approve", title: "Approve", th: "อนุมัติ", done: approvedNow,
+             summary: `Pay the guide ${thb(money.netPayToGuide)} · fee ${thb(payer.feeNet)} + reimbursement ${thb(money.reimbursementDue)}${payer.reviewReward > 0 ? ` + review ${thb(payer.reviewNet)}${payer.whtOnReview > 0 ? " (net of WHT)" : " (no tax)"}` : ""}`,
+             action: approvedNow
+               ? <button type="button" className="btn sm ghost" disabled={busy} onClick={toggleApprove}>Unapprove</button>
+               : <button type="button" className="btn sm primary js-check-approve" disabled={busy} onClick={toggleApprove}>Approve</button> },
+           { key: "pay", title: "Pay & PEAK", th: "โอนเงินและลง PEAK", done: !!payment?.paid && inPeak,
+             summary: payment?.paid ? `Paid${payment.paidAt ? ` ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""} · ${peakStatus?.documentNo ?? payment.peakRef ?? (inPeak ? "in PEAK" : "not in PEAK yet")}` : approvedNow ? "Approved — transfer on Payments" : "After approval",
+             action: <a className="btn sm" href="/payments">Payments →</a> },
+         ];
+         const current = cards.findIndex((c) => !c.done);
+         return (
+           <section className="js-check no-print" aria-label="Check this job">
+             <div className="js-check-head"><b>Check this job</b><span>{cards.filter((c) => c.done).length} of {cards.length} done</span></div>
+             <ol>
+               {cards.map((c, i) => (
+                 <li key={c.key} className={`js-check-card${c.done ? " done" : ""}${i === current ? " now" : ""}${c.warn && !c.done ? " warn" : ""}`} data-step={c.key} title={c.tip || undefined}>
+                   <span className="js-check-n" aria-hidden="true">{c.done ? "✓" : i + 1}</span>
+                   <span className="js-check-body"><b>{c.title}</b><small>{c.summary}</small></span>
+                   {c.action}
+                 </li>
+               ))}
+             </ol>
+           </section>
+         );
+       })()}
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Header */}
         <div className="js-head">
@@ -1254,7 +1290,7 @@ export default function JobSheetEditor() {
         </div>
 
         {/* Job details */}
-        <div style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
+        <div id="js-guests" style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายละเอียดงาน"}</small></h3>
         <GuestCounts rows={sheet.bookings} sync={bookingSync} />
         {canEdit && pastGaps && (pastGaps.missing.length > 0 || pastGaps.unsettled.length > 0) && (
@@ -1303,7 +1339,7 @@ export default function JobSheetEditor() {
 
         {/* TOUR EXPENSES — company cost in this job. Accounting mapping keys off
             the CATEGORY (lib/jobsheet), never the description. */}
-        <div style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
+        <div id="js-expenses" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         <h3 className="js-section" style={{ background: "#fff8c4" }}>TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small><span className="js-sub">Company cost in this job</span></h3>
         {rates && rates.titles.length > 0 && (
           <div className="js-rate-titles no-print" style={{ margin: "0 0 6px", fontSize: 11.5, color: "var(--ink-soft)" }}>
