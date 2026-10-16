@@ -140,6 +140,9 @@ try {
   const auditsBefore = await prisma.auditLog.count();
   for (const role of ["OPERATOR", "ADMIN"]) {
     const { page, errors, text, imgs } = await open(role, "2099-01-01");
+    // On the operator's screen the approval sits under History & files — open it.
+    await page.evaluate(() => { const b = document.querySelector(".js-hist-toggle"); if (b && b.getAttribute("aria-expanded") === "false") b.click(); });
+    await new Promise((r) => setTimeout(r, 200));
     const approval = await page.$eval(APPROVAL, (x) => x.innerText);
     check(`${role}: the page loads without a crash`, errors.length === 0, errors.join(" | ").slice(0, 200));
     check(`${role}: approval shows status, approver and time`, approval.includes("อนุมัติแล้ว") && approval.includes("Op Example") && approval.includes("1 Jan 2099 14:05"), approval.replace(/\s+/g, " ").slice(0, 160));
@@ -163,6 +166,8 @@ try {
     await page.close();
   }
   const { page, errors } = await open("ADMIN", "2099-01-02");
+  await page.evaluate(() => { const b = document.querySelector(".js-hist-toggle"); if (b && b.getAttribute("aria-expanded") === "false") b.click(); });
+  await new Promise((r) => setTimeout(r, 200));
   const needText = await page.$eval(REF, (x) => x.innerText).catch(() => "");
   check("ADMIN, no certificate yet: says how to make one, creates nothing", errors.length === 0 && needText.includes("ยังไม่มีใบรับรอง") && needText.includes("สร้างร่าง") && needText.includes("ไม่สร้างให้อัตโนมัติ"), needText.replace(/\s+/g, " ").slice(0, 160));
   if (SHOTS) await (await page.$(REF)).screenshot({ path: join(SHOTS, "certificate-reference-none.png") });
