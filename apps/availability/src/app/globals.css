@@ -1615,6 +1615,6 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .js-money-line .js-money-total{font-size:18px;color:var(--primary)}
 .js-link-btn{border:0;background:none;padding:0;font:inherit;color:var(--primary);text-decoration:underline;cursor:pointer;font-weight:700}
 @media screen{
-  .js-bar-op~.js-detail-grid h3.js-section>small,.js-bar-op~.js-detail-grid th small{display:none !important}
+  .js-bar-op~.js-detail-grid h3.js-section>small,.js-bar-op~.js-detail-grid th small,.js-bar-op~.js-detail-grid .js-th{display:none !important}
   .js-review-empty>h3,.js-review-empty>table{display:none}
 }

@@ -85,7 +85,7 @@ const dtShort = (iso?: string) => (iso ? new Date(iso).toLocaleString("en-GB", {
 // Bilingual label — English with the Thai accounting term underneath, so the job
 // sheet reads as a proper Thai accounting document (accountant-requested).
 const TH = ({ en, th }: { en: string; th: string }) => (
-  <>{en}<span style={{ display: "block", fontSize: 9.5, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", lineHeight: 1.2 }}>{th}</span></>
+  <>{en}<span className="js-th" style={{ display: "block", fontSize: 9.5, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", lineHeight: 1.2 }}>{th}</span></>
 );
 
 const numOrNull = (v: string): number | null => { if (v.trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
