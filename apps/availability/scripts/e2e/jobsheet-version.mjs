@@ -192,7 +192,10 @@ try {
   await waitText(page, /Saved ✓|Not saved/);
   check("unapprove → edit → Save saves", puts.at(-1) === 200 && (await sheetNow()).operatorNote === "checked with the guide", `last PUT ${puts.at(-1)} · note ${JSON.stringify((await sheetNow()).operatorNote)} · textareas ${(await page.$$(NOTE)).length}`);
 
-  // 5 — changed behind the page
+  // 5 — changed behind the page. First let the page finish re-reading the sheet after the
+  // save above: a change landing while that read is in flight is (rightly) picked up by the
+  // page, and the next save then goes through — that race made this check flaky in CI.
+  await page.waitForNetworkIdle({ idleTime: 500 }).catch(() => {});
   await prisma.jobSheet.update({ where: KEY, data: { operatorNote: "saved in another tab" } });
   await page.type(NOTE, " (and more)");
   await clickButton(page, "Save");
