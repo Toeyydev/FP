@@ -1584,3 +1584,37 @@ body:has(.op-layout) .wrap{max-width:1440px}
 @media (max-width:640px){
   .acct-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
+
+/* Job sheet — operator screen, cleaned up (owner/teacher 2026-10-16: "หน้านี้รกมาก").
+   What is closed on screen always prints: the sheet is an accounting document. */
+.js-closed{display:none}
+@media print{.js-closed{display:block !important}}
+.js-bar-op{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.js-title{display:flex;flex-direction:column;gap:1px;flex:1 1 280px;min-width:0}
+.js-title b{font-size:17px;line-height:1.25}
+.js-title span{font-size:12.5px;color:var(--ink-soft)}
+.js-title-status{font:inherit;font-size:12px;font-weight:700;border:1px solid var(--line);border-radius:999px;padding:1px 6px;background:var(--grey-bg);color:var(--ink)}
+.js-bar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.js-more{position:relative}
+.js-more-menu{display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;background:var(--card,#fff);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 14px 34px rgba(22,32,28,.16);padding:6px;flex-direction:column;gap:2px}
+.js-more-menu.open{display:flex}
+.js-more-menu .btn{justify-content:flex-start;text-align:left;border:0;background:none;width:100%;height:auto;padding:8px 10px;border-radius:8px}
+.js-more-menu .btn:hover{background:var(--grey-bg)}
+.js-more-menu .btn.danger{color:var(--danger)}
+.js-more-menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+.js-top{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:12px;align-items:start;margin-bottom:14px}
+.js-top>.tday{margin:0}
+.js-top>.js-check{margin:0}
+@media (max-width:900px){.js-top{grid-template-columns:minmax(0,1fr)}}
+.js-open-line{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;width:100%;text-align:left;font:inherit;font-size:13px;background:var(--card,#fff);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:10px 0;cursor:pointer;color:var(--ink)}
+.js-open-line:hover{background:var(--grey-bg)}
+.js-open-line>span{font-weight:700}
+.js-open-line small{color:var(--ink-soft);font-size:12px;font-weight:500}
+.js-open-line>b{margin-left:auto;font-size:12.5px;color:var(--primary)}
+.js-money-line>span{display:flex;flex-direction:column;font-variant-numeric:tabular-nums}
+.js-money-line .js-money-total{font-size:18px;color:var(--primary)}
+.js-link-btn{border:0;background:none;padding:0;font:inherit;color:var(--primary);text-decoration:underline;cursor:pointer;font-weight:700}
+@media screen{
+  .js-bar-op~.js-detail-grid h3.js-section>small,.js-bar-op~.js-detail-grid th small,.js-bar-op~.js-detail-grid .js-th{display:none !important}
+  .js-review-empty>h3,.js-review-empty>table{display:none}
+}
