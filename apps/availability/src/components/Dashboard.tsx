@@ -24,27 +24,10 @@ type Finance = {
 type PastUnstaffed = { date: string; slotIdx: number; time: string; tour: string; pax: number; count: number; daysAgo: number };
 type Data = { today: string; todayTours: Tour[]; tomorrowTours: Tour[]; upcomingTours: Tour[]; unassigned: Unassigned[]; understaffed: Understaffed[]; pastUnstaffed?: PastUnstaffed[]; conflicts: Conflict[]; orphaned: Orphaned[]; leaveRequests: Leave[]; reportsPending?: number; finance?: Finance ; process?: { awaitingReview: number; awaitingTransfer: number; awaitingPeak: number }};
 
-// Compact baht for KPI cards — whole-baht, no decimals (the tables keep 2dp via thb).
+// Compact baht for the home page lines — whole-baht, no decimals (the tables keep 2dp via thb).
 const thb0 = (v: number) => `฿${Math.round(v).toLocaleString("en-US")}`;
 
 const dShort = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-
-function Kpi({ n, label, tone = "", sub, onClick }: { n: number; label: string; tone?: string; sub?: string; onClick?: () => void }) {
-  return (
-    <div className={`kpi ${n > 0 ? tone : ""}${onClick ? " kpi-click" : ""}`} onClick={onClick} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}>
-      <b>{n}</b><span>{label}</span>{sub ? <small className="kpi-sub">{sub}</small> : null}
-    </div>
-  );
-}
-
-// A KPI whose headline is a formatted string (e.g. ฿24,800) instead of a count.
-// Same .kpi visual; `hot` applies the tone even though the value isn't numeric.
-function MoneyKpi({ v, label, tone = "", hot = false, sub, href }: { v: string; label: string; tone?: string; hot?: boolean; sub?: string; href?: string }) {
-  const body = <><b style={{ fontVariantNumeric: "tabular-nums" }}>{v}</b><span>{label}</span>{sub ? <small className="kpi-sub">{sub}</small> : null}</>;
-  return href
-    ? <a className={`kpi ${hot ? tone : ""} kpi-click`} href={href} style={{ textDecoration: "none", color: "inherit" }}>{body}</a>
-    : <div className={`kpi ${hot ? tone : ""}`}>{body}</div>;
-}
 
 // Google Drive connection — where job sheets + e-slips are saved. A visible button
 // so the operator can (re)connect the company Drive account without hunting for a URL.
@@ -167,13 +150,8 @@ export default function Dashboard() {
   const [bcMsg, setBcMsg] = useState("");
   const [bcBusy, setBcBusy] = useState(false);
   // Collapsible dashboard sections — default shows Tomorrow, hides Today + Upcoming.
-  const [hidden, setHidden] = useState<Set<string>>(new Set(["tomorrow", "upcoming"]));
+  const [hidden, setHidden] = useState<Set<string>>(new Set(["tomorrow", "upcoming", "money"]));
   const toggleSec = (k: string) => setHidden((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  // Tap a KPI → expand its section (if collapsible) and scroll to it.
-  const jumpTo = (id: string, section?: string) => {
-    if (section) setHidden((p) => { const n = new Set(p); n.delete(section); return n; });
-    setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
-  };
   async function sendBroadcast() {
     const message = bcText.trim();
     if (!message) return;
@@ -200,101 +178,44 @@ export default function Dashboard() {
           <section className="panel"><div style={{ padding: 14 }}>{Array.from({ length: 4 }).map((_, i) => <div key={i} className="skel-row" />)}</div></section>
         </div>
       ) : ((() => {
-          const done = ["ARRIVE", "START", "END", "COMPLETE"];
           const todayPax = d.todayTours.reduce((s, t) => s + (t.pax ?? 0), 0);
-          const todayIn = d.todayTours.filter((t) => done.includes(t.state)).length;
-          const todayOverdue = d.todayTours.filter((t) => t.overdue).length;
           const orphaned = d.orphaned ?? [];
           const past = d.pastUnstaffed ?? [];
           // The admin's later steps in the process (lib/job-process), each a row of its own.
           const proc = d.process ?? { awaitingReview: 0, awaitingTransfer: 0, awaitingPeak: 0 };
           const procRows = ([["AWAITING_REVIEW", proc.awaitingReview, "job sheet", "to review and approve", "รอตรวจและอนุมัติ"], ["AWAITING_TRANSFER", proc.awaitingTransfer, "approved job", "to pay — transfer and upload the slip", "รอโอนเงิน"], ["AWAITING_PEAK", proc.awaitingPeak, "paid job", "not in PEAK yet", "จ่ายแล้ว รอลง PEAK"]] as const).filter((r) => r[1] > 0);
           const attention = past.length + d.unassigned.length + d.understaffed.length + orphaned.length + d.leaveRequests.length + procRows.length;
+          const moneyNeeds = !d.finance ? 0 : [(d.reportsPending ?? 0) > 0, d.finance.expensesToReview.count > 0, d.finance.guidePayable.total > 0 && !procRows.some((r) => r[0] === "AWAITING_TRANSFER"), d.finance.batches.open > 0, d.finance.peak.pendingRef > 0].filter(Boolean).length;
+          const needs = attention + moneyNeeds;
           return (
         <div className="dash">
-          {/* Page header — title left, primary actions right. */}
-          <div className="dash-head">
-            <div>
-              <h1 className="page-title">Operator Dashboard</h1>
-              <div className="page-sub">Today&rsquo;s tours, guide assignments, pending actions and payments.</div>
-            </div>
-            <div className="dash-head-actions">
-              <a className="btn" href="/board">Dispatch board</a>
-              <a className="btn primary" href="/bookings">+ New booking</a>
-            </div>
+          {/* Operator home (owner 2026-10-16, "simpler"): one column — Needs you, Today, then
+              one summary line each for tomorrow, the week and money. No number tiles: every
+              count is a line in Needs you with its button, or is not shown when it is 0. */}
+          <div className="home-head">
+            <h1 className="page-title">{new Date(`${d.today}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</h1>
+            <button className="btn js-broadcast-open" aria-expanded={bcOpen} onClick={() => setBcOpen((o) => !o)}>📣 Broadcast</button>
+            <a className="btn primary" href="/bookings">+ New booking</a>
           </div>
-
-          {/* One compact KPI band — operations + money, all computed server-side. */}
-          <div className="kpi-row">
-            <Kpi n={d.todayTours.length} label="Tours today" sub={d.todayTours.length ? `${todayIn}/${d.todayTours.length} in · ${todayPax} guests` : undefined} onClick={() => jumpTo("today")} />
-            <Kpi n={d.tomorrowTours.length} label="Tomorrow" onClick={() => jumpTo("tomorrow", "tomorrow")} />
-            <Kpi n={d.unassigned.length} label="Unassigned" tone="warn" onClick={() => jumpTo("attention")} />
-            <Kpi n={d.understaffed.length} label="Understaffed" tone="bad" onClick={() => jumpTo("attention")} />
-            {orphaned.length > 0 && <Kpi n={orphaned.length} label="Orphaned" tone="bad" onClick={() => jumpTo("attention")} />}
-            {d.finance && <>
-              <MoneyKpi v={String(d.reportsPending ?? 0)} label="Reports pending" tone="warn" hot={(d.reportsPending ?? 0) > 0} sub="end-tour report" href="/tour-log" />
-              <MoneyKpi v={String(d.finance.expensesToReview.count)} label="Expenses to review" tone="warn" hot={d.finance.expensesToReview.count > 0} sub={d.finance.expensesToReview.count ? thb0(d.finance.expensesToReview.total) : undefined} href="/expense-review" />
-              <MoneyKpi v={thb0(d.finance.guidePayable.total)} label="Guide payable" sub={d.finance.guidePayable.guides ? `${d.finance.guidePayable.guides} guide${d.finance.guidePayable.guides === 1 ? "" : "s"} · ${d.finance.guidePayable.tours} tour${d.finance.guidePayable.tours === 1 ? "" : "s"}` : "all settled"} href="/payments" />
-              <MoneyKpi v={String(d.finance.batches.open)} label="Open batches" tone="warn" hot={d.finance.batches.open > 0} sub={d.finance.batches.open ? `${thb0(d.finance.batches.openTotal)}` : "none open"} href="/payment-batches" />
-              <MoneyKpi v={`${d.finance.peak.synced}`} label="PEAK refs" tone="warn" hot={d.finance.peak.pendingRef > 0} sub={d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} missing` : "all recorded"} href="/payments" />
-            </>}
-          </div>
-
-          <div className="dash-cols">
-          <div className="dash-main">
-            {/* Today — one plain line per tour: time, tour, guide · pax, and one status
-                (lib/today-list). A tour past its start with no check-in turns red and
-                says how late. Job no., expense and pay live on the job sheet it opens. */}
-            {(() => {
-              const nowMin = bangkokMinute();
-              const late = d.todayTours.filter((a) => todayView(a, nowMin).kind === "LATE").length;
-              return (
-            <section className="panel" id="today">
-              <div className="panel-head"><h2>Today</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${d.todayTours.length} tour${d.todayTours.length === 1 ? "" : "s"} · ${todayPax} guests` : ""}{late ? <b className="today-late-count"> · ⚠ {late} late</b> : null}</span></div>
-              <div className="dash-list today-list">
-                {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a) => {
-                  const v = todayView(a, nowMin);
-                  const chip = v.kind === "LATE" && v.rel !== "now" ? `⚠ ${v.rel}` : v.chip;
-                  const r = a.report;
-                  const note = r ? [r.noShow > 0 ? `${r.noShow} no-show` : "", r.leftEarly > 0 ? `${r.leftEarly} left early` : ""].filter(Boolean).join(" · ") : "";
-                  return (
-                    <a key={`${a.guideId}|${a.slotIdx}`} className={`dash-row today-row k-${v.kind.toLowerCase()}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title={`Open the job sheet${a.ref ? ` · ${a.ref}` : ""}`}>
-                      <span className="dr-time">{a.time}</span>
-                      <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}{note ? ` · ${note}` : ""}</div></span>
-                      <span className={`today-ck t-${v.tone}`}>{chip}</span>
-                    </a>
-                  );
-                })}
+          {bcOpen && (
+            <section className="panel home-bc">
+              <div style={{ fontSize: 14, fontWeight: 650 }}>Broadcast to guides</div>
+              <div className="dr-sub" style={{ marginTop: 2 }}>Send an update to guides with upcoming tours — in-app, push and LINE.</div>
+              <textarea value={bcText} onChange={(e) => setBcText(e.target.value)} maxLength={500} rows={3} placeholder="e.g. Heavy rain expected today, please bring umbrellas for guests." className="search" style={{ width: "100%", resize: "vertical", font: "inherit", fontSize: 13, lineHeight: 1.5, marginTop: 8 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{bcText.length}/500</span>
+                <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => setBcOpen(false)}>Cancel</button>
+                <button className="btn sm primary" disabled={bcBusy || !bcText.trim()} onClick={sendBroadcast}>{bcBusy ? "Sending…" : "Send"}</button>
               </div>
+              {bcMsg && <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 6, color: bcMsg.startsWith("✅") ? "var(--green)" : "var(--danger)" }}>{bcMsg}</div>}
             </section>
-              );
-            })()}
+          )}
 
-            <section className="panel" id="tomorrow">
-              <div className="panel-head" onClick={() => toggleSec("tomorrow")} style={{ cursor: "pointer" }}><h2>{hidden.has("tomorrow") ? "▸ " : "▾ "}Tomorrow</h2><span className="hint">{d.tomorrowTours.length} tour(s)</span></div>
-              <div className="dash-list" style={{ display: hidden.has("tomorrow") ? "none" : undefined }}>
-                {d.tomorrowTours.length === 0 ? <div className="op-empty">No tours tomorrow.</div> : d.tomorrowTours.map((a, i) => (
-                  <a key={i} className="dash-row" href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></a>
-                ))}
-              </div>
-            </section>
-
-            <section className="panel" id="upcoming">
-              <div className="panel-head" onClick={() => toggleSec("upcoming")} style={{ cursor: "pointer" }}><h2>{hidden.has("upcoming") ? "▸ " : "▾ "}Upcoming · next 7 days</h2></div>
-              <div className="dash-list" style={{ display: hidden.has("upcoming") ? "none" : undefined }}>
-                {d.upcomingTours.length === 0 ? <div className="op-empty">Nothing scheduled.</div> : d.upcomingTours.map((a, i) => (
-                  <a key={i} className="dash-row" href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></a>
-                ))}
-              </div>
-            </section>
-          </div>
-
-          {/* Right rail — exceptions + money snapshot. Only actionable state. */}
-          <div className="dash-side">
+          <div className="home-col">
             <section className="panel" id="attention">
-              <div className="panel-head"><h2>Needs attention{attention > 0 ? ` (${attention})` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">PDF</button>}</div>
+              <div className="panel-head"><h2>Needs you{needs > 0 ? ` · ${needs}` : ""}</h2>{d.unassigned.length > 0 && <button className="btn sm" style={{ marginLeft: "auto" }} onClick={exportUnassignedPdf} title="Print-ready list of tours that still need a guide — Save as PDF">PDF</button>}</div>
               <div className="dash-list">
-                {attention === 0 && <div className="op-empty" style={{ padding: 14 }}>All operations are on track.</div>}
+                {needs === 0 && <div className="op-empty" style={{ padding: 14 }}>All on track ✓</div>}
                 {/* Tours that already ran with nobody rostered. First in the list
                     and never ageing out: each one is either a guide owed money for
                     work already done, or a booking nobody honoured. Both need an
@@ -336,7 +257,7 @@ export default function Dashboard() {
                 {procRows.map(([stage, n, what, todo, th]) => (
                   <a key={stage} className="att-row js-proc-task" data-stage={stage} href={`/process?stage=${stage}`} title="Open these jobs on the Job process board">
                     <span className="att-dot" style={{ background: "var(--assign)" }} />
-                    <span><b>{n} {what}{n === 1 ? "" : "s"}</b> {todo}<div className="dr-sub">{th} · last 60 days</div></span>
+                    <span><b>{n} {what}{n === 1 ? "" : "s"}</b> {todo}{stage === "AWAITING_TRANSFER" && d.finance && d.finance.guidePayable.total > 0 ? ` · ${thb0(d.finance.guidePayable.total)}` : ""}<div className="dr-sub" title={th}>last 60 days</div></span>
                     <span className="att-go">Open →</span>
                   </a>
                 ))}
@@ -365,65 +286,95 @@ export default function Dashboard() {
                     ? <button key={`u${g.date}`} type="button" className="att-row" onClick={() => setRecordDay(g.date)} style={{ width: "100%", textAlign: "left", font: "inherit", cursor: "pointer", border: 0, background: "none" }} title="These tours have started with no guide — name who is guiding them">{body}</button>
                     : <a key={`u${g.date}`} className="att-row" href={`/bookings?date=${g.date}`} title="Open Bookings to dispatch this day's tours">{body}</a>;
                 })}
-              </div>
-            </section>
-
-            {d.finance && (
-              <section className="panel">
-                <div className="panel-head"><h2>Finance &amp; accounting</h2></div>
-                <div style={{ padding: "4px 16px 12px" }}>
-                  <div className="fin-row"><span>Expenses awaiting review</span><b>{d.finance.expensesToReview.count ? `${d.finance.expensesToReview.count} · ${thb0(d.finance.expensesToReview.total)}` : "0"}</b></div>
-                  <div className="fin-row"><span>Guide payable</span><b>{thb0(d.finance.guidePayable.total)}</b></div>
-                  {d.finance.guidePayable.guides > 0 && <div className="fin-row"><span><small>{d.finance.guidePayable.guides} guide{d.finance.guidePayable.guides === 1 ? "" : "s"} · {d.finance.guidePayable.tours} tour{d.finance.guidePayable.tours === 1 ? "" : "s"}</small></span><b /></div>}
-                  <div className="fin-row"><span>Payment batch</span><b>{d.finance.batches.open ? `${d.finance.batches.open} open · ${thb0(d.finance.batches.openTotal)}` : "No open batch"}</b></div>
-                  <div className="fin-row"><span>Paid this week</span><b>{d.finance.batches.paidWeekCount ? thb0(d.finance.batches.paidWeekTotal) : "—"}</b></div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-                    <a className="btn sm" href="/expense-review">Review expenses</a>
-                    <a className="btn sm" href="/payment-batches">Batches</a>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {d.finance && (
-              <section className="panel">
-                <div className="panel-head"><h2>PEAK accounting</h2></div>
-                <div style={{ padding: "4px 16px 12px" }}>
-                  <div className="fin-row">
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <span className="att-dot" style={{ background: d.finance.peak.pendingRef ? "var(--assign)" : "var(--green)" }} />
-                      Reference tracking
-                    </span>
-                    <b>{d.finance.peak.pendingRef ? `${d.finance.peak.pendingRef} missing` : "All recorded"}</b>
-                  </div>
-                  <div className="fin-row"><span>EXP refs this month</span><b>{d.finance.peak.synced}</b></div>
-                  <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 6 }}>Expense refs are recorded on Payments when payouts are posted.</div>
-                  <div style={{ marginTop: 8 }}><a className="btn sm" href="/payments">Open Payments</a></div>
-                </div>
-              </section>
-            )}
-
-            {/* Broadcast — demoted to a secondary card; opens the composer in place. */}
-            <section className="panel">
-              <div style={{ padding: "12px 16px" }}>
-                <div style={{ fontSize: 14, fontWeight: 650 }}>Broadcast to guides</div>
-                <div className="dr-sub" style={{ marginTop: 2 }}>Send an update to guides with upcoming tours — in-app, push and LINE.</div>
-                {!bcOpen ? (
-                  <button className="btn sm" style={{ marginTop: 9 }} onClick={() => setBcOpen(true)}>Create broadcast</button>
-                ) : (
-                  <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 7 }}>
-                    <textarea value={bcText} onChange={(e) => setBcText(e.target.value)} maxLength={500} rows={3} placeholder="e.g. Heavy rain expected today, please bring umbrellas for guests." className="search" style={{ width: "100%", resize: "vertical", font: "inherit", fontSize: 13, lineHeight: 1.5 }} />
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{bcText.length}/500</span>
-                      <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => setBcOpen(false)}>Cancel</button>
-                      <button className="btn sm primary" disabled={bcBusy || !bcText.trim()} onClick={sendBroadcast}>{bcBusy ? "Sending…" : "Send"}</button>
-                    </div>
-                    {bcMsg && <div style={{ fontSize: 12.5, fontWeight: 600, color: bcMsg.startsWith("✅") ? "var(--green)" : "var(--danger)" }}>{bcMsg}</div>}
-                  </div>
+                {/* Money that waits on the operator — one line each, only when there is some. */}
+                {(d.reportsPending ?? 0) > 0 && (
+                  <a className="att-row js-need-reports" href="/tour-log"><span className="att-dot" style={{ background: "var(--assign)" }} /><span><b>{d.reportsPending} report{d.reportsPending === 1 ? "" : "s"}</b> not filed yet</span><span className="att-go">Open →</span></a>
+                )}
+                {d.finance && d.finance.expensesToReview.count > 0 && (
+                  <a className="att-row js-need-expenses" href="/expense-review"><span className="att-dot" style={{ background: "var(--assign)" }} /><span><b>{d.finance.expensesToReview.count} guide expense report{d.finance.expensesToReview.count === 1 ? "" : "s"}</b> to review · {thb0(d.finance.expensesToReview.total)}</span><span className="att-go">Review →</span></a>
+                )}
+                {d.finance && d.finance.guidePayable.total > 0 && !procRows.some((r) => r[0] === "AWAITING_TRANSFER") && (
+                  <a className="att-row js-need-pay" href="/payments"><span className="att-dot" style={{ background: "var(--assign)" }} /><span><b>Pay {thb0(d.finance.guidePayable.total)}</b> · {d.finance.guidePayable.guides} guide{d.finance.guidePayable.guides === 1 ? "" : "s"} · {d.finance.guidePayable.tours} tour{d.finance.guidePayable.tours === 1 ? "" : "s"}</span><span className="att-go">Payments →</span></a>
+                )}
+                {d.finance && d.finance.batches.open > 0 && (
+                  <a className="att-row js-need-batch" href="/payment-batches"><span className="att-dot" style={{ background: "var(--assign)" }} /><span><b>{d.finance.batches.open} open payment batch{d.finance.batches.open === 1 ? "" : "es"}</b> · {thb0(d.finance.batches.openTotal)}</span><span className="att-go">Open →</span></a>
+                )}
+                {d.finance && d.finance.peak.pendingRef > 0 && (
+                  <a className="att-row js-need-peak" href="/payments"><span className="att-dot" style={{ background: "var(--assign)" }} /><span><b>{d.finance.peak.pendingRef} PEAK ref{d.finance.peak.pendingRef === 1 ? "" : "s"}</b> missing</span><span className="att-go">Payments →</span></a>
                 )}
               </div>
             </section>
-          </div>
+
+            {/* Today — one plain line per tour: time, tour, guide · pax, and one status
+                (lib/today-list). A tour past its start with no check-in turns red and
+                says how late. Job no., expense and pay live on the job sheet it opens. */}
+            {(() => {
+              const nowMin = bangkokMinute();
+              const late = d.todayTours.filter((a) => todayView(a, nowMin).kind === "LATE").length;
+              return (
+            <section className="panel" id="today">
+              <div className="panel-head"><h2>Today</h2><span className="hint">{dShort(d.today)}{d.todayTours.length ? ` · ${d.todayTours.length} tour${d.todayTours.length === 1 ? "" : "s"} · ${todayPax} guests` : ""}{late ? <b className="today-late-count"> · ⚠ {late} late</b> : null}</span></div>
+              <div className="dash-list today-list">
+                {d.todayTours.length === 0 ? <div className="op-empty">No tours today.</div> : d.todayTours.map((a) => {
+                  const v = todayView(a, nowMin);
+                  const chip = v.kind === "LATE" && v.rel !== "now" ? `⚠ ${v.rel}` : v.chip;
+                  const r = a.report;
+                  const note = r ? [r.noShow > 0 ? `${r.noShow} no-show` : "", r.leftEarly > 0 ? `${r.leftEarly} left early` : ""].filter(Boolean).join(" · ") : "";
+                  return (
+                    <a key={`${a.guideId}|${a.slotIdx}`} className={`dash-row today-row k-${v.kind.toLowerCase()}`} href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title={`Open the job sheet${a.ref ? ` · ${a.ref}` : ""}`}>
+                      <span className="dr-time">{a.time}</span>
+                      <span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}{note ? ` · ${note}` : ""}</div></span>
+                      <span className={`today-ck t-${v.tone}`}>{chip}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            </section>
+              );
+            })()}
+
+            {/* Tomorrow, the week and money: one summary line each; Show opens the detail. */}
+            {(() => {
+              const tomorrow = new Date(Date.parse(`${d.today}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10);
+              const staffedTomorrow = !d.unassigned.some((u) => u.date === tomorrow) && !d.understaffed.some((u) => u.date === tomorrow);
+              const fin = d.finance;
+              const line = (key: string, title: string, sub: string) => (
+                <button type="button" className={`home-line js-home-${key}`} aria-expanded={!hidden.has(key)} onClick={() => toggleSec(key)}>
+                  <b>{title}</b><span>{sub}</span><em>{hidden.has(key) ? "Show ▸" : "Hide ▴"}</em>
+                </button>
+              );
+              return (
+                <section className="panel home-summary">
+                  {line("tomorrow", "Tomorrow", `${d.tomorrowTours.length} tour${d.tomorrowTours.length === 1 ? "" : "s"}${d.tomorrowTours.length ? (staffedTomorrow ? " · all have a guide" : " · some need a guide") : ""}`)}
+                  <div id="tomorrow" className="dash-list" style={{ display: hidden.has("tomorrow") ? "none" : undefined }}>
+                {d.tomorrowTours.length === 0 ? <div className="op-empty">No tours tomorrow.</div> : d.tomorrowTours.map((a, i) => (
+                  <a key={i} className="dash-row" href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></a>
+                ))}
+                  </div>
+                  {line("upcoming", "Next 7 days", `${d.upcomingTours.length} tour${d.upcomingTours.length === 1 ? "" : "s"}`)}
+                  <div id="upcoming" className="dash-list" style={{ display: hidden.has("upcoming") ? "none" : undefined }}>
+                {d.upcomingTours.length === 0 ? <div className="op-empty">Nothing scheduled.</div> : d.upcomingTours.map((a, i) => (
+                  <a key={i} className="dash-row" href={`/job-sheet?guideId=${encodeURIComponent(a.guideId)}&date=${a.date}&slotIdx=${a.slotIdx}`} title="Open this tour’s job sheet — full details"><span className="dr-time">{dShort(a.date)}<br /><small>{a.time}</small></span><span className="dr-main"><b>{a.tour}</b><div className="dr-sub">{a.guide}{a.pax != null ? ` · ${a.pax} pax` : ""}</div></span></a>
+                ))}
+                  </div>
+                  {fin && line("money", "Money & PEAK", [fin.batches.open ? `${fin.batches.open} open batch${fin.batches.open === 1 ? "" : "es"}` : "no open batch", fin.batches.paidWeekCount ? `paid this week ${thb0(fin.batches.paidWeekTotal)}` : "", fin.peak.pendingRef ? `${fin.peak.pendingRef} PEAK refs missing` : "PEAK refs all recorded"].filter(Boolean).join(" · "))}
+                  {fin && (
+                    <div className="home-money" style={{ display: hidden.has("money") ? "none" : undefined }}>
+                      <div className="fin-row"><span>Expenses awaiting review</span><b>{fin.expensesToReview.count ? `${fin.expensesToReview.count} · ${thb0(fin.expensesToReview.total)}` : "0"}</b></div>
+                      <div className="fin-row"><span>Guide payable</span><b>{thb0(fin.guidePayable.total)}{fin.guidePayable.guides ? ` · ${fin.guidePayable.guides} guide${fin.guidePayable.guides === 1 ? "" : "s"} · ${fin.guidePayable.tours} tour${fin.guidePayable.tours === 1 ? "" : "s"}` : ""}</b></div>
+                      <div className="fin-row"><span>Payment batch</span><b>{fin.batches.open ? `${fin.batches.open} open · ${thb0(fin.batches.openTotal)}` : "No open batch"}</b></div>
+                      <div className="fin-row"><span>Paid this week</span><b>{fin.batches.paidWeekCount ? thb0(fin.batches.paidWeekTotal) : "—"}</b></div>
+                      <div className="fin-row"><span>PEAK refs</span><b>{fin.peak.pendingRef ? `${fin.peak.pendingRef} missing` : "All recorded"} · {fin.peak.synced} EXP this month</b></div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                        <a className="btn sm" href="/payments">Payments</a>
+                        <a className="btn sm" href="/expense-review">Review expenses</a>
+                        <a className="btn sm" href="/payment-batches">Batches</a>
+                      </div>
+                    </div>
+                  )}
+                </section>
+              );
+            })()}
           </div>
         </div>
         );

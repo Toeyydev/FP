@@ -139,6 +139,33 @@ try {
     if (SHOTS) { await page.$eval("#today", (x) => x.scrollIntoView()); await page.screenshot({ path: join(SHOTS, `today-${who}.png`) }); }
     await page.close();
   }
+  // The home around it: one column — Needs you, Today, summary lines; no number tiles.
+  {
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.setCookie(await sessionCookie("op-today@example.test"));
+    await page.goto(`${BASE}/dashboard`, { waitUntil: "networkidle0" });
+    await page.waitForSelector("#attention", { timeout: 20000 });
+    const order = await page.evaluate(() => [...document.querySelectorAll(".home-col > *")].map((x) => x.id || x.className.split(" ").slice(-1)[0]));
+    check("home: one column — Needs you, then Today, then the summary lines", JSON.stringify(order) === JSON.stringify(["attention", "today", "home-summary"]), JSON.stringify(order));
+    check("home: no number tiles", (await page.$(".kpi-row, .kpi")) === null);
+    check("home: the first block is called Needs you", /^Needs you/.test(await page.$eval("#attention h2", (h) => h.innerText)), await page.$eval("#attention h2", (h) => h.innerText));
+    const tomorrowShut = await page.$eval("#tomorrow", (x) => getComputedStyle(x).display);
+    await page.click(".js-home-tomorrow");
+    await new Promise((r) => setTimeout(r, 200));
+    const tomorrowOpen = await page.$eval("#tomorrow", (x) => getComputedStyle(x).display);
+    check("home: Tomorrow is one line; Show opens the list", tomorrowShut === "none" && tomorrowOpen !== "none", `${tomorrowShut} → ${tomorrowOpen}`);
+    check("home: Money & PEAK is one line, closed", (await page.$(".js-home-money")) !== null && (await page.$eval(".home-money", (x) => getComputedStyle(x).display)) === "none");
+    await page.click(".js-broadcast-open");
+    await page.waitForSelector(".home-bc textarea", { timeout: 5000 }).catch(() => {});
+    check("home: Broadcast is a button that opens the composer", (await page.$(".home-bc textarea")) !== null);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "home-desktop.png"), fullPage: true });
+    await page.setViewport({ width: 390, height: 844 });
+    await page.reload({ waitUntil: "networkidle0" });
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "home-phone.png"), fullPage: true });
+    await page.close();
+  }
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("ran without throwing", false, String(e?.stack ?? e));
