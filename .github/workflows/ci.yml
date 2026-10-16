@@ -370,6 +370,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-next-step
 
+      # The guide's Home on a phone: one line of name + date, the Next card, a To do list
+      # instead of banners, My tours one line each; fits 390px.
+      - name: Guide home in a real browser
+        run: node scripts/e2e/guide-home.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-home
+
       # The dashboard's Today list: one short line per tour with one status chip, each a
       # link to its job sheet, no sideways scrolling on a phone.
       - name: Dashboard Today list in a real browser

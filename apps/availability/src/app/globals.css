@@ -1630,3 +1630,39 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .home-line span{color:var(--ink-soft)}
 .home-line em{margin-left:auto;font-style:normal;font-weight:700;font-size:12.5px;color:var(--primary)}
 .home-money{padding:4px 16px 12px}
+/* Guide home (AppClient, view "schedule") — owner 2026-10-16: simpler. Name + date on one
+   line, the Next card, a To do list (one line each), the balance line, My tours one line each. */
+.guide-hero.gh-slim{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:4px 2px 10px;margin:0;background:none;border:0;box-shadow:none}
+.guide-hero.gh-slim h2{margin:0;font-size:20px}
+.guide-hero.gh-slim .gh-date{font-size:13px;color:var(--ink-soft);margin:0}
+.todo-card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:14px}
+.todo-head{font-size:12px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);padding:10px 14px 4px}
+.todo-row{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border:0;border-top:1px solid var(--line);background:none;font:inherit;font-size:14px;text-align:left;color:var(--ink);text-decoration:none;cursor:pointer}
+.todo-head+.todo-row{border-top:0}
+.todo-row:hover{background:var(--grey-bg)}
+.todo-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.todo-dot.bad{background:var(--danger)}.todo-dot.warn{background:#8A5A0D}
+.todo-txt{flex:1;min-width:0;display:flex;flex-direction:column}
+.todo-txt small{font-size:12px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.todo-go{font-weight:700;color:var(--primary);font-size:13px;white-space:nowrap}
+.todo-more{font-size:12px;color:var(--ink-soft);padding:2px 14px 10px 32px}
+.sched-list{padding:4px 0}
+.sched-row{display:flex;align-items:center;border-top:1px solid var(--line)}
+.sched-row:first-child{border-top:0}
+.sched-link{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:8px 14px;text-decoration:none;color:var(--ink)}
+.sched-link:hover{background:var(--grey-bg)}
+.sched-link .sched-when{min-width:52px;padding:0;background:none;border:0;line-height:1.2}
+.sched-link .sched-when b{font-size:13px}
+.sched-link .sched-when span{font-size:13px}
+.sched-link .sched-mid{flex:1;min-width:0;display:flex;flex-direction:column}
+.sched-link .sched-mid b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sched-link .sched-mid small{font-size:12px;color:var(--ink-soft)}
+.sched-link .sched-state{margin:0;white-space:nowrap}
+.sched-go{color:var(--ink-soft);font-size:18px}
+.sched-cancel{border:0;background:none;font:inherit;font-size:12px;color:var(--danger);padding:10px 14px 10px 0;cursor:pointer;white-space:nowrap}
+/* Phones: the bottom bar is the guide's navigation, so the same four tabs at the top go,
+   and the guide's header keeps only language, the bell and Sign out. */
+@media (max-width:760px){
+  .gtabs{display:none}
+  header.app-guide .brand,header.app-guide .live{display:none}
+}
