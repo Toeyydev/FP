@@ -110,12 +110,14 @@ const NOTE = 'textarea[placeholder^="Internal operations note"]';
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const sheetNow = () => prisma.jobSheet.findUniqueOrThrow({ where: KEY });
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
-const payTogether = (page) => page.$eval(".js-pay-together", (x) => x.innerText).catch(() => "");
+// The month's list sits behind "show" on the operator's screen — open it before reading.
+const payTogether = (page) => page.$eval(".js-pay-together", (x) => { const t = x.querySelector(".js-pay-together-toggle"); if (t && t.getAttribute("aria-expanded") === "false") t.click(); return new Promise((r) => setTimeout(() => r(x.innerText), 50)); }).catch(() => "");
 const thisJobLine = async (page) => (await payTogether(page)).split("\n").find((l) => l.includes("(this job)")) ?? "";
 const statusMsg = (page) => page.evaluate(() => [...document.querySelectorAll(".js-bar span")].map((s) => s.textContent).join(" | "));
 async function clickButton(page, label) {
   const ok = await page.evaluate((label) => {
-    const b = [...document.querySelectorAll(".js-bar button")].find((x) => x.textContent.trim() === label);
+    // Save is on the bar; Approve / Unapprove on "Check this job".
+    const b = [...document.querySelectorAll(".js-bar button, .js-check button")].find((x) => x.textContent.trim() === label);
     if (!b || b.disabled) return false;
     b.click(); return true;
   }, label);
@@ -130,6 +132,9 @@ async function setCategories(page, values) {
   }
 }
 async function setFee(page, value) {
+  // The guide-fee table opens from the money line on the operator's screen.
+  await page.evaluate(() => { const b = document.querySelector(".js-money-line"); if (b && b.getAttribute("aria-expanded") === "false") b.click(); });
+  await pause(150);
   const input = await page.$('input[title="Agreed rate"]');
   await input.click({ clickCount: 3 });
   await input.type(String(value));

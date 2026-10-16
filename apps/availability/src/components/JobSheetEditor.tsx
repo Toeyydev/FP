@@ -183,6 +183,14 @@ export default function JobSheetEditor() {
   const [advPurpose, setAdvPurpose] = useState("");
   const [advOtherReason, setAdvOtherReason] = useState("");
   const [advBusy, setAdvBusy] = useState(false);
+  // Operator screen only (the PDF prints everything): the More ▾ menu, and the parts of
+  // the sheet that open on demand — guide details, the money detail, history & files,
+  // and the guide's other unpaid jobs in the side panel.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [identOpen, setIdentOpen] = useState(false);
+  const [moneyOpen, setMoneyOpen] = useState(false);
+  const [histOpen, setHistOpen] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
   // Operator: the advance details under the one-line summary, closed by default.
   // Remembered on this device (a convenience only — the page works without it).
   const [advOpen, setAdvOpenState] = useState(false);
@@ -896,32 +904,56 @@ export default function JobSheetEditor() {
 
   return (
     <div className="wrap jobsheet">
+      {/* Top bar. The operator's is Back · title · More ▾ · Save (owner/teacher 2026-10-16:
+          the page was cluttered — 11 buttons). Approve lives on "Check this job". The menu's
+          buttons stay in the page while it is closed, so every action is still one click
+          away from the keyboard and from tests. The guide's bar is unchanged. */}
+      {canEdit ? (
+      <div className="js-bar js-bar-op no-print">
+        <button className="btn ghost" onClick={() => router.back()}>← Back</button>
+        <div className="js-title">
+          <b>{tour?.name || sheet.tourId}</b>
+          <span>{new Date(`${sheet.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} · {SLOT_TIMES[sheet.slotIdx] ?? tour?.time ?? ""} · {sum("bookedPax") || 0} guests · {header?.name || sheet.guideId}{sheet.ref ? ` · ${sheet.ref}` : ""}
+            {" · "}<select className="js-title-status" value={sheet.status} onChange={(e) => up({ status: e.target.value })} aria-label="Status">
+              {Array.from(new Set(["Confirmed", "Pending", "Cancelled", sheet.status])).map((st) => <option key={st}>{st}</option>)}
+            </select></span>
+        </div>
+        <div className="js-bar-actions">
+          <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
+          <div className="js-more">
+            <button type="button" className="btn js-more-btn" aria-expanded={moreOpen} onClick={() => setMoreOpen((o) => !o)}>More ▾</button>
+            <div className={`js-more-menu${moreOpen ? " open" : ""}`} role="menu" onClick={() => setMoreOpen(false)}>
+              <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/pdf?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>PDF</button>
+              <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>Job order</button>
+              <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>Excel</button>
+              <a className="btn" target="_blank" rel="noopener noreferrer"
+                href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>Add to Google Calendar</a>
+              <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>
+              {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
+              <hr />
+              {!handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
+              <button className="btn" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>
+              <button className="btn danger" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — delete it from Payments / Tour Log instead" : "Delete this job sheet and its tour records"} onClick={deleteJobSheet}>Delete job sheet</button>
+            </div>
+          </div>
+          <button className="btn primary" disabled={busy || !!saveProblem?.stale} onClick={() => save()}>{busy ? "…" : "Save"}</button>
+        </div>
+      </div>
+      ) : (
       <div className="js-bar no-print">
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button className="btn ghost" onClick={() => router.back()}>← Back</button>
-          {canEdit && <button className="btn" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>}
-          {canEdit && <button className="btn danger" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — delete it from Payments / Tour Log instead" : "Delete this job sheet and its tour records"} onClick={deleteJobSheet}>Delete job sheet</button>}
-          {canEdit && !handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {ro && <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>}
+          <span style={{ color: "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>View only</span>
           <span style={{ color: saved ? "var(--green,#1a7f37)" : "var(--ink-soft,#888)", fontWeight: 600, fontSize: 13 }}>{msg}</span>
-          {ro && <button className="btn primary" onClick={() => window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener")} title="Open your official guide job order (ใบสั่งงานมัคคุเทศก์)">Job order</button>}
-          {ro && <button className="btn" onClick={() => window.open(`/api/jobsheet/pdf?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener")} title="Open the full job sheet as a PDF for reference">📄 PDF</button>}
+          <button className="btn primary" onClick={() => window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener")} title="Open your official guide job order (ใบสั่งงานมัคคุเทศก์)">Job order</button>
+          <button className="btn" onClick={() => window.open(`/api/jobsheet/pdf?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener")} title="Open the full job sheet as a PDF for reference">📄 PDF</button>
           <a className="btn" target="_blank" rel="noopener noreferrer"
             href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>Add to Google Calendar</a>
-          {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/pdf?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>PDF</button>}
-          {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.open(`/api/jobsheet/joborder?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`, "_blank", "noopener"); }}>Job order</button>}
-          {canEdit && <button className="btn" disabled={busy} onClick={async () => { if (!saved) await save(); window.location.href = `/api/jobsheet/export?guideId=${encodeURIComponent(guideId)}&date=${date}&slotIdx=${slotIdx}`; }}>Excel</button>}
-          {canEdit && drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
-          {canEdit && isApproved(sheet.approvalStatus) && (
-            <span title={sheet.approvedAt ? `Approved ${new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "Approved for payout"} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, color: "var(--green,#2f7d4f)", background: "var(--ok-bg,#eef7f0)", border: "1px solid var(--ok-line,#cfe6d6)", borderRadius: 999, padding: "3px 10px" }}>✓ Approved</span>
-          )}
-          {canEdit && <button className="btn" disabled={busy} onClick={toggleApprove} title="Operator sign-off on the actual expenses before payout / PEAK sync">{isApproved(sheet.approvalStatus) ? "Unapprove" : "Approve"}</button>}
-          {canEdit && <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>}
-          {canEdit && <button className="btn primary" disabled={busy || !!saveProblem?.stale} onClick={() => save()}>{busy ? "…" : "Save"}</button>}
         </div>
       </div>
+      )}
 
       {saveProblem && (
         <div className="js-save-problem no-print" role="alert" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "#fdecea", border: "1px solid #f3c2bd", color: "#9b1c1c", fontSize: 13.5, display: "grid", gap: 6 }}>
@@ -1183,8 +1215,6 @@ export default function JobSheetEditor() {
         </div>
       )}
 
-      {/* Check-in → start → check-out → report: the operator sees it above the sheet. */}
-      {canEdit && tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
 
       {(canEdit || showFull) && (
       <div className="js-detail-grid">
@@ -1196,8 +1226,10 @@ export default function JobSheetEditor() {
            <button key={k} type="button" className={`subtab${secTab === k ? " active" : ""}`} onClick={() => setSecTab(k)}>{l}</button>
          ))}
        </div>
-       {/* Where this job is in the process, and who it is waiting for (lib/job-process). */}
-       {canEdit && <JobProcessStrip guideId={guideId} date={date} slotIdx={slotIdx} refresh={`${sheet.updatedAt ?? ""}|${sheet.approvalStatus ?? ""}`} />}
+       {/* Tour day (check-in → report) beside "Check this job" — the two things an operator
+           reads first. The process strip moved under History & files. */}
+       {canEdit && (<div className="js-top">
+       {tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
        {/* Check this job — Idea B (owner, 2026-10-16): the operator's four questions, in order.
            Each card says where it stands from the sheet's own data, the next one open is
            highlighted, and its button goes to the part of the sheet that answers it. The
@@ -1245,7 +1277,17 @@ export default function JobSheetEditor() {
            </section>
          );
        })()}
+       </div>)}
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
+        {/* Letterhead, Job No. table and the guide's details: the operator's screen shows
+            them on demand (the title bar already says tour, date, guide, job no. and status);
+            they always print — the sheet is an accounting document. */}
+        {canEdit && (
+          <button type="button" className="js-open-line no-print js-ident-toggle" aria-expanded={identOpen} onClick={() => setIdentOpen((o) => !o)}>
+            <span>Guide &amp; job details</span><small>{header?.name || sheet.guideId} · {header?.tel || "no phone"} · {sheet.tourId}</small><b>{identOpen ? "Hide ▴" : "Show ▸"}</b>
+          </button>
+        )}
+        <div className={canEdit && !identOpen ? "js-ident js-closed" : "js-ident"}>
         {/* Header */}
         <div className="js-head">
           {/* Company/legal reference — deliberately small and secondary (§header
@@ -1293,6 +1335,7 @@ export default function JobSheetEditor() {
           <div><span>Address <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>ที่อยู่</small></span>{header?.address || "—"}</div>
           <div><span>E-mail <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>อีเมล</small></span>{header?.email || ""}</div>
           <div><span>Tel. <small style={{ fontSize: 8.5, color: "var(--ink-soft)" }}>โทรศัพท์</small></span>{header?.tel || "—"}</div>
+        </div>
         </div>
 
         {/* Job details */}
@@ -1725,9 +1768,22 @@ export default function JobSheetEditor() {
 
         </div>
 
+        {/* Money, as one line ending in the transfer (operator screen). The guide-fee table
+            and the Summary below open with Show — or on the "Fee & summary" tab — and
+            always print. Same jobSheetTotals / tourCostBreakdown figures as before. */}
+        {canEdit && (secTab === "all" || secTab === "fee") && (
+          <button type="button" className="js-open-line js-money-line no-print" aria-expanded={moneyOpen || secTab === "fee"} onClick={() => setMoneyOpen((o) => !o)}>
+            <span><small>Guide fee</small> {thb(payer.feeNet)}</span>
+            <span><small>Reimbursement</small> {thb(money.reimbursementDue)}</span>
+            {payer.reviewReward > 0 && <span><small>Review</small> {thb(payer.reviewNet)}</span>}
+            <span className="js-money-total"><small>Transfer to guide</small> {thb(money.netPayToGuide)}</span>
+            <b>{moneyOpen || secTab === "fee" ? "Hide ▴" : "Show ▸"}</b>
+          </button>
+        )}
         {/* Guide fee */}
         <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
         <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
+        <div className={canEdit && !moneyOpen && secTab !== "fee" ? "js-closed" : undefined}>
         {/* GUIDE PAYMENT — the guide's earning for this job. Kept strictly out of
             Tour Expenses: this is what the company OWES the guide, not what the tour
             cost. Every figure comes from computeTotals (lib/jobsheet) — the same math
@@ -1783,6 +1839,7 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
 
+        </div>
         {/* Additional Guide Payment — review rewards are guide compensation, not
             tour operating cost. A reward earned on ANOTHER job (Related Job No.
             differs) is paid out with this job but never counted as its expense. */}
@@ -1794,7 +1851,7 @@ export default function JobSheetEditor() {
             // On paper it is a heading and column titles over nothing, so the
             // printed evidence document simply omits the section — the same way
             // it omits any other section that has nothing to certify.
-            <div className={rows.length ? undefined : "no-print"}
+            <div className={rows.length ? undefined : "no-print js-review-empty"}
                  style={{ marginTop: 14, breakInside: "avoid", pageBreakInside: "avoid" }}>
               <h3 className="js-section" style={{ background: "#efe7f3" }}>Additional Guide Payment / Review Reward<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายการจ่ายเพิ่มเติมให้มัคคุเทศก์"}</small><span className="js-sub">Separate from tour expenses and the base guide fee</span></h3>
               <table className="js-table">
@@ -2044,7 +2101,7 @@ export default function JobSheetEditor() {
 
        {/* Financial Summary — placed BELOW Advance/Settlement per owner: the
            final money recap right before certification. */}
-       <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none", marginTop: 16 }}>
+       <div className={canEdit && !moneyOpen && secTab !== "fee" ? "js-closed" : undefined} style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none", marginTop: 16 }}>
         {/* Financial Summary — accounting presentation (see lib/jobsheet helpers):
             Total Job Expenses = tour expenses + GROSS guide fee; WHT shown
             separately and never subtracted from job expenses. Advance lines are
@@ -2173,6 +2230,16 @@ export default function JobSheetEditor() {
         })()}
        </div>
 
+       {/* Approval, certificates, the process strip and History & files: one line on the
+           operator's screen, opened on demand. The approval block still prints. */}
+       {canEdit && (
+         <button type="button" className="js-open-line no-print js-hist-toggle" aria-expanded={histOpen} onClick={() => setHistOpen((o) => !o)}>
+           <span>History &amp; files</span><small>{isApproved(sheet.approvalStatus) ? "approved" : "not approved"} · {history.length} event{history.length === 1 ? "" : "s"}{isAdmin ? " · certificates" : ""} · process</small><b>{histOpen ? "Hide ▴" : "Show ▸"}</b>
+         </button>
+       )}
+       <div className={canEdit && !histOpen ? "js-closed" : undefined}>
+       {/* Where this job is in the process, and who it is waiting for (lib/job-process). */}
+       {canEdit && <JobProcessStrip guideId={guideId} date={date} slotIdx={slotIdx} refresh={`${sheet.updatedAt ?? ""}|${sheet.approvalStatus ?? ""}`} />}
        {/* Certificates in lieu of receipts — the rows a guide fronted that no supplier
            issues paper for. Shown here, next to the expenses they are about, and never
            on the printed sheet.
@@ -2261,6 +2328,7 @@ export default function JobSheetEditor() {
          })()}
        </div>
        )}
+       </div>
       </section>
 
       {/* Finance / accounting side panel — operator-only snapshot of where this job
@@ -2276,7 +2344,7 @@ export default function JobSheetEditor() {
               {isApproved(sheet.approvalStatus)
                 ? <span className="badge active">✓ Approved</span>
                 : <span className="badge muted">Not approved</span>}
-              <button className="btn sm" disabled={busy} onClick={toggleApprove}>{isApproved(sheet.approvalStatus) ? "Unapprove" : "Approve"}</button>
+              {/* Approve / Unapprove is on "Check this job" — one place for it. */}
             </div>
             {sheet.approvedAt && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 3 }}>{new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
           </div>
@@ -2328,8 +2396,9 @@ export default function JobSheetEditor() {
               const monthLabel = new Date(`${sheet.date.slice(0, 7)}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
               return (
                 <div className="js-pay-together" role="region" aria-label="Unpaid jobs this month" style={{ marginTop: 6, padding: 8, border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg, #f6f5f3)" }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{header?.name || sheet.guideId} has {all.length} unpaid job{all.length === 1 ? "" : "s"} in {monthLabel}</div>
-                  <ul style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11.5, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{header?.name || sheet.guideId} has {all.length} unpaid job{all.length === 1 ? "" : "s"} in {monthLabel}{" "}
+                    <button type="button" className="js-link-btn js-pay-together-toggle" aria-expanded={jobsOpen} onClick={() => setJobsOpen((o) => !o)}>{jobsOpen ? "hide" : "show"}</button></div>
+                  <ul className={jobsOpen ? undefined : "js-closed"} style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11.5, lineHeight: 1.5 }}>
                     {all.map((j) => (
                       <li key={`${j.date}|${j.slotIdx}`} style={{ color: j.ready ? "var(--ink)" : "var(--ink-soft)" }}>
                         {j.date.slice(8)} · {SLOT_TIMES[j.slotIdx] ?? ""} · {j.ref ?? "no job sheet"} · {thb(j.amount)}{j.date === sheet.date && j.slotIdx === sheet.slotIdx ? " (this job)" : ""}{j.ready ? "" : ` — not ready: ${(j.waiting ?? "").replace(/^\S+\s/, "")}`}
@@ -2339,7 +2408,7 @@ export default function JobSheetEditor() {
                   <button className="btn sm primary" style={{ marginTop: 6 }} disabled={busy || ready.length === 0} onClick={() => setPayTogetherOpen(true)}>
                     Put {ready.length} job{ready.length === 1 ? "" : "s"} in one PEAK document…
                   </button>
-                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>One transfer is one PEAK document: create it when you are about to pay, with every job that transfer pays. Jobs are not posted to PEAK one sheet at a time.</div>
+                  <div className={jobsOpen ? undefined : "js-closed"} style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.45 }}>One transfer is one PEAK document: create it when you are about to pay, with every job that transfer pays. Jobs are not posted to PEAK one sheet at a time.</div>
                 </div>
               );
             })()}
