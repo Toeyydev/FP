@@ -132,6 +132,25 @@ try {
   const job = (r.rows ?? []).flatMap((x) => x.jobs ?? []).find((j) => j.date === DATE);
   check("the transfer is the fee net of 3% plus the reviews in full: ฿970 + ฿200 = ฿1,170", job && Math.abs(job.amount - 1170) < 0.005, JSON.stringify(job && { amount: job.amount }));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "jobsheet-review-no-tax.png"), fullPage: true });
+
+  // The guide's view: the review reward is pay — its own line in the payout — never one of
+  // "the expenses", and never a row in the guide's own expense report.
+  await prisma.jobSheet.update({ where: KEY, data: { expenses: [...sheet.expenses, { description: "Water", price: 10, pax: 4, paidBy: "guide", paidBySource: "operator" }] } });
+  const gp = await browser.newPage();
+  gp.on("pageerror", (e) => errors.push(`guide: ${e}`));
+  await gp.setViewport({ width: 390, height: 900 });
+  await gp.setCookie(await sessionCookie("g981@example.test"));
+  await gp.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
+  await gp.waitForSelector(".guide-sum", { timeout: 20000 });
+  const listed = await gp.$$eval(".guide-sum .gs-exp li", (xs) => xs.map((x) => x.innerText.replace(/\s+/g, " ")));
+  const reportRows = await gp.$$eval(".guide-sum table input:not([type=number])", (xs) => xs.map((x) => x.value));
+  const gsum = await gp.$eval(".guide-sum", (x) => x.innerText);
+  check("guide: the expense list has no review reward, and its total is the tour expenses only (฿40)",
+    listed.length === 2 && /Water/.test(listed[0]) && !listed.some((l) => /review/i.test(l)) && /Total expenses ฿40\.00/.test(listed[1]), JSON.stringify(listed));
+  check("guide: the review reward is its own payout line, in full", /Review reward · no tax[\s\S]*฿200\.00/.test(gsum), (gsum.match(/Review[^\n]*\n?[^\n]*/i) ?? [""])[0]);
+  check("guide: the expense report form is not seeded with the review reward", reportRows.length > 0 && !reportRows.some((v) => /review|รีวิว/i.test(v)), JSON.stringify(reportRows));
+  if (SHOTS) await gp.screenshot({ path: join(SHOTS, "jobsheet-review-guide.png"), fullPage: true });
+  await gp.close();
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("run", false, String(e?.stack ?? e).slice(0, 600));

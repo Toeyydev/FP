@@ -59,6 +59,13 @@ describe("submitGuideExpenses", () => {
     expect(data).not.toHaveProperty("expenses");
   });
 
+  it("never stores a review reward in the guide's report — it is the operator's to record", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
+    await report({ expenses: [{ description: "Water", price: 10, pax: 4, paidBy: "guide" }, { description: "Review reward", price: 50, pax: 2 }] });
+    const { data } = prismaMock.jobSheet.update.mock.calls[0][0];
+    expect(data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Water"]);
+  });
+
   it("fills actual pax on the sheet from the no-shows already recorded", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({
       id: "js_1", tourId: "T-001",
@@ -207,7 +214,7 @@ describe("Paid By on a report the guide files after the tour", () => {
       ["Wat Pho", "advance", "category-default"],              // a ticket → bought with a company advance
       ["Grand Palace", undefined, undefined],                  // ฿0 → nothing to decide
       ["Ferry (Inc. Guide)", "company", "operator"],           // the operator already said
-      ["Review reward", undefined, undefined],                 // earned, not spent
+      // "Review reward" is dropped: earned, not spent — the operator records it, not the report
     ]);
     expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 0, "category-default": 2, unconfirmed: 0, "rate-default": 0 } });
   });
