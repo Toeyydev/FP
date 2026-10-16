@@ -751,48 +751,42 @@ export default function AppClient({
   }
 
   // The 7:30 AM answer — the imminent tour, front and centre.
+  // Home, top: who and when — one line (guide home, owner 2026-10-16 "simpler").
   function guideHero(): ReactNode {
     const now = new Date(Date.now() + 7 * 3600 * 1000);
     const hr = now.getUTCHours();
     const greet = hr < 12 ? t("greetMorning") : hr < 18 ? t("greetAfternoon") : t("greetEvening");
     const first = (displayName || "").trim().split(" ")[0] || displayName;
-    const todayStr = now.toISOString().slice(0, 10);
-    const todayCount = schedule.filter((s) => s.date === todayStr).length;
-    const dateLabel = now.toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "long", day: "numeric", month: "long" });
+    const dateLabel = now.toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "short", day: "numeric", month: "short" });
     return (
-      <section className="guide-hero">
+      <section className="guide-hero gh-slim">
         <h2>{greet}{first ? `, ${first}` : ""}</h2>
-        <div className="gh-date">{dateLabel}</div>
-        <div className="gh-status">
-          {todayCount > 0
-            ? <><b>{todayCount}</b> <span>{t("heroToursToday")}</span></>
-            : <span>{t("heroNoTours")}</span>}
-        </div>
-        {expensesDue.length > 0 && (
-          <div style={{ marginTop: 12, background: "#fff8c4", border: "1px solid #ecd9bf", borderRadius: 10, padding: "10px 12px", textAlign: "left" }}>
-            <div style={{ fontWeight: 800, fontSize: 13.5, color: "#7a5b12" }}>
-              {expensesDue.length === 1 ? t("expDueOne") : t("expDueMany").replace("{n}", String(expensesDue.length))}
-            </div>
-            <div style={{ fontSize: 11.5, color: "#7a5b12", opacity: 0.85, margin: "2px 0 8px" }}>{t("expDueHint")}</div>
-            <div style={{ display: "grid", gap: 6 }}>
-              {expensesDue.slice(0, 4).map((e) => (
-                <a key={`${e.date}|${e.slotIdx}`} href={e.href}
-                   style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#fff", border: "1px solid #f0e6cf", borderRadius: 8, padding: "8px 10px", textDecoration: "none", color: "var(--ink)" }}>
-                  <span style={{ minWidth: 0 }}>
-                    <b style={{ fontSize: 13 }}>{e.tour}</b>
-                    <span style={{ display: "block", fontSize: 11.5, color: "var(--ink-soft)" }}>
-                      {new Date(`${e.date}T00:00:00`).toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "short", day: "numeric", month: "short" })}{e.time ? ` \u00b7 ${e.time}` : ""}
-                    </span>
-                  </span>
-                  <span style={{ fontWeight: 800, color: "var(--primary)", whiteSpace: "nowrap", fontSize: 12.5 }}>{t("expDueAction")} ›</span>
-                </a>
-              ))}
-              {expensesDue.length > 4 && (
-                <span style={{ fontSize: 11.5, color: "#7a5b12" }}>{t("expDueMore").replace("{n}", String(expensesDue.length - 4))}</span>
-              )}
-            </div>
-          </div>
-        )}
+        {/* The server and the browser format a short date slightly differently ("Fri 16 Oct" /
+            "Fri, 16 Oct"); the browser's wins without a hydration error. */}
+        <span className="gh-date" suppressHydrationWarning>{dateLabel}</span>
+      </section>
+    );
+  }
+
+  // Home: everything the guide still has to do, one line each — expenses to report, the
+  // phone set-up, LINE and their details. Done items disappear; nothing to do, no card.
+  function guideTodo(): ReactNode {
+    const fmtD = (x: string) => new Date(`${x}T00:00:00`).toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { weekday: "short", day: "numeric", month: "short" });
+    const rows: ReactNode[] = [];
+    for (const e of expensesDue.slice(0, 4)) rows.push(
+      <a key={`e${e.date}|${e.slotIdx}`} className="todo-row js-todo-expenses" href={e.href}><span className="todo-dot bad" /><span className="todo-txt">{t("todoExpenses")} · {fmtD(e.date)}<small>{e.tour}</small></span><span className="todo-go">{t("expDueAction")} ›</span></a>);
+    if (expensesDue.length > 4) rows.push(<div key="emore" className="todo-more">{t("expDueMore").replace("{n}", String(expensesDue.length - 4))}</div>);
+    if (!profileGate.complete) rows.push(
+      <a key="profile" className="todo-row js-todo-profile" href="/profile" title={profileGate.missing.join(", ")}><span className="todo-dot warn" /><span className="todo-txt">{t("todoProfile")}{profileGate.missing.length ? ` · ${t("todoMissing").replace("{n}", String(profileGate.missing.length))}` : ""}</span><span className="todo-go">{t("todoOpen")} ›</span></a>);
+    if (!alertsOn) rows.push(
+      <button key="alerts" type="button" className="todo-row js-todo-alerts" onClick={enableAlerts}><span className="todo-dot warn" /><span className="todo-txt">{t("alertsTitle")}</span><span className="todo-go">{t("alertsEnable")} ›</span></button>);
+    if (profileGate.lineLoginEnabled && profileGate.lineLinked === false) rows.push(
+      <a key="line" className="todo-row js-todo-line" href="/api/line/login/start"><span className="todo-dot warn" /><span className="todo-txt">{t("lineCardTitle")}</span><span className="todo-go">{t("todoLine")} ›</span></a>);
+    if (!rows.length) return null;
+    return (
+      <section className="todo-card" aria-label={t("todoTitle")}>
+        <div className="todo-head">{t("todoTitle")} · {rows.filter((r) => (r as { key?: string }).key !== "emore").length}</div>
+        {rows}
       </section>
     );
   }
@@ -823,35 +817,25 @@ export default function AppClient({
     );
   }
 
+  // My tours: one line each — date, time, tour, guests, where it stands; tap opens the job
+  // sheet (map, calendar and the next-step button live there and on the Next card).
   function guideSchedule(): ReactNode {
-    const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+    const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric" });
     return (
       <>
-        <div className="panel-head"><h2>{t("myTours")}</h2><span className="hint">{t("scheduleHint")}</span></div>
-        <div style={{ padding: 14 }}>
-          {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => {
-            const next = CHECK_NEXT[s.checkinState ?? "none"];
-            return (
-            <div key={i} className="sched-card" style={{ cursor: "default" }}>
-              <div className="sched-when"><b>{fmt(s.date)}</b><span>{s.time}</span></div>
-              <div className="sched-mid">
-                <b>{s.tourName}</b>
-                <div className="sched-sub">{s.pax != null ? `👥 ${s.pax} pax` : ""}{s.note ? ` · 📝 ${s.note}` : ""}</div>
-                {s.meetingPoint && <div className="sched-meet">📍 {s.meetingPoint} <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.meetingPoint)}`} target="_blank" rel="noreferrer">{t("openMap")}</a></div>}
-                <div className="sched-meet"><a href={gcalUrl({ title: `Folkpaths — ${s.tourName}`, date: s.date, slotIdx: s.slotIdx, durationMin: s.durationMin, location: s.meetingPoint ?? undefined, details: `${s.pax != null ? `${s.pax} pax · ` : ""}Folkpaths tour` })} target="_blank" rel="noreferrer">{t("addToCalendar")}</a></div>
-                {s.checkinState && <div className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : s.checkinState === "END" ? `✓ ${t("checkedOut")}` : `✓ ${t("tourDone")}`}</div>}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                {showAction(s, next) && next && <button className="btn sm primary" onClick={() => next.type === "COMPLETE" ? openReport(s) : doCheckin(s, next.type)}>{next.label}</button>}
-                {next && next.type === "ARRIVE" && !checkInOpen(s.date, s.time) && <span style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>{t("checkInOpens")} {s.time}</span>}
-                <div style={{ display: "flex", gap: 6 }}>
-                  <a className="btn sm" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>📄</a>
-                  {!s.checkinState && <button className="btn sm danger" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>}
-                </div>
-              </div>
+        <div className="panel-head"><h2>{t("myTours")}</h2></div>
+        <div className="sched-list">
+          {schedule.length === 0 ? <div className="op-empty">{t("noUpcoming")}</div> : schedule.map((s, i) => (
+            <div key={i} className="sched-row">
+              <a className="sched-link" href={`/job-sheet?guideId=${guideId}&date=${s.date}&slotIdx=${s.slotIdx}`}>
+                <span className="sched-when"><b>{fmt(s.date)}</b><span>{s.time}</span></span>
+                <span className="sched-mid"><b>{s.tourName}</b><small>{s.pax != null ? `${s.pax} ${t("guests")}` : ""}{s.note ? ` · ${s.note}` : ""}</small></span>
+                {s.checkinState && <span className="sched-state">{s.checkinState === "ARRIVE" ? `✓ ${t("checkedIn")}` : s.checkinState === "START" ? `● ${t("inProgress")}` : s.checkinState === "END" ? `✓ ${t("checkedOut")}` : `✓ ${t("tourDone")}`}</span>}
+                <span className="sched-go" aria-hidden="true">›</span>
+              </a>
+              {!s.checkinState && <button className="sched-cancel" onClick={() => cancelTour(s)}>{t("cancelTour")}</button>}
             </div>
-            );
-          })}
+          ))}
         </div>
       </>
     );
@@ -1316,7 +1300,7 @@ export default function AppClient({
 
   return (
     <div className="wrap">
-      <header className="app">
+      <header className={role === "guide" ? "app app-guide" : "app"}>
         <div className="brand"><div className="kicker">{t("kicker")}</div><h1>{t("appTitle")}</h1></div>
         <div className="spacer" />
         <div className="live"><span className="dot" /><span>{changed ? `${t("updated")} ${clock}` : `${t("live")} · ${clock}`}</span></div>
@@ -1364,8 +1348,8 @@ export default function AppClient({
       {role === "guide" && view === "schedule" && guideHero()}
 
       {/* Active-tour reminder: appears the moment a guide checks in / starts, and
-          stays until they mark the tour done. */}
-      {role === "guide" && (() => {
+          stays until they mark the tour done. On Home the Next card already says so. */}
+      {role === "guide" && view !== "schedule" && (() => {
         const active = schedule.find((s) => s.checkinState === "ARRIVE" || s.checkinState === "START" || s.checkinState === "END");
         if (!active) return null;
         return (
@@ -1382,7 +1366,7 @@ export default function AppClient({
 
       {role === "guide" && <GuideWelcome />}
 
-      {!alertsOn && role === "guide" && (
+      {!alertsOn && role === "guide" && view !== "schedule" && (
         <section className="setup-card">
           <div className="setup-head"><b>{t("setupTitle")}</b><span>{t("setupSub")}</span></div>
           <ol className="setup-steps">
@@ -1406,7 +1390,7 @@ export default function AppClient({
           looking for, so most never found it: five of the seven guides who owed
           expense reports had no LINE at all. Signed in already, so no code and no
           token — the route links LINE to this session (api/line/login/start). */}
-      {role === "guide" && profileGate.lineLoginEnabled && profileGate.lineLinked === false && (
+      {role === "guide" && view !== "schedule" && profileGate.lineLoginEnabled && profileGate.lineLinked === false && (
         <section className="setup-card">
           <div className="setup-head"><b>{t("lineCardTitle")}</b><span>{t("lineCardBody")}</span></div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "4px 2px 2px" }}>
@@ -1421,7 +1405,7 @@ export default function AppClient({
           isn't installed yet. Self-hides on desktop / in-app browsers / standalone. */}
       {alertsOn && !installed && <InstallPrompt />}
 
-      {role === "guide" && !profileGate.complete && (
+      {role === "guide" && view !== "schedule" && !profileGate.complete && (
         <section className="profile-gate">
           <div>
             <b>📝 {t("completeProfileTitle")}</b>
@@ -1456,6 +1440,7 @@ export default function AppClient({
       )}
 
       {role === "guide" && view === "schedule" && nextTourHero()}
+      {role === "guide" && view === "schedule" && guideTodo()}
       {role === "guide" && view === "schedule" && (payDue.pending > 0 || payDue.approved > 0) && (
         <a className="needsyou" href="/pay">
           <span><b>฿{(payDue.pending + payDue.approved).toLocaleString()}</b> {t("paymentDue")}</span>
@@ -1469,7 +1454,7 @@ export default function AppClient({
           : (view === "day" ? opDay() : view === "month" ? opMonth() : opYear())}
       </section>
 
-      <div className="footnote">{t("footnote1")}<br />{t("footnote2")}</div>
+      {!(role === "guide" && view === "schedule") && <div className="footnote">{t("footnote1")}<br />{t("footnote2")}</div>}
 
       {modal && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setModal(null); }}>
