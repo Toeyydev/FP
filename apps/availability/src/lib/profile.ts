@@ -26,9 +26,14 @@ export const PROFILE_STATUS_SELECT = Object.fromEntries(REQUIRED_PROFILE_FIELDS.
 
 type ProfileFields = Record<string, unknown>;
 
-export function guideProfileStatus(u: ProfileFields): { complete: boolean; missing: string[] } {
-  const missing = REQUIRED_PROFILE_FIELDS
-    .filter((k) => { const v = u[k]; return v == null || !String(v).trim(); })
-    .map((k) => FIELD_LABELS[k] ?? k);
-  return { complete: missing.length === 0, missing };
+// The FIELD KEYS still to be filled in. The English labels above are for this
+// app's own screens; a client that speaks another language (the guide app is
+// Thai first) needs the keys so it can name the fields in its own words.
+export function missingProfileFields(u: ProfileFields): string[] {
+  return REQUIRED_PROFILE_FIELDS.filter((k) => { const v = u[k]; return v == null || !String(v).trim(); });
+}
+
+export function guideProfileStatus(u: ProfileFields): { complete: boolean; missing: string[]; fields: string[] } {
+  const fields = missingProfileFields(u);
+  return { complete: fields.length === 0, missing: fields.map((k) => FIELD_LABELS[k] ?? k), fields };
 }

@@ -63,6 +63,10 @@ export type GuideAdvanceSummary = {
   /** ledgerOutstanding less pendingReturns, never below 0. */
   stillToReturn: number;
   status: AdvanceStatus;
+  /** The expense categories the company's advances on this job may pay for (each
+   *  advance's allowedCategories, together). The app marks those lines as paid from
+   *  the advance to begin with; the guide can still change them. */
+  categories: string[];
   advances: AdvanceMovement[];
   returns: AdvanceMovement[];
 };
@@ -82,7 +86,7 @@ export async function guideAdvanceSummary(
   const [advances, checkins] = await Promise.all([
     prisma.guideAdvance.findMany({
       where, orderBy: { advanceDate: "asc" },
-      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, amountSatang: true, settledSatang: true, advanceDate: true, paidAt: true, method: true, txRef: true, note: true, slipUrl: true, reversedAt: true },
+      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, amountSatang: true, settledSatang: true, advanceDate: true, paidAt: true, method: true, txRef: true, note: true, slipUrl: true, reversedAt: true, allowedCategories: true },
     }),
     prisma.checkin.count({ where }),
   ]);
@@ -127,6 +131,7 @@ export async function guideAdvanceSummary(
     // The status follows the LEDGER: a balance covered only by money still being checked is
     // not settled yet.
     status: guideStatus(summaries, tourCompleted, live.length > 0),
+    categories: [...new Set(live.flatMap((a) => a.allowedCategories ?? []))],
     advances: live.map((a) => ({ id: a.id, amount: a.amountSatang / 100, at: a.paidAt, method: a.method, txRef: a.txRef, note: [a.advanceNo, a.note].filter(Boolean).join(" · ") || null, slip: a.slipUrl })),
     // Money the guide has sent back, whatever it has been put against yet. A CLAIMED one
     // is shown as waiting on purpose: it is a claim until someone checks the bank.
