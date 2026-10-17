@@ -92,12 +92,27 @@ export function guideShare<T extends { assignedGuideId: string | null }>(booking
   return bookings.some((b) => b.assignedGuideId) ? bookings.filter((b) => b.assignedGuideId === guideId) : bookings;
 }
 
+// How long a guide keeps a guest's phone number: until 24 hours after the tour ends
+// (owner, 2026-10-17). Enough to return lost property or settle a question the next
+// day; after that the number is not the guide's to keep. The tour's end is its
+// departure plus the tour's own length, or a full day out when that is not set.
+export const GUEST_PHONE_AFTER_TOUR_MS = 24 * 3600_000;
+export const DEFAULT_TOUR_MINUTES = 8 * 60;
+
+/** When a guide stops being sent a guest's phone for this departure, in epoch ms. */
+export function guestPhoneVisibleUntilMs(date: string, slotIdx: number, durationMin: number | null | undefined): number {
+  const [sh, sm] = (SLOT_TIMES[slotIdx] ?? "00:00").split(":").map(Number);
+  const [yy, mm, dd] = date.split("-").map(Number);
+  const startMs = Date.UTC(yy, mm - 1, dd, sh, sm) - 7 * 3600_000; // Bangkok is UTC+7
+  return startMs + (durationMin && durationMin > 0 ? durationMin : DEFAULT_TOUR_MINUTES) * 60_000 + GUEST_PHONE_AFTER_TOUR_MS;
+}
+
 // The full details for one assigned job: the assignment + operator tour info +
 // the booking customers with the no-shows recorded against each, and how far the
 // guide has got (latest check-in). Null when the guide is not assigned to that
 // departure. `ownShareOnly` (FolkOPS Mobile) lists only the guide's share of a
 // split departure; the web My Tours still lists the whole departure.
-export async function guideTourDetails(guideId: string, date: string, slotIdx: number, opts: { ownShareOnly?: boolean; everyPhone?: boolean } = {}) {
+export async function guideTourDetails(guideId: string, date: string, slotIdx: number, opts: { ownShareOnly?: boolean; everyPhone?: boolean; nowMs?: number } = {}) {
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return null;
 
@@ -142,7 +157,11 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
   // A split departure lists every guest on the web view, but a guest's phone goes only to
   // the guide they are assigned to. The other guide sees the name, never the number. An
   // operator (everyPhone) keeps seeing every number, as they always have.
-  const mine = new Set((opts.everyPhone ? bookings : own).map((b) => b.id));
+  // A guide's numbers also lapse 24 hours after the tour ends (guestPhoneVisibleUntilMs).
+  // The operator's view keeps them: the company still holds the booking.
+  const phoneVisibleUntil = guestPhoneVisibleUntilMs(date, slotIdx, tour?.durationMin);
+  const phonesLapsed = !opts.everyPhone && (opts.nowMs ?? Date.now()) > phoneVisibleUntil;
+  const mine = new Set(phonesLapsed ? [] : (opts.everyPhone ? bookings : own).map((b) => b.id));
   return {
     date, slotIdx, time: SLOT_TIMES[slotIdx] ?? "",
     pax: assignment.pax, note: assignment.note, checkinState: lastCheckin?.type ?? null,
@@ -151,6 +170,8 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
     expenses,
+    // When the guide stops being sent the guests' numbers, so the app can say so.
+    phoneVisibleUntil: opts.everyPhone ? null : new Date(phoneVisibleUntil).toISOString(),
     bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
   };
 }
