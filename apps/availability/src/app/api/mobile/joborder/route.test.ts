@@ -46,7 +46,10 @@ describe("GET /api/mobile/joborder", () => {
       tour: { name: "Wat Pho & Wat Arun" }, rate: 1200, pax: 2,
     });
     expect(body.operator.license).toBeTruthy();
-    expect(body.bookings).toHaveLength(1);
+    // Head count only: the guests behind it are not repeated on the phone's order.
+    expect(body.bookings).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("A Guest");
+    expect(JSON.stringify(body)).not.toContain("GYG-1");
   });
 
   it("takes the guide from the token, never from the query", async () => {

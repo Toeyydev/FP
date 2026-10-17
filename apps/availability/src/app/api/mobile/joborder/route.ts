@@ -28,5 +28,10 @@ export async function GET(req: Request) {
   // order — but a guide asking for their own does.
   if (!order.assigned) return NextResponse.json({ error: "not-assigned" }, { status: 404 });
 
-  return NextResponse.json(order);
+  // Head count only, as the company's paper order carries it (owner, 2026-10-17).
+  // The order is shown to whoever stops the guide, and the guests' names and
+  // booking numbers are already on the guide's tour details; this answer does not
+  // repeat them. The printed form keeps its own list.
+  const { bookings: _bookings, ...shown } = order;
+  return NextResponse.json({ ...shown, bookings: [] });
 }
