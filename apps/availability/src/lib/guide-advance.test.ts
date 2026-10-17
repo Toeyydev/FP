@@ -44,7 +44,18 @@ beforeEach(() => {
 describe("guideAdvanceSummary — read from the ledger", () => {
   it("says nothing is owed when no advance was ever paid", async () => {
     const s = await guideAdvanceSummary("G-TEST", "2030-09-12", 0, NOW);
-    expect(s).toMatchObject({ totalAdvancePaid: 0, usedFromAdvance: 0, totalReturned: 0, outstanding: 0, status: "NOT_REQUIRED" });
+    expect(s).toMatchObject({ totalAdvancePaid: 0, usedFromAdvance: 0, totalReturned: 0, outstanding: 0, status: "NOT_REQUIRED", categories: [] });
+  });
+
+  it("says which kinds of expense the company's advances may pay for", async () => {
+    prismaMock.guideAdvance.findMany.mockResolvedValue([
+      advance({ allowedCategories: ["entrance"] }),
+      advance({ id: "a2", allowedCategories: ["entrance", "meal"] }),
+      // A reversed advance pays for nothing.
+      advance({ id: "a3", allowedCategories: ["transport"], reversedAt: new Date() }),
+    ]);
+    const s = await guideAdvanceSummary("G-TEST", "2030-09-12", 0, NOW);
+    expect(s.categories).toEqual(["entrance", "meal"]);
   });
 
   it("counts only what the ledger has settled — a tag on the sheet is not a settlement", async () => {
