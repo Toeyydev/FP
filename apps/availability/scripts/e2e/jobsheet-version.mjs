@@ -116,8 +116,8 @@ const thisJobLine = async (page) => (await payTogether(page)).split("\n").find((
 const statusMsg = (page) => page.evaluate(() => [...document.querySelectorAll(".js-bar span")].map((s) => s.textContent).join(" | "));
 async function clickButton(page, label) {
   const ok = await page.evaluate((label) => {
-    // Save is on the bar; Approve / Unapprove on "Check this job".
-    const b = [...document.querySelectorAll(".js-bar button, .js-check button")].find((x) => x.textContent.trim() === label);
+    // Save and Approve are on the bar; Unapprove is in its More menu (clicked in place).
+    const b = [...document.querySelectorAll(".js-bar button")].find((x) => x.textContent.trim() === label);
     if (!b || b.disabled) return false;
     b.click(); return true;
   }, label);

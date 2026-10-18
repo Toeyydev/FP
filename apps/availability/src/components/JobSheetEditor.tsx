@@ -905,7 +905,7 @@ export default function JobSheetEditor() {
   return (
     <div className="wrap jobsheet">
       {/* Top bar. The operator's is Back · title · More ▾ · Save (owner/teacher 2026-10-16:
-          the page was cluttered — 11 buttons). Approve lives on "Check this job". The menu's
+          the page was cluttered — 11 buttons). Approve sits beside Save (Unapprove in More). The menu's
           buttons stay in the page while it is closed, so every action is still one click
           away from the keyboard and from tests. The guide's bar is unchanged. */}
       {canEdit ? (
@@ -929,6 +929,7 @@ export default function JobSheetEditor() {
               <a className="btn" target="_blank" rel="noopener noreferrer"
                 href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>Add to Google Calendar</a>
               <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>
+              {isApproved(sheet.approvalStatus) && <button className="btn js-unapprove" disabled={busy} onClick={toggleApprove}>Unapprove</button>}
               {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
               <hr />
               {!handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
@@ -936,6 +937,9 @@ export default function JobSheetEditor() {
               <button className="btn danger" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — delete it from Payments / Tour Log instead" : "Delete this job sheet and its tour records"} onClick={deleteJobSheet}>Delete job sheet</button>
             </div>
           </div>
+          {isApproved(sheet.approvalStatus)
+            ? <span className="js-approved-chip" title={sheet.approvedAt ? `Approved ${new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} — Unapprove is in More` : "Approved — Unapprove is in More"}>✓ Approved</span>
+            : <button className="btn js-approve" disabled={busy} onClick={toggleApprove} title="Operator sign-off on the actual expenses before payout / PEAK sync">Approve</button>}
           <button className="btn primary" disabled={busy || !!saveProblem?.stale} onClick={() => save()}>{busy ? "…" : "Save"}</button>
         </div>
       </div>
@@ -1226,58 +1230,9 @@ export default function JobSheetEditor() {
            <button key={k} type="button" className={`subtab${secTab === k ? " active" : ""}`} onClick={() => setSecTab(k)}>{l}</button>
          ))}
        </div>
-       {/* Tour day (check-in → report) beside "Check this job" — the two things an operator
-           reads first. The process strip moved under History & files. */}
-       {canEdit && (<div className="js-top">
-       {tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
-       {/* Check this job — Idea B (owner, 2026-10-16): the operator's four questions, in order.
-           Each card says where it stands from the sheet's own data, the next one open is
-           highlighted, and its button goes to the part of the sheet that answers it. The
-           figures are the same jobSheetTotals the Summary and the transfer use. */}
-       {canEdit && (() => {
-         const goTo = (tab: "details" | "expenses", id: string) => { setSecTab(tab); setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); };
-         const bookedPax = sheet.bookings.reduce((a, b) => a + (b.bookedPax ?? 0), 0);
-         const allCounted = sheet.bookings.length > 0 && sheet.bookings.every((b) => b.actualPax != null);
-         const came = sheet.bookings.reduce((a, b) => a + (b.actualPax ?? 0), 0);
-         const tourRows = sheet.expenses.filter((e) => !isReviewExpense(e) && expenseAmount(e) > 0);
-         // What still needs the operator: the same rechecks the Summary marks (lib/peak-sync).
-         const lookList = [...(uncategorisedExpenseRows(sheet.expenses).length ? [`${uncategorisedExpenseRows(sheet.expenses).length} row(s) with no category`] : []), ...recheck.map((r) => r.short)];
-         const toLook = lookList.length;
-         const approvedNow = isApproved(sheet.approvalStatus);
-         const inPeak = peakStatus?.state !== "NOT_IN_PEAK";
-         const cards: { key: string; title: string; th: string; summary: string; done: boolean; warn?: boolean; tip?: string; action: React.ReactNode }[] = [
-           { key: "guests", title: "Who came", th: "ลูกค้ามากี่คน", done: allCounted,
-             summary: sheet.bookings.length === 0 ? "No bookings on this sheet" : allCounted ? `${came} of ${bookedPax} came${bookedPax - came > 0 ? ` · ${bookedPax - came} no-show` : ""}` : `${sheet.bookings.length} booking${sheet.bookings.length === 1 ? "" : "s"} · ${bookedPax} booked · not counted yet`,
-             action: <button type="button" className="btn sm" onClick={() => goTo("details", "js-guests")}>Guests</button> },
-           { key: "expenses", title: "What the guide spent", th: "ค่าใช้จ่าย", done: toLook === 0 && (!!sheet.guideExpensesAt || approvedNow), warn: toLook > 0, tip: lookList.join("\n"),
-             summary: `${tourRows.length} row${tourRows.length === 1 ? "" : "s"} · ${thb(money.totalTourExpenses)}${toLook > 0 ? ` · ${toLook} need${toLook === 1 ? "s" : ""} a look` : sheet.guideExpensesAt ? " · guide reported" : " · guide has not reported"}`,
-             action: <button type="button" className="btn sm" onClick={() => goTo("expenses", "js-expenses")}>Expenses</button> },
-           { key: "approve", title: "Approve", th: "อนุมัติ", done: approvedNow,
-             summary: `Pay the guide ${thb(money.netPayToGuide)} · fee ${thb(payer.feeNet)} + reimbursement ${thb(money.reimbursementDue)}${payer.reviewReward > 0 ? ` + review ${thb(payer.reviewNet)}${payer.whtOnReview > 0 ? " (net of WHT)" : " (no tax)"}` : ""}`,
-             action: approvedNow
-               ? <button type="button" className="btn sm ghost" disabled={busy} onClick={toggleApprove}>Unapprove</button>
-               : <button type="button" className="btn sm primary js-check-approve" disabled={busy} onClick={toggleApprove}>Approve</button> },
-           { key: "pay", title: "Pay & PEAK", th: "โอนเงินและลง PEAK", done: !!payment?.paid && inPeak,
-             summary: payment?.paid ? `Paid${payment.paidAt ? ` ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""} · ${peakStatus?.documentNo ?? payment.peakRef ?? (inPeak ? "in PEAK" : "not in PEAK yet")}` : approvedNow ? "Approved — transfer on Payments" : "After approval",
-             action: <a className="btn sm" href="/payments">Payments →</a> },
-         ];
-         const current = cards.findIndex((c) => !c.done);
-         return (
-           <section className="js-check no-print" aria-label="Check this job">
-             <div className="js-check-head"><b>Check this job</b><span>{cards.filter((c) => c.done).length} of {cards.length} done</span></div>
-             <ol>
-               {cards.map((c, i) => (
-                 <li key={c.key} className={`js-check-card${c.done ? " done" : ""}${i === current ? " now" : ""}${c.warn && !c.done ? " warn" : ""}`} data-step={c.key} title={c.tip || undefined}>
-                   <span className="js-check-n" aria-hidden="true">{c.done ? "✓" : i + 1}</span>
-                   <span className="js-check-body"><b>{c.title}</b><small>{c.summary}</small></span>
-                   {c.action}
-                 </li>
-               ))}
-             </ol>
-           </section>
-         );
-       })()}
-       </div>)}
+       {/* Tour day (check-in → report) — the first thing an operator reads. The process strip
+           is under History & files. */}
+       {canEdit && tourDay && <TourDayTimeline steps={tourDay.steps} scheduled={tourDay.scheduled} date={sheet.date} />}
        <fieldset disabled={ro} style={{ border: 0, margin: 0, padding: 0, minInlineSize: "auto" }}>
         {/* Letterhead, Job No. table and the guide's details: the operator's screen shows
             them on demand (the title bar already says tour, date, guide, job no. and status);
@@ -2341,7 +2296,7 @@ export default function JobSheetEditor() {
               {isApproved(sheet.approvalStatus)
                 ? <span className="badge active">✓ Approved</span>
                 : <span className="badge muted">Not approved</span>}
-              {/* Approve / Unapprove is on "Check this job" — one place for it. */}
+              {/* Approve / Unapprove is in the top bar — one place for it. */}
             </div>
             {sheet.approvedAt && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 3 }}>{new Date(sheet.approvedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
           </div>

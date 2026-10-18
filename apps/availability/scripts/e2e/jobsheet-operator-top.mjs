@@ -1,12 +1,12 @@
-// "Check this job" on the operator's job sheet — the four questions, in order: who came,
-// what the guide spent, approve, pay & PEAK. In a real browser against a real server and
-// database.
+// The top of the operator's job sheet: Back · title · More ▾ · Approve · Save, then Tour day —
+// no "Check this job" cards (owner 2026-10-18: not needed, it repeated the sheet). In a real
+// browser against a real server and database.
 //
-// Proves: each card reads its state from the sheet; the first one not done is highlighted;
-// Guests and Expenses open the part of the sheet that answers them; Approve on the card
-// approves the sheet; the cards fit a phone without sideways scrolling.
+// Proves: the cards are gone; Approve sits beside Save and approves the sheet; once approved
+// the bar says so and Unapprove is in More; the guide-fee table is on screen with WHT and the
+// fee after WHT; the bar fits a phone; the guide sees neither Approve nor the operator bar.
 //
-// Run after `next build`:  node scripts/e2e/jobsheet-checklist.mjs
+// Run after `next build`:  node scripts/e2e/jobsheet-operator-top.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and AUTH_SECRET.
 //
 // All data invented — this repo is public.
@@ -106,7 +106,6 @@ await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const errors = [];
-const cards = (page) => page.$$eval(".js-check .js-check-card", (xs) => xs.map((x) => ({ step: x.dataset.step, done: x.classList.contains("done"), now: x.classList.contains("now"), text: x.innerText.replace(/\s+/g, " "), tip: x.title })));
 const URL_ = `${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`;
 try {
   const page = await browser.newPage();
@@ -115,11 +114,10 @@ try {
   await page.setViewport({ width: 1280, height: 1000 });
   await page.setCookie(await sessionCookie("op-ck@example.test"));
   await page.goto(URL_, { waitUntil: "networkidle0" });
-  await page.waitForSelector(".js-check", { timeout: 20000 });
-  let c = await cards(page);
-  check("four cards in order: who came, what the guide spent, approve, pay & PEAK", JSON.stringify(c.map((x) => x.step)) === JSON.stringify(["guests", "expenses", "approve", "pay"]), JSON.stringify(c.map((x) => x.step)));
-  check("guests not counted yet → Who came is the one highlighted", !c[0].done && c[0].now && /2 bookings · 3 booked · not counted yet/.test(c[0].text), c[0].text);
-  check("What the guide spent says the guide has not reported", /1 row · ฿40\.00 · guide has not reported/.test(c[1].text), `${c[1].text} || ${c[1].tip}`);
+  await page.waitForSelector(".js-bar-op", { timeout: 20000 });
+  check("no Check this job cards", (await page.$(".js-check, .js-check-card")) === null);
+  const bar = await page.$$eval(".js-bar-op > button, .js-bar-actions > button, .js-bar-actions > span.js-approved-chip, .js-more-btn", (xs) => xs.map((x) => x.innerText.trim()));
+  check("the bar: Back · More ▾ · Approve · Save", bar.includes("← Back") && bar.includes("More ▾") && bar.includes("Approve") && bar.includes("Save"), JSON.stringify(bar));
   // The guide fee is on screen — rate, WHT and the fee after WHT (owner 2026-10-18).
   const fee = await page.evaluate(() => {
     const vis = (el) => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
@@ -127,50 +125,35 @@ try {
     return { input: vis(document.querySelector('input[title="Agreed rate"]')), table: vis(table), text: table ? table.innerText.replace(/\s+/g, " ") : "" };
   });
   check("the guide fee table is on screen: rate, WHT and Guide fee, net ฿970", fee.input && fee.table && /WHT on fee −฿30\.00/.test(fee.text) && /Guide fee, net ฿970\.00/.test(fee.text), fee.text.slice(0, 160));
-  check("Approve names what the guide will be paid", /Pay the guide ฿1,010\.00 · fee ฿970\.00 \+ reimbursement ฿40\.00/.test(c[2].text), c[2].text);
 
-  // Guests opens the guests part of the sheet; Expenses the expenses part.
-  await page.evaluate(() => [...document.querySelectorAll('.js-check-card[data-step="expenses"] button')][0].click());
-  await pause(400);
-  const tabs = await page.evaluate(() => ({ guests: getComputedStyle(document.getElementById("js-guests")).display, exp: getComputedStyle(document.getElementById("js-expenses")).display }));
-  check("Expenses opens the expenses part of the sheet", tabs.exp !== "none" && tabs.guests === "none", JSON.stringify(tabs));
-  await page.evaluate(() => [...document.querySelectorAll('.js-check-card[data-step="guests"] button')][0].click());
-  await pause(400);
-  const tabs2 = await page.evaluate(() => ({ guests: getComputedStyle(document.getElementById("js-guests")).display, exp: getComputedStyle(document.getElementById("js-expenses")).display }));
-  check("Guests opens the guests part of the sheet", tabs2.guests !== "none" && tabs2.exp === "none", JSON.stringify(tabs2));
-
-  // Counted and reported: the highlight moves on to Approve.
-  const sheet = await prisma.jobSheet.findUniqueOrThrow({ where: KEY });
-  await prisma.jobSheet.update({ where: KEY, data: { bookings: sheet.bookings.map((b, i) => ({ ...b, actualPax: i === 0 ? 2 : 0, noShowPax: i === 0 ? 0 : 1 })), guideExpensesAt: new Date(), guideExpenses: sheet.expenses } });
-  await page.goto(URL_, { waitUntil: "networkidle0" });
-  await page.waitForSelector(".js-check");
-  c = await cards(page);
-  check("counted and reported → Who came and What the guide spent done, Approve highlighted", c[0].done && /2 of 3 came · 1 no-show/.test(c[0].text) && c[1].done && /guide reported/.test(c[1].text) && c[2].now && !c[2].done, JSON.stringify(c.map((x) => [x.step, x.done, x.now])));
-
-  // Approve on the card approves the sheet.
-  await page.click(".js-check-approve");
-  await page.waitForFunction(() => document.querySelector('.js-check-card[data-step="approve"]')?.classList.contains("done"), { timeout: 15000 }).catch(() => {});
+  // Approve beside Save approves the sheet; then the bar says Approved and Unapprove is in More.
+  await page.click(".js-approve");
+  await page.waitForSelector(".js-approved-chip", { timeout: 15000 }).catch(() => {});
   const after = await prisma.jobSheet.findUniqueOrThrow({ where: KEY, select: { approvalStatus: true } });
-  c = await cards(page);
-  check("Approve on the card approves the sheet; Pay & PEAK is next", after.approvalStatus === "APPROVED" && c[2].done && c[3].now && /Approved — transfer on Payments/.test(c[3].text), JSON.stringify({ status: after.approvalStatus, cards: c.map((x) => [x.step, x.done, x.now]) }));
-  if (SHOTS) { await page.$eval(".js-check", (x) => x.scrollIntoView({ block: "start" })); await page.screenshot({ path: join(SHOTS, "jobsheet-checklist.png"), fullPage: false }); }
+  check("Approve in the bar approves the sheet; the bar then says ✓ Approved", after.approvalStatus === "APPROVED" && (await page.$(".js-approved-chip")) !== null && (await page.$(".js-approve")) === null, after.approvalStatus);
+  await page.click(".js-more-btn");
+  await page.waitForSelector(".js-more-menu.open .js-unapprove", { timeout: 5000 }).catch(() => {});
+  check("…and Unapprove is in More", (await page.$(".js-more-menu.open .js-unapprove")) !== null);
+  await page.click(".js-more-menu.open .js-unapprove");
+  await page.waitForSelector(".js-approve", { timeout: 15000 }).catch(() => {});
+  const back = await prisma.jobSheet.findUniqueOrThrow({ where: KEY, select: { approvalStatus: true } });
+  check("Unapprove takes it back; Approve is in the bar again", back.approvalStatus !== "APPROVED" && (await page.$(".js-approve")) !== null, String(back.approvalStatus));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "jobsheet-operator-top.png"), fullPage: false });
 
-  // A phone: one card per line, nothing sideways.
+  // A phone: the bar wraps, nothing reaches past the screen.
   await page.setViewport({ width: 390, height: 900 });
   await page.goto(URL_, { waitUntil: "networkidle0" });
-  await page.waitForSelector(".js-check");
-  // (The operator's sheet below is wider than a phone — its tables — so this checks the
-  // checklist itself: one card per line, nothing inside it scrolls sideways.)
-  const fit = await page.$eval(".js-check", (x) => ({ over: x.scrollWidth - x.clientWidth, lefts: [...new Set([...x.querySelectorAll(".js-check-card")].map((c) => Math.round(c.getBoundingClientRect().left)))].length }));
-  check("on a phone the cards stack one per line, nothing sideways inside the checklist", fit.over <= 1 && fit.lefts === 1, JSON.stringify(fit));
-  if (SHOTS) { await page.$eval(".js-check", (x) => x.scrollIntoView({ block: "start" })); await page.screenshot({ path: join(SHOTS, "jobsheet-checklist-phone.png"), fullPage: false }); }
+  await page.waitForSelector(".js-bar-op");
+  const fit = await page.$eval(".js-bar-op", (x) => Math.max(...[...x.querySelectorAll("*")].map((c) => c.getBoundingClientRect().right).filter((r) => r > 0)) <= window.innerWidth + 1);
+  check("on a phone the bar fits", fit);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "jobsheet-operator-top-phone.png"), fullPage: false });
 
-  // The guide does not get the operator's checklist.
+  // The guide sees neither Approve nor the operator's bar.
   const gp = await browser.newPage();
   await gp.setCookie(await sessionCookie("g971@example.test"));
   await gp.goto(URL_, { waitUntil: "networkidle0" });
   await gp.waitForSelector(".guide-sum", { timeout: 20000 });
-  check("the guide's view has no checklist", (await gp.$(".js-check")) === null);
+  check("the guide's view has no Approve and no operator bar", (await gp.$(".js-approve, .js-bar-op")) === null);
   await gp.close();
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
