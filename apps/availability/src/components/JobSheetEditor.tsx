@@ -1126,11 +1126,11 @@ export default function JobSheetEditor() {
                   return (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: advSt === "SETTLED" ? "var(--ok-bg,#eef7f0)" : "var(--grey-bg,#f7f7f7)", border: `1px solid ${advSt === "SETTLED" ? "var(--ok-line,#cfe6d6)" : "var(--line)"}`, borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700 }}>
-                      <span>Advance from Folkpaths</span>
-                      <span>{advSt === "SETTLED" ? "✓ Settled" : stillToReturn > 0 ? `Return ${thb(stillToReturn)}` : advT.outstanding > 0 ? "Return being checked" : ""}</span>
+                      <span>{stillToReturn > 0 ? <>Advance · return to Folkpaths<br /><small className="gs-calc">เงินทดรอง ต้องคืนบริษัท</small></> : <>Advance from Folkpaths<br /><small className="gs-calc">เงินทดรองจากบริษัท</small></>}</span>
+                      <span className="js-adv-guide-figure" style={{ fontSize: stillToReturn > 0 ? 18 : 13, color: stillToReturn > 0 ? "#8A5A0D" : undefined, fontVariantNumeric: "tabular-nums" }}>{advSt === "SETTLED" ? "✓ Settled" : stillToReturn > 0 ? thb(stillToReturn) : advT.outstanding > 0 ? "Return being checked" : ""}</span>
                     </div>
                     <div style={{ color: "var(--ink-soft)", marginTop: 3, fontVariantNumeric: "tabular-nums" }}>
-                      Received {thb(advT.totalAdvancePaid)} · Spent {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)} · Balance {thb(advT.outstanding)}
+                      Received {thb(advT.totalAdvancePaid)} · Spent {thb(advT.usedFromAdvance)}{advT.totalReturned > 0 ? ` · Returned ${thb(advT.totalReturned)}` : ""}
                     </div>
                     {claimed > 0 && (
                       <div style={{ color: "var(--ink)", marginTop: 4 }}>
@@ -1921,19 +1921,24 @@ export default function JobSheetEditor() {
             full settlement below stays one click away, and always prints with the sheet. */}
         {canEdit && (
           <div className="no-print js-advance-summary adv-sum">
-            <b>Company advance</b>
-            {hasAdvance ? <>
-              <span><small>Given</small> <b className="num">{thb(advT.totalAdvancePaid)}</b></span>
-              <span><small>Used</small> <b className="num">{thb(advT.usedFromAdvance)}</b></span>
-              <span><small>Returned</small> <b className="num">{thb(advT.totalReturned)}</b></span>
-              {advT.deductedFromPayments > 0 && <span><small>Deducted</small> <b className="num">{thb(advT.deductedFromPayments)}</b></span>}
-              {advT.outstanding !== 0 && <span><small>To return</small> <b className="num adv-due">{thb(advT.outstanding)}</b></span>}
-              <span className={`badge ${advance.status === "SETTLED" ? "ok" : advance.status === "NEEDS_REVIEW" ? "pending" : "invited"}`}>{advance.status === "SETTLED" ? "✓ Settled" : advance.status === "NEEDS_REVIEW" ? "Needs review" : advance.status === "RETURN_DUE" || tourCompleted ? "Return due" : advance.status === "IN_USE" ? "In use" : "Open"}</span>
-            </> : <span className="adv-missing">{advRows} row{advRows === 1 ? "" : "s"} marked “From company advance” · no advance recorded for this job</span>}
+            {/* One number that matters (owner 2026-10-18, "simpler"): what is still to return, or
+                Settled. Given / used / returned / deducted and the advance numbers are in the
+                tooltip; the full settlement under Details. */}
+            <b>Advance</b>
+            {hasAdvance ? <span className="adv-sum-main" title={[`Given ${thb(advT.totalAdvancePaid)}`, `used ${thb(advT.usedFromAdvance)}`, `returned ${thb(advT.totalReturned)}`, advT.deductedFromPayments > 0 ? `deducted ${thb(advT.deductedFromPayments)}` : "", liveAdvances.map((x) => x.advanceNo).join(", ")].filter(Boolean).join(" · ")}>
+              <span className="num adv-given">{thb(advT.totalAdvancePaid)}</span>
+              <span aria-hidden="true">·</span>
+              {advance.status === "SETTLED"
+                ? <span className="badge ok">✓ Settled</span>
+                : advance.status === "NEEDS_REVIEW"
+                  ? <span className="badge pending">Needs review</span>
+                  : advT.outstanding > 0
+                    ? <b className="num adv-due">{thb(advT.outstanding)} to return</b>
+                    : <span className="adv-given">in use</span>}
+            </span> : <span className="adv-missing">not recorded yet</span>}
             <span className="adv-sum-links">
-              {liveAdvances.map((a) => <a key={a.id} className="mono" href={existingAdvanceHref(a.id)}>{a.advanceNo} →</a>)}
-              {!hasAdvance && <a href="/payments?view=advances">Record on Payments → Advances →</a>}
-              {hasAdvance && <button type="button" className="btn sm js-advance-details" aria-expanded={advOpen} onClick={() => setAdvOpen((o) => !o)}>{advOpen ? "Hide details" : "Details"}</button>}
+              {!hasAdvance && <a href="/payments?view=advances">Record →</a>}
+              {hasAdvance && <button type="button" className="btn sm js-advance-details" aria-expanded={advOpen} onClick={() => setAdvOpen((o) => !o)}>{advOpen ? "Hide ▴" : "Details ▸"}</button>}
             </span>
           </div>
         )}

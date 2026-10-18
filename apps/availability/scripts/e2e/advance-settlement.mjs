@@ -136,7 +136,7 @@ try {
   await page.goto(`${BASE}/job-sheet?guideId=G-992&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
   // The operator sees a one-line summary; the settlement details open with "Details".
   await page.waitForSelector(".js-advance-summary .js-advance-details", { timeout: 20000 });
-  check("the job sheet shows the advance as one line, details closed until asked", /Company advance/.test(await text(page, ".js-advance-summary")) && (await page.$eval(".js-advance-details", (b) => b.getAttribute("aria-expanded"))) === "false");
+  check("the job sheet shows the advance as one line — what is still to return — details closed until asked", /^Advance/.test((await text(page, ".js-advance-summary")).trim()) && /to return|Settled|in use/.test(await text(page, ".js-advance-summary")) && (await page.$eval(".js-advance-details", (b) => b.getAttribute("aria-expanded"))) === "false");
   if (SHOTS) { await page.$eval(".js-advance-summary", (x) => x.scrollIntoView({ block: "center" })); await page.screenshot({ path: join(SHOTS, "advance-summary.png"), fullPage: false }); }
   await page.click(".js-advance-details");
   // Phase 1D: settling happens on the advance's own card (components/AdvanceOperations) — the

@@ -229,8 +229,9 @@ try {
   await page.evaluate(() => localStorage.setItem("folkops.advanceDetailsOpen", "1"));
   await createAdvanceOnPayments(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });
   await page.goto(J0, { waitUntil: "networkidle0" }); await page.waitForSelector(".js-payer-select");
-  const sumLine = await text(page, ".js-advance-summary");
-  check("2 · the job sheet shows one line for the advance — given, used, returned — and links to it", /Company advance/.test(sumLine) && /Given ฿1,000\.00/.test(sumLine.replace(/\s+/g, " ")) && /FOLK-ADV-/.test(sumLine), sumLine.replace(/\s+/g, " ").slice(0, 200));
+  const sumLine = (await text(page, ".js-advance-summary")).replace(/\s+/g, " ");
+  const sumTip = await page.$eval(".js-advance-summary .adv-sum-main", (x) => x.title).catch(() => "");
+  check("2 · the job sheet shows one line for the advance — ฿1,000 to return — with given / used / the advance number in its tooltip", /^Advance ฿1,000\.00 · ฿1,000\.00 to return/.test(sumLine.trim()) && /Given ฿1,000\.00 · used ฿0\.00/.test(sumTip) && /FOLK-ADV-/.test(sumTip), `${sumLine.slice(0, 120)} || ${sumTip}`);
   const all1 = await prisma.guideAdvance.findMany({ where: { date: DATE, slotIdx: 0 }, orderBy: { createdAt: "asc" } });
   const A = all1[0];
   check("2 · an advance created on Payments → Advances with meals allowed (slip stored through the upload)", !!A && JSON.stringify(A.allowedCategories) === JSON.stringify(["entrance", "meal"]) && /fake-upload/.test(A.slipUrl ?? ""), JSON.stringify(A?.allowedCategories));
