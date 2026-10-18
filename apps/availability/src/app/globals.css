@@ -1553,25 +1553,6 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .adv-details:not(.adv-closed){margin-top:8px}
 @media print{.adv-details.adv-closed{display:block}}
 
-/* Job sheet — Check this job (operator checklist) */
-.js-check{border:1px solid var(--line);border-radius:14px;background:var(--card,#fff);padding:12px 14px;margin-bottom:14px}
-.js-check-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
-.js-check-head b{font-size:15px}
-.js-check-head span{font-size:12px;color:var(--ink-soft)}
-.js-check ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
-.js-check-card{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;min-width:0}
-.js-check-card>.btn{align-self:flex-start}
-.js-check-n{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;background:var(--grey-bg);color:var(--ink-soft)}
-.js-check-body{display:flex;flex-direction:column;gap:2px;min-width:0}
-.js-check-body b{font-size:13.5px}
-.js-check-body small{font-size:12px;color:var(--ink-soft);line-height:1.35}
-.js-check-card.done{opacity:.7}
-.js-check-card.done .js-check-n{background:var(--green);color:#fff}
-.js-check-card.now{border:2px solid var(--primary);box-shadow:0 6px 18px rgba(14,59,46,.08)}
-.js-check-card.now .js-check-n{background:var(--primary);color:#fff}
-.js-check-card.warn .js-check-body small{color:#8A5A0D}
-@media (max-width:900px){.js-check ol{grid-template-columns:1fr 1fr}}
-@media (max-width:520px){.js-check ol{grid-template-columns:1fr}.js-check-card{flex-direction:row;align-items:center}.js-check-body{flex:1}.js-check-card>.btn{align-self:center}}
 /* Job sheet — the guide's next step (components/GuideNextStep) */
 .gns{display:flex;flex-direction:column;gap:6px;padding:12px 14px;margin-bottom:10px}
 .gns-hint{font-size:12.5px;color:var(--ink-soft);text-align:center}
@@ -1596,16 +1577,13 @@ body:has(.op-layout) .wrap{max-width:1440px}
 .js-title-status{font:inherit;font-size:12px;font-weight:700;border:1px solid var(--line);border-radius:999px;padding:1px 6px;background:var(--grey-bg);color:var(--ink)}
 .js-bar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
 .js-more{position:relative}
+.js-approved-chip{display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:700;color:var(--green);background:var(--ok-bg,#eef7f0);border:1px solid var(--ok-line,#cfe6d6);white-space:nowrap}
 .js-more-menu{display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;background:var(--card,#fff);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 14px 34px rgba(22,32,28,.16);padding:6px;flex-direction:column;gap:2px}
 .js-more-menu.open{display:flex}
 .js-more-menu .btn{justify-content:flex-start;text-align:left;border:0;background:none;width:100%;height:auto;padding:8px 10px;border-radius:8px}
 .js-more-menu .btn:hover{background:var(--grey-bg)}
 .js-more-menu .btn.danger{color:var(--danger)}
 .js-more-menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
-.js-top{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:12px;align-items:start;margin-bottom:14px}
-.js-top>.tday{margin:0}
-.js-top>.js-check{margin:0}
-@media (max-width:900px){.js-top{grid-template-columns:minmax(0,1fr)}}
 .js-open-line{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;width:100%;text-align:left;font:inherit;font-size:13px;background:var(--card,#fff);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:10px 0;cursor:pointer;color:var(--ink)}
 .js-open-line:hover{background:var(--grey-bg)}
 .js-open-line>span{font-weight:700}

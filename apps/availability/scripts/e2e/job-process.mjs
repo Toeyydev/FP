@@ -146,7 +146,7 @@ try {
   await page.goto(`${BASE}${href}`, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-proc-strip", { timeout: 20000 });
   check("the job sheet shows the same stage and who it is waiting for", (await page.$eval(".js-proc-strip", (x) => x.dataset.stage)) === "AWAITING_REVIEW" && /Waiting on the admin/.test(await page.$eval(".proc-strip-next", (x) => x.innerText)));
-  await page.evaluate(() => document.querySelector(".js-check-approve")?.click());
+  await page.evaluate(() => document.querySelector(".js-approve")?.click());
   await page.waitForFunction(() => document.querySelector(".js-proc-strip")?.dataset.stage === "AWAITING_TRANSFER", { timeout: 20000 }).catch(() => {});
   check("approving the sheet moves the job to To pay", (await page.$eval(".js-proc-strip", (x) => x.dataset.stage)) === "AWAITING_TRANSFER");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "job-process-strip.png") });
