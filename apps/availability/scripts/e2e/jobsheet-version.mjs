@@ -131,10 +131,9 @@ async function setCategories(page, values) {
     await pause(250); // one change at a time, as a person makes them
   }
 }
+// The notes box sits in the Summary, which opens from the money line on the operator's screen.
+const openSummary = (page) => page.evaluate(() => { const b = document.querySelector(".js-money-line"); if (b && b.getAttribute("aria-expanded") === "false") b.click(); });
 async function setFee(page, value) {
-  // The guide-fee table opens from the money line on the operator's screen.
-  await page.evaluate(() => { const b = document.querySelector(".js-money-line"); if (b && b.getAttribute("aria-expanded") === "false") b.click(); });
-  await pause(150);
   const input = await page.$('input[title="Agreed rate"]');
   await input.click({ clickCount: 3 });
   await input.type(String(value));
@@ -192,6 +191,7 @@ try {
   await page.waitForNetworkIdle({ idleTime: 400 }).catch(() => {});
   await page.waitForFunction(() => /not ready/.test(document.querySelector(".js-pay-together")?.innerText.split("\n").find((x) => x.includes("(this job)")) ?? ""), { timeout: 15000 }).catch(() => {});
   check("after Unapprove the list shows this job not ready — no reload", /not ready/.test(await thisJobLine(page)), await thisJobLine(page));
+  await openSummary(page); await pause(150);
   await page.type(NOTE, "checked with the guide");
   await clickButton(page, "Save");
   await waitText(page, /Saved ✓|Not saved/);
@@ -202,6 +202,7 @@ try {
   // page, and the next save then goes through — that race made this check flaky in CI.
   await page.waitForNetworkIdle({ idleTime: 500 }).catch(() => {});
   await prisma.jobSheet.update({ where: KEY, data: { operatorNote: "saved in another tab" } });
+  await openSummary(page); await pause(150);
   await page.type(NOTE, " (and more)");
   await clickButton(page, "Save");
   await page.waitForSelector(".js-save-problem", { timeout: 15000 }).catch(() => {});
@@ -219,6 +220,7 @@ try {
   await page.waitForNetworkIdle({ idleTime: 400 }).catch(() => {});
   const noteAfter = await page.$eval(NOTE, (x) => x.value);
   check("Reload shows the sheet as saved and lets Save run again", !(await page.$(".js-save-problem")) && noteAfter === "saved in another tab", noteAfter);
+  await openSummary(page); await pause(150);
   await page.type(NOTE, " — confirmed");
   await clickButton(page, "Save");
   await waitText(page, /Saved ✓|Not saved/);
