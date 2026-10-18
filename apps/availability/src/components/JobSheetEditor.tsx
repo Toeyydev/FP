@@ -1768,22 +1768,9 @@ export default function JobSheetEditor() {
 
         </div>
 
-        {/* Money, as one line ending in the transfer (operator screen). The guide-fee table
-            and the Summary below open with Show — or on the "Fee & summary" tab — and
-            always print. Same jobSheetTotals / tourCostBreakdown figures as before. */}
-        {canEdit && (secTab === "all" || secTab === "fee") && (
-          <button type="button" className="js-open-line js-money-line no-print" aria-expanded={moneyOpen || secTab === "fee"} onClick={() => setMoneyOpen((o) => !o)}>
-            <span><small>Guide fee</small> {thb(payer.feeNet)}</span>
-            <span><small>Reimbursement</small> {thb(money.reimbursementDue)}</span>
-            {payer.reviewReward > 0 && <span><small>Review</small> {thb(payer.reviewNet)}</span>}
-            <span className="js-money-total"><small>Transfer to guide</small> {thb(money.netPayToGuide)}</span>
-            <b>{moneyOpen || secTab === "fee" ? "Hide ▴" : "Show ▸"}</b>
-          </button>
-        )}
         {/* Guide fee */}
         <div style={{ display: secTab === "all" || secTab === "fee" ? undefined : "none" }}>
         <div style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>
-        <div className={canEdit && !moneyOpen && secTab !== "fee" ? "js-closed" : undefined}>
         {/* GUIDE PAYMENT — the guide's earning for this job. Kept strictly out of
             Tour Expenses: this is what the company OWES the guide, not what the tour
             cost. Every figure comes from computeTotals (lib/jobsheet) — the same math
@@ -1839,7 +1826,17 @@ export default function JobSheetEditor() {
           </tbody>
         </table>
 
-        </div>
+        {/* Money, as one line ending in the transfer (operator screen). The guide-fee table
+            above always shows (owner 2026-10-18: the fee and the fee after WHT, on screen);
+            Show opens the Summary — or the "Fee & summary" tab does. It always prints. */}
+        {canEdit && (
+          <button type="button" className="js-open-line js-money-line no-print" aria-expanded={moneyOpen || secTab === "fee"} onClick={() => setMoneyOpen((o) => !o)}>
+            <span><small>Reimbursement</small> {thb(money.reimbursementDue)}</span>
+            {payer.reviewReward > 0 && <span><small>Review</small> {thb(payer.reviewNet)}</span>}
+            <span className="js-money-total"><small>Transfer to guide</small> {thb(money.netPayToGuide)}</span>
+            <b>{moneyOpen || secTab === "fee" ? "Hide summary ▴" : "Summary ▸"}</b>
+          </button>
+        )}
         {/* Additional Guide Payment — review rewards are guide compensation, not
             tour operating cost. A reward earned on ANOTHER job (Related Job No.
             differs) is paid out with this job but never counted as its expense. */}
