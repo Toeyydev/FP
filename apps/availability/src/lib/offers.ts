@@ -456,3 +456,31 @@ export async function sweepExpiredOffers(): Promise<number> {
   }
   return due.length;
 }
+
+/** One job offer as a guide sees it, to accept or pass on. */
+export type GuideOpenOffer = {
+  id: string; tourId: string; tourName: string; meetingPoint: string | null;
+  date: string; slotIdx: number; time: string; pax: number | null; note: string | null; expiresAt: Date;
+};
+
+// The open job offers a guide can still act on, soonest first. One list for the web
+// (/api/offers/mine) and FolkOPS Mobile (/api/mobile/offers), so a guide never sees a
+// job on one and not the other.
+export async function guideOpenOffers(guideId: string, now: Date = new Date()): Promise<GuideOpenOffer[]> {
+  const responses = await prisma.jobOfferResponse.findMany({ where: { guideId, response: "OFFERED" }, select: { offerId: true } });
+  const ids = responses.map((r) => r.offerId);
+  if (ids.length === 0) return [];
+  const offers = await prisma.jobOffer.findMany({
+    where: { id: { in: ids }, status: "OPEN", expiresAt: { gt: now } },
+    orderBy: [{ date: "asc" }, { slotIdx: "asc" }],
+  });
+  const tours = await prisma.tour.findMany({ where: { id: { in: offers.map((o) => o.tourId) } }, select: { id: true, name: true, meetingPoint: true } });
+  const tmap = new Map(tours.map((t) => [t.id, t]));
+  return offers.map((o) => ({
+    id: o.id, tourId: o.tourId, tourName: tmap.get(o.tourId)?.name ?? o.tourId,
+    meetingPoint: tmap.get(o.tourId)?.meetingPoint ?? null,
+    date: o.date, slotIdx: o.slotIdx, time: timeRangeLabel(o.slotIdx, o.durationMin),
+    pax: o.pax, note: o.note, expiresAt: o.expiresAt,
+  }));
+}
+
