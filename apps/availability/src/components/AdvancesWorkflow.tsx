@@ -69,6 +69,8 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
   const [issuing, setIssuing] = useState(false);
   // "Record return…" on one advance: money the guide sent back (moved here from the job sheet).
   const [returning, setReturning] = useState<Advance | null>(null);
+  // The row whose "⋯" menu (Ledger, PEAK doc…, Reverse…, voucher) is open.
+  const [rowMenu, setRowMenu] = useState<string | null>(null);
   const [allocating, setAllocating] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<Advance | null>(null);
   const [linking, setLinking] = useState<LinkTarget | null>(null);
@@ -157,37 +159,45 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
 
       {canWrite && waiting.length > 0 && <AdvanceBankSelect value={returnBank} onChange={setReturnBank} disabled={busy} />}
       <div className="tablewrap">
-        <table className="adv-table">
-          <thead><tr><th>Advance</th><th>Guide</th><th>Date</th><th>Job</th><th className="r">Amount</th><th className="r">Settled</th><th className="r">Outstanding</th><th>Status</th><th /></tr></thead>
+        {/* One line per advance (owner 2026-10-18, "simpler"): who and which job, what is still
+            to return (or the status), and the one action. The advance number, date and figures
+            are in the tooltip; Ledger, PEAK doc…, Reverse… and the voucher are under ⋯. */}
+        <table className="adv-table adv-table-simple">
+          <thead><tr><th>Guide · job</th><th className="r">To return</th><th /></tr></thead>
           <tbody>
-            {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
+            {advances.length === 0 && <tr><td colSpan={3} className="muted">No ticket advance has been recorded.</td></tr>}
             {advances.map((a) => (
-              <tr key={a.id}>
-                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}<VoucherLine advance={a} canReissue={canEdit} onReissued={() => void load()} /></td>
-                <td>{a.guideId}</td>
-                <td>{a.advanceDate}</td>
-                <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
-                <td className="r num">{thb(a.amount)}</td>
-                <td className="r num">{thb(a.settled)}</td>
-                <td className="r num"><b>{thb(a.outstanding)}</b></td>
-                <td><span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "VOID" ? " muted" : a.status === null ? " warn" : ""}`} title={a.problems?.join(", ") || undefined}>{STATUS_LABEL[a.status ?? "NEEDS_REVIEW"]}</span></td>
+              <tr key={a.id} title={`${a.advanceNo} · ${a.advanceDate} · given ${thb(a.amount)} · settled ${thb(a.settled)}`}>
+                <td>
+                  <b>{a.guideId}</b> <span className="mono muted" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</span>
+                  <div className="adv-sub"><span className="mono">{a.advanceNo}</span><AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}</div>
+                </td>
+                <td className="r">
+                  {a.status === "SETTLED" || a.status === "VOID" || a.status === null || a.outstanding <= 0
+                    ? <span className={`badge${a.status === "SETTLED" ? " ok" : a.status === "VOID" ? " muted" : a.status === null ? " warn" : ""}`} title={a.problems?.join(", ") || undefined}>{STATUS_LABEL[a.status ?? "NEEDS_REVIEW"]}</span>
+                    : <b className="num adv-owed">{thb(a.outstanding)}</b>}
+                </td>
                 <td className="adv-actions">
-                  <button className="btn sm ghost" onClick={() => setDetail(a)}>Ledger</button>
-                  {canLink && (
-                    <button className="btn sm ghost" disabled={busy} title="This transfer, or its ticket costs, are already in PEAK under a document your accountant created"
-                      onClick={() => setLinking({ kind: "ADVANCE", advanceId: a.id, guideId: a.guideId, label: a.advanceNo, amount: a.amount, jobNo: a.jobNo, outstanding: a.outstanding })}>PEAK doc…</button>
-                  )}
                   {canWrite && a.outstanding > 0 && a.status !== "VOID" && a.date && a.slotIdx != null && (
                     <button className="btn sm ghost js-record-return" disabled={busy || frozen} title="The guide sent unused money back — record it with the slip"
                       onClick={() => setReturning(a)}>Record return…</button>
                   )}
-                  {canWrite && a.status === "OPEN" && !a.peakLink && (
-                    <button className="btn sm ghost" disabled={busy} title="The transfer never happened, or went to the wrong guide"
-                      onClick={() => {
-                        const reason = window.prompt(`Reverse ${a.advanceNo}? Say why — this records that the money never left the bank, not that it came back.`);
-                        if (reason) void act(() => jfetch(`/api/advances/${a.id}/reverse`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) }), `${a.advanceNo} reversed`);
-                      }}>Reverse…</button>
-                  )}
+                  <button type="button" className="btn sm ghost js-adv-more" aria-expanded={rowMenu === a.id} title="Ledger, PEAK document, voucher, reverse" onClick={() => setRowMenu(rowMenu === a.id ? null : a.id)}>⋯</button>
+                  <div className={`adv-row-menu${rowMenu === a.id ? " open" : ""}`}>
+                    <button className="btn sm ghost" onClick={() => setDetail(a)}>Ledger</button>
+                    {canLink && (
+                      <button className="btn sm ghost" disabled={busy} title="This transfer, or its ticket costs, are already in PEAK under a document your accountant created"
+                        onClick={() => setLinking({ kind: "ADVANCE", advanceId: a.id, guideId: a.guideId, label: a.advanceNo, amount: a.amount, jobNo: a.jobNo, outstanding: a.outstanding })}>PEAK doc…</button>
+                    )}
+                    {canWrite && a.status === "OPEN" && !a.peakLink && (
+                      <button className="btn sm ghost" disabled={busy} title="The transfer never happened, or went to the wrong guide"
+                        onClick={() => {
+                          const reason = window.prompt(`Reverse ${a.advanceNo}? Say why — this records that the money never left the bank, not that it came back.`);
+                          if (reason) void act(() => jfetch(`/api/advances/${a.id}/reverse`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }) }), `${a.advanceNo} reversed`);
+                        }}>Reverse…</button>
+                    )}
+                    <VoucherLine advance={a} canReissue={canEdit} onReissued={() => void load()} />
+                  </div>
                 </td>
               </tr>
             ))}
