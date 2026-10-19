@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
-import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+// The server-side HTML→PDF renderer (headless Chrome with the Thai fonts). It lives with the
+// certificates because they needed it first; only the renderer is used — no certificate data.
+import { renderPdf } from "@/lib/certificates/pdf";
 import { computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, jobSheetDriveName, noShowStats, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { jobAdvanceView, JOB_ADVANCE_STATUS_LABEL } from "@/lib/advances/job-view";
 import { jobSheetTotals } from "@/lib/peak-sync";
@@ -9,121 +12,135 @@ import { approvalHtml, approvalView, approverNameOf } from "@/lib/jobsheet-appro
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+// Fonts installed in the container (nixpacks) that draw Thai correctly; the server has no Sarabun.
+export const JOB_SHEET_PDF_FONTS = `'Umpush', 'Loma', 'Noto Sans Thai', Arial, sans-serif`;
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-// Render the saved job sheet and store it in the shared Folkpaths Drive under
-// "Folkpaths Job Sheets / YYYY-MM". Uses the company Drive account (no operator
-// session needed — resolved via FOLKPATHS_DRIVE_EMAIL). Best-effort: returns the
-// link or null, never throws — a Drive hiccup must not break the caller.
+// Render the saved job sheet to a PDF on the server and store it in the shared Folkpaths
+// Drive under "Folkpaths Job Sheets / YYYY-MM". Always a PDF — the owner's rule is that
+// the job sheets in Drive are PDFs, not Google Docs. Rendered by the same headless Chrome
+// as the certificates (lib/certificates/pdf), which has the Thai fonts. Saved under the
+// same name each time, so a re-save (an approval, a correction) replaces the file in place
+// and keeps its link. Uses the company Drive account (FOLKPATHS_DRIVE_EMAIL).
+// Best-effort: returns the link or null, never throws — a Drive or renderer hiccup must not
+// break the caller.
 export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx: number): Promise<string | null> {
   try {
     if (!googleDriveEnabled) return null;
     const refreshToken = await folkpathsDriveToken();
     if (!refreshToken) return null;
-
-    const [sheet, assignment, u] = await Promise.all([
-      prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
-      prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
-      prisma.user.findUnique({ where: { guideId } }),
-    ]);
-    if (!sheet) return null;
-    const tourId = sheet.tourId || assignment?.tourId || "";
-    const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
-
-    const bookings = (sheet.bookings as Booking[]) ?? [];
-    const expenses = (sheet.expenses as Expense[]) ?? [];
-    const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
-    const t = computeTotals(expenses, guideFee);
-    const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
-    const money = jobSheetTotals(expenses, guideFee, sheet.ref, bookings);
-    const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
-    const guideName = u?.fullName || u?.displayName || guideId;
-    const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
-    const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
-    const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
-
-    const bookingRows = bookings.map((b) => {
-      const ns = (b as { status?: string }).status === "no-show";
-      const actual = ns ? `<span style="color:#c0392b;font-weight:700">NO-SHOW</span>` : `${b.actualPax ?? ""}`;
-      return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`;
-    }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
-    const nsStats = noShowStats(bookings);
-    // An uncategorised row prints "—" — the document shows what is stored, never a guess.
-    const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(paidByDocLabel(e))}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
-
-    // Advance / settlement ledger — the accountant's cash story (never in expense totals).
-    // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
-    const adv = await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses });
-    const small = (t: string) => `<span style="font-size:10px;color:#8a8f8b">${t}</span>`;
-    const waiting = adv.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);
-    const advanceHtml = adv.advances.length || adv.returns.length ? `
-      <h3 style="margin:14px 0 4px;border:0">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">การเคลียร์เงินทดรองจ่าย</span></h3>
-      <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Description</th><th>Date</th><th align="right">Amount</th></tr></thead>
-        <tbody>
-          ${adv.advances.map((a) => `<tr><td>Advance Paid ${small("เงินทดรองจ่ายให้มัคคุเทศก์")} · ${esc(a.advanceNo)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}${a.status === "REVERSED" ? " · reversed" : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(a.advanceDate)} · ${esc(a.method)}</td><td align="right">${esc(thb(a.amount))}</td></tr>`).join("")}
-          <tr><td style="padding-left:18px">Expenses settled from Advance ${small("ค่าใช้จ่ายที่เคลียร์กับเงินทดรองแล้ว")}</td><td></td><td align="right">− ${esc(thb(adv.totals.usedFromAdvance))}</td></tr>
-          ${adv.totals.tagsNotYetSettled > 0 ? `<tr style="color:#6b746f"><td style="padding-left:32px">Marked “from advance”, not yet settled ${small("ระบุว่าใช้เงินทดรอง แต่ยังไม่ได้เคลียร์")}</td><td></td><td align="right">(${esc(thb(adv.totals.tagsNotYetSettled))})</td></tr>` : ""}
-          ${adv.returns.filter((r) => r.allocatedHere > 0).map((r) => `<tr><td style="padding-left:18px">Advance Returned ${small("เงินทดรองคงเหลือส่งคืน")} · ${esc(r.receiptNo)}${r.slipUrl ? ` · <a href="${esc(r.slipUrl)}">slip</a>` : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(r.receivedDate)} · ${esc(r.method)}</td><td align="right">− ${esc(thb(r.allocatedHere))}</td></tr>`).join("")}
-          ${adv.totals.deductedFromPayments > 0 ? `<tr><td style="padding-left:18px">Deducted from a guide payment ${small("หักจากการจ่ายค่าตอบแทน")}</td><td></td><td align="right">− ${esc(thb(adv.totals.deductedFromPayments))}</td></tr>` : ""}
-          <tr style="background:#f7f7f7"><td align="right" colspan="2"><b>Outstanding Advance ${small("เงินทดรองจ่ายคงค้าง")}</b></td><td align="right"><b>${esc(thb(adv.totals.outstanding))}</b></td></tr>
-          ${waiting.length ? `<tr style="color:#6b746f"><td colspan="3">Returns not yet counted ${small("เงินคืนที่ยังไม่นับ")}: ${waiting.map((r) => `${esc(r.receiptNo)} ${esc(thb(r.status === "CLAIMED" ? r.amount : r.unallocated))}${r.status === "CLAIMED" ? " — waiting to be checked" : " — not yet allocated"}`).join(" · ")}</td></tr>` : ""}
-          <tr><td colspan="3"><b>Settlement Status ${small("สถานะการเคลียร์เงินทดรอง")}:</b> ${esc(JOB_ADVANCE_STATUS_LABEL[adv.status] ?? adv.status)}</td></tr>
-        </tbody>
-      </table>` : "";
-
-    // Approval, not certification — who approved the expenses and when. The certificate in
-    // lieu of receipt is a separate document with its own file (lib/jobsheet-approval).
-    const approvalBlock = approvalHtml(approvalView(sheet, await approverNameOf(prisma, sheet.approvedBy)), esc);
-
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Sarabun,Arial,sans-serif;color:#111;font-size:13px">
-      <div style="font-size:12px;font-weight:600;letter-spacing:1px">${esc(CO.brandName)}</div>
-      <div style="color:#666;font-size:9px">Operated by ${esc(CO.operatedBy)} / ${esc(CO.legalNameTh)}</div>
-      <div style="color:#8a8f8b;font-size:8.5px;margin-bottom:12px">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
-      <table border="0" cellpadding="6" style="border-collapse:collapse;margin-bottom:10px;font-size:12.5px">
-        <tr><td style="color:#555;white-space:nowrap">Job No. <small style="font-size:8px;color:#8a8f8b">เลขที่งาน</small></td><td><b>${esc(ref)}</b></td></tr>
-        <tr><td style="color:#555">Updated</td><td>${esc(updated)}</td></tr>
-        <tr><td style="color:#555">Tour ID</td><td><b>${esc(tourId)}</b></td></tr>
-        <tr><td style="color:#555">Guide ID</td><td>${esc(guideId)}</td></tr>
-        <tr><td style="color:#555">Status</td><td>${esc(sheet.status)}</td></tr>
-      </table>
-      <table border="0" cellpadding="6" style="border-collapse:collapse;margin-bottom:14px;font-size:12.5px">
-        <tr><td style="color:#555">Tour Date</td><td><b>${esc(date)}</b> · ${esc(time)}</td></tr>
-        <tr><td style="color:#555">Tour Name</td><td><b>${esc(tour?.name ?? tourId)}</b></td></tr>
-        <tr><td style="color:#555">Guide name</td><td>${esc(guideId)} ${esc(guideName)}</td></tr>
-        ${u?.email ? `<tr><td style="color:#555">E-mail</td><td>${esc(u.email)}</td></tr>` : ""}
-        ${u?.phone ? `<tr><td style="color:#555">Tel no.</td><td>${esc(u.phone)}</td></tr>` : ""}
-      </table>
-      <h3 style="margin:16px 0 4px">Job Details</h3>
-      <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Name</th><th align="left">Booking no.</th><th>Booked</th><th>Actual</th><th align="left">Tickets</th></tr></thead>
-        <tbody>${bookingRows}</tbody>
-      </table>
-      ${nsStats.pax > 0 ? `<div style="font-size:11px;color:#c2604a;margin:4px 0 0"><b>No-show</b> <span style="font-size:9px;color:#8a8f8b">ไม่มาใช้บริการ</span>: ${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}</div>` : ""}
-      <h3 style="margin:14px 0 4px;border:0">Tour Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
-      <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
-        <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Expense Category <span style="font-size:10px;color:#8a8f8b;font-weight:400">ประเภทค่าใช้จ่าย</span></th><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
-        <tbody>${expenseRows}</tbody>
-      </table>
-${advanceHtml}
-      
-      <table style="margin-top:12px;border-collapse:collapse"><tbody>
-        <tr><td colspan="2" style="font-weight:700;padding:2px 0">Financial Summary <span style="font-size:10px;color:#8a8f8b;font-weight:400">สรุปรายการทางการเงิน</span></td></tr>
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Tour Expenses <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></td><td align="right"><b>${esc(thb(cost.tourExpenses))}</b></td></tr>
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.gross))}</b></td></tr>
-        ${cost.reviewOwn > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Review Reward <span style="display:block;font-size:10px;color:#8a8f8b">ค่าตอบแทนรีวิว</span></td><td align="right"><b>${esc(thb(cost.reviewOwn))}</b></td></tr>` : ""}
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Withholding Tax <span style="font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
-        <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Net Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์สุทธิ</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
-        ${money.reimbursementDue > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(money.reimbursementDue))}</b></td></tr>` : ""}
-        ${money.awaitingConfirmationTotal > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Awaiting payer confirmation <span style="font-size:10px;color:#8a8f8b">รอยืนยันผู้ชำระ — ไม่รวมในยอดที่ต้องคืน</span></td><td align="right" style="color:#555">${esc(thb(money.awaitingConfirmationTotal))}</td></tr>` : ""}
-        <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Net Pay to Guide <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนที่ต้องชำระให้มัคคุเทศก์</span></b></td><td align="right"><b>${esc(thb(money.netPayToGuide))}</b></td></tr>
-      </tbody></table>
-      ${approvalBlock}
-    </body></html>`;
-
-    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const doc = await jobSheetDriveDocument(guideId, date, slotIdx);
+    if (!doc) return null;
+    const pdf = await renderPdf(doc.html);
+    const { link } = await saveBufferToDrive({ refreshToken, name: doc.name, base64: pdf.toString("base64"), mimeType: "application/pdf", folderPath: doc.folderPath });
     return link;
   } catch {
     return null;
   }
+}
+
+// The job sheet as it is filed: one self-contained A4 page of HTML, its file name and folder.
+export async function jobSheetDriveDocument(guideId: string, date: string, slotIdx: number): Promise<{ html: string; name: string; folderPath: string[] } | null> {
+  const [sheet, assignment, u] = await Promise.all([
+    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
+    prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
+    prisma.user.findUnique({ where: { guideId } }),
+  ]);
+  if (!sheet) return null;
+  const tourId = sheet.tourId || assignment?.tourId || "";
+  const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
+
+  const bookings = (sheet.bookings as Booking[]) ?? [];
+  const expenses = (sheet.expenses as Expense[]) ?? [];
+  const guideFee = (sheet.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE;
+  const t = computeTotals(expenses, guideFee);
+  const cost = jobCostBreakdown(expenses, guideFee, sheet.ref, bookings);
+  const money = jobSheetTotals(expenses, guideFee, sheet.ref, bookings);
+  const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
+  const guideName = u?.fullName || u?.displayName || guideId;
+  const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
+  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+  const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
+
+  const bookingRows = bookings.map((b) => {
+    const ns = (b as { status?: string }).status === "no-show";
+    const actual = ns ? `<span style="color:#c0392b;font-weight:700">NO-SHOW</span>` : `${b.actualPax ?? ""}`;
+    return `<tr${ns ? ' style="background:#fdecec"' : ""}><td>${esc(b.name)}</td><td>${esc(b.bookingNo)}</td><td style="text-align:center">${b.bookedPax ?? ""}</td><td style="text-align:center">${actual}</td><td>${esc(b.tickets === "included" ? "Included" : b.tickets === "not" ? "Not incl." : "")}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
+  const nsStats = noShowStats(bookings);
+  // An uncategorised row prints "—" — the document shows what is stored, never a guess.
+  const expenseRows = expenses.filter((e) => !isReviewExpense(e)).filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${expenseCategory(e) ? esc(expenseCategoryLabel(e)) : "—"}</td><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}</td><td>${esc(paidByDocLabel(e))}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="5" style="color:#888">No expenses.</td></tr>`;
+
+  // Advance / settlement ledger — the accountant's cash story (never in expense totals).
+  // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
+  const adv = await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses });
+  const small = (t: string) => `<span style="font-size:10px;color:#8a8f8b">${t}</span>`;
+  const waiting = adv.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);
+  const advanceHtml = adv.advances.length || adv.returns.length ? `
+    <h3 style="margin:14px 0 4px;border:0">Advance / Settlement <span style="font-size:10px;color:#8a8f8b;font-weight:400">การเคลียร์เงินทดรองจ่าย</span></h3>
+    <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
+      <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Description</th><th>Date</th><th align="right">Amount</th></tr></thead>
+      <tbody>
+        ${adv.advances.map((a) => `<tr><td>Advance Paid ${small("เงินทดรองจ่ายให้มัคคุเทศก์")} · ${esc(a.advanceNo)}${a.txRef ? ` · ${esc(a.txRef)}` : ""}${a.slipUrl ? ` · <a href="${esc(a.slipUrl)}">slip</a>` : ""}${a.status === "REVERSED" ? " · reversed" : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(a.advanceDate)} · ${esc(a.method)}</td><td align="right">${esc(thb(a.amount))}</td></tr>`).join("")}
+        <tr><td style="padding-left:18px">Expenses settled from Advance ${small("ค่าใช้จ่ายที่เคลียร์กับเงินทดรองแล้ว")}</td><td></td><td align="right">− ${esc(thb(adv.totals.usedFromAdvance))}</td></tr>
+        ${adv.totals.tagsNotYetSettled > 0 ? `<tr style="color:#6b746f"><td style="padding-left:32px">Marked “from advance”, not yet settled ${small("ระบุว่าใช้เงินทดรอง แต่ยังไม่ได้เคลียร์")}</td><td></td><td align="right">(${esc(thb(adv.totals.tagsNotYetSettled))})</td></tr>` : ""}
+        ${adv.returns.filter((r) => r.allocatedHere > 0).map((r) => `<tr><td style="padding-left:18px">Advance Returned ${small("เงินทดรองคงเหลือส่งคืน")} · ${esc(r.receiptNo)}${r.slipUrl ? ` · <a href="${esc(r.slipUrl)}">slip</a>` : ""}</td><td align="center" style="white-space:nowrap;color:#6b746f">${esc(r.receivedDate)} · ${esc(r.method)}</td><td align="right">− ${esc(thb(r.allocatedHere))}</td></tr>`).join("")}
+        ${adv.totals.deductedFromPayments > 0 ? `<tr><td style="padding-left:18px">Deducted from a guide payment ${small("หักจากการจ่ายค่าตอบแทน")}</td><td></td><td align="right">− ${esc(thb(adv.totals.deductedFromPayments))}</td></tr>` : ""}
+        <tr style="background:#f7f7f7"><td align="right" colspan="2"><b>Outstanding Advance ${small("เงินทดรองจ่ายคงค้าง")}</b></td><td align="right"><b>${esc(thb(adv.totals.outstanding))}</b></td></tr>
+        ${waiting.length ? `<tr style="color:#6b746f"><td colspan="3">Returns not yet counted ${small("เงินคืนที่ยังไม่นับ")}: ${waiting.map((r) => `${esc(r.receiptNo)} ${esc(thb(r.status === "CLAIMED" ? r.amount : r.unallocated))}${r.status === "CLAIMED" ? " — waiting to be checked" : " — not yet allocated"}`).join(" · ")}</td></tr>` : ""}
+        <tr><td colspan="3"><b>Settlement Status ${small("สถานะการเคลียร์เงินทดรอง")}:</b> ${esc(JOB_ADVANCE_STATUS_LABEL[adv.status] ?? adv.status)}</td></tr>
+      </tbody>
+    </table>` : "";
+
+  // Approval, not certification — who approved the expenses and when. The certificate in
+  // lieu of receipt is a separate document with its own file (lib/jobsheet-approval).
+  const approvalBlock = approvalHtml(approvalView(sheet, await approverNameOf(prisma, sheet.approvedBy)), esc);
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title><style>@page{size:A4;margin:12mm}</style></head><body style="font-family:${JOB_SHEET_PDF_FONTS};color:#111;font-size:13px">
+    <div style="font-size:12px;font-weight:600;letter-spacing:1px">${esc(CO.brandName)}</div>
+    <div style="color:#666;font-size:9px">Operated by ${esc(CO.operatedBy)} / ${esc(CO.legalNameTh)}</div>
+    <div style="color:#8a8f8b;font-size:8.5px;margin-bottom:12px">Tax ID ${esc(CO.taxId)} · Tour Operator ${esc(CO.tourOperatorNameTh)} · License ${esc(CO.tourismLicenseNo)}</div>
+    <table border="0" cellpadding="6" style="border-collapse:collapse;margin-bottom:10px;font-size:12.5px">
+      <tr><td style="color:#555;white-space:nowrap">Job No. <small style="font-size:8px;color:#8a8f8b">เลขที่งาน</small></td><td><b>${esc(ref)}</b></td></tr>
+      <tr><td style="color:#555">Updated</td><td>${esc(updated)}</td></tr>
+      <tr><td style="color:#555">Tour ID</td><td><b>${esc(tourId)}</b></td></tr>
+      <tr><td style="color:#555">Guide ID</td><td>${esc(guideId)}</td></tr>
+      <tr><td style="color:#555">Status</td><td>${esc(sheet.status)}</td></tr>
+    </table>
+    <table border="0" cellpadding="6" style="border-collapse:collapse;margin-bottom:14px;font-size:12.5px">
+      <tr><td style="color:#555">Tour Date</td><td><b>${esc(date)}</b> · ${esc(time)}</td></tr>
+      <tr><td style="color:#555">Tour Name</td><td><b>${esc(tour?.name ?? tourId)}</b></td></tr>
+      <tr><td style="color:#555">Guide name</td><td>${esc(guideId)} ${esc(guideName)}</td></tr>
+      ${u?.email ? `<tr><td style="color:#555">E-mail</td><td>${esc(u.email)}</td></tr>` : ""}
+      ${u?.phone ? `<tr><td style="color:#555">Tel no.</td><td>${esc(u.phone)}</td></tr>` : ""}
+    </table>
+    <h3 style="margin:16px 0 4px">Job Details</h3>
+    <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
+      <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Name</th><th align="left">Booking no.</th><th>Booked</th><th>Actual</th><th align="left">Tickets</th></tr></thead>
+      <tbody>${bookingRows}</tbody>
+    </table>
+    ${nsStats.pax > 0 ? `<div style="font-size:11px;color:#c2604a;margin:4px 0 0"><b>No-show</b> <span style="font-size:9px;color:#8a8f8b">ไม่มาใช้บริการ</span>: ${nsStats.pax} pax · ${nsStats.bookings} booking${nsStats.bookings === 1 ? "" : "s"}</div>` : ""}
+    <h3 style="margin:14px 0 4px;border:0">Tour Expenses <span style="font-size:10px;color:#8a8f8b;font-weight:400">ค่าใช้จ่ายในการนำเที่ยว</span></h3>
+    <table style="width:100%;border-collapse:collapse" border="0" cellpadding="4">
+      <thead><tr style="background:#f2f2f2;font-weight:400"><th align="left">Expense Category <span style="font-size:10px;color:#8a8f8b;font-weight:400">ประเภทค่าใช้จ่าย</span></th><th align="left">Description <span style="font-size:10px;color:#8a8f8b;font-weight:400">รายการ</span></th><th>Pax <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวน</span></th><th align="left">Paid by <span style="font-size:10px;color:#8a8f8b;font-weight:400">แหล่งเงินที่ใช้ชำระ</span></th><th align="right">Amount <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนเงิน</span></th></tr></thead>
+      <tbody>${expenseRows}</tbody>
+    </table>
+${advanceHtml}
+    
+    <table style="margin-top:12px;border-collapse:collapse"><tbody>
+      <tr><td colspan="2" style="font-weight:700;padding:2px 0">Financial Summary <span style="font-size:10px;color:#8a8f8b;font-weight:400">สรุปรายการทางการเงิน</span></td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Tour Expenses <span style="font-size:10px;color:#8a8f8b">ค่าใช้จ่ายในการนำเที่ยว</span></td><td align="right"><b>${esc(thb(cost.tourExpenses))}</b></td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</span></td><td align="right"><b>${esc(thb(t.gross))}</b></td></tr>
+      ${cost.reviewOwn > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Review Reward <span style="display:block;font-size:10px;color:#8a8f8b">ค่าตอบแทนรีวิว</span></td><td align="right"><b>${esc(thb(cost.reviewOwn))}</b></td></tr>` : ""}
+      <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Withholding Tax <span style="font-size:10px;color:#8a8f8b">ภาษีหัก ณ ที่จ่าย</span></td><td align="right">${esc(thb(t.wht))}</td></tr>
+      <tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Net Guide Fee <span style="font-size:10px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์สุทธิ</span></td><td align="right"><b>${esc(thb(t.netGuideFee))}</b></td></tr>
+      ${money.reimbursementDue > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#b45309;white-space:nowrap">Reimbursement Due <span style="font-size:10px;color:#8a8f8b">ยอดที่ต้องคืนให้มัคคุเทศก์ (สำรองจ่าย)</span></td><td align="right" style="color:#b45309"><b>${esc(thb(money.reimbursementDue))}</b></td></tr>` : ""}
+      ${money.awaitingConfirmationTotal > 0 ? `<tr><td style="padding:2px 16px 2px 0;color:#555;white-space:nowrap">Awaiting payer confirmation <span style="font-size:10px;color:#8a8f8b">รอยืนยันผู้ชำระ — ไม่รวมในยอดที่ต้องคืน</span></td><td align="right" style="color:#555">${esc(thb(money.awaitingConfirmationTotal))}</td></tr>` : ""}
+      <tr><td style="padding:2px 16px 2px 0;white-space:nowrap"><b>Net Pay to Guide <span style="font-size:10px;color:#8a8f8b;font-weight:400">จำนวนที่ต้องชำระให้มัคคุเทศก์</span></b></td><td align="right"><b>${esc(thb(money.netPayToGuide))}</b></td></tr>
+    </tbody></table>
+    ${approvalBlock}
+  </body></html>`;
+
+  return { html, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), folderPath: ["Folkpaths Job Sheets", monthFolder] };
 }

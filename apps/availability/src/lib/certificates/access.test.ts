@@ -285,7 +285,9 @@ describe("every place the rule has to hold, holds", () => {
       "src/lib/jobsheet-send.ts", "src/lib/expense-reminders.ts", "src/lib/tour-reminders.ts",
       "src/lib/offers.ts", "src/lib/jobsheet-drive.ts",
     ]) {
-      const src = code(sender);
+      // The job sheet PDF borrows the HTML→PDF renderer and nothing else: that one import
+      // carries no certificate data. Any other certificate import still fails.
+      const src = code(sender).replace('import { renderPdf } from "@/lib/certificates/pdf";', "");
       expect(src, `${sender} imports certificate code`).not.toContain("lib/certificates");
       for (const field of ["certificateNo", "certificateId", "evidenceWaiver", "CERT-"]) {
         expect(src, `${sender} mentions ${field}`).not.toContain(field);

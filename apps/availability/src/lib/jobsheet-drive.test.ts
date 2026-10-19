@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
-// Renders the Google Doc exactly as saveJobSheetToDrive builds it; only the database and
-// the Drive upload are mocked. All data is invented — this repo is public.
+// Renders the job sheet exactly as saveJobSheetToDrive builds it; only the database, the PDF
+// renderer and the Drive upload are mocked. All data is invented — this repo is public.
 const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },
@@ -12,9 +12,13 @@ const prismaMock = vi.hoisted(() => ({
   guideAdvanceEntry: { findMany: vi.fn(async () => []) },
   guideAdvanceReceipt: { findMany: vi.fn(async () => []) },
 }));
-const saveHtml = vi.hoisted(() => vi.fn());
+const saveBuffer = vi.hoisted(() => vi.fn());
+const render = vi.hoisted(() => vi.fn(async (_html: string) => Buffer.from("%PDF-test")));
+// The tests below read the HTML that was rendered.
+const saveHtml = { mock: { get calls() { return render.mock.calls.map(([html]) => [{ html }]); } } };
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
-vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveHtmlToDrive: saveHtml }));
+vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveBufferToDrive: saveBuffer }));
+vi.mock("@/lib/certificates/pdf", () => ({ renderPdf: render }));
 
 import { saveJobSheetToDrive } from "./jobsheet-drive";
 import { tourCostBreakdown } from "@/lib/peak-sync";
@@ -35,7 +39,7 @@ beforeEach(() => {
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Test Tour", time: "08:30" });
   prismaMock.guideAdvance.findMany.mockResolvedValue([]);
   prismaMock.guideAdvanceReturn.findMany.mockResolvedValue([]);
-  saveHtml.mockResolvedValue({ id: "doc-1", link: "https://docs.example/doc-1" });
+  saveBuffer.mockResolvedValue({ id: "file-1", link: "https://drive.example/file-1" });
 });
 
 const paidByCell = (html: string, description: string) => {
@@ -45,7 +49,7 @@ const paidByCell = (html: string, description: string) => {
 
 describe("the Google Doc in Drive names who paid each expense", () => {
   it("shows 'not specified' for a blank or unrecognised Paid By, and keeps the known labels", async () => {
-    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBe("https://docs.example/doc-1");
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBe("https://drive.example/file-1");
     const { html } = saveHtml.mock.calls[0][0];
     expect(paidByCell(html, "Row blank")).toBe("Not specified / ยังไม่ระบุผู้จ่าย");
     expect(paidByCell(html, "Row unknown")).toBe("Not specified / ยังไม่ระบุผู้จ่าย");
@@ -118,5 +122,33 @@ describe("the Google Doc states only confirmed payers as fact", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: [MIX[0], MIX[5]], guideFee: { price: 1000, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"), certifiedAt: null });
     await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
     expect(saveHtml.mock.calls[0][0].html).not.toMatch(/Awaiting payer confirmation|Suggested \/ รอยืนยัน/);
+  });
+});
+
+describe("the copy in Drive is a PDF", () => {
+  it("uploads the rendered PDF under the job sheet's name with .pdf, in the month folder", async () => {
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    expect(render).toHaveBeenCalledTimes(1);
+    const up = saveBuffer.mock.calls[0][0];
+    expect(up.mimeType).toBe("application/pdf");
+    expect(up.name).toBe("FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf");
+    expect(up.folderPath).toEqual(["Folkpaths Job Sheets", "2030-05 May"]);
+    expect(Buffer.from(up.base64, "base64").toString()).toBe("%PDF-test");
+  });
+  it("is an A4 page set in a font with Thai, since the server has no Sarabun", async () => {
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    const { html } = saveHtml.mock.calls[0][0];
+    expect(html).toContain("@page{size:A4");
+    expect(html).toContain("font-family:'Umpush'");
+  });
+  it("saves nothing — not a Google Doc either — when the PDF cannot be made", async () => {
+    render.mockRejectedValueOnce(new Error("pdf-renderer-unavailable: not-installed"));
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(saveBuffer).not.toHaveBeenCalled();
+  });
+  it("returns null without rendering when the sheet does not exist", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue(null);
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(render).not.toHaveBeenCalled();
   });
 });
