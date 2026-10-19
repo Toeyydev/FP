@@ -17,7 +17,7 @@ type Profile = {
 };
 
 const FIELDS = [
-  ["fullName", "fullName"], ["phone", "phoneLabel"], ["lineId", "lineIdLabel"], ["licenseNo", "licenseNoLabel"],
+  ["fullName", "fullName"], ["phone", "phoneLabel"], ["calendarEmail", "calendarEmailLabel"], ["lineId", "lineIdLabel"], ["licenseNo", "licenseNoLabel"],
   ["emergencyName", "emergencyNameLabel"], ["emergencyPhone", "emergencyPhoneLabel"], ["emergencyRelation", "emergencyRelationLabel"],
   ["taxId", "taxIdLabel"], ["idCardAddress", "idCardAddressLabel"], ["currentAddress", "currentAddressLabel"],
   ["bankName", "bankNameLabel"], ["bankAccountNo", "bankAccountNoLabel"], ["bankAccountName", "bankAccountNameLabel"], ["bankBranch", "bankBranchLabel"],
@@ -49,6 +49,13 @@ export default function ProfileForm({ targetUserId, isGuideOwn = false }: { targ
   useEffect(() => { load(); }, [load]);
 
   async function save() {
+    // Optional, but if given it must be an address — say so on the field, not as "Error".
+    const cal = (form.calendarEmail ?? "").trim();
+    if (cal && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cal)) {
+      setMissing(new Set(["calendarEmail"])); setMsg(t("calendarEmailInvalid"));
+      document.getElementById("fld-calendarEmail")?.focus();
+      return;
+    }
     // Every required field must be filled (operators editing others can skip).
     if (!targetUserId) {
       const miss = REQUIRED_PROFILE_FIELDS.filter((k) => !(form[k] && form[k].trim()));
@@ -158,6 +165,7 @@ export default function ProfileForm({ targetUserId, isGuideOwn = false }: { targ
             <div className="fld" key={k}>
               <label>{t(labelKey as Parameters<typeof t>[0])}{REQUIRED.has(k) ? <span style={{ color: "#c0392b" }}> *</span> : ""}</label>
               <input id={`fld-${k}`} required={REQUIRED.has(k)} value={form[k] ?? ""}
+                {...(k === "calendarEmail" ? { type: "email", placeholder: p.email ? `${t("calendarEmailBlank")} ${p.email}` : undefined } : {})}
                 style={missing.has(k) ? { borderColor: "#c0392b", background: "#fff6f5" } : undefined}
                 onChange={(e) => { setForm({ ...form, [k]: e.target.value }); if (missing.has(k)) setMissing((prev) => { const n = new Set(prev); n.delete(k); return n; }); }} />
             </div>

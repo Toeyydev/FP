@@ -149,7 +149,7 @@ export async function PATCH(req: NextRequest) {
   // the clash check that stops one guide holding two overlapping tours, the
   // assignment, the job sheet, the calendar. An operator acting for a guide must
   // not get a laxer path than the guide would.
-  const r = await acceptOffer(id, guideId);
+  const r = await acceptOffer(id, guideId, { by: "operator" });
   if (!r.ok) {
     const why = r.reason === "taken" ? "Another guide already took this offer."
       : r.reason === "expired" ? "This offer has expired — create a new one, or assign the guide directly."

@@ -201,7 +201,10 @@ export type AcceptResult =
 
 // Atomic first-wins accept. The conditional updateMany (status OPEN + not expired)
 // can only succeed for ONE concurrent caller, so a race resolves to a single winner.
-export async function acceptOffer(offerId: string, guideId: string): Promise<AcceptResult> {
+// `by: "operator"` — an operator giving the job to a guide (PATCH /api/offers), not the
+// guide accepting it. Everything is the same except that it does not create a calendar
+// event: at launch only a guide's own Accept sends a Google invitation (owner, 2026-10-20).
+export async function acceptOffer(offerId: string, guideId: string, o: { by?: "guide" | "operator" } = {}): Promise<AcceptResult> {
   const offer = await prisma.jobOffer.findUnique({ where: { id: offerId } });
   if (!offer) return { ok: false, reason: "closed" };
   if (offer.status === "ASSIGNED") return { ok: false, reason: "taken" };
@@ -288,10 +291,12 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   }
   // Offer is resolved — clear its notification from EVERY candidate's bell.
   await prisma.notification.deleteMany({ where: { offerId } });
-  // Email the guide a calendar invite (with reminders).
-  await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx);
-  // Push to connected Google Calendars (guide + operator master), if configured.
-  try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on calendar */ }
+  // The old emailed .ics — sent only while Google invitations are not set up (lib/calendar).
+  try { await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on email */ }
+  // The company calendar event, with this guide invited — or, on a replacement, the same
+  // event handed over to them. Only an Accept creates one. Not awaited: Google must never
+  // slow or block an Accept; failures are recorded and retried (lib/tour-calendar-sync).
+  void import("@/lib/tour-calendar-sync").then((m) => m.pushTourToCalendars(guideId, offer.date, offer.slotIdx, { create: o.by !== "operator" })).catch(() => {});
 
   // Tell the operator team a guide took the job (in-app + push). Covers BOTH the
   // in-app and LINE accept paths, and works even for auto re-offers (no creator).

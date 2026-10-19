@@ -4,6 +4,7 @@ import { sweepExpiredOffers } from "@/lib/offers";
 import { sweepTourReminders, sweepUnstaffedDepartures } from "@/lib/tour-reminders";
 import { sweepExpenseReminders } from "@/lib/expense-reminders";
 import { recordLoopHeartbeat } from "@/lib/heartbeat";
+import { retryTourCalendarEvents } from "@/lib/tour-calendar-sync";
 import { prisma } from "@/lib/db";
 import { localSwitches, recordServiceStatus, switchesUnsafe, UNSAFE_LOCAL_MESSAGE } from "@/lib/peak-switches";
 
@@ -38,6 +39,9 @@ export function startSyncLoop(): void {
     try { await sweepTourReminders(); } catch { /* keep looping */ }
     try { await sweepUnstaffedDepartures(); } catch { /* keep looping */ }
     try { await sweepExpenseReminders(); } catch { /* keep looping */ }
+    // Calendar invitations that failed or never reached Google. Only retries events that
+    // already exist — it never creates one, so it never backfills (lib/tour-calendar-sync).
+    try { await retryTourCalendarEvents(); } catch { /* keep looping */ }
     // Leave a pulse last, so /api/health can tell "nothing was due" from "the loop
     // stopped". These sweeps only write when they send something, so without it the
     // two look identical from outside (lib/heartbeat).

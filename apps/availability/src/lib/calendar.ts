@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { SLOT_TIMES } from "@/lib/slots";
+import { calendarInvitesActive } from "@/lib/tour-calendar-sync";
 
 // Bangkok (UTC+7) local start → UTC epoch ms.
 function bangkokStartMs(date: string, slotIdx: number): number {
@@ -33,7 +34,10 @@ export function makeIcs(o: { uid: string; startMs: number; durationMin: number; 
 }
 
 // Email the guide a calendar invite for an assigned job (fire-and-forget).
+// Retired once Google invitations are set up: the company calendar event invites the guide
+// itself (lib/tour-calendar-sync), and a second .ics would put the tour in their calendar twice.
 export async function sendTourCalendarInvite(guideId: string, date: string, slotIdx: number) {
+  if (await calendarInvitesActive()) return;
   const [guide, assignment] = await Promise.all([
     prisma.user.findUnique({ where: { guideId }, select: { email: true, displayName: true } }),
     prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, include: { tour: true } }),

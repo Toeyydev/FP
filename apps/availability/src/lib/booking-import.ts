@@ -215,10 +215,8 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
     // Safety net: a departure with no live guests left for this tour loses its calendar events.
     for (const a of ga) {
       const anyLive = gb.some((b) => ["OFFERED", "ASSIGNED"].includes(b.status) && (!b.tourId || b.tourId === a.tourId));
-      if (!anyLive && (a.googleEventId || a.opsGoogleEventId)) {
-        try { await removeTourEvents(a); } catch { /* best-effort */ }
-        await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
-      }
+      // removeTourEvents only acts when the departure has a company event (lib/tour-calendar-sync).
+      if (!anyLive) { try { await removeTourEvents(a); } catch { /* best-effort */ } }
     }
   }
 
