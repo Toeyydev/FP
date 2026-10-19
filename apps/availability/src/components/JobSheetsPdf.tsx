@@ -9,6 +9,13 @@ import OperatorNav from "@/components/OperatorNav";
 type Key = { guideId: string; date: string; slotIdx: number; ref?: string | null };
 type Result = Key & { ok: boolean; link?: string | null; error?: string };
 
+// What is missing, in words — the server sends which (never the Shared Drive's id itself).
+const DESTINATION_TEXT: Record<string, string> = {
+  "no-shared-drive": "The Folkpaths Shared Drive is not configured on the server (FOLKPATHS_SHARED_DRIVE_ID).",
+  "not-connected": "The company Google account is not connected.",
+  "drive-off": "Google Drive is not set up on this server.",
+};
+
 const dShort = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
 export default function JobSheetsPdf() {
@@ -60,7 +67,11 @@ export default function JobSheetsPdf() {
           {plan && (
             <>
               <p><b>{plan.sheets.length}</b> approved job sheet{plan.sheets.length === 1 ? "" : "s"}. Each is saved to the Folkpaths Shared Drive, <i>Folkpaths Job Sheets / month</i>, as a PDF; a PDF already there with the same name is replaced. Google Doc copies are left as they are.</p>
-              {plan.destination !== "shared-drive" && <div className="banner danger" role="status">The Folkpaths Shared Drive is not set up ({plan.destination}). Nothing can be saved until FOLKPATHS_SHARED_DRIVE_ID is configured.</div>}
+              {plan.destination !== "shared-drive" && (
+                <div className="banner danger js-pdf-no-destination" role="alert" style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", borderRadius: 8, padding: "10px 12px", margin: "8px 0" }}>
+                  <b>No PDF will be saved anywhere.</b> {DESTINATION_TEXT[plan.destination] ?? "The Folkpaths Shared Drive is not available."} Job sheet PDFs are filed only in the Folkpaths Shared Drive — never in a personal My Drive — so Test 1 and Save are off until this is fixed.
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                 <button className="btn ghost" disabled={busy || plan.sheets.length === 0 || plan.destination !== "shared-drive"} onClick={() => run(plan.sheets.slice(0, 1))}>Test 1</button>
                 <button className="btn primary" disabled={busy || plan.sheets.length === 0 || plan.destination !== "shared-drive"} onClick={() => run(plan.sheets)}>{busy ? `Saving… ${results.length}/${plan.sheets.length}` : `Save ${plan.sheets.length} PDFs`}</button>
