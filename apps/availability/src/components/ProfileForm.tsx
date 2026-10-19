@@ -236,7 +236,10 @@ export default function ProfileForm({ targetUserId, isGuideOwn = false }: { targ
             )}
           </div>
 
-          {cal.enabled && (
+          {/* The company Google connection — an operator's own profile only. Guides no longer
+              connect Google: their tours reach them as invitations from the company calendar
+              (lib/tour-calendar-sync), and the connect link always connects the signed-in user. */}
+          {cal.enabled && !p.guideId && !targetUserId && (
             <div className="fld" style={{ marginTop: 18 }}>
               <label>{t("calSection")}</label>
               <div className="auth-note" style={{ marginTop: 0, marginBottom: 8 }}>{t("calHint")}</div>

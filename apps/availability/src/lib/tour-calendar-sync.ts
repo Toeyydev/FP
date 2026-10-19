@@ -33,7 +33,8 @@ import { googleEnabled, calendarApi } from "@/lib/google-calendar";
 // after MAX_ATTEMPTS the operators are told once.
 //
 // Note: Google applies an event's reminders to the organizer's calendar. A guest's copy uses
-// the guest's own default notifications — Google gives the organizer no way to set them.
+// the guest's own default notifications — Google gives the organizer no way to set them. So
+// the guide's one-hour reminder is FolkOPS's own (lib/tour-reminders); this one is secondary.
 
 const TZ = "Asia/Bangkok";
 export const MAX_ATTEMPTS = 10;

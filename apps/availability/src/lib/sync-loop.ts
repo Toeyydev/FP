@@ -26,17 +26,13 @@ export function startSyncLoop(): void {
   setTimeout(() => { void tick(); }, 30_000);          // shortly after boot
   setInterval(() => { void tick(); }, 1_800_000);      // then every 30 min (matches the Bokun refresh window; manual Sync is the instant path)
 
-  // Pre-tour guide reminders run on a tighter cadence than the Bokun sync: the
-  // 45-min lead-time window is only caught if we look every few minutes. Cheap
-  // (one indexed query per tick when nothing's due) and idempotent, so a 5-min
-  // beat is safe. Not folded into tick() — that would stretch the lead window to
-  // the 30-min sync beat and miss the mark.
-  // Rides the same beat: the post-tour expense chase is due on a 24-hour clock, so
-  // it does not need 5-minute precision, but it is one indexed query when nothing is
-  // due and it sends at most one message per job — cheap enough not to warrant a
-  // third timer. Separate try so a failure in one sweep never skips the other.
+  // Departure alerts run on a tighter cadence than the Bokun sync: the unstaffed-tour
+  // lead times are only caught if we look every few minutes. Cheap (one indexed query
+  // per tick when nothing's due) and idempotent, so a 5-min beat is safe. The post-tour
+  // expense chase and the calendar retries ride the same beat. Separate try blocks so a
+  // failure in one sweep never skips the others. (The guide's one-hour reminder has its
+  // own minute beat, below.)
   const remind = async () => {
-    try { await sweepTourReminders(); } catch { /* keep looping */ }
     try { await sweepUnstaffedDepartures(); } catch { /* keep looping */ }
     try { await sweepExpenseReminders(); } catch { /* keep looping */ }
     // Calendar invitations that failed or never reached Google. Only retries events that
@@ -53,6 +49,12 @@ export function startSyncLoop(): void {
   // FP's own PEAK switches, for payment-worker to read before it posts and for the
   // status bar (lib/peak-switches). Every minute: a row written once and never again
   // would let an old report outlive a switch change. One small upsert, throttled inside.
+  // The guide's one-hour reminder runs on the minute, so it lands at T-60 rather than
+  // anywhere up to five minutes late. Cheap: no query at all unless a departure is due.
+  const tourReminder = async () => { try { await sweepTourReminders(); } catch { /* keep looping */ } };
+  setTimeout(() => { void tourReminder(); }, 25_000);
+  setInterval(() => { void tourReminder(); }, 60_000);
+
   const report = async () => {
     const unsafe = switchesUnsafe(localSwitches());
     if (unsafe && !warnedUnsafe) console.error(JSON.stringify({ t: new Date().toISOString(), svc: "FP", msg: "peak-switch-unsafe", level: "error", reason: UNSAFE_LOCAL_MESSAGE }));
