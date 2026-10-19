@@ -12,7 +12,7 @@ type Result = Key & { ok: boolean; link?: string | null; error?: string };
 const dShort = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
 export default function JobSheetsPdf() {
-  const [plan, setPlan] = useState<{ sheets: Key[]; batch: number } | null>(null);
+  const [plan, setPlan] = useState<{ sheets: Key[]; batch: number; destination: string } | null>(null);
   const [results, setResults] = useState<Result[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
@@ -25,7 +25,7 @@ export default function JobSheetsPdf() {
   };
   const preview = async () => {
     setMsg(null);
-    try { const d = await call({ action: "preview" }); setPlan({ sheets: d.sheets, batch: d.batch }); } catch (e) { setMsg({ tone: "danger", text: (e as Error).message }); }
+    try { const d = await call({ action: "preview" }); setPlan({ sheets: d.sheets, batch: d.batch, destination: d.destination }); } catch (e) { setMsg({ tone: "danger", text: (e as Error).message }); }
   };
   useEffect(() => { void preview(); }, []);
 
@@ -59,10 +59,11 @@ export default function JobSheetsPdf() {
           {msg && <div className={`banner ${msg.tone}`} role="status" style={{ marginBottom: 10 }}>{msg.text}</div>}
           {plan && (
             <>
-              <p><b>{plan.sheets.length}</b> approved job sheet{plan.sheets.length === 1 ? "" : "s"}. Each is saved to <i>Folkpaths Job Sheets / month</i> as a PDF; a PDF already there with the same name is replaced. Google Doc copies are left as they are.</p>
+              <p><b>{plan.sheets.length}</b> approved job sheet{plan.sheets.length === 1 ? "" : "s"}. Each is saved to the Folkpaths Shared Drive, <i>Folkpaths Job Sheets / month</i>, as a PDF; a PDF already there with the same name is replaced. Google Doc copies are left as they are.</p>
+              {plan.destination !== "shared-drive" && <div className="banner danger" role="status">The Folkpaths Shared Drive is not set up ({plan.destination}). Nothing can be saved until FOLKPATHS_SHARED_DRIVE_ID is configured.</div>}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                <button className="btn ghost" disabled={busy || plan.sheets.length === 0} onClick={() => run(plan.sheets.slice(0, 1))}>Test 1</button>
-                <button className="btn primary" disabled={busy || plan.sheets.length === 0} onClick={() => run(plan.sheets)}>{busy ? `Saving… ${results.length}/${plan.sheets.length}` : `Save ${plan.sheets.length} PDFs`}</button>
+                <button className="btn ghost" disabled={busy || plan.sheets.length === 0 || plan.destination !== "shared-drive"} onClick={() => run(plan.sheets.slice(0, 1))}>Test 1</button>
+                <button className="btn primary" disabled={busy || plan.sheets.length === 0 || plan.destination !== "shared-drive"} onClick={() => run(plan.sheets)}>{busy ? `Saving… ${results.length}/${plan.sheets.length}` : `Save ${plan.sheets.length} PDFs`}</button>
                 {failed.length > 0 && !busy && <button className="btn ghost" onClick={() => run(failed)}>Retry {failed.length}</button>}
               </div>
             </>

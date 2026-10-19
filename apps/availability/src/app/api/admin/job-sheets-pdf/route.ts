@@ -4,9 +4,15 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { isAdmin } from "@/lib/roles";
-import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
+import { jobSheetDriveTarget, saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 
 export const dynamic = "force-dynamic";
+
+const DESTINATION_HELP = {
+  "drive-off": "Google Drive is not set up on this server.",
+  "not-connected": "The company Google account is not connected.",
+  "no-shared-drive": "The Folkpaths Shared Drive is not configured (FOLKPATHS_SHARED_DRIVE_ID). Nothing was saved.",
+} as const;
 
 // A PDF render takes a few seconds; a small batch keeps each request well inside a timeout.
 const BATCH = 5;
@@ -17,7 +23,7 @@ const body = z.discriminatedUnion("action", [
 ]);
 
 // POST — admin only (session AND database role). Files every APPROVED job sheet in the
-// Folkpaths Drive as a PDF (lib/jobsheet-drive), replacing a same-named PDF in place.
+// Folkpaths Shared Drive as a PDF (lib/jobsheet-drive), replacing a same-named PDF in place.
 //   { action: "preview" }          lists the approved sheets; changes nothing
 //   { action: "save", sheets }     saves up to 5 of them; the page sends the list in batches
 // It writes no row: the sheets are read, rendered and uploaded. Older Google Doc copies in
@@ -31,15 +37,20 @@ export async function POST(req: NextRequest) {
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: [`Send at most ${BATCH} sheets at a time.`] }, { status: 400 });
 
+  // Nothing is saved anywhere until the Shared Drive is configured — never to a My Drive.
+  const target = await jobSheetDriveTarget(session.user.id);
+  const destination = target.ok ? "shared-drive" : target.reason;
+
   if (parsed.data.action === "preview") {
     const sheets = await prisma.jobSheet.findMany({
       where: { approvalStatus: "APPROVED" },
       select: { guideId: true, date: true, slotIdx: true, ref: true },
       orderBy: [{ date: "asc" }, { slotIdx: "asc" }, { guideId: "asc" }],
     });
-    return NextResponse.json({ ok: true, batch: BATCH, sheets });
+    return NextResponse.json({ ok: true, batch: BATCH, destination, sheets });
   }
 
+  if (!target.ok) return NextResponse.json({ error: "no-destination", reasons: [DESTINATION_HELP[target.reason]] }, { status: 409 });
   const results = [];
   for (const s of parsed.data.sheets) {
     // Only an approved sheet: this tool files decisions, not drafts.

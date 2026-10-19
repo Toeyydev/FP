@@ -27,6 +27,26 @@ export async function folkpathsDriveToken(actingUserId?: string): Promise<string
   return chosen.refreshToken ? decrypt(chosen.refreshToken) : null;
 }
 
+// The Folkpaths company Shared Drive — the source of truth for company documents (job sheet
+// PDFs first). Configured, never hard-coded: FOLKPATHS_SHARED_DRIVE_ID is the Shared Drive's
+// id (the part after /drive/folders/ when the Shared Drive itself is open in Drive). Null when
+// unset: a caller that must file in the Shared Drive then refuses rather than fall back to
+// someone's My Drive.
+export function folkpathsSharedDriveId(): string | null {
+  const id = (process.env.FOLKPATHS_SHARED_DRIVE_ID ?? "").trim();
+  return /^[A-Za-z0-9_-]{10,}$/.test(id) ? id : null;
+}
+
+// Query-string options every files.* call needs to see or write inside a Shared Drive.
+// Without supportsAllDrives Drive answers 404 for anything in a Shared Drive; a files.list
+// without corpora=drive + driveId + includeItemsFromAllDrives searches My Drive only.
+export function sharedDriveParams(driveId: string | undefined, kind: "list" | "write"): string {
+  if (!driveId) return "";
+  return kind === "list"
+    ? `&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=drive&driveId=${encodeURIComponent(driveId)}`
+    : "&supportsAllDrives=true";
+}
+
 // Accounting / partner accounts that must be able to SEE every job sheet + e-slip.
 // Comma-separated in FOLKPATHS_DRIVE_SHARE (e.g. "account@folkpaths.com"). They get
 // reader access to the TOP-LEVEL company folders, so all files inside are visible.
@@ -50,19 +70,24 @@ async function shareFolderWith(token: string, folderId: string): Promise<void> {
 // Find a folder this app created (drive.file scope) by name under an optional
 // parent, creating it if missing. Top-level company folders are shared with the
 // accounting account(s) so they can see all job sheets + e-slips.
-async function findOrCreateFolder(token: string, name: string, parentId?: string): Promise<string> {
+//
+// With a sharedDriveId the folders live in that Shared Drive: a top-level folder's parent is
+// the Shared Drive itself, and every lookup and create carries the Shared Drive options.
+// Access there comes from Shared Drive membership, so no per-folder sharing is added.
+async function findOrCreateFolder(token: string, name: string, parentId?: string, sharedDriveId?: string): Promise<string> {
   const safe = name.replace(/'/g, "\\'");
+  const parent = parentId ?? sharedDriveId;
   const q = [`name = '${safe}'`, "mimeType = 'application/vnd.google-apps.folder'", "trashed = false"];
-  if (parentId) q.push(`'${parentId}' in parents`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive`;
+  if (parent) q.push(`'${parent}' in parents`);
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${sharedDriveId ? sharedDriveParams(sharedDriveId, "list") : "&spaces=drive"}`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   const j = (await r.json().catch(() => ({}))) as { files?: { id?: string }[] };
   let id: string;
   if (j.files?.[0]?.id) id = j.files[0].id;
   else {
-    const cr = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+    const cr = await fetch(`https://www.googleapis.com/drive/v3/files?fields=id${sharedDriveParams(sharedDriveId, "write")}`, {
       method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: parentId ? [parentId] : undefined }),
+      body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: parent ? [parent] : undefined }),
     });
     const cj = (await cr.json().catch(() => ({}))) as { id?: string };
     if (!cr.ok || !cj.id) throw new Error(`drive-folder ${cr.status}: ${JSON.stringify(cj).slice(0, 160)}`);
@@ -70,7 +95,7 @@ async function findOrCreateFolder(token: string, name: string, parentId?: string
   }
   // Give the accounting account(s) reader access to the top-level company folders
   // ("Folkpaths Job Sheets" / "Folkpaths E-slips"), so every file inside is visible.
-  if (!parentId && SHARE_EMAILS.length) await shareFolderWith(token, id);
+  if (!parentId && !sharedDriveId && SHARE_EMAILS.length) await shareFolderWith(token, id);
   return id;
 }
 
@@ -101,36 +126,39 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
 // Drive without any conversion. `base64` is the file content base64-encoded.
 // Find an existing file (any type) by exact name in a folder, so a re-save can
 // replace it instead of creating a duplicate. drive.file scope sees app-created files.
-async function findFilesInFolder(token: string, name: string, parentId?: string): Promise<string[]> {
+async function findFilesInFolder(token: string, name: string, parentId?: string, sharedDriveId?: string): Promise<string[]> {
   const safe = name.replace(/'/g, "\\'");
   const q = [`name = '${safe}'`, "mimeType != 'application/vnd.google-apps.folder'", "trashed = false"];
   if (parentId) q.push(`'${parentId}' in parents`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive&orderBy=modifiedTime desc`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${sharedDriveId ? sharedDriveParams(sharedDriveId, "list") : "&spaces=drive"}&orderBy=modifiedTime desc`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   const j = (await r.json().catch(() => ({}))) as { files?: { id: string }[] };
   return (j.files ?? []).map((f) => f.id);
 }
 
-async function trashFile(token: string, id: string): Promise<void> {
-  await fetch(`https://www.googleapis.com/drive/v3/files/${id}`, {
+async function trashFile(token: string, id: string, sharedDriveId?: string): Promise<void> {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${id}${sharedDriveId ? "?supportsAllDrives=true" : ""}`, {
     method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ trashed: true }),
   }).catch(() => {});
 }
 
-export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
+// `sharedDriveId` files it in that Shared Drive (folderPath created under the Shared Drive's
+// root); without it, in the connected account's My Drive as before.
+export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[]; sharedDriveId?: string }): Promise<{ id: string; link: string }> {
   const token = await googleAccessToken(opts.refreshToken);
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
+  const sd = opts.sharedDriveId;
   let parent: string | undefined;
-  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
+  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent, sd);
 
   // Replace mode: if same-named file(s) already exist in this folder, update the
   // newest in place (no duplicate, same link) and trash any older duplicates so a
   // re-save always overwrites the one canonical copy.
-  const existing = await findFilesInFolder(token, opts.name, parent);
+  const existing = await findFilesInFolder(token, opts.name, parent, sd);
   if (existing.length) {
     const [keep, ...dupes] = existing;
-    for (const d of dupes) await trashFile(token, d);
-    const ur = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${keep}?uploadType=media&fields=id,webViewLink`, {
+    for (const d of dupes) await trashFile(token, d, sd);
+    const ur = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${keep}?uploadType=media&fields=id,webViewLink${sharedDriveParams(sd, "write")}`, {
       method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": opts.mimeType }, body: Buffer.from(opts.base64, "base64"),
     });
     const uj = (await ur.json().catch(() => ({}))) as { id?: string; webViewLink?: string };
@@ -143,7 +171,7 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   const body =
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
     `--${boundary}\r\nContent-Type: ${opts.mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${opts.base64}\r\n--${boundary}--`;
-  const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
+  const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink${sharedDriveParams(sd, "write")}`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body,
   });
   // Typed where it is read: under the worker's stricter config an untyped `j`

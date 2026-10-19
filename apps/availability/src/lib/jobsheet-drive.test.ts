@@ -17,7 +17,8 @@ const render = vi.hoisted(() => vi.fn(async (_html: string) => Buffer.from("%PDF
 // The tests below read the HTML that was rendered.
 const saveHtml = { mock: { get calls() { return render.mock.calls.map(([html]) => [{ html }]); } } };
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
-vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveBufferToDrive: saveBuffer }));
+const sharedDrive = vi.hoisted(() => ({ id: "0AExampleSharedDrive1" as string | null }));
+vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", folkpathsSharedDriveId: () => sharedDrive.id, saveBufferToDrive: saveBuffer }));
 vi.mock("@/lib/certificates/pdf", () => ({ renderPdf: render }));
 
 import { saveJobSheetToDrive } from "./jobsheet-drive";
@@ -33,6 +34,7 @@ const ROWS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sharedDrive.id = "0AExampleSharedDrive1";
   prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: ROWS, guideFee: { price: 1200, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"), certifiedAt: null });
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001" });
   prismaMock.user.findUnique.mockResolvedValue({ fullName: "Guide A", displayName: "Guide A" });
@@ -126,6 +128,12 @@ describe("the Google Doc states only confirmed payers as fact", () => {
 });
 
 describe("the copy in Drive is a PDF", () => {
+  it("is filed in the Folkpaths Shared Drive, or nowhere — never a My Drive", async () => {
+    sharedDrive.id = null;
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(render).not.toHaveBeenCalled();
+    expect(saveBuffer).not.toHaveBeenCalled();
+  });
   it("uploads the rendered PDF under the job sheet's name with .pdf, in the month folder", async () => {
     await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
     expect(render).toHaveBeenCalledTimes(1);
@@ -133,6 +141,7 @@ describe("the copy in Drive is a PDF", () => {
     expect(up.mimeType).toBe("application/pdf");
     expect(up.name).toBe("FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf");
     expect(up.folderPath).toEqual(["Folkpaths Job Sheets", "2030-05 May"]);
+    expect(up.sharedDriveId).toBe("0AExampleSharedDrive1");
     expect(Buffer.from(up.base64, "base64").toString()).toBe("%PDF-test");
   });
   it("is an A4 page set in a font with Thai, since the server has no Sarabun", async () => {

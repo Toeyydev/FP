@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
-import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, folkpathsDriveToken, folkpathsSharedDriveId, saveBufferToDrive } from "@/lib/google-drive";
 // The server-side HTML→PDF renderer (headless Chrome with the Thai fonts). It lives with the
 // certificates because they needed it first; only the renderer is used — no certificate data.
 import { renderPdf } from "@/lib/certificates/pdf";
@@ -17,23 +17,35 @@ export const JOB_SHEET_PDF_FONTS = `'Umpush', 'Loma', 'Noto Sans Thai', Arial, s
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-// Render the saved job sheet to a PDF on the server and store it in the shared Folkpaths
+// Where job sheet PDFs are filed: the Folkpaths Shared Drive (FOLKPATHS_SHARED_DRIVE_ID),
+// written through the company Google connection (FOLKPATHS_DRIVE_EMAIL). Never a My Drive:
+// with no Shared Drive configured there is no destination, and the caller saves nothing.
+export type JobSheetDriveTarget = { ok: true; refreshToken: string; sharedDriveId: string } | { ok: false; reason: "drive-off" | "not-connected" | "no-shared-drive" };
+export async function jobSheetDriveTarget(actingUserId?: string): Promise<JobSheetDriveTarget> {
+  if (!googleDriveEnabled) return { ok: false, reason: "drive-off" };
+  const sharedDriveId = folkpathsSharedDriveId();
+  if (!sharedDriveId) return { ok: false, reason: "no-shared-drive" };
+  const refreshToken = await folkpathsDriveToken(actingUserId);
+  if (!refreshToken) return { ok: false, reason: "not-connected" };
+  return { ok: true, refreshToken, sharedDriveId };
+}
+
+// Render the saved job sheet to a PDF on the server and store it in the Folkpaths Shared
 // Drive under "Folkpaths Job Sheets / YYYY-MM". Always a PDF — the owner's rule is that
 // the job sheets in Drive are PDFs, not Google Docs. Rendered by the same headless Chrome
 // as the certificates (lib/certificates/pdf), which has the Thai fonts. Saved under the
 // same name each time, so a re-save (an approval, a correction) replaces the file in place
-// and keeps its link. Uses the company Drive account (FOLKPATHS_DRIVE_EMAIL).
+// and keeps its link.
 // Best-effort: returns the link or null, never throws — a Drive or renderer hiccup must not
 // break the caller.
 export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx: number): Promise<string | null> {
   try {
-    if (!googleDriveEnabled) return null;
-    const refreshToken = await folkpathsDriveToken();
-    if (!refreshToken) return null;
+    const target = await jobSheetDriveTarget();
+    if (!target.ok) return null;
     const doc = await jobSheetDriveDocument(guideId, date, slotIdx);
     if (!doc) return null;
     const pdf = await renderPdf(doc.html);
-    const { link } = await saveBufferToDrive({ refreshToken, name: doc.name, base64: pdf.toString("base64"), mimeType: "application/pdf", folderPath: doc.folderPath });
+    const { link } = await saveBufferToDrive({ refreshToken: target.refreshToken, sharedDriveId: target.sharedDriveId, name: doc.name, base64: pdf.toString("base64"), mimeType: "application/pdf", folderPath: doc.folderPath });
     return link;
   } catch {
     return null;
