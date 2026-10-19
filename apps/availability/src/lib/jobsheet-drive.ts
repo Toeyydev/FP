@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
-import { googleDriveEnabled, folkpathsDriveToken, folkpathsSharedDriveId, saveBufferToDrive } from "@/lib/google-drive";
+import { folkpathsSharedDriveId, saveBufferWithAccessToken } from "@/lib/google-drive";
+import { serviceAccountAccessToken, serviceAccountConfig } from "@/lib/drive-service-account";
 // The server-side HTML→PDF renderer (headless Chrome with the Thai fonts). It lives with the
 // certificates because they needed it first; only the renderer is used — no certificate data.
 import { renderPdf } from "@/lib/certificates/pdf";
@@ -18,16 +19,25 @@ export const JOB_SHEET_PDF_FONTS = `'Umpush', 'Loma', 'Noto Sans Thai', Arial, s
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 // Where job sheet PDFs are filed: the Folkpaths Shared Drive (FOLKPATHS_SHARED_DRIVE_ID),
-// written through the company Google connection (FOLKPATHS_DRIVE_EMAIL). Never a My Drive:
-// with no Shared Drive configured there is no destination, and the caller saves nothing.
-export type JobSheetDriveTarget = { ok: true; refreshToken: string; sharedDriveId: string } | { ok: false; reason: "drive-off" | "not-connected" | "no-shared-drive" };
-export async function jobSheetDriveTarget(actingUserId?: string): Promise<JobSheetDriveTarget> {
-  if (!googleDriveEnabled) return { ok: false, reason: "drive-off" };
+// written by the Folkpaths service account, a Contributor member of that Shared Drive
+// (lib/drive-service-account). Never the admin@folkpaths.com OAuth connection and never a
+// My Drive: without both settings there is no destination, and the caller saves nothing.
+// A configuration check only — no token is fetched and nothing is written.
+export type JobSheetDriveTarget = { ok: true; sharedDriveId: string } | { ok: false; reason: "no-shared-drive" | "no-service-account" };
+export function jobSheetDriveTarget(): JobSheetDriveTarget {
   const sharedDriveId = folkpathsSharedDriveId();
   if (!sharedDriveId) return { ok: false, reason: "no-shared-drive" };
-  const refreshToken = await folkpathsDriveToken(actingUserId);
-  if (!refreshToken) return { ok: false, reason: "not-connected" };
-  return { ok: true, refreshToken, sharedDriveId };
+  if (!serviceAccountConfig()) return { ok: false, reason: "no-service-account" };
+  return { ok: true, sharedDriveId };
+}
+
+// Save a job sheet PDF's bytes in the Shared Drive under folderPath. Throws when there is no
+// destination or Drive refuses; same name → the existing PDF is updated in place.
+export async function saveJobSheetPdf(o: { name: string; base64: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
+  const target = jobSheetDriveTarget();
+  if (!target.ok) throw new Error(`job-sheet-drive: ${target.reason}`);
+  const token = await serviceAccountAccessToken();
+  return saveBufferWithAccessToken(token, { ...o, mimeType: "application/pdf", sharedDriveId: target.sharedDriveId });
 }
 
 // Render the saved job sheet to a PDF on the server and store it in the Folkpaths Shared
@@ -40,12 +50,11 @@ export async function jobSheetDriveTarget(actingUserId?: string): Promise<JobShe
 // break the caller.
 export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx: number): Promise<string | null> {
   try {
-    const target = await jobSheetDriveTarget();
-    if (!target.ok) return null;
+    if (!jobSheetDriveTarget().ok) return null;
     const doc = await jobSheetDriveDocument(guideId, date, slotIdx);
     if (!doc) return null;
     const pdf = await renderPdf(doc.html);
-    const { link } = await saveBufferToDrive({ refreshToken: target.refreshToken, sharedDriveId: target.sharedDriveId, name: doc.name, base64: pdf.toString("base64"), mimeType: "application/pdf", folderPath: doc.folderPath });
+    const { link } = await saveJobSheetPdf({ name: doc.name, base64: pdf.toString("base64"), folderPath: doc.folderPath });
     return link;
   } catch {
     return null;

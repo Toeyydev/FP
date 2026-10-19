@@ -5,7 +5,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { renderPdf } from "@/lib/certificates/pdf";
-import { JOB_SHEET_PDF_FONTS, jobSheetDriveTarget } from "@/lib/jobsheet-drive";
+import { JOB_SHEET_PDF_FONTS, jobSheetDriveTarget, saveJobSheetPdf } from "@/lib/jobsheet-drive";
 import { computeTotals, expenseAmount, jobSheetDriveName, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { tourCostBreakdown } from "@/lib/peak-sync";
 
@@ -18,8 +18,9 @@ export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const connected = googleDriveEnabled ? !!(await folkpathsDriveToken(session?.user?.id)) : false;
-  // Job sheet PDFs need the Folkpaths Shared Drive configured as well (lib/jobsheet-drive).
-  const sharedDrive = (await jobSheetDriveTarget(session?.user?.id)).ok;
+  // Job sheet PDFs are filed by the service account in the Folkpaths Shared Drive
+  // (lib/jobsheet-drive) — independent of this Google connection, which e-slips use.
+  const sharedDrive = jobSheetDriveTarget().ok;
   return NextResponse.json({ enabled: googleDriveEnabled, connected, sharedDrive });
 }
 
@@ -33,9 +34,11 @@ export async function POST(req: NextRequest) {
   // if Drive isn't configured/connected. We attempt the Drive copy only when we can.
   // The copy always goes to the shared Folkpaths Drive, whoever the operator is.
   const refreshToken = googleDriveEnabled ? await folkpathsDriveToken(session?.user?.id) : null;
-  // Job sheet PDFs go to the Folkpaths Shared Drive, never a My Drive (lib/jobsheet-drive).
-  const target = await jobSheetDriveTarget(session?.user?.id);
-  const noSharedDrive = "The Folkpaths Shared Drive isn't configured (FOLKPATHS_SHARED_DRIVE_ID), so the job sheet PDF wasn't saved.";
+  // Job sheet PDFs go to the Folkpaths Shared Drive through the service account — never this
+  // OAuth connection, never a My Drive (lib/jobsheet-drive). The e-slip below keeps the OAuth
+  // connection and My Drive, unchanged.
+  const target = jobSheetDriveTarget();
+  const noSharedDrive = "The Folkpaths Shared Drive isn't set up for job sheets (FOLKPATHS_SHARED_DRIVE_ID and the service account), so the job sheet PDF wasn't saved.";
 
   const body = await req.json().catch(() => null);
   const guideId = String(body?.guideId || "");
@@ -80,11 +83,11 @@ export async function POST(req: NextRequest) {
     let link: string | undefined;
     let eslipLink: string | undefined;
     let driveError: string | undefined;
-    if (!refreshToken && (pdfBase64 || eslipBase64)) driveError = "Google Drive isn't connected, so the copy wasn't saved.";
-    if (pdfBase64 && refreshToken && !target.ok) driveError = noSharedDrive;
+    if (pdfBase64 && !target.ok) driveError = noSharedDrive;
+    if (eslipBase64 && !refreshToken) driveError = driveError || "Google Drive isn't connected, so the e-slip copy wasn't saved.";
     if (pdfBase64 && target.ok) {
       try {
-        const r = await saveBufferToDrive({ refreshToken: target.refreshToken, sharedDriveId: target.sharedDriveId, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const r = await saveJobSheetPdf({ name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         link = r.link;
       } catch (e) { driveError = (e as Error).message.slice(0, 200); }
     }
@@ -103,7 +106,6 @@ export async function POST(req: NextRequest) {
     // The slip is filed, not paid: Payments records the transfer that pays this job.
     return NextResponse.json({ ok: true, link, eslipLink, paid, driveError, recordPayment: !!eslipBase64 });
   }
-  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
   if (!target.ok) return NextResponse.json({ error: "no-shared-drive", hint: noSharedDrive }, { status: 400 });
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 
@@ -160,7 +162,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const pdf = await renderPdf(html);
-    const { link } = await saveBufferToDrive({ refreshToken: target.refreshToken, sharedDriveId: target.sharedDriveId, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdf.toString("base64"), mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const { link } = await saveJobSheetPdf({ name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdf.toString("base64"), folderPath: ["Folkpaths Job Sheets", monthFolder] });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, format: "pdf" } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {

@@ -18,7 +18,11 @@ const render = vi.hoisted(() => vi.fn(async (_html: string) => Buffer.from("%PDF
 const saveHtml = { mock: { get calls() { return render.mock.calls.map(([html]) => [{ html }]); } } };
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 const sharedDrive = vi.hoisted(() => ({ id: "0AExampleSharedDrive1" as string | null }));
-vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", folkpathsSharedDriveId: () => sharedDrive.id, saveBufferToDrive: saveBuffer }));
+// The admin OAuth path is present only so a test can prove it is never touched.
+const oauth = vi.hoisted(() => ({ token: vi.fn(async () => "admin-refresh-token"), save: vi.fn() }));
+vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: oauth.token, saveBufferToDrive: oauth.save, folkpathsSharedDriveId: () => sharedDrive.id, saveBufferWithAccessToken: saveBuffer }));
+const sa = vi.hoisted(() => ({ configured: true, token: vi.fn(async () => "sa-access-token") }));
+vi.mock("@/lib/drive-service-account", () => ({ serviceAccountConfig: () => (sa.configured ? { email: "x@p.iam.gserviceaccount.com", privateKey: "k" } : null), serviceAccountAccessToken: sa.token }));
 vi.mock("@/lib/certificates/pdf", () => ({ renderPdf: render }));
 
 import { saveJobSheetToDrive } from "./jobsheet-drive";
@@ -35,6 +39,7 @@ const ROWS = [
 beforeEach(() => {
   vi.clearAllMocks();
   sharedDrive.id = "0AExampleSharedDrive1";
+  sa.configured = true;
   prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: ROWS, guideFee: { price: 1200, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"), certifiedAt: null });
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001" });
   prismaMock.user.findUnique.mockResolvedValue({ fullName: "Guide A", displayName: "Guide A" });
@@ -127,6 +132,37 @@ describe("the Google Doc states only confirmed payers as fact", () => {
   });
 });
 
+describe("job sheets are filed by the service account, never the admin OAuth connection", () => {
+  it("uses the service account's token and never asks for the OAuth connection", async () => {
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    expect(sa.token).toHaveBeenCalledTimes(1);
+    expect(saveBuffer.mock.calls[0][0]).toBe("sa-access-token");
+    expect(oauth.token).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+  it("without the service account it saves nothing — and does not fall back to the OAuth connection or My Drive", async () => {
+    sa.configured = false;
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(render).not.toHaveBeenCalled();
+    expect(sa.token).not.toHaveBeenCalled();
+    expect(saveBuffer).not.toHaveBeenCalled();
+    expect(oauth.token).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+  it("without the Shared Drive id it saves nothing either", async () => {
+    sharedDrive.id = null;
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(saveBuffer).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+  it("a refused service-account token saves nothing and never throws", async () => {
+    sa.token.mockRejectedValueOnce(new Error("drive-service-account: token refused (400 invalid_grant)"));
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(saveBuffer).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+});
+
 describe("the copy in Drive is a PDF", () => {
   it("is filed in the Folkpaths Shared Drive, or nowhere — never a My Drive", async () => {
     sharedDrive.id = null;
@@ -137,7 +173,8 @@ describe("the copy in Drive is a PDF", () => {
   it("uploads the rendered PDF under the job sheet's name with .pdf, in the month folder", async () => {
     await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
     expect(render).toHaveBeenCalledTimes(1);
-    const up = saveBuffer.mock.calls[0][0];
+    const [token, up] = saveBuffer.mock.calls[0];
+    expect(token).toBe("sa-access-token");
     expect(up.mimeType).toBe("application/pdf");
     expect(up.name).toBe("FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf");
     expect(up.folderPath).toEqual(["Folkpaths Job Sheets", "2030-05 May"]);

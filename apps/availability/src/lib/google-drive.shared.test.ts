@@ -4,7 +4,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 vi.mock("@/lib/google-calendar", () => ({ googleEnabled: true, googleAccessToken: async () => "access-token" }));
 vi.mock("@/lib/db", () => ({ prisma: {} }));
 
-import { saveBufferToDrive, folkpathsSharedDriveId, sharedDriveParams } from "./google-drive";
+import { saveBufferToDrive, saveBufferWithAccessToken, folkpathsSharedDriveId, sharedDriveParams } from "./google-drive";
 
 const SD = "0AExampleSharedDrive1";
 type Call = { url: URL; method: string; body?: string };
@@ -22,7 +22,10 @@ function stubDrive(existing: string[]) {
     return json({ id: existing[0] ?? "new-file", webViewLink: `https://drive.example/${existing[0] ?? "new-file"}` });
   }));
 }
-const save = (sharedDriveId?: string) => saveBufferToDrive({ refreshToken: "r", name: "FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf", base64: Buffer.from("%PDF").toString("base64"), mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", "2030-05 May"], sharedDriveId });
+const NAME = "FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf";
+const FILE = { name: NAME, base64: Buffer.from("%PDF").toString("base64"), mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", "2030-05 May"] };
+// The service-account path (job sheets): an access token and the Shared Drive.
+const save = (sharedDriveId?: string) => saveBufferWithAccessToken("sa-access-token", { ...FILE, sharedDriveId });
 
 beforeEach(() => { calls = []; });
 afterEach(() => { vi.unstubAllGlobals(); delete process.env.FOLKPATHS_SHARED_DRIVE_ID; });
@@ -78,9 +81,37 @@ describe("saving into the Shared Drive", () => {
     const lookup = calls.find((c) => c.method === "GET" && (c.url.searchParams.get("q") ?? "").includes("mimeType != "))!;
     expect(lookup.url.searchParams.get("q")).toContain("name = 'FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf'");
   });
+  it("saving the same name twice is idempotent: one file, updated in place, same link", async () => {
+    stubDrive(["existing-pdf"]);
+    const first = await save(SD);
+    const second = await save(SD);
+    expect(second).toEqual(first);
+    expect(calls.filter((c) => c.method === "POST" && c.url.pathname.startsWith("/upload/"))).toHaveLength(0);
+    expect(calls.filter((c) => c.method === "PATCH" && c.url.pathname === "/upload/drive/v3/files/existing-pdf")).toHaveLength(2);
+  });
+  it("authenticates with the token it is given, not the OAuth connection", async () => {
+    stubDrive([]);
+    await save(SD);
+    const auths = (vi.mocked(fetch).mock.calls as unknown as [string, RequestInit][]).map(([, i]) => (i?.headers as Record<string, string>)?.authorization);
+    expect(new Set(auths)).toEqual(new Set(["Bearer sa-access-token"]));
+  });
+});
+
+describe("the OAuth / My Drive path (e-slips, advance slips) is unchanged", () => {
+  it("cannot reach a Shared Drive: no Shared Drive option exists on it", async () => {
+    stubDrive([]);
+    // @ts-expect-error sharedDriveId is not an option of the OAuth path
+    await saveBufferToDrive({ refreshToken: "r", ...FILE, sharedDriveId: SD });
+    for (const c of calls) {
+      expect(c.url.searchParams.get("supportsAllDrives")).toBeNull();
+      expect(c.url.searchParams.get("driveId")).toBeNull();
+    }
+  });
   it("without a Shared Drive, the requests are the My Drive ones they always were", async () => {
     stubDrive([]);
-    await save();
+    await saveBufferToDrive({ refreshToken: "r", ...FILE });
+    const auths = (vi.mocked(fetch).mock.calls as unknown as [string, RequestInit][]).map(([, i]) => (i?.headers as Record<string, string>)?.authorization);
+    expect(new Set(auths)).toEqual(new Set(["Bearer access-token"])); // the OAuth connection's token
     for (const c of calls) {
       expect(c.url.searchParams.get("supportsAllDrives")).toBeNull();
       expect(c.url.searchParams.get("driveId")).toBeNull();

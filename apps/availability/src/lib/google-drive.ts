@@ -28,10 +28,10 @@ export async function folkpathsDriveToken(actingUserId?: string): Promise<string
 }
 
 // The Folkpaths company Shared Drive — the source of truth for company documents (job sheet
-// PDFs first). Configured, never hard-coded: FOLKPATHS_SHARED_DRIVE_ID is the Shared Drive's
-// id (the part after /drive/folders/ when the Shared Drive itself is open in Drive). Null when
-// unset: a caller that must file in the Shared Drive then refuses rather than fall back to
-// someone's My Drive.
+// PDFs first), written by the service account (lib/drive-service-account). Configured, never
+// hard-coded: FOLKPATHS_SHARED_DRIVE_ID is the Shared Drive's id (the part after
+// /drive/folders/ when the Shared Drive itself is open in Drive). Null when unset: a caller
+// that must file in the Shared Drive then refuses rather than fall back to a My Drive.
 export function folkpathsSharedDriveId(): string | null {
   const id = (process.env.FOLKPATHS_SHARED_DRIVE_ID ?? "").trim();
   return /^[A-Za-z0-9_-]{10,}$/.test(id) ? id : null;
@@ -142,11 +142,19 @@ async function trashFile(token: string, id: string, sharedDriveId?: string): Pro
   }).catch(() => {});
 }
 
-// `sharedDriveId` files it in that Shared Drive (folderPath created under the Shared Drive's
-// root); without it, in the connected account's My Drive as before.
-export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[]; sharedDriveId?: string }): Promise<{ id: string; link: string }> {
+// The connected account's My Drive (the admin@folkpaths.com OAuth connection, drive.file):
+// e-slips, advance slips and every other My Drive flow. Never a Shared Drive — company
+// documents in the Shared Drive go through the service account (lib/drive-service-account).
+export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
   const token = await googleAccessToken(opts.refreshToken);
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
+  return saveBufferWithAccessToken(token, { name: opts.name, base64: opts.base64, mimeType: opts.mimeType, folderPath: opts.folderPath });
+}
+
+// The upload itself, for whoever holds the access token. With `sharedDriveId` the folderPath
+// is found or created under that Shared Drive's root and every call carries the Shared Drive
+// options; without it, the requests are the My Drive ones.
+export async function saveBufferWithAccessToken(token: string, opts: { name: string; base64: string; mimeType: string; folderPath: string[]; sharedDriveId?: string }): Promise<{ id: string; link: string }> {
   const sd = opts.sharedDriveId;
   let parent: string | undefined;
   for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent, sd);

@@ -9,9 +9,8 @@ import { jobSheetDriveTarget, saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 export const dynamic = "force-dynamic";
 
 const DESTINATION_HELP = {
-  "drive-off": "Google Drive is not set up on this server.",
-  "not-connected": "The company Google account is not connected.",
   "no-shared-drive": "The Folkpaths Shared Drive is not configured (FOLKPATHS_SHARED_DRIVE_ID). Nothing was saved.",
+  "no-service-account": "The Folkpaths service account is not configured (GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL / GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY). Nothing was saved.",
 } as const;
 
 // A PDF render takes a few seconds; a small batch keeps each request well inside a timeout.
@@ -38,7 +37,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: [`Send at most ${BATCH} sheets at a time.`] }, { status: 400 });
 
   // Nothing is saved anywhere until the Shared Drive is configured — never to a My Drive.
-  const target = await jobSheetDriveTarget(session.user.id);
+  const target = jobSheetDriveTarget();
   const destination = target.ok ? "shared-drive" : target.reason;
 
   if (parsed.data.action === "preview") {

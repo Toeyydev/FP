@@ -12,8 +12,7 @@ type Result = Key & { ok: boolean; link?: string | null; error?: string };
 // What is missing, in words — the server sends which (never the Shared Drive's id itself).
 const DESTINATION_TEXT: Record<string, string> = {
   "no-shared-drive": "The Folkpaths Shared Drive is not configured on the server (FOLKPATHS_SHARED_DRIVE_ID).",
-  "not-connected": "The company Google account is not connected.",
-  "drive-off": "Google Drive is not set up on this server.",
+  "no-service-account": "The Folkpaths service account is not configured on the server (GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL / GOOGLE_DRIVE_SERVICE_ACCOUNT_PRIVATE_KEY).",
 };
 
 const dShort = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });

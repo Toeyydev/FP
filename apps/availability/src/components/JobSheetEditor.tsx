@@ -165,7 +165,7 @@ export default function JobSheetEditor() {
   const [recordPay, setRecordPay] = useState<CreatedDocument | null>(null);
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
   const [secTab, setSecTab] = useState<"all" | "details" | "expenses" | "fee">("all"); // operator section tabs — "all" keeps the classic single-scroll sheet
-  const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
+  const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean; sharedDrive: boolean }>({ enabled: false, connected: false, sharedDrive: false }); // Google Drive save (connected = the OAuth link e-slips use; sharedDrive = where job sheet PDFs go)
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
   const [expBusy, setExpBusy] = useState(false);
@@ -244,7 +244,7 @@ export default function JobSheetEditor() {
       .catch(() => {});
   }, [needsAccountPicker, canEdit, peakAccounts.length]);
 
-  useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected })).catch(() => {}); }, []);
+  useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected, sharedDrive: !!d.sharedDrive })).catch(() => {}); }, []);
 
   // Entrance-fee items (Grand Palace, Wat Pho, Wat Arun) are paid only for guests
   // whose tickets are "Included". Keep their pax in sync with that count.
@@ -356,7 +356,7 @@ export default function JobSheetEditor() {
     await jfetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => {});
     // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
     // record reflects it immediately (best-effort; needs a saved sheet + Drive).
-    if (drive.enabled && drive.connected) {
+    if (drive.sharedDrive) {
       try {
         const r = await jfetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx }) });
         setMsg(r.ok ? (ns > 0 ? "No-show saved & uploaded to Drive ✓" : "Updated & uploaded to Drive ✓") : "No-show saved ✓");
