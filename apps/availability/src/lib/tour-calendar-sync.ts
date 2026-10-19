@@ -32,6 +32,12 @@ import { googleEnabled, calendarApi } from "@/lib/google-calendar";
 // Google's reason, never personal data) and retried by the 5-minute loop with backoff;
 // after MAX_ATTEMPTS the operators are told once.
 //
+// While Google refuses to create a guide's event (the API switched off, no connection), the
+// guide is not left with nothing: they are emailed one .ics carrying the identifier Google
+// gives an event it was handed an id for (`<id>@google.com`), so when Google starts working
+// its invitation updates that same calendar entry instead of adding a second. Reassigning or
+// cancelling before then emails a CANCEL for it. (Email must be configured to deliver it.)
+//
 // Note: Google applies an event's reminders to the organizer's calendar. A guest's copy uses
 // the guest's own default notifications — Google gives the organizer no way to set them. So
 // the guide's one-hour reminder is FolkOPS's own (lib/tour-reminders); this one is secondary.
@@ -90,6 +96,28 @@ export function buildEventBody(o: { tourName: string; meetingPoint?: string | nu
 
 export const contentHash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
+/** The calendar identifier Google gives an event created with our id. */
+export const icalUidFor = (googleEventId: string) => `${googleEventId}@google.com`;
+
+// The emailed stand-in for an event Google would not create. Returns whether it was sent.
+async function emailFallback(o: { to: string; googleEventId: string; body: EventBody | null; method: "REQUEST" | "CANCEL"; sequence: number }): Promise<boolean> {
+  try {
+    const [{ makeIcs }, { sendEmail }] = await Promise.all([import("@/lib/calendar"), import("@/lib/email")]);
+    const b = o.body;
+    const startMs = b ? Date.parse(`${b.start.dateTime}+07:00`) : Date.now();
+    const durationMin = b ? Math.round((Date.parse(`${b.end.dateTime}+07:00`) - startMs) / 60_000) : 60;
+    const ics = makeIcs({ uid: icalUidFor(o.googleEventId), startMs, durationMin, summary: b?.summary ?? "Tour", description: b?.description, location: b?.location,
+      method: o.method, sequence: o.sequence, status: o.method === "CANCEL" ? "CANCELLED" : "CONFIRMED" });
+    const r = await sendEmail({
+      to: o.to,
+      subject: o.method === "CANCEL" ? `Tour cancelled for you: ${b?.summary ?? "a tour"}` : `Tour: ${b?.summary ?? ""} — ${b?.start.dateTime.replace("T", " ").slice(0, 16) ?? ""}`,
+      text: o.method === "CANCEL" ? "This tour is no longer yours. It has been removed from your calendar." : `${b?.summary ?? ""}\n${b?.start.dateTime.replace("T", " ").slice(0, 16) ?? ""}\n${b?.description ?? ""}`,
+      icalEvent: { method: o.method, content: ics },
+    });
+    return !!r?.sent;
+  } catch { return false; }
+}
+
 // The organizer: the connected account named by FOLKPATHS_CALENDAR_EMAIL (else
 // FOLKPATHS_DRIVE_EMAIL, the company account), else the earliest operator/admin connection.
 async function organizer(): Promise<{ refreshToken: string; calendarId: string } | null> {
@@ -142,9 +170,9 @@ async function syncOnce(date: string, slotIdx: number, o: { create?: string; dep
   const cancelled = rows.filter((r) => r.state === "CANCELLED");
   const touched: Row[] = [];
   const kept = new Set<string>();
-  for (const r of active) if (r.attendeeGuideId && want.has(r.attendeeGuideId)) { kept.add(r.attendeeGuideId); touched.push(r); }
+  for (const r of active) if (want.has(r.attendeeGuideId)) { kept.add(r.attendeeGuideId); touched.push(r); }
   const spareActive = active.filter((r) => !touched.includes(r));
-  const spareCancelled = cancelled.filter((r) => !r.attendeeGuideId || !want.has(r.attendeeGuideId));
+  const spareCancelled = cancelled.filter((r) => !want.has(r.attendeeGuideId));
 
   for (const [guideId, tourId] of want) {
     if (kept.has(guideId)) continue;
@@ -179,7 +207,7 @@ async function pushRow(r: Row): Promise<void> {
   if (!fresh) return;
   let body: EventBody | { status: "cancelled" };
   let attendeeEmail: string | null = fresh.attendeeEmail;
-  if (fresh.state === "ACTIVE" && fresh.attendeeGuideId) {
+  if (fresh.state === "ACTIVE") {
     const [u, tour, sheet, offer] = await Promise.all([
       prisma.user.findUnique({ where: { guideId: fresh.attendeeGuideId }, select: { email: true, calendarEmail: true } }),
       prisma.tour.findUnique({ where: { id: fresh.tourId }, select: { id: true, name: true, meetingPoint: true, durationMin: true } }),
@@ -196,14 +224,21 @@ async function pushRow(r: Row): Promise<void> {
     body = { status: "cancelled" };
   }
   const hash = contentHash(body);
-  if (fresh.syncStatus === "OK" && fresh.contentHash === hash) return; // Google already has exactly this — no call, no email to the guide
+  // A fallback .ics went to someone who no longer holds this event (reassigned, or cancelled)
+  // and Google never made the event → withdraw it from their calendar.
+  let row = fresh;
+  if (row.fallbackSentAt && row.fallbackEmail && !row.createdInGoogle && (row.state === "CANCELLED" || row.fallbackEmail !== attendeeEmail)) {
+    await emailFallback({ to: row.fallbackEmail, googleEventId: row.googleEventId, body: null, method: "CANCEL", sequence: 1 });
+    row = await prisma.tourCalendarEvent.update({ where: { id: row.id }, data: { fallbackSentAt: null, fallbackEmail: null } });
+  }
+  if (row.syncStatus === "OK" && row.contentHash === hash) return; // Google already has exactly this — no call, no email to the guide
   if (fresh.state === "CANCELLED" && !fresh.createdInGoogle) {
     await prisma.tourCalendarEvent.update({ where: { id: fresh.id }, data: { syncStatus: "OK", contentHash: hash, lastError: null, nextAttemptAt: null, attendeeEmail } });
     return;
   }
 
   const org = await organizer();
-  let result: { ok: boolean; status: number; reason: string | null; op: string };
+  let result: { ok: boolean; status: number; reason: string | null; op: string; json?: Record<string, unknown> };
   if (!org) result = { ok: false, status: 0, reason: "no-organizer-connection", op: "none" };
   else {
     const path = `/calendars/${encodeURIComponent(fresh.calendarId)}/events`;
@@ -219,22 +254,43 @@ async function pushRow(r: Row): Promise<void> {
     }
   }
 
+  // Does Google's identifier for the event match the one a fallback .ics used? Recorded, so
+  // the first real event proves (or disproves) that a guide who had the fallback is not
+  // given the tour twice.
+  const icalUid = typeof result.json?.iCalUID === "string" ? result.json.iCalUID : null;
   if (result.ok) {
     await prisma.tourCalendarEvent.update({ where: { id: fresh.id }, data: { syncStatus: "OK", contentHash: hash, createdInGoogle: true, attempts: 0, lastError: null, nextAttemptAt: null, attendeeEmail } });
   } else {
     const attempts = fresh.attempts + 1;
     const wait = BACKOFF_MIN[Math.min(attempts - 1, BACKOFF_MIN.length - 1)];
     await prisma.tourCalendarEvent.update({ where: { id: fresh.id }, data: { syncStatus: "FAILED", attempts, lastError: `${result.status} ${result.reason ?? ""}`.trim().slice(0, 200), nextAttemptAt: new Date(Date.now() + wait * 60_000) } });
+    // Google would not create this guide's event: email them the stand-in, once — and on the
+    // first failure tell the operators, so a guide without either is never a silent outcome.
+    if (row.state === "ACTIVE" && !row.createdInGoogle && "summary" in body) {
+      let emailed = !!row.fallbackSentAt;
+      if (!emailed && attendeeEmail && await emailFallback({ to: attendeeEmail, googleEventId: row.googleEventId, body, method: "REQUEST", sequence: 0 })) {
+        await prisma.tourCalendarEvent.update({ where: { id: fresh.id }, data: { fallbackSentAt: new Date(), fallbackEmail: attendeeEmail } });
+        emailed = true;
+      }
+      if (attempts === 1) {
+        try {
+          const { notifyOps } = await import("@/lib/booking-import");
+          await notifyOps(`Google Calendar did not create the invitation for ${row.attendeeGuideId} — ${body.summary}, ${row.date} ${SLOT_TIMES[row.slotIdx] ?? ""} (${result.status} ${result.reason ?? ""}). FolkOPS keeps retrying. ${emailed ? "The guide was emailed a calendar file meanwhile." : "The guide has NOT been sent a calendar invitation — email is not set up or has no address for them."}`,
+            "Calendar invite not sent", `${row.attendeeGuideId} · ${row.date} · ${result.reason ?? result.status}`, { date: row.date, push: false });
+        } catch { /* alerts are best-effort */ }
+      }
+    }
     if (attempts === MAX_ATTEMPTS) {
       try {
         const { notifyOps } = await import("@/lib/booking-import");
-        await notifyOps(`Google Calendar could not update the invitation for ${fresh.attendeeGuideId ?? "a guide"} on ${fresh.date} ${SLOT_TIMES[fresh.slotIdx] ?? ""} after ${MAX_ATTEMPTS} tries (${result.status} ${result.reason ?? ""}). The guide may not have the event.`, "Calendar invite failing", `${fresh.date} · ${result.reason ?? result.status}`, { date: fresh.date });
+        await notifyOps(`Google Calendar could not update the invitation for ${fresh.attendeeGuideId} on ${fresh.date} ${SLOT_TIMES[fresh.slotIdx] ?? ""} after ${MAX_ATTEMPTS} tries (${result.status} ${result.reason ?? ""}). The guide may not have the event.`, "Calendar invite failing", `${fresh.date} · ${result.reason ?? result.status}`, { date: fresh.date });
       } catch { /* alerts are best-effort */ }
     }
   }
   try {
     await audit({ actorId: null, actorRole: "SYSTEM", action: result.ok ? "calendar.event_synced" : "calendar.event_failed", entityType: "TourCalendarEvent", entityId: fresh.id,
-      detail: { date: fresh.date, slotIdx: fresh.slotIdx, guideId: fresh.attendeeGuideId, state: fresh.state, op: result.op, status: result.status, ...(result.ok ? {} : { reason: result.reason }) } });
+      detail: { date: fresh.date, slotIdx: fresh.slotIdx, guideId: fresh.attendeeGuideId, state: fresh.state, op: result.op, status: result.status, ...(result.ok ? {} : { reason: result.reason }),
+        ...(icalUid ? { icalUidMatchesFallback: icalUid === icalUidFor(fresh.googleEventId) } : {}) } });
   } catch { /* the audit never blocks */ }
 }
 

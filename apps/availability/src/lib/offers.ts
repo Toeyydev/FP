@@ -291,8 +291,9 @@ export async function acceptOffer(offerId: string, guideId: string, o: { by?: "g
   }
   // Offer is resolved — clear its notification from EVERY candidate's bell.
   await prisma.notification.deleteMany({ where: { offerId } });
-  // The old emailed .ics — sent only while Google invitations are not set up (lib/calendar).
-  try { await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on email */ }
+  // The old emailed .ics — only for a job an operator gave (lib/calendar). A guide's own Accept
+  // gets the company calendar event, and its .ics fallback if Google refuses it, from the sync.
+  if (o.by === "operator") { try { await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on email */ } }
   // The company calendar event, with this guide invited — or, on a replacement, the same
   // event handed over to them. Only an Accept creates one. Not awaited: Google must never
   // slow or block an Accept; failures are recorded and retried (lib/tour-calendar-sync).

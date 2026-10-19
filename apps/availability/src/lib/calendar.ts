@@ -14,11 +14,12 @@ const esc = (s: string) => (s || "").replace(/\\/g, "\\\\").replace(/[,;]/g, (c)
 
 // A calendar event with two reminders (12h + 1h before). Google Calendar reads
 // the VALARMs and notifies the guide automatically once they add it.
-export function makeIcs(o: { uid: string; startMs: number; durationMin: number; summary: string; description?: string; location?: string; status?: "CONFIRMED" | "CANCELLED" }): string {
+export function makeIcs(o: { uid: string; startMs: number; durationMin: number; summary: string; description?: string; location?: string; status?: "CONFIRMED" | "CANCELLED"; method?: "REQUEST" | "CANCEL"; sequence?: number }): string {
   const lines = [
-    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Folkpaths//Guide//EN", "CALSCALE:GREGORIAN", "METHOD:REQUEST",
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Folkpaths//Guide//EN", "CALSCALE:GREGORIAN", `METHOD:${o.method ?? "REQUEST"}`,
     "BEGIN:VEVENT",
     `UID:${o.uid}`,
+    o.sequence ? `SEQUENCE:${o.sequence}` : "",
     `DTSTAMP:${fmtUtc(o.startMs)}`,
     `DTSTART:${fmtUtc(o.startMs)}`,
     `DTEND:${fmtUtc(o.startMs + o.durationMin * 60000)}`,
@@ -33,11 +34,14 @@ export function makeIcs(o: { uid: string; startMs: number; durationMin: number; 
   return lines.filter(Boolean).join("\r\n");
 }
 
-// Email the guide a calendar invite for an assigned job (fire-and-forget).
-// Retired once Google invitations are set up: the company calendar event invites the guide
-// itself (lib/tour-calendar-sync), and a second .ics would put the tour in their calendar twice.
+// Email the guide a calendar invite for a job given to them by an operator (fire-and-forget).
+// Not sent when the company Google connection exists, and never for a job that has a company
+// calendar event for this guide: that event invites them, and when Google is failing the
+// calendar sync emails its own fallback .ics with the event's identifier
+// (lib/tour-calendar-sync). A guide's own Accept never comes here.
 export async function sendTourCalendarInvite(guideId: string, date: string, slotIdx: number) {
   if (await calendarInvitesActive()) return;
+  if (await prisma.tourCalendarEvent.findFirst({ where: { date, slotIdx, attendeeGuideId: guideId }, select: { id: true } })) return;
   const [guide, assignment] = await Promise.all([
     prisma.user.findUnique({ where: { guideId }, select: { email: true, displayName: true } }),
     prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, include: { tour: true } }),

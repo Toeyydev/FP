@@ -2021,12 +2021,19 @@ model TourCalendarEvent {
   tourId          String
   googleEventId   String    @unique
   calendarId      String // the organizer's calendar ("primary" of the connected account)
-  attendeeGuideId String? // the guide on it now; kept after a cancel so a reinstated job finds it
+  // The guide on it now; kept after a cancel so a reinstated job finds it. Required: in
+  // Postgres NULLs are distinct, so a nullable column would let the unique index below
+  // admit any number of guide-less rows for one departure.
+  attendeeGuideId String
   attendeeEmail   String?
   state           String    @default("ACTIVE") // ACTIVE | CANCELLED
   syncStatus      String    @default("PENDING") // OK | PENDING | FAILED — Google matches `state` and the content
   contentHash     String? // what Google last accepted; a patch (and its email to the guide) only when it changes
   createdInGoogle Boolean   @default(false)
+  // The emailed .ics sent while Google refused to create the event: when, and to which
+  // address. Same UID as the Google event, so once Google works it updates that entry.
+  fallbackSentAt  DateTime?
+  fallbackEmail   String?
   attempts        Int       @default(0)
   nextAttemptAt   DateTime?
   lastError       String? // status and Google's reason only — never personal data

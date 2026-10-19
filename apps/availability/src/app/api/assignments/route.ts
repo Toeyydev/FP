@@ -164,10 +164,11 @@ export async function POST(req: NextRequest) {
     });
     forgetCached(DASHBOARD_CACHE_KEY);
     // Tell the guide it is in their schedule, as an accepted offer does. Best-effort.
-    try { await sendTourCalendarInvite(guideId, date, slotIdx); } catch { /* never block on email */ }
     // Updates or reinstates the departure's existing calendar event for this guide; a manual
     // assignment never creates one (only a guide's Accept does — lib/tour-calendar-sync).
     try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, date, slotIdx); } catch { /* never block on calendar */ }
+    // After the sync: a guide who now holds the departure's existing event is invited by it.
+    try { await sendTourCalendarInvite(guideId, date, slotIdx); } catch { /* never block on email */ }
     // Every channel the guide can be reached on: in the app (the bell), a push to the
     // phone or browser where the app is installed, and LINE when linked. Email is left to
     // the calendar invite above. (A slot the guide already holds is refused above, so this

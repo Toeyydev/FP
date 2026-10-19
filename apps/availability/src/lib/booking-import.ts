@@ -212,11 +212,13 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
         placed += r.placed.size;
       } catch { /* one departure must not stop the sweep */ }
     }
-    // Safety net: a departure with no live guests left for this tour loses its calendar events.
+    // Safety net: a tour whose bookings were ALL cancelled loses its calendar event (Google
+    // tells the guide). Only then — a job with no bookings at all (made by hand) keeps its
+    // event, the same rule the one-hour reminder uses (lib/tour-reminders). removeTourEvents
+    // only acts when the departure has a company event (lib/tour-calendar-sync).
     for (const a of ga) {
-      const anyLive = gb.some((b) => ["OFFERED", "ASSIGNED"].includes(b.status) && (!b.tourId || b.tourId === a.tourId));
-      // removeTourEvents only acts when the departure has a company event (lib/tour-calendar-sync).
-      if (!anyLive) { try { await removeTourEvents(a); } catch { /* best-effort */ } }
+      const forTour = gb.filter((b) => !b.tourId || b.tourId === a.tourId);
+      if (forTour.length && forTour.every((b) => b.status === "CANCELLED")) { try { await removeTourEvents(a); } catch { /* best-effort */ } }
     }
   }
 

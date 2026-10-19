@@ -16,7 +16,7 @@ const google = vi.hoisted(() => {
       if (store.has(id)) return { ok: false, status: 409, json: {}, reason: "duplicate" };
       store.set(id, { ...(o.body as Ev), status: (o.body?.status as string) ?? "confirmed" });
       if (state.loseNextInsertResponse) { state.loseNextInsertResponse = false; return { ok: false, status: 503, json: {}, reason: "backendError" }; }
-      return { ok: true, status: 200, json: { id }, reason: null };
+      return { ok: true, status: 200, json: { id, iCalUID: `${id}@google.com` }, reason: null };
     }
     const id = path.split("/").pop()!;
     const cur = store.get(id);
@@ -38,7 +38,8 @@ import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { acceptOffer, createOffer } from "@/lib/offers";
-import { pushTourToCalendars, removeTourEvents, retryTourCalendarEvents, googleEventIdFor, MAX_ATTEMPTS } from "@/lib/tour-calendar-sync";
+import { pushTourToCalendars, removeTourEvents, retryTourCalendarEvents, googleEventIdFor, icalUidFor, MAX_ATTEMPTS } from "@/lib/tour-calendar-sync";
+import { reconcileAssignedBookings } from "@/lib/booking-import";
 import { sendTourCalendarInvite } from "@/lib/calendar";
 
 const DATE = new Date(Date.now() + 7 * 3600_000 + 9 * 86400_000).toISOString().slice(0, 10);
@@ -263,5 +264,135 @@ describe("the old emailed invite is retired once Google invitations are set up",
     await assign(A);
     await sendTourCalendarInvite(A, DATE, SLOT);
     expect(mail.sendEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- When Google will not create the event (the API switched off, no connection) ----
+type Mail = { to: string; subject: string; icalEvent?: { method: string; content: string } };
+// Calendar emails only — creating an offer also emails the guide its Accept link.
+const mails = () => (mail.sendEmail.mock.calls as unknown as [Mail][]).map(([m]) => m).filter((m) => !!m.icalEvent);
+const uidOf = (m: Mail) => (m.icalEvent?.content.match(/^UID:(.+)$/m) || [])[1]?.trim();
+const methodOf = (m: Mail) => (m.icalEvent?.content.match(/^METHOD:(.+)$/m) || [])[1]?.trim();
+
+describe("a guide is never silently left with no calendar entry", () => {
+  it("Google refusing: the guide is emailed ONE .ics with the event's own identifier; when Google works it is the same entry", async () => {
+    google.state.failWith = { status: 403, reason: "accessNotConfigured" };
+    const offer = await createOffer({ tourId: "T-900", date: DATE, slotIdx: SLOT, pax: 2, onlyGuideId: A });
+    expect((await acceptOffer(offer.offerId!, A)).ok).toBe(true);
+    await settle();
+    const [row] = await rows();
+    expect(mails()).toHaveLength(1);
+    expect(mails()[0].to).toBe("guide-a@example.test");
+    expect(methodOf(mails()[0])).toBe("REQUEST");
+    expect(uidOf(mails()[0])).toBe(icalUidFor(row.googleEventId));
+    expect(mails()[0].icalEvent!.content).not.toMatch(/Secretname|000 0000/); // no guest data here either
+    // the operators are told, once, that it failed and that the guide got the file
+    const told = await prisma.notification.findMany({ where: { message: { contains: "did not create the invitation" } } });
+    expect(told).toHaveLength(1);
+    expect(told[0].message).toContain("The guide was emailed a calendar file");
+    // more failed retries: no second email, no second alert
+    for (let i = 0; i < 3; i++) { await prisma.tourCalendarEvent.updateMany({ data: { nextAttemptAt: new Date(0) } }); await retryTourCalendarEvents(); }
+    expect(mails()).toHaveLength(1);
+    expect(await prisma.notification.count({ where: { message: { contains: "did not create the invitation" } } })).toBe(1);
+    // Google switched on: the event is made, with the identifier the .ics used — one entry, not two
+    google.state.failWith = null;
+    await prisma.tourCalendarEvent.updateMany({ data: { nextAttemptAt: new Date(0) } });
+    await retryTourCalendarEvents();
+    expect(events()).toHaveLength(1);
+    expect(events()[0].id).toBe(row.googleEventId);
+    expect(mails()).toHaveLength(1);
+    const synced = await prisma.auditLog.findFirst({ where: { action: "calendar.event_synced", entityId: row.id }, orderBy: { createdAt: "desc" } });
+    expect((synced!.detail as { icalUidMatchesFallback?: boolean }).icalUidMatchesFallback).toBe(true);
+  });
+
+  it("Google working: no .ics at all — the guide is invited once, by Google", async () => {
+    const offer = await createOffer({ tourId: "T-900", date: DATE, slotIdx: SLOT, pax: 2, onlyGuideId: A });
+    expect((await acceptOffer(offer.offerId!, A)).ok).toBe(true);
+    await settle();
+    expect(events()).toHaveLength(1);
+    expect(mails()).toHaveLength(0);
+  });
+
+  it("no company Google connection at all: still ONE .ics (not the old one and the fallback)", async () => {
+    await prisma.googleCalendar.deleteMany({});
+    const offer = await createOffer({ tourId: "T-900", date: DATE, slotIdx: SLOT, pax: 2, onlyGuideId: A });
+    expect((await acceptOffer(offer.offerId!, A)).ok).toBe(true);
+    await settle();
+    expect(mails()).toHaveLength(1);
+    expect(uidOf(mails()[0])).toBe(icalUidFor((await rows())[0].googleEventId));
+  });
+
+  it("reassigned A → B while Google is refusing: A's .ics is withdrawn (CANCEL), B gets theirs", async () => {
+    google.state.failWith = { status: 403, reason: "accessNotConfigured" };
+    const first = await createOffer({ tourId: "T-900", date: DATE, slotIdx: SLOT, pax: 2, onlyGuideId: A });
+    expect((await acceptOffer(first.offerId!, A)).ok).toBe(true);
+    await settle();
+    const swap = await createOffer({ tourId: "T-900", date: DATE, slotIdx: SLOT, pax: 2, onlyGuideId: B, replacesGuideId: A });
+    expect((await acceptOffer(swap.offerId!, B)).ok).toBe(true);
+    await settle();
+    const uid = icalUidFor((await rows())[0].googleEventId);
+    expect(mails().map((m) => [m.to, methodOf(m), uidOf(m)])).toEqual([
+      ["guide-a@example.test", "REQUEST", uid],
+      ["guide-a@example.test", "CANCEL", uid],
+      ["guide-b@example.test", "REQUEST", uid],
+    ]);
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it("cancelled while Google is refusing: the guide's .ics is withdrawn", async () => {
+    google.state.failWith = { status: 403, reason: "accessNotConfigured" };
+    await assign(A);
+    await pushTourToCalendars(A, DATE, SLOT, { create: true });
+    await removeTourEvents({ guideId: A, date: DATE, slotIdx: SLOT });
+    expect(mails().map((m) => methodOf(m))).toEqual(["REQUEST", "CANCEL"]);
+  });
+
+  it("email not set up: nothing is pretended — the operators are told the guide has NO invitation", async () => {
+    mail.sendEmail.mockResolvedValue({ sent: false });
+    google.state.failWith = { status: 403, reason: "accessNotConfigured" };
+    await assign(A);
+    await pushTourToCalendars(A, DATE, SLOT, { create: true });
+    expect((await rows())[0].fallbackSentAt).toBeNull();
+    const told = await prisma.notification.findFirst({ where: { message: { contains: "did not create the invitation" } } });
+    expect(told!.message).toContain("has NOT been sent a calendar invitation");
+    mail.sendEmail.mockResolvedValue({ sent: true });
+  });
+});
+
+describe("the database itself refuses a duplicate or a guide-less event", () => {
+  const row = (o: Partial<{ id: string; attendeeGuideId: string | null }>) => prisma.tourCalendarEvent.create({ data: { id: o.id ?? "x", date: DATE, slotIdx: SLOT, tourId: "T-900", googleEventId: googleEventIdFor(o.id ?? "x"), calendarId: "primary", attendeeGuideId: o.attendeeGuideId as string } });
+  it("a second event for the same guide on the same departure is rejected", async () => {
+    await row({ id: "r1", attendeeGuideId: A });
+    await expect(row({ id: "r2", attendeeGuideId: A })).rejects.toThrow();
+  });
+  it("an event with no guide cannot be stored (NULLs would slip past the unique index)", async () => {
+    await expect(prisma.$executeRawUnsafe(`INSERT INTO "TourCalendarEvent" ("id","date","slotIdx","tourId","googleEventId","calendarId","attendeeGuideId","updatedAt") VALUES ('n1','${DATE}',${SLOT},'T-900','folkopsn1','primary',NULL,now())`)).rejects.toThrow();
+  });
+});
+
+describe("the booking sync's safety net", () => {
+  it("leaves alone the event of a job with no bookings at all (made by hand)", async () => {
+    await prisma.booking.deleteMany({});
+    await assign(A);
+    await pushTourToCalendars(A, DATE, SLOT, { create: true });
+    google.calls.length = 0;
+    await reconcileAssignedBookings(true);
+    expect(google.calls).toHaveLength(0);
+    expect((await rows())[0].state).toBe("ACTIVE");
+  });
+  it("cancels the event when every booking for the tour was cancelled", async () => {
+    await assign(A);
+    await pushTourToCalendars(A, DATE, SLOT, { create: true });
+    await prisma.booking.updateMany({ where: { date: DATE, slotIdx: SLOT }, data: { status: "CANCELLED" } });
+    await reconcileAssignedBookings(true);
+    expect((await rows())[0].state).toBe("CANCELLED");
+    expect(events()[0].status).toBe("cancelled");
+  });
+  it("keeps it while any booking for the tour is still live", async () => {
+    await assign(A);
+    await pushTourToCalendars(A, DATE, SLOT, { create: true });
+    await prisma.booking.create({ data: { source: "Example OTA", externalRef: "CAL-2", confirmationCode: "CAL-2", customerName: "Guest Two", date: DATE, slotIdx: SLOT, tourId: "T-900", pax: 1, status: "CANCELLED" } });
+    await reconcileAssignedBookings(true);
+    expect((await rows())[0].state).toBe("ACTIVE");
   });
 });
