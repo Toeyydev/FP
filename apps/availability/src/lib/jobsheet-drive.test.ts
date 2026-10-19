@@ -11,6 +11,9 @@ const prismaMock = vi.hoisted(() => ({
   guideAdvanceReturn: { findMany: vi.fn() },
   guideAdvanceEntry: { findMany: vi.fn(async () => []) },
   guideAdvanceReceipt: { findMany: vi.fn(async () => []) },
+  // The save's cross-instance lock (lib/jobsheet-drive): a transaction that only holds it.
+  $queryRaw: vi.fn(async () => []),
+  $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prismaMock)),
 }));
 const saveBuffer = vi.hoisted(() => vi.fn());
 const render = vi.hoisted(() => vi.fn(async (_html: string) => Buffer.from("%PDF-test")));
@@ -196,5 +199,22 @@ describe("the copy in Drive is a PDF", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue(null);
     expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
     expect(render).not.toHaveBeenCalled();
+  });
+});
+
+describe("saves of job sheet PDFs never overlap", () => {
+  it("two saves at once run one after the other, so the second finds the first's file", async () => {
+    let running = 0, peak = 0;
+    saveBuffer.mockImplementation(async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 30)); running--; return { id: "file-1", link: "https://drive.example/file-1" }; });
+    const results = await Promise.all([saveJobSheetToDrive("G-TEST", "2030-05-06", 0), saveJobSheetToDrive("G-TEST", "2030-05-06", 0), saveJobSheetToDrive("G-TEST", "2030-05-06", 0)]);
+    expect(results).toEqual(["https://drive.example/file-1", "https://drive.example/file-1", "https://drive.example/file-1"]);
+    expect(saveBuffer).toHaveBeenCalledTimes(3);
+    expect(peak).toBe(1);
+  });
+  it("a failed save does not stop the next one", async () => {
+    saveBuffer.mockRejectedValueOnce(new Error("drive-upload 500")).mockResolvedValueOnce({ id: "file-2", link: "https://drive.example/file-2" });
+    const [a, b] = await Promise.all([saveJobSheetToDrive("G-TEST", "2030-05-06", 0), saveJobSheetToDrive("G-TEST", "2030-05-06", 0)]);
+    expect(a).toBeNull();
+    expect(b).toBe("https://drive.example/file-2");
   });
 });

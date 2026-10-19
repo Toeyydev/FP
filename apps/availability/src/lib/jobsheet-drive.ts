@@ -33,11 +33,41 @@ export function jobSheetDriveTarget(): JobSheetDriveTarget {
 
 // Save a job sheet PDF's bytes in the Shared Drive under folderPath. Throws when there is no
 // destination or Drive refuses; same name → the existing PDF is updated in place.
-export async function saveJobSheetPdf(o: { name: string; base64: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
+//
+// One save at a time. "Same name updates the file" is a look-then-write: two saves of one
+// sheet at once (an approval's background save and a Save to Drive click) would both find
+// nothing and both create a PDF, and the first two saves of a new month would both create
+// the month's folder. Two guards:
+//   - across app instances: a Postgres advisory lock keyed by the Shared Drive, held for
+//     the whole look-up / create / update (saveJobSheetPdfLocked);
+//   - in this process: a queue, so saves wait here instead of each holding a database
+//     connection while it waits for the lock.
+// The lock is per Shared Drive, not per sheet, because the folder race spans sheets.
+let pdfSaveQueue: Promise<unknown> = Promise.resolve();
+export function saveJobSheetPdf(o: { name: string; base64: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
+  const run = pdfSaveQueue.then(() => saveJobSheetPdfLocked(o), () => saveJobSheetPdfLocked(o));
+  pdfSaveQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * The save, under the cross-instance lock. Exported for the tests, which run it without the
+ * in-process queue to prove the lock alone keeps simultaneous saves apart.
+ *
+ * The transaction exists only to hold pg_advisory_xact_lock — it writes nothing — and ends,
+ * releasing the lock, when the Drive calls return or the timeout passes. A Drive call that
+ * outlives the timeout is no longer covered (it is not cancelled); the timeout is set far
+ * above a normal save.
+ */
+export async function saveJobSheetPdfLocked(o: { name: string; base64: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
   const target = jobSheetDriveTarget();
   if (!target.ok) throw new Error(`job-sheet-drive: ${target.reason}`);
-  const token = await serviceAccountAccessToken();
-  return saveBufferWithAccessToken(token, { ...o, mimeType: "application/pdf", sharedDriveId: target.sharedDriveId });
+  const sharedDriveId = target.sharedDriveId;
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`jobsheet-pdf:${sharedDriveId}`}))::text`;
+    const token = await serviceAccountAccessToken();
+    return saveBufferWithAccessToken(token, { ...o, mimeType: "application/pdf", sharedDriveId });
+  }, { maxWait: 30_000, timeout: 120_000 });
 }
 
 // Render the saved job sheet to a PDF on the server and store it in the Folkpaths Shared

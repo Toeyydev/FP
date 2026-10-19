@@ -13,6 +13,8 @@ vi.mock("@/lib/db", () => ({ prisma: {
   user: { findUnique: async () => ({ fullName: "Guide A", displayName: "Guide A" }) },
   tour: { findUnique: async () => ({ name: "Test Tour", time: "08:30" }) },
   tourPayment: { findUnique: async () => null },
+  $queryRaw: async () => [],
+  $transaction: async (fn: (tx: unknown) => unknown) => fn({ $queryRaw: async () => [] }),
 } }));
 const drive = vi.hoisted(() => ({
   oauthToken: vi.fn(async (): Promise<string | null> => "admin-refresh-token"),

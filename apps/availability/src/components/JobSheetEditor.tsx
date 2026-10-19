@@ -929,7 +929,7 @@ export default function JobSheetEditor() {
               <a className="btn" target="_blank" rel="noopener noreferrer"
                 href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>Add to Google Calendar</a>
               <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>
-              {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
+              {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect the company Google account so e-slips can be saved to Drive (job sheet PDFs go to the Shared Drive without it)">☁ Connect Google Drive</a>}
               <hr />
               {!handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
               <button className="btn" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>
