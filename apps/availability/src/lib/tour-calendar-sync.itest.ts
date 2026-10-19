@@ -275,7 +275,7 @@ const uidOf = (m: Mail) => (m.icalEvent?.content.match(/^UID:(.+)$/m) || [])[1]?
 const methodOf = (m: Mail) => (m.icalEvent?.content.match(/^METHOD:(.+)$/m) || [])[1]?.trim();
 
 describe("a guide is never silently left with no calendar entry", () => {
-  it("Google refusing: the guide is emailed ONE .ics with the event's own identifier; when Google works it is the same entry", async () => {
+  it("Google refusing: the guide is emailed ONE .ics with the event's expected identifier; when Google works, Google's iCalUID is checked against it", async () => {
     google.state.failWith = { status: 403, reason: "accessNotConfigured" };
     const offer = await createOffer({ tourId: "T-900", date: DATE, slotIdx: SLOT, pax: 2, onlyGuideId: A });
     expect((await acceptOffer(offer.offerId!, A)).ok).toBe(true);
@@ -294,7 +294,9 @@ describe("a guide is never silently left with no calendar entry", () => {
     for (let i = 0; i < 3; i++) { await prisma.tourCalendarEvent.updateMany({ data: { nextAttemptAt: new Date(0) } }); await retryTourCalendarEvents(); }
     expect(mails()).toHaveLength(1);
     expect(await prisma.notification.count({ where: { message: { contains: "did not create the invitation" } } })).toBe(1);
-    // Google switched on: the event is made, with the identifier the .ics used — one entry, not two
+    // Google switched on: the event is made under the same id, no further .ics, and the match of
+    // Google's iCalUID with the .ics UID is recorded. (Whether a guide's calendar app then shows one
+    // entry, not two, depends on that app — this fake cannot prove it.)
     google.state.failWith = null;
     await prisma.tourCalendarEvent.updateMany({ data: { nextAttemptAt: new Date(0) } });
     await retryTourCalendarEvents();

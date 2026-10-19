@@ -33,10 +33,13 @@ import { googleEnabled, calendarApi } from "@/lib/google-calendar";
 // after MAX_ATTEMPTS the operators are told once.
 //
 // While Google refuses to create a guide's event (the API switched off, no connection), the
-// guide is not left with nothing: they are emailed one .ics carrying the identifier Google
-// gives an event it was handed an id for (`<id>@google.com`), so when Google starts working
-// its invitation updates that same calendar entry instead of adding a second. Reassigning or
-// cancelling before then emails a CANCEL for it. (Email must be configured to deliver it.)
+// guide is not left with nothing: they are emailed one .ics, and the operators are told.
+// The .ics carries the identifier Google is expected to give an event created with our id
+// (`<id>@google.com`); the first successful sync records whether Google's iCalUID really
+// matched (audit `icalUidMatchesFallback`). A matching UID lets a calendar that keys on UID
+// treat Google's later invitation as an update of the same entry — but whether a given mail
+// or calendar app actually merges the two is NOT proven here; check it on rollout.
+// Reassigning or cancelling before then emails a CANCEL for it. (Email must be configured.)
 //
 // Note: Google applies an event's reminders to the organizer's calendar. A guest's copy uses
 // the guest's own default notifications — Google gives the organizer no way to set them. So
@@ -96,7 +99,7 @@ export function buildEventBody(o: { tourName: string; meetingPoint?: string | nu
 
 export const contentHash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
-/** The calendar identifier Google gives an event created with our id. */
+/** The calendar identifier Google is expected to give an event created with our id (checked on each successful sync). */
 export const icalUidFor = (googleEventId: string) => `${googleEventId}@google.com`;
 
 // The emailed stand-in for an event Google would not create. Returns whether it was sent.
@@ -255,8 +258,8 @@ async function pushRow(r: Row): Promise<void> {
   }
 
   // Does Google's identifier for the event match the one a fallback .ics used? Recorded, so
-  // the first real event proves (or disproves) that a guide who had the fallback is not
-  // given the tour twice.
+  // the first real event shows it. (A match is necessary for a client to merge the two
+  // entries; it does not prove every client will.)
   const icalUid = typeof result.json?.iCalUID === "string" ? result.json.iCalUID : null;
   if (result.ok) {
     await prisma.tourCalendarEvent.update({ where: { id: fresh.id }, data: { syncStatus: "OK", contentHash: hash, createdInGoogle: true, attempts: 0, lastError: null, nextAttemptAt: null, attendeeEmail } });
