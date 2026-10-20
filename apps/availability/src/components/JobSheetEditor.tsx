@@ -2021,8 +2021,9 @@ export default function JobSheetEditor() {
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", file: null, confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
           {!canEdit && hasAdvance && advT.outstanding > 0 && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
-          {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advances and returns are recorded on <a href="/payments?view=advances">Payments → Advances</a>.</span>}
+          {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>You can also manage advances and returns on <a href="/payments?view=advances">Payments → Advances</a>.</span>}
           {!canEdit && hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (
