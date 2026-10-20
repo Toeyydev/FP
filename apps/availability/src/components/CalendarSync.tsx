@@ -63,7 +63,7 @@ export default function CalendarSync() {
         <section className="panel" style={{ padding: 16 }}>
           <div className="panel-head" style={{ padding: 0, marginBottom: 10 }}>
             <h2>Calendar sync · ปฏิทิน</h2>
-            <span className="hint">Each guide&rsquo;s tour invitation on the company Google Calendar. Failed ones retry by themselves; Retry tries one now.</span>
+            <span className="hint">Each guide&rsquo;s tour invitation on the company Google Calendar. Retrying ones are tried again automatically; Failed ones have stopped retrying and need Retry now.</span>
           </div>
 
           <div className="cs-counts" style={{ display: "flex", gap: 18, flexWrap: "wrap", margin: "4px 0 12px" }}>

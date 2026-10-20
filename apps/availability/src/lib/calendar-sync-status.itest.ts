@@ -152,6 +152,18 @@ describe("Retry one", () => {
     expect(google.calls).toHaveLength(0);
     expect((await prisma.tourCalendarEvent.findUnique({ where: { id: r.id } }))!.syncStatus).toBe("FAILED");
   });
+  it("the same guide now on a different tour at that time: the old tour's event is not resent", async () => {
+    await prisma.tour.create({ data: { id: "T-901", name: "Evening Food Walk (example)", time: "18:30", durationMin: 180 } });
+    await assign(A); // date/slot of the row…
+    await prisma.assignment.updateMany({ where: { guideId: A, date: day(3), slotIdx: 0 }, data: { tourId: "T-901" } }); // …moved to another tour
+    const r = await row({}); // a stale FAILED row for T-900
+    const res = await retry(r.id);
+    expect(res).toMatchObject({ status: 409, body: { ok: false, code: "tour-changed" } });
+    expect(google.calls).toHaveLength(0);
+    expect(google.store.size).toBe(0);
+    expect(await prisma.tourCalendarEvent.findUnique({ where: { id: r.id } })).toMatchObject({ syncStatus: "FAILED", state: "ACTIVE", tourId: "T-900", createdInGoogle: false, attempts: 1 });
+    expect((await prisma.auditLog.findFirst({ where: { action: "calendar.manual_retry", entityId: r.id } }))!.detail).toEqual({ outcome: "tour-changed" });
+  });
   it("a tour whose bookings are all cancelled is not revived", async () => {
     await assign(A);
     await prisma.booking.create({ data: { source: "Example OTA", externalRef: "CS-2", confirmationCode: "CS-2", customerName: "Guest X", date: day(3), slotIdx: 0, tourId: "T-900", pax: 1, status: "CANCELLED" } });

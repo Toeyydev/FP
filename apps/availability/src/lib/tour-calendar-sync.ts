@@ -286,14 +286,16 @@ export function calendarErrorText(lastError: string | null | undefined): string 
 
 export type ManualRetryResult =
   | { ok: true; message: string }
-  | { ok: false; code: "not-found" | "nothing-to-retry" | "no-longer-assigned" | "tour-cancelled" | "still-failing"; message: string };
+  | { ok: false; code: "not-found" | "nothing-to-retry" | "no-longer-assigned" | "tour-changed" | "tour-cancelled" | "still-failing"; message: string };
 
 /**
  * Retry ONE existing calendar event now, on an operator's request.
  *
  * It only pushes the row that exists — it never creates a row (no backfill) and never
  * reconciles the departure. An event still marked ACTIVE is retried only while its guide is
- * still assigned to that departure and the tour is not fully cancelled; a CANCELLED event can
+ * still assigned to that departure FOR THE SAME TOUR as the event, and that tour is not fully
+ * cancelled — a stale row left from before the job moved to another tour must not resend the
+ * old tour's event; the next assignment sync puts that right. A CANCELLED event can
  * only have its cancellation pushed, never be brought back. Runs under the same per-departure
  * lock as every other sync, with the same fixed Google event id, so a double click or a
  * second process cannot make a duplicate. Google Calendar only — no email, no LINE.
@@ -311,6 +313,7 @@ export async function retryTourCalendarEventById(id: string): Promise<ManualRetr
         prisma.booking.findMany({ where: { date: row.date, slotIdx: row.slotIdx }, select: { tourId: true, status: true } }),
       ]);
       if (!assigned) return { ok: false, code: "no-longer-assigned", message: "This guide is no longer assigned to that tour, so the invitation was not retried." };
+      if (assigned.tourId !== row.tourId) return { ok: false, code: "tour-changed", message: "This guide's job at that time is now a different tour, so this invitation was not retried." };
       const forTour = bookings.filter((b) => !b.tourId || b.tourId === assigned.tourId);
       if (forTour.length && forTour.every((b) => b.status === "CANCELLED")) return { ok: false, code: "tour-cancelled", message: "Every booking for that tour is cancelled, so the invitation was not retried." };
     }
