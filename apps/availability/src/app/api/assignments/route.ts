@@ -9,7 +9,6 @@ import { sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { audit } from "@/lib/audit";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
 import { manualAssignBlockers } from "@/lib/manual-assign";
-import { sendTourCalendarInvite } from "@/lib/calendar";
 import { notifyGuide } from "@/lib/booking-import";
 import { directAssignmentNotice } from "@/lib/assignment-notice";
 import { removeGuideFromDeparture } from "@/lib/assignment-removal";
@@ -163,16 +162,13 @@ export async function POST(req: NextRequest) {
       detail: { guideId, date, slotIdx, tourId, bookings: booked.count, offersClosed: open.length },
     });
     forgetCached(DASHBOARD_CACHE_KEY);
-    // Tell the guide it is in their schedule, as an accepted offer does. Best-effort.
-    // Updates or reinstates the departure's existing calendar event for this guide; a manual
-    // assignment never creates one (only a guide's Accept does — lib/tour-calendar-sync).
+    // The company calendar event with this guide invited, as an accepted offer gets — the
+    // departure's existing event when there is one (lib/tour-calendar-sync). Best-effort.
     try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, date, slotIdx); } catch { /* never block on calendar */ }
-    // After the sync: a guide who now holds the departure's existing event is invited by it.
-    try { await sendTourCalendarInvite(guideId, date, slotIdx); } catch { /* never block on email */ }
     // Every channel the guide can be reached on: in the app (the bell), a push to the
-    // phone or browser where the app is installed, and LINE when linked. Email is left to
-    // the calendar invite above. (A slot the guide already holds is refused above, so this
-    // is always news to them.)
+    // phone or browser where the app is installed, and LINE when linked. No email: the
+    // calendar invitation comes from Google. (A slot the guide already holds is refused
+    // above, so this is always news to them.)
     const n = directAssignmentNotice({ guideName: g?.displayName ?? null, tourName: tour?.name ?? tourId, meetingPoint: tour?.meetingPoint ?? null, date, slotIdx, pax: pax ?? null });
     try {
       await notifyGuide(guideId, n.message, n.title, n.body, undefined, { url: `/tour-details?date=${date}&slotIdx=${slotIdx}`, email: false });

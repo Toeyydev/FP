@@ -2030,10 +2030,6 @@ model TourCalendarEvent {
   syncStatus      String    @default("PENDING") // OK | PENDING | FAILED — Google matches `state` and the content
   contentHash     String? // what Google last accepted; a patch (and its email to the guide) only when it changes
   createdInGoogle Boolean   @default(false)
-  // The emailed .ics sent while Google refused to create the event: when, and to which
-  // address. Same UID as the Google event, so once Google works it updates that entry.
-  fallbackSentAt  DateTime?
-  fallbackEmail   String?
   attempts        Int       @default(0)
   nextAttemptAt   DateTime?
   lastError       String? // status and Google's reason only — never personal data

@@ -18,8 +18,6 @@ CREATE TABLE "TourCalendarEvent" (
     "syncStatus" TEXT NOT NULL DEFAULT 'PENDING',
     "contentHash" TEXT,
     "createdInGoogle" BOOLEAN NOT NULL DEFAULT false,
-    "fallbackSentAt" TIMESTAMP(3),
-    "fallbackEmail" TEXT,
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "nextAttemptAt" TIMESTAMP(3),
     "lastError" TEXT,
