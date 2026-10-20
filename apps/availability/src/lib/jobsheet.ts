@@ -457,7 +457,14 @@ const ATTRACTION_PREFIXES = ["grand palace", "wat pho", "wat arun"];
 
 // Re-sync the attraction (Grand Palace / Wat Pho / Wat Arun) ticket expenses to the
 // number of ticket-included guests who actually showed up (sum of actualPax).
+//
+// Only when every guest row says whether its tickets are included. A blank Tickets value is
+// UNKNOWN, not "no tickets": counting it as 0 used to wipe the operator's ticket count to 0
+// whenever a no-show was reported. While any row with guests is still blank, the lines are
+// left exactly as they are and a person decides.
 export function syncAttractionTickets(bookings: Booking[], expenses: Expense[]): Expense[] {
+  const withGuests = bookings.filter((b) => (b.actualPax ?? b.bookedPax ?? 0) > 0);
+  if (withGuests.some((b) => b.tickets !== "included" && b.tickets !== "not")) return expenses;
   const inclPax = bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
   return expenses.map((e) =>
     ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,

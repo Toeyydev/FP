@@ -126,6 +126,15 @@ describe("syncAttractionTickets", () => {
     expect(out.find((e) => e.description.startsWith("Grand Palace"))!.pax).toBe(5); // only the 5 who came on the included booking
     expect(out.find((e) => e.description === "Lunch")!.pax).toBe(11); // untouched
   });
+
+  it("leaves attraction ticket pax unchanged while any guest row is unknown", () => {
+    const bookings = [
+      { name: "a", bookingNo: "A", bookedPax: 2, actualPax: 2, tickets: "included" as const, status: "" },
+      { name: "b", bookingNo: "B", bookedPax: 3, actualPax: 2, tickets: "" as const, status: "partial" },
+    ];
+    const expenses = [{ description: "Grand Palace entrance", price: 500, pax: 5 }, { description: "Lunch", price: 200, pax: 5 }];
+    expect(syncAttractionTickets(bookings, expenses)).toEqual(expenses);
+  });
 });
 
 describe("jobsheet — finance approval", () => {

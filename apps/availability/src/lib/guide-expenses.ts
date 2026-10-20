@@ -199,7 +199,7 @@ export async function submitGuideExpenses(o: {
   // number only appears once the guide has reported. Operators can still override.
   const slotBookings = await prisma.booking.findMany({
     where: { date, slotIdx },
-    select: { externalRef: true, confirmationCode: true, noShow: true, noShowPax: true, pax: true, customerName: true, assignedGuideId: true, status: true, tourId: true },
+    select: { externalRef: true, confirmationCode: true, noShow: true, noShowPax: true, pax: true, customerName: true, assignedGuideId: true, status: true, tourId: true, rateTitle: true },
     orderBy: { createdAt: "asc" },
   });
   const noShowByRef = new Map<string, number>(); // booking ref -> absent pax

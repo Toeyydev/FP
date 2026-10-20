@@ -85,6 +85,28 @@ describe("12, 18 · the Rate reaches the booking, and is never overwritten by a 
 });
 
 describe("1–7 · what the save suggests, and what it never touches", () => {
+  it("fills only a matched blank Tickets row in the editable GET response, without writing on GET", async () => {
+    await departure([["GYGTICKETS1", 2, TICKETS]]);
+    const blank = [{ name: "Guest GYGTICKETS1", bookingNo: "GYGTICKETS1", bookedPax: 2, actualPax: null, tickets: "", status: "" }];
+    await prisma.jobSheet.update({ where: sheetKey, data: { bookings: blank as never } });
+    expect((await get()).sheet.bookings[0].tickets).toBe("included");
+    expect(((await prisma.jobSheet.findUniqueOrThrow({ where: sheetKey })).bookings as unknown as Array<{ tickets: string }>)[0].tickets).toBe("");
+  });
+
+  it("does not infer a blank Tickets row after the sheet is approved", async () => {
+    await departure([["GYGTICKETS2", 2, TICKETS]]);
+    const blank = [{ name: "Guest GYGTICKETS2", bookingNo: "GYGTICKETS2", bookedPax: 2, actualPax: null, tickets: "", status: "" }];
+    await prisma.jobSheet.update({ where: sheetKey, data: { bookings: blank as never, approvalStatus: "APPROVED", approvedBy: opId, approvedAt: new Date() } });
+    expect((await get()).sheet.bookings[0].tickets).toBe("");
+  });
+
+  it("never replaces an operator's saved Tickets choice", async () => {
+    await departure([["GYGTICKETS3", 2, TICKETS]]);
+    const manual = [{ name: "Guest GYGTICKETS3", bookingNo: "GYGTICKETS3", bookedPax: 2, actualPax: null, tickets: "not", status: "" }];
+    await prisma.jobSheet.update({ where: sheetKey, data: { bookings: manual as never } });
+    expect((await get()).sheet.bookings[0].tickets).toBe("not");
+  });
+
   it("1 · ticket-inclusive: tickets suggested as Company Resource ('company'), never Company Advance; nothing stamped", async () => {
     await departure([["GYGT1", 2, TICKETS], ["GYGT2", 2, TICKETS]]);
     expect((await put(wire(await rowsNow()), { baseUpdatedAt: await versionNow() })).status).toBe(200);

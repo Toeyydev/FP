@@ -348,7 +348,7 @@ export async function recordNoShow(o: {
   const where = { date, slotIdx, ...scope, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
   // Newest first: a GetYourGuide booking amended on the OTA keeps one reference across
   // several Bokun records, and only the latest is the guest's current booking.
-  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true, noShow: true, noShowPax: true }, orderBy: { createdAt: "desc" } });
+  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true, noShow: true, noShowPax: true, rateTitle: true }, orderBy: { createdAt: "desc" } });
   if (o.tourId && !b) return { ok: false, status: 404, error: "booking-not-found" };
 
   // Clamp the count to the booking's group size and persist it.
