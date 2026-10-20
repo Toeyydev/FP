@@ -106,7 +106,7 @@ await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const sheet = (d) => `/job-sheet?guideId=${G}&date=${d}&slotIdx=0`;
-const OPS = ["/dashboard", "/bookings", "/board", "/jobs", "/process", "/guides", "/tours", "/blocked-slots", "/payments", "/payments?view=advances", "/payment-batches", "/payment-slips", "/expense-review", "/peak-sync", "/accounting-logs", "/reports", "/tour-log", "/admin", "/admin/create-job-sheets", "/meeting-points", "/product-map", "/tour-details", sheet(TODAY), sheet(PAST)];
+const OPS = ["/dashboard", "/bookings", "/board", "/jobs", "/process", "/guides", "/tours", "/blocked-slots", "/calendar-sync", "/payments", "/payments?view=advances", "/payment-batches", "/payment-slips", "/expense-review", "/peak-sync", "/accounting-logs", "/reports", "/tour-log", "/admin", "/admin/create-job-sheets", "/meeting-points", "/product-map", "/tour-details", sheet(TODAY), sheet(PAST)];
 const GUIDE = ["/", "/?view=week", "/profile", "/pay", sheet(TODAY), sheet(PAST)];
 const ONLY = (process.env.RESPONSIVE_ONLY ?? "").split(",").filter(Boolean);
 // html/body clip sideways overflow (globals.css), so a page that is too wide does not
