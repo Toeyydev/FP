@@ -1427,12 +1427,11 @@ export default function JobSheetEditor() {
                   {ro ? expenseCategoryLabel(e) : (
                     <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(expenseCategory(e) ? {} : { color: "var(--ink-soft)" }) }}
                       value={expenseCategory(e) ?? ""} onChange={(ev) => {
-                        const expenseType = ev.target.value;
-                        setExpense(i, {
-                          expenseType,
-                          // Company Advance stays only while an advance on this job may pay for the new category.
-                          ...(paid === "GUIDE_ADVANCE" && !advancesFor(expenseType).length ? { paidBy: "", paidBySource: "operator" } : {}),
-                        });
+                        // Keep the operator's payer choice when the category changes. If no
+                        // recorded advance may pay for it, the warning below and the server's
+                        // save validation make that explicit; silently clearing the choice
+                        // made the Advance option appear to vanish.
+                        setExpense(i, { expenseType: ev.target.value });
                       }}
                       title="The stable category this expense is booked under. Accounting maps on THIS, not on the description.">
                       <option value="">— choose —</option>
@@ -1458,7 +1457,7 @@ export default function JobSheetEditor() {
                     setExpense(i, { paidBy: v, paidBySource: "operator" });
                   }} className="js-payer-select" title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
-                    {PAYMENT_SOURCES.filter((s) => s.value !== "advance" || advancesFor(expenseCategory(e)).length > 0 || paid === "GUIDE_ADVANCE").map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
+                    {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
                   {paid === "GUIDE_ADVANCE" && !advancesFor(expenseCategory(e)).length && (
                     <div className="js-advance-not-allowed" style={{ fontSize: 10.5, color: "var(--danger,#b3402f)", marginTop: 2, whiteSpace: "normal" }}>
