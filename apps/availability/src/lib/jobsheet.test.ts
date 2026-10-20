@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+
+describe("jobsheet — fixed standard expense descriptions", () => {
+  it("offers the three guide-inclusive labels in their canonical spelling", () => {
+    expect(STANDARD_EXPENSE_DESCRIPTIONS.map((x) => x.description)).toEqual([
+      "Water (Inc. Guide)", "Bus (Inc. Guide)", "Ferry (Inc. Guide)",
+    ]);
+  });
+
+  it("recognises legacy short labels without capturing unrelated descriptions", () => {
+    expect(standardExpenseDescription("Water")?.description).toBe("Water (Inc. Guide)");
+    expect(standardExpenseDescription("Bus")?.description).toBe("Bus (Inc. Guide)");
+    expect(standardExpenseDescription("Ferry")?.description).toBe("Ferry (Inc. Guide)");
+    expect(standardExpenseDescription("Private bus charter")).toBeNull();
+    expect(standardExpenseDescription("Grand Palace")).toBeNull();
+  });
+});
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [

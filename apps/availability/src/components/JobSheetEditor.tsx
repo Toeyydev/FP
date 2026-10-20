@@ -10,7 +10,7 @@ import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -563,11 +563,18 @@ export default function JobSheetEditor() {
       return false;
     }
     setBusy(true); setMsg("");
+    // Old sheets may still hold the former short names (Water / Bus / Ferry).
+    // Saving from the dropdown upgrades them to the fixed labels even when the
+    // operator only changed another field on the row.
+    const expenses = s.expenses.map((expense) => {
+      const fixed = standardExpenseDescription(expense.description);
+      return fixed ? { ...expense, description: fixed.description, expenseType: fixed.expenseType } : expense;
+    });
     const r = await jfetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
       // The version this form was opened on. The server refuses a save built on a stale
       // one rather than quietly undoing whoever saved in between.
-      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}),
+      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}),
         ...(Object.keys(advanceChoices).length ? { advanceChoices: Object.entries(advanceChoices).map(([index, advanceId]) => ({ index: Number(index), advanceId })) } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
@@ -1439,7 +1446,22 @@ export default function JobSheetEditor() {
                     </select>
                   )}
                 </td>
-                <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
+                <td>{(() => {
+                  const fixed = standardExpenseDescription(e.description);
+                  return fixed ? (
+                    <select
+                      className="js-standard-expense-description"
+                      style={{ ...L, cursor: "pointer" }}
+                      value={fixed.description}
+                      onChange={(ev) => {
+                        const picked = STANDARD_EXPENSE_DESCRIPTIONS.find((item) => item.description === ev.target.value)!;
+                        setExpense(i, { description: picked.description, expenseType: picked.expenseType });
+                      }}
+                      title="Fixed standard Job Sheet item">
+                      {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
+                    </select>
+                  ) : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />;
+                })()}</td>
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /
                       "operator") read as Company. "Guide Advance" rows feed the settlement.

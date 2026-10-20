@@ -102,6 +102,24 @@ export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Lotus (Inc. Guide)", price: 10, pax: null, expenseType: "other" },
   { description: "Bus (Inc. Guide)", price: 15, pax: null, expenseType: "transport" },
 ];
+
+// The three recurring guide-inclusive consumables/transport lines use fixed names in
+// Job Sheet.  Keeping the spelling canonical makes expense matching, certificates and
+// later accounting review stable instead of treating "Bus", "Bus (guide)" etc. as
+// different costs.
+export const STANDARD_EXPENSE_DESCRIPTIONS = [
+  { description: "Water (Inc. Guide)", expenseType: "meal" },
+  { description: "Bus (Inc. Guide)", expenseType: "transport" },
+  { description: "Ferry (Inc. Guide)", expenseType: "transport" },
+] as const;
+
+export function standardExpenseDescription(value: string): (typeof STANDARD_EXPENSE_DESCRIPTIONS)[number] | null {
+  const v = value.trim();
+  return STANDARD_EXPENSE_DESCRIPTIONS.find((item) => {
+    const base = item.description.split(" (")[0];
+    return new RegExp(`^${base}(?:\\s*\\([^)]*guide[^)]*\\))?$`, "i").test(v);
+  }) ?? null;
+}
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
 
 // The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
