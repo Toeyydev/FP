@@ -27,7 +27,7 @@ export async function recordHandoverOnSheets(tx: Tx, h: HandoverFacts): Promise<
   if (!guests.length) {
     const atSlot = await tx.booking.findMany({
       where: { date: h.date, slotIdx: h.slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, rateTitle: true },
       orderBy: { createdAt: "asc" },
     });
     guests = guideSlotBookings(atSlot, h.fromGuideId).map(toSheetBooking);

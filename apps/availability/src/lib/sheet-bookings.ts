@@ -6,6 +6,7 @@
 // past-dated sheet is never reconciled against live bookings afterwards, so that
 // guest list stayed empty for good. One rule, one place.
 import { bookingRef } from "@/lib/booking-ref";
+import { ticketsFromRate } from "@/lib/rate-kind";
 import { noShowStatus } from "@/lib/jobsheet";
 
 /** Booking statuses that still belong on a sheet. */
@@ -21,6 +22,8 @@ export type SlotBooking = {
   noShowPax?: number | null;
   status?: string | null;
   tourId?: string | null;
+  /** The Bókun Rate the guests booked — fills Tickets where it is unambiguous (lib/rate-kind). */
+  rateTitle?: string | null;
 };
 
 export type SheetBooking = { name: string; bookingNo: string; bookedPax: number | null; actualPax: number | null; tickets: string; status: string };
@@ -97,14 +100,14 @@ export function liveActualPax(b: SlotBooking): number | null {
   return ns > 0 ? Math.max(0, (b.pax ?? 0) - ns) : null;
 }
 
-/** One booking as a guest row. Booked Pax is always shown; Actual Pax per liveActualPax. */
+/** One booking as a guest row. Booked Pax is always shown; Actual Pax per liveActualPax; Tickets from the Rate where it is unambiguous, else blank. */
 export function toSheetBooking(b: SlotBooking): SheetBooking {
   return {
     name: b.customerName ?? "",
     bookingNo: bookingRef(b.externalRef, b.confirmationCode),
     bookedPax: b.pax ?? null,
     actualPax: liveActualPax(b),
-    tickets: "",
+    tickets: ticketsFromRate(b.rateTitle),
     status: b.noShow ? "no-show" : "",
   };
 }
