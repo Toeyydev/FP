@@ -16,7 +16,6 @@ const prismaMock = vi.hoisted(() => ({
   leaveRequest: { findMany: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
-vi.mock("@/lib/calendar", () => ({ sendTourCalendarInvite: vi.fn() }));
 vi.mock("@/lib/tour-calendar-sync", () => ({ pushTourToCalendars: vi.fn() }));
 vi.mock("@/lib/line", () => ({ linePushButtons: vi.fn(), lineEnabled: () => false }));
 vi.mock("@/lib/push", () => ({ sendPushToUser: vi.fn() }));

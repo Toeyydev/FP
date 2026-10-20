@@ -8,7 +8,6 @@ vi.mock("@/auth", () => authMock);
 vi.mock("@/lib/push", async (orig) => ({ ...(await orig<typeof import("@/lib/push")>()), sendPushToUser: vi.fn(async () => 0) }));
 vi.mock("@/lib/line", async (orig) => ({ ...(await orig<typeof import("@/lib/line")>()), lineEnabled: false }));
 vi.mock("@/lib/email", async (orig) => ({ ...(await orig<typeof import("@/lib/email")>()), sendEmail: vi.fn(async () => true) }));
-vi.mock("@/lib/calendar", async (orig) => ({ ...(await orig<typeof import("@/lib/calendar")>()), sendTourCalendarInvite: vi.fn(async () => {}) }));
 vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof import("@/lib/tour-calendar-sync")>()), removeTourEvents: vi.fn(async () => {}), pushTourToCalendars: vi.fn(async () => {}) }));
 
 import { prisma } from "@/lib/db";

@@ -40,6 +40,21 @@ export async function googleAccessToken(refreshToken: string): Promise<string | 
   return ((await res.json()) as { access_token?: string }).access_token ?? null;
 }
 
+// One Calendar API call that says what happened instead of returning null. Used by the
+// company event sync (lib/tour-calendar-sync), which records the status and Google's reason.
+export type CalendarResult = { ok: boolean; status: number; json: Record<string, unknown>; reason: string | null };
+export async function calendarApi(refreshToken: string, method: "GET" | "POST" | "PATCH", path: string, o: { query?: Record<string, string>; body?: unknown } = {}): Promise<CalendarResult> {
+  const tok = await googleAccessToken(refreshToken);
+  if (!tok) return { ok: false, status: 401, json: {}, reason: "token-refresh-failed" };
+  const qs = o.query ? `?${new URLSearchParams(o.query)}` : "";
+  const res = await fetch(`https://www.googleapis.com/calendar/v3${path}${qs}`, {
+    method, headers: { authorization: `Bearer ${tok}`, ...(o.body ? { "content-type": "application/json" } : {}) }, body: o.body ? JSON.stringify(o.body) : undefined,
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const err = json.error as { errors?: { reason?: string }[]; status?: string; message?: string } | undefined;
+  return { ok: res.ok, status: res.status, json, reason: res.ok ? null : (err?.errors?.[0]?.reason ?? err?.status ?? "error") };
+}
+
 export type CalEvent = {
   summary: string; description?: string; location?: string;
   start: { dateTime: string; timeZone: string }; end: { dateTime: string; timeZone: string };
