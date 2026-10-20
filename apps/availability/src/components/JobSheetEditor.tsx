@@ -1914,7 +1914,10 @@ export default function JobSheetEditor() {
            from it (paidBy = "Guide Advance" expense rows above) and what came back.
            A cash-movement ledger: it never adds to the expense total. Lives outside
            the read-only fieldset so the GUIDE can still record their return. */}
-       {(hasAdvance || (canEdit && advRows > 0)) && (
+       {/* Operators must always be able to see where an advance is recorded, including
+           before this job has one. Previously the whole section disappeared when both
+           the ledger and expense tags were empty, leaving no route from the job sheet. */}
+       {advanceLoaded && (canEdit || hasAdvance) && (
        <div className="advance-settlement" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
         {/* Operator: one line — given · used · returned · to return — and a link to the
             advance on Payments → Advances, where advances and returns are recorded. The
@@ -1929,7 +1932,7 @@ export default function JobSheetEditor() {
               {advT.deductedFromPayments > 0 && <span><small>Deducted</small> <b className="num">{thb(advT.deductedFromPayments)}</b></span>}
               {advT.outstanding !== 0 && <span><small>To return</small> <b className="num adv-due">{thb(advT.outstanding)}</b></span>}
               <span className={`badge ${advance.status === "SETTLED" ? "ok" : advance.status === "NEEDS_REVIEW" ? "pending" : "invited"}`}>{advance.status === "SETTLED" ? "✓ Settled" : advance.status === "NEEDS_REVIEW" ? "Needs review" : advance.status === "RETURN_DUE" || tourCompleted ? "Return due" : advance.status === "IN_USE" ? "In use" : "Open"}</span>
-            </> : <span className="adv-missing">{advRows} row{advRows === 1 ? "" : "s"} marked “From company advance” · no advance recorded for this job</span>}
+            </> : <span className="adv-missing">{advRows > 0 ? `${advRows} row${advRows === 1 ? "" : "s"} marked “From company advance” · ` : ""}No advance recorded for this job</span>}
             <span className="adv-sum-links">
               {liveAdvances.map((a) => <a key={a.id} className="mono" href={existingAdvanceHref(a.id)}>{a.advanceNo} →</a>)}
               {!hasAdvance && <a href="/payments?view=advances">Record on Payments → Advances →</a>}
