@@ -261,6 +261,66 @@ export async function retryTourCalendarEvents(now = new Date()): Promise<number>
   return seen.size;
 }
 
+// ---- Manual retry (Ops → Calendar sync) ----
+
+/** What an operator sees for a row's last error: plain words, the status and Google's reason only. */
+export function calendarErrorText(lastError: string | null | undefined): string | null {
+  if (!lastError) return null;
+  const [status, ...rest] = lastError.trim().split(" ");
+  const reason = rest.join(" ");
+  const known: Record<string, string> = {
+    accessNotConfigured: "Google Calendar API is switched off in Google Cloud",
+    SERVICE_DISABLED: "Google Calendar API is switched off in Google Cloud",
+    insufficientPermissions: "Google refused permission for the company calendar",
+    forbidden: "Google refused permission for the company calendar",
+    "token-refresh-failed": "The company Google account needs reconnecting",
+    "no-organizer-connection": "No company Google account is connected",
+    notFound: "Google could not find the event",
+    rateLimitExceeded: "Google asked us to slow down",
+    userRateLimitExceeded: "Google asked us to slow down",
+    backendError: "Google had a temporary problem",
+  };
+  const words = known[reason] ?? (Number(status) >= 500 ? "Google had a temporary problem" : "Google Calendar refused the change");
+  return `${words}${status && status !== "0" ? ` (${status}${reason ? ` ${reason}` : ""})` : reason ? ` (${reason})` : ""}`.slice(0, 160);
+}
+
+export type ManualRetryResult =
+  | { ok: true; message: string }
+  | { ok: false; code: "not-found" | "nothing-to-retry" | "no-longer-assigned" | "tour-cancelled" | "still-failing"; message: string };
+
+/**
+ * Retry ONE existing calendar event now, on an operator's request.
+ *
+ * It only pushes the row that exists — it never creates a row (no backfill) and never
+ * reconciles the departure. An event still marked ACTIVE is retried only while its guide is
+ * still assigned to that departure and the tour is not fully cancelled; a CANCELLED event can
+ * only have its cancellation pushed, never be brought back. Runs under the same per-departure
+ * lock as every other sync, with the same fixed Google event id, so a double click or a
+ * second process cannot make a duplicate. Google Calendar only — no email, no LINE.
+ */
+export async function retryTourCalendarEventById(id: string): Promise<ManualRetryResult> {
+  const first = await prisma.tourCalendarEvent.findUnique({ where: { id }, select: { date: true, slotIdx: true } });
+  if (!first) return { ok: false, code: "not-found", message: "That calendar row no longer exists." };
+  return serial(`${first.date}|${first.slotIdx}`, async (): Promise<ManualRetryResult> => {
+    const row = await prisma.tourCalendarEvent.findUnique({ where: { id } });
+    if (!row) return { ok: false, code: "not-found", message: "That calendar row no longer exists." };
+    if (row.syncStatus === "OK") return { ok: true, message: "Already in step with Google — nothing to retry." };
+    if (row.state === "ACTIVE") {
+      const [assigned, bookings] = await Promise.all([
+        prisma.assignment.findFirst({ where: { guideId: row.attendeeGuideId, date: row.date, slotIdx: row.slotIdx }, select: { tourId: true } }),
+        prisma.booking.findMany({ where: { date: row.date, slotIdx: row.slotIdx }, select: { tourId: true, status: true } }),
+      ]);
+      if (!assigned) return { ok: false, code: "no-longer-assigned", message: "This guide is no longer assigned to that tour, so the invitation was not retried." };
+      const forTour = bookings.filter((b) => !b.tourId || b.tourId === assigned.tourId);
+      if (forTour.length && forTour.every((b) => b.status === "CANCELLED")) return { ok: false, code: "tour-cancelled", message: "Every booking for that tour is cancelled, so the invitation was not retried." };
+    }
+    await pushRow(row);
+    const after = await prisma.tourCalendarEvent.findUnique({ where: { id }, select: { syncStatus: true, state: true, lastError: true } });
+    if (after?.syncStatus === "OK") return { ok: true, message: after.state === "CANCELLED" ? "Done — the cancellation is now in Google Calendar." : "Done — the event is in Google Calendar and the guide is invited." };
+    return { ok: false, code: "still-failing", message: `Still failing: ${calendarErrorText(after?.lastError) ?? "Google Calendar refused the change"}. Automatic retries continue.` };
+  }).catch((): ManualRetryResult => ({ ok: false, code: "still-failing", message: "Still failing: the retry could not be completed. Automatic retries continue." }));
+}
+
 // ---- The names the rest of the app already calls ----
 
 /** After a guide is put on a departure — by their Accept or by an operator. Creates their event if there is none to reuse. */
