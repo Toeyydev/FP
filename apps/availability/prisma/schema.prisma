@@ -40,6 +40,9 @@ model User {
   fullNameEnglish String?
   guideId         String?      @unique // G-001..G-025; null for operator/admin
   phone           String?
+  // Where this guide receives Google Calendar invitations for their tours. Optional;
+  // blank means their account email (lib/tour-calendar-sync).
+  calendarEmail   String?
   languages       String[]     @default([])
   qualifications  String[]     @default([]) // tour ids the guide can run
   offerBlocked    Boolean      @default(false) // operator blocked this guide from receiving job offers
@@ -2003,4 +2006,36 @@ model ReceiptClassification {
   txRef     String? // the slip's transaction ID, when it is one
   checkedAt DateTime @default(now())
   checkedBy String? // User.id who pressed the check, or null when classified at upload
+}
+
+// One company-owned Google Calendar event (on the admin@folkpaths.com calendar) per guide
+// on a departure, with that guide as the only attendee. Keyed to the DEPARTURE, not to the
+// Assignment row: when a job moves from Guide A to Guide B the same row — and the same
+// Google event — changes attendee, so nothing is deleted and recreated.
+// googleEventId is chosen by FolkOPS (derived from this row's id) before the first insert,
+// so a retried insert can never make a second event. lib/tour-calendar-sync.
+model TourCalendarEvent {
+  id              String    @id @default(cuid())
+  date            String // "YYYY-MM-DD"
+  slotIdx         Int
+  tourId          String
+  googleEventId   String    @unique
+  calendarId      String // the organizer's calendar ("primary" of the connected account)
+  // The guide on it now; kept after a cancel so a reinstated job finds it. Required: in
+  // Postgres NULLs are distinct, so a nullable column would let the unique index below
+  // admit any number of guide-less rows for one departure.
+  attendeeGuideId String
+  attendeeEmail   String?
+  state           String    @default("ACTIVE") // ACTIVE | CANCELLED
+  syncStatus      String    @default("PENDING") // OK | PENDING | FAILED — Google matches `state` and the content
+  contentHash     String? // what Google last accepted; a patch (and its email to the guide) only when it changes
+  createdInGoogle Boolean   @default(false)
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime?
+  lastError       String? // status and Google's reason only — never personal data
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([date, slotIdx, attendeeGuideId])
+  @@index([syncStatus, nextAttemptAt])
 }

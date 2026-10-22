@@ -11,6 +11,7 @@ import { OperatorNav } from "@/components/OperatorNav";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
 import { availabilitySaveError, type AvailabilitySaveError } from "@/lib/availability-errors";
 import { SLOTS } from "@/lib/slots";
+import { tourReminderHref } from "@/lib/tour-reminder-text";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import { gcalUrl } from "@/lib/gcal";
 import {
@@ -555,8 +556,9 @@ export default function AppClient({
   // Where a notification leads when tapped, so the operator can act on it from the
   // alert: an over-capacity / late booking → the Bookings inbox (to split/dispatch),
   // an offer update → Dispatch. The date in the message focuses the inbox.
-  function notifHref(kind: string | undefined, message: string): string | null {
-    if (role === "guide") return null;
+  function notifHref(kind: string | undefined, message: string, createdAt?: string): string | null {
+    // A guide's one-hour reminder opens that job (lib/tour-reminder-text).
+    if (role === "guide") return kind === "tour-reminder" && guideId && createdAt ? tourReminderHref(guideId, message, createdAt) : null;
     const date = (message.match(/\d{4}-\d{2}-\d{2}/) || [])[0];
     if (kind === "late-booking") return `/bookings${date ? `?focus=${date}` : ""}`;
     if (kind === "offer") return "/jobs";
@@ -573,7 +575,7 @@ export default function AppClient({
     const text = lines.filter((l) => !l.includes("฿"));
     const head = text[0] ?? "";
     const rows = text.slice(1);
-    const href = notifHref(i.kind, i.message);
+    const href = notifHref(i.kind, i.message, i.createdAt);
     const Card = (href ? "a" : "div") as "a";
     return (
       <Card key={i.id} {...(href ? { href } : {})} className={`notif-card${href ? " notif-link" : ""}`} style={href ? { cursor: "pointer", textDecoration: "none", color: "inherit", display: "block" } : undefined}>
@@ -591,7 +593,7 @@ export default function AppClient({
           </div>
         )}
         <div className="nc-time">{new Date(i.createdAt).toLocaleString()}</div>
-        {href && <div style={{ marginTop: 6, fontSize: 12.5, fontWeight: 700, color: "var(--primary)" }}>Tap to open & resolve ›</div>}
+        {href && <div style={{ marginTop: 6, fontSize: 12.5, fontWeight: 700, color: "var(--primary)" }}>{i.kind === "tour-reminder" ? "Open the job ›" : "Tap to open & resolve ›"}</div>}
       </Card>
     );
   }

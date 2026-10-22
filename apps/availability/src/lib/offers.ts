@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/db";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
-import { sendTourCalendarInvite } from "@/lib/calendar";
 import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
@@ -288,10 +287,10 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   }
   // Offer is resolved — clear its notification from EVERY candidate's bell.
   await prisma.notification.deleteMany({ where: { offerId } });
-  // Email the guide a calendar invite (with reminders).
-  await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx);
-  // Push to connected Google Calendars (guide + operator master), if configured.
-  try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on calendar */ }
+  // The company calendar event, with this guide invited — or, on a replacement, the same
+  // event handed over to them. Not awaited: Google must never slow or block an Accept;
+  // failures are recorded, retried and reported to ops (lib/tour-calendar-sync).
+  void import("@/lib/tour-calendar-sync").then((m) => m.pushTourToCalendars(guideId, offer.date, offer.slotIdx)).catch(() => {});
 
   // Tell the operator team a guide took the job (in-app + push). Covers BOTH the
   // in-app and LINE accept paths, and works even for auto re-offers (no creator).

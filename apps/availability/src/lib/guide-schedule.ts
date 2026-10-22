@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { ticketsFromRate } from "@/lib/rate-kind";
 import { SLOT_TIMES } from "@/lib/slots";
 import { paxIndex } from "@/lib/assigned-pax";
 import { bookingRef } from "@/lib/booking-ref";
@@ -112,17 +113,18 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       // parseBokun drops it when that flag says otherwise. The OTA relay email is
       // deliberately never carried: mail to it goes back through the channel, not to
       // the guest, so it would only look like a contact detail without being one.
-      select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, phone: true, assignedGuideId: true },
+      select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, phone: true, assignedGuideId: true, rateTitle: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
     prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { bookings: true } }),
   ]);
 
-  // Whether a booking's guests already have their entrance tickets is the
-  // operator's own tag on the job sheet — nothing on the booking itself records
-  // it. Match the sheet's rows the way the sheet writes them: by booking
-  // reference. An untagged row, or no sheet at all, means "not said", and the
-  // guide is shown nothing rather than a guess.
+  // Whether a booking's guests already have their entrance tickets is the job
+  // sheet's Tickets tag, matched the way the sheet writes its rows: by booking
+  // reference. A row on the saved sheet always wins, even blank (the sheet is the
+  // record). With no saved row for the booking, the booking's Rate fills it only
+  // where the Rate is unambiguous (lib/rate-kind); otherwise the guide is shown
+  // nothing rather than a guess.
   const ticketsByRef = new Map<string, SheetBooking["tickets"]>();
   for (const row of ((sheet?.bookings as SheetBooking[] | null) ?? [])) {
     if (row?.bookingNo) ticketsByRef.set(row.bookingNo, row.tickets ?? "");
@@ -141,6 +143,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
     } : null,
-    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? "" })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? ticketsFromRate(b.rateTitle) })),
   };
 }

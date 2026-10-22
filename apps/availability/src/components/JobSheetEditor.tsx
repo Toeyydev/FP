@@ -10,7 +10,7 @@ import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -563,11 +563,18 @@ export default function JobSheetEditor() {
       return false;
     }
     setBusy(true); setMsg("");
+    // Old sheets may still hold the former short names (Water / Bus / Ferry).
+    // Saving from the dropdown upgrades them to the fixed labels even when the
+    // operator only changed another field on the row.
+    const expenses = s.expenses.map((expense) => {
+      const fixed = standardExpenseDescription(expense.description);
+      return fixed ? { ...expense, description: fixed.description, expenseType: fixed.expenseType } : expense;
+    });
     const r = await jfetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
       // The version this form was opened on. The server refuses a save built on a stale
       // one rather than quietly undoing whoever saved in between.
-      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses: s.expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}),
+      body: JSON.stringify({ guideId: s.guideId, date: s.date, slotIdx: s.slotIdx, tourId: s.tourId, status: s.status, bookings: s.bookings, expenses, guideFee: s.guideFee, operatorNote: s.operatorNote ?? "", ...(s.updatedAt ? { baseUpdatedAt: new Date(s.updatedAt).toISOString() } : {}),
         ...(Object.keys(advanceChoices).length ? { advanceChoices: Object.entries(advanceChoices).map(([index, advanceId]) => ({ index: Number(index), advanceId })) } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
@@ -1427,12 +1434,11 @@ export default function JobSheetEditor() {
                   {ro ? expenseCategoryLabel(e) : (
                     <select style={{ ...L, appearance: "none", WebkitAppearance: "none", backgroundImage: "none", cursor: "pointer", ...(expenseCategory(e) ? {} : { color: "var(--ink-soft)" }) }}
                       value={expenseCategory(e) ?? ""} onChange={(ev) => {
-                        const expenseType = ev.target.value;
-                        setExpense(i, {
-                          expenseType,
-                          // Company Advance stays only while an advance on this job may pay for the new category.
-                          ...(paid === "GUIDE_ADVANCE" && !advancesFor(expenseType).length ? { paidBy: "", paidBySource: "operator" } : {}),
-                        });
+                        // Keep the operator's payer choice when the category changes. If no
+                        // recorded advance may pay for it, the warning below and the server's
+                        // save validation make that explicit; silently clearing the choice
+                        // made the Advance option appear to vanish.
+                        setExpense(i, { expenseType: ev.target.value });
                       }}
                       title="The stable category this expense is booked under. Accounting maps on THIS, not on the description.">
                       <option value="">— choose —</option>
@@ -1440,7 +1446,22 @@ export default function JobSheetEditor() {
                     </select>
                   )}
                 </td>
-                <td><input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} /></td>
+                <td>{(() => {
+                  const fixed = standardExpenseDescription(e.description);
+                  return fixed ? (
+                    <select
+                      className="js-standard-expense-description"
+                      style={{ ...L, cursor: "pointer" }}
+                      value={fixed.description}
+                      onChange={(ev) => {
+                        const picked = STANDARD_EXPENSE_DESCRIPTIONS.find((item) => item.description === ev.target.value)!;
+                        setExpense(i, { description: picked.description, expenseType: picked.expenseType });
+                      }}
+                      title="Fixed standard Job Sheet item">
+                      {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
+                    </select>
+                  ) : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />;
+                })()}</td>
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /
                       "operator") read as Company. "Guide Advance" rows feed the settlement.
@@ -1458,7 +1479,7 @@ export default function JobSheetEditor() {
                     setExpense(i, { paidBy: v, paidBySource: "operator" });
                   }} className="js-payer-select" title={PAYMENT_SOURCES.map((x) => `${x.label} (${x.th}) — ${x.effect}`).join("\n")}>
                     {paid === "UNSPECIFIED" && <option value="">— not set —</option>}
-                    {PAYMENT_SOURCES.filter((s) => s.value !== "advance" || advancesFor(expenseCategory(e)).length > 0 || paid === "GUIDE_ADVANCE").map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
+                    {PAYMENT_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label} — {s.effect}</option>)}
                   </select>
                   {paid === "GUIDE_ADVANCE" && !advancesFor(expenseCategory(e)).length && (
                     <div className="js-advance-not-allowed" style={{ fontSize: 10.5, color: "var(--danger,#b3402f)", marginTop: 2, whiteSpace: "normal" }}>
@@ -1914,7 +1935,10 @@ export default function JobSheetEditor() {
            from it (paidBy = "Guide Advance" expense rows above) and what came back.
            A cash-movement ledger: it never adds to the expense total. Lives outside
            the read-only fieldset so the GUIDE can still record their return. */}
-       {(hasAdvance || (canEdit && advRows > 0)) && (
+       {/* Operators must always be able to see where an advance is recorded, including
+           before this job has one. Previously the whole section disappeared when both
+           the ledger and expense tags were empty, leaving no route from the job sheet. */}
+       {advanceLoaded && (canEdit || hasAdvance) && (
        <div className="advance-settlement" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
         {/* Operator: one line — given · used · returned · to return — and a link to the
             advance on Payments → Advances, where advances and returns are recorded. The
@@ -1929,7 +1953,7 @@ export default function JobSheetEditor() {
               {advT.deductedFromPayments > 0 && <span><small>Deducted</small> <b className="num">{thb(advT.deductedFromPayments)}</b></span>}
               {advT.outstanding !== 0 && <span><small>To return</small> <b className="num adv-due">{thb(advT.outstanding)}</b></span>}
               <span className={`badge ${advance.status === "SETTLED" ? "ok" : advance.status === "NEEDS_REVIEW" ? "pending" : "invited"}`}>{advance.status === "SETTLED" ? "✓ Settled" : advance.status === "NEEDS_REVIEW" ? "Needs review" : advance.status === "RETURN_DUE" || tourCompleted ? "Return due" : advance.status === "IN_USE" ? "In use" : "Open"}</span>
-            </> : <span className="adv-missing">{advRows} row{advRows === 1 ? "" : "s"} marked “From company advance” · no advance recorded for this job</span>}
+            </> : <span className="adv-missing">{advRows > 0 ? `${advRows} row${advRows === 1 ? "" : "s"} marked “From company advance” · ` : ""}No advance recorded for this job</span>}
             <span className="adv-sum-links">
               {liveAdvances.map((a) => <a key={a.id} className="mono" href={existingAdvanceHref(a.id)}>{a.advanceNo} →</a>)}
               {!hasAdvance && <a href="/payments?view=advances">Record on Payments → Advances →</a>}
@@ -2019,8 +2043,9 @@ export default function JobSheetEditor() {
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", file: null, confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
           {!canEdit && hasAdvance && advT.outstanding > 0 && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
-          {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advances and returns are recorded on <a href="/payments?view=advances">Payments → Advances</a>.</span>}
+          {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>You can also manage advances and returns on <a href="/payments?view=advances">Payments → Advances</a>.</span>}
           {!canEdit && hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (

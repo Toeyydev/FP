@@ -102,6 +102,24 @@ export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Lotus (Inc. Guide)", price: 10, pax: null, expenseType: "other" },
   { description: "Bus (Inc. Guide)", price: 15, pax: null, expenseType: "transport" },
 ];
+
+// The three recurring guide-inclusive consumables/transport lines use fixed names in
+// Job Sheet.  Keeping the spelling canonical makes expense matching, certificates and
+// later accounting review stable instead of treating "Bus", "Bus (guide)" etc. as
+// different costs.
+export const STANDARD_EXPENSE_DESCRIPTIONS = [
+  { description: "Water (Inc. Guide)", expenseType: "meal" },
+  { description: "Bus (Inc. Guide)", expenseType: "transport" },
+  { description: "Ferry (Inc. Guide)", expenseType: "transport" },
+] as const;
+
+export function standardExpenseDescription(value: string): (typeof STANDARD_EXPENSE_DESCRIPTIONS)[number] | null {
+  const v = value.trim();
+  return STANDARD_EXPENSE_DESCRIPTIONS.find((item) => {
+    const base = item.description.split(" (")[0];
+    return new RegExp(`^${base}(?:\\s*\\([^)]*guide[^)]*\\))?$`, "i").test(v);
+  }) ?? null;
+}
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
 
 // The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
@@ -457,7 +475,14 @@ const ATTRACTION_PREFIXES = ["grand palace", "wat pho", "wat arun"];
 
 // Re-sync the attraction (Grand Palace / Wat Pho / Wat Arun) ticket expenses to the
 // number of ticket-included guests who actually showed up (sum of actualPax).
+//
+// Only when every guest row says whether its tickets are included. A blank Tickets value is
+// UNKNOWN, not "no tickets": counting it as 0 used to wipe the operator's ticket count to 0
+// whenever a no-show was reported. While any row with guests is still blank, the lines are
+// left exactly as they are and a person decides.
 export function syncAttractionTickets(bookings: Booking[], expenses: Expense[]): Expense[] {
+  const withGuests = bookings.filter((b) => (b.actualPax ?? b.bookedPax ?? 0) > 0);
+  if (withGuests.some((b) => b.tickets !== "included" && b.tickets !== "not")) return expenses;
   const inclPax = bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
   return expenses.map((e) =>
     ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,

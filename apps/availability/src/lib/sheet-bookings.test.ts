@@ -32,6 +32,12 @@ describe("toSheetBooking", () => {
     expect(toSheetBooking(bk({ externalRef: null })).bookingNo).toBe("GET-TEST-1");
   });
 
+  it("fills Tickets only when the rate title is unambiguous", () => {
+    expect(toSheetBooking(bk({ rateTitle: "Tour with all entrance tickets" })).tickets).toBe("included");
+    expect(toSheetBooking(bk({ rateTitle: "Tour without entrance tickets" })).tickets).toBe("not");
+    expect(toSheetBooking(bk({ rateTitle: "Standard rate" })).tickets).toBe("");
+  });
+
   it("carries a reported no-show into Actual Pax", () => {
     expect(liveActualPax(bk({ pax: 3, noShowPax: 1 }))).toBe(2);
     expect(toSheetBooking(bk({ pax: 2, noShow: true, noShowPax: null }))).toMatchObject({ actualPax: 0, status: "no-show" });
