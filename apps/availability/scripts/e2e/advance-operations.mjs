@@ -220,11 +220,14 @@ try {
   await page.goto(J0, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-payer-select", { timeout: 20000 });
 
-  // 7 — no advance on the job: Company Advance is not offered.
-  check("7 · Company Advance is not offered while no advance on the job may pay for it", !(await payerOptions(page, 0)).includes("advance"));
+  // 7 — Company Advance is always offered (#359); while no advance may pay for the row, choosing
+  // it shows a warning and the server refuses the save.
+  check("7 · Company Advance is offered even before the job has an advance (#359)", (await payerOptions(page, 0)).includes("advance"));
 
-  // 2 — the operator's job sheet records no advance itself: no Record advance, no form.
-  check("2 · the job sheet has no Record advance — advances are recorded on Payments → Advances", (await page.$(".js-advance-submit")) === null && !(await clickText(page, ".advance-settlement", "+ Record advance")));
+  // 2 — the operator may also record an advance from the job sheet (#360). It is not pressed
+  // here: the advances below are created on Payments → Advances.
+  const recordAdvanceOnSheet = await page.evaluate(() => [...document.querySelectorAll(".advance-settlement button")].some((b) => b.innerText.trim() === "+ Record advance" && !b.disabled));
+  check("2 · the job sheet offers + Record advance (#360), and no form is open until it is pressed", recordAdvanceOnSheet && (await page.$(".js-advance-submit")) === null);
   // Details open on this device from here on (remembered — the summary line is closed by default).
   await page.evaluate(() => localStorage.setItem("folkops.advanceDetailsOpen", "1"));
   await createAdvanceOnPayments(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });
