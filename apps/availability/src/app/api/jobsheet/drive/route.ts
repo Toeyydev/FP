@@ -3,7 +3,9 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_TIMES } from "@/lib/slots";
-import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive, saveBufferToDrive } from "@/lib/google-drive";
+import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
+import { renderPdf } from "@/lib/certificates/pdf";
+import { JOB_SHEET_PDF_FONTS, jobSheetDriveTarget, saveJobSheetPdf } from "@/lib/jobsheet-drive";
 import { computeTotals, expenseAmount, jobSheetDriveName, thb, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { tourCostBreakdown } from "@/lib/peak-sync";
 
@@ -16,11 +18,15 @@ export async function GET() {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const connected = googleDriveEnabled ? !!(await folkpathsDriveToken(session?.user?.id)) : false;
-  return NextResponse.json({ enabled: googleDriveEnabled, connected });
+  // Job sheet PDFs are filed by the service account in the Folkpaths Shared Drive
+  // (lib/jobsheet-drive) — independent of this Google connection, which e-slips use.
+  const sharedDrive = jobSheetDriveTarget().ok;
+  return NextResponse.json({ enabled: googleDriveEnabled, connected, sharedDrive });
 }
 
-// POST { guideId, date, slotIdx } — render the job sheet and save it as a Google
-// Doc in admin@folkpaths.com's Drive under "Folkpaths Job Sheets / YYYY-MM".
+// POST { guideId, date, slotIdx } — render the job sheet to a PDF on the server and save it
+// in the Folkpaths Drive under "Folkpaths Job Sheets / YYYY-MM". Always a PDF, never a
+// Google Doc (owner rule) — same name as every other save, so it replaces the file in place.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -28,6 +34,11 @@ export async function POST(req: NextRequest) {
   // if Drive isn't configured/connected. We attempt the Drive copy only when we can.
   // The copy always goes to the shared Folkpaths Drive, whoever the operator is.
   const refreshToken = googleDriveEnabled ? await folkpathsDriveToken(session?.user?.id) : null;
+  // Job sheet PDFs go to the Folkpaths Shared Drive through the service account — never this
+  // OAuth connection, never a My Drive (lib/jobsheet-drive). The e-slip below keeps the OAuth
+  // connection and My Drive, unchanged.
+  const target = jobSheetDriveTarget();
+  const noSharedDrive = "The Folkpaths Shared Drive isn't set up for job sheets (FOLKPATHS_SHARED_DRIVE_ID and the service account), so the job sheet PDF wasn't saved.";
 
   const body = await req.json().catch(() => null);
   const guideId = String(body?.guideId || "");
@@ -72,10 +83,11 @@ export async function POST(req: NextRequest) {
     let link: string | undefined;
     let eslipLink: string | undefined;
     let driveError: string | undefined;
-    if (!refreshToken && (pdfBase64 || eslipBase64)) driveError = "Google Drive isn't connected, so the copy wasn't saved.";
-    if (pdfBase64 && refreshToken) {
+    if (pdfBase64 && !target.ok) driveError = noSharedDrive;
+    if (eslipBase64 && !refreshToken) driveError = driveError || "Google Drive isn't connected, so the e-slip copy wasn't saved.";
+    if (pdfBase64 && target.ok) {
       try {
-        const r = await saveBufferToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const r = await saveJobSheetPdf({ name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         link = r.link;
       } catch (e) { driveError = (e as Error).message.slice(0, 200); }
     }
@@ -94,7 +106,7 @@ export async function POST(req: NextRequest) {
     // The slip is filed, not paid: Payments records the transfer that pays this job.
     return NextResponse.json({ ok: true, link, eslipLink, paid, driveError, recordPayment: !!eslipBase64 });
   }
-  if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect Google Drive first." }, { status: 400 });
+  if (!target.ok) return NextResponse.json({ error: "no-shared-drive", hint: noSharedDrive }, { status: 400 });
   const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 
   const bookingRows = bookings.map((b) => {
@@ -104,7 +116,7 @@ export async function POST(req: NextRequest) {
   }).join("") || `<tr><td colspan="5" style="color:#888">No bookings recorded.</td></tr>`;
   const expenseRows = expenses.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0).map((e) => `<tr><td>${esc(e.description)}</td><td style="text-align:center">${e.pax ?? ""}${e.unit ? " " + esc(e.unit) : ""}</td><td style="text-align:right">${esc(thb(expenseAmount(e)))}</td></tr>`).join("") || `<tr><td colspan="3" style="color:#888">No expenses.</td></tr>`;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title></head><body style="font-family:Arial,Helvetica,sans-serif;color:#111;font-size:13px">
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(ref)}</title><style>@page{size:A4;margin:12mm}</style></head><body style="font-family:${JOB_SHEET_PDF_FONTS};color:#111;font-size:13px">
     <div style="font-size:24px;font-weight:800;letter-spacing:1px">FOLKPATHS</div>
     <div style="color:#666;font-size:12px;margin-bottom:12px">บริษัท โฟล์คพาธส์ จำกัด · Job Sheet</div>
     <table border="1" cellpadding="6" style="border-collapse:collapse;margin-bottom:10px;font-size:12.5px">
@@ -149,8 +161,9 @@ export async function POST(req: NextRequest) {
   </body></html>`;
 
   try {
-    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
-    await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
+    const pdf = await renderPdf(html);
+    const { link } = await saveJobSheetPdf({ name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdf.toString("base64"), folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref, format: "pdf" } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });

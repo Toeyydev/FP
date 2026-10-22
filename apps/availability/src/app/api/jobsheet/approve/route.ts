@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { isOps } from "@/lib/roles";
 import { toggleApproval, isApproved } from "@/lib/jobsheet";
+import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 
 // POST { guideId, date, slotIdx, approve? } — operator/admin only.
 // Records the operator's finance sign-off on a SAVED job sheet: sets
@@ -76,5 +77,13 @@ export async function POST(req: NextRequest) {
     entityType: "JobSheet", entityId: existing.id,
     detail: { guideId, date, slotIdx, ref: existing.ref },
   });
+  // File the sheet in Drive as a PDF that shows the decision — approved, or approval removed.
+  // Not awaited: a PDF render takes seconds and the approval is already recorded; the Drive
+  // copy is best-effort and is replaced in place by the next save.
+  void saveJobSheetToDrive(guideId, date, slotIdx).then((link) => audit({
+    actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
+    action: link ? "jobsheet.drive_saved" : "jobsheet.drive_failed", entityType: "JobSheet", entityId: existing.id,
+    detail: { guideId, date, slotIdx, ref: existing.ref, format: "pdf", after: nowApproved ? "approved" : "unapproved" },
+  })).catch(() => {});
   return NextResponse.json({ ok: true, ...sheet, advanceSettled });
 }

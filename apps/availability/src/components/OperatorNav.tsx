@@ -27,6 +27,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "calendar-sync", label: "Calendar sync", href: "/calendar-sync" },
       { key: "restore-bookings", label: "Restore archived bookings", href: "/admin/restore-bookings", adminOnly: true },
       { key: "create-job-sheets", label: "Create job sheets", href: "/admin/create-job-sheets", adminOnly: true },
+      { key: "job-sheets-pdf", label: "Job sheet PDFs", href: "/admin/job-sheets-pdf", adminOnly: true },
     ],
   },
   {

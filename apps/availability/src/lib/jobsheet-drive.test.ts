@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
-// Renders the Google Doc exactly as saveJobSheetToDrive builds it; only the database and
-// the Drive upload are mocked. All data is invented — this repo is public.
+// Renders the job sheet exactly as saveJobSheetToDrive builds it; only the database, the PDF
+// renderer and the Drive upload are mocked. All data is invented — this repo is public.
 const prismaMock = vi.hoisted(() => ({
   jobSheet: { findUnique: vi.fn() },
   assignment: { findUnique: vi.fn() },
@@ -11,10 +11,22 @@ const prismaMock = vi.hoisted(() => ({
   guideAdvanceReturn: { findMany: vi.fn() },
   guideAdvanceEntry: { findMany: vi.fn(async () => []) },
   guideAdvanceReceipt: { findMany: vi.fn(async () => []) },
+  // The save's cross-instance lock (lib/jobsheet-drive): a transaction that only holds it.
+  $queryRaw: vi.fn(async () => []),
+  $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prismaMock)),
 }));
-const saveHtml = vi.hoisted(() => vi.fn());
+const saveBuffer = vi.hoisted(() => vi.fn());
+const render = vi.hoisted(() => vi.fn(async (_html: string) => Buffer.from("%PDF-test")));
+// The tests below read the HTML that was rendered.
+const saveHtml = { mock: { get calls() { return render.mock.calls.map(([html]) => [{ html }]); } } };
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
-vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: async () => "refresh-token", saveHtmlToDrive: saveHtml }));
+const sharedDrive = vi.hoisted(() => ({ id: "0AExampleSharedDrive1" as string | null }));
+// The admin OAuth path is present only so a test can prove it is never touched.
+const oauth = vi.hoisted(() => ({ token: vi.fn(async () => "admin-refresh-token"), save: vi.fn() }));
+vi.mock("@/lib/google-drive", () => ({ googleDriveEnabled: true, folkpathsDriveToken: oauth.token, saveBufferToDrive: oauth.save, folkpathsSharedDriveId: () => sharedDrive.id, saveBufferWithAccessToken: saveBuffer }));
+const sa = vi.hoisted(() => ({ configured: true, token: vi.fn(async () => "sa-access-token") }));
+vi.mock("@/lib/drive-service-account", () => ({ serviceAccountConfig: () => (sa.configured ? { email: "x@p.iam.gserviceaccount.com", privateKey: "k" } : null), serviceAccountAccessToken: sa.token }));
+vi.mock("@/lib/certificates/pdf", () => ({ renderPdf: render }));
 
 import { saveJobSheetToDrive } from "./jobsheet-drive";
 import { tourCostBreakdown } from "@/lib/peak-sync";
@@ -29,13 +41,15 @@ const ROWS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sharedDrive.id = "0AExampleSharedDrive1";
+  sa.configured = true;
   prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: ROWS, guideFee: { price: 1200, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"), certifiedAt: null });
   prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001" });
   prismaMock.user.findUnique.mockResolvedValue({ fullName: "Guide A", displayName: "Guide A" });
   prismaMock.tour.findUnique.mockResolvedValue({ name: "Test Tour", time: "08:30" });
   prismaMock.guideAdvance.findMany.mockResolvedValue([]);
   prismaMock.guideAdvanceReturn.findMany.mockResolvedValue([]);
-  saveHtml.mockResolvedValue({ id: "doc-1", link: "https://docs.example/doc-1" });
+  saveBuffer.mockResolvedValue({ id: "file-1", link: "https://drive.example/file-1" });
 });
 
 const paidByCell = (html: string, description: string) => {
@@ -45,7 +59,7 @@ const paidByCell = (html: string, description: string) => {
 
 describe("the Google Doc in Drive names who paid each expense", () => {
   it("shows 'not specified' for a blank or unrecognised Paid By, and keeps the known labels", async () => {
-    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBe("https://docs.example/doc-1");
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBe("https://drive.example/file-1");
     const { html } = saveHtml.mock.calls[0][0];
     expect(paidByCell(html, "Row blank")).toBe("Not specified / ยังไม่ระบุผู้จ่าย");
     expect(paidByCell(html, "Row unknown")).toBe("Not specified / ยังไม่ระบุผู้จ่าย");
@@ -118,5 +132,89 @@ describe("the Google Doc states only confirmed payers as fact", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ ref: "FOLK-BKK-20300506-01", tourId: "T-001", status: "Confirmed", bookings: [], expenses: [MIX[0], MIX[5]], guideFee: { price: 1000, time: 1, whtPct: 3 }, updatedAt: new Date("2030-05-06T10:00:00Z"), certifiedAt: null });
     await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
     expect(saveHtml.mock.calls[0][0].html).not.toMatch(/Awaiting payer confirmation|Suggested \/ รอยืนยัน/);
+  });
+});
+
+describe("job sheets are filed by the service account, never the admin OAuth connection", () => {
+  it("uses the service account's token and never asks for the OAuth connection", async () => {
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    expect(sa.token).toHaveBeenCalledTimes(1);
+    expect(saveBuffer.mock.calls[0][0]).toBe("sa-access-token");
+    expect(oauth.token).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+  it("without the service account it saves nothing — and does not fall back to the OAuth connection or My Drive", async () => {
+    sa.configured = false;
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(render).not.toHaveBeenCalled();
+    expect(sa.token).not.toHaveBeenCalled();
+    expect(saveBuffer).not.toHaveBeenCalled();
+    expect(oauth.token).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+  it("without the Shared Drive id it saves nothing either", async () => {
+    sharedDrive.id = null;
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(saveBuffer).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+  it("a refused service-account token saves nothing and never throws", async () => {
+    sa.token.mockRejectedValueOnce(new Error("drive-service-account: token refused (400 invalid_grant)"));
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(saveBuffer).not.toHaveBeenCalled();
+    expect(oauth.save).not.toHaveBeenCalled();
+  });
+});
+
+describe("the copy in Drive is a PDF", () => {
+  it("is filed in the Folkpaths Shared Drive, or nowhere — never a My Drive", async () => {
+    sharedDrive.id = null;
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(render).not.toHaveBeenCalled();
+    expect(saveBuffer).not.toHaveBeenCalled();
+  });
+  it("uploads the rendered PDF under the job sheet's name with .pdf, in the month folder", async () => {
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    expect(render).toHaveBeenCalledTimes(1);
+    const [token, up] = saveBuffer.mock.calls[0];
+    expect(token).toBe("sa-access-token");
+    expect(up.mimeType).toBe("application/pdf");
+    expect(up.name).toBe("FOLK-BKK-20300506-01 — Guide A — 2030-05-06 — G-TEST — slot 0.pdf");
+    expect(up.folderPath).toEqual(["Folkpaths Job Sheets", "2030-05 May"]);
+    expect(up.sharedDriveId).toBe("0AExampleSharedDrive1");
+    expect(Buffer.from(up.base64, "base64").toString()).toBe("%PDF-test");
+  });
+  it("is an A4 page set in a font with Thai, since the server has no Sarabun", async () => {
+    await saveJobSheetToDrive("G-TEST", "2030-05-06", 0);
+    const { html } = saveHtml.mock.calls[0][0];
+    expect(html).toContain("@page{size:A4");
+    expect(html).toContain("font-family:'Umpush'");
+  });
+  it("saves nothing — not a Google Doc either — when the PDF cannot be made", async () => {
+    render.mockRejectedValueOnce(new Error("pdf-renderer-unavailable: not-installed"));
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(saveBuffer).not.toHaveBeenCalled();
+  });
+  it("returns null without rendering when the sheet does not exist", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue(null);
+    expect(await saveJobSheetToDrive("G-TEST", "2030-05-06", 0)).toBeNull();
+    expect(render).not.toHaveBeenCalled();
+  });
+});
+
+describe("saves of job sheet PDFs never overlap", () => {
+  it("two saves at once run one after the other, so the second finds the first's file", async () => {
+    let running = 0, peak = 0;
+    saveBuffer.mockImplementation(async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 30)); running--; return { id: "file-1", link: "https://drive.example/file-1" }; });
+    const results = await Promise.all([saveJobSheetToDrive("G-TEST", "2030-05-06", 0), saveJobSheetToDrive("G-TEST", "2030-05-06", 0), saveJobSheetToDrive("G-TEST", "2030-05-06", 0)]);
+    expect(results).toEqual(["https://drive.example/file-1", "https://drive.example/file-1", "https://drive.example/file-1"]);
+    expect(saveBuffer).toHaveBeenCalledTimes(3);
+    expect(peak).toBe(1);
+  });
+  it("a failed save does not stop the next one", async () => {
+    saveBuffer.mockRejectedValueOnce(new Error("drive-upload 500")).mockResolvedValueOnce({ id: "file-2", link: "https://drive.example/file-2" });
+    const [a, b] = await Promise.all([saveJobSheetToDrive("G-TEST", "2030-05-06", 0), saveJobSheetToDrive("G-TEST", "2030-05-06", 0)]);
+    expect(a).toBeNull();
+    expect(b).toBe("https://drive.example/file-2");
   });
 });

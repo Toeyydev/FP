@@ -165,7 +165,7 @@ export default function JobSheetEditor() {
   const [recordPay, setRecordPay] = useState<CreatedDocument | null>(null);
   const [showFull, setShowFull] = useState(false); // guides see the summary; expand for full sheet
   const [secTab, setSecTab] = useState<"all" | "details" | "expenses" | "fee">("all"); // operator section tabs — "all" keeps the classic single-scroll sheet
-  const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
+  const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean; sharedDrive: boolean }>({ enabled: false, connected: false, sharedDrive: false }); // Google Drive save (connected = the OAuth link e-slips use; sharedDrive = where job sheet PDFs go)
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
   const [expBusy, setExpBusy] = useState(false);
@@ -244,7 +244,7 @@ export default function JobSheetEditor() {
       .catch(() => {});
   }, [needsAccountPicker, canEdit, peakAccounts.length]);
 
-  useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected })).catch(() => {}); }, []);
+  useEffect(() => { fetch("/api/jobsheet/drive").then((r) => (r.ok ? r.json() : null)).then((d) => d && setDrive({ enabled: !!d.enabled, connected: !!d.connected, sharedDrive: !!d.sharedDrive })).catch(() => {}); }, []);
 
   // Entrance-fee items (Grand Palace, Wat Pho, Wat Arun) are paid only for guests
   // whose tickets are "Included". Keep their pax in sync with that count.
@@ -356,7 +356,7 @@ export default function JobSheetEditor() {
     await jfetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => {});
     // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
     // record reflects it immediately (best-effort; needs a saved sheet + Drive).
-    if (drive.enabled && drive.connected) {
+    if (drive.sharedDrive) {
       try {
         const r = await jfetch("/api/jobsheet/drive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx }) });
         setMsg(r.ok ? (ns > 0 ? "No-show saved & uploaded to Drive ✓" : "Updated & uploaded to Drive ✓") : "No-show saved ✓");
@@ -936,7 +936,7 @@ export default function JobSheetEditor() {
               <a className="btn" target="_blank" rel="noopener noreferrer"
                 href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>Add to Google Calendar</a>
               <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>
-              {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
+              {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect the company Google account so e-slips can be saved to Drive (job sheet PDFs go to the Shared Drive without it)">☁ Connect Google Drive</a>}
               <hr />
               {!handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
               <button className="btn" disabled={busy || checkedIn || !!handover} title={handover ? "This tour was handed over — undo the handover first" : checkedIn ? "The guide has checked in — return or undo it from the Tour Log instead" : "Unassign this guide and send the job back to the inbox to re-dispatch (notifies the guide)"} onClick={returnToOperator}>↩ Return to operator</button>
