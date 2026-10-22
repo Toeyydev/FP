@@ -10,7 +10,7 @@ import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -563,13 +563,9 @@ export default function JobSheetEditor() {
       return false;
     }
     setBusy(true); setMsg("");
-    // Old sheets may still hold the former short names (Water / Bus / Ferry).
-    // Saving from the dropdown upgrades them to the fixed labels even when the
-    // operator only changed another field on the row.
-    const expenses = s.expenses.map((expense) => {
-      const fixed = standardExpenseDescription(expense.description);
-      return fixed ? { ...expense, description: fixed.description, expenseType: fixed.expenseType } : expense;
-    });
+    // Old short names (Water / Bus / Ferry) are upgraded to the fixed labels on Save —
+    // never on a protected row, whose name is part of what was confirmed (lib/jobsheet).
+    const expenses = upgradeStandardDescriptions(s.expenses);
     const r = await jfetch("/api/jobsheet", {
       method: "PUT", headers: { "content-type": "application/json" },
       // The version this form was opened on. The server refuses a save built on a stale

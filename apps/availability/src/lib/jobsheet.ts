@@ -1,5 +1,7 @@
 // Job-sheet types, the default Folkpaths expense catalogue, and the totals math.
 
+import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
+
 export type Booking = {
   name: string;
   bookingNo: string;
@@ -119,6 +121,20 @@ export function standardExpenseDescription(value: string): (typeof STANDARD_EXPE
     const base = item.description.split(" (")[0];
     return new RegExp(`^${base}(?:\\s*\\([^)]*guide[^)]*\\))?$`, "i").test(v);
   }) ?? null;
+}
+/**
+ * The rows a Save sends: former short names (Water / Bus / Ferry) upgraded to the fixed
+ * labels — except on a protected row (a confirmed payer, a waiver, a certificate request,
+ * an advance settlement). Its description and type are part of what was confirmed and the
+ * server refuses any change to them, so upgrading it made every Save of the sheet fail.
+ * A protected row keeps its name until a person picks a new one.
+ */
+export function upgradeStandardDescriptions<T extends Expense>(expenses: readonly T[]): T[] {
+  return expenses.map((expense) => {
+    if (isProtected(expense as ProtectedRow)) return expense;
+    const fixed = standardExpenseDescription(expense.description);
+    return fixed ? { ...expense, description: fixed.description, expenseType: fixed.expenseType } : expense;
+  });
 }
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
 

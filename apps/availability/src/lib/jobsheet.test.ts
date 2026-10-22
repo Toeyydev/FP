@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
 
 describe("jobsheet — fixed standard expense descriptions", () => {
   it("offers the three guide-inclusive labels in their canonical spelling", () => {
@@ -436,5 +436,31 @@ describe("review rows carry no tax from 2026-10-06 — stampReviewTaxFree and co
     expect({ base: now.whtBase, wht: now.wht, onReview: now.whtOnReview, review: now.reviewReward }).toEqual({ base: 1000, wht: 30, onReview: 0, review: 200 });
     const before = computeTotals([r50(4)], fee);
     expect({ base: before.whtBase, wht: before.wht, onReview: before.whtOnReview }).toEqual({ base: 1200, wht: 36, onReview: 6 });
+  });
+});
+
+describe("upgrading old short names on Save", () => {
+  const stamp = { paidBy: "guide", paidBySource: "operator", paidByBy: "u_ops", paidByAt: "2030-01-01T00:00:00.000Z" };
+  it("upgrades an unprotected row's old name to the fixed label and type", () => {
+    const [w] = upgradeStandardDescriptions([{ description: "Water", price: 10, pax: 2 } as Expense]);
+    expect(w.description).toBe("Water (Inc. Guide)");
+    expect(w.expenseType).toBe(standardExpenseDescription("Water")!.expenseType);
+  });
+  it("leaves a protected row exactly as it is — a confirmed payer, a waiver, a certificate request or a settlement", () => {
+    const rows = [
+      { description: "Water", price: 10, pax: 2, ...stamp },
+      { description: "Bus", price: 15, pax: 3, evidenceWaiver: { waived: true } },
+      { description: "Ferry", price: 5.5, pax: 4, certificateRequest: { requested: true } },
+      { description: "Water", price: 10, pax: 1, advanceSettlement: { id: "s1" } },
+    ] as unknown as Expense[];
+    expect(upgradeStandardDescriptions(rows)).toEqual(rows);
+  });
+  it("on a mixed sheet upgrades only the unprotected rows", () => {
+    const out = upgradeStandardDescriptions([{ description: "Bus", price: 15, pax: 3, ...stamp }, { description: "Bus", price: 15, pax: 3 }] as unknown as Expense[]);
+    expect(out.map((e) => e.description)).toEqual(["Bus", "Bus (Inc. Guide)"]);
+  });
+  it("leaves other descriptions alone", () => {
+    const rows = [{ description: "Grand Palace", price: 500, pax: 2 }] as Expense[];
+    expect(upgradeStandardDescriptions(rows)).toEqual(rows);
   });
 });
