@@ -29,8 +29,48 @@ document.querySelectorAll('[data-bokun-link]').forEach((link) => {
 });
 
 window.dataLayer = window.dataLayer || [];
+const consentBanner = document.querySelector('[data-consent-banner]');
+const consentKey = 'folkpaths-consent-v1';
+let tagsLoaded = false;
+let analyticsConsentGranted = false;
+
+const loadGoogleTags = () => {
+  if (tagsLoaded) return;
+  tagsLoaded = true;
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = 'https://www.googletagmanager.com/gtm.js?id=GTM-TGXT7KCT';
+  document.head.append(script);
+  window.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+};
+
+const applyConsent = (choice) => {
+  const granted = choice === 'accepted';
+  analyticsConsentGranted = granted;
+  window.gtag?.('consent', 'update', {
+    ad_storage: granted ? 'granted' : 'denied',
+    analytics_storage: granted ? 'granted' : 'denied',
+    ad_user_data: granted ? 'granted' : 'denied',
+    ad_personalization: granted ? 'granted' : 'denied'
+  });
+  if (granted) loadGoogleTags();
+  if (consentBanner) consentBanner.hidden = true;
+};
+
+let savedConsent = null;
+try { savedConsent = window.localStorage.getItem(consentKey); } catch {}
+if (savedConsent === 'accepted' || savedConsent === 'necessary') applyConsent(savedConsent);
+else if (consentBanner) consentBanner.hidden = false;
+
+const saveConsent = (choice) => {
+  try { window.localStorage.setItem(consentKey, choice); } catch {}
+  applyConsent(choice);
+};
+consentBanner?.querySelector('[data-consent-accept]')?.addEventListener('click', () => saveConsent('accepted'));
+consentBanner?.querySelector('[data-consent-reject]')?.addEventListener('click', () => saveConsent('necessary'));
+
 const trackEvent = (name, parameters = {}) => {
-  if (typeof window.gtag === 'function') window.gtag('event', name, parameters);
+  if (analyticsConsentGranted && typeof window.gtag === 'function') window.gtag('event', name, parameters);
 };
 
 document.addEventListener('click', (event) => {
@@ -136,14 +176,7 @@ document.querySelectorAll('[data-review-carousel]').forEach((carousel) => {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let index = 0;
   let timer;
-  const narrowViewport = window.matchMedia('(max-width: 56rem)');
-  let manuallyPaused = narrowViewport.matches;
-
-  if (manuallyPaused && toggleAutoplay) {
-    toggleAutoplay.textContent = 'Play';
-    toggleAutoplay.setAttribute('aria-pressed', 'true');
-    toggleAutoplay.setAttribute('aria-label', 'Play automatic review rotation');
-  }
+  let manuallyPaused = false;
 
   const show = (nextIndex, behavior = 'smooth') => {
     index = (nextIndex + slides.length) % slides.length;
@@ -178,4 +211,104 @@ document.querySelectorAll('[data-review-carousel]').forEach((carousel) => {
   document.addEventListener('visibilitychange', start);
   reducedMotion.addEventListener?.('change', start);
   start();
+});
+
+const communityReviews = document.querySelector('[data-published-reviews]');
+if (communityReviews) {
+  const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+  fetch('/api/reviews', { headers: { Accept: 'application/json' } })
+    .then((response) => response.ok ? response.json() : Promise.reject(new Error('Reviews unavailable')))
+    .then(({ reviews = [] }) => {
+      if (!reviews.length) {
+        communityReviews.innerHTML = '<p class="empty-reviews">No direct-booking reviews have been published yet.</p>';
+        return;
+      }
+      communityReviews.innerHTML = reviews.map((review) => `<article class="community-review-card"><div class="review-source"><strong>Verified direct booking</strong><span aria-label="Rated ${review.rating} out of 5">${review.rating} / 5</span></div><blockquote><p>${escapeText(review.reviewText)}</p></blockquote><p class="review-meta">${escapeText(review.displayName)} · ${escapeText(review.tourName)} · ${escapeText(review.tourMonth)}</p></article>`).join('');
+      const schema = {
+        '@context': 'https://schema.org',
+        '@graph': reviews.map((review) => ({
+          '@type': 'Review',
+          itemReviewed: { '@type': 'TouristTrip', name: review.tourName },
+          author: { '@type': 'Person', name: review.displayName },
+          datePublished: review.publishedAt,
+          reviewBody: review.reviewText,
+          reviewRating: { '@type': 'Rating', ratingValue: review.rating, bestRating: 5, worstRating: 1 }
+        }))
+      };
+      const script = document.createElement('script');
+      script.type = 'application/ld+json';
+      script.textContent = JSON.stringify(schema).replaceAll('<', '\\u003c');
+      document.head.append(script);
+    })
+    .catch(() => { communityReviews.innerHTML = '<p class="empty-reviews">Verified reviews cannot be loaded right now. Please try again later.</p>'; });
+}
+
+document.querySelectorAll('[data-review-form]').forEach((form) => {
+  const verifyPanel = form.querySelector('[data-review-verify]');
+  const composePanel = form.querySelector('[data-review-compose]');
+  const status = form.querySelector('[data-review-status]');
+  let verificationToken = '';
+  let turnstileToken = '';
+  const turnstileSiteKey = document.documentElement.dataset.turnstileSiteKey;
+  const turnstileContainer = form.querySelector('[data-turnstile-container]');
+
+  if (turnstileSiteKey && turnstileContainer) {
+    const script = document.createElement('script');
+    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.addEventListener('load', () => window.turnstile?.render(turnstileContainer, { sitekey: turnstileSiteKey, callback: (token) => { turnstileToken = token; }, 'expired-callback': () => { turnstileToken = ''; } }));
+    document.head.append(script);
+  }
+
+  const setBusy = (busy) => {
+    form.setAttribute('aria-busy', String(busy));
+    form.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+  };
+  const showStatus = (message, isError = false) => {
+    status.textContent = message;
+    status.dataset.error = String(isError);
+  };
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    setBusy(true);
+    showStatus(form.dataset.step === 'verify' ? 'Checking your booking securely…' : 'Sending your review for moderation…');
+    try {
+      if (form.dataset.step === 'verify') {
+        const response = await fetch('/api/reviews/verify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ bookingCode: form.elements.bookingCode.value, email: form.elements.email.value, turnstileToken })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.verificationToken) throw new Error(result.message || 'We could not verify those details. Check the complete code and booking email, then try again after the tour.');
+        verificationToken = result.verificationToken;
+        form.dataset.step = 'compose';
+        verifyPanel.hidden = true;
+        composePanel.hidden = false;
+        showStatus(`Booking verified for ${result.tourName}. Your booking details will stay private.`);
+        form.elements.displayName.focus();
+      } else {
+        const response = await fetch('/api/reviews', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            verificationToken,
+            displayName: form.elements.displayName.value,
+            rating: Number(form.elements.rating.value),
+            reviewText: form.elements.reviewText.value,
+            displayConsent: form.elements.displayConsent.checked
+          })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'The review could not be submitted. Please try again.');
+        composePanel.hidden = true;
+        showStatus('Thank you. Your review was received and is awaiting moderation before publication.');
+      }
+    } catch (error) {
+      showStatus(error.message || 'Something went wrong. Please try again.', true);
+    } finally {
+      setBusy(false);
+    }
+  });
 });
