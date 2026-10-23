@@ -115,8 +115,14 @@ document.addEventListener('click', (event) => {
     trackEvent('book_now_click', parameters);
     if (bookingLink.hostname?.endsWith('bokun.io') || bookingLink.dataset.src?.includes('bokun.io')) {
       trackEvent('begin_checkout', {
-        ...parameters,
-        items: [{ item_id: parameters.item_id, item_name: parameters.item_name, price: parameters.value, quantity: 1 }]
+        tour_id: parameters.tour_id,
+        link_url: parameters.link_url,
+        page_path: parameters.page_path,
+        ecommerce: {
+          currency: parameters.currency,
+          value: parameters.value,
+          items: [{ item_id: parameters.item_id, item_name: parameters.item_name, price: parameters.value, quantity: 1 }]
+        }
       });
     }
   }
