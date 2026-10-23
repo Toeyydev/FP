@@ -180,6 +180,10 @@
   #bokun_a20602fd_2b06_4128_9448_ac5d208edf6a:active { background: #30682e; }
   #bokun_a20602fd_2b06_4128_9448_ac5d208edf6a:disabled { cursor: wait; opacity: .72; }
   .booking-note { margin-top: .75rem; color: var(--muted); font-size: .9rem; }
+  .checkout-confidence, .booking-trust-strip { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1rem 0; }
+  .checkout-confidence strong { flex-basis: 100%; }
+  .checkout-confidence span, .booking-trust-strip span { border: 1px solid currentColor; border-radius: 999px; padding: .42rem .68rem; font-size: .78rem; font-weight: 700; line-height: 1.15; }
+  .booking-trust-strip { margin-top: 1.5rem; }
   .dress-code-figure { margin: 3rem 0; }
   .dress-code-figure img { width: min(100%, 42rem); height: auto; border: 2px solid var(--ink); }
   .dress-code-figure figcaption { max-width: 42rem; margin-top: .65rem; color: var(--muted); font-size: .9rem; }
@@ -277,6 +281,7 @@
   .booking-aside { position: static; }
   .footer-grid { grid-template-columns: 1fr; gap: 2rem; }
   .booking-choice { grid-template-columns: 1fr; }
+  .checkout-confidence span, .booking-trust-strip span { font-size: .72rem; }
   .published-reviews { grid-template-columns: 1fr; }
   .consent-banner { grid-template-columns: 1fr; bottom: .75rem; max-height: calc(100svh - 1.5rem); overflow-y: auto; }
   .consent-actions { justify-content: stretch; }

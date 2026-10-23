@@ -16,6 +16,31 @@ if (toggle && nav) {
   });
 }
 
+const campaignParameterNames = ['gclid', 'gbraid', 'wbraid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+const campaignParameters = new URLSearchParams();
+const currentParameters = new URLSearchParams(window.location.search);
+campaignParameterNames.forEach((name) => {
+  const value = currentParameters.get(name);
+  if (value) campaignParameters.set(name, value.slice(0, 300));
+});
+
+const decorateCampaignLink = (link) => {
+  if (!campaignParameters.size || !link.href) return;
+  const url = new URL(link.href, window.location.origin);
+  campaignParameters.forEach((value, name) => url.searchParams.set(name, value));
+  link.href = url.toString();
+};
+
+// Preserve ad attribution without cookies or local storage. Campaign parameters
+// travel only with the visitor's links and remain available to Bókun checkout.
+document.querySelectorAll('a[href^="/"], a[data-booking-event]').forEach(decorateCampaignLink);
+document.querySelectorAll('[data-booking-event][data-src]').forEach((button) => {
+  if (!campaignParameters.size) return;
+  const url = new URL(button.dataset.src);
+  campaignParameters.forEach((value, name) => url.searchParams.set(name, value));
+  button.dataset.src = url.toString();
+});
+
 document.querySelectorAll('[data-bokun-link]').forEach((link) => {
   const configured = document.documentElement.dataset.bokunUrl;
   const product = link.dataset.product;
@@ -25,6 +50,7 @@ document.querySelectorAll('[data-bokun-link]').forEach((link) => {
     link.href = url.toString();
     link.target = '_blank';
     link.rel = 'noopener';
+    decorateCampaignLink(link);
   }
 });
 
@@ -70,7 +96,8 @@ consentBanner?.querySelector('[data-consent-accept]')?.addEventListener('click',
 consentBanner?.querySelector('[data-consent-reject]')?.addEventListener('click', () => saveConsent('necessary'));
 
 const trackEvent = (name, parameters = {}) => {
-  if (analyticsConsentGranted && typeof window.gtag === 'function') window.gtag('event', name, parameters);
+  if (!analyticsConsentGranted) return;
+  window.dataLayer.push({ event: name, ...parameters });
 };
 
 document.addEventListener('click', (event) => {
@@ -78,18 +105,26 @@ document.addEventListener('click', (event) => {
   if (bookingLink) {
     const parameters = {
       tour_id: bookingLink.dataset.product || 'all-tours',
+      item_id: bookingLink.dataset.product || 'all-tours',
+      item_name: bookingLink.dataset.productName || bookingLink.textContent.trim(),
+      value: Number(bookingLink.dataset.price || 0),
+      currency: bookingLink.dataset.currency || 'THB',
       link_url: bookingLink.href,
       page_path: window.location.pathname
     };
     trackEvent('book_now_click', parameters);
     if (bookingLink.hostname?.endsWith('bokun.io') || bookingLink.dataset.src?.includes('bokun.io')) {
-      trackEvent('checkout_start', parameters);
+      trackEvent('begin_checkout', {
+        ...parameters,
+        items: [{ item_id: parameters.item_id, item_name: parameters.item_name, price: parameters.value, quantity: 1 }]
+      });
     }
   }
 
   const tourLink = event.target.closest('[data-tour-select]');
   if (tourLink) trackEvent('tour_select', {
     tour_id: tourLink.dataset.product || 'unknown',
+    item_id: tourLink.dataset.product || 'unknown',
     link_url: tourLink.href,
     page_path: window.location.pathname
   });
@@ -106,6 +141,12 @@ document.addEventListener('click', (event) => {
       trackEvent('private_tour_contact', parameters);
     }
   }
+
+  const contactLink = event.target.closest('a[href^="tel:"], a[href^="mailto:"]');
+  if (contactLink) trackEvent(contactLink.href.startsWith('tel:') ? 'phone_click' : 'email_click', {
+    link_url: contactLink.href,
+    page_path: window.location.pathname
+  });
 });
 
 document.querySelectorAll('[data-hero-carousel]').forEach((carousel) => {
