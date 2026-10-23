@@ -94,6 +94,13 @@ const saveConsent = (choice) => {
 };
 consentBanner?.querySelector('[data-consent-accept]')?.addEventListener('click', () => saveConsent('accepted'));
 consentBanner?.querySelector('[data-consent-reject]')?.addEventListener('click', () => saveConsent('necessary'));
+document.querySelectorAll('[data-consent-reset]').forEach((button) => button.addEventListener('click', () => {
+  try { window.localStorage.removeItem(consentKey); } catch {}
+  if (consentBanner) {
+    consentBanner.hidden = false;
+    consentBanner.querySelector('[data-consent-accept]')?.focus();
+  }
+}));
 
 const trackEvent = (name, parameters = {}) => {
   if (!analyticsConsentGranted) return;

@@ -149,6 +149,8 @@
   .footer-grid { display: grid; grid-template-columns: minmax(18rem, 1.3fr) repeat(3, auto); gap: 3rem; }
   .footer-links { display: grid; gap: .5rem; align-content: start; }
   .footer-contact { font-style: normal; }
+  .footer-cookie-button { width: fit-content; padding: 0; border: 0; border-bottom: 1px solid currentColor; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  .footer-cookie-button:hover { border-bottom-width: 2px; }
   .tat-license { margin-top: .65rem; display: flex; align-items: center; gap: .8rem; line-height: 1.35; }
   .tat-mark { width: 5.25rem; aspect-ratio: 1; padding: .35rem; display: grid; place-items: center; flex: 0 0 auto; border-radius: var(--radius-s); background: var(--white); }
   .tat-mark img { width: 100%; height: 100%; object-fit: contain; }
