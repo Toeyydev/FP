@@ -323,6 +323,8 @@
 }
 
 @media (max-width: 35rem) {
+  .review-summary a { display: block; width: fit-content; margin-bottom: .3rem; }
+  .review-summary-sep { display: none; }
   h1 { font-size: clamp(3.15rem, 17vw, 4.5rem); }
   .hero-copy { min-height: 29rem; }
   .hero-copy > p { margin-block: 1.15rem; }
