@@ -59,6 +59,27 @@ const consentBanner = document.querySelector('[data-consent-banner]');
 const consentKey = 'folkpaths-consent-v1';
 let tagsLoaded = false;
 let analyticsConsentGranted = false;
+let tourViewSent = false;
+
+const emitTourView = () => {
+  const view = document.querySelector('[data-tour-view]');
+  if (!analyticsConsentGranted || !view || tourViewSent) return;
+  tourViewSent = true;
+  const price = Number(view.dataset.price || 0);
+  window.dataLayer.push({
+    event: 'view_item',
+    ecommerce: {
+      currency: view.dataset.currency || 'THB',
+      value: price,
+      items: [{
+        item_id: view.dataset.product || 'unknown',
+        item_name: view.dataset.productName || document.title,
+        price,
+        quantity: 1
+      }]
+    }
+  });
+};
 
 const loadGoogleTags = () => {
   if (tagsLoaded) return;
@@ -81,12 +102,17 @@ const applyConsent = (choice) => {
   });
   if (granted) loadGoogleTags();
   if (consentBanner) consentBanner.hidden = true;
+  document.body.dataset.consentOpen = 'false';
+  emitTourView();
 };
 
 let savedConsent = null;
 try { savedConsent = window.localStorage.getItem(consentKey); } catch {}
 if (savedConsent === 'accepted' || savedConsent === 'necessary') applyConsent(savedConsent);
-else if (consentBanner) consentBanner.hidden = false;
+else if (consentBanner) {
+  consentBanner.hidden = false;
+  document.body.dataset.consentOpen = 'true';
+}
 
 const saveConsent = (choice) => {
   try { window.localStorage.setItem(consentKey, choice); } catch {}
@@ -98,6 +124,7 @@ document.querySelectorAll('[data-consent-reset]').forEach((button) => button.add
   try { window.localStorage.removeItem(consentKey); } catch {}
   if (consentBanner) {
     consentBanner.hidden = false;
+    document.body.dataset.consentOpen = 'true';
     consentBanner.querySelector('[data-consent-accept]')?.focus();
   }
 }));
