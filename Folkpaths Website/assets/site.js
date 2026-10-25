@@ -393,3 +393,30 @@ document.querySelectorAll('[data-review-form]').forEach((form) => {
     }
   });
 });
+
+// Typical Bangkok conditions by month from long-term climate averages. This is
+// static guidance, not a forecast, so it needs no third-party weather service.
+const bangkokWeather = [
+  { low: 22, high: 32, rain: 'little rain', tip: 'Cool season and the most comfortable month for walking.' },
+  { low: 24, high: 33, rain: 'little rain', tip: 'Dry and warm, with pleasant mornings.' },
+  { low: 26, high: 34, rain: 'occasional showers', tip: 'The hot season begins, so bring water and a hat.' },
+  { low: 27, high: 35, rain: 'occasional storms', tip: 'The hottest month. Morning tours are the coolest choice.' },
+  { low: 27, high: 34, rain: 'rain becoming frequent', tip: 'Hot and humid, with afternoon storms starting.' },
+  { low: 27, high: 33, rain: 'frequent showers', tip: 'Rainy season. Showers are usually short, often in the afternoon.' },
+  { low: 26, high: 33, rain: 'frequent showers', tip: 'Rainy season. Carry an umbrella; showers usually pass quickly.' },
+  { low: 26, high: 32, rain: 'frequent showers', tip: 'Rainy season. Carry an umbrella; showers usually pass quickly.' },
+  { low: 25, high: 32, rain: 'the wettest month', tip: 'Carry an umbrella. Tours continue in light rain.' },
+  { low: 25, high: 32, rain: 'frequent showers', tip: 'Rain usually eases toward the end of the month.' },
+  { low: 24, high: 32, rain: 'little rain', tip: 'The cool, dry season begins.' },
+  { low: 22, high: 31, rain: 'little rain', tip: 'Cool, dry, and peak season, so book early.' }
+];
+
+document.querySelectorAll('[data-weather-note]').forEach((note) => {
+  const now = new Date();
+  const month = Number(new Intl.DateTimeFormat('en', { month: 'numeric', timeZone: 'Asia/Bangkok' }).format(now)) - 1;
+  const monthName = new Intl.DateTimeFormat('en', { month: 'long', timeZone: 'Asia/Bangkok' }).format(now);
+  const weather = bangkokWeather[month];
+  if (!weather) return;
+  note.querySelector('[data-weather-title]').textContent = `Bangkok in ${monthName}`;
+  note.querySelector('[data-weather-text]').textContent = `Usually ${weather.low}–${weather.high}°C with ${weather.rain}. ${weather.tip}`;
+});

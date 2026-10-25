@@ -199,6 +199,9 @@
   #bokun_a20602fd_2b06_4128_9448_ac5d208edf6a:active { background: #30682e; }
   #bokun_a20602fd_2b06_4128_9448_ac5d208edf6a:disabled { cursor: wait; opacity: .72; }
   .booking-note { margin-top: .75rem; color: var(--muted); font-size: .9rem; }
+  .weather-note { margin: 1rem 0; padding: .85rem 1rem; display: grid; gap: .3rem; border-left: .3rem solid var(--yellow); background: color-mix(in oklch, var(--yellow) 12%, var(--paper)); }
+  .weather-note p { margin: 0; font-size: .92rem; }
+  .weather-note small { color: var(--muted); font-size: .78rem; }
   .checkout-confidence, .booking-trust-strip { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1rem 0; }
   .checkout-confidence strong { flex-basis: 100%; }
   .checkout-confidence span, .booking-trust-strip span { border: 1px solid currentColor; border-radius: 999px; padding: .42rem .68rem; font-size: .78rem; font-weight: 700; line-height: 1.15; }
