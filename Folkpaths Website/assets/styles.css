@@ -178,7 +178,7 @@
   .booking-summary > div:first-child { display: grid; line-height: 1; }
   .booking-summary > div:first-child span, .booking-summary small { font-size: .75rem; font-weight: 750; }
   .booking-summary > div:first-child strong { font-size: clamp(1.8rem, 4vw, 2.5rem); }
-  .booking-summary dl { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+  .booking-summary dl { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: 1rem; }
   .booking-summary dl div { min-width: 0; }
   .booking-summary dt { font-size: .72rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
   .booking-summary dd { margin: .15rem 0 0; font-weight: 800; }
@@ -299,7 +299,7 @@
   .split, .cta-panel, .content-grid, .review-submit-grid { grid-template-columns: 1fr; }
   .booking-aside { position: static; }
   .booking-summary { grid-template-columns: auto minmax(0, 1fr); }
-  .booking-summary dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .booking-summary dl { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); }
   .booking-summary .button { grid-column: 1 / -1; width: 100%; }
   .footer-grid { grid-template-columns: 1fr; gap: 2rem; }
   .booking-choice { grid-template-columns: 1fr; }
