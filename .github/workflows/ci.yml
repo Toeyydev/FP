@@ -278,6 +278,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-version
 
+      # A guide fee under ฿1,000 (a half fee) carries no withholding: the rate goes to 0% and
+      # locks, Save keeps it, a full fee brings 3% back, and it fits a phone.
+      - name: Guide fee under ฿1,000, no WHT, in a real browser
+        run: node scripts/e2e/guide-fee-wht.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-fee-wht
+
       # A payment left out of a payout that already went: created as its own obligation,
       # checked for duplicates, paid by its own transfer, reconciled with a PEAK reference —
       # and the original payout never changes.
