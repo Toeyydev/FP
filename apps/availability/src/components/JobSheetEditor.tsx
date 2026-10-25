@@ -20,6 +20,7 @@ import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak
 import { approvalView, JOB_SHEET_ROLE_NOTE_TH } from "@/lib/jobsheet-approval";
 import CertificateReference from "@/components/CertificateReference";
 import WhatsAppButton from "@/components/WhatsAppButton";
+import MoveDepartureDialog from "@/components/MoveDepartureDialog";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
@@ -138,6 +139,7 @@ export default function JobSheetEditor() {
   // WhatsApp links by booking number, read live from the bookings by the server — only for
   // guests this viewer may contact, and never saved on the sheet.
   const [guestContacts, setGuestContacts] = useState<Record<string, { whatsapp: string; display: string }>>({});
+  const [moveOpen, setMoveOpen] = useState(false); // Move departure (components/MoveDepartureDialog)
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
@@ -907,6 +909,11 @@ export default function JobSheetEditor() {
 
   return (
     <div className="wrap jobsheet">
+      {moveOpen && (
+        <MoveDepartureDialog guideId={sheet.guideId} guideName={header?.name || sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} tourName={tour?.name || sheet.tourId}
+          rows={sheet.bookings.map((b) => ({ name: b.name ?? "", bookingNo: b.bookingNo ?? "", bookedPax: b.bookedPax ?? null }))} contacts={guestContacts}
+          onClose={() => setMoveOpen(false)} onMoved={() => { load(); }} />
+      )}
       {/* Top bar. The operator's is Back · title · More ▾ · Save (owner/teacher 2026-10-16:
           the page was cluttered — 11 buttons). Approve lives on "Check this job". The menu's
           buttons stay in the page while it is closed, so every action is still one click
@@ -932,6 +939,7 @@ export default function JobSheetEditor() {
               <a className="btn" target="_blank" rel="noopener noreferrer"
                 href={gcalUrl(tour?.name ?? "Tour", sheet.date, sheet.slotIdx, tour?.durationMin || 180, `Guide: ${header?.name ?? ""}\nFolkpath job · open the app for full details`)}>Add to Google Calendar</a>
               <button className="btn" disabled={busy} onClick={sendToGuide}>Send to guide</button>
+              <button className="btn js-move-open" disabled={busy || !saved} title={saved ? "Move guests to another date or time — the venue closed, a guest is sick…" : "Save or discard your changes first"} onClick={() => setMoveOpen(true)}>ย้ายรอบ · Move guests…</button>
               {drive.enabled && !drive.connected && <a className="btn" href="/api/google/connect" title="Connect a Google account so the PDF can be saved to Drive">☁ Connect Google Drive</a>}
               <hr />
               {!handover && date <= new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10) && <button className="btn" disabled={busy} title="Another guide finished this tour (this guide fell sick or was injured) — the guide fee moves to them" onClick={() => setHandoverOpen(true)}>🤒 Hand over…</button>}
