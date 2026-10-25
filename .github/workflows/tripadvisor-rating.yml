@@ -1,9 +1,9 @@
 name: Tripadvisor rating
 
 # Refreshes Folkpaths Website/data/ratings.json once a day from the official
-# Tripadvisor Content API. The website reads that file at runtime, so the
+# Tripadvisor Terra API. The website reads that file at runtime, so the
 # commit is the whole deploy (Cloudflare Pages builds every push to main).
-# Setup (one time): add the Content API key as the repo secret
+# Setup (one time): add the Terra API key as the repo secret
 # TRIPADVISOR_API_KEY. Until it exists, the job skips without failing.
 on:
   schedule:
