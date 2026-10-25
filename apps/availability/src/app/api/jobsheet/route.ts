@@ -10,7 +10,7 @@ import { jobAdvanceView } from "@/lib/advances/job-view";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, guideFeeWhtRule, isApproved, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
 import { scheduledStart, tourDayTimeline } from "@/lib/tour-day-timeline";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -530,10 +530,16 @@ export async function PUT(req: NextRequest) {
   const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
-    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, updatedAt: true } });
+    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, guideFee: true, updatedAt: true } });
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
       return { kind: "stale" as const };
     }
+    // A guide fee under ฿1,000 carries no withholding (owner decision 2026-10-25) — enforced
+    // here, not only in the editor. Only when the fee is created or edited: an untouched fee
+    // keeps the rate it was saved, and maybe paid, with (lib/jobsheet guideFeeWhtRule).
+    const storedFee = (current?.guideFee ?? null) as GuideFee | null;
+    const feeEdited = !storedFee || (["price", "time", "whtPct"] as const).some((k) => (storedFee[k] ?? null) !== (d.guideFee[k] ?? null));
+    if (feeEdited) d.guideFee = guideFeeWhtRule(d.guideFee, storedFee);
     // Review incentives carry no withholding from 2026-10-06 (owner decision): a review row
     // added from that day is marked tax-free by the server; rows already on the sheet keep the
     // tax they were paid with (lib/jobsheet stampReviewTaxFree).

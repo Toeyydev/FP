@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
 
 describe("jobsheet — fixed standard expense descriptions", () => {
   it("offers the three guide-inclusive labels in their canonical spelling", () => {
@@ -464,3 +464,23 @@ describe("upgrading old short names on Save", () => {
     expect(upgradeStandardDescriptions(rows)).toEqual(rows);
   });
 });
+
+describe("guide fee under ฿1,000 — no withholding (owner 2026-10-25)", () => {
+  it("a half fee or a ฿500 fee takes 0%", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 0.5, whtPct: 3 })).toEqual({ price: 1000, time: 0.5, whtPct: 0 });
+    expect(guideFeeWhtRule({ price: 500, time: 1, whtPct: 3 }).whtPct).toBe(0);
+    expect(feeIsWhtFree({ price: 999, time: 1, whtPct: 3 })).toBe(true);
+  });
+  it("exactly ฿1,000 or more keeps the rate entered", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 1, whtPct: 3 }).whtPct).toBe(3);
+    expect(guideFeeWhtRule({ price: 1500, time: 1, whtPct: 5 }).whtPct).toBe(5);
+    expect(feeIsWhtFree({ price: 1000, time: 1, whtPct: 3 })).toBe(false);
+  });
+  it("taken back up from under ฿1,000, the rule's 0% becomes the standard 3%", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 1, whtPct: 0 }, { price: 1000, time: 0.5, whtPct: 0 }).whtPct).toBe(3);
+  });
+  it("a 0% entered on a full fee is the operator's and stays", () => {
+    expect(guideFeeWhtRule({ price: 1200, time: 1, whtPct: 0 }, { price: 1200, time: 1, whtPct: 3 }).whtPct).toBe(0);
+  });
+});
+

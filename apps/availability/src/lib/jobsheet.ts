@@ -138,6 +138,24 @@ export function upgradeStandardDescriptions<T extends Expense>(expenses: readonl
 }
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
 
+/**
+ * Owner decision 2026-10-25: a job whose guide fee (rate × count) is under ฿1,000 — a half
+ * fee, say — carries no withholding. `prev` is the fee as stored: when an edit takes a fee
+ * back up from under the threshold and its rate was the rule's 0%, the standard rate comes
+ * back. A fee of ฿1,000 or more keeps whatever rate was entered.
+ *
+ * Applied only when the fee is edited (or a sheet is created): a sheet nobody touches keeps
+ * the rate it was saved — and maybe paid — with.
+ */
+export const WHT_FREE_FEE_BELOW = 1000;
+const feeGross = (gf: GuideFee | null | undefined) => (Number(gf?.price) || 0) * (Number(gf?.time) || 0);
+export function guideFeeWhtRule(next: GuideFee, prev?: GuideFee | null): GuideFee {
+  if (feeGross(next) < WHT_FREE_FEE_BELOW) return next.whtPct === 0 ? next : { ...next, whtPct: 0 };
+  if (prev && feeGross(prev) < WHT_FREE_FEE_BELOW && Number(prev.whtPct) === 0 && !Number(next.whtPct)) return { ...next, whtPct: DEFAULT_GUIDE_FEE.whtPct };
+  return next;
+}
+export const feeIsWhtFree = (gf: GuideFee | null | undefined) => feeGross(gf) < WHT_FREE_FEE_BELOW;
+
 // The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
 // together with another (piggybacked) pays no fee of its own, and 0 × anything or ฿0 is
 // that decision, not a blank. Only a sheet with no fee entered at all — {} or no price

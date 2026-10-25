@@ -10,7 +10,7 @@ import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -1813,9 +1813,9 @@ export default function JobSheetEditor() {
               <td className="js-amt">
                 {!ro && (
                   <span className="js-amt-in no-print">
-                    <input style={{ ...L, width: 84, textAlign: "right" }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, price: numOrNull(e.target.value) } })} title="Agreed rate" />
+                    <input style={{ ...L, width: 84, textAlign: "right" }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, price: numOrNull(e.target.value) }, sheet.guideFee) })} title="Agreed rate" />
                     <span>×</span>
-                    <input style={{ ...L, width: 44, textAlign: "right" }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, time: numOrNull(e.target.value) } })} title="Number of times/days" />
+                    <input style={{ ...L, width: 44, textAlign: "right" }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, time: numOrNull(e.target.value) }, sheet.guideFee) })} title="Number of times/days" />
                   </span>
                 )}
                 <b>{thb(t.gross)}</b>
@@ -1824,7 +1824,7 @@ export default function JobSheetEditor() {
             <tr>
               <td><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></td>
               <td className="js-amt">
-                {!ro && <span className="js-amt-in no-print"><input style={{ ...L, width: 52, textAlign: "right" }} type="number" value={sheet.guideFee.whtPct ?? ""} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} title="Withholding tax rate on the guide fee — applies to the fee only, never to tour expenses" /></span>}
+                {!ro && <span className="js-amt-in no-print"><input className="js-wht-pct" style={{ ...L, width: 52, textAlign: "right" }} type="number" value={sheet.guideFee.whtPct ?? ""} disabled={feeIsWhtFree(sheet.guideFee)} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} title={feeIsWhtFree(sheet.guideFee) ? "Guide fee under ฿1,000 — no withholding (ค่าตัวต่ำกว่า ฿1,000 ไม่หักภาษี)" : "Withholding tax rate on the guide fee — applies to the fee only, never to tour expenses"} /></span>}
                 <b>{sheet.guideFee.whtPct ?? 0}%</b>
               </td>
             </tr>
