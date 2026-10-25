@@ -420,3 +420,23 @@ document.querySelectorAll('[data-weather-note]').forEach((note) => {
   note.querySelector('[data-weather-title]').textContent = `Bangkok in ${monthName}`;
   note.querySelector('[data-weather-text]').textContent = `Usually ${weather.low}–${weather.high}°C with ${weather.rain}. ${weather.tip}`;
 });
+
+// The Tripadvisor rating is refreshed daily by the tripadvisor-rating GitHub
+// workflow into /data/ratings.json. The built page already shows the last known
+// numbers, so a failed or missing fetch simply leaves them in place.
+const tripadvisorTargets = document.querySelectorAll('[data-tripadvisor-rating]');
+if (tripadvisorTargets.length) {
+  fetch('/data/ratings.json', { cache: 'no-cache' })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((ratings) => {
+      const rating = ratings?.tripadvisor;
+      if (!rating || !(rating.value >= 1 && rating.value <= 5) || !(rating.count > 0)) return;
+      tripadvisorTargets.forEach((target) => {
+        target.querySelector('[data-rating-value]').textContent = `${rating.value.toFixed(1)}/5 ★`;
+        const count = target.querySelector('[data-rating-count]');
+        count.value = String(rating.count);
+        count.textContent = rating.count.toLocaleString('en-US');
+      });
+    })
+    .catch(() => {});
+}
