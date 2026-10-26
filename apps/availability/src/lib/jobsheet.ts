@@ -1,5 +1,7 @@
 // Job-sheet types, the default Folkpaths expense catalogue, and the totals math.
 
+import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
+
 export type Booking = {
   name: string;
   bookingNo: string;
@@ -102,7 +104,57 @@ export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Lotus (Inc. Guide)", price: 10, pax: null, expenseType: "other" },
   { description: "Bus (Inc. Guide)", price: 15, pax: null, expenseType: "transport" },
 ];
+
+// The three recurring guide-inclusive consumables/transport lines use fixed names in
+// Job Sheet.  Keeping the spelling canonical makes expense matching, certificates and
+// later accounting review stable instead of treating "Bus", "Bus (guide)" etc. as
+// different costs.
+export const STANDARD_EXPENSE_DESCRIPTIONS = [
+  { description: "Water (Inc. Guide)", expenseType: "meal" },
+  { description: "Bus (Inc. Guide)", expenseType: "transport" },
+  { description: "Ferry (Inc. Guide)", expenseType: "transport" },
+] as const;
+
+export function standardExpenseDescription(value: string): (typeof STANDARD_EXPENSE_DESCRIPTIONS)[number] | null {
+  const v = value.trim();
+  return STANDARD_EXPENSE_DESCRIPTIONS.find((item) => {
+    const base = item.description.split(" (")[0];
+    return new RegExp(`^${base}(?:\\s*\\([^)]*guide[^)]*\\))?$`, "i").test(v);
+  }) ?? null;
+}
+/**
+ * The rows a Save sends: former short names (Water / Bus / Ferry) upgraded to the fixed
+ * labels — except on a protected row (a confirmed payer, a waiver, a certificate request,
+ * an advance settlement). Its description and type are part of what was confirmed and the
+ * server refuses any change to them, so upgrading it made every Save of the sheet fail.
+ * A protected row keeps its name until a person picks a new one.
+ */
+export function upgradeStandardDescriptions<T extends Expense>(expenses: readonly T[]): T[] {
+  return expenses.map((expense) => {
+    if (isProtected(expense as ProtectedRow)) return expense;
+    const fixed = standardExpenseDescription(expense.description);
+    return fixed ? { ...expense, description: fixed.description, expenseType: fixed.expenseType } : expense;
+  });
+}
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
+
+/**
+ * Owner decision 2026-10-25: a job whose guide fee (rate × count) is under ฿1,000 — a half
+ * fee, say — carries no withholding. `prev` is the fee as stored: when an edit takes a fee
+ * back up from under the threshold and its rate was the rule's 0%, the standard rate comes
+ * back. A fee of ฿1,000 or more keeps whatever rate was entered.
+ *
+ * Applied only when the fee is edited (or a sheet is created): a sheet nobody touches keeps
+ * the rate it was saved — and maybe paid — with.
+ */
+export const WHT_FREE_FEE_BELOW = 1000;
+const feeGross = (gf: GuideFee | null | undefined) => (Number(gf?.price) || 0) * (Number(gf?.time) || 0);
+export function guideFeeWhtRule(next: GuideFee, prev?: GuideFee | null): GuideFee {
+  if (feeGross(next) < WHT_FREE_FEE_BELOW) return next.whtPct === 0 ? next : { ...next, whtPct: 0 };
+  if (prev && feeGross(prev) < WHT_FREE_FEE_BELOW && Number(prev.whtPct) === 0 && !Number(next.whtPct)) return { ...next, whtPct: DEFAULT_GUIDE_FEE.whtPct };
+  return next;
+}
+export const feeIsWhtFree = (gf: GuideFee | null | undefined) => feeGross(gf) < WHT_FREE_FEE_BELOW;
 
 // The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
 // together with another (piggybacked) pays no fee of its own, and 0 × anything or ฿0 is
@@ -461,7 +513,14 @@ const ATTRACTION_PREFIXES = ["grand palace", "wat pho", "wat arun"];
 
 // Re-sync the attraction (Grand Palace / Wat Pho / Wat Arun) ticket expenses to the
 // number of ticket-included guests who actually showed up (sum of actualPax).
+//
+// Only when every guest row says whether its tickets are included. A blank Tickets value is
+// UNKNOWN, not "no tickets": counting it as 0 used to wipe the operator's ticket count to 0
+// whenever a no-show was reported. While any row with guests is still blank, the lines are
+// left exactly as they are and a person decides.
 export function syncAttractionTickets(bookings: Booking[], expenses: Expense[]): Expense[] {
+  const withGuests = bookings.filter((b) => (b.actualPax ?? b.bookedPax ?? 0) > 0);
+  if (withGuests.some((b) => b.tickets !== "included" && b.tickets !== "not")) return expenses;
   const inclPax = bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
   return expenses.map((e) =>
     ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,

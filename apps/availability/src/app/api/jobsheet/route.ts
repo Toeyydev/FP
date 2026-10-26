@@ -10,7 +10,7 @@ import { jobAdvanceView } from "@/lib/advances/job-view";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, guideFeeWhtRule, isApproved, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
 import { scheduledStart, tourDayTimeline } from "@/lib/tour-day-timeline";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -27,6 +27,7 @@ import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
 import { readPastSheetGaps } from "@/lib/past-sheet-sync";
 import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, sheetRefs, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
+import { ticketsFromRate } from "@/lib/rate-kind";
 import { applyRateDefaults, expectedPayerFrom, jobRates } from "@/lib/rate-payer";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
@@ -190,7 +191,7 @@ export async function GET(req: NextRequest) {
   // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true, rateTitle: true },
     orderBy: { createdAt: "asc" },
   });
   // Split slot → this guide's sheet is only the guests tagged to them (lib/sheet-bookings,
@@ -409,6 +410,7 @@ export async function GET(req: NextRequest) {
     // off this guide's saved sheet, so the two guides' sheets stay separated.
     const otherGuideRefSet = new Set(allAtSlot.filter((b) => b.assignedGuideId && b.assignedGuideId !== guideId).flatMap(refKeys));
 
+    const inferTickets = !isApproved(existing.approvalStatus) && payment.status !== "PAID";
     const matched = new Map<SheetBooking, (typeof linked)[number]>();
     for (const r of saved) { const lb = matchLive(r); if (lb) matched.set(r, lb); }
     const coveredLive = new Set(matched.values());
@@ -423,10 +425,21 @@ export async function GET(req: NextRequest) {
           cancelledRefs: cancelledRefSet, movedRefs: movedRefSet, otherGuideRefs: otherGuideRefSet,
         }));
       })
-      .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
+      .map((r) => {
+        const lb = matched.get(r);
+        if (!lb) return r;
+        const row = { ...r, bookingNo: canonRef(lb) }; // refresh GET- → GYG
+        // A blank Tickets on a saved row matched to its live booking is filled from the Rate
+        // where the Rate is unambiguous (lib/rate-kind) — in this response only; the
+        // operator's Save stores it. A value someone chose is never replaced, and an approved
+        // or paid sheet is shown exactly as saved.
+        if (inferTickets && !(row.tickets ?? "").trim()) { const t = ticketsFromRate(lb.rateTitle); if (t) row.tickets = t; }
+        return row;
+      });
     const added = linked
       .filter((lb) => !coveredLive.has(lb))
-      .map(toSheetBooking);
+      .map(toSheetBooking)
+      .map((r) => (inferTickets ? r : { ...r, tickets: "" })); // approved / paid: nothing inferred
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
     return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
@@ -499,7 +512,7 @@ export async function PUT(req: NextRequest) {
   const [slotLive, guidesAtSlot, otherSheets] = await Promise.all([
     prisma.booking.findMany({
       where: { date: d.date, slotIdx: d.slotIdx, OR: [{ status: { in: [...SHEET_BOOKING_STATUSES] } }, { status: "CANCELLED", OR: [{ noShow: true }, { noShowPax: { gt: 0 } }] }] },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true, rateTitle: true },
       orderBy: { createdAt: "asc" },
     }),
     prisma.assignment.count({ where: { date: d.date, slotIdx: d.slotIdx } }),
@@ -517,10 +530,16 @@ export async function PUT(req: NextRequest) {
   const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
-    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, updatedAt: true } });
+    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, guideFee: true, updatedAt: true } });
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
       return { kind: "stale" as const };
     }
+    // A guide fee under ฿1,000 carries no withholding (owner decision 2026-10-25) — enforced
+    // here, not only in the editor. Only when the fee is created or edited: an untouched fee
+    // keeps the rate it was saved, and maybe paid, with (lib/jobsheet guideFeeWhtRule).
+    const storedFee = (current?.guideFee ?? null) as GuideFee | null;
+    const feeEdited = !storedFee || (["price", "time", "whtPct"] as const).some((k) => (storedFee[k] ?? null) !== (d.guideFee[k] ?? null));
+    if (feeEdited) d.guideFee = guideFeeWhtRule(d.guideFee, storedFee);
     // Review incentives carry no withholding from 2026-10-06 (owner decision): a review row
     // added from that day is marked tax-free by the server; rows already on the sheet keep the
     // tax they were paid with (lib/jobsheet stampReviewTaxFree).

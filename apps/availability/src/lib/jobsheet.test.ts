@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+
+describe("jobsheet — fixed standard expense descriptions", () => {
+  it("offers the three guide-inclusive labels in their canonical spelling", () => {
+    expect(STANDARD_EXPENSE_DESCRIPTIONS.map((x) => x.description)).toEqual([
+      "Water (Inc. Guide)", "Bus (Inc. Guide)", "Ferry (Inc. Guide)",
+    ]);
+  });
+
+  it("recognises legacy short labels without capturing unrelated descriptions", () => {
+    expect(standardExpenseDescription("Water")?.description).toBe("Water (Inc. Guide)");
+    expect(standardExpenseDescription("Bus")?.description).toBe("Bus (Inc. Guide)");
+    expect(standardExpenseDescription("Ferry")?.description).toBe("Ferry (Inc. Guide)");
+    expect(standardExpenseDescription("Private bus charter")).toBeNull();
+    expect(standardExpenseDescription("Grand Palace")).toBeNull();
+  });
+});
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -125,6 +141,15 @@ describe("syncAttractionTickets", () => {
     const out = syncAttractionTickets(bookings, [{ description: "Grand Palace entrance", price: 500, pax: 11 }, { description: "Lunch", price: 200, pax: 11 }]);
     expect(out.find((e) => e.description.startsWith("Grand Palace"))!.pax).toBe(5); // only the 5 who came on the included booking
     expect(out.find((e) => e.description === "Lunch")!.pax).toBe(11); // untouched
+  });
+
+  it("leaves attraction ticket pax unchanged while any guest row is unknown", () => {
+    const bookings = [
+      { name: "a", bookingNo: "A", bookedPax: 2, actualPax: 2, tickets: "included" as const, status: "" },
+      { name: "b", bookingNo: "B", bookedPax: 3, actualPax: 2, tickets: "" as const, status: "partial" },
+    ];
+    const expenses = [{ description: "Grand Palace entrance", price: 500, pax: 5 }, { description: "Lunch", price: 200, pax: 5 }];
+    expect(syncAttractionTickets(bookings, expenses)).toEqual(expenses);
   });
 });
 
@@ -420,3 +445,49 @@ describe("review rows carry no tax from 2026-10-06 — stampReviewTaxFree and co
     expect({ base: before.whtBase, wht: before.wht, onReview: before.whtOnReview }).toEqual({ base: 1200, wht: 36, onReview: 6 });
   });
 });
+
+describe("upgrading old short names on Save", () => {
+  const stamp = { paidBy: "guide", paidBySource: "operator", paidByBy: "u_ops", paidByAt: "2030-01-01T00:00:00.000Z" };
+  it("upgrades an unprotected row's old name to the fixed label and type", () => {
+    const [w] = upgradeStandardDescriptions([{ description: "Water", price: 10, pax: 2 } as Expense]);
+    expect(w.description).toBe("Water (Inc. Guide)");
+    expect(w.expenseType).toBe(standardExpenseDescription("Water")!.expenseType);
+  });
+  it("leaves a protected row exactly as it is — a confirmed payer, a waiver, a certificate request or a settlement", () => {
+    const rows = [
+      { description: "Water", price: 10, pax: 2, ...stamp },
+      { description: "Bus", price: 15, pax: 3, evidenceWaiver: { waived: true } },
+      { description: "Ferry", price: 5.5, pax: 4, certificateRequest: { requested: true } },
+      { description: "Water", price: 10, pax: 1, advanceSettlement: { id: "s1" } },
+    ] as unknown as Expense[];
+    expect(upgradeStandardDescriptions(rows)).toEqual(rows);
+  });
+  it("on a mixed sheet upgrades only the unprotected rows", () => {
+    const out = upgradeStandardDescriptions([{ description: "Bus", price: 15, pax: 3, ...stamp }, { description: "Bus", price: 15, pax: 3 }] as unknown as Expense[]);
+    expect(out.map((e) => e.description)).toEqual(["Bus", "Bus (Inc. Guide)"]);
+  });
+  it("leaves other descriptions alone", () => {
+    const rows = [{ description: "Grand Palace", price: 500, pax: 2 }] as Expense[];
+    expect(upgradeStandardDescriptions(rows)).toEqual(rows);
+  });
+});
+
+describe("guide fee under ฿1,000 — no withholding (owner 2026-10-25)", () => {
+  it("a half fee or a ฿500 fee takes 0%", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 0.5, whtPct: 3 })).toEqual({ price: 1000, time: 0.5, whtPct: 0 });
+    expect(guideFeeWhtRule({ price: 500, time: 1, whtPct: 3 }).whtPct).toBe(0);
+    expect(feeIsWhtFree({ price: 999, time: 1, whtPct: 3 })).toBe(true);
+  });
+  it("exactly ฿1,000 or more keeps the rate entered", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 1, whtPct: 3 }).whtPct).toBe(3);
+    expect(guideFeeWhtRule({ price: 1500, time: 1, whtPct: 5 }).whtPct).toBe(5);
+    expect(feeIsWhtFree({ price: 1000, time: 1, whtPct: 3 })).toBe(false);
+  });
+  it("taken back up from under ฿1,000, the rule's 0% becomes the standard 3%", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 1, whtPct: 0 }, { price: 1000, time: 0.5, whtPct: 0 }).whtPct).toBe(3);
+  });
+  it("a 0% entered on a full fee is the operator's and stays", () => {
+    expect(guideFeeWhtRule({ price: 1200, time: 1, whtPct: 0 }, { price: 1200, time: 1, whtPct: 3 }).whtPct).toBe(0);
+  });
+});
+

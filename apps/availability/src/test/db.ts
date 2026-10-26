@@ -23,6 +23,8 @@ const TABLES = [
   // makes the NEXT test collide on a file id its own fake Drive just reissued.
   "ExpenseCertificate", "AttesterSignature", "HistoricalEvidenceReview",
   "PaymentTransaction", "PaymentEvidence", "PaymentBatchItem", "PaymentBatch", "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
+  // Calendar invitations (lib/tour-calendar-sync) and the Google connection they use.
+  "TourCalendarEvent", "GoogleCalendar",
   "Availability", "RefreshToken", "User", "Tour",
 ];
 

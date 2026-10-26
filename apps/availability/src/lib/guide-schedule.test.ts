@@ -120,7 +120,7 @@ describe("guideTourDetails", () => {
     // assignedGuideId is read to work out a split guide's share, and never sent.
     const select = prismaMock.booking.findMany.mock.calls[0][0].select;
     // phone is now selected and sent; the OTA relay email still is not, and never should be.
-    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "phone", "source"]);
+    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "phone", "rateTitle", "source"]);
     expect(Object.keys(select)).not.toContain("email");
     expect(prismaMock.checkin.findFirst.mock.calls[0][0]).toEqual({ where: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 }, orderBy: { at: "desc" }, select: { type: true } });
   });
@@ -154,6 +154,21 @@ describe("guideTourDetails", () => {
     prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
     prismaMock.tour.findUnique.mockResolvedValue(null);
     prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Emily", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 0 }]);
+    expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+  });
+
+  it("shows Included from an unambiguous booking rate when there is no saved sheet row", async () => {
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+    prismaMock.tour.findUnique.mockResolvedValue(null);
+    prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Guest", confirmationCode: "FP-1", externalRef: "OTA-1", pax: 2, source: "viator", noShowPax: 0, rateTitle: "Tour with all entrance tickets" }]);
+    expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("included");
+  });
+
+  it("keeps a saved blank ticket tag instead of replacing it from the rate", async () => {
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+    prismaMock.tour.findUnique.mockResolvedValue(null);
+    prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Guest", confirmationCode: "FP-1", externalRef: "OTA-1", pax: 2, source: "viator", noShowPax: 0, rateTitle: "Tour with all entrance tickets" }]);
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [{ name: "Guest", bookingNo: "OTA-1", bookedPax: 2, actualPax: null, tickets: "", status: "" }] });
     expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
   });
 

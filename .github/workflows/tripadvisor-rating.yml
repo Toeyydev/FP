@@ -1,0 +1,48 @@
+name: Tripadvisor rating
+
+# Refreshes Folkpaths Website/data/ratings.json once a day from the official
+# Tripadvisor Terra API. The website reads that file at runtime, so the
+# commit is the whole deploy (Cloudflare Pages builds every push to main).
+# Setup (one time): add the Terra API key as the repo secret
+# TRIPADVISOR_API_KEY. Until it exists, the job skips without failing.
+on:
+  schedule:
+    - cron: "0 23 * * *" # 06:00 Bangkok
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tripadvisor-rating
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      TRIPADVISOR_API_KEY: ${{ secrets.TRIPADVISOR_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Fetch rating
+        run: |
+          if [ -z "${TRIPADVISOR_API_KEY}" ]; then
+            echo "::warning::TRIPADVISOR_API_KEY secret not set yet — add it in repo Settings → Secrets → Actions. Skipping."
+            exit 0
+          fi
+          node .github/scripts/tripadvisor-rating.mjs
+      - name: Commit if changed
+        run: |
+          if [ -z "$(git status --porcelain -- 'Folkpaths Website/data')" ]; then
+            echo "No rating change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add "Folkpaths Website/data/ratings.json"
+          git commit -m "Update Tripadvisor rating"
+          git pull --rebase origin main
+          git push origin HEAD:main
