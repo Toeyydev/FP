@@ -83,6 +83,9 @@ export async function recordCheckin(o: {
   lat?: number;
   lng?: number;
   accuracyM?: number;
+  /** The phone said its position came from a mock-location app (Android). Kept in the
+   *  audit log with the check-in, so a distance that looks right can still be questioned. */
+  mocked?: boolean;
   actorId: string | null; // the signed-in user who pressed it, for the audit log
   recordedBy?: { id: string | null; role: string | null }; // set only when an OPERATOR records it for the guide
 }, nowMs: number = Date.now()): Promise<CheckinResult> {
@@ -125,7 +128,7 @@ export async function recordCheckin(o: {
     recordedById: o.recordedBy ? o.recordedBy.id : null,
     recordedByRole: o.recordedBy ? o.recordedBy.role : null,
   } });
-  await audit({ actorId: o.actorId, actorRole: "GUIDE", action: `checkin.${type.toLowerCase()}`, entityType: "Assignment", detail: { date, slotIdx, tourId: assignment.tourId, lat, lng } });
+  await audit({ actorId: o.actorId, actorRole: "GUIDE", action: `checkin.${type.toLowerCase()}`, entityType: "Assignment", detail: { date, slotIdx, tourId: assignment.tourId, lat, lng, accuracyM, distanceM, withinGeofence, ...(o.mocked ? { mocked: true } : {}) } });
   return { ok: true, type };
 }
 

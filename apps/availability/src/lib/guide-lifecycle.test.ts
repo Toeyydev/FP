@@ -94,6 +94,13 @@ describe("recordCheckin", () => {
     expect(data.distanceM).toBeLessThan(120);
   });
 
+  it("keeps a simulated location in the audit log, and says nothing when there was none", async () => {
+    await checkin({ lat: 13.7437, lng: 100.494, accuracyM: 12, mocked: true });
+    expect(vi.mocked(audit).mock.calls.at(-1)?.[0].detail).toMatchObject({ lat: 13.7437, lng: 100.494, accuracyM: 12, withinGeofence: true, mocked: true });
+    await checkin({ lat: 13.7437, lng: 100.494, accuracyM: 12 });
+    expect(vi.mocked(audit).mock.calls.at(-1)?.[0].detail).not.toHaveProperty("mocked");
+  });
+
   it("records no distance without GPS, and marks an operator's entry as theirs", async () => {
     await checkin({ type: "START", recordedBy: { id: "u_ops", role: "OPERATOR" } });
     expect(prismaMock.checkin.create.mock.calls[0][0].data).toMatchObject({ type: "START", lat: null, lng: null, accuracyM: null, distanceM: null, withinGeofence: null, recordedById: "u_ops", recordedByRole: "OPERATOR" });

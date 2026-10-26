@@ -191,6 +191,9 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     tour: tour ? {
       id: tour.id, name: tour.name, time: tour.time,
       meetingPoint: tour.meetingPoint, itinerary: tour.itinerary, included: tour.included, bring: tour.bring,
+      // Where the guide checks in and how close counts — so the app can show the
+      // distance before they press the button, by the same rule recordCheckin applies.
+      meetingLat: tour.meetingLat ?? null, meetingLng: tour.meetingLng ?? null, meetingRadiusM: tour.meetingRadiusM ?? null,
     } : null,
     expenses,
     // When the guide stops being sent the guests' numbers, so the app can say so.

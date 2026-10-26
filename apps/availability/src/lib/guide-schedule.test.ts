@@ -133,7 +133,7 @@ describe("guideTourDetails", () => {
       // 08:30 Bangkok + a full day out (no length set) + 24 hours.
       phoneVisibleUntil: "2026-09-12T09:30:00.000Z",
       date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early", checkinState: "ARRIVE",
-      tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
+      tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water", meetingLat: 13.74, meetingLng: null, meetingRadiusM: null },
       // `id` is sent so the app can report this booking's no-shows precisely.
       bookings: [{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, phone: "+39333111222", tickets: "" }],
     });
