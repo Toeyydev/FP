@@ -910,7 +910,7 @@ export default function JobSheetEditor() {
   return (
     <div className="wrap jobsheet">
       {moveOpen && (
-        <MoveDepartureDialog guideId={sheet.guideId} guideName={header?.name || sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} tourName={tour?.name || sheet.tourId}
+        <MoveDepartureDialog guideId={sheet.guideId} guideName={header?.name || sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} tourId={sheet.tourId} tourName={tour?.name || sheet.tourId}
           rows={sheet.bookings.map((b) => ({ name: b.name ?? "", bookingNo: b.bookingNo ?? "", bookedPax: b.bookedPax ?? null }))} contacts={guestContacts}
           onClose={() => setMoveOpen(false)} onMoved={() => { load(); }} />
       )}

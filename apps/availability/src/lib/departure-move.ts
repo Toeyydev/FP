@@ -3,7 +3,8 @@
 // it, the guide's job at the new time if the operator keeps the guide, and the job sheet the
 // guests left. Owner decisions 2026-10-25: three reasons (venue closed, guest sick, other
 // with a written reason); the guide fee for the departure left is set by hand on its sheet,
-// never by this move.
+// never by this move. 2026-10-26: guests may also join another guide's departure, of any
+// tour (joinBlockers); a job left with no guests is then taken off its guide.
 //
 // Pure: the route (api/departures/move) loads the facts and writes the result.
 import { SLOT_TIMES } from "@/lib/slots";
@@ -37,19 +38,43 @@ export type MoveFacts = {
   /** Of those, the ones with no live booking at this departure (a row typed by hand, say). */
   unmatched: string[];
   sheet: { approved: boolean; paid: boolean; inPayment: boolean; peakDocumentNo: string | null } | null;
+  /** Joining another guide's job — which may run at this very time. */
+  joining?: boolean;
 };
 
 /** Every reason the move cannot be made — all at once; [] when it can. Nothing moves otherwise. */
 export function moveBlockers(f: MoveFacts): string[] {
   const r: string[] = [];
   if (!f.refs.length) r.push("Choose the guests to move");
-  if (f.to.date === f.from.date && f.to.slotIdx === f.from.slotIdx) r.push("Choose a different date or time to move to");
+  if (!f.joining && f.to.date === f.from.date && f.to.slotIdx === f.from.slotIdx) r.push("Choose a different date or time to move to");
   if (f.to.date < f.today) r.push("The new date has already passed");
   if (f.reason === "other" && (f.reasonText ?? "").trim().length < 3) r.push("Write the reason");
   if (f.unmatched.length) r.push(`No booking at this departure for ${f.unmatched.join(", ")} — move it from Bookings`);
   if (f.sheet?.approved) r.push("This job sheet is approved — unapprove it first");
   if (f.sheet?.paid || f.sheet?.inPayment) r.push("This job is already paid — the guests cannot leave its sheet");
   if (f.sheet?.peakDocumentNo) r.push(`This job is in PEAK (${f.sheet.peakDocumentNo}) — the guests cannot leave its sheet`);
+  return r;
+}
+
+/**
+ * Joining another guide's departure (รวมรอบ): the guests go onto a tour that already runs
+ * at the new time — any tour (owner decision 2026-10-26; the dialog warns when it is not
+ * the same one). The guide fee there is that tour's. What can stop it, on top of moveBlockers.
+ */
+export type JoinFacts = {
+  /** The guide's job at the new time; null when nobody runs a tour there now. */
+  target: { guideName: string; sameJob: boolean; paxAfter: number; approved: boolean; paid: boolean; peakDocumentNo: string | null } | null;
+  maxPax: number;
+};
+
+export function joinBlockers(f: JoinFacts): string[] {
+  if (!f.target) return ["Nobody runs a tour at that time any more — reload and choose again"];
+  if (f.target.sameJob) return ["These guests are already on this job — choose another one"];
+  const r: string[] = [];
+  if (f.target.paxAfter > f.maxPax) r.push(`${f.target.guideName} would have ${f.target.paxAfter} guests — one guide takes at most ${f.maxPax}`);
+  if (f.target.approved) r.push(`${f.target.guideName}'s job sheet there is approved — unapprove it first`);
+  if (f.target.paid) r.push(`${f.target.guideName}'s job there is already paid — no guests can join it`);
+  if (f.target.peakDocumentNo) r.push(`${f.target.guideName}'s job there is in PEAK (${f.target.peakDocumentNo}) — no guests can join it`);
   return r;
 }
 
