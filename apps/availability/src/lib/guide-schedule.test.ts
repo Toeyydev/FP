@@ -36,6 +36,26 @@ describe("guideSchedule", () => {
     expect(where).toEqual({ guideId: "G-001", date: { gte: "2026-09-11" } });
   });
 
+  it("reaches back only when asked, and only as far as asked", async () => {
+    await guideSchedule("G-001", Date.UTC(2026, 8, 10, 18), { unreportedDays: 7 });
+    expect(prismaMock.assignment.findMany.mock.calls[0][0].where).toEqual({ guideId: "G-001", date: { gte: "2026-09-04" } });
+    // Across a month boundary, too.
+    await guideSchedule("G-001", Date.UTC(2026, 9, 2, 3), { unreportedDays: 7 });
+    expect(prismaMock.assignment.findMany.mock.calls[1][0].where.date).toEqual({ gte: "2026-09-25" });
+  });
+
+  it("keeps a past tour still owing its report, and lets a reported one go", async () => {
+    prismaMock.assignment.findMany.mockResolvedValue([
+      { date: "2026-09-09", slotIdx: 0, tourId: "T-001", pax: 2, note: null, tour: null },
+      { date: "2026-09-10", slotIdx: 7, tourId: "T-002", pax: 2, note: null, tour: null },
+      { date: "2026-09-11", slotIdx: 0, tourId: "T-003", pax: 2, note: null, tour: null },
+    ]);
+    // Reported: the 9th (past) and the 11th (today). Only the past one drops out.
+    prismaMock.tourReport.findMany.mockResolvedValue([{ date: "2026-09-09", slotIdx: 0 }, { date: "2026-09-11", slotIdx: 0 }]);
+    const items = await guideSchedule("G-001", Date.UTC(2026, 8, 10, 18), { unreportedDays: 7 });
+    expect(items.map((i) => [i.date, i.reported])).toEqual([["2026-09-10", false], ["2026-09-11", true]]);
+  });
+
   it("skips the booking and check-in lookups when nothing is assigned", async () => {
     expect(await guideSchedule("G-001")).toEqual([]);
     expect(prismaMock.booking.findMany).not.toHaveBeenCalled();
