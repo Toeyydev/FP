@@ -250,6 +250,15 @@ describe("รวมรอบ from the Bookings inbox — a guest nobody guides y
     expect(await prisma.jobOffer.findUniqueOrThrow({ where: { id: offer.id } })).toMatchObject({ status: "EXPIRED" });
   });
 
+  it("a guest the operator already typed onto Fah's sheet by hand is not listed twice", async () => {
+    await prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } }, data: { bookings: [row("GYG-TEST-9", { bookedPax: 5 }), row("GYG-TEST-5", { name: "Guest 5", bookedPax: 1 })] } });
+    const r = await inboxJoin();
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const there = await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } } });
+    expect((there.bookings as { bookingNo: string }[]).map((b) => b.bookingNo).sort()).toEqual(["GYG-TEST-5", "GYG-TEST-9"]);
+    expect(await booking("GYG-TEST-5")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: G2 });
+  });
+
   it("refuses a departure that already has a guide", async () => {
     await prisma.assignment.create({ data: { guideId: G, ...FROM, tourId: "T-900", pax: 1 } });
     const r = await inboxJoin();
