@@ -21,13 +21,16 @@ import { removeGuideFromDeparture } from "@/lib/assignment-removal";
 // sheet they left — even after the tour's start, which the booking reconciler never rewrites.
 // All checks run before anything is written; any blocker and nothing moves.
 // With `join`, the guests go onto another guide's job at the new time instead — any tour
-// (รวมรอบ) — and a job the move leaves with no guests comes off its guide.
+// (รวมรอบ) — and a job the move leaves with no guests comes off its guide. Bookings nobody
+// is guiding yet (the Bookings inbox) join the same way: no guideId, the bookings by id, and
+// the departure's open offers close once it has no guests left.
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
 const bodyZ = z.object({
-  guideId: z.string().min(1),
+  guideId: z.string().min(1).nullish(),
   date: z.string().regex(dateRe),
   slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1),
-  refs: z.array(z.string().min(1).max(80)).max(40),
+  refs: z.array(z.string().min(1).max(80)).max(40).default([]),
+  bookingIds: z.array(z.string().min(1).max(40)).max(40).nullish(),
   to: z.object({ date: z.string().regex(dateRe), slotIdx: z.number().int().min(0).max(SLOT_COUNT - 1) }),
   reason: z.enum(Object.keys(MOVE_REASONS) as [MoveReason, ...MoveReason[]]),
   reasonText: z.string().max(300).nullish(),
@@ -69,23 +72,28 @@ export async function POST(req: NextRequest) {
   const parsed = bodyZ.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const d = parsed.data;
+  // No guide on the departure yet: only a join, of bookings named by id.
+  const unassigned = !d.guideId;
+  if (unassigned && (!d.join || !d.bookingIds?.length)) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const from = { date: d.date, slotIdx: d.slotIdx };
-  const key = { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx };
+  const key = d.guideId ? { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx } : null;
   const actor = { id: session!.user!.id ?? null, role: role ?? null };
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
   const [assignment, sheet, tourPayment, payJob, atSlot] = await Promise.all([
-    prisma.assignment.findUnique({ where: { guideId_date_slotIdx: key }, select: { tourId: true } }),
-    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key }, select: { id: true, tourId: true, approvalStatus: true, peakDocumentNo: true, peakSyncStatus: true } }),
-    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: key }, select: { status: true } }),
-    prisma.guidePaymentJob.findFirst({ where: { ...key, active: true }, select: { id: true } }),
-    prisma.booking.findMany({ where: { ...from, status: { in: [...SHEET_BOOKING_STATUSES] } }, select: { id: true, externalRef: true, confirmationCode: true, tourId: true, pax: true } }),
+    key ? prisma.assignment.findUnique({ where: { guideId_date_slotIdx: key }, select: { tourId: true } }) : null,
+    key ? prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key }, select: { id: true, tourId: true, approvalStatus: true, peakDocumentNo: true, peakSyncStatus: true } }) : null,
+    key ? prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: key }, select: { status: true } }) : null,
+    key ? prisma.guidePaymentJob.findFirst({ where: { ...key, active: true }, select: { id: true } }) : null,
+    prisma.booking.findMany({ where: { ...from, status: { in: [...SHEET_BOOKING_STATUSES] } }, select: { id: true, externalRef: true, confirmationCode: true, tourId: true, pax: true, assignedGuideId: true } }),
   ]);
-  const tourId = assignment?.tourId ?? sheet?.tourId ?? null;
-  if (!tourId) return NextResponse.json({ error: "not-movable", reasons: ["No tour on this job"] }, { status: 409 });
 
-  const refs = [...new Set(d.refs.map((r) => r.trim()).filter(Boolean))];
-  const chosen = refs.map((ref) => ({ ref, booking: atSlot.find((b) => bookingKeys(b).includes(ref.toLowerCase())) ?? null }));
+  const chosen = unassigned
+    ? [...new Set(d.bookingIds!)].map((id) => { const b = atSlot.find((x) => x.id === id) ?? null; return { ref: (b && (b.confirmationCode || b.externalRef)) || id, booking: b }; })
+    : [...new Set(d.refs.map((r) => r.trim()).filter(Boolean))].map((ref) => ({ ref, booking: atSlot.find((b) => bookingKeys(b).includes(ref.toLowerCase())) ?? null }));
+  const refs = chosen.map((c) => c.ref);
+  const tourId = assignment?.tourId ?? sheet?.tourId ?? chosen.find((c) => c.booking?.tourId)?.booking?.tourId ?? null;
+  if (!unassigned && !tourId) return NextResponse.json({ error: "not-movable", reasons: ["No tour on this job"] }, { status: 409 });
   const reasons = moveBlockers({
     from, to: d.to, today, reason: d.reason, reasonText: d.reasonText, refs,
     unmatched: chosen.filter((c) => !c.booking).map((c) => c.ref),
@@ -95,6 +103,13 @@ export async function POST(req: NextRequest) {
     } : null,
     joining: !!d.join,
   });
+  // From the inbox: only guests nobody guides yet — a staffed departure moves from its sheet.
+  if (unassigned) {
+    const onJob = chosen.filter((c) => c.booking?.assignedGuideId).map((c) => c.ref);
+    if (onJob.length) reasons.push(`${onJob.join(", ")} ${onJob.length === 1 ? "is" : "are"} on a guide's job — use ย้ายรอบ on that job sheet`);
+    const tours = [...new Set(chosen.map((c) => c.booking?.tourId).filter((t): t is string => !!t))];
+    if (tours.length && (await prisma.assignment.count({ where: { ...from, tourId: { in: tours } } }))) reasons.push("This departure already has a guide — use ย้ายรอบ on the guide's job sheet");
+  }
   // Joining another guide's job there: its tour becomes the guests' tour (and its fee the
   // fee), within one guide's seats, onto a sheet that is still open.
   let join: { guideId: string; guideName: string; tourId: string } | null = null;
@@ -124,7 +139,7 @@ export async function POST(req: NextRequest) {
   // The guide at the new time: already there on this tour, or put there directly — with
   // every rule a direct assignment keeps (lib/manual-assign).
   let assignGuide = false;
-  if (d.keepGuide && !join && !reasons.length) {
+  if (d.guideId && tourId && d.keepGuide && !join && !reasons.length) {
     const there = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: d.guideId, ...d.to } }, select: { tourId: true } });
     if (there && there.tourId !== tourId) reasons.push(`${d.guideId} already runs another tour at that time`);
     else if (!there) { reasons.push(...(await directAssignBlockers({ guideId: d.guideId, ...d.to, tourId }))); assignGuide = true; }
@@ -139,7 +154,7 @@ export async function POST(req: NextRequest) {
       await tx.booking.update({
         where: { id: b.id },
         data: { date: d.to.date, slotIdx: d.to.slotIdx, startTime: SLOT_TIMES[d.to.slotIdx] ?? null, datePinned: true, status: "PENDING",
-          ...(join ? { tourId: join.tourId, assignedGuideId: join.guideId } : { assignedGuideId: d.keepGuide ? d.guideId : null }) },
+          ...(join ? { tourId: join.tourId, assignedGuideId: join.guideId } : { assignedGuideId: d.keepGuide ? d.guideId ?? null : null }) },
       });
     }
   });
@@ -148,7 +163,7 @@ export async function POST(req: NextRequest) {
       detail: { ref: b.confirmationCode ?? b.externalRef ?? null, from, to: d.to, pinned: true, reason: label, keepGuide: d.keepGuide, ...(join ? { joined: { guideId: join.guideId, tourId: join.tourId }, fromTourId: b.tourId } : {}) } });
   }
   // 2 — the guide's job at the new time.
-  if (assignGuide) await directAssign({ guideId: d.guideId, ...d.to, tourId }, actor);
+  if (assignGuide && d.guideId && tourId) await directAssign({ guideId: d.guideId, ...d.to, tourId }, actor);
   // 3 — both departures follow the bookings (lib/booking-reconcile). Best-effort: the move is saved.
   const reconcileMoved = async () => {
     for (const b of moving) {
@@ -182,7 +197,7 @@ export async function POST(req: NextRequest) {
   // that cannot come off (checked in, money recorded on it) stays, and the operator is told.
   let sourceRemoved = false;
   let sourceKept: string[] = [];
-  if (join) {
+  if (join && d.guideId) {
     const left = await prisma.booking.count({ where: { ...from, tourId, status: { in: [...SHEET_BOOKING_STATUSES] }, OR: [{ assignedGuideId: d.guideId }, { assignedGuideId: null }] } });
     if (!left) {
       const r = await removeGuideFromDeparture({ guideId: d.guideId, ...from, release: true, message: `Its guests joined ${join.guideName}'s tour at ${SLOT_TIMES[d.to.slotIdx] ?? ""} (${label}).` });
@@ -194,9 +209,17 @@ export async function POST(req: NextRequest) {
       }
     }
   }
-  await audit({ actorId: actor.id, actorRole: actor.role, action: "departure.moved", entityType: "JobSheet", entityId: sheet?.id ?? `${d.guideId}|${d.date}|${d.slotIdx}`,
-    detail: { guideId: d.guideId, from, to: d.to, reason: label, refs, keepGuide: d.keepGuide, guideAssigned: assignGuide, removedRows: removed,
-      ...(join ? { joined: { guideId: join.guideId, tourId: join.tourId }, fromTourId: tourId, sourceRemoved, sourceKept } : {}) } });
+  // From the inbox: a departure the move left with no guests is no longer offered to guides.
+  let offersClosed = 0;
+  if (unassigned) {
+    for (const t of new Set(moving.map((b) => b.tourId).filter((x): x is string => !!x))) {
+      const left = await prisma.booking.count({ where: { ...from, tourId: t, status: { in: [...SHEET_BOOKING_STATUSES] } } });
+      if (!left) offersClosed += (await prisma.jobOffer.updateMany({ where: { ...from, tourId: t, status: "OPEN" }, data: { status: "EXPIRED" } })).count;
+    }
+  }
+  await audit({ actorId: actor.id, actorRole: actor.role, action: "departure.moved", entityType: "JobSheet", entityId: sheet?.id ?? `${d.guideId ?? "unassigned"}|${d.date}|${d.slotIdx}`,
+    detail: { guideId: d.guideId ?? null, from, to: d.to, reason: label, refs, keepGuide: d.keepGuide, guideAssigned: assignGuide, removedRows: removed,
+      ...(join ? { joined: { guideId: join.guideId, tourId: join.tourId }, fromTourId: tourId, sourceRemoved, sourceKept } : {}), ...(unassigned ? { offersClosed } : {}) } });
   forgetCached(DASHBOARD_CACHE_KEY);
-  return NextResponse.json({ ok: true, moved: moving.length, to: d.to, guideAssigned: assignGuide, removedRows: removed.length, sheetSkipped, joined: join ? { guideId: join.guideId, guideName: join.guideName } : null, sourceRemoved, sourceKept });
+  return NextResponse.json({ ok: true, moved: moving.length, to: d.to, guideAssigned: assignGuide, removedRows: removed.length, sheetSkipped, joined: join ? { guideId: join.guideId, guideName: join.guideName } : null, sourceRemoved, sourceKept, offersClosed });
 }

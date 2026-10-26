@@ -8,6 +8,7 @@ import { isOnline } from "@/lib/presence";
 import { DOW, MON, parseYMD } from "@/lib/dates";
 import BookingsTable from "@/components/BookingsTable";
 import RecordPastTourDialog from "@/components/RecordPastTourDialog";
+import JoinDepartureDialog from "@/components/JoinDepartureDialog";
 import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 
@@ -126,6 +127,7 @@ export default function BookingsInbox() {
 
   // Over-capacity split editor: assign each booking to a guide, ≤ CAP pax per guide.
   const [splitFor, setSplitFor] = useState<{ date: string; slotIdx: number; tourId: string; items: Booking[] } | null>(null);
+  const [joinFor, setJoinFor] = useState<{ date: string; slotIdx: number; tourId: string | null; items: Booking[] } | null>(null);
   const [splitMap, setSplitMap] = useState<Record<string, string>>({});
   function openSplit(items: Booking[]) {
     setSplitFor({ date: items[0].date!, slotIdx: items[0].slotIdx!, tourId: groupTourId(items), items });
@@ -482,6 +484,7 @@ export default function BookingsInbox() {
                                     </>
                                   : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
                                 {pax > CAP && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
+                                <button className="btn sm js-join-open" title="รวมรอบ — put these guests on a tour another guide already runs (e.g. one 14:00 guest onto the 13:30 departure)" onClick={() => setJoinFor({ date, slotIdx, tourId, items })}>🔀 รวมรอบ</button>
                               </>
                             )}
                             <button className="btn sm" title="Export this tour's job sheet as a PDF (Save as PDF in the print dialog)" onClick={() => openJobSheetPdf(items, assignedGuide || grpGuide[key])}>📄 Job sheet PDF</button>
@@ -561,6 +564,11 @@ export default function BookingsInbox() {
         </div>
       )}
 
+      {joinFor && (
+        <JoinDepartureDialog date={joinFor.date} slotIdx={joinFor.slotIdx} tourId={joinFor.tourId} tourName={tourName(joinFor.tourId)}
+          items={joinFor.items.map((b) => ({ id: b.id, label: bookingRef(b.externalRef, b.confirmationCode) || b.source, name: b.customerName ?? "", pax: b.pax }))}
+          onClose={() => setJoinFor(null)} onJoined={() => { load(); }} />
+      )}
       {splitFor && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setSplitFor(null); }}>
           <div className="modal" style={{ maxWidth: 560 }}>
