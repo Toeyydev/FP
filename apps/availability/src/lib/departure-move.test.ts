@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { guestMoveMessage, moveBlockers, moveNote, reasonLabel, removeMovedRows, type MoveFacts } from "@/lib/departure-move";
+import { guestMoveMessage, joinBlockers, moveBlockers, moveNote, reasonLabel, removeMovedRows, type JoinFacts, type MoveFacts } from "@/lib/departure-move";
 
 const base: MoveFacts = {
   from: { date: "2099-04-10", slotIdx: 0 }, to: { date: "2099-04-11", slotIdx: 0 }, today: "2099-04-10",
@@ -37,5 +37,23 @@ describe("the sheet the guests left", () => {
   it("the guest message names the new day and time", () => {
     expect(guestMoveMessage({ name: "Anna", tourName: "Riverside Temples", to: { date: "2099-04-11", slotIdx: 0 } }))
       .toBe("Hello Anna, this is Folkpaths. Your Riverside Temples is now on Saturday 11 April at 08:30. Please reply to confirm — thank you!");
+  });
+});
+
+describe("joining another guide's job (รวมรอบ)", () => {
+  const target: NonNullable<JoinFacts["target"]> = { guideName: "Fah Example", sameJob: false, paxAfter: 12, approved: false, paid: false, peakDocumentNo: null };
+  it("a job at this very time may be joined", () => expect(moveBlockers({ ...base, to: base.from, joining: true })).toEqual([]));
+  it("up to one guide's seats is fine", () => expect(joinBlockers({ maxPax: 12, target })).toEqual([]));
+  it("names every blocker at once", () => {
+    expect(joinBlockers({ maxPax: 12, target: { ...target, paxAfter: 13, approved: true, paid: true, peakDocumentNo: "EXP-TEST-2" } })).toEqual([
+      "Fah Example would have 13 guests — one guide takes at most 12",
+      "Fah Example's job sheet there is approved — unapprove it first",
+      "Fah Example's job there is already paid — no guests can join it",
+      "Fah Example's job there is in PEAK (EXP-TEST-2) — no guests can join it",
+    ]);
+  });
+  it("not the job the guests are on, and not one gone", () => {
+    expect(joinBlockers({ maxPax: 12, target: { ...target, sameJob: true } })).toEqual(["These guests are already on this job — choose another one"]);
+    expect(joinBlockers({ maxPax: 12, target: null })).toEqual(["Nobody runs a tour at that time any more — reload and choose again"]);
   });
 });

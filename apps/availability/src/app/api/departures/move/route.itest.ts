@@ -18,7 +18,8 @@ vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof imp
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
-import { POST } from "./route";
+import { GET, POST } from "./route";
+import { importParsed } from "@/lib/booking-import";
 
 const G = "G-907";
 const TO = { date: "2099-04-20", slotIdx: 0 };
@@ -136,5 +137,88 @@ describe("nothing moves when a rule says no", () => {
     authMock.auth.mockResolvedValue({ user: { id: guide.id, role: "GUIDE", guideId: G } });
     expect((await move({ date: "2099-04-10", slotIdx: 0 })).status).toBe(403);
     await expectUnmoved();
+  });
+});
+
+describe("รวมรอบ — joining another guide's tour (14:00 guest onto the 13:30 departure)", () => {
+  const G2 = "G-908";
+  const DAY = "2099-04-12";
+  const FROM = { date: DAY, slotIdx: 3 }; // 14:00
+  const AT = { date: DAY, slotIdx: 2 };   // 13:30
+  async function otherJob(pax: number) {
+    await prisma.tour.create({ data: { id: "T-901", name: "Palace & Temples Example", time: "13:30", durationMin: 240 } });
+    await seedGuide(G2, { displayName: "Fah Example" });
+    await prisma.assignment.create({ data: { guideId: G2, ...AT, tourId: "T-901", pax } });
+    await prisma.booking.create({ data: { source: "GETYOURGUIDE", externalId: "GYG-TEST-9-x", externalRef: "GYG-TEST-9", tourId: "T-901", ...AT, pax, status: "ASSIGNED", assignedGuideId: G2, customerName: "Guest 9" } });
+    await prisma.jobSheet.create({ data: { ref: "FOLK-TEST-MV-JOIN", guideId: G2, ...AT, tourId: "T-901", status: "Confirmed", bookings: [row("GYG-TEST-9", { bookedPax: pax })], expenses: [], guideFee: { price: 1200, time: 1, whtPct: 3 } } });
+  }
+  const join = (over: Record<string, unknown> = {}) => move(FROM, { refs: ["GYG-TEST-1", "GYG-TEST-2"], to: AT, reason: "other", reasonText: "รวมรอบ", keepGuide: false, join: { guideId: G2 }, ...over });
+
+  it("lists the jobs running at a time, with their live guest count", async () => {
+    await job(DAY, 3);
+    await otherJob(5);
+    const r = await GET(new NextRequest(`http://test.local/api/departures/move?date=${DAY}&slotIdx=2`));
+    expect(await r.json()).toEqual({ departures: [{ guideId: G2, guideName: "Fah Example", tourId: "T-901", tourName: "Palace & Temples Example", pax: 5 }] });
+  });
+
+  it("puts the guests on that guide's tour and sheet, and takes the emptied job off its guide", async () => {
+    await job(DAY, 3);
+    await otherJob(5);
+    const r = await join();
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body).toMatchObject({ moved: 2, guideAssigned: false, joined: { guideId: G2 }, sourceRemoved: true, sourceKept: [] });
+
+    for (const ref of ["GYG-TEST-1", "GYG-TEST-2"]) expect(await booking(ref)).toMatchObject({ ...AT, startTime: "13:30", tourId: "T-901", assignedGuideId: G2, datePinned: true });
+    const there = await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } } });
+    expect((there.bookings as { bookingNo: string }[]).map((b) => b.bookingNo).sort()).toEqual(["GYG-TEST-1", "GYG-TEST-2", "GYG-TEST-9"]);
+    expect(there.guideFee).toEqual({ price: 1200, time: 1, whtPct: 3 }); // the tour's fee, untouched
+
+    expect(await prisma.assignment.count({ where: { guideId: G, ...FROM } })).toBe(0);
+    expect(await prisma.jobSheet.count({ where: { guideId: G, ...FROM } })).toBe(0);
+    expect(await prisma.notification.count({ where: { userId: guide.id } })).toBe(1);
+    expect((await prisma.auditLog.findFirstOrThrow({ where: { action: "departure.moved" } })).detail).toMatchObject({ joined: { guideId: G2, tourId: "T-901" }, fromTourId: "T-900", sourceRemoved: true });
+  });
+
+  it("keeps the job when only some guests join it", async () => {
+    await job(DAY, 3);
+    await otherJob(5);
+    const r = await join({ refs: ["GYG-TEST-1"] });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.sourceRemoved).toBe(false);
+    expect(await prisma.assignment.count({ where: { guideId: G, ...FROM } })).toBe(1);
+  });
+
+  it("the channel sync does not drag a joined guest back to the old tour or time", async () => {
+    await job(DAY, 3);
+    await otherJob(5);
+    expect((await join()).status).toBe(200);
+    await prisma.productMap.upsert({ where: { productKey: "example palace product" }, create: { productKey: "example palace product", productName: "Example Palace Product", tourId: "T-900" }, update: { tourId: "T-900" } });
+    await importParsed({ externalId: `GYG-TEST-1-${DAY}`, externalRef: "GYG-TEST-1", productName: "Example Palace Product", date: DAY, slotIdx: 3, startTime: "14:00", pax: 2, customerName: "Guest GYG-TEST-1" }, { source: "GETYOURGUIDE", cancelled: false, via: "test" });
+    expect(await booking("GYG-TEST-1")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: G2, datePinned: true });
+  });
+
+  it("refuses more guests than one guide takes", async () => {
+    await job(DAY, 3);
+    await otherJob(11);
+    const r = await join();
+    expect(r.status).toBe(409);
+    expect(r.body.reasons.join(" ")).toContain("Fah Example would have 15 guests — one guide takes at most 12");
+    expect(await booking("GYG-TEST-1")).toMatchObject({ ...FROM, tourId: "T-900", datePinned: false });
+  });
+
+  it("refuses a job sheet there that is approved", async () => {
+    await job(DAY, 3);
+    await otherJob(2);
+    await prisma.jobSheet.update({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } }, data: { approvalStatus: "APPROVED" } });
+    const r = await join();
+    expect(r.status).toBe(409);
+    expect(r.body.reasons).toContain("Fah Example's job sheet there is approved — unapprove it first");
+  });
+
+  it("refuses when nobody runs a tour there any more", async () => {
+    await job(DAY, 3);
+    const r = await join();
+    expect(r.status).toBe(409);
+    expect(r.body.reasons).toContain("Nobody runs a tour at that time any more — reload and choose again");
   });
 });

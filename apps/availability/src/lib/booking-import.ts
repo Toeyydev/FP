@@ -485,10 +485,11 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
 
   // A booking whose date/slot an operator pinned by hand (a rebooking arranged outside
   // the OTA) must survive the sync: when pinned, an import updates everything EXCEPT the
-  // date/slot/time, so the channel's original date can't drag it back. Non-pinned (the
-  // default) behaves exactly as before.
+  // date/slot/time and the tour, so the channel's original departure can't drag it back —
+  // the tour too, since a move may put the guests on another guide's tour (รวมรอบ).
+  // Non-pinned (the default) behaves exactly as before.
   const slotFields = (pinned: boolean) =>
-    pinned ? {} : { date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
+    pinned ? {} : { tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
 
   if (p.externalId) {
     const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true, date: true, slotIdx: true } });
@@ -504,7 +505,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       const byRef = sameRef.find((b) => (!b.externalId || b.externalId === p.externalId) && (!b.confirmationCode || b.confirmationCode === p.confirmationCode));
       if (byRef) {
         if (await ignoreStaleLive(byRef, cancelled, via)) return "skipped";
-        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
         await reconcileAfterImport(updated.id, via, byRef, collect);
         return "updated";
@@ -532,7 +533,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       },
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined,
-        tourId: tourId ?? undefined, ...slotFields(existing?.datePinned ?? false),
+        ...slotFields(existing?.datePinned ?? false),
         pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
       },
     });
@@ -567,7 +568,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     }
     if (dup && (await ignoreStaleLive(dup, cancelled, via))) return "skipped";
     if (dup) {
-      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
       const copies = cancelled ? (await cancelOtherCopies(p, dup.id, cancelledAtSource, via)).cancelledNow : [];
       // Tell the guide/ops once per slot, after every copy is cancelled, so the recount is right.
       await announceCancelled([...(dup.status !== "CANCELLED" && cancelled ? [updated] : []), ...copies]);
