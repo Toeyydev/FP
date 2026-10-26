@@ -495,10 +495,14 @@ export function combinedSlipDriveName(o: { guideId: string; guideName: string; d
 // Drive file name for an expense receipt. Unique per job and expense row, even when a legacy
 // ref is shared by two sheets or missing: the name carries guide, date and slot, so a re-upload
 // replaces only this job's receipt for this row, never another guide's or slot's.
-export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string }): string {
+export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string; from?: "operator" | "guide" }): string {
   const base = `${(opts.ref || "Job").trim()} — ${opts.guideId} — ${opts.date} — slot ${opts.slotIdx}`;
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
-  return `${base}-E${opts.index + 1}${desc ? ` ${desc}` : ""} — receipt.${opts.ext}`;
+  // A guide's receipt is numbered by the line of THEIR report, which is not the
+  // operator's row of the same number — so it is named apart (G<n>, "guide
+  // receipt") and never reads as the operator's evidence for a different line.
+  const guide = opts.from === "guide";
+  return `${base}-${guide ? "G" : "E"}${opts.index + 1}${desc ? ` ${desc}` : ""} — ${guide ? "guide receipt" : "receipt"}.${opts.ext}`;
 }
 
 // Apply a guide's reported attendance to a job sheet: remove `absent` guests
