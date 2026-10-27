@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId, type ParsedBooking } from "@/lib/bookings";
+import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId, sameTour, type ParsedBooking } from "@/lib/bookings";
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, linePushFlex, lineEnabled } from "@/lib/line";
@@ -449,6 +449,17 @@ async function announceCancelled(bookings: { date: string | null; slotIdx: numbe
   for (const b of bySlot.values()) await onBookingCancelled(b);
 }
 
+// The guide's job at this departure runs the same tour under another id (lib/bookings
+// sameTour): the booking takes the job's id, so the two meet. Only when exactly one such id
+// is running there and none runs under the booking's own id.
+export async function followGuideTour(tourId: string | null, date: string | null | undefined, slotIdx: number | null | undefined): Promise<string | null> {
+  if (!tourId || !date || slotIdx == null) return tourId;
+  const there = await prisma.assignment.findMany({ where: { date, slotIdx }, select: { tourId: true } }).catch(() => []);
+  if (there.some((a) => a.tourId === tourId)) return tourId;
+  const kin = [...new Set(there.map((a) => a.tourId).filter((t) => sameTour(t, tourId)))];
+  return kin.length === 1 ? kin[0] : tourId;
+}
+
 export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown; via?: ReconcileSource; collect?: DirtyBookings }): Promise<ImportResult> {
   const via: ReconcileSource = opts.via ?? "csv";
   const collect = opts.collect;
@@ -480,6 +491,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   // Correct the resolved tour by departure time: the 14:00 slot is the palace-only tour,
   // not the combined day tour a channel product maps to by name. (No-op for other slots.)
   tourId = slotAwareTourId(tourId, p.slotIdx);
+  tourId = await followGuideTour(tourId, p.date, p.slotIdx);
   const { source, cancelled } = opts;
   const raw = (opts.raw ?? undefined) as object | undefined;
   // Recorded only with a cancellation, and only when the channel says when it happened.

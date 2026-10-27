@@ -1,6 +1,6 @@
 import { isDirectWebsiteBooking } from "@/lib/bookings";
 import { describe, it, expect } from "vitest";
-import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId } from "@/lib/bookings";
+import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId, sameTour } from "@/lib/bookings";
 import { isEveningSlot, SLOT_TIMES } from "@/lib/slots";
 
 describe("channel-only bookings — don't default evening tours to Grand Palace", () => {
@@ -61,6 +61,19 @@ describe("channelOnlyEveningTourId — the food tour times name the tour", () =>
     expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("18:30"))).toBe("T-009");
     for (const t of ["08:30", "13:30", "15:00"]) expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf(t))).toBeNull();
     expect(channelOnlyEveningTourId(null)).toBeNull();
+  });
+});
+
+describe("sameTour — one tour under the id of each departure time", () => {
+  it("the combined tour's ids are one tour, and the food tour's ids are one tour", () => {
+    expect(sameTour("T-001", "T-002")).toBe(true);
+    expect(sameTour("T-007", "T-009")).toBe(true);
+    expect(sameTour("T-002", "T-002")).toBe(true);
+  });
+  it("different tours are not", () => {
+    expect(sameTour("T-001", "T-005")).toBe(false);
+    expect(sameTour("T-002", "T-009")).toBe(false);
+    expect(sameTour(null, "T-001")).toBe(false);
   });
 });
 

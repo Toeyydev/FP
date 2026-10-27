@@ -7,7 +7,7 @@ import { audit } from "@/lib/audit";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
 import { productKey, isChannelProductName, slotAwareTourId } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
-import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
+import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun, followGuideTour } from "@/lib/booking-import";
 import { reconcileBookingChange, reconcileWithdrawn, type Withdrawn } from "@/lib/booking-reconcile";
 import { withTimeout } from "@/lib/api-cache";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
@@ -213,7 +213,9 @@ export async function POST(req: NextRequest) {
     const before = moved ? await prisma.booking.findUnique({ where: { id }, select: { date: true, slotIdx: true, tourId: true } }) : null;
     // A booking moved to another time takes the tour that departs then (lib/bookings
     // slotAwareTourId) — palace-only runs only at 14:00 — unless the operator chose a tour.
-    const slotTour = before && rest.tourId === undefined ? slotAwareTourId(before.tourId, rest.slotIdx ?? before.slotIdx) : null;
+    const slotTour = before && rest.tourId === undefined
+      ? await followGuideTour(slotAwareTourId(before.tourId, rest.slotIdx ?? before.slotIdx), rest.date ?? before.date, rest.slotIdx ?? before.slotIdx)
+      : null;
     const b = await prisma.booking.update({
       where: { id },
       data: moved ? { ...rest, datePinned: true, ...(slotTour && slotTour !== before?.tourId ? { tourId: slotTour } : {}) } : rest,
