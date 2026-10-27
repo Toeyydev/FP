@@ -144,7 +144,6 @@ export default function JobSheetEditor() {
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
   const [tourDay, setTourDay] = useState<{ scheduled: string | null; steps: TimelineStep[] } | null>(null);
-  const [guideReport, setGuideReport] = useState<GuideReport | null>(null);
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
   // Another guide finished this tour, or this guide finished it for someone (api/tour-handover).
@@ -220,7 +219,7 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setPastGaps(d.pastBookingGaps ?? null);
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setGuideReport(d.guideReport && typeof d.guideReport.noShow === "number" ? d.guideReport : null); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
@@ -1362,7 +1361,6 @@ export default function JobSheetEditor() {
         <div id="js-guests" style={{ display: secTab === "all" || secTab === "details" ? undefined : "none" }}>
         <h3 className="js-section">Job Details<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"รายละเอียดงาน"}</small></h3>
         <GuestCounts rows={sheet.bookings} sync={bookingSync} />
-        {guideReport && <GuideReportNote report={guideReport} markedPax={noShowTotal} />}
         {canEdit && pastGaps && (pastGaps.missing.length > 0 || pastGaps.unsettled.length > 0) && (
           <div className="banner warn no-print js-past-gaps" role="status" style={{ display: "grid", gap: 6, background: "#fff7e8", border: "1px solid #e0b964", borderRadius: 8, padding: "8px 12px", margin: "6px 0", fontSize: 13 }}>
             {pastGaps.missing.length > 0 && <div><b>{pastGaps.missing.length} booking{pastGaps.missing.length === 1 ? "" : "s"} at this departure {pastGaps.missing.length === 1 ? "is" : "are"} not on this sheet</b> ({pastGaps.missing.reduce((t, g) => t + (g.pax ?? 0), 0)} pax): {pastGaps.missing.map((g) => `${g.ref} ×${g.pax ?? "?"}`).join(", ")} · มีบุ๊กกิ้งของรอบนี้ที่ยังไม่อยู่ใน job sheet</div>}
@@ -2712,23 +2710,6 @@ function GuestCounts({ rows, sync }: { rows: { bookedPax: number | null; actualP
       <span>Expected guests <b style={{ color: "var(--ink,#111)" }}>{expected}</b></span>
       <span>Actual guests <b style={{ color: "var(--ink,#111)" }}>{reported ? actual : "Not reported"}</b></span>
       {sync && sync.from != null && sync.to != null && <span className="no-print">Synced from booking · updated {at} · {sync.from} → {sync.to} guests</span>}
-    </div>
-  );
-}
-
-type GuideReport = { noShow: number; leftEarly: number; comments: string | null };
-
-// What the guide said in their end-of-tour report, as they said it. A no-show count the
-// guide did not tie to a booking is not applied to any row (lib/guide-lifecycle): the
-// operator ticks who did not come, in the No-show column below.
-function GuideReportNote({ report, markedPax }: { report: GuideReport; markedPax: number }) {
-  const facts = [report.noShow > 0 ? `${report.noShow} no-show` : "", report.leftEarly > 0 ? `${report.leftEarly} left early` : ""].filter(Boolean).join(" · ");
-  const unmatched = report.noShow - markedPax;
-  return (
-    <div className="no-print js-guide-report" role="status" style={{ margin: "6px 0", padding: "8px 12px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", fontSize: 13, display: "grid", gap: 3 }}>
-      <b style={{ color: "var(--danger)" }}>⚠ Guide reported: {facts}</b>
-      {report.comments && <span style={{ overflowWrap: "anywhere" }}>&ldquo;{report.comments}&rdquo;</span>}
-      {unmatched > 0 && <span className="js-guide-report-unmatched">{unmatched} not matched to a booking — tick who in the No-show column · ยังไม่ระบุว่าใครไม่มา</span>}
     </div>
   );
 }

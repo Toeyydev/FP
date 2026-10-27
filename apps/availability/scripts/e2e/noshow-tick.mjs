@@ -1,14 +1,12 @@
-// A guide's no-show report shows on the job sheet (owner, 2026-10-27), in a real browser
-// against a real server and database.
+// The operator marks who did not come on the job sheet (owner, 2026-10-27), in a real
+// browser against a real server and database.
 //
 // Proves, on the page:
-//   1. the sheet shows what the guide reported — the count and their words — and how many
-//      of the no-shows are not yet tied to a booking
-//   2. the operator ticks who did not come in the No-show column; it is saved on the
-//      booking, and the "not matched" line goes once every no-show is tied to one
+//   1. every guest row has a No-show tick
+//   2. ticking it is saved on the booking, and the row shows "No-show"
 //   3. at phone width (390px) the page has no sideways scroll
 //
-// Run after `next build`:  node scripts/e2e/noshow-report.mjs
+// Run after `next build`:  node scripts/e2e/noshow-tick.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and
 // AUTH_SECRET.
 //
@@ -101,7 +99,6 @@ async function sessionCookie(email) {
 
 // ── the test ─────────────────────────────────────────────────────────────────
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-const note = (page) => page.$eval(".js-guide-report", (x) => x.textContent).catch(() => null);
 const data = await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
@@ -113,18 +110,12 @@ try {
   page.on("dialog", (d) => d.accept());
   await page.setCookie(await sessionCookie(data.op.email));
   await page.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=2`, { waitUntil: "networkidle0" });
-  await page.waitForSelector(".js-guide-report", { timeout: 20000 });
+  await page.waitForSelector(".js-ns-tick", { timeout: 20000 });
+  if (SHOTS) await (await page.$("#js-guests")).screenshot({ path: join(SHOTS, "noshow-tick-before.png") });
 
-  // 1 — what the guide reported
-  const first = (await note(page)) ?? "";
-  check("1 · the sheet says the guide reported 2 no-show", /Guide reported: 2 no-show/.test(first), first);
-  check("1 · with the guide's own words", first.includes("Two guests never came to the meeting point"), first);
-  check("1 · and that 2 are not tied to a booking yet", /2 not matched to a booking/.test(first), first);
-  if (SHOTS) await (await page.$("#js-guests")).screenshot({ path: join(SHOTS, "noshow-report.png") });
-
-  // 2 — the operator ticks who
+  // 1, 2 — the operator ticks who
   const ticks = await page.$$(".js-ns-tick input");
-  check("2 · every booking row has a No-show tick", ticks.length === 3, String(ticks.length));
+  check("1 · every booking row has a No-show tick", ticks.length === 3, String(ticks.length));
   const saved = page.waitForResponse((r) => r.url().endsWith("/api/jobsheet/noshow") && r.request().method() === "POST", { timeout: 15000 });
   await ticks[1].click();
   const res = await saved;
@@ -132,8 +123,9 @@ try {
   await pause(300);
   const b = await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-E2E-NS2" } });
   check("2 · on the booking: 2 of 2 did not come", b.noShow === true && b.noShowPax === 2, JSON.stringify({ noShow: b.noShow, noShowPax: b.noShowPax }));
-  const after = (await note(page)) ?? "";
-  check("2 · nothing is left unmatched once the 2 are ticked", !/not matched/.test(after) && /Guide reported: 2 no-show/.test(after), after);
+  const label = await page.$$eval(".js-ns-tick", (xs) => xs.map((x) => x.textContent.trim()));
+  check("2 · the row says No-show", JSON.stringify(label) === JSON.stringify(["", "No-show", ""]), JSON.stringify(label));
+  if (SHOTS) await (await page.$("#js-guests")).screenshot({ path: join(SHOTS, "noshow-tick.png") });
 
   // 3 — phone width
   await page.setViewport({ width: 390, height: 844 });
@@ -150,5 +142,5 @@ try {
 }
 
 const failed = results.filter((r) => !r.ok);
-console.log(`\nno-show report e2e: ${results.length - failed.length} passed, ${failed.length} failed`);
+console.log(`\nno-show tick e2e: ${results.length - failed.length} passed, ${failed.length} failed`);
 process.exit(failed.length ? 1 : 0);

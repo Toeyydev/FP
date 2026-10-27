@@ -1,19 +1,15 @@
 import { vi, describe, it, expect, beforeAll, beforeEach } from "vitest";
 
 // A guide's end-of-tour report and the job sheet (owner, 2026-10-27): a no-show the guide
-// tied to a booking is marked on that row; a no-show count tied to no booking is shown as
-// the guide said it and applied to no row — the operator ticks who. It used to come off the
-// biggest booking, unmarked. Real database; push/LINE/email/calendar mocked. All data invented.
-const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
-vi.mock("@/auth", () => authMock);
+// tied to a booking is marked on that row; a no-show count tied to no booking is applied to
+// no row — the operator ticks who on the sheet. It used to come off the biggest booking,
+// unmarked. Real database; push/LINE/email/calendar mocked. All data invented.
 vi.mock("@/lib/push", async (orig) => ({ ...(await orig<typeof import("@/lib/push")>()), sendPushToUser: vi.fn(async () => 0) }));
 vi.mock("@/lib/line", async (orig) => ({ ...(await orig<typeof import("@/lib/line")>()), lineEnabled: false, linePush: vi.fn(async () => true), linePushFlex: vi.fn(async () => true) }));
 vi.mock("@/lib/email", async (orig) => ({ ...(await orig<typeof import("@/lib/email")>()), sendEmail: vi.fn(async () => true) }));
 vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof import("@/lib/tour-calendar-sync")>()), removeTourEvents: vi.fn(async () => {}), pushTourToCalendars: vi.fn(async () => {}) }));
 
-import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { GET } from "@/app/api/jobsheet/route";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { recordNoShow, submitTourReport } from "@/lib/guide-lifecycle";
 import type { Booking } from "@/lib/jobsheet";
@@ -34,8 +30,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await resetDatabase();
   await seedGuide(G, { displayName: "Ploy Example" });
-  const op = await prisma.user.create({ data: { email: "op@example.test", displayName: "Op Example", role: "OPERATOR", state: "ACTIVE" } });
-  authMock.auth.mockResolvedValue({ user: { id: op.id, role: "OPERATOR" } });
+  await prisma.user.create({ data: { email: "op@example.test", displayName: "Op Example", role: "OPERATOR", state: "ACTIVE" } });
   await prisma.assignment.create({ data: { guideId: G, date: DATE, slotIdx: SLOT, tourId: "T-900", pax: 5 } });
   ids = {};
   for (const [ref, pax, tag] of [["GYG-NS-1", 1, null], ["GYG-NS-2", 2, null], ["GYG-NS-JOINED", 2, G]] as const) {
@@ -53,16 +48,6 @@ describe("a no-show the guide did not tie to a booking", () => {
     expect(rows.every((b) => !b.noShowPax)).toBe(true);
     expect((await prisma.jobSheet.findFirstOrThrow()).status).toBe("Review: no-show");
     expect(await prisma.tourReport.findFirstOrThrow()).toMatchObject({ noShow: 2, comments: "Two guests never came" });
-  });
-  it("the job sheet carries the guide's report, as the guide said it", async () => {
-    await report({ noShow: 2, leftEarly: 1, comments: "Two guests never came" });
-    const d = await (await GET(new NextRequest(`http://test.local/api/jobsheet?guideId=${G}&date=${DATE}&slotIdx=${SLOT}`))).json();
-    expect(d.guideReport).toEqual({ noShow: 2, leftEarly: 1, comments: "Two guests never came" });
-  });
-  it("a tour with nothing to report carries none", async () => {
-    await report({});
-    const d = await (await GET(new NextRequest(`http://test.local/api/jobsheet?guideId=${G}&date=${DATE}&slotIdx=${SLOT}`))).json();
-    expect(d.guideReport).toBeNull();
   });
 });
 

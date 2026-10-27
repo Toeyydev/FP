@@ -305,14 +305,14 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-fee-wht
 
-      # A guide's no-show report shows on the job sheet: the count and their words, how many
-      # are not tied to a booking yet, the operator's No-show tick saves, and it fits a phone.
-      - name: Guide no-show report on the job sheet, in a real browser
-        run: node scripts/e2e/noshow-report.mjs
+      # The operator ticks who did not come on the job sheet: saved on the booking, the row
+      # says No-show, and it fits a phone.
+      - name: No-show tick on the job sheet, in a real browser
+        run: node scripts/e2e/noshow-tick.mjs
         env:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
-          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/noshow-report
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/noshow-tick
 
       # A payment left out of a payout that already went: created as its own obligation,
       # checked for duplicates, paid by its own transfer, reconciled with a PEAK reference —
