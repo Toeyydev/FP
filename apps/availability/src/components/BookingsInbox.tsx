@@ -612,11 +612,11 @@ export default function BookingsInbox() {
   );
 }
 
-// Two paths joining into one: รวมรอบ. A line icon, drawn in the text colour.
+// รวมรอบ: the 🔀 crossing arrows, drawn as a line in the text colour — no emoji tile.
 function MergeIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 2v3.5a3 3 0 0 0 3 3h4M13 2v3.5a3 3 0 0 1-3 3M8 8.5V14M5.8 11.8 8 14l2.2-2.2" />
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 4.5h2.2c1.2 0 2.3.6 3 1.6l2.6 3.8c.7 1 1.8 1.6 3 1.6h2.2M1.5 11.5h2.2c1.2 0 2.3-.6 3-1.6l2.6-3.8c.7-1 1.8-1.6 3-1.6h2.2M12.5 2.5l2 2-2 2M12.5 9.5l2 2-2 2" />
     </svg>
   );
 }
