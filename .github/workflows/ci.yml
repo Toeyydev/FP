@@ -278,6 +278,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-version
 
+      # Bookings → Ready to offer: a guide on ANOTHER tour at the same time does not badge a
+      # booking as handled — it says no guide runs its tour and keeps the offer controls.
+      - name: Inbox guide of another tour in a real browser
+        run: node scripts/e2e/inbox-other-tour.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/inbox-other-tour
+
       # Move departure (ย้ายรอบ): guests go to another date or time in one act — booking
       # pinned, the same guide at the new time, the sheet they left cleaned, a WhatsApp draft.
       - name: Move departure in a real browser

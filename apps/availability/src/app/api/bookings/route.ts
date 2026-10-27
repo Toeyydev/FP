@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { SLOT_COUNT, SLOT_TIMES } from "@/lib/slots";
-import { productKey, isChannelProductName } from "@/lib/bookings";
+import { productKey, isChannelProductName, slotAwareTourId } from "@/lib/bookings";
 import { todayD, ymd } from "@/lib/dates";
 import { reconcileAssignedBookings, autoAttachLate, autoSyncBokun } from "@/lib/booking-import";
 import { reconcileBookingChange, reconcileWithdrawn, type Withdrawn } from "@/lib/booking-reconcile";
@@ -125,16 +125,29 @@ export async function GET(req: NextRequest) {
   // Attach the assigned guide (if the slot is already dispatched) so the inbox can
   // badge those groups as handled instead of offering them again.
   const aDates = [...new Set(bookings.filter((b) => b.date && b.slotIdx != null).map((b) => b.date!))];
-  const aRows = aDates.length ? await prisma.assignment.findMany({ where: { date: { in: aDates } }, select: { date: true, slotIdx: true, guideId: true } }) : [];
+  const aRows = aDates.length ? await prisma.assignment.findMany({ where: { date: { in: aDates } }, select: { date: true, slotIdx: true, guideId: true, tourId: true }, orderBy: { guideId: "asc" } }) : [];
   const aGuideIds = [...new Set(aRows.map((a) => a.guideId))];
   const aUsers = aGuideIds.length ? await prisma.user.findMany({ where: { guideId: { in: aGuideIds } }, select: { guideId: true, displayName: true } }) : [];
   const aName = new Map(aUsers.map((g) => [g.guideId, g.displayName]));
-  const aMap = new Map(aRows.map((a) => [`${a.date}|${a.slotIdx}`, a.guideId]));
+  const aBySlot = new Map<string, typeof aRows>();
+  for (const a of aRows) { const k = `${a.date}|${a.slotIdx}`; aBySlot.set(k, [...(aBySlot.get(k) ?? []), a]); }
+  // The guide of THIS booking's tour at its time. A guide on another tour at the same time
+  // is not this booking's guide — it is named separately (otherTourGuide), so the inbox does
+  // not badge the booking as handled (a GYG booking filed under the wrong tour, 27 Oct 2026).
+  const guideOf = (b: { date: string | null; slotIdx: number | null; tourId: string | null }) => {
+    const at = b.date && b.slotIdx != null ? aBySlot.get(`${b.date}|${b.slotIdx}`) ?? [] : [];
+    const mine = at.find((a) => !b.tourId || a.tourId === b.tourId);
+    const other = mine ? undefined : at[0];
+    return {
+      guideId: mine?.guideId ?? null, guide: mine ? (aName.get(mine.guideId) ?? mine.guideId) : null,
+      otherTourGuide: other ? { guideId: other.guideId, guide: aName.get(other.guideId) ?? other.guideId, tourId: other.tourId } : null,
+    };
+  };
   // Incoming bookings are OTA only: a direct website booking never belongs in the dispatch
   // inbox. Decided per row (lib/bookings isDirectWebsiteBooking), not by the FOLK- prefix
   // alone — Bókun's webhook gives an OTA booking a FOLK-T… confirmation code too, and hiding
   // on the prefix hid every booking that arrived by webhook (3 Oct 2026).
-  const withGuide = bookings.filter((b) => !isDirectWebsiteBooking(b)).map((b) => { const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined; return { ...b, guideId: gid ?? null, guide: gid ? (aName.get(gid) ?? gid) : null }; });
+  const withGuide = bookings.filter((b) => !isDirectWebsiteBooking(b)).map((b) => ({ ...b, ...guideOf(b) }));
   // "Incoming" = tours still to come: drop today's slots whose start time has already
   // passed (e.g. this morning's 08:30 once it's run). Future + undated bookings stay.
   const nowMin = (() => { const d = new Date(Date.now() + 7 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes(); })();
@@ -197,10 +210,13 @@ export async function POST(req: NextRequest) {
     // The pin is only ever set here, by a human act; it is never inferred, and the
     // sync already honours it (lib/booking-import slotFields).
     const moved = rest.date !== undefined || rest.slotIdx !== undefined;
-    const before = moved ? await prisma.booking.findUnique({ where: { id }, select: { date: true, slotIdx: true } }) : null;
+    const before = moved ? await prisma.booking.findUnique({ where: { id }, select: { date: true, slotIdx: true, tourId: true } }) : null;
+    // A booking moved to another time takes the tour that departs then (lib/bookings
+    // slotAwareTourId) — palace-only runs only at 14:00 — unless the operator chose a tour.
+    const slotTour = before && rest.tourId === undefined ? slotAwareTourId(before.tourId, rest.slotIdx ?? before.slotIdx) : null;
     const b = await prisma.booking.update({
       where: { id },
-      data: moved ? { ...rest, datePinned: true } : rest,
+      data: moved ? { ...rest, datePinned: true, ...(slotTour && slotTour !== before?.tourId ? { tourId: slotTour } : {}) } : rest,
     });
     // Learn the product → tour mapping so future bookings of this product auto-map,
     // and back-apply it to other pending bookings of the same product. NEVER learn
