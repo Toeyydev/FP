@@ -91,3 +91,30 @@ describe("a combined-tour booking arriving at 13:30 under a name mapped to the m
     expect((await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-COMB-OLD" } })).tourId).toBe("T-002");
   });
 });
+
+describe("a 13:30 job made under the morning tour's id (before tours were filed by time)", () => {
+  const NAME = "Example : Half-Day Guided : Palace, Temples & River";
+  const arrive = (ref: string) => importParsed({ externalRef: ref, confirmationCode: `CODE-${ref}`, customerName: `Guest ${ref}`, date: DATE, slotIdx: S1330, startTime: "13:30", pax: 2, productName: NAME }, { source: "GetYourGuide", cancelled: false, via: "autosync" });
+  beforeEach(async () => {
+    await prisma.productMap.deleteMany({});
+    await prisma.productMap.create({ data: { productKey: productKey(NAME), productName: NAME, tourId: "T-001" } });
+    await prisma.assignment.create({ data: { guideId: G, date: DATE, slotIdx: S1330, tourId: "T-001", pax: 2 } });
+  });
+  it("the booking joins that job — the board shows the guide's guests, not a tour with no guide", async () => {
+    await arrive("GYG-FAM-1");
+    expect((await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-FAM-1" } })).tourId).toBe("T-001");
+    const row = (await inbox()).find((b) => b.externalRef === "GYG-FAM-1")!;
+    expect(row.guideId).toBe(G);
+  });
+  it("a guest moved to 13:30 by hand joins it too", async () => {
+    const b = await mk("GYG-FAM-2", S1400, "T-005");
+    const r = await post({ action: "update", id: b.id, slotIdx: S1330 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect((await prisma.booking.findUniqueOrThrow({ where: { id: b.id } })).tourId).toBe("T-001");
+  });
+  it("with no job there the booking keeps the tour of its time", async () => {
+    await prisma.assignment.deleteMany({});
+    await arrive("GYG-FAM-3");
+    expect((await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-FAM-3" } })).tourId).toBe("T-002");
+  });
+});

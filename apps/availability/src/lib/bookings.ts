@@ -105,6 +105,17 @@ export function channelOnlyEveningTourId(slotIdx: number | null | undefined): st
   return slotIdx != null ? FOOD_TOUR_BY_SLOT[slotIdx] ?? null : null;
 }
 
+// Tours that are one tour run at different times, kept under one id per departure (above).
+// Jobs made before the ids were filed by time can carry the other id of the same tour — a
+// 13:30 job under T-001 — so a booking follows the guide's job when it is the same tour
+// under another id (lib/booking-import followGuideTour). Otherwise the two never meet: the
+// board shows the guide's tour with no guests and the guests as a tour with no guide.
+const TOUR_FAMILIES: string[][] = [["T-001", "T-002"], Object.values(FOOD_TOUR_BY_SLOT)];
+export function sameTour(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a === b || TOUR_FAMILIES.some((f) => f.includes(a) && f.includes(b));
+}
+
 export function normTime(v: unknown): string | undefined {
   if (v == null) return undefined;
   const s = String(v).replace(".", ":");
