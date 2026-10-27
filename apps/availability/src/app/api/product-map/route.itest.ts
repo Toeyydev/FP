@@ -77,3 +77,22 @@ describe("a booking arriving under a mapped food-tour name", () => {
     expect((await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-FOOD-1730" } })).tourId).toBe("T-008");
   });
 });
+
+describe("a GetYourGuide booking that names no tour", () => {
+  const arrive = (ref: string, slotIdx: number) => importParsed({ externalRef: ref, confirmationCode: `CODE-${ref}`, customerName: "Guest Example", date: DATE, slotIdx, startTime: SLOT_TIMES[slotIdx], pax: 2, productName: "GetYourGuide" }, { source: "GetYourGuide", cancelled: false, via: "autosync" });
+  const tourOfRef = async (ref: string) => (await prisma.booking.findFirstOrThrow({ where: { externalRef: ref } })).tourId;
+  beforeEach(async () => {
+    await prisma.tour.upsert({ where: { id: "T-001" }, create: { id: "T-001", name: "Example Day Tour", time: "08:30", durationMin: 240 }, update: {} });
+    await prisma.productMap.create({ data: { productKey: productKey("GetYourGuide"), productName: "GetYourGuide", tourId: "T-001" } });
+  });
+  it("at 18:30 is the food tour — only the food tour runs then", async () => {
+    await arrive("GYG-CH-1830", S1830);
+    expect(await tourOfRef("GYG-CH-1830")).toBe("T-009");
+  });
+  it("at 16:30 and 17:30 is still left for the operator to place", async () => {
+    await arrive("GYG-CH-1630", S1630);
+    await arrive("GYG-CH-1730", S1730);
+    expect(await tourOfRef("GYG-CH-1630")).toBeNull();
+    expect(await tourOfRef("GYG-CH-1730")).toBeNull();
+  });
+});
