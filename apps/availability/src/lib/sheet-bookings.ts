@@ -36,8 +36,12 @@ export type SheetBooking = { name: string; bookingNo: string; bookedPax: number 
  * unassigned for the operator to place.
  */
 export function guideSlotBookings<T extends SlotBooking>(allAtSlot: T[], guideId: string): T[] {
-  const splitHere = allAtSlot.some((b) => b.assignedGuideId);
-  return splitHere ? allAtSlot.filter((b) => b.assignedGuideId === guideId) : allAtSlot;
+  const taggedTo = new Set(allAtSlot.map((b) => b.assignedGuideId).filter(Boolean));
+  if (!taggedTo.size) return allAtSlot;
+  // Tags that name only this guide are not a split: the untagged guests are theirs too. (A
+  // guest joined to a one-guide tour was tagged, and the guide's own guests vanished.)
+  if (taggedTo.size === 1 && taggedTo.has(guideId)) return allAtSlot;
+  return allAtSlot.filter((b) => b.assignedGuideId === guideId);
 }
 
 /**

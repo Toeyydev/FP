@@ -21,6 +21,15 @@ describe("guideSlotBookings", () => {
     ];
     expect(guideSlotBookings(all, "G-TEST").map((b) => b.externalRef)).toEqual(["GYG-TEST-1"]);
   });
+
+  it("keeps a one-guide tour whole when one guest is tagged to that guide (a guest joined by รวมรอบ)", () => {
+    const all = [
+      bk({ externalRef: "GYG-TEST-1" }), bk({ externalRef: "GYG-TEST-2" }), bk({ externalRef: "GYG-TEST-3" }),
+      bk({ externalRef: "GYG-TEST-JOINED", assignedGuideId: "G-TEST" }),
+    ];
+    expect(guideSlotBookings(all, "G-TEST")).toHaveLength(4);
+    expect(guideSlotBookings(all, "G-OTHER")).toHaveLength(0); // nobody else is handed the guide's guests
+  });
 });
 
 describe("toSheetBooking", () => {

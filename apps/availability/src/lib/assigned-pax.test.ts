@@ -23,6 +23,11 @@ describe("paxIndex", () => {
     expect(ix.for("T-001", "2026-09-04", 0, "G-017")).toBe(2);
   });
 
+  it("counts a one-guide tour whole when one guest is tagged to that guide (a guest joined by รวมรอบ)", () => {
+    const ix = paxIndex([b(1), b(2), b(2), b(2, "G-017")]);
+    expect(ix.for("T-001", "2026-09-04", 0, "G-017")).toBe(7);
+  });
+
   it("shows a third guide only what is still unclaimed on a split slot", () => {
     const ix = paxIndex([b(3, "G-015"), b(2, "G-017"), b(1)]);
     expect(ix.for("T-001", "2026-09-04", 0, "G-020")).toBe(1);

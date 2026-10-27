@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
   }
   // Joining another guide's job there: its tour becomes the guests' tour (and its fee the
   // fee), within one guide's seats, onto a sheet that is still open.
-  let join: { guideId: string; guideName: string; tourId: string } | null = null;
+  let join: { guideId: string; guideName: string; tourId: string; tag: boolean } | null = null;
   if (d.join) {
     const jk = { guideId: d.join.guideId, ...d.to };
     const [there, thereSheet, therePay, thereJob, thereUser, thereBookings] = await Promise.all([
@@ -135,7 +135,11 @@ export async function POST(req: NextRequest) {
         peakDocumentNo: thereSheet?.peakSyncStatus === "VOIDED" ? null : thereSheet?.peakDocumentNo ?? null,
       } : null,
     }));
-    if (there) join = { guideId: d.join.guideId, guideName, tourId: there.tourId };
+    // Tag the guests to that guide only where the departure is already split between guides.
+    // On a one-guide departure every booking is that guide's untagged; one tagged booking
+    // there made it read as split, and the guide's own guests vanished from their job (27 Oct 2026).
+    const split = thereBookings.some((b) => there && b.tourId === there.tourId && b.assignedGuideId && b.assignedGuideId !== d.join!.guideId);
+    if (there) join = { guideId: d.join.guideId, guideName, tourId: there.tourId, tag: split };
   }
   // The guide at the new time: already there on this tour, or put there directly — with
   // every rule a direct assignment keeps (lib/manual-assign).
@@ -157,7 +161,7 @@ export async function POST(req: NextRequest) {
       await tx.booking.update({
         where: { id: b.id },
         data: { date: d.to.date, slotIdx: d.to.slotIdx, startTime: SLOT_TIMES[d.to.slotIdx] ?? null, datePinned: true, status: "PENDING",
-          ...(join ? { tourId: join.tourId, assignedGuideId: join.guideId } : {
+          ...(join ? { tourId: join.tourId, assignedGuideId: join.tag ? join.guideId : null } : {
             assignedGuideId: d.keepGuide ? d.guideId ?? null : null,
             // The tour that departs at the new time (lib/bookings: palace-only runs only at 14:00).
             ...(b.tourId && slotAwareTourId(b.tourId, d.to.slotIdx) !== b.tourId ? { tourId: slotAwareTourId(b.tourId, d.to.slotIdx) } : {}),
