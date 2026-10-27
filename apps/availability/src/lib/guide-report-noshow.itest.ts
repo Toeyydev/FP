@@ -15,7 +15,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { GET } from "@/app/api/jobsheet/route";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
-import { submitTourReport } from "@/lib/guide-lifecycle";
+import { recordNoShow, submitTourReport } from "@/lib/guide-lifecycle";
 import type { Booking } from "@/lib/jobsheet";
 
 const G = "G-985";
@@ -71,6 +71,10 @@ describe("a no-show the guide tied to a booking", () => {
     await report({ noShow: 2, noShowCounts: [{ id: ids["GYG-NS-2"], pax: 2 }] });
     const rows = await sheetRows();
     expect(rows.find((b) => b.bookingNo === "GYG-NS-2")).toMatchObject({ noShowPax: 2, actualPax: 0 });
+  });
+  it("from the app, the guide's tick reaches their own guests even when a joined guest is tagged to them", async () => {
+    const r = await recordNoShow({ guideId: G, date: DATE, slotIdx: SLOT, bookingNo: "GYG-NS-2", noShowPax: 2, tourId: "T-900", operator: true, actorId: null, actorRole: "ADMIN", via: "test" } as Parameters<typeof recordNoShow>[0]);
+    expect(r).toMatchObject({ ok: true, noShowPax: 2 });
   });
   it("from the app reaches the guide's own guests even when a joined guest is tagged to them", async () => {
     await report({ noShow: 1, noShowCounts: [{ id: ids["GYG-NS-1"], pax: 1 }], tourId: "T-900" });
