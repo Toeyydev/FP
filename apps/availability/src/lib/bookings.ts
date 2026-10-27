@@ -67,9 +67,17 @@ export function isChannelProductName(name?: string | null): boolean {
 const COMBINED_PALACE_TOUR_IDS = new Set(["T-001", "T-002"]);
 const PALACE_ONLY_TOUR_ID = "T-005";
 const SLOT_1400 = SLOT_TIMES.indexOf("14:00");
+//
+// And the other way (owner, 2026-10-25): the palace-only tour runs ONLY at 14:00. A booking
+// filed under it at 08:30 or 13:30 — a channel product mapped by name, or a booking moved off
+// 14:00 — is the combined tour that departs then: T-001 in the morning, T-002 at 13:30. Filed
+// wrong, it never joined the 13:30 guide's job and sat in "Ready to offer" (GYG, 27 Oct 2026).
+// At any other time it is left alone: nobody has said which tour that would be.
+const COMBINED_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("08:30")]: "T-001", [SLOT_TIMES.indexOf("13:30")]: "T-002" };
 export function slotAwareTourId(tourId: string | null | undefined, slotIdx: number | null | undefined): string | null {
   if (!tourId) return tourId ?? null;
   if (SLOT_1400 >= 0 && slotIdx === SLOT_1400 && COMBINED_PALACE_TOUR_IDS.has(tourId)) return PALACE_ONLY_TOUR_ID;
+  if (tourId === PALACE_ONLY_TOUR_ID && slotIdx != null && COMBINED_BY_SLOT[slotIdx]) return COMBINED_BY_SLOT[slotIdx];
   return tourId;
 }
 

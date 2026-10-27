@@ -10,6 +10,7 @@ import { isApproved } from "@/lib/jobsheet";
 import { SHEET_BOOKING_STATUSES } from "@/lib/sheet-bookings";
 import { reconcileBookingChange } from "@/lib/booking-reconcile";
 import { directAssign, directAssignBlockers } from "@/lib/direct-assign";
+import { slotAwareTourId } from "@/lib/bookings";
 import { MOVE_REASONS, bookingKeys, joinBlockers, moveBlockers, moveNote, reasonLabel, removeMovedRows, type MoveReason } from "@/lib/departure-move";
 import { paxIndex } from "@/lib/assigned-pax";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
@@ -138,11 +139,13 @@ export async function POST(req: NextRequest) {
   }
   // The guide at the new time: already there on this tour, or put there directly — with
   // every rule a direct assignment keeps (lib/manual-assign).
+  // The tour at the new time is the one that departs then (palace-only runs only at 14:00).
   let assignGuide = false;
-  if (d.guideId && tourId && d.keepGuide && !join && !reasons.length) {
+  const destTourId = tourId ? slotAwareTourId(tourId, d.to.slotIdx) : null;
+  if (d.guideId && destTourId && d.keepGuide && !join && !reasons.length) {
     const there = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: d.guideId, ...d.to } }, select: { tourId: true } });
-    if (there && there.tourId !== tourId) reasons.push(`${d.guideId} already runs another tour at that time`);
-    else if (!there) { reasons.push(...(await directAssignBlockers({ guideId: d.guideId, ...d.to, tourId }))); assignGuide = true; }
+    if (there && there.tourId !== destTourId) reasons.push(`${d.guideId} already runs another tour at that time`);
+    else if (!there) { reasons.push(...(await directAssignBlockers({ guideId: d.guideId, ...d.to, tourId: destTourId }))); assignGuide = true; }
   }
   if (reasons.length) return NextResponse.json({ error: "not-movable", reasons }, { status: 409 });
 
@@ -154,7 +157,11 @@ export async function POST(req: NextRequest) {
       await tx.booking.update({
         where: { id: b.id },
         data: { date: d.to.date, slotIdx: d.to.slotIdx, startTime: SLOT_TIMES[d.to.slotIdx] ?? null, datePinned: true, status: "PENDING",
-          ...(join ? { tourId: join.tourId, assignedGuideId: join.guideId } : { assignedGuideId: d.keepGuide ? d.guideId ?? null : null }) },
+          ...(join ? { tourId: join.tourId, assignedGuideId: join.guideId } : {
+            assignedGuideId: d.keepGuide ? d.guideId ?? null : null,
+            // The tour that departs at the new time (lib/bookings: palace-only runs only at 14:00).
+            ...(b.tourId && slotAwareTourId(b.tourId, d.to.slotIdx) !== b.tourId ? { tourId: slotAwareTourId(b.tourId, d.to.slotIdx) } : {}),
+          }) },
       });
     }
   });
@@ -163,7 +170,7 @@ export async function POST(req: NextRequest) {
       detail: { ref: b.confirmationCode ?? b.externalRef ?? null, from, to: d.to, pinned: true, reason: label, keepGuide: d.keepGuide, ...(join ? { joined: { guideId: join.guideId, tourId: join.tourId }, fromTourId: b.tourId } : {}) } });
   }
   // 2 — the guide's job at the new time.
-  if (assignGuide && d.guideId && tourId) await directAssign({ guideId: d.guideId, ...d.to, tourId }, actor);
+  if (assignGuide && d.guideId && destTourId) await directAssign({ guideId: d.guideId, ...d.to, tourId: destTourId }, actor);
   // 3 — both departures follow the bookings (lib/booking-reconcile). Best-effort: the move is saved.
   const reconcileMoved = async () => {
     for (const b of moving) {

@@ -33,6 +33,11 @@ describe("slotAwareTourId — 14:00 is the palace-only tour", () => {
     expect(slotAwareTourId("T-002", 2)).toBe("T-002");  // 13:30
     expect(slotAwareTourId("T-001", 4)).toBe("T-001");  // 15:00
   });
+  it("palace-only runs only at 14:00 — at 13:30 it is the combined T-002, at 08:30 T-001 (owner 2026-10-25)", () => {
+    expect(slotAwareTourId("T-005", SLOT_TIMES.indexOf("13:30"))).toBe("T-002");
+    expect(slotAwareTourId("T-005", SLOT_TIMES.indexOf("08:30"))).toBe("T-001");
+    expect(slotAwareTourId("T-005", SLOT_TIMES.indexOf("10:00"))).toBe("T-005"); // nobody said which tour — left alone
+  });
   it("never touches a tour that isn't the combined day tour", () => {
     expect(slotAwareTourId("T-005", slot1400)).toBe("T-005");  // already palace-only
     expect(slotAwareTourId("T-003", slot1400)).toBe("T-003");  // Wat Pho & Wat Arun

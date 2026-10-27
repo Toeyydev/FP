@@ -19,6 +19,8 @@ type Booking = {
   tourId: string | null; date: string | null; startTime: string | null; slotIdx: number | null;
   pax: number | null; customerName: string | null; status: string;
   guideId?: string | null; guide?: string | null;
+  /** A guide at the same time on ANOTHER tour — not this booking's guide (api/bookings). */
+  otherTourGuide?: { guideId: string; guide: string; tourId: string } | null;
 };
 type Tour = { id: string; name: string; time: string };
 
@@ -446,6 +448,7 @@ export default function BookingsInbox() {
                         const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0);
                         const assignedGuide = items.find((b) => b.guideId)?.guideId ?? null;
                         const assignedName = items.find((b) => b.guide)?.guide ?? null;
+                        const otherTour = assignedGuide ? null : items.find((b) => b.otherTourGuide)?.otherTourGuide ?? null;
                         return (
                           <div key={key} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", background: assignedGuide ? "var(--grey-bg, #f6f5f3)" : "#fff", flexWrap: "wrap", alignItems: "center" }}>
                             <div style={{ flex: 1, minWidth: 240 }}>
@@ -466,6 +469,7 @@ export default function BookingsInbox() {
                               <span className="badge active" title="This slot is already dispatched to a guide" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700 }}>✓ Assigned to <span className="gid">{assignedGuide}</span>{assignedName && assignedName !== assignedGuide ? ` · ${assignedName}` : ""}</span>
                             ) : (
                               <>
+                                {otherTour && <span className="badge js-other-tour" title={`${otherTour.guideId} runs ${tourName(otherTour.tourId)} at this time — not this booking's tour. Check the booking's tour, or use รวมรอบ.`} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, background: "#fff3e0", color: "#a85a00", whiteSpace: "normal" }}>⚠ No guide for this tour · {otherTour.guideId} · {otherTour.guide} runs {tourName(otherTour.tourId)}</span>}
                                 <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
                                 <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
                                   <option value="">Offer to all available</option>
