@@ -73,6 +73,12 @@ const SLOT_1400 = SLOT_TIMES.indexOf("14:00");
 // 14:00 — is the combined tour that departs then: T-001 in the morning, T-002 at 13:30. Filed
 // wrong, it never joined the 13:30 guide's job and sat in "Ready to offer" (GYG, 27 Oct 2026).
 // At any other time it is left alone: nobody has said which tour that would be.
+//
+// The combined tour itself is one channel product sold at 08:30 and 13:30, mapped by name to
+// ONE of T-001/T-002 (owner, 2026-10-27: 13:30 runs only the combined tour). A 13:30 booking
+// filed under T-001 never reached the 13:30 guide's job — three bookings, 5 guests, missed it
+// (27 Oct 2026). So the combined tour, too, is filed under the id of the time it departs.
+// Guests merged in from 14:00 (รวมรอบ) are unaffected: they arrive as T-005 and become T-002.
 const COMBINED_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("08:30")]: "T-001", [SLOT_TIMES.indexOf("13:30")]: "T-002" };
 //
 // The China Town food tour is one tour run at three times, kept as one tour id per
@@ -87,7 +93,7 @@ export function slotAwareTourId(tourId: string | null | undefined, slotIdx: numb
   if (!tourId) return tourId ?? null;
   if (FOOD_TOUR_IDS.has(tourId) && slotIdx != null && FOOD_TOUR_BY_SLOT[slotIdx]) return FOOD_TOUR_BY_SLOT[slotIdx];
   if (SLOT_1400 >= 0 && slotIdx === SLOT_1400 && COMBINED_PALACE_TOUR_IDS.has(tourId)) return PALACE_ONLY_TOUR_ID;
-  if (tourId === PALACE_ONLY_TOUR_ID && slotIdx != null && COMBINED_BY_SLOT[slotIdx]) return COMBINED_BY_SLOT[slotIdx];
+  if ((tourId === PALACE_ONLY_TOUR_ID || COMBINED_PALACE_TOUR_IDS.has(tourId)) && slotIdx != null && COMBINED_BY_SLOT[slotIdx]) return COMBINED_BY_SLOT[slotIdx];
   return tourId;
 }
 

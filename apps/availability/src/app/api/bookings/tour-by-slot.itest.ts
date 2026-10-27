@@ -16,6 +16,8 @@ import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { GET, POST } from "@/app/api/bookings/route";
 import { SLOT_TIMES } from "@/lib/slots";
+import { importParsed } from "@/lib/booking-import";
+import { productKey } from "@/lib/bookings";
 
 const DATE = new Date(Date.now() + 5 * 86400_000 + 7 * 3600_000).toISOString().slice(0, 10);
 const S1330 = SLOT_TIMES.indexOf("13:30"), S1400 = SLOT_TIMES.indexOf("14:00");
@@ -35,7 +37,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await resetDatabase();
   await seedGuide(G, { displayName: "Mike Example" });
-  for (const [id, name, time] of [["T-002", "Grand Palace, Wat Pho & Wat Arun (example)", "13:30"], ["T-005", "Wat Phrakaew & Grand Palace (example)", "14:00"]]) {
+  for (const [id, name, time] of [["T-001", "Grand Palace, Wat Pho & Wat Arun (example, morning)", "08:30"], ["T-002", "Grand Palace, Wat Pho & Wat Arun (example)", "13:30"], ["T-005", "Wat Phrakaew & Grand Palace (example)", "14:00"]]) {
     await prisma.tour.create({ data: { id, name, time, durationMin: 240 } });
   }
   const op = await prisma.user.create({ data: { email: "op@example.test", displayName: "Op Example", role: "OPERATOR", state: "ACTIVE" } });
@@ -68,5 +70,24 @@ describe("the inbox names the guide of the booking's own tour", () => {
     await prisma.assignment.create({ data: { guideId: G, date: DATE, slotIdx: S1330, tourId: "T-002", pax: 3 } });
     await mk("GYG-RIGHT", S1330, "T-002");
     expect((await inbox()).find((b) => b.externalRef === "GYG-RIGHT")).toMatchObject({ guideId: G, otherTourGuide: null });
+  });
+});
+
+describe("a combined-tour booking arriving at 13:30 under a name mapped to the morning tour", () => {
+  const NAME = "Example : Half-Day Guided : Palace, Temples & River";
+  const arrive = (ref: string) => importParsed({ externalRef: ref, confirmationCode: `CODE-${ref}`, customerName: `Guest ${ref}`, date: DATE, slotIdx: S1330, startTime: "13:30", pax: 2, productName: NAME }, { source: "GetYourGuide", cancelled: false, via: "webhook" });
+  beforeEach(async () => {
+    await prisma.productMap.deleteMany({});
+    await prisma.productMap.create({ data: { productKey: productKey(NAME), productName: NAME, tourId: "T-001" } });
+  });
+  it("is filed under the 13:30 tour", async () => {
+    await arrive("GYG-COMB-1330");
+    expect((await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-COMB-1330" } })).tourId).toBe("T-002");
+  });
+  it("one already filed under the morning tour is put right by the next sync", async () => {
+    await mk("GYG-COMB-OLD", S1330, "T-001");
+    await prisma.booking.updateMany({ where: { externalRef: "GYG-COMB-OLD" }, data: { productName: NAME } });
+    await arrive("GYG-COMB-OLD");
+    expect((await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-COMB-OLD" } })).tourId).toBe("T-002");
   });
 });
