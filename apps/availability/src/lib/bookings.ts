@@ -97,6 +97,14 @@ export function slotAwareTourId(tourId: string | null | undefined, slotIdx: numb
   return tourId;
 }
 
+// A booking that arrives with only the channel's name ("GetYourGuide") says nothing about
+// which tour it is — but 16:30, 17:30 and 18:30 run only the food tour (owner, 2026-10-27),
+// so at those times the time alone names it. Left without a tour, an 18:30 food booking sat
+// on no board on the day it departed. Any other evening time is left for the operator.
+export function channelOnlyEveningTourId(slotIdx: number | null | undefined): string | null {
+  return slotIdx != null ? FOOD_TOUR_BY_SLOT[slotIdx] ?? null : null;
+}
+
 export function normTime(v: unknown): string | undefined {
   if (v == null) return undefined;
   const s = String(v).replace(".", ":");

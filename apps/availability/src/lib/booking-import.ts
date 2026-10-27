@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, type ParsedBooking } from "@/lib/bookings";
+import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId, type ParsedBooking } from "@/lib/bookings";
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, linePushFlex, lineEnabled } from "@/lib/line";
@@ -463,6 +463,8 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       const eveningChannelOnly = isChannelProductName(p.productName) && isEveningSlot(p.slotIdx);
       if (!eveningChannelOnly) tourId = map.tourId;
     }
+    // ...unless the time alone says which tour it is (16:30–18:30 run only the food tour).
+    if (isChannelProductName(p.productName) && isEveningSlot(p.slotIdx)) tourId = channelOnlyEveningTourId(p.slotIdx);
   }
   // A product name nobody has mapped to a tour yet — usually the channel renamed a product.
   // Its bookings land on no board until someone maps it, so say so the same day, once per
