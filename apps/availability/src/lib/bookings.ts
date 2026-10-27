@@ -89,21 +89,20 @@ const COMBINED_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("08:30")]
 // At a time no food tour runs it is left alone.
 const FOOD_TOUR_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("16:30")]: "T-007", [SLOT_TIMES.indexOf("17:30")]: "T-008", [SLOT_TIMES.indexOf("18:30")]: "T-009" };
 const FOOD_TOUR_IDS = new Set(Object.values(FOOD_TOUR_BY_SLOT));
-// A booking that arrives with only the channel's name ("GetYourGuide") says nothing about
-// which tour it is, so an evening one is left without a tour for the operator to place —
-// except at 18:30, where only the food tour runs (owner, 2026-10-27). Filed nowhere, an
-// 18:30 food booking sat on no board on the day it departed.
-const CHANNEL_ONLY_TOUR_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("18:30")]: "T-009" };
-export function channelOnlyEveningTourId(slotIdx: number | null | undefined): string | null {
-  return slotIdx != null ? CHANNEL_ONLY_TOUR_BY_SLOT[slotIdx] ?? null : null;
-}
-
 export function slotAwareTourId(tourId: string | null | undefined, slotIdx: number | null | undefined): string | null {
   if (!tourId) return tourId ?? null;
   if (FOOD_TOUR_IDS.has(tourId) && slotIdx != null && FOOD_TOUR_BY_SLOT[slotIdx]) return FOOD_TOUR_BY_SLOT[slotIdx];
   if (SLOT_1400 >= 0 && slotIdx === SLOT_1400 && COMBINED_PALACE_TOUR_IDS.has(tourId)) return PALACE_ONLY_TOUR_ID;
   if ((tourId === PALACE_ONLY_TOUR_ID || COMBINED_PALACE_TOUR_IDS.has(tourId)) && slotIdx != null && COMBINED_BY_SLOT[slotIdx]) return COMBINED_BY_SLOT[slotIdx];
   return tourId;
+}
+
+// A booking that arrives with only the channel's name ("GetYourGuide") says nothing about
+// which tour it is — but 16:30, 17:30 and 18:30 run only the food tour (owner, 2026-10-27),
+// so at those times the time alone names it. Left without a tour, an 18:30 food booking sat
+// on no board on the day it departed. Any other evening time is left for the operator.
+export function channelOnlyEveningTourId(slotIdx: number | null | undefined): string | null {
+  return slotIdx != null ? FOOD_TOUR_BY_SLOT[slotIdx] ?? null : null;
 }
 
 export function normTime(v: unknown): string | undefined {

@@ -54,10 +54,12 @@ describe("slotAwareTourId — the combined tour is filed under the time it depar
   });
 });
 
-describe("channelOnlyEveningTourId — only 18:30 says which tour it is", () => {
-  it("18:30 is the food tour; other times name no tour", () => {
+describe("channelOnlyEveningTourId — the food tour times name the tour", () => {
+  it("16:30, 17:30 and 18:30 are the food tour of that time; other times name no tour", () => {
+    expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("16:30"))).toBe("T-007");
+    expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("17:30"))).toBe("T-008");
     expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("18:30"))).toBe("T-009");
-    for (const t of ["16:30", "17:30", "13:30"]) expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf(t))).toBeNull();
+    for (const t of ["08:30", "13:30", "15:00"]) expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf(t))).toBeNull();
     expect(channelOnlyEveningTourId(null)).toBeNull();
   });
 });

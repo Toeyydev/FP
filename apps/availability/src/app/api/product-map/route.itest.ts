@@ -85,14 +85,12 @@ describe("a GetYourGuide booking that names no tour", () => {
     await prisma.tour.upsert({ where: { id: "T-001" }, create: { id: "T-001", name: "Example Day Tour", time: "08:30", durationMin: 240 }, update: {} });
     await prisma.productMap.create({ data: { productKey: productKey("GetYourGuide"), productName: "GetYourGuide", tourId: "T-001" } });
   });
-  it("at 18:30 is the food tour — only the food tour runs then", async () => {
-    await arrive("GYG-CH-1830", S1830);
-    expect(await tourOfRef("GYG-CH-1830")).toBe("T-009");
-  });
-  it("at 16:30 and 17:30 is still left for the operator to place", async () => {
+  it("at 16:30, 17:30 and 18:30 is the food tour of that time — only the food tour runs then", async () => {
     await arrive("GYG-CH-1630", S1630);
     await arrive("GYG-CH-1730", S1730);
-    expect(await tourOfRef("GYG-CH-1630")).toBeNull();
-    expect(await tourOfRef("GYG-CH-1730")).toBeNull();
+    await arrive("GYG-CH-1830", S1830);
+    expect(await tourOfRef("GYG-CH-1630")).toBe("T-007");
+    expect(await tourOfRef("GYG-CH-1730")).toBe("T-008");
+    expect(await tourOfRef("GYG-CH-1830")).toBe("T-009");
   });
 });

@@ -463,7 +463,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       const eveningChannelOnly = isChannelProductName(p.productName) && isEveningSlot(p.slotIdx);
       if (!eveningChannelOnly) tourId = map.tourId;
     }
-    // ...unless the time alone says which tour it is (18:30 runs only the food tour).
+    // ...unless the time alone says which tour it is (16:30–18:30 run only the food tour).
     if (isChannelProductName(p.productName) && isEveningSlot(p.slotIdx)) tourId = channelOnlyEveningTourId(p.slotIdx);
   }
   // A product name nobody has mapped to a tour yet — usually the channel renamed a product.
