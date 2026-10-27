@@ -10,7 +10,8 @@ import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { isFoodTourId } from "@/lib/bookings";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -169,6 +170,7 @@ export default function JobSheetEditor() {
   const [secTab, setSecTab] = useState<"all" | "details" | "expenses" | "fee">("all"); // operator section tabs — "all" keeps the classic single-scroll sheet
   const [drive, setDrive] = useState<{ enabled: boolean; connected: boolean }>({ enabled: false, connected: false }); // Google Drive save
   const [guideExp, setGuideExp] = useState<Expense[]>([]); // guide's own expense report (separate from official)
+  const [foodSpent, setFoodSpent] = useState<string>(""); // food tour: the one food total the guide reports
   const [guideNote, setGuideNote] = useState(""); // free-text note with the guide's report
   const [expBusy, setExpBusy] = useState(false);
   const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
@@ -482,10 +484,10 @@ export default function JobSheetEditor() {
   const addGExp = () => setGuideExp((arr) => [...arr, { description: "", price: null, pax: null }]);
   const rmGExp = (i: number) => setGuideExp((arr) => arr.filter((_, j) => j !== i));
   const guideExpTotal = guideExp.reduce((s, e) => s + expenseAmount(e), 0);
-  async function submitGuideExpenses() {
+  async function submitGuideExpenses(rows?: Expense[]) {
     if (!sheet) return;
     setExpBusy(true); setMsg("");
-    const clean = guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
+    const clean = rows ?? guideExp.filter((e) => (e.description || "").trim() || expenseAmount(e) > 0);
     const r = await jfetch("/api/jobsheet/expenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenses: clean, note: guideNote.trim() }) });
     setExpBusy(false);
     if (r.ok) { setMsg("Expenses sent to the operator ✓"); load(); return; }
@@ -1186,7 +1188,32 @@ export default function JobSheetEditor() {
                 {payoutView.basis === "reported" && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>Based on the expenses you report below — the operator confirms the final figure.</div>}
               </div>
             </div>
-            {canReport && (
+            {canReport && isFoodTourId(sheet.tourId) && (() => {
+              // Food tour (owner, 2026-10-27): one figure — what the food cost — against the
+              // food advance. No list of stops, no receipt required (lib/jobsheet foodCostRows).
+              const adv = advT.totalAdvancePaid;
+              const shown = foodSpent !== "" ? foodSpent : (reportedFoodCost(sheet.guideExpenses) || "").toString();
+              const spent = Number(shown) || 0;
+              const diff = Math.round((adv - spent) * 100) / 100;
+              return (
+                <div className="js-food-report" style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14, display: "grid", gap: 8, maxWidth: 420 }}>
+                  <h3 style={{ margin: 0 }}>ค่าอาหาร Food Tour</h3>
+                  {adv > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>บริษัทโอนให้ (Adv)</span><b className="js-food-adv">{thb(adv)}</b></div>}
+                  <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                    <span>ใช้ไปจริง</span>
+                    <input className="js-food-spent" type="number" min={0} inputMode="decimal" value={shown} onChange={(e) => setFoodSpent(e.target.value)} style={{ ...L, width: 120, textAlign: "right" }} />
+                  </label>
+                  {adv > 0 && spent > 0 && (
+                    <div className="js-food-diff" style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--line)", paddingTop: 6, fontWeight: 700 }}>
+                      {diff >= 0 ? <><span>เหลือคืนบริษัท</span><span>{thb(diff)}</span></> : <><span>บริษัทจ่ายเพิ่มให้คุณ</span><span>{thb(-diff)}</span></>}
+                    </div>
+                  )}
+                  <button className="btn primary js-food-submit" disabled={expBusy || spent <= 0} onClick={() => submitGuideExpenses(foodCostRows(spent, adv))}>{expBusy ? "Sending…" : "ส่งรายงาน"}</button>
+                  {sheet.guideExpensesAt && <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>✓ Last sent {new Date(sheet.guideExpensesAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.</div>}
+                </div>
+              );
+            })()}
+            {canReport && !isFoodTourId(sheet.tourId) && (
               <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
                 <h3 style={{ margin: "0 0 2px" }}>Report your expenses</h3>
                 <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Enter what you actually paid on tour, then submit — the operator cross-checks it against the sheet.</div>
@@ -1213,7 +1240,7 @@ export default function JobSheetEditor() {
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
                   <button className="btn sm" onClick={addGExp}>+ Add expense</button>
-                  <button className="btn primary" disabled={expBusy} onClick={submitGuideExpenses} style={{ marginLeft: "auto" }}>{expBusy ? "Sending…" : "Submit expenses to operator"}</button>
+                  <button className="btn primary" disabled={expBusy} onClick={() => submitGuideExpenses()} style={{ marginLeft: "auto" }}>{expBusy ? "Sending…" : "Submit expenses to operator"}</button>
                 </div>
                 {sheet.guideExpensesAt && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 8 }}>✓ Last sent {new Date(sheet.guideExpensesAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.</div>}
               </div>
