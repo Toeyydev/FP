@@ -74,8 +74,18 @@ const SLOT_1400 = SLOT_TIMES.indexOf("14:00");
 // wrong, it never joined the 13:30 guide's job and sat in "Ready to offer" (GYG, 27 Oct 2026).
 // At any other time it is left alone: nobody has said which tour that would be.
 const COMBINED_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("08:30")]: "T-001", [SLOT_TIMES.indexOf("13:30")]: "T-002" };
+//
+// The China Town food tour is one tour run at three times, kept as one tour id per
+// departure: T-007 16:30, T-008 17:30, T-009 18:30. A product name maps to ONE of them, so
+// a food booking is filed under the id of the time it actually departs. The channel renamed
+// the product in Oct 2026 ("Eat Like a Local" → "Bangkok Chinatown Street Food Tour"), and a
+// name mapped to one food tour must not file the other two times under it.
+// At a time no food tour runs it is left alone.
+const FOOD_TOUR_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("16:30")]: "T-007", [SLOT_TIMES.indexOf("17:30")]: "T-008", [SLOT_TIMES.indexOf("18:30")]: "T-009" };
+const FOOD_TOUR_IDS = new Set(Object.values(FOOD_TOUR_BY_SLOT));
 export function slotAwareTourId(tourId: string | null | undefined, slotIdx: number | null | undefined): string | null {
   if (!tourId) return tourId ?? null;
+  if (FOOD_TOUR_IDS.has(tourId) && slotIdx != null && FOOD_TOUR_BY_SLOT[slotIdx]) return FOOD_TOUR_BY_SLOT[slotIdx];
   if (SLOT_1400 >= 0 && slotIdx === SLOT_1400 && COMBINED_PALACE_TOUR_IDS.has(tourId)) return PALACE_ONLY_TOUR_ID;
   if (tourId === PALACE_ONLY_TOUR_ID && slotIdx != null && COMBINED_BY_SLOT[slotIdx]) return COMBINED_BY_SLOT[slotIdx];
   return tourId;

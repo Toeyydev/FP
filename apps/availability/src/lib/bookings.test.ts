@@ -22,6 +22,23 @@ describe("channel-only bookings — don't default evening tours to Grand Palace"
   });
 });
 
+describe("slotAwareTourId — a food tour is filed under the time it departs", () => {
+  const at = (t: string) => SLOT_TIMES.indexOf(t);
+  it("files a food booking under the food tour of its own time, whichever food tour the name maps to", () => {
+    for (const mapped of ["T-007", "T-008", "T-009"]) {
+      expect(slotAwareTourId(mapped, at("16:30"))).toBe("T-007");
+      expect(slotAwareTourId(mapped, at("17:30"))).toBe("T-008");
+      expect(slotAwareTourId(mapped, at("18:30"))).toBe("T-009");
+    }
+  });
+  it("leaves a food tour alone at a time no food tour runs, and never makes a day tour a food tour", () => {
+    expect(slotAwareTourId("T-009", at("15:00"))).toBe("T-009");
+    expect(slotAwareTourId("T-009", null)).toBe("T-009");
+    expect(slotAwareTourId("T-001", at("18:30"))).toBe("T-001");
+    expect(slotAwareTourId("T-003", at("16:30"))).toBe("T-003");
+  });
+});
+
 describe("slotAwareTourId — 14:00 is the palace-only tour", () => {
   const slot1400 = SLOT_TIMES.indexOf("14:00");
   it("remaps the combined day tour (T-001/T-002) to palace-only T-005 at 14:00", () => {

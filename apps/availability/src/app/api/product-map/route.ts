@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { productKey } from "@/lib/bookings";
+import { productKey, slotAwareTourId } from "@/lib/bookings";
+import { reconcileBookings } from "@/lib/booking-reconcile";
 import { audit } from "@/lib/audit";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
@@ -41,10 +42,21 @@ export async function POST(req: NextRequest) {
   const key = productKey(productName);
   await prisma.productMap.upsert({ where: { productKey: key }, create: { productKey: key, productName, tourId }, update: { tourId, productName } });
 
-  const candidates = await prisma.booking.findMany({ where: { tourId: null, productName: { not: null } }, select: { id: true, productName: true } });
-  const ids = candidates.filter((b) => productKey(b.productName!) === key).map((b) => b.id);
+  // Each waiting booking takes the tour of its own departure time (slotAwareTourId): one
+  // food-tour product sells 16:30, 17:30 and 18:30, which are three tours here.
+  const candidates = await prisma.booking.findMany({ where: { tourId: null, productName: { not: null } }, select: { id: true, productName: true, slotIdx: true } });
+  const byTour = new Map<string, string[]>();
+  for (const b of candidates) {
+    if (productKey(b.productName!) !== key) continue;
+    const t = slotAwareTourId(tourId, b.slotIdx)!;
+    byTour.set(t, [...(byTour.get(t) ?? []), b.id]);
+  }
   let backfilled = 0;
-  if (ids.length) backfilled = (await prisma.booking.updateMany({ where: { id: { in: ids } }, data: { tourId } })).count;
+  for (const [t, ids] of byTour) backfilled += (await prisma.booking.updateMany({ where: { id: { in: ids } }, data: { tourId: t } })).count;
+  // Put them on their guide's job now, not at the next 30-minute sweep — a same-day
+  // booking can be hours from departure.
+  const filed = [...byTour.values()].flat();
+  if (filed.length) { try { await reconcileBookings(filed.map((id) => ({ id })), { source: "manual-sync", reason: "product mapped to a tour" }); } catch { /* the mapping is saved; the sweep retries */ } }
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "productmap.set", entityType: "ProductMap", detail: { productName, tourId, backfilled } });
   return NextResponse.json({ ok: true, backfilled });
 }
