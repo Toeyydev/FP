@@ -39,6 +39,21 @@ describe("slotAwareTourId — a food tour is filed under the time it departs", (
   });
 });
 
+describe("slotAwareTourId — the combined tour is filed under the time it departs", () => {
+  const at = (t: string) => SLOT_TIMES.indexOf(t);
+  it("08:30 is T-001 and 13:30 is T-002, whichever of the two the name maps to", () => {
+    for (const mapped of ["T-001", "T-002"]) {
+      expect(slotAwareTourId(mapped, at("08:30"))).toBe("T-001");
+      expect(slotAwareTourId(mapped, at("13:30"))).toBe("T-002");
+    }
+  });
+  it("leaves it alone at a time neither runs (14:00 is still the palace-only tour)", () => {
+    expect(slotAwareTourId("T-001", at("10:00"))).toBe("T-001");
+    expect(slotAwareTourId("T-002", at("15:00"))).toBe("T-002");
+    expect(slotAwareTourId("T-001", at("14:00"))).toBe("T-005");
+  });
+});
+
 describe("slotAwareTourId — 14:00 is the palace-only tour", () => {
   const slot1400 = SLOT_TIMES.indexOf("14:00");
   it("remaps the combined day tour (T-001/T-002) to palace-only T-005 at 14:00", () => {
