@@ -160,7 +160,7 @@ describe("recordNoShow", () => {
   it("scoped to a split departure, looks only within the guide's own group", async () => {
     prismaMock.booking.count.mockResolvedValue(2); // the operator has tagged bookings to guides
     await noShow({ tourId: "T-001", bookingNo: "GYG1" });
-    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null } } });
+    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null }, NOT: { assignedGuideId: "G-001" } } });
     const where = { date: "2026-09-11", slotIdx: 0, tourId: "T-001", status: LIVE, assignedGuideId: "G-001", OR: refs("GYG1") };
     expect(prismaMock.booking.findFirst.mock.calls[0][0].where).toEqual(where);
     expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual(where);
@@ -324,7 +324,7 @@ describe("submitTourReport", () => {
     prismaMock.booking.findMany.mockResolvedValue(BOOKINGS);
     await report({ tourId: "T-001", noShowCounts: COUNTS });
     const where = { date: "2026-09-11", slotIdx: 0, tourId: "T-001", status: LIVE, assignedGuideId: "G-001" };
-    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null } } });
+    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null }, NOT: { assignedGuideId: "G-001" } } });
     expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual(where);
   });
 

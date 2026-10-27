@@ -191,7 +191,9 @@ export async function submitTourReport(o: {
   // historic whole-slot reach.
   let scope: { tourId?: string; status?: { in: string[] }; assignedGuideId?: string } = {};
   if (o.tourId) {
-    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null } } })) > 0;
+    // Split = another guide's guests are tagged here. Guests tagged to this guide alone (one
+    // joined by รวมรอบ) do not make it split (lib/sheet-bookings guideSlotBookings).
+    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null }, NOT: { assignedGuideId: guideId } } })) > 0;
     scope = { tourId: o.tourId, status: { in: LIVE_STATUSES }, ...(split ? { assignedGuideId: guideId } : {}) };
   }
 
@@ -247,8 +249,11 @@ export async function submitTourReport(o: {
           return { ...r, noShowPax: ns, status: noShowStatus(ns, r.bookedPax), actualPax: Math.max(0, (r.bookedPax ?? 0) - ns) };
         });
       }
-      // Then remove any left-early pax generically and re-sync attraction tickets.
-      const applied = applyReportedAttendance(rows, expenses, o.noShowCounts ? leftEarly : absent);
+      // Then remove any left-early pax generically and re-sync attraction tickets. A no-show
+      // count that names no booking is NOT spread over the rows: which guest did not come is
+      // not known, so the sheet shows the guide's report and the operator ticks who (owner,
+      // 2026-10-27). It used to come off the biggest booking, unmarked and unseen.
+      const applied = applyReportedAttendance(rows, expenses, leftEarly);
       // A row settled against a company advance keeps its count (lib/advances/settlement).
       const kept = keepSettledRows(expenses as SheetRow[], applied.expenses as SheetRow[]);
       await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings as object, expenses: kept.rows as object, status: "Review: no-show" } });
@@ -345,7 +350,9 @@ export async function recordNoShow(o: {
   // tagged to a guide).
   let scope: { tourId?: string; status?: { in: string[] }; assignedGuideId?: string } = {};
   if (o.tourId) {
-    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null } } })) > 0;
+    // Split = another guide's guests are tagged here. Guests tagged to this guide alone (one
+    // joined by รวมรอบ) do not make it split (lib/sheet-bookings guideSlotBookings).
+    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null }, NOT: { assignedGuideId: guideId } } })) > 0;
     scope = { tourId: o.tourId, status: { in: LIVE_STATUSES }, ...(split ? { assignedGuideId: guideId } : {}) };
   }
   const where = { date, slotIdx, ...scope, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };

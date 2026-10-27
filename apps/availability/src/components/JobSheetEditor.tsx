@@ -355,7 +355,15 @@ export default function JobSheetEditor() {
     setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, noShowPax: ns, status: noShowStatus(ns, x.bookedPax), actualPax: Math.max(0, (x.bookedPax ?? 0) - ns) } : x) } : s);
     if (!b.bookingNo) return;
     // Record it first — the API also mirrors the count / status / actual pax onto the sheet.
-    await jfetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => {});
+    // Refused (an operator lowering a reported no-show must give a reason, in Bookings): put
+    // the row back and say so, rather than show a change that was never saved.
+    const res = await jfetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => null);
+    if (!res || !res.ok) {
+      setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? b : x) } : s);
+      const err = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error : null;
+      setMsg(err === "reason-required" ? "To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason" : "No-show not saved — try again");
+      return;
+    }
     // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
     // record reflects it immediately (best-effort; needs a saved sheet + Drive).
     if (drive.enabled && drive.connected) {
@@ -1008,7 +1016,7 @@ export default function JobSheetEditor() {
 
       {sheet.status === "Review: no-show" && (
         <div className="no-print" style={{ margin: "0 0 14px", padding: "10px 14px", borderRadius: 8, background: "var(--danger-bg)", border: "1px solid var(--danger-line)", color: "var(--danger)", fontWeight: 600, fontSize: 13.5 }}>
-          ⚠ A guide reported a no-show on this tour. Absent guests were removed from the pax counts and ticket expenses — confirm the numbers before payout.
+          ⚠ A guide reported a no-show on this tour. Check who did not come and the ticket counts before payout.
         </div>
       )}
 
@@ -1373,7 +1381,7 @@ export default function JobSheetEditor() {
           </div>
         )}
         <table className="js-table">
-          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print" /></tr></thead>
+          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print"><TH en="No-show" th="ไม่มา" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.bookings.map((b, i) => (
               <tr key={i}>
@@ -1387,11 +1395,20 @@ export default function JobSheetEditor() {
                     <option value="">—</option><option value="included">Included</option><option value="not">Not incl.</option>
                   </select>
                 </td>
+                <td className="no-print">{(() => {
+                  const P = b.bookedPax ?? 0, ns = b.noShowPax ?? (b.status === "no-show" ? P : 0);
+                  return (
+                    <label className="js-ns-tick" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap", color: ns > 0 ? "var(--danger)" : "var(--ink-soft)" }} title={b.bookingNo ? "This booking did not come" : "Add the booking no. first"}>
+                      <input type="checkbox" checked={ns > 0} disabled={!b.bookingNo || isApproved(sheet.approvalStatus)} onChange={(e) => markNoShow(i, b, e.target.checked ? P : 0)} style={{ width: 16, height: 16, accentColor: "var(--danger)" }} />
+                      {ns > 0 && ns < P ? `${ns} of ${P}` : ns > 0 ? "No-show" : ""}
+                    </label>
+                  );
+                })()}</td>
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ bookings: sheet.bookings.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /></tr>
-            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show <small style={{ fontSize: 9, fontWeight: 500 }}>ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700, whiteSpace: "nowrap" }}>{noShow.pax} pax · {noShow.bookings} booking{noShow.bookings === 1 ? "" : "s"}</td><td /><td className="no-print" /></tr>}
+            <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /><td className="no-print" /></tr>
+            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show <small style={{ fontSize: 9, fontWeight: 500 }}>ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700, whiteSpace: "nowrap" }}>{noShow.pax} pax · {noShow.bookings} booking{noShow.bookings === 1 ? "" : "s"}</td><td /><td className="no-print" /><td className="no-print" /></tr>}
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>
