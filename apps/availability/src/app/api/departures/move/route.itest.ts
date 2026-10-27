@@ -168,7 +168,7 @@ describe("รวมรอบ — joining another guide's tour (14:00 guest onto 
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ moved: 2, guideAssigned: false, joined: { guideId: G2 }, sourceRemoved: true, sourceKept: [] });
 
-    for (const ref of ["GYG-TEST-1", "GYG-TEST-2"]) expect(await booking(ref)).toMatchObject({ ...AT, startTime: "13:30", tourId: "T-901", assignedGuideId: G2, datePinned: true });
+    for (const ref of ["GYG-TEST-1", "GYG-TEST-2"]) expect(await booking(ref)).toMatchObject({ ...AT, startTime: "13:30", tourId: "T-901", assignedGuideId: null, datePinned: true });
     const there = await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } } });
     expect((there.bookings as { bookingNo: string }[]).map((b) => b.bookingNo).sort()).toEqual(["GYG-TEST-1", "GYG-TEST-2", "GYG-TEST-9"]);
     expect(there.guideFee).toEqual({ price: 1200, time: 1, whtPct: 3 }); // the tour's fee, untouched
@@ -194,7 +194,7 @@ describe("รวมรอบ — joining another guide's tour (14:00 guest onto 
     expect((await join()).status).toBe(200);
     await prisma.productMap.upsert({ where: { productKey: "example palace product" }, create: { productKey: "example palace product", productName: "Example Palace Product", tourId: "T-900" }, update: { tourId: "T-900" } });
     await importParsed({ externalId: `GYG-TEST-1-${DAY}`, externalRef: "GYG-TEST-1", productName: "Example Palace Product", date: DAY, slotIdx: 3, startTime: "14:00", pax: 2, customerName: "Guest GYG-TEST-1" }, { source: "GETYOURGUIDE", cancelled: false, via: "test" });
-    expect(await booking("GYG-TEST-1")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: G2, datePinned: true });
+    expect(await booking("GYG-TEST-1")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: null, datePinned: true });
   });
 
   it("refuses more guests than one guide takes", async () => {
@@ -244,10 +244,19 @@ describe("รวมรอบ from the Bookings inbox — a guest nobody guides y
     const r = await inboxJoin();
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ moved: 1, joined: { guideId: G2 }, offersClosed: 1 });
-    expect(await booking("GYG-TEST-5")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: G2, datePinned: true });
+    expect(await booking("GYG-TEST-5")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: null, datePinned: true });
     const there = await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } } });
     expect((there.bookings as { bookingNo: string }[]).map((b) => b.bookingNo).sort()).toEqual(["GYG-TEST-5", "GYG-TEST-9"]);
     expect(await prisma.jobOffer.findUniqueOrThrow({ where: { id: offer.id } })).toMatchObject({ status: "EXPIRED" });
+  });
+
+  it("tags the guest to Fah only where the departure is split between two guides", async () => {
+    await seedGuide("G-909", { displayName: "Ton Example" });
+    await prisma.assignment.create({ data: { guideId: "G-909", ...AT, tourId: "T-901", pax: 4 } });
+    await prisma.booking.create({ data: { source: "GETYOURGUIDE", externalId: "GYG-TEST-8-x", externalRef: "GYG-TEST-8", tourId: "T-901", ...AT, pax: 4, status: "ASSIGNED", assignedGuideId: "G-909", customerName: "Guest 8" } });
+    const r = await inboxJoin();
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(await booking("GYG-TEST-5")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: G2 });
   });
 
   it("a guest the operator already typed onto Fah's sheet by hand is not listed twice", async () => {
@@ -256,7 +265,7 @@ describe("รวมรอบ from the Bookings inbox — a guest nobody guides y
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     const there = await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: { guideId: G2, ...AT } } });
     expect((there.bookings as { bookingNo: string }[]).map((b) => b.bookingNo).sort()).toEqual(["GYG-TEST-5", "GYG-TEST-9"]);
-    expect(await booking("GYG-TEST-5")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: G2 });
+    expect(await booking("GYG-TEST-5")).toMatchObject({ ...AT, tourId: "T-901", assignedGuideId: null });
   });
 
   it("refuses a departure that already has a guide", async () => {
