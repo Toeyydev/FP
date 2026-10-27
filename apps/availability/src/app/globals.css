@@ -1666,3 +1666,8 @@ body:has(.op-layout) .wrap{max-width:1440px}
   .gtabs{display:none}
   header.app-guide .brand,header.app-guide .live{display:none}
 }
+
+/* Outline only, in the brand colour, with a line icon — a quiet secondary action (รวมรอบ).
+   Last in the file and scoped like .op-layout .btn, which would otherwise repaint it grey. */
+.btn.line,.op-layout .btn.line{display:inline-flex;align-items:center;gap:6px;background:transparent;border-color:var(--primary);color:var(--primary);font-weight:500}
+.btn.line:hover,.op-layout .btn.line:hover{border-color:var(--primary);background:var(--green-bg)}

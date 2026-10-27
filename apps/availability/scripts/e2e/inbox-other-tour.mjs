@@ -121,6 +121,12 @@ try {
   check("…and keeps the offer controls", /Offer all|Offer to guide/i.test(one));
   const two = await cardOf(page, "GYG-OT-2");
   check("a booking of the guide's own tour still shows ✓ Assigned", /Assigned to\s*G-987/i.test(two) && !/No guide for this tour/i.test(two), two.replace(/\s+/g, " ").slice(0, 200));
+  // รวมรอบ is an outline button with a line icon, not an emoji (owner, 2026-10-28).
+  const joinBtn = await page.$eval(".js-join-open", (b) => { const c = getComputedStyle(b); return { text: b.textContent.trim(), icon: !!b.querySelector("svg"), line: b.classList.contains("line"), border: c.borderTopColor, color: c.color }; }).catch(() => null);
+  check("รวมรอบ is an outline button with a line icon, no emoji", !!joinBtn && joinBtn.text === "รวมรอบ" && joinBtn.icon && joinBtn.line, JSON.stringify(joinBtn));
+  // In the brand colour on the operator page too — .op-layout .btn repaints buttons grey.
+  check("…drawn in the brand colour, not repainted grey", !!joinBtn && joinBtn.border === "rgb(14, 59, 46)" && joinBtn.color === "rgb(14, 59, 46)", JSON.stringify(joinBtn && { border: joinBtn.border, color: joinBtn.color }));
+  if (SHOTS) { const b = await page.$(".js-join-open"); if (b) await (await b.evaluateHandle((x) => x.parentElement)).asElement().screenshot({ path: join(SHOTS, "join-button.png") }); }
   if (SHOTS) { const c = await page.$(".js-other-tour"); if (c) await (await c.evaluateHandle((x) => x.closest(".op-toolbar"))).asElement().screenshot({ path: join(SHOTS, "other-tour-card.png") }); }
   await page.setViewport({ width: 390, height: 844 });
   await pause(400);
