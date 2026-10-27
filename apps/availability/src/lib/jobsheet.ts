@@ -495,6 +495,30 @@ export function combinedSlipDriveName(o: { guideId: string; guideName: string; d
 // Drive file name for an expense receipt. Unique per job and expense row, even when a legacy
 // ref is shared by two sheets or missing: the name carries guide, date and slot, so a re-upload
 // replaces only this job's receipt for this row, never another guide's or slot's.
+// ── Food tour: one total against the company's food advance ─────────────────────
+// Owner (2026-10-27): on a food tour the guide reports ONE figure — what the food cost —
+// not each stop. Within the advance it is paid from the advance (the balance is returned);
+// above it, the difference is the guide's own money and is paid back with their pay. A food
+// tour's food cost is certified without a receipt (lib/certificates/payload isFoodCostRow).
+export const FOOD_COST_DESCRIPTION = "ค่าอาหาร Food Tour";
+export const FOOD_COST_OVER_DESCRIPTION = "ค่าอาหาร Food Tour (เกินเงินล่วงหน้า)";
+export function foodCostRows(spent: number, advance: number): Expense[] {
+  const total = Math.max(0, Math.round((Number(spent) || 0) * 100) / 100);
+  const adv = Math.max(0, Number(advance) || 0);
+  if (total <= 0) return [];
+  const row = (description: string, price: number, paidBy: "advance" | "guide"): Expense =>
+    ({ description, price, pax: 1, expenseType: "meal", paidBy, paidByChoice: "guide" } as Expense);
+  if (adv <= 0) return [row(FOOD_COST_DESCRIPTION, total, "guide")];
+  const fromAdvance = Math.min(total, adv);
+  return total > adv
+    ? [row(FOOD_COST_DESCRIPTION, fromAdvance, "advance"), row(FOOD_COST_OVER_DESCRIPTION, Math.round((total - adv) * 100) / 100, "guide")]
+    : [row(FOOD_COST_DESCRIPTION, fromAdvance, "advance")];
+}
+/** What a food-tour report already says the food cost (both rows), for re-opening the form. */
+export function reportedFoodCost(rows: readonly Expense[] | null | undefined): number {
+  return (rows ?? []).filter((e) => e.description === FOOD_COST_DESCRIPTION || e.description === FOOD_COST_OVER_DESCRIPTION).reduce((s, e) => s + expenseAmount(e), 0);
+}
+
 export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string; from?: "operator" | "guide" }): string {
   const base = `${(opts.ref || "Job").trim()} — ${opts.guideId} — ${opts.date} — slot ${opts.slotIdx}`;
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);

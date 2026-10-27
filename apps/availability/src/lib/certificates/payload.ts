@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isFoodTourId } from "@/lib/bookings";
 import { expenseAmount, isReviewExpense, type Expense } from "@/lib/jobsheet";
 import { canonicalPaidBy } from "@/lib/peak-sync";
 import { effectivePayer, guideMoneyConfirmed } from "@/lib/payer-rules";
@@ -95,6 +96,8 @@ export const NO_RECEIPT_REASON_TH =
 /** What a certificate needs to know about the job besides its rows. */
 export type SheetContext = {
   tourName?: string | null;
+  /** The job's tour id: the food tour is known by id too, whatever its display name. */
+  tourId?: string | null;
   /** Drive file ids of attachments that turned out to be bank transfer slips (lib/certificates/receipt-kind). */
   transferSlipFileIds?: ReadonlySet<string>;
 };
@@ -108,6 +111,8 @@ export type SheetContext = {
 export const isFoodCostRow = (e: Pick<Expense, "expenseType" | "description">) =>
   String(e.expenseType ?? "") === "meal" && !/water|น้ำ/i.test(String(e.description ?? ""));
 export const isFoodTour = (tourName: string | null | undefined) => /^\s*eat like a local/i.test(tourName ?? "");
+/** By id (T-007/T-008/T-009) or by the old name — a tour renamed to its channel title stays a food tour. */
+const foodTour = (ctx: SheetContext) => isFoodTour(ctx.tourName) || isFoodTourId(ctx.tourId);
 
 /** Why a row paid from a company advance has no receipt. Kept with the document. */
 export const ADVANCE_NO_RECEIPT_REASON_TH =
@@ -137,7 +142,7 @@ export function certifiableRows(expenses: readonly Expense[] | null | undefined,
   const out: CertifiableRow[] = [];
   (expenses ?? []).forEach((e, index) => {
     if (isReviewExpense(e)) return;
-    if (isFoodCostRow(e) && !isFoodTour(ctx.tourName)) return;
+    if (isFoodCostRow(e) && !foodTour(ctx)) return;
     // Only Guide Own Money an operator or the guide confirmed (lib/payer-rules). A category
     // rule, a Rate suggestion or the old after-tour default is not evidence, whatever paidBy
     // says: nothing to certify until a person confirms the payer.
@@ -167,7 +172,7 @@ function advanceRows(expenses: readonly Expense[] | null | undefined, ctx: Sheet
   const out: CertifiableRow[] = [];
   (expenses ?? []).forEach((e, index) => {
     if (isReviewExpense(e) || expenseAmount(e) <= 0) return;
-    if (isFoodCostRow(e) && !isFoodTour(ctx.tourName)) return;
+    if (isFoodCostRow(e) && !foodTour(ctx)) return;
     // A transfer slip attached to the row is the advance going out, not the ticket it bought.
     const fileId = String((e as ExpenseWithEvidence).receiptFileId ?? "").trim();
     const slipOnly = !!fileId && !!ctx.transferSlipFileIds?.has(fileId);
@@ -277,11 +282,11 @@ export function checkDrift(
     kind?: CertificateKind;
   },
   /** `advances`: for a COMPANY_ADVANCE certificate, the advances its rows point at NOW. */
-  sheetNow: { facts: SheetFacts; expenses: Expense[]; advances?: string[]; tourName?: string | null; transferSlipFileIds?: ReadonlySet<string> },
+  sheetNow: { facts: SheetFacts; expenses: Expense[]; advances?: string[]; tourName?: string | null; tourId?: string | null; transferSlipFileIds?: ReadonlySet<string> },
 ): DriftResult {
   const reasons: string[] = [];
   const kind = stored.kind ?? "GUIDE_PAID";
-  const nowRows = certifiableRows(sheetNow.expenses, kind, { tourName: sheetNow.tourName, transferSlipFileIds: sheetNow.transferSlipFileIds });
+  const nowRows = certifiableRows(sheetNow.expenses, kind, { tourName: sheetNow.tourName, tourId: sheetNow.tourId, transferSlipFileIds: sheetNow.transferSlipFileIds });
   // Rebuilt with the signature the certificate already carries, because this asks one
   // question only: has the JOB SHEET moved? A signature replaced since would make every
   // rebuild differ and report the sheet as changed when nothing on it had. Whether the

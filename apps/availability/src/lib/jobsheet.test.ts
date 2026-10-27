@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { foodCostRows, reportedFoodCost, FOOD_COST_DESCRIPTION, FOOD_COST_OVER_DESCRIPTION, adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
 
 describe("jobsheet — fixed standard expense descriptions", () => {
   it("offers the three guide-inclusive labels in their canonical spelling", () => {
@@ -491,3 +491,23 @@ describe("guide fee under ฿1,000 — no withholding (owner 2026-10-25)", () =>
   });
 });
 
+
+describe("foodCostRows — a food tour's one food total against the advance", () => {
+  it("with no advance, the guide's own money, paid back", () => {
+    expect(foodCostRows(1850, 0)).toEqual([expect.objectContaining({ description: FOOD_COST_DESCRIPTION, price: 1850, pax: 1, expenseType: "meal", paidBy: "guide" })]);
+  });
+  it("within the advance, from the advance — the rest is returned", () => {
+    expect(foodCostRows(1850, 2000)).toEqual([expect.objectContaining({ price: 1850, paidBy: "advance" })]);
+    expect(foodCostRows(2000, 2000)).toEqual([expect.objectContaining({ price: 2000, paidBy: "advance" })]);
+  });
+  it("above the advance, the advance in full and the difference as the guide's own money", () => {
+    expect(foodCostRows(2100, 2000)).toEqual([
+      expect.objectContaining({ description: FOOD_COST_DESCRIPTION, price: 2000, paidBy: "advance" }),
+      expect.objectContaining({ description: FOOD_COST_OVER_DESCRIPTION, price: 100, paidBy: "guide" }),
+    ]);
+  });
+  it("nothing spent is nothing reported, and the form reopens on what was sent", () => {
+    expect(foodCostRows(0, 2000)).toEqual([]);
+    expect(reportedFoodCost(foodCostRows(2100, 2000))).toBe(2100);
+  });
+});
