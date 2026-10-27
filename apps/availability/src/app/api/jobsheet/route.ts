@@ -101,7 +101,9 @@ export async function GET(req: NextRequest) {
   // The tour day — check-in, start, check-out, report — for the guide and the operator alike
   // (lib/tour-day-timeline). The report is read here for both; the operator's history below
   // reads it again only for its own lines.
-  const dayReport = await prisma.tourReport.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { submittedAt: true, noShow: true, leftEarly: true, completedPax: true } });
+  const dayReport = await prisma.tourReport.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { submittedAt: true, noShow: true, leftEarly: true, completedPax: true, comments: true } });
+  // What the guide reported, shown on the sheet as they said it (JobSheetEditor GuideReportNote).
+  const guideReport = dayReport && (dayReport.noShow > 0 || dayReport.leftEarly > 0) ? { noShow: dayReport.noShow, leftEarly: dayReport.leftEarly, comments: dayReport.comments ?? null } : null;
   const tourDay = { scheduled: SLOT_TIMES[slotIdx] ?? null, steps: tourDayTimeline({ checkins, report: dayReport, start: scheduledStart(date, SLOT_TIMES[slotIdx] ?? "") }) };
 
   // Paid state for this slot. Once the operator has uploaded the slip / marked it paid
@@ -356,7 +358,7 @@ export async function GET(req: NextRequest) {
       // Nothing is added by itself — but a person is told what is missing, and may add it
       // with one button (lib/past-sheet-sync). Not on a replacement's copy of the list.
       const pastBookingGaps = isOps && date < todayBKK && handover?.role !== "to" ? await readPastSheetGaps(prisma, { guideId, date, slotIdx }).catch(() => null) : null;
-      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, guideReport, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -442,7 +444,7 @@ export async function GET(req: NextRequest) {
       .map((r) => (inferTickets ? r : { ...r, tickets: "" })); // approved / paid: nothing inferred
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, guideReport, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -451,7 +453,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts, bookingSync, rates,
+    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, guideReport, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts, bookingSync, rates,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
