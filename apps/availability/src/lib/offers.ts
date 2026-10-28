@@ -144,11 +144,11 @@ export async function createOffer(o: {
 
 // Guides who are AVAILABLE for a given date + slot:
 //  - active guide with a G-id
-//  - has NOT blocked ANY of their time that day — if a guide marks even one slot
-//    busy (availability.slots[idx] === true means busy) they're treated as off for
-//    the whole day and are never offered/assigned that date. Operator decision:
-//    a partially-blocked guide (e.g. blocked the afternoon) must not surface as
-//    "available" in the offer flow at all.
+//  - has NOT blocked this slot, or a slot that clashes with it in time
+//    (availability.slots[idx] === true means busy). Owner, 2026-10-28: a guide is
+//    busy only in the slots they blocked — one who blocked the morning is free in the
+//    afternoon. (It used to be the whole day, which hid a guide the app had told
+//    "your other times are free".)
 //  - NOT already assigned that slot OR a slot that clashes in time (same or within
 //    the clash gap — a guide can't run two overlapping tours)
 //  - the day is not company-blocked
@@ -170,8 +170,9 @@ export async function availableGuides(date: string, slotIdx: number) {
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", fromDate: { lte: date }, toDate: { gte: date } }, select: { guideId: true } }),
   ]);
 
-  // A guide who blocked ANY slot that day is off for the whole day (not just that slot).
-  const busy = new Set(avail.filter((a) => a.slots.some((s) => s === true)).map((a) => a.guideId));
+  // Busy for this departure: they blocked it, or a slot that overlaps it in time.
+  const near = clashingSlotIdxs(slotIdx);
+  const busy = new Set(avail.filter((a) => near.some((i) => a.slots[i] === true)).map((a) => a.guideId));
   const taken = new Set(assigned.map((a) => a.guideId));
   const onLeave = new Set(leaves.map((l) => l.guideId));
   return guides.filter((g) => g.guideId && !busy.has(g.guideId) && !taken.has(g.guideId) && !onLeave.has(g.guideId));

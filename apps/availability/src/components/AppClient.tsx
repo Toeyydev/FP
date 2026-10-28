@@ -483,13 +483,13 @@ export default function AppClient({
     setModal({ kind: "newoffer" });
   }
   // A guide is "off" for a whole day — and so must never appear in the assign/offer
-  // flow that day — if they are inactive, offer-blocked, on approved leave, or have
-  // blocked ANY of their own slots that day. Mirrors availableGuides() on the server.
+  // flow that day — if they are inactive, offer-blocked or on approved leave. Slots
+  // they blocked are busy one by one (owner, 2026-10-28): blocking the morning leaves
+  // the afternoon free. Mirrors availableGuides() on the server.
   function offToday(g: { guideId: string; state?: string; offerBlocked?: boolean }, d: Date): boolean {
     if (g.state && g.state !== "ACTIVE") return true;
     if (g.offerBlocked) return true;
-    if (onLeave(g.guideId, ymd(d))) return true;
-    return (getAvail(g.guideId, d) ?? EMPTY).some(Boolean);
+    return onLeave(g.guideId, ymd(d));
   }
   // How many guides are free for a date+slot (client-side preview before sending).
   // Free = not off today (see offToday) and not already assigned that slot.
@@ -499,6 +499,7 @@ export default function AppClient({
     if (isBlocked(d)) return [];
     return (ref?.guides ?? []).filter((g) => {
       if (offToday(g, d)) return false;
+      if ((getAvail(g.guideId, d) ?? EMPTY)[slotIdx]) return false;
       const asg = getAssign(g.guideId, d);
       return !asg[slotIdx];
     });
@@ -992,8 +993,8 @@ export default function AppClient({
       for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busySlots++; else free++; }
       const assignedN = Object.keys(asg).length;
       const dayOff = busySlots === SLOTS.length && assignedN === 0; // whole day blocked → day off
-      // "Available" now means genuinely offerable: a guide who blocked any slot,
-      // is on leave, or is inactive/blocked is off for the day, not available.
+      // "Available" means genuinely offerable: at least one free slot, and not on leave
+      // or inactive/blocked. Blocking some slots leaves the others free.
       if (!blocked && !offToday(g, d) && free > 0) availGuides++;
       if (assignedN > 0) assignGuides++;
       if (busySlots > 0 && !dayOff) busyGuides++;
@@ -1085,7 +1086,7 @@ export default function AppClient({
                         if (a) { const c = conf.has(s.idx); return <td key={s.idx} className={`cell assigned${c ? " conflict" : ""}${nm}`} title={c ? t("conflictWarn") : (tourById[a.tour]?.name || a.tour)} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{c ? "⚠ " : ""}{a.tour}</span></td>; }
                         if (leave) return <td key={s.idx} className={`cell leave${nm}`} title={t("onLeave")} />;
                         if (avd[s.idx]) return <td key={s.idx} className={`cell busy${nm}`} title={t("busy")} />;
-                        // Guide is off for the whole day (blocked part of it, on leave, blocked or inactive):
+                        // Guide is off for the whole day (on leave, offer-blocked or inactive):
                         // their remaining free slots must not be assignable either.
                         if (off) return <td key={s.idx} className={`cell off${nm}`} title={t("offToday")} />;
                         return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
