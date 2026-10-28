@@ -204,6 +204,17 @@ describe("7–10 · never the wrong booking", () => {
     expect(await prisma.auditLog.count()).toBe(audits);
   });
 
+  it("an amendment: Bókun cancels the old product inside a booking that is still CONFIRMED → the booking's live GET- copy is left alone", async () => {
+    // 27 Oct 2026: a date change in Bókun cancels the old product booking and books a new one
+    // under the same booking. Only the product is cancelled; the booking stays CONFIRMED.
+    await viaSearch(searchCopy(7700020, "GYGAMEND20"));
+    const amended = { ...webhook({ bookingId: 7700020, productBookingId: 8800020, otaRef: "GYGAMEND20", status: "CANCELLED" }), status: "CONFIRMED" };
+    expect(parseBokun(amended).bookingConfirmationCode).toBeUndefined();
+    await viaWebhook(amended);
+    expect((await byCode("GET-7700020"))[0]).toMatchObject({ status: "PENDING" });
+    expect((await byCode("ACME-T8800020"))[0]).toMatchObject({ status: "CANCELLED" });
+  });
+
   it("a record under the booking code but a different OTA ref is a different booking → left alone", async () => {
     await viaSearch(searchCopy(7700001, "GYGOTHER01"));
     await viaWebhook(webhook({ bookingId: 7700001, productBookingId: 8800001, otaRef: "GYGCANCEL01", status: "CANCELLED" }));

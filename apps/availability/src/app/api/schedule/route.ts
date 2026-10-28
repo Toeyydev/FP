@@ -8,6 +8,7 @@ import { guideSchedule } from "@/lib/guide-schedule";
 import { expensesDueForGuide } from "@/lib/expenses-due";
 import { sendPushToUser } from "@/lib/push";
 import { untagGuideSlotBookings } from "@/lib/offers";
+import { removalRefusal } from "@/lib/assignment-removal";
 
 // GET — the signed-in guide's upcoming confirmed tours (today onward), plus the
 // finished ones still waiting for their expense report. The schedule deliberately
@@ -36,7 +37,12 @@ export async function POST(req: NextRequest) {
 
   // Remove the guide's (+ operator's) Google Calendar events before freeing it.
   try { await (await import("@/lib/tour-calendar-sync")).removeTourEvents(a); } catch { /* never block cancel on calendar */ }
+  // Their job sheet goes with the job — unless money or a check-in is already recorded on it
+  // (lib/assignment-removal removalRefusal), which an operator must look at. A sheet left
+  // behind used to read as a second job at the departure.
+  const keepSheet = !!(await removalRefusal(guideId, date, slotIdx));
   await prisma.assignment.delete({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
+  if (!keepSheet) await prisma.jobSheet.deleteMany({ where: { guideId, date, slotIdx } });
   // Return the slot's bookings to the inbox (pending) so the operator sees the job
   // to re-dispatch. The job goes back to the operators — it is NOT auto re-offered
   // to another guide; the operator chooses who takes it over. Clear this guide's tag

@@ -138,9 +138,13 @@ export type Plan = {
  * the same plan. `releasable(guideId, row)` says whether a row may come off that guide's
  * sheet (sheet editable, row carries no attendance); without it nothing is released.
  */
-export function planDeparture(assigns: PlanAssign[], bookings: PlanBooking[], sheets: PlanSheet[], opts: { releasable?: (guideId: string, row: SheetBooking) => boolean } = {}): Plan {
+export function planDeparture(assigns: PlanAssign[], bookings: PlanBooking[], allSheets: PlanSheet[], opts: { releasable?: (guideId: string, row: SheetBooking) => boolean } = {}): Plan {
   const plan: Plan = { owner: new Map(), review: new Map(), frozen: new Map(), cancelHolder: new Map(), release: [] };
   const assignOf = new Map(assigns.map((a) => [a.guideId, a]));
+  // A sheet whose guide is no longer on this departure is a leftover (a guide who cancelled
+  // their own tour kept theirs), not a job: it holds no guest, and it never stops the guides
+  // who ARE on the tour from getting theirs. It used to freeze the whole departure (29 Oct 2026).
+  const sheets = allSheets.filter((s) => assignOf.has(s.guideId));
   const freeze = (g: string, why: string) => { if (!assignOf.has(g)) return; const l = plan.frozen.get(g) ?? []; l.push(why); plan.frozen.set(g, l); };
   const rowOn = (g: string, b: PlanBooking) => sheets.find((s) => s.guideId === g)?.rows.find((r) => refKeys(b).includes(rowKey(r)));
   const holdersOf = (b: PlanBooking) => { const k = refKeys(b); return sheets.filter((s) => s.rows.some((r) => k.includes(rowKey(r)))).map((s) => s.guideId); };
