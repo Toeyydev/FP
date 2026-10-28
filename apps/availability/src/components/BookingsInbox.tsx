@@ -488,7 +488,7 @@ export default function BookingsInbox() {
                                     </>
                                   : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
                                 {pax > CAP && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
-                                <button className="btn sm js-join-open" title="รวมรอบ — put these guests on a tour another guide already runs (e.g. one 14:00 guest onto the 13:30 departure)" onClick={() => setJoinFor({ date, slotIdx, tourId, items })}>🔀 รวมรอบ</button>
+                                <button className="btn sm line js-join-open" title="รวมรอบ — put these guests on a tour another guide already runs (e.g. one 14:00 guest onto the 13:30 departure)" onClick={() => setJoinFor({ date, slotIdx, tourId, items })}><MergeIcon />รวมรอบ</button>
                               </>
                             )}
                             <button className="btn sm" title="Export this tour's job sheet as a PDF (Save as PDF in the print dialog)" onClick={() => openJobSheetPdf(items, assignedGuide || grpGuide[key])}>📄 Job sheet PDF</button>
@@ -609,5 +609,14 @@ export default function BookingsInbox() {
         </div>
       </div>
     </div>
+  );
+}
+
+// รวมรอบ: the 🔀 crossing arrows, drawn as a line in the text colour — no emoji tile.
+function MergeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 4.5h2.2c1.2 0 2.3.6 3 1.6l2.6 3.8c.7 1 1.8 1.6 3 1.6h2.2M1.5 11.5h2.2c1.2 0 2.3-.6 3-1.6l2.6-3.8c.7-1 1.8-1.6 3-1.6h2.2M12.5 2.5l2 2-2 2M12.5 9.5l2 2-2 2" />
+    </svg>
   );
 }
