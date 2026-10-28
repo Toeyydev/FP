@@ -221,7 +221,14 @@ export function parseBokun(raw: unknown): ParsedBooking {
   // Read from known places only: a deep search could pick up another booking's id or code.
   const bokunBookingId = externalId ?? r.parentBookingId;
   const productConfirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? r.productConfirmationCode;
-  const bookingCodeRaw = arr(r.activityBookings).length === 1 ? r.confirmationCode : undefined;
+  // A product cancelled inside a booking that is itself still CONFIRMED is an amendment —
+  // Bókun moving a date cancels the old product and books a new one under the same booking
+  // (GET-…). The booking code then names the live booking, not this cancelled product, so it
+  // is not read: a cancellation must never reach the booking's live copy through it.
+  // (27 Oct 2026: a guest moved to 29 Oct vanished from the guide's job this way.)
+  const productCancelled = typeof ab.status === "string" && /cancel/i.test(ab.status);
+  const bookingLive = typeof r.status === "string" && r.status.trim() !== "" && !/cancel/i.test(r.status);
+  const bookingCodeRaw = arr(r.activityBookings).length === 1 && !(productCancelled && bookingLive) ? r.confirmationCode : undefined;
   const cancelledAt = toISO(r.cancellationDate ?? ab.cancellationDate);
   // The webhook carries the Rate on the activity booking; the booking search on the item
   // itself (or its fields). Known places only — a deep search could find another's title.
