@@ -19,6 +19,8 @@ const block = (guideId: string, times: string[]) =>
 beforeAll(requireTestDatabase);
 beforeEach(async () => {
   await resetDatabase();
+  await prisma.leaveRequest.deleteMany({}); // resetDatabase keeps leave rows
+  await prisma.availability.deleteMany({});
   await seedGuide("G-971", { displayName: "Morning Off Example" });
   await seedGuide("G-972", { displayName: "Free Example" });
 });
