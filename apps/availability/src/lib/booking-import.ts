@@ -506,8 +506,20 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     pinned ? {} : { tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
 
   if (p.externalId) {
-    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true, date: true, slotIdx: true } });
-    if (existing && (await ignoreStaleLive(existing, cancelled, via))) return "skipped";
+    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true, date: true, slotIdx: true, confirmationCode: true } });
+    // One Bókun booking id can carry two products: a date change in Bókun cancels the old
+    // product and books a new one under the same booking, and both arrive under this id
+    // (27 Oct 2026). Which product the record now holds decides what each event may do.
+    const otherProduct = !!existing?.confirmationCode && !!p.confirmationCode && existing.confirmationCode !== p.confirmationCode;
+    // The old product's cancellation must not cancel the record now holding the live new one.
+    if (existing && cancelled && p.amendmentCancel && otherProduct) {
+      await audit({ action: "booking.cancel_not_applied", entityType: "Booking", entityId: existing.id, detail: { ref: p.confirmationCode ?? null, holds: existing.confirmationCode, via, reason: "a product cancelled inside a booking still confirmed in Bókun; this record holds the booking's other product — left unchanged" } });
+      return "skipped";
+    }
+    // The new live product after the old one's cancellation is not a stale payload: it is the
+    // booking now. The record takes the new product and is live again.
+    const replacement = !!existing && !cancelled && existing.status === "CANCELLED" && otherProduct;
+    if (existing && !replacement && (await ignoreStaleLive(existing, cancelled, via))) return "skipped";
     // The SAME OTA booking can re-arrive under a different Bokun externalId (a
     // re-issue / channel remap). If we already hold this externalRef, update THAT
     // record in place instead of creating a duplicate — but only a record nothing marks
@@ -548,12 +560,15 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined,
         ...slotFields(existing?.datePinned ?? false),
-        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
+        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : replacement ? "PENDING" : undefined, ...(replacement ? { cancelledAtSource: null } : { cancelledAtSource }), raw,
       },
     });
+    if (replacement) await audit({ action: "booking.amendment_replaced", entityType: "Booking", entityId: rec.id, detail: { from: existing!.confirmationCode, to: p.confirmationCode ?? null, via, reason: "the booking's cancelled product was replaced by a new live product in Bókun" } });
     // A cancelled record is never hidden as a duplicate of a live one: hiding it is how a
     // cancellation used to vanish. It cannot double-count a guest — it is not live.
-    const keep = existing || cancelled || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true, via)) && !(await flagCrossChannelDuplicate(rec)));
+    // A replacement is live again as if new: the booking's other live copy (the search's
+    // "GET-…" record) may already hold the guest, so it goes through dedupe like a new one.
+    const keep = (existing && !replacement) || cancelled || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true, via)) && !(await flagCrossChannelDuplicate(rec)));
     // Other copies of the same Bokun booking (e.g. the visible "GET-…" copy while this one
     // was a hidden webhook copy) are cancelled too — exact identity only, see cancelOtherCopies.
     const others = cancelled ? await cancelOtherCopies(p, rec.id, cancelledAtSource, via) : { cancelledNow: [] as CopyRow[] };
