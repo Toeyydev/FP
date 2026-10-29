@@ -215,6 +215,41 @@ describe("7–10 · never the wrong booking", () => {
     expect((await byCode("ACME-T8800020"))[0]).toMatchObject({ status: "CANCELLED" });
   });
 
+  // A date change in Bókun: the old product is cancelled and a new one booked under the same
+  // booking (same Bókun id), which stays CONFIRMED. Both arrive under one id (27 Oct 2026).
+  const amend = (product: number, cancelledOld = false) => cancelledOld
+    ? { ...webhook({ bookingId: 7700030, productBookingId: product, otaRef: "GYGAMEND30", status: "CANCELLED" }), status: "CONFIRMED" }
+    : webhook({ bookingId: 7700030, productBookingId: product, otaRef: "GYGAMEND30", status: "CONFIRMED" });
+  const theRecord = async () => (await prisma.booking.findMany({ where: { externalRef: "GYGAMEND30", status: { not: "IGNORED" } } }));
+
+  it("an amendment, new product first: the old product's cancellation does not cancel the record now holding the new one", async () => {
+    await viaWebhook(amend(8800030));
+    await viaWebhook(amend(8800031));
+    await viaWebhook(amend(8800030, true));
+    const rows = await theRecord();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ confirmationCode: "ACME-T8800031", status: "PENDING" });
+    expect(await count("booking.cancel_not_applied")).toBe(1);
+  });
+
+  it("an amendment, cancellation first: the new live product brings the booking back, under its new code", async () => {
+    await viaWebhook(amend(8800030));
+    await viaWebhook(amend(8800030, true));
+    expect((await theRecord())[0]).toMatchObject({ status: "CANCELLED" });
+    await viaWebhook(amend(8800031));
+    const rows = await theRecord();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ confirmationCode: "ACME-T8800031", status: "PENDING", cancelledAtSource: null });
+    expect(await count("booking.amendment_replaced")).toBe(1);
+  });
+
+  it("a real cancellation then a stale live payload of the SAME product is still ignored", async () => {
+    await viaWebhook(amend(8800030));
+    await viaWebhook(webhook({ bookingId: 7700030, productBookingId: 8800030, otaRef: "GYGAMEND30", status: "CANCELLED" }));
+    await viaWebhook(amend(8800030));
+    expect((await theRecord())[0]).toMatchObject({ status: "CANCELLED" });
+  });
+
   it("a record under the booking code but a different OTA ref is a different booking → left alone", async () => {
     await viaSearch(searchCopy(7700001, "GYGOTHER01"));
     await viaWebhook(webhook({ bookingId: 7700001, productBookingId: 8800001, otaRef: "GYGCANCEL01", status: "CANCELLED" }));

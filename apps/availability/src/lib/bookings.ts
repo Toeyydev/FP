@@ -155,6 +155,10 @@ export type ParsedBooking = {
   // under. Read only for a single-product booking: with several products one booking code
   // names them all, so it cannot say which FolkOPS record a cancellation is for.
   bookingConfirmationCode?: string;
+  // This product is cancelled but the Bókun booking it belongs to is still CONFIRMED: an
+  // amendment (a date change books a new product under the same booking). The cancellation
+  // is for this product only — never for a record now holding the booking's other product.
+  amendmentCancel?: boolean;
   // When the channel cancelled it (Bokun cancellationDate), as ISO. The source's own
   // event time — never the moment FolkOPS happened to receive the cancellation.
   cancelledAt?: string;
@@ -289,6 +293,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
     bokunBookingId: bokunBookingId != null && typeof bokunBookingId !== "object" ? String(bokunBookingId) : undefined,
     ...(typeof bookingCodeRaw === "string" && bookingCodeRaw.trim() ? { bookingConfirmationCode: bookingCodeRaw.trim() } : {}),
+    ...(productCancelled && bookingLive ? { amendmentCancel: true } : {}),
     cancelledAt,
     ...(rateTitle ? { rateTitle } : {}),
   };
