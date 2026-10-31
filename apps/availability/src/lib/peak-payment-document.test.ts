@@ -154,6 +154,15 @@ describe("one PEAK document for several jobs — stage 1 creates it, unpaid", ()
     expect(doc.expense).not.toHaveProperty("paidPayments");
   });
 
+  it("books 50% compensation to its own account at the payable amount, and refuses without one", () => {
+    const comp = { code: "510123", name: "Example compensation" };
+    const jobs = [{ ...JOBS[0], guideFee: { price: 1500, time: 1, whtPct: 0, payType: "HALF_COMPENSATION" as const, adjustReason: "Force majeure" }, expenses: [] }];
+    const doc = build({ jobs, accounts: { ...ACCOUNTS, guideCompensation: comp } });
+    expect(doc.lines.map((l) => [l.accountCode, l.price, l.withHoldingTaxAmount])).toEqual([["510123", 750, 0]]);
+    expect(doc.lines[0].description).toContain("Guide compensation");
+    expect(reasonsOf(() => build({ jobs })).join(" ")).toContain("Guide compensation has no PEAK account mapping");
+  });
+
   it("sends every line as vatType 1 — Folkpaths is not VAT-registered, and PEAK refuses a line without it", () => {
     const doc = build();
     expect(doc.lines.length).toBeGreaterThan(0);

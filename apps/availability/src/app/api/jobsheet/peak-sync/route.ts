@@ -6,12 +6,12 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { isOps } from "@/lib/roles";
-import { isApproved, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { feeIsCompensation, isApproved, DEFAULT_GUIDE_FEE, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { createExpenseAllInOne, peakEnabled, sanitizePeakError } from "@/lib/peak-api";
 import {
   buildJobSheetExpense, defaultAccountingDates, peakPayloadHash, peakSyncEligibility, JobSheetNotPostable,
 } from "@/lib/peak-sync";
-import { peakAccountMap, guideFeeAccount } from "@/lib/peak-account-map";
+import { peakAccountMap, guideFeeAccount, guideCompensationAccount } from "@/lib/peak-account-map";
 import { paymentDocumentLocks } from "@/lib/peak-payment-server";
 import { perSheetSyncRefusal, sheetInPeak } from "@/lib/combined-payment";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
   try {
     doc = buildJobSheetExpense({
       guideId, peakContactId: guide!.peakContactId!, expenses, guideFee, accounts,
-      guideFeeAccount: feeAccount, accountingDate: dates.accountingDate,
+      guideFeeAccount: feeAccount, guideCompensationAccount: feeIsCompensation(guideFee) ? await guideCompensationAccount() : null, accountingDate: dates.accountingDate,
       documentDate: dates.documentDate, jobRef: sheet.ref, bookings: (sheet.bookings as unknown as Booking[]) ?? [],
     });
   } catch (e) {

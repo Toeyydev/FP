@@ -56,6 +56,10 @@ const expenseZ = z.object({
   peakExistingDocumentId: z.string().max(60).nullish(),
   alreadyRecordedInPeak: z.boolean().optional(),
 });
-const guideFeeZ = z.object({ price: num, time: num, whtPct: num }).nullish().transform((v) => v ?? { price: null, time: null, whtPct: null });
+const guideFeeZ = z.object({
+  price: num, time: num, whtPct: num,
+  payType: z.enum(["FULL", "HALF_COMPENSATION", "CUSTOM"]).nullish(),
+  customPayable: num.optional(), customNature: z.enum(["FEE", "COMPENSATION"]).nullish(), adjustReason: z.string().max(60).nullish(), adjustNote: z.string().max(500).nullish(),
+}).nullish().transform((v) => v ?? { price: null, time: null, whtPct: null });
 
 export { expenseZ, bookingZ, guideFeeZ, num, numOpt };

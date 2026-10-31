@@ -10,6 +10,7 @@
 
 export type AccountingCategory =
   | "GUIDE_FEE"
+  | "GUIDE_COMPENSATION"
   | "ENTRANCE_TICKET"
   | "TRANSPORTATION"
   | "MEAL_REFRESHMENT"
@@ -43,6 +44,10 @@ export type CategorySpec = {
 
 export const ACCOUNTING_CATEGORIES: CategorySpec[] = [
   { key: "GUIDE_FEE", label: "Guide Fee", th: "ค่าจ้างมัคคุเทศก์", example: "Guide service fee", scope: "FIXED" },
+  // Used only by a job paying compensation, so the chart is ready without it — a job that
+  // needs it and finds nothing mapped is refused, never booked to the guide-fee account.
+  { key: "GUIDE_COMPENSATION", label: "Guide compensation", th: "ค่าชดเชยค่าจ้างไกด์กรณีเปลี่ยน/ยกเลิก", example: "510123 — paid when a tour is changed or cancelled", scope: "PER_JOB",
+    note: "Needed only when a job pays 50% compensation." },
   { key: "ENTRANCE_TICKET", label: "Entrance Ticket", th: "ค่าบัตรเข้าชม", example: "Admission ticket, temple entry", scope: "FIXED" },
   { key: "TRANSPORTATION", label: "Transportation", th: "ค่าพาหนะ", example: "Boat, Ferry, Taxi, Grab, BTS, MRT, Bus", scope: "FIXED" },
   { key: "MEAL_REFRESHMENT", label: "Meal / Refreshment", th: "ค่าอาหารและเครื่องดื่ม", example: "Drinking water, guest snack, food", scope: "FIXED" },
