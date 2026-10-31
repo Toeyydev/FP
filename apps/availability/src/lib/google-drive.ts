@@ -32,14 +32,41 @@ export async function folkpathsDriveToken(actingUserId?: string): Promise<string
 // in the shared drive's URL (drive.google.com/drive/folders/<id>); the connected
 // account (admin@folkpaths.com) must be a Content manager or Manager of it, since
 // re-saves trash the copy they replace. Unset: the connected account's My Drive, as
-// before. Files already saved keep their ids and links either way — moving the old
-// top-level folders into the shared drive by hand keeps every stored link working,
-// and the app then finds and reuses those folders by name.
+// before. Files already saved keep their ids and links either way.
 export const SHARED_DRIVE_ID = (process.env.FOLKPATHS_SHARED_DRIVE_ID || "").trim();
 // Every call must say it understands shared drives, or Drive answers 404 for their files.
 const ALL_DRIVES = "supportsAllDrives=true";
 // Searches look inside the shared drive when there is one, otherwise in My Drive.
-const searchScope = () => (SHARED_DRIVE_ID ? `&corpora=drive&driveId=${encodeURIComponent(SHARED_DRIVE_ID)}&includeItemsFromAllDrives=true&${ALL_DRIVES}` : "&spaces=drive");
+const searchScope = (drive?: string) => (drive ? `&corpora=drive&driveId=${encodeURIComponent(drive)}&includeItemsFromAllDrives=true&${ALL_DRIVES}` : "&spaces=drive");
+
+// The switch-over month, "YYYY-MM" (FOLKPATHS_SHARED_DRIVE_FROM, e.g. 2026-11). A month's
+// documents live in ONE place, so a month closes from one folder: folders of months
+// before it stay in My Drive — even a late October receipt uploaded in November — and
+// that month onward goes to the shared drive. Unset: everything goes to the shared drive.
+export const SHARED_DRIVE_FROM = (process.env.FOLKPATHS_SHARED_DRIVE_FROM || "").trim();
+
+/** The month a folder path is filed under: "2026-11 November" or Accounting's "2026" / "11NOV". */
+export function folderMonth(folderPath: string[]): string | null {
+  for (let i = 0; i < folderPath.length; i++) {
+    const m = folderPath[i].match(/^(\d{4})-(\d{2})(\b|$)/);
+    if (m) return `${m[1]}-${m[2]}`;
+    const y = folderPath[i].match(/^(\d{4})$/);
+    const mm = folderPath[i + 1]?.match(/^(\d{2})[A-Z]{3}$/);
+    if (y && mm) return `${y[1]}-${mm[1]}`;
+  }
+  return null;
+}
+
+const bangkokMonth = (now: Date) => new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 7);
+
+/** The shared drive this path belongs in, or undefined for My Drive. A path with no month
+ *  in it (e.g. unmatched e-slips) goes by the month it is saved in. */
+export function sharedDriveFor(folderPath: string[], now = new Date()): string | undefined {
+  if (!SHARED_DRIVE_ID) return undefined;
+  if (!SHARED_DRIVE_FROM) return SHARED_DRIVE_ID;
+  const month = folderMonth(folderPath) ?? bangkokMonth(now);
+  return month >= SHARED_DRIVE_FROM ? SHARED_DRIVE_ID : undefined;
+}
 
 // Accounting / partner accounts that must be able to SEE every job sheet + e-slip.
 // Comma-separated in FOLKPATHS_DRIVE_SHARE (e.g. "account@folkpaths.com"). They get
@@ -64,14 +91,14 @@ async function shareFolderWith(token: string, folderId: string): Promise<void> {
 // Find a folder this app created (drive.file scope) by name under an optional
 // parent, creating it if missing. Top-level company folders are shared with the
 // accounting account(s) so they can see all job sheets + e-slips.
-async function findOrCreateFolder(token: string, name: string, parentId?: string): Promise<string> {
+async function findOrCreateFolder(token: string, name: string, parentId: string | undefined, drive: string | undefined): Promise<string> {
   const topLevel = !parentId;
   // A top-level company folder sits at the root of the shared drive (whose id is its own root).
-  parentId = parentId || SHARED_DRIVE_ID || undefined;
+  parentId = parentId || drive || undefined;
   const safe = name.replace(/'/g, "\\'");
   const q = [`name = '${safe}'`, "mimeType = 'application/vnd.google-apps.folder'", "trashed = false"];
   if (parentId) q.push(`'${parentId}' in parents`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${searchScope()}`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${searchScope(drive)}`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   const j = (await r.json().catch(() => ({}))) as { files?: { id?: string }[] };
   let id: string;
@@ -97,9 +124,10 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
   const token = await googleAccessToken(opts.refreshToken);
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
   let parent: string | undefined;
-  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
+  const drive = sharedDriveFor(opts.folderPath);
+  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent, drive);
   // Resave should replace, not pile up: trash any existing same-named copies first.
-  for (const d of await findFilesInFolder(token, opts.name, parent)) await trashFile(token, d);
+  for (const d of await findFilesInFolder(token, opts.name, parent, drive)) await trashFile(token, d);
   const meta = { name: opts.name, mimeType: "application/vnd.google-apps.document", parents: parent ? [parent] : undefined };
   const boundary = `folkpaths-${Math.random().toString(36).slice(2)}`;
   const body =
@@ -118,11 +146,11 @@ export async function saveHtmlToDrive(opts: { refreshToken: string; name: string
 // Drive without any conversion. `base64` is the file content base64-encoded.
 // Find an existing file (any type) by exact name in a folder, so a re-save can
 // replace it instead of creating a duplicate. drive.file scope sees app-created files.
-async function findFilesInFolder(token: string, name: string, parentId?: string): Promise<string[]> {
+async function findFilesInFolder(token: string, name: string, parentId: string | undefined, drive: string | undefined): Promise<string[]> {
   const safe = name.replace(/'/g, "\\'");
   const q = [`name = '${safe}'`, "mimeType != 'application/vnd.google-apps.folder'", "trashed = false"];
   if (parentId) q.push(`'${parentId}' in parents`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${searchScope()}&orderBy=modifiedTime desc`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${searchScope(drive)}&orderBy=modifiedTime desc`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   const j = (await r.json().catch(() => ({}))) as { files?: { id: string }[] };
   return (j.files ?? []).map((f) => f.id);
@@ -138,12 +166,13 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   const token = await googleAccessToken(opts.refreshToken);
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
   let parent: string | undefined;
-  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent);
+  const drive = sharedDriveFor(opts.folderPath);
+  for (const seg of opts.folderPath) parent = await findOrCreateFolder(token, seg, parent, drive);
 
   // Replace mode: if same-named file(s) already exist in this folder, update the
   // newest in place (no duplicate, same link) and trash any older duplicates so a
   // re-save always overwrites the one canonical copy.
-  const existing = await findFilesInFolder(token, opts.name, parent);
+  const existing = await findFilesInFolder(token, opts.name, parent, drive);
   if (existing.length) {
     const [keep, ...dupes] = existing;
     for (const d of dupes) await trashFile(token, d);

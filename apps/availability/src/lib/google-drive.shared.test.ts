@@ -46,3 +46,26 @@ describe("saving into the company Shared Drive", () => {
     expect(calls.find((c) => c.url.includes("/files?q="))!.url).toContain("&spaces=drive");
   });
 });
+
+describe("switching over from a month (FOLKPATHS_SHARED_DRIVE_FROM)", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); });
+  async function load(from: string) {
+    vi.stubEnv("FOLKPATHS_SHARED_DRIVE_ID", DRIVE);
+    vi.stubEnv("FOLKPATHS_SHARED_DRIVE_FROM", from);
+    return import("@/lib/google-drive");
+  }
+  it("keeps a month before the switch in My Drive — even uploaded later — and files the switch month onward in the shared drive", async () => {
+    const { sharedDriveFor } = await load("2026-11");
+    const nov = new Date("2026-11-03T03:00:00Z");
+    expect(sharedDriveFor(["Folkpaths Job Sheets", "2026-10 October", "Receipts"], nov)).toBeUndefined();
+    expect(sharedDriveFor(["Folkpaths Job Sheets", "2026-11 November", "Advances"], nov)).toBe(DRIVE);
+    expect(sharedDriveFor(["Folkpaths E-slips", "2026-12 December"], nov)).toBe(DRIVE);
+    expect(sharedDriveFor(["Folkpaths Accounting", "Advance", "2026", "10OCT", "FOLK-BKK-1"], nov)).toBeUndefined();
+    expect(sharedDriveFor(["Folkpaths Accounting", "Advance", "2026", "11NOV", "FOLK-BKK-1"], nov)).toBe(DRIVE);
+  });
+  it("a path with no month goes by the Bangkok month it is saved in", async () => {
+    const { sharedDriveFor } = await load("2026-11");
+    expect(sharedDriveFor(["Folkpaths E-slips", "Matched"], new Date("2026-10-31T17:30:00Z"))).toBe(DRIVE); // 17:30 UTC 31 Oct = 00:30 1 Nov Bangkok
+    expect(sharedDriveFor(["Folkpaths E-slips", "Matched"], new Date("2026-10-31T10:00:00Z"))).toBeUndefined();
+  });
+});
