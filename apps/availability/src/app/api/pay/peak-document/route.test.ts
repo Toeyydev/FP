@@ -875,12 +875,12 @@ describe("no transfer without a document, and no document settled without eviden
     expect(db.payments[0]).toMatchObject({ bankRef: "KB203005131234" });
   });
 
-  it("files the slip under the document, the payment, the guide, the amount and the bank reference", async () => {
+  it("files the slip under the job, the document, the payment, the guide, the amount and the bank reference", async () => {
     await create([J1, J2, J3]);
     await payDoc();
     expect(drive.save).toHaveBeenCalledTimes(1);
     expect(drive.save.mock.calls[0][0]).toMatchObject({
-      name: "EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.png",
+      name: "FOLK-BKK-20300506-01-PLUS2_EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.png",
       folderPath: ["Folkpaths E-slips", "2030-05 May"],
     });
   });
@@ -1072,7 +1072,7 @@ describe("a person checked the slip, and the record says so", () => {
   it("keeps the slip's real extension — a PDF is filed as a PDF", async () => {
     await create([J1, J2, J3]);
     await payDoc({ fileName: "statement.pdf", mime: "application/pdf" });
-    expect(drive.save.mock.calls[0][0].name).toBe("EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.pdf");
+    expect(drive.save.mock.calls[0][0].name).toBe("FOLK-BKK-20300506-01-PLUS2_EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.pdf");
   });
 
   it("gives back the bank reference when PEAK refuses the payment — the document settles nothing", async () => {
@@ -1207,7 +1207,7 @@ describe("฿1,924: the review incentive is withheld on, and the transfer answer
     expect(peak.pay.mock.calls[0][0]).toMatchObject({ amount: 1876, withholdingTaxAmount: 48 });
     expect(payOf(JOB)).toMatchObject({ status: "PAID", peakRef: "EXP-TEST-0042" });
     expect(db.docs[0]).toMatchObject({ status: "PAID", slipAmount: 1876, verificationSource: "USER_VERIFIED_SLIP", bankAccountKey: "ACC:1234567890" });
-    expect(drive.save.mock.calls[0][0].name).toBe(`EXP-TEST-0042_${REF}_G-TEST_1876.00_KB203005131234.png`);
+    expect(drive.save.mock.calls[0][0].name).toBe(`FOLK-BKK-20300506-01_EXP-TEST-0042_${REF}_G-TEST_1876.00_KB203005131234.png`);
   });
 
   it("a fee changed after the EXP was made is drift — no bank note, and nothing paid", async () => {
