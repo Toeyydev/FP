@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { evidenceName } from "@/lib/evidence-name";
 import { audit } from "@/lib/audit";
 import { recordReceipt } from "@/lib/advances/service";
 import { notifyGuide, notifyOps } from "@/lib/booking-import";
@@ -199,9 +200,9 @@ export async function recordAdvanceReturn(o: {
   if (o.slipFile && typeof o.slipFile.arrayBuffer === "function" && (o.slipFile.size ?? 0) > 0) {
     const gUser = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
     const guideName = gUser?.fullName || gUser?.displayName || guideId;
-    // The same naming as every other Drive file of this job, so its documents sort together.
-    const base = `${sheet.ref || `${guideId}-${date}`} — ${guideName} — ${date}`;
-    const up = await uploadSlip(o.actorId ?? undefined, o.slipFile, `${base} — advance return ฿${amount}`, date);
+    // Job No. first, the same as every other Drive file of this job (lib/evidence-name).
+    const name = evidenceName({ jobs: [sheet.ref], what: "advance return slip", guide: guideName, date, amount, refs: [o.txRef, guideId] });
+    const up = await uploadSlip(o.actorId ?? undefined, o.slipFile, name, date);
     if ("error" in up) return { ok: false, status: up.status, error: up.error };
     slip = up;
   }

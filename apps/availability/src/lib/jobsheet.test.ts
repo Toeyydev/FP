@@ -187,19 +187,19 @@ describe("jobsheet — receiptDriveName", () => {
   it("names a guide's receipt apart from the operator's row of the same number", () => {
     const operator = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" });
     const guide = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg", from: "guide" });
-    expect(guide).toBe("FOLK-BKK-20260808-01 — G-001 — 2026-08-08 — slot 0-G1 Grand Palace — guide receipt.jpg");
+    expect(guide).toBe("FOLK-BKK-20260808-01 — guide receipt G1 Grand Palace — G-001 — 2026-08-08 — slot 0.jpg");
     expect(guide).not.toBe(operator);
   });
 
   it("is unique per expense row (ref + E<n>) even for identical descriptions", () => {
     const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" });
     const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 1, description: "Grand Palace", ext: "jpg" });
-    expect(a).toBe("FOLK-BKK-20260808-01 — G-001 — 2026-08-08 — slot 0-E1 Grand Palace — receipt.jpg");
+    expect(a).toBe("FOLK-BKK-20260808-01 — receipt E1 Grand Palace — G-001 — 2026-08-08 — slot 0.jpg");
     expect(a).not.toBe(b); // same description, different row → a different Drive file
   });
-  it("falls back to guideId-date without a ref and sanitises the description", () => {
+  it("says NO-JOB without a ref and sanitises the description", () => {
     const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", slotIdx: 0, index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
-    expect(n).toBe("Job — G-002 — 2026-08-08 — slot 0-E3 Taxi airport run — receipt.pdf");
+    expect(n).toBe("NO-JOB — receipt E3 Taxi airport run — G-002 — 2026-08-08 — slot 0.pdf");
   });
 });
 

@@ -1,4 +1,5 @@
 import { accountingWriteRefusal } from "@/lib/advances/write-guard";
+import { evidenceName } from "@/lib/evidence-name";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -122,10 +123,10 @@ export async function POST(req: NextRequest) {
 
   let slip: { url: string; fileId: string } | null = null;
   if (file && typeof file.arrayBuffer === "function" && (file.size ?? 0) > 0) {
-    // Same naming convention as every other Drive file of this job
-    // ("<ref> — <guide> — <date> — …") so a job's documents sort together.
-    const base = `${kind === "advance" && peakRef ? `${peakRef} — ` : ""}${sheet.ref || `${guideId}-${date}`} — ${guideName} — ${date}`;
-    const up = await uploadSlip(session.user.id ?? undefined, file, `${base} — ${kind === "advance" ? "advance" : "advance return"} ฿${amount}`, date);
+    // Job No. first (lib/evidence-name), so a job's documents sort together. The bank
+    // reference keeps two same-amount transfers of one job from replacing each other.
+    const name = evidenceName({ jobs: [sheet.ref], what: kind === "advance" ? "advance slip" : "advance return slip", guide: guideName, date, amount, refs: [txRef, kind === "advance" ? peakRef : null, guideId] });
+    const up = await uploadSlip(session.user.id ?? undefined, file, name, date);
     if ("error" in up) return NextResponse.json({ error: up.error }, { status: up.status });
     slip = up;
   }

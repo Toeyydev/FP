@@ -1,4 +1,5 @@
 import { isHistoricalPayment } from "@/lib/payments-v2/rules";
+import { evidenceName } from "@/lib/evidence-name";
 import { accountingWriteRefusal } from "@/lib/advances/write-guard";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
@@ -99,7 +100,6 @@ export async function POST(req: NextRequest) {
   const guideName = guide?.fullName || guide?.displayName || body.guideId;
   // Named after the transfer and the jobs it pays — never after another job's EXP. A
   // supplemental payment has no job of its own to be named after.
-  const what = body.jobs.length ? `${body.jobs[0].jobNo}${body.jobs.length > 1 ? ` +${body.jobs.length - 1} more` : ""}` : "supplemental payment";
   async function fileSlip(f: Upload, date: string, label: string): Promise<{ ok: true; slip: NonNullable<RecordPaymentInput["slip"]> } | { ok: false; res: NextResponse }> {
     const refreshToken = await folkpathsDriveToken(actor.actorId ?? undefined);
     if (!refreshToken) return { ok: false, res: NextResponse.json({ error: "not-connected", reasons: ["Connect the Folkpaths Google account first"] }, { status: 400 }) };
@@ -107,7 +107,9 @@ export async function POST(req: NextRequest) {
     const bytes = Buffer.from(await f.arrayBuffer!());
     const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
     const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
-    const name = `${body.guideId} ${guideName} — ${date} — ${what}${label} — e-slip.${extOf(mime)}`;
+    // Job No. first (lib/evidence-name). The short hash keeps two different slips of one
+    // day apart — Drive replaces a same-named file.
+    const name = evidenceName({ jobs: body.jobs.map((j) => j.jobNo), noJob: "SUPPLEMENTAL", what: `guide pay slip${label}`, guide: guideName, date, refs: [body.guideId, fileHash.slice(0, 8)], ext: extOf(mime) });
     let link: string, fileId: string;
     try {
       ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));

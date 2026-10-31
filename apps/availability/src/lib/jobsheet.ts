@@ -1,5 +1,6 @@
 // Job-sheet types, the default Folkpaths expense catalogue, and the totals math.
 
+import { evidenceName } from "@/lib/evidence-name";
 import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
 
 export type Booking = {
@@ -520,13 +521,14 @@ export function reportedFoodCost(rows: readonly Expense[] | null | undefined): n
 }
 
 export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string; from?: "operator" | "guide" }): string {
-  const base = `${(opts.ref || "Job").trim()} — ${opts.guideId} — ${opts.date} — slot ${opts.slotIdx}`;
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
   // A guide's receipt is numbered by the line of THEIR report, which is not the
   // operator's row of the same number — so it is named apart (G<n>, "guide
   // receipt") and never reads as the operator's evidence for a different line.
   const guide = opts.from === "guide";
-  return `${base}-${guide ? "G" : "E"}${opts.index + 1}${desc ? ` ${desc}` : ""} — ${guide ? "guide receipt" : "receipt"}.${opts.ext}`;
+  const what = `${guide ? "guide receipt G" : "receipt E"}${opts.index + 1}${desc ? ` ${desc}` : ""}`;
+  // Job No. first (lib/evidence-name). guideId + slot stay: legacy refs are not unique.
+  return evidenceName({ jobs: [opts.ref], what, guide: opts.guideId, date: opts.date, refs: [`slot ${opts.slotIdx}`], ext: opts.ext });
 }
 
 // Apply a guide's reported attendance to a job sheet: remove `absent` guests

@@ -28,8 +28,8 @@ describe("downloadDriveFile — reading a saved slip back to attach it in PEAK",
     const r = await downloadDriveFile("refresh", "https://drive.google.com/file/d/AbCdEfGhIjKl_-12/view");
     expect(r).toEqual({ base64: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png", name: "slip.png" });
     expect(calls).toEqual([
-      "https://www.googleapis.com/drive/v3/files/AbCdEfGhIjKl_-12?fields=mimeType,name",
-      "https://www.googleapis.com/drive/v3/files/AbCdEfGhIjKl_-12?alt=media",
+      "https://www.googleapis.com/drive/v3/files/AbCdEfGhIjKl_-12?fields=mimeType,name&supportsAllDrives=true",
+      "https://www.googleapis.com/drive/v3/files/AbCdEfGhIjKl_-12?alt=media&supportsAllDrives=true",
     ]);
   });
   it("is null when Drive refuses or the link is not a Drive file", async () => {

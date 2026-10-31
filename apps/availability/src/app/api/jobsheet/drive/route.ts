@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { evidenceName } from "@/lib/evidence-name";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
@@ -81,10 +82,10 @@ export async function POST(req: NextRequest) {
     }
     if (eslipBase64 && refreshToken) {
       try {
-        // Slip evidence leads with the PEAK expense ref (EXP-xxxxx) when this
-        // tour's payment has one, matching the saved PEAK entry name.
+        // Job No. first (lib/evidence-name); the PEAK expense ref (EXP-xxxxx), when this
+        // tour's payment has one, follows as a reference.
         const tpRef = (await prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { peakRef: true } }))?.peakRef;
-        const e = await saveBufferToDrive({ refreshToken, name: `${tpRef ? `${tpRef} — ` : ""}${jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ` — e-slip.${eslipExt}`)}`, base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const e = await saveBufferToDrive({ refreshToken, name: evidenceName({ jobs: [ref], what: "guide pay slip", guide: guideName, date, refs: [tpRef, guideId, `slot ${slotIdx}`], ext: eslipExt }), base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
         eslipLink = e.link;
       } catch (e) { driveError = driveError || (e as Error).message.slice(0, 200); }
     }

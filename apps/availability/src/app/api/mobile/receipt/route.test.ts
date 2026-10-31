@@ -54,7 +54,7 @@ describe("POST /api/mobile/receipt", () => {
     const [o] = upload.mock.calls[0];
     expect(o.folder).toBe("Receipts");
     expect(o.date).toBe("2026-09-20");
-    expect(o.name("jpg")).toBe("FOLK-BKK-20260920-01 — G-001 — 2026-09-20 — slot 2-G2 Grand Palace — guide receipt.jpg");
+    expect(o.name("jpg")).toBe("FOLK-BKK-20260920-01 — guide receipt G2 Grand Palace — G-001 — 2026-09-20 — slot 2.jpg");
   });
 
   it("refuses a departure this guide was never given, and uploads nothing", async () => {
