@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { PEAK_VAT_TYPE } from "@/lib/peak-vat";
 import { computeTotals, DEFAULT_GUIDE_FEE, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { createExpenseAllInOne, peakEnabled } from "@/lib/peak-api";
 
@@ -14,7 +15,7 @@ export class HistoricalSheetNotPostable extends Error {
 const ACC_FEE = process.env.PEAK_ACCT_GUIDE_FEE || "";      // expense account for guide fees
 const ACC_EXP = process.env.PEAK_ACCT_EXPENSES || "";       // account for reimbursable expenses
 const PAY_METHOD = process.env.PEAK_PAYMENT_METHOD || "";   // bank-transfer payment method id
-const VAT_TYPE = process.env.PEAK_VAT_TYPE || "";           // e.g. a "no VAT" code (tune on sandbox)
+const VAT_TYPE = PEAK_VAT_TYPE;                             // lib/peak-vat: not VAT-registered → 1
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const ymd = (d: string) => d.replace(/-/g, ""); // 2026-06-28 -> 20260628

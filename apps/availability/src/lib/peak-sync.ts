@@ -13,6 +13,7 @@
 // money comes back to them.
 
 import { advanceGap, advanceGapReason, type AdvanceGap, type JobAdvance } from "@/lib/advances/coverage";
+import { PEAK_VAT_TYPE } from "@/lib/peak-vat";
 import { categoryForExpenseType, categoryLabel, isPerJobCategory } from "@/lib/peak-accounts";
 import {
   expenseAmount,
@@ -700,7 +701,7 @@ export type PeakExpenseLine = {
   quantity: number;
   price: number;
   accountCode: string;
-  vatType?: string;
+  vatType?: string | number;
   withHoldingTaxAmount: number;
 };
 
@@ -763,7 +764,7 @@ export function buildJobSheetExpense(input: {
       quantity: 1,
       price: round2(totals.guideFeeGross),
       accountCode: code,
-      vatType,
+      vatType: vatType || PEAK_VAT_TYPE,
       // The fee's own withholding, not the whole of it. A review incentive is also
       // withheld on (2026-09-23) but never appears in THIS document — syncableExpenses
       // leaves review rows out — and a document must not carry tax for a line it does
@@ -786,7 +787,7 @@ export function buildJobSheetExpense(input: {
       quantity: 1,
       price: round2(expenseAmount(e)),
       accountCode: account.code,
-      vatType,
+      vatType: vatType || PEAK_VAT_TYPE,
       withHoldingTaxAmount: 0,
     });
   }
