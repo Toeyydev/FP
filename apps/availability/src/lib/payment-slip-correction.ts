@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { evidenceName } from "@/lib/evidence-name";
 import { prisma } from "@/lib/db";
 import { driveFileIdOf, folkpathsDriveToken } from "@/lib/google-drive";
 import { googleAccessToken } from "@/lib/google-calendar";
@@ -104,9 +105,10 @@ const AFTER: PaymentValues = { status: "PENDING", paidAt: null, approvedBy: null
 
 /** The rename a correction asks for. Fixed at correction time, so a retry repeats it exactly. */
 export type RenamePlan = { fileId: string; oldName: string; newName: string };
-function renamePlan(t: CorrectionTarget, rightfulPeakRef: string | null, oldName: string, day: string): RenamePlan {
-  const exp = rightfulPeakRef ? ` — ${rightfulPeakRef}` : "";
-  return { fileId: t.driveFileId, oldName, newName: `${t.rightfulGuideId} — ${t.date} slot ${t.slotIdx}${exp} — e-slip (เคยแนบผิดกับ ${t.guideId} · แก้ ${day}).pdf` };
+// Job No. of the rightful guide's job first, like every other slip (lib/evidence-name).
+function renamePlan(t: CorrectionTarget, rightfulJobRef: string | null, rightfulPeakRef: string | null, oldName: string, day: string): RenamePlan {
+  const newName = evidenceName({ jobs: [rightfulJobRef], what: "guide pay slip", guide: t.rightfulGuideId, date: t.date, refs: [`slot ${t.slotIdx}`, rightfulPeakRef, `เคยแนบผิดกับ ${t.guideId} · แก้ ${day}`], ext: "pdf" });
+  return { fileId: t.driveFileId, oldName, newName };
 }
 function renameDescription(t: { guideId: string; rightfulGuideId: string; date: string; slotIdx: number; peakRef: string | null; day: string; auditId: string; oldName: string }) {
   return [
@@ -151,12 +153,13 @@ async function inspect(t: CorrectionTarget, db: Db | Prisma.TransactionClient, d
   if (row.guidePaymentId) problems.push("แถวนี้จ่ายผ่าน Payments v2 — ต้องกลับรายการที่การจ่ายเงินนั้น");
   if (row.paidBatchNo) problems.push(`แถวนี้อยู่ในชุดการจ่าย ${row.paidBatchNo}`);
 
-  const [v2Jobs, batchItems, sheet, evidence, users] = await Promise.all([
+  const [v2Jobs, batchItems, sheet, evidence, users, rightfulSheet] = await Promise.all([
     db.guidePaymentJob.count({ where: { guideId: t.guideId, date: t.date, slotIdx: t.slotIdx } }),
     db.paymentBatchItem.count({ where: { guideId: t.guideId, date: t.date, slotIdx: t.slotIdx } }),
     db.jobSheet.findUnique({ where: key(t.guideId), select: { id: true, ref: true, peakDocumentNo: true } }),
     db.paymentEvidence.count({ where: { googleDriveFileId: t.driveFileId } }),
     db.user.findMany({ where: { guideId: t.guideId }, select: { id: true } }),
+    db.jobSheet.findUnique({ where: key(t.rightfulGuideId), select: { ref: true } }),
   ]);
   if (v2Jobs) problems.push("งานนี้มีรายการใน Payments v2 — ต้องกลับรายการที่การจ่ายเงินนั้น");
   if (batchItems) problems.push("งานนี้อยู่ในชุดการจ่าย (payment batch)");
@@ -198,7 +201,7 @@ async function inspect(t: CorrectionTarget, db: Db | Prisma.TransactionClient, d
     rightful: { guideId: t.rightfulGuideId, tourPaymentId: rightful?.id ?? null, status: rightful?.status ?? null, peakRef: rightful?.peakRef ?? null, driveFileId: rightfulFileId, fileName: right?.name ?? null },
     proof: { md5: wrong?.md5Checksum ?? null, sameBytes },
     notices: notices.map((n) => ({ id: n.id, kind: n.kind, createdAt: n.createdAt.toISOString() })),
-    drive: wrong ? renamePlan(t, rightful?.peakRef ?? null, wrong.name, day) : null,
+    drive: wrong ? renamePlan(t, rightfulSheet?.ref ?? null, rightful?.peakRef ?? null, wrong.name, day) : null,
   };
   return { plan, row, rightful };
 }

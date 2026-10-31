@@ -120,7 +120,7 @@ describe("the correction", () => {
     expect(calls.renamed).toHaveLength(1);
     expect(calls.renamed[0].committedFirst).toBe(true);
     expect(calls.renamed[0].id).toBe(WRONG_FILE);
-    expect(calls.renamed[0].name).toBe("G-902 — 2026-07-15 slot 2 — EXP-20990700001 — e-slip (เคยแนบผิดกับ G-901 · แก้ 2026-09-27).pdf");
+    expect(calls.renamed[0].name).toBe("NO-JOB — guide pay slip — G-902 — 2026-07-15 — slot 2 — EXP-20990700001 — เคยแนบผิดกับ G-901 · แก้ 2026-09-27.pdf");
     expect(calls.renamed[0].description).toContain("ชื่อเดิม: G-901 Nok Example");
     expect(calls.renamed[0].description).toContain("ห้ามลบ");
     const renamed = await prisma.auditLog.findFirstOrThrow({ where: { action: "drive.slip_renamed" } });
@@ -139,7 +139,7 @@ describe("the correction", () => {
     expect(plan.after).toEqual({ status: "PENDING", paidAt: null, approvedBy: null, approvedAt: null, eslipUrl: null });
     expect(plan.notices).toHaveLength(1);
     expect(plan.proof.sameBytes).toBe(true);
-    expect(plan.drive).toEqual({ fileId: WRONG_FILE, oldName: "G-901 Nok Example — 2026-07-15 (1 tour) — abc — e-slip.pdf", newName: "G-902 — 2026-07-15 slot 2 — EXP-20990700001 — e-slip (เคยแนบผิดกับ G-901 · แก้ 2026-09-27).pdf" });
+    expect(plan.drive).toEqual({ fileId: WRONG_FILE, oldName: "G-901 Nok Example — 2026-07-15 (1 tour) — abc — e-slip.pdf", newName: "NO-JOB — guide pay slip — G-902 — 2026-07-15 — slot 2 — EXP-20990700001 — เคยแนบผิดกับ G-901 · แก้ 2026-09-27.pdf" });
   });
 
   it("a failed rename leaves the correction in place, says how to retry, and the retry renames the same file exactly once", async () => {

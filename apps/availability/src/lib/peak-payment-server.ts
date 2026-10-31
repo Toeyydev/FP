@@ -701,10 +701,10 @@ export function prismaPayDeps(opts: {
       if (!refreshToken) throw new Error("Google Drive is not connected");
       const earliest = [...jobs.map((j) => j.date)].sort()[0] ?? bangkokToday();
       const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
-      // <EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext> — the document it settles, the
+      // <JOB_NO>_<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext> — the job(s), the document it settles, the
       // payment it belongs to, whose it is, what left the bank and the bank's own
       // reference, so a slip found on its own can be placed without opening it.
-      const name = slipFileName({ documentNo: docNo, paymentRef: doc.paymentRef, guideId: doc.guideId, net: Number(doc.total) || 0, bankRef, ext });
+      const name = slipFileName({ jobNos: jobs.map((j) => j.ref), documentNo: docNo, paymentRef: doc.paymentRef, guideId: doc.guideId, net: Number(doc.total) || 0, bankRef, ext });
       const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", monthFolder] });
       // Stored now, so a payment that later needs resolving by hand still has its slip.
       // The bank reference and the amount were written with the claim, before PEAK.

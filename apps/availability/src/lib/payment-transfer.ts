@@ -104,7 +104,11 @@ export function slipExtension(originalName: string | null | undefined, mime: str
 }
 
 /**
- * `<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<original extension>`
+ * `<JOB_NO>_<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<original extension>`
+ *
+ * The Job No. leads, as on every file this app keeps in Drive (lib/evidence-name), so a
+ * job's documents sort together. A slip that pays several jobs leads with the first and
+ * says how many more (`FOLK-BKK-20261015-02-PLUS2`); none at all reads `NO-JOB`.
  *
  * Every field someone would otherwise have to open the file to learn. Underscores
  * separate the fields and hyphens live inside them, so the name splits cleanly. The
@@ -115,6 +119,7 @@ export function slipExtension(originalName: string | null | undefined, mime: str
  * unopenable, and the guide's name is not in the name — the screen shows that.
  */
 export function slipFileName(p: {
+  jobNos?: (string | null | undefined)[];
   documentNo: string | null | undefined;
   paymentRef: string;
   guideId: string;
@@ -122,7 +127,9 @@ export function slipFileName(p: {
   bankRef: string;
   ext: string;
 }): string {
-  const parts = [slug(p.documentNo ?? "") || "NO-EXP", slug(p.paymentRef), slug(p.guideId), amountPart(p.net), slug(normalizeBankRef(p.bankRef)) || "NO-REF"];
+  const jobs = [...new Set((p.jobNos ?? []).map((j) => slug(j ?? "")).filter(Boolean))];
+  const job = jobs.length ? `${jobs[0]}${jobs.length > 1 ? `-PLUS${jobs.length - 1}` : ""}` : "NO-JOB";
+  const parts = [job, slug(p.documentNo ?? "") || "NO-EXP", slug(p.paymentRef), slug(p.guideId), amountPart(p.net), slug(normalizeBankRef(p.bankRef)) || "NO-REF"];
   return `${parts.join("_")}.${slug(p.ext).toLowerCase() || "jpg"}`;
 }
 

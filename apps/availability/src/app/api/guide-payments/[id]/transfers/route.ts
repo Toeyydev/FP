@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { evidenceName } from "@/lib/evidence-name";
 import crypto from "crypto";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -87,7 +88,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const bytes = Buffer.from(await f!.arrayBuffer!());
     const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
     const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
-    const name = `${p.guideId} ${guideName} — ${date} — ${what} — transfer ${i + 2} of ${total} — e-slip.${extOf(mime)}`;
+    // Job No. first (lib/evidence-name); a payment with no job leads with its FOLK-PMT no.
+    const name = evidenceName({ jobs: p.jobs.map((j) => j.jobNo), noJob: p.paymentNo, what: `guide pay slip — transfer ${i + 2} of ${total}`, guide: guideName, date, refs: [p.paymentNo, p.guideId, fileHash.slice(0, 8)], ext: extOf(mime) });
     let link: string, fileId: string;
     try {
       ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
