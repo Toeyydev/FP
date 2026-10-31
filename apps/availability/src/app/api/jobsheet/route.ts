@@ -10,7 +10,7 @@ import { jobAdvanceView } from "@/lib/advances/job-view";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, guideFeeWhtRule, isApproved, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, feeAdjustmentProblems, guideFeeOrStandard, guideFeeWhtRule, isApproved, normaliseGuideFee, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
 import { scheduledStart, tourDayTimeline } from "@/lib/tour-day-timeline";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -530,7 +530,7 @@ export async function PUT(req: NextRequest) {
   const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
-    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, guideFee: true, updatedAt: true } });
+    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, guideFee: true, updatedAt: true, approvalStatus: true } });
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
       return { kind: "stale" as const };
     }
@@ -538,8 +538,28 @@ export async function PUT(req: NextRequest) {
     // here, not only in the editor. Only when the fee is created or edited: an untouched fee
     // keeps the rate it was saved, and maybe paid, with (lib/jobsheet guideFeeWhtRule).
     const storedFee = (current?.guideFee ?? null) as GuideFee | null;
-    const feeEdited = !storedFee || (["price", "time", "whtPct"] as const).some((k) => (storedFee[k] ?? null) !== (d.guideFee[k] ?? null));
-    if (feeEdited) d.guideFee = guideFeeWhtRule(d.guideFee, storedFee);
+    d.guideFee = normaliseGuideFee(d.guideFee as GuideFee) as typeof d.guideFee;
+    const FEE_KEYS = ["price", "time", "whtPct", "payType", "customPayable", "customNature", "adjustReason", "adjustNote"] as const;
+    const feeEdited = !storedFee || FEE_KEYS.some((k) => (storedFee[k] ?? null) !== ((d.guideFee as GuideFee)[k] ?? null));
+    // Approved or paid, the fee is what was approved or paid: unapprove first, as for any
+    // change to the job's money. Compared with the fee in force, so saving a sheet that
+    // stored none (it reads as the standard fee) is not an edit.
+    if (current && feeEdited) {
+      const inForce = guideFeeOrStandard(storedFee);
+      const changed = FEE_KEYS.some((k) => (inForce[k] ?? null) !== ((d.guideFee as GuideFee)[k] ?? null));
+      if (changed) {
+        const [pay, job] = await Promise.all([
+          tx.tourPayment.findUnique({ where: key, select: { status: true } }),
+          tx.guidePaymentJob.findFirst({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, active: true }, select: { id: true } }),
+        ]);
+        if (isApproved(current.approvalStatus) || pay?.status === "PAID" || job) return { kind: "fee-locked" as const };
+      }
+    }
+    if (feeEdited) {
+      const problems = feeAdjustmentProblems(d.guideFee as GuideFee);
+      if (problems.length) return { kind: "fee-invalid" as const, problems };
+      d.guideFee = guideFeeWhtRule(d.guideFee as GuideFee, storedFee) as typeof d.guideFee;
+    }
     // Review incentives carry no withholding from 2026-10-06 (owner decision): a review row
     // added from that day is marked tax-free by the server; rows already on the sheet keep the
     // tax they were paid with (lib/jobsheet stampReviewTaxFree).
@@ -593,6 +613,12 @@ export async function PUT(req: NextRequest) {
     if (hit.count === 0) return { kind: "stale" as const };
     return { kind: "ok" as const, sheet: (await tx.jobSheet.findUnique({ where: { id: current.id } }))! };
   });
+  if (written.kind === "fee-locked") {
+    return NextResponse.json({ error: "fee-locked", reasons: ["This job is approved or paid, so its guide fee cannot be changed. Unapprove it first."] }, { status: 409 });
+  }
+  if (written.kind === "fee-invalid") {
+    return NextResponse.json({ error: "fee-adjustment", reasons: written.problems }, { status: 400 });
+  }
   if (written.kind === "stale") {
     return NextResponse.json({ error: "stale", reasons: ["This job sheet was saved by someone else while you had it open. Reload it and make the change again — saving now would quietly undo theirs."] }, { status: 409 });
   }

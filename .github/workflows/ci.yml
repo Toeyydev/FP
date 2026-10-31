@@ -305,6 +305,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-fee-wht
 
+      # Guide compensation: 50% shows standard, payable and WHT 0, Save needs a reason, the
+      # standard fee stays stored, an approved job is locked, and it fits a phone.
+      - name: Guide compensation on the job sheet, in a real browser
+        run: node scripts/e2e/guide-compensation.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-compensation
+
       # A food tour's food cost is one figure against the food advance: the guide sees what
       # is left to return or what the company adds, and Send stores it from the advance.
       - name: Food tour one food total, in a real browser

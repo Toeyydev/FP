@@ -11,7 +11,7 @@ import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
 import { isFoodTourId } from "@/lib/bookings";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, feeIsAdjusted, feeIsLegacyHalf, FEE_ADJUST_OTHER, FEE_ADJUST_REASONS, shownStandardFee, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, type GuidePayType, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -375,6 +375,18 @@ export default function JobSheetEditor() {
       } catch { setMsg("No-show saved ✓"); }
     } else setMsg(ns > 0 ? "No-show saved ✓" : "Updated ✓");
   };
+  // Guide Payment: Standard fee vs what this job actually pays (lib/jobsheet payableGuideFee).
+  const feeReduced = feeIsAdjusted(sheet.guideFee) || feeIsLegacyHalf(sheet.guideFee);
+  const feeLocked = isApproved(sheet.approvalStatus) || !!payment?.paid;
+  const setFeeAdjust = (p: Partial<GuideFee>) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, ...p }, sheet.guideFee) });
+  // A legacy half (count 0.5) becomes a real rate × 1 the moment its type is chosen, so 50% of
+  // it is not a quarter.
+  const setPayType = (v: GuidePayType) => setFeeAdjust({
+    time: feeIsLegacyHalf(sheet.guideFee) ? 1 : sheet.guideFee.time,
+    payType: v === "FULL" ? null : v,
+    ...(v === "CUSTOM" ? {} : { customPayable: null, customNature: null }),
+    ...(v === "FULL" ? { adjustReason: null, adjustNote: null } : {}),
+  });
   const setExpense = (i: number, p: Partial<Expense>) => up({ expenses: sheet.expenses.map((e, j) => j === i ? { ...e, ...p } : e) });
   const sum = (key: "bookedPax" | "actualPax") => sheet.bookings.reduce((s, b) => s + (b[key] ?? 0), 0);
   // Total no-show pax reported across the sheet's bookings (per-booking count, with a
@@ -1861,22 +1873,72 @@ export default function JobSheetEditor() {
         <table className="js-table js-pay-table">
           <tbody>
             <tr>
-              <td><TH en="Guide Fee" th="ค่าจ้างมัคคุเทศก์" /></td>
+              <td>{feeReduced ? <TH en="Standard Guide Fee" th="ค่าจ้างมาตรฐาน" /> : <TH en="Guide Fee" th="ค่าจ้างมัคคุเทศก์" />}</td>
               <td className="js-amt">
                 {!ro && (
                   <span className="js-amt-in no-print">
-                    <input style={{ ...L, width: 84, textAlign: "right" }} type="number" value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, price: numOrNull(e.target.value) }, sheet.guideFee) })} title="Agreed rate" />
+                    <input style={{ ...L, width: 84, textAlign: "right" }} type="number" disabled={feeLocked} value={sheet.guideFee.price ?? ""} onChange={(e) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, price: numOrNull(e.target.value) }, sheet.guideFee) })} title="Agreed rate" />
                     <span>×</span>
-                    <input style={{ ...L, width: 44, textAlign: "right" }} type="number" value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, time: numOrNull(e.target.value) }, sheet.guideFee) })} title="Number of times/days" />
+                    <input style={{ ...L, width: 44, textAlign: "right" }} type="number" disabled={feeLocked} value={sheet.guideFee.time ?? ""} onChange={(e) => up({ guideFee: guideFeeWhtRule({ ...sheet.guideFee, time: numOrNull(e.target.value) }, sheet.guideFee) })} title="Number of times/days" />
                   </span>
                 )}
-                <b>{thb(t.gross)}</b>
+                <b>{thb(feeReduced ? shownStandardFee(sheet.guideFee) : t.gross)}</b>
               </td>
             </tr>
+            {!ro && (
+              <tr className="no-print js-pay-type-row">
+                <td><TH en="Payment Type" th="ประเภทการจ่าย" /></td>
+                <td className="js-amt">
+                  <select className="js-pay-type" style={{ ...L, width: "auto", maxWidth: "100%" }} disabled={feeLocked} title={feeLocked ? "Unapprove the job to change its guide fee" : undefined} value={sheet.guideFee.payType ?? (feeIsLegacyHalf(sheet.guideFee) ? "HALF_COMPENSATION" : "FULL")} onChange={(e) => setPayType(e.target.value as GuidePayType)}>
+                    <option value="FULL">Full Guide Fee</option>
+                    <option value="HALF_COMPENSATION">50% Compensation</option>
+                    <option value="CUSTOM">Custom Amount</option>
+                  </select>
+                </td>
+              </tr>
+            )}
+            {feeReduced && (
+              <tr className="js-fee-payable-row">
+                <td><TH en="Guide Fee Payable" th="ค่าจ้างที่จ่ายจริง" /></td>
+                <td className="js-amt">
+                  {!ro && sheet.guideFee.payType === "CUSTOM" && <span className="js-amt-in no-print"><input className="js-custom-payable" style={{ ...L, width: 84, textAlign: "right" }} type="number" min={0} disabled={feeLocked} value={sheet.guideFee.customPayable ?? ""} onChange={(e) => setFeeAdjust({ customPayable: numOrNull(e.target.value) })} /></span>}
+                  <b className="js-fee-payable">{thb(t.gross)}</b>
+                </td>
+              </tr>
+            )}
+            {feeIsAdjusted(sheet.guideFee) && !ro && sheet.guideFee.payType === "CUSTOM" && (
+              <tr className="no-print">
+                <td><TH en="Book as" th="ลงบัญชีเป็น" /></td>
+                <td className="js-amt">
+                  <select className="js-custom-nature" style={{ ...L, width: "auto", maxWidth: "100%" }} disabled={feeLocked} value={sheet.guideFee.customNature ?? ""} onChange={(e) => setFeeAdjust({ customNature: (e.target.value || null) as GuideFee["customNature"] })}>
+                    <option value="">Choose…</option>
+                    <option value="FEE">Guide fee</option>
+                    <option value="COMPENSATION">Compensation (change / cancellation)</option>
+                  </select>
+                </td>
+              </tr>
+            )}
+            {feeIsAdjusted(sheet.guideFee) && (
+              <tr className="js-fee-reason-row">
+                <td><TH en="Reason" th="เหตุผล" /></td>
+                <td className="js-amt" style={{ whiteSpace: "normal" }}>
+                  {!ro && (
+                    <span className="no-print" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <select className="js-fee-reason" style={{ ...L, width: "auto", maxWidth: "100%" }} disabled={feeLocked} value={sheet.guideFee.adjustReason ?? ""} onChange={(e) => setFeeAdjust({ adjustReason: e.target.value || null })}>
+                        <option value="">Choose a reason…</option>
+                        {FEE_ADJUST_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      <input className="js-fee-note" style={{ ...L, width: 220, maxWidth: "100%", textAlign: "left" }} maxLength={500} disabled={feeLocked} placeholder={sheet.guideFee.adjustReason === FEE_ADJUST_OTHER ? "Note (required)" : "Note (optional)"} value={sheet.guideFee.adjustNote ?? ""} onChange={(e) => setFeeAdjust({ adjustNote: e.target.value })} />
+                    </span>
+                  )}
+                  <span className={ro ? undefined : "print-only"}>{[sheet.guideFee.adjustReason, sheet.guideFee.adjustNote].filter(Boolean).join(" — ")}</span>
+                </td>
+              </tr>
+            )}
             <tr>
               <td><TH en="WHT %" th="อัตราภาษีหัก ณ ที่จ่าย" /></td>
               <td className="js-amt">
-                {!ro && <span className="js-amt-in no-print"><input className="js-wht-pct" style={{ ...L, width: 52, textAlign: "right" }} type="number" value={sheet.guideFee.whtPct ?? ""} disabled={feeIsWhtFree(sheet.guideFee)} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} title={feeIsWhtFree(sheet.guideFee) ? "Guide fee under ฿1,000 — no withholding (ค่าตัวต่ำกว่า ฿1,000 ไม่หักภาษี)" : "Withholding tax rate on the guide fee — applies to the fee only, never to tour expenses"} /></span>}
+                {!ro && <span className="js-amt-in no-print"><input className="js-wht-pct" style={{ ...L, width: 52, textAlign: "right" }} type="number" value={sheet.guideFee.whtPct ?? ""} disabled={feeLocked || feeIsWhtFree(sheet.guideFee)} onChange={(e) => up({ guideFee: { ...sheet.guideFee, whtPct: numOrNull(e.target.value) } })} title={feeIsWhtFree(sheet.guideFee) ? "Guide fee under ฿1,000 — no withholding (ค่าตัวต่ำกว่า ฿1,000 ไม่หักภาษี)" : "Withholding tax rate on the guide fee — applies to the fee only, never to tour expenses"} /></span>}
                 <b>{sheet.guideFee.whtPct ?? 0}%</b>
               </td>
             </tr>
