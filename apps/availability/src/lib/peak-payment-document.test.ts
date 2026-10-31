@@ -154,6 +154,13 @@ describe("one PEAK document for several jobs — stage 1 creates it, unpaid", ()
     expect(doc.expense).not.toHaveProperty("paidPayments");
   });
 
+  it("sends every line as vatType 1 — Folkpaths is not VAT-registered, and PEAK refuses a line without it", () => {
+    const doc = build();
+    expect(doc.lines.length).toBeGreaterThan(0);
+    expect(doc.lines.every((l) => l.vatType === 1)).toBe(true);
+    expect((doc.expense.products as { vatType?: unknown }[]).every((p) => p.vatType === 1)).toBe(true);
+  });
+
   it("sends a separate line per job and category, each naming its job", () => {
     const doc = build();
     expect(doc.lines.map((l) => [l.description, l.accountCode, l.price, l.withHoldingTaxAmount])).toEqual([

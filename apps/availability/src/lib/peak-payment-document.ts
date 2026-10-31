@@ -16,6 +16,7 @@
 // saved account chart, and the side effects arrive through CreateDocumentDeps and
 // PayDocumentDeps — which is what lets the order of operations be tested without either.
 import { advanceBlock, advanceGap, advanceGapReason, type AdvanceBlock, type AdvanceGap, type JobAdvance } from "@/lib/advances/coverage";
+import { PEAK_VAT_TYPE } from "@/lib/peak-vat";
 import { paymentPayer } from "@/lib/payer-rules";
 import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
@@ -64,7 +65,7 @@ export type PeakPaymentLine = {
   quantity: number;
   price: number;
   accountCode: string;
-  vatType?: string;
+  vatType?: string | number;
   withHoldingTaxAmount: number;
 };
 
@@ -219,7 +220,7 @@ export function buildGuidePaymentDocument(input: {
     }
     const groups = new Map<string, { kind: PaymentLineKind; category: string | null; code: string; label: string; amount: number }>();
     const push = (kind: PaymentLineKind, category: string | null, code: string, price: number, lineWht: number, description: string) => {
-      lines.push({ description, quantity: 1, price, accountCode: code, vatType, withHoldingTaxAmount: lineWht });
+      lines.push({ description, quantity: 1, price, accountCode: code, vatType: vatType || PEAK_VAT_TYPE, withHoldingTaxAmount: lineWht });
       traces.push({ description, jobRef: ref, date: j.date, slotIdx: j.slotIdx, kind, category, accountCode: code, price, wht: lineWht });
     };
     const add = (kind: PaymentLineKind, category: string | null, code: string, label: string, amount: number) => {
