@@ -76,11 +76,11 @@ export async function liveDrive(): Promise<DriveOps> {
   };
   return {
     async meta(fileId) {
-      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${fields}`, { headers: auth });
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${fields}&supportsAllDrives=true`, { headers: auth });
       return r.ok ? parse(r) : null;
     },
     async rename(fileId, name, description) {
-      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${fields}`, {
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${fields}&supportsAllDrives=true`, {
         method: "PATCH", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ name, description }),
       });
       if (!r.ok) throw new Error(`Drive rename failed: HTTP ${r.status}`);
