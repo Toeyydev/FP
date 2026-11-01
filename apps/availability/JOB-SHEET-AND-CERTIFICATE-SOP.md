@@ -57,6 +57,20 @@ A certificate is needed only for **the guide's own money, with an amount, and no
 
 For jobs before 26 Sep 2026, use **/admin/historical-evidence** to work through them. It prepares drafts only; attest, file and link on the job sheet as above.
 
+### Where the files are
+
+All files live in Shared Drives, and the job sheet and PEAK links stay the same when a file moves.
+
+| Shared Drive | Folder | Holds |
+|---|---|---|
+| Company | `Folkpaths Job Sheets/<YYYY-MM Month>/` | Job sheets, `Receipts`, `Advances` |
+| Company | `Folkpaths E-slips/<YYYY-MM Month>/` | Guide payment slips |
+| Company | `Folkpaths Accounting/<Category>/<YYYY>/<NNMMM>/<Job No.>/` | Advance, return and payment files, by transaction month |
+| Private (admin only) | `Folkpaths Finance/Private Expense Certificates/<YYYY-MM>/` | Certificates |
+| Private (admin only) | `Folkpaths Finance/Private Attester Signatures/` | Signature images |
+
+The Private drive must have no other member. Anyone added to a Shared Drive can open everything in it, so filing a certificate is refused while it has one.
+
 ## 4. What did not change
 
 - Job sheet approval: who can approve, what it records, and its audit log.

@@ -35,9 +35,18 @@ export async function folkpathsDriveToken(actingUserId?: string): Promise<string
 // before. Files already saved keep their ids and links either way.
 export const SHARED_DRIVE_ID = (process.env.FOLKPATHS_SHARED_DRIVE_ID || "").trim();
 // Every call must say it understands shared drives, or Drive answers 404 for their files.
-const ALL_DRIVES = "supportsAllDrives=true";
+export const ALL_DRIVES = "supportsAllDrives=true";
 // Searches look inside the shared drive when there is one, otherwise in My Drive.
 const searchScope = (drive?: string) => (drive ? `&corpora=drive&driveId=${encodeURIComponent(drive)}&includeItemsFromAllDrives=true&${ALL_DRIVES}` : "&spaces=drive");
+
+// Certificates and signature images go to a second Shared Drive of their own (FOLKPATHS_PRIVATE_DRIVE_ID),
+// never the one above: anyone made a member of a shared drive can open everything in it, and
+// no folder can take that away. These files are admin-only, and the check before filing
+// (certificates/access) refuses a place with any other member. Set the id only after the
+// "Folkpaths Finance" folder has been moved there: a file is found by this one location.
+// Unset: the connected account's My Drive, as before.
+export const privateDriveId = () => (process.env.FOLKPATHS_PRIVATE_DRIVE_ID || "").trim() || undefined;
+export const privateDriveScope = () => searchScope(privateDriveId());
 
 // The switch-over month, "YYYY-MM" (FOLKPATHS_SHARED_DRIVE_FROM, e.g. 2026-11). A month's
 // documents live in ONE place, so a month closes from one folder: folders of months
