@@ -532,6 +532,7 @@ export async function PUT(req: NextRequest) {
   // this request or a signed-for row is not the row it was signed for.
   let payerReasons: { row: string; paidBy: string | null; reason: string }[] = [];
   let payerChanges: { row: string; from: string | null; to: string | null }[] = [];
+  let amountChanges: { row: string; from: string; to: string }[] = [];
   const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
@@ -578,6 +579,7 @@ export async function PUT(req: NextRequest) {
     const allowPayerChange = isOpsSave && tp?.status !== "PAID" && !activeJob;
     const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet", { allowPayerChange });
     payerChanges = merged.payerChanges ?? [];
+    amountChanges = merged.amountChanges ?? [];
     if (merged.conflicts.length) return { kind: "conflicts" as const, conflicts: merged.conflicts };
     // Stamped AFTER the merge, so a carried stamp is seen and left alone. Stamping the
     // request body instead would have put whoever pressed Save over the person who
@@ -660,7 +662,7 @@ export async function PUT(req: NextRequest) {
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(payerChanges.length ? { payerChanges } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(payerChanges.length ? { payerChanges } : {}), ...(amountChanges.length ? { amountChanges } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
   // The saved sheet goes back to whoever saved it — an operator, usually — so the rows
   // that a certificate stands behind are stripped on the way out for anyone but an admin.
   // The row they just saved is unchanged in the database; what they are not told is that
