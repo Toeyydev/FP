@@ -60,6 +60,8 @@ describe("switching over from a month (FOLKPATHS_SHARED_DRIVE_FROM)", () => {
     expect(sharedDriveFor(["Folkpaths Job Sheets", "2026-10 October", "Receipts"], nov)).toBeUndefined();
     expect(sharedDriveFor(["Folkpaths Job Sheets", "2026-11 November", "Advances"], nov)).toBe(DRIVE);
     expect(sharedDriveFor(["Folkpaths E-slips", "2026-12 December"], nov)).toBe(DRIVE);
+    expect(sharedDriveFor(["Folkpaths Job Sheets", "2026", "11 November", "Receipts"], nov)).toBe(DRIVE);
+    expect(sharedDriveFor(["Folkpaths E-slips", "2025", "10 October"], nov)).toBeUndefined();
     expect(sharedDriveFor(["Folkpaths Accounting", "Advance", "2026", "10OCT", "FOLK-BKK-1"], nov)).toBeUndefined();
     expect(sharedDriveFor(["Folkpaths Accounting", "Advance", "2026", "11NOV", "FOLK-BKK-1"], nov)).toBe(DRIVE);
   });

@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { NextRequest, NextResponse } from "next/server";
 import { evidenceName } from "@/lib/evidence-name";
 import { auth } from "@/auth";
@@ -54,8 +55,7 @@ export async function POST(req: NextRequest) {
   const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
   const guideName = u?.fullName || u?.displayName || guideId;
   const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
-  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim(); // e.g. "2026-06 June"
+    const monthFolder = driveMonth(date);
 
   // If the client sent a browser-rendered PDF (from the print page's "Share to
   // Drive"), store it verbatim — a pixel-perfect copy of the printed job sheet.
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     if (!refreshToken && (pdfBase64 || eslipBase64)) driveError = "Google Drive isn't connected, so the copy wasn't saved.";
     if (pdfBase64 && refreshToken) {
       try {
-        const r = await saveBufferToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const r = await saveBufferToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }, ".pdf"), base64: pdfBase64, mimeType: "application/pdf", folderPath: ["Folkpaths Job Sheets", ...monthFolder] });
         link = r.link;
       } catch (e) { driveError = (e as Error).message.slice(0, 200); }
     }
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
         // Job No. first (lib/evidence-name); the PEAK expense ref (EXP-xxxxx), when this
         // tour's payment has one, follows as a reference.
         const tpRef = (await prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { peakRef: true } }))?.peakRef;
-        const e = await saveBufferToDrive({ refreshToken, name: evidenceName({ jobs: [ref], what: "guide pay slip", guide: guideName, date, refs: [tpRef, guideId, `slot ${slotIdx}`], ext: eslipExt }), base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+        const e = await saveBufferToDrive({ refreshToken, name: evidenceName({ jobs: [ref], what: "guide pay slip", guide: guideName, date, refs: [tpRef, guideId, `slot ${slotIdx}`], ext: eslipExt }), base64: eslipBase64, mimeType: eslipMime, folderPath: ["Folkpaths Job Sheets", ...monthFolder] });
         eslipLink = e.link;
       } catch (e) { driveError = driveError || (e as Error).message.slice(0, 200); }
     }
@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
   </body></html>`;
 
   try {
-    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", ...monthFolder] });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.drive_saved", entityType: "JobSheet", detail: { guideId, date, slotIdx, ref } });
     return NextResponse.json({ ok: true, link });
   } catch (e) {

@@ -54,13 +54,13 @@ export const privateDriveScope = () => searchScope(privateDriveId());
 // that month onward goes to the shared drive. Unset: everything goes to the shared drive.
 export const SHARED_DRIVE_FROM = (process.env.FOLKPATHS_SHARED_DRIVE_FROM || "").trim();
 
-/** The month a folder path is filed under: "2026-11 November" or Accounting's "2026" / "11NOV". */
+/** The month a folder path is filed under: "2026-10 October", "2026" / "11 November" or Accounting's "2026" / "11NOV". */
 export function folderMonth(folderPath: string[]): string | null {
   for (let i = 0; i < folderPath.length; i++) {
     const m = folderPath[i].match(/^(\d{4})-(\d{2})(\b|$)/);
     if (m) return `${m[1]}-${m[2]}`;
     const y = folderPath[i].match(/^(\d{4})$/);
-    const mm = folderPath[i + 1]?.match(/^(\d{2})[A-Z]{3}$/);
+    const mm = folderPath[i + 1]?.match(/^(\d{2})(?:[A-Z]{3}$| [A-Z])/);
     if (y && mm) return `${y[1]}-${mm[1]}`;
   }
   return null;

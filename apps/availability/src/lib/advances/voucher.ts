@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import type { PrismaClient } from "@prisma/client";
 import { bahtText } from "@/lib/baht-text";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
@@ -18,7 +19,6 @@ import { fromSatang } from "./rules";
 // and an auditor each read this page for a different reason.
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /** Bangkok-readable date: 2026-09-20 → 20 ก.ย. 2569 */
 const TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
@@ -65,7 +65,7 @@ export const voucherDriveName = (v: Pick<VoucherInput, "advanceNo" | "jobNo">) =
 
 export const voucherDriveFolder = (advanceDate: string) => [
   "Folkpaths Job Sheets",
-  `${advanceDate.slice(0, 7)} ${MONTHS[Number(advanceDate.slice(5, 7)) - 1] ?? ""}`.trim(),
+  ...driveMonth(advanceDate),
   "Advances",
 ];
 
