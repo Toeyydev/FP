@@ -881,7 +881,7 @@ describe("no transfer without a document, and no document settled without eviden
     expect(drive.save).toHaveBeenCalledTimes(1);
     expect(drive.save.mock.calls[0][0]).toMatchObject({
       name: "FOLK-BKK-20300506-01-PLUS2_EXP-TEST-0042_FOLK-PAY-203005-01_G-TEST_4169.00_KB203005131234.png",
-      folderPath: ["Folkpaths E-slips", "2030-05 May"],
+      folderPath: ["Folkpaths E-slips", "2030", "05 May"],
     });
   });
 

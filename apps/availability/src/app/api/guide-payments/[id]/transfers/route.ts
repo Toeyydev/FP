@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { NextRequest, NextResponse } from "next/server";
 import { evidenceName } from "@/lib/evidence-name";
 import crypto from "crypto";
@@ -16,7 +17,6 @@ import { addMissingTransfers, previewMissingTransfers, type MissingTransferInput
 
 export const dynamic = "force-dynamic";
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 
 const body = z.object({
@@ -87,12 +87,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const mime = f!.type || "image/jpeg";
     const bytes = Buffer.from(await f!.arrayBuffer!());
     const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
-    const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+    const monthFolder = driveMonth(date);
     // Job No. first (lib/evidence-name); a payment with no job leads with its FOLK-PMT no.
     const name = evidenceName({ jobs: p.jobs.map((j) => j.jobNo), noJob: p.paymentNo, what: `guide pay slip — transfer ${i + 2} of ${total}`, guide: guideName, date, refs: [p.paymentNo, p.guideId, fileHash.slice(0, 8)], ext: extOf(mime) });
     let link: string, fileId: string;
     try {
-      ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
+      ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", ...monthFolder] }));
     } catch (e) {
       return NextResponse.json({ error: "drive-failed", reasons: [(e as Error).message.slice(0, 200)] }, { status: 502 });
     }

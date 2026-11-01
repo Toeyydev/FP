@@ -63,11 +63,13 @@ All files live in Shared Drives, and the job sheet and PEAK links stay the same 
 
 | Shared Drive | Folder | Holds |
 |---|---|---|
-| Company | `Folkpaths Job Sheets/<YYYY-MM Month>/` | Job sheets, `Receipts`, `Advances` |
-| Company | `Folkpaths E-slips/<YYYY-MM Month>/` | Guide payment slips |
+| Company | `Folkpaths Job Sheets/<YYYY>/<MM Month>/` | Job sheets, `Receipts`, `Advances` |
+| Company | `Folkpaths E-slips/<YYYY>/<MM Month>/` | Guide payment slips |
 | Company | `Folkpaths Accounting/<Category>/<YYYY>/<NNMMM>/<Job No.>/` | Advance, return and payment files, by transaction month |
-| Private (admin only) | `Folkpaths Finance/Private Expense Certificates/<YYYY-MM>/` | Certificates |
+| Private (admin only) | `Folkpaths Finance/Private Expense Certificates/<YYYY>/<MM Month>/` | Certificates |
 | Private (admin only) | `Folkpaths Finance/Private Attester Signatures/` | Signature images |
+
+Months before November 2026 keep their old folders (`2026-10 October`).
 
 The Private drive must have no other member. Anyone added to a Shared Drive can open everything in it, so filing a certificate is refused while it has one.
 

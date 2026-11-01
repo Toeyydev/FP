@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { isHistoricalPayment } from "@/lib/payments-v2/rules";
 import { evidenceName } from "@/lib/evidence-name";
 import { accountingWriteRefusal } from "@/lib/advances/write-guard";
@@ -17,7 +18,6 @@ import { previewPayment, recordPayment, type RecordPaymentInput } from "@/lib/pa
 
 export const dynamic = "force-dynamic";
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 
 // Request shape: lib/payments-v2/request-schema (a Next.js route may only export handlers).
@@ -106,13 +106,13 @@ export async function POST(req: NextRequest) {
     const mime = f.type || "image/jpeg";
     const bytes = Buffer.from(await f.arrayBuffer!());
     const fileHash = crypto.createHash("sha256").update(bytes).digest("hex");
-    const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+    const monthFolder = driveMonth(date);
     // Job No. first (lib/evidence-name). The short hash keeps two different slips of one
     // day apart — Drive replaces a same-named file.
     const name = evidenceName({ jobs: body.jobs.map((j) => j.jobNo), noJob: "SUPPLEMENTAL", what: `guide pay slip${label}`, guide: guideName, date, refs: [body.guideId, fileHash.slice(0, 8)], ext: extOf(mime) });
     let link: string, fileId: string;
     try {
-      ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", monthFolder] }));
+      ({ link, id: fileId } = await saveBufferToDrive({ refreshToken, name, base64: bytes.toString("base64"), mimeType: mime, folderPath: ["Folkpaths E-slips", ...monthFolder] }));
     } catch (e) {
       return { ok: false, res: NextResponse.json({ error: "drive-failed", reasons: [(e as Error).message.slice(0, 200)] }, { status: 502 }) };
     }

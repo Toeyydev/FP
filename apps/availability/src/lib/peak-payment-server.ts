@@ -1,6 +1,7 @@
 // Server half of "Pay N jobs together": reads the jobs, enforces every guard that needs
 // the database, and supplies the side effects lib/peak-payment-document orders — for
 // stage 1 (create the PEAK expense document) and stage 2 (record its payment).
+import { driveMonth } from "@/lib/drive-month";
 import { isHistoricalPayment } from "@/lib/payments-v2/rules";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -32,7 +33,6 @@ import {
 export type JobKey = { date: string; slotIdx: number };
 type Actor = { actorId: string | null; actorRole: string | null };
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -702,12 +702,12 @@ export function prismaPayDeps(opts: {
       }
       if (!refreshToken) throw new Error("Google Drive is not connected");
       const earliest = [...jobs.map((j) => j.date)].sort()[0] ?? bangkokToday();
-      const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
+      const monthFolder = driveMonth(earliest);
       // <JOB_NO>_<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext> — the job(s), the document it settles, the
       // payment it belongs to, whose it is, what left the bank and the bank's own
       // reference, so a slip found on its own can be placed without opening it.
       const name = slipFileName({ jobNos: jobs.map((j) => j.ref), documentNo: docNo, paymentRef: doc.paymentRef, guideId: doc.guideId, net: Number(doc.total) || 0, bankRef, ext });
-      const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", monthFolder] });
+      const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", ...monthFolder] });
       // Stored now, so a payment that later needs resolving by hand still has its slip.
       // The bank reference and the amount were written with the claim, before PEAK.
       await prisma.guidePaymentDocument.update({

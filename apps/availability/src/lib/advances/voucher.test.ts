@@ -75,7 +75,7 @@ describe("the advance voucher", () => {
   });
 
   it("files itself beside the slip, in the month the money moved", () => {
-    expect(voucherDriveFolder("2099-01-20")).toEqual(["Folkpaths Job Sheets", "2099-01 January", "Advances"]);
+    expect(voucherDriveFolder("2099-01-20")).toEqual(["Folkpaths Job Sheets", "2099", "01 January", "Advances"]);
     expect(voucherDriveName({ advanceNo: "FOLK-ADV-209901-001", jobNo: "FOLK-TEST-0001" }))
       .toBe("FOLK-ADV-209901-001 — FOLK-TEST-0001 — advance voucher");
   });
@@ -100,7 +100,7 @@ describe("filing the voucher", () => {
     const link = await saveAdvanceVoucher(dbWith(update), "adv_1", { enabled: true, token: async () => "token", saveHtml });
 
     expect(link).toBe("https://drive.example.test/voucher");
-    expect(saveHtml.mock.calls[0][0].folderPath).toEqual(["Folkpaths Job Sheets", "2099-01 January", "Advances"]);
+    expect(saveHtml.mock.calls[0][0].folderPath).toEqual(["Folkpaths Job Sheets", "2099", "01 January", "Advances"]);
     expect(saveHtml.mock.calls[0][0].html).toContain("หนึ่งพันบาทถ้วน");
     expect(update.mock.calls[0][0].data).toMatchObject({ voucherUrl: "https://drive.example.test/voucher", voucherFileId: "file_1" });
   });

@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 
 /**
@@ -9,7 +10,6 @@ import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/li
  * evidence nobody finds.
  */
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const OK_TYPES = /^(image\/(jpeg|jpg|png|webp)|application\/pdf)$/i;
 export const MAX_SLIP_BYTES = 10 * 1024 * 1024;
 
@@ -51,9 +51,9 @@ export async function uploadJobFile(o: {
   const refreshToken = await folkpathsDriveToken(o.userId);
   if (!refreshToken) return { error: "not-connected", status: 400 };
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
-  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+  const monthFolder = driveMonth(date);
   try {
-    const up = await saveBufferToDrive({ refreshToken, name: o.name(extOf(mime)), base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", monthFolder, o.folder] });
+    const up = await saveBufferToDrive({ refreshToken, name: o.name(extOf(mime)), base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", ...monthFolder, o.folder] });
     return { url: up.link, fileId: up.id };
   } catch (e) {
     return { error: `drive-failed: ${(e as Error).message.slice(0, 160)}`, status: 502 };

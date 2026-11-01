@@ -128,7 +128,7 @@ const fakeDrive = (): CertificateDrive => {
 
 const ENV = "test-env";
 /** Where documents are filed now: a private finance folder, not the guides' tree. */
-const PRIVATE_FOLDER = "Folkpaths Finance/Private Expense Certificates/2099-04";
+const PRIVATE_FOLDER = "Folkpaths Finance/Private Expense Certificates/2099/04 April";
 const LEGACY_FOLDER = "Folkpaths Job Sheets/2099-04 April/Expense Certificates";
 const deps = (over: Deps = {}): Deps => ({
   renderPdf: async (html: string) => Buffer.from(`%PDF-1.4 ${html.length}`),
