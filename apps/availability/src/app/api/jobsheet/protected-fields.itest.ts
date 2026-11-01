@@ -254,3 +254,24 @@ describe("two rows that say the same thing", () => {
     expect(rows[2].evidenceWaiver).toEqual(WAIVER);
   });
 });
+
+describe("a wrong count on a confirmed row", () => {
+  it("an operator corrects it on an unpaid job: the payer stamp stays and the audit names the change", async () => {
+    await seedSheet([ferry({ ...STAMP, pax: 5 })]);
+    const { status } = await save([ferry({ pax: 4 })]);
+    expect(status).toBe(200);
+    const rows = await rowsNow();
+    expect(rows[0].pax).toBe(4);
+    expect(rows[0].paidByBy).toBe("u_admin");
+    const log = await prisma.auditLog.findFirst({ where: { action: "jobsheet.saved" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(log!.detail)).toContain("amountChanges");
+  });
+
+  it("once the job is paid the count stays as it was paid", async () => {
+    await seedSheet([ferry({ ...STAMP, pax: 5 })]);
+    await prisma.tourPayment.create({ data: { guideId: GUIDE, date: DATE, slotIdx: 0, tourId: "T-900", status: "PAID" } });
+    const { status } = await save([ferry({ pax: 4 })]);
+    expect(status).not.toBe(200);
+    expect((await rowsNow())[0].pax).toBe(5);
+  });
+});

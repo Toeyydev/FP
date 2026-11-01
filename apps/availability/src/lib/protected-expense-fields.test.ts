@@ -281,6 +281,31 @@ describe("two rows that say the same thing", () => {
 
 describe("mergeServerOwned — an operator correcting a recorded payer on an unpaid job (2026-10-05)", () => {
   const ticket = (over: Partial<ProtectedRow> = {}) => stamped({ description: "Temple ticket (example)", price: 500, pax: 1, expenseType: "entrance", paidBy: "company", paidBySource: "operator", ...over } as Partial<ProtectedRow>);
+  it("with allowPayerChange the same expense and payer may take another count: stamp and link stay, the change reported", () => {
+    const stored = ticket({ pax: 5, advanceId: "adv_1" } as Partial<ProtectedRow>);
+    const m = mergeServerOwned([stored], [{ ...ticket({ pax: 4 }), paidByBy: undefined, paidByAt: undefined }], "This sheet", { allowPayerChange: true });
+    expect(m.conflicts).toEqual([]);
+    expect(m.rows[0]).toMatchObject({ pax: 4, paidByBy: stored.paidByBy, advanceId: "adv_1" });
+    expect(m.amountChanges).toHaveLength(1);
+  });
+
+  it("without allowPayerChange (a paid job) the count stays as it was recorded", () => {
+    const m = mergeServerOwned([ticket({ pax: 5 })], [ticket({ pax: 4 })], "This sheet");
+    expect(m.conflicts).toHaveLength(1);
+  });
+
+  it("a certificate or a settlement still holds the exact expense", () => {
+    const certified = ticket({ pax: 5, evidenceWaiver: waiver } as Partial<ProtectedRow>);
+    expect(mergeServerOwned([certified], [ticket({ pax: 4 })], "This sheet", { allowPayerChange: true }).conflicts).toHaveLength(1);
+    const settled = ticket({ pax: 5, advanceSettlement: { entryId: "e", advanceId: "a", advanceNo: "ADV-1" } } as Partial<ProtectedRow>);
+    expect(mergeServerOwned([settled], [ticket({ pax: 4 })], "This sheet", { allowPayerChange: true }).conflicts).toHaveLength(1);
+  });
+
+  it("two rows that read the same but for the amount cannot be told apart, so it is refused", () => {
+    const m = mergeServerOwned([ticket({ pax: 5 }), ticket({ pax: 3 })], [ticket({ pax: 4 }), ticket({ pax: 3 })], "This sheet", { allowPayerChange: true });
+    expect(m.conflicts).toHaveLength(1);
+  });
+
   it("with allowPayerChange the same expense may take another payer: the old stamp is dropped, the change reported", () => {
     const m = mergeServerOwned([ticket()], [{ ...ticket({ paidBy: "advance" }), paidByBy: undefined, paidByAt: undefined }], "This sheet", { allowPayerChange: true });
     expect(m.conflicts).toEqual([]);
