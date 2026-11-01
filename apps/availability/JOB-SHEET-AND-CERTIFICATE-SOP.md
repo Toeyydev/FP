@@ -47,8 +47,13 @@ A certificate is needed only for **the guide's own money, with an amount, and no
    2. **รับรอง** (attest)
    3. **จัดเก็บใน Drive**
    4. **link** the certificate to the rows
-3. Nothing is created automatically. Every step is a person pressing a button, and every step is audited.
-4. To replace a certificate, withdraw it (with a reason) first, then issue a new one. The old number stays in the history as **ยกเลิกแล้ว**.
+3. When the guide reported the expenses, **Approve** does this for you (since Nov 2026):
+   - The authorised attester sees **จะออกใบรับรองแทนใบเสร็จ ฿… ในชื่อคุณด้วย** at Approve. Pressing it drafts, attests, files and links in one click. The certificate links to the EXP by itself when the PEAK document is created.
+   - Anybody else's Approve leaves a draft for the attester to finish here. Their click never attests.
+   - A step that fails never undoes the approval. The message says where it stopped; carry on from that step here.
+   - With no guide report, draft by hand: a person must say where the rows came from.
+4. Every step is audited.
+5. To replace a certificate, withdraw it (with a reason) first, then issue a new one. The old number stays in the history as **ยกเลิกแล้ว**.
 
 For jobs before 26 Sep 2026, use **/admin/historical-evidence** to work through them. It prepares drafts only; attest, file and link on the job sheet as above.
 

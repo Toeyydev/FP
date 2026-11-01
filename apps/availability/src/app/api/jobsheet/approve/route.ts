@@ -4,8 +4,9 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { isOps } from "@/lib/roles";
+import { isAdmin, isOps } from "@/lib/roles";
 import { toggleApproval, isApproved } from "@/lib/jobsheet";
+import { certificatesOnApproval, type AutoCertificate } from "@/lib/certificates/auto";
 
 // POST { guideId, date, slotIdx, approve? } — operator/admin only.
 // Records the operator's finance sign-off on a SAVED job sheet: sets
@@ -65,6 +66,15 @@ export async function POST(req: NextRequest) {
   const advanceSettled = nowApproved && !isApproved(existing.approvalStatus)
     ? await autoSettleSheet(prisma, { guideId, date, slotIdx }, { actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null })
     : [];
+  // The certificate in lieu of a receipt follows the approval (lib/certificates/auto). Before
+  // the re-read below, because linking it marks rows. It can never undo the approval.
+  const firstApproval = nowApproved && !isApproved(existing.approvalStatus);
+  const actor = { id: session!.user!.id ?? "", name: (session!.user!.name || session!.user!.id || "").toString(), role: session!.user!.role ?? "" };
+  let certificates: AutoCertificate[] = [];
+  if (firstApproval) {
+    try { certificates = await certificatesOnApproval({ guideId, date, slotIdx }, actor); }
+    catch { /* reported by the certificate panel; the job stays approved */ }
+  }
   // updatedAt too: this write moved the sheet's version, and the editor sends that version
   // back as baseUpdatedAt on its next Save. Without it the editor held the version from
   // before the approval and its next Save was refused as stale.
@@ -76,5 +86,7 @@ export async function POST(req: NextRequest) {
     entityType: "JobSheet", entityId: existing.id,
     detail: { guideId, date, slotIdx, ref: existing.ref },
   });
-  return NextResponse.json({ ok: true, ...sheet, advanceSettled });
+  // Certificate numbers are for admins (certificate-signature-admin-only): an operator's
+  // approval leaves a draft in the admin's queue and is told nothing about it.
+  return NextResponse.json({ ok: true, ...sheet, advanceSettled, ...(isAdmin(session!.user!.role) ? { certificates } : {}) });
 }
