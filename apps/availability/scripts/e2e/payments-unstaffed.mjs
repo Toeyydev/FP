@@ -48,8 +48,9 @@ function browserPath() {
 
 // ── data (invented) ──────────────────────────────────────────────────────────
 const TODAY = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-// The first of this month, or — on the 1st itself — today: always this month and not in the future.
-const DAY1 = `${TODAY.slice(0, 8)}01`;
+// The first of this month — or, on the 1st itself, of last month: a past tour whatever the
+// hour. Today's 08:30 has not run yet before 08:30, and a failed main CI stops the deploy.
+const DAY1 = TODAY.endsWith("-01") ? `${new Date(Date.parse(`${TODAY}T00:00:00Z`) - 86400_000).toISOString().slice(0, 8)}01` : `${TODAY.slice(0, 8)}01`;
 const AUTH_SECRET = process.env.AUTH_SECRET || "e2e-only-not-a-real-secret-0123456789";
 const DRIVE_LOG = join(appDir, ".e2e-drive.log");
 writeFileSync(DRIVE_LOG, "");
@@ -105,12 +106,22 @@ await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const errors = [];
+// Payments opens on this month; DAY1 is last month's on the 1st.
+async function openMonth(page) {
+  await page.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+  await page.waitForSelector('input[type="month"]', { timeout: 20000 });
+  await page.$eval('input[type="month"]', (x, v) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(x, v);
+    x.dispatchEvent(new Event("input", { bubbles: true }));
+  }, DAY1.slice(0, 7));
+  await page.waitForNetworkIdle({ idleTime: 400 }).catch(() => {});
+}
 try {
   const page = await browser.newPage();
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.setViewport({ width: 390, height: 844 });
   await page.setCookie(await sessionCookie("op-us@example.test"));
-  await page.goto(`${BASE}/payments`, { waitUntil: "networkidle0" });
+  await openMonth(page);
   await page.waitForSelector(".js-unstaffed", { timeout: 20000 });
   const head = await page.$eval(".js-unstaffed summary", (x) => x.innerText.replace(/\s+/g, " "));
   check("Payments says one tour has no guide recorded, with its bookings and guests", /1 tour with no guide recorded/i.test(head) && /2 bookings · 5 guests/.test(head), head);
