@@ -142,6 +142,16 @@ try {
   const legacy = buttons.filter((t) => /FOLK-BKK-2026010[89]-01/.test(t));
   check("2 · old-style jobs paid the same day with different slips are a button each", legacy.length === 2 && legacy.every((t) => /^Put 1 job /.test(t)), JSON.stringify(buttons));
   check("no other button offers them together", buttons.length === 4, JSON.stringify(buttons));
+  // The same action on each job's own line, beside + EXP: it opens for that job's whole transfer.
+  const rowButtons = await page.$$(".js-put-in-peak");
+  check("2b · every job waiting for PEAK has Put in PEAK on its own line", rowButtons.length === 5, String(rowButtons.length));
+  await rowButtons[0].click();
+  await page.waitForSelector(".modal", { timeout: 15000 });
+  const dialog = await page.$eval(".modal", (x) => x.innerText.replace(/\s+/g, " "));
+  check("2b · it opens the PEAK document dialog for that transfer", /PEAK document/.test(dialog), dialog.slice(0, 160));
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => { const c = [...document.querySelectorAll(".modal button")].find((b) => /^(Cancel|Close|×)$/.test(b.textContent.trim())); c?.click(); });
+  await pause(400);
 
   // 3 — the server's own rule, asked directly: jobs from both payments in one document.
   const refused = await page.evaluate(async (jobs) => {
