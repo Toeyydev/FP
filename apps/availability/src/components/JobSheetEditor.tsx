@@ -357,13 +357,12 @@ export default function JobSheetEditor() {
     setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? { ...x, noShowPax: ns, status: noShowStatus(ns, x.bookedPax), actualPax: Math.max(0, (x.bookedPax ?? 0) - ns) } : x) } : s);
     if (!b.bookingNo) return;
     // Record it first — the API also mirrors the count / status / actual pax onto the sheet.
-    // Refused (an operator lowering a reported no-show must give a reason, in Bookings): put
-    // the row back and say so, rather than show a change that was never saved.
+    // Refused or unreachable: put the row back and say so, rather than show a change that was
+    // never saved.
     const res = await jfetch("/api/jobsheet/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: b.bookingNo, noShowPax: ns }) }).catch(() => null);
     if (!res || !res.ok) {
       setSheet((s) => s ? { ...s, bookings: s.bookings.map((x, j) => j === i ? b : x) } : s);
-      const err = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error : null;
-      setMsg(err === "reason-required" ? "To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason" : "No-show not saved — try again");
+      setMsg("No-show not saved — try again");
       return;
     }
     // …then upload a fresh copy to the Folkpaths Drive right away so the operator's
@@ -621,7 +620,7 @@ export default function JobSheetEditor() {
     const parts = ["Saved ✓"];
     if (kept.length) parts.push(`kept ${kept.length} reported no-show${kept.length === 1 ? "" : "s"} on the sheet (${kept.join(", ")})`);
     if (differ.length) parts.push(`needs review: ${differ.map((m) => `${m.bookingNo} shows ${m.absentOnSheet} absent, the guide reported ${m.reported}`).join("; ")}`);
-    if (kept.length || differ.length) parts.push("To withdraw a no-show, open the booking in Bookings, untick No-show and give a reason");
+    if (kept.length || differ.length) parts.push("To withdraw a no-show, untick it in the No-show column");
     setMsg(parts.join(" — "));
     // The month's payment list carries this job's payout and whether it is ready; it was
     // fetched before this save and would otherwise keep offering the old figures.

@@ -127,6 +127,16 @@ try {
   check("2 · the row says No-show", JSON.stringify(label) === JSON.stringify(["", "No-show", ""]), JSON.stringify(label));
   if (SHOTS) await (await page.$("#js-guests")).screenshot({ path: join(SHOTS, "noshow-tick.png") });
 
+  // 2b — taking the tick off needs no reason (owner, 2026-11-01)
+  const undone = page.waitForResponse((r) => r.url().endsWith("/api/jobsheet/noshow") && r.request().method() === "POST", { timeout: 15000 });
+  await (await page.$$(".js-ns-tick input"))[1].click();
+  const undoRes = await undone;
+  await pause(300);
+  const cleared = await prisma.booking.findFirstOrThrow({ where: { externalRef: "GYG-E2E-NS2" } });
+  check("2b · unticking is saved with no reason", undoRes.ok() && cleared.noShow === false && cleared.noShowPax === 0, `${undoRes.status()} ${JSON.stringify({ noShow: cleared.noShow, noShowPax: cleared.noShowPax })}`);
+  const after = await page.$$eval(".js-ns-tick input", (xs) => xs.map((x) => x.checked));
+  check("2b · the row is no longer ticked", JSON.stringify(after) === JSON.stringify([false, false, false]), JSON.stringify(after));
+
   // 3 — phone width
   await page.setViewport({ width: 390, height: 844 });
   await pause(300);
