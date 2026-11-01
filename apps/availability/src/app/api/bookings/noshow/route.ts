@@ -8,8 +8,8 @@ const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
 // POST { id, noShow, reason? } — operator marks a booking as a no-show (or clears it). Can be
 // done any time, including before the tour (e.g. a known last-minute cancellation).
-// Owner rule (2026-09-13): withdrawing a reported no-show is a deliberate edit — it needs a
-// reason, and the audit keeps who changed it, the count before and after, and why.
+// Owner rule (2026-11-01, replacing 2026-09-13): withdrawing a no-show needs no reason; the
+// audit keeps who changed it and the count before and after.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!ops(session?.user?.role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -21,7 +21,6 @@ export async function POST(req: NextRequest) {
   if (!cur) return NextResponse.json({ error: "not-found" }, { status: 404 });
   const previousNoShowPax = cur.noShowPax || (cur.noShow ? cur.pax ?? 0 : 0);
   const reason = parsed.data.reason?.trim() || null;
-  if (!parsed.data.noShow && previousNoShowPax > 0 && !reason) return NextResponse.json({ error: "reason-required", detail: "Withdrawing a reported no-show needs a reason." }, { status: 400 });
   const b = await prisma.booking.update({ where: { id: parsed.data.id }, data: { noShow: parsed.data.noShow, noShowPax: parsed.data.noShow ? (cur?.pax ?? 0) : 0 }, select: { confirmationCode: true, customerName: true } });
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: parsed.data.noShow ? "booking.noshow" : "booking.noshow_cleared", entityType: "Booking", entityId: parsed.data.id, detail: { ref: b.confirmationCode, name: b.customerName, previousNoShowPax, noShowPax: parsed.data.noShow ? (cur.pax ?? 0) : 0, ...(reason ? { reason } : {}) } });
   return NextResponse.json({ ok: true });

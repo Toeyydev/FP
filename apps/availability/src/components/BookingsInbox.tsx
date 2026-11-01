@@ -523,14 +523,7 @@ export default function BookingsInbox() {
                 <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "end", color: detail.noShow ? "var(--danger)" : undefined, fontWeight: detail.noShow ? 700 : undefined }}>
                   <input type="checkbox" checked={!!detail.noShow} onChange={async (e) => {
                     const v = e.target.checked;
-                    // Withdrawing a reported no-show is a deliberate edit: ask why, and change nothing without a reason.
-                    let reason: string | undefined;
-                    if (!v && (detail.noShow || Number(detail.noShowPax ?? 0) > 0)) {
-                      const given = window.prompt("Withdraw this reported no-show? Give the reason (kept in the audit log):", "");
-                      if (!given || !given.trim()) { setMsg("No-show kept — a reason is needed to withdraw it."); return; }
-                      reason = given.trim();
-                    }
-                    const r = await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v, reason }) });
+                    const r = await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v }) });
                     if (!r.ok) { setMsg("No-show not changed — try again."); return; }
                     setField("noShow", v); load();
                   }} />

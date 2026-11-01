@@ -369,16 +369,15 @@ describe("submitTourReport", () => {
   });
 });
 
-describe("recordNoShow — owner rule: lowering a reported no-show is deliberate", () => {
+describe("recordNoShow — owner rule: lowering a reported no-show needs no reason", () => {
   beforeEach(() => {
     prismaMock.booking.findFirst.mockResolvedValue({ pax: 4, noShow: true, noShowPax: 3, externalRef: "GYG1", confirmationCode: null });
   });
 
-  it("an operator lowering or withdrawing a reported count without a reason changes nothing", async () => {
-    expect(await noShow({ operator: true, noShowPax: 1 }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: false, status: 400, error: "reason-required" });
-    expect(await noShow({ operator: true, noShowPax: 0, reason: " " }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: false, status: 400, error: "reason-required" });
-    expect(prismaMock.booking.updateMany).not.toHaveBeenCalled();
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+  it("an operator lowers or withdraws a reported count without a reason, and the audit keeps who, before and after", async () => {
+    expect(await noShow({ operator: true, noShowPax: 0, actorId: "op_1", actorRole: "OPERATOR", via: "guide-list" }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: true, noShowPax: 0 });
+    expect(prismaMock.booking.updateMany).toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ actorId: "op_1", action: "booking.noshow_cleared", detail: expect.objectContaining({ previousNoShowPax: 3 }) }));
   });
 
   it("with a reason it is saved, and the audit keeps who, before, after and why", async () => {

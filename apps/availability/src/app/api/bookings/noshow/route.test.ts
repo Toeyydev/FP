@@ -21,13 +21,14 @@ beforeEach(() => {
 });
 
 describe("POST /api/bookings/noshow", () => {
-  it("refuses to withdraw a reported no-show without a reason, and changes nothing", async () => {
+  it("withdraws without a reason and keeps who, before and after", async () => {
     const res = await post({ id: "b1", noShow: false });
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe("reason-required");
-    expect(prismaMock.booking.update).not.toHaveBeenCalled();
-    const blank = await post({ id: "b1", noShow: false, reason: "   " });
-    expect(blank.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(prismaMock.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: { noShow: false, noShowPax: 0 } }));
+    expect(auditMock).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: "op_1", actorRole: "OPERATOR", action: "booking.noshow_cleared", entityId: "b1",
+      detail: expect.objectContaining({ previousNoShowPax: 2, noShowPax: 0 }),
+    }));
   });
 
   it("withdraws with a reason and keeps who, before, after and why", async () => {
