@@ -220,6 +220,10 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
   // gap in the books; before payment it is the normal state — so the paid one stands out.
   const notInPeak = (j: Job) => j.peakStatus?.state === "NOT_IN_PEAK";
   const expCandidate = (j: Job) => !!j.canRecordExp && notInPeak(j);
+  // One transfer, one PEAK document: which jobs a paid job shares its transfer with.
+  const transferKey = (j: Job) => j.payment?.id ? `pmt:${j.payment.id}`
+    : (j.slips?.find((s) => s.url)?.url ?? j.eslipUrl) ? `slip:${j.slips?.find((s) => s.url)?.url ?? j.eslipUrl}` : `day:${bkkDateOf(j.paidAt!)}`;
+  const canPutJob = (j: Job) => !!j.canPutInPeak && notInPeak(j) && !!j.paidAt;
   const peakBadge = (j: Job) => notInPeak(j)
     ? <span className={`pay-peak-missing${j.paid ? " paid" : ""}`} title={j.paid ? "Paid, but FolkOPS has no PEAK document for this job — record its EXP ref, or post it to PEAK" : "No PEAK document for this job yet"}>Not in PEAK</span>
     : j.peakStatus?.state === "NOTHING_TO_POST"
@@ -563,8 +567,6 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
               const cands = jobs.filter(expCandidate);
               // One transfer, one document. A recorded payment (FOLK-PMT-…) is one transfer; for
               // jobs paid before those existed, a shared slip is; failing both, the day is.
-              const transferKey = (j: Job) => j.payment?.id ? `pmt:${j.payment.id}`
-                : (j.slips?.find((s) => s.url)?.url ?? j.eslipUrl) ? `slip:${j.slips?.find((s) => s.url)?.url ?? j.eslipUrl}` : `day:${bkkDateOf(j.paidAt!)}`;
               const byTransfer = new Map<string, Job[]>();
               for (const j of jobs) if (j.canPutInPeak && notInPeak(j) && j.paidAt) byTransfer.set(transferKey(j), [...(byTransfer.get(transferKey(j)) ?? []), j]);
               const groups = [...byTransfer.values()].map((js) => ({ js, day: bkkDateOf(js[0].paidAt!), paymentNo: js[0].payment?.paymentNo ?? null }))
@@ -616,6 +618,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                   {paymentChip(j)}
                   {inPeakTag(j)}{advanceGapTag(j)}
                   {peakBadge(j)}
+                  {canEdit && mode === "paid" && canPutJob(j) && <button type="button" className="btn sm primary js-put-in-peak" style={{ padding: "1px 8px" }} title="Create the PEAK document for this transfer. Check PEAK first: if one was made by hand, use + EXP instead." onClick={() => setPutInPeak({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter((x) => canPutJob(x) && transferKey(x) === transferKey(j)), paidDate: bkkDateOf(j.paidAt!) })}>Put in PEAK</button>}
                   {canEdit && expCandidate(j) && <button type="button" className="btn sm ghost" style={{ padding: "1px 8px" }} title="Record the number of the PEAK document made by hand for this payment" onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter(expCandidate), preselect: [`${j.date}|${j.slotIdx}`] })}>+ EXP</button>}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : j.peakPaymentRef ? docBadge(j) : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
                   </span>
