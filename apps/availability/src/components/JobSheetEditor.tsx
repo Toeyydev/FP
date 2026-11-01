@@ -145,6 +145,7 @@ export default function JobSheetEditor() {
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
   const [tourDay, setTourDay] = useState<{ scheduled: string | null; steps: TimelineStep[] } | null>(null);
+  const [ticketsUnsaved, setTicketsUnsaved] = useState(false); // ticket rows follow the guest tags on screen, not yet stored
   const [approveCertifies, setApproveCertifies] = useState(0); // satang Approve would certify in this user's name
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
@@ -269,7 +270,12 @@ export default function JobSheetEditor() {
         if (isAttraction && e.pax !== inclPax) { changed = true; return { ...e, pax: inclPax }; }
         return e;
       });
-      return changed ? { ...prev, expenses } : prev;
+      if (!changed) return prev;
+      // The screen now differs from what is stored, and every figure in the Advance panel
+      // is the stored one. Say so: Approve and the PDF save first only when this is false,
+      // and a corrected count nobody saved left the panel adding up to the wrong total.
+      if (canEdit && !isApproved(prev.approvalStatus) && !payment?.paid) { setSaved(false); setTicketsUnsaved(true); }
+      return { ...prev, expenses };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(sheet?.bookings?.map((b) => [b.tickets, b.actualPax, b.bookedPax]))]);
@@ -612,6 +618,7 @@ export default function JobSheetEditor() {
       return false;
     }
     setSaveProblem(null);
+    setTicketsUnsaved(false);
     setAdvanceChoices({});
     void refreshAdvance(); // links set by this save show in the Advance panel straight away
     const kept: string[] = d.restoredNoShows ?? [];
@@ -2052,6 +2059,12 @@ export default function JobSheetEditor() {
            the ledger and expense tags were empty, leaving no route from the job sheet. */}
        {advanceLoaded && (canEdit || hasAdvance) && (
        <div className="advance-settlement" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none", marginTop: 16 }}>
+          {ticketsUnsaved && (
+            <div className="no-print js-tickets-unsaved" role="status" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "8px 12px", margin: "8px 0", border: "1px solid var(--line)", borderRadius: 8, fontSize: 13 }}>
+              <span style={{ flex: "1 1 200px" }}>จำนวนตั๋วถูกปรับตามแขกที่รวมตั๋ว ยังไม่ได้บันทึก ยอดด้านล่างจะเปลี่ยนหลังบันทึก</span>
+              <button type="button" className="btn sm primary js-tickets-save" disabled={busy} onClick={() => save()}>บันทึกจำนวนตั๋ว</button>
+            </div>
+          )}
         {/* Operator: one line — given · used · returned · to return — and a link to the
             advance on Payments → Advances, where advances and returns are recorded. The
             full settlement below stays one click away, and always prints with the sheet. */}

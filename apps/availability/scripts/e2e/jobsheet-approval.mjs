@@ -11,6 +11,7 @@
 //      page creates nothing
 //   5. Approve says what it will certify to the admin who certifies, fits at 390px, and
 //      an operator's approval leaves a draft without ever mentioning it
+//   6. a ticket count the page corrected says it is unsaved, and one click stores it
 //
 // Run after `next build`:  node scripts/e2e/jobsheet-approval.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and
@@ -57,7 +58,7 @@ function browserPath() {
 const CERT_NO = "CERT-FOLK-BKK-20990101-01-01";
 const DRIVE = "https://drive.google.com/file/d/fileCertificateE2E00001/view";
 async function seed() {
-  const tables = ["AuditLog", "Notification", "PeakAttachment", "ExpenseCertificate", "TourPayment", "JobSheet", "Booking", "Assignment", "RefreshToken", "User", "Tour"];
+  const tables = ["GuideAdvance", "AuditLog", "Notification", "PeakAttachment", "ExpenseCertificate", "TourPayment", "JobSheet", "Booking", "Assignment", "RefreshToken", "User", "Tour"];
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
   await prisma.tour.create({ data: { id: "T-900", name: "Riverside Temples", time: "08:30", durationMin: 180 } });
   const hash = bcrypt.hashSync(PASSWORD, 8);
@@ -84,6 +85,12 @@ async function seed() {
   await prisma.assignment.create({ data: { guideId: "G-901", date: "2099-01-03", slotIdx: 0, tourId: "T-900", pax: 2 } });
   const rows = [e("Tram", 15, 2)];
   await prisma.jobSheet.create({ data: { ref: "FOLK-BKK-20990103-01", guideId: "G-901", date: "2099-01-03", slotIdx: 0, tourId: "T-900", status: "Confirmed", expenses: rows, guideExpenses: rows, guideExpensesAt: new Date("2099-01-03T10:00:00Z"), guideFee: { price: 1200, time: 1, whtPct: 3 } } });
+  // Tags say 1 of 3 guests has tickets, the stored rows still say 3: the screen follows the tags.
+  await prisma.assignment.create({ data: { guideId: "G-901", date: "2099-01-04", slotIdx: 0, tourId: "T-900", pax: 3 } });
+  const advance = await prisma.guideAdvance.create({ data: { advanceNo: "FOLK-ADV-209901-001", jobNo: "FOLK-BKK-20990104-01", guideId: "G-901", date: "2099-01-04", slotIdx: 0, amount: 500, amountSatang: 50000, advanceDate: "2099-01-04", accountingPeriod: "2099-01", paidAt: new Date("2099-01-04T01:00:00Z"), purpose: "Ticket advance", allowedCategories: ["entrance"] } });
+  await prisma.jobSheet.create({ data: { ref: "FOLK-BKK-20990104-01", guideId: "G-901", date: "2099-01-04", slotIdx: 0, tourId: "T-900", status: "Confirmed",
+    bookings: [{ name: "Guest One", bookingNo: "EX-1", bookedPax: 1, actualPax: 1, tickets: "included", status: "" }, { name: "Guest Two", bookingNo: "EX-2", bookedPax: 2, actualPax: 2, tickets: "not", status: "" }],
+    expenses: [e("Grand Palace", 500, 3, { expenseType: "entrance", paidBy: "advance", advanceId: advance.id, paidByBy: users.ADMIN.id, paidByAt: "2099-01-04T00:00:00.000Z" })], guideFee: { price: 1200, time: 1, whtPct: 3 } } });
   return { users, withCert, needs };
 }
 
@@ -209,6 +216,21 @@ try {
   await op.close();
   const draft = await prisma.expenseCertificate.findFirst({ where: { tourDate: "2099-01-03" } });
   check("OPERATOR: their approval left a draft nobody has certified", draft?.status === "READY_TO_ATTEST" && !draft.attestedByUserId, draft?.status ?? "none");
+
+  // A ticket count the screen corrected is said to be unsaved, and one click stores it.
+  const fix = await browser.newPage();
+  await fix.setViewport({ width: 390, height: 900 });
+  await fix.setCookie(await sessionCookie(data.users.OPERATOR.email));
+  await fix.goto(sheetUrl("2099-01-04"), { waitUntil: "networkidle0" });
+  await fix.waitForSelector(".js-tickets-unsaved", { timeout: 20000 });
+  const fits = await fix.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  check("a corrected ticket count says it is not saved, and fits at 390px", fits);
+  if (SHOTS) await fix.screenshot({ path: join(SHOTS, "tickets-unsaved-390.png") });
+  await fix.click(".js-tickets-save");
+  await fix.waitForFunction(() => !document.querySelector(".js-tickets-unsaved"), { timeout: 15000 });
+  const stored = await prisma.jobSheet.findFirst({ where: { date: "2099-01-04" } });
+  check("one click stores the corrected count and keeps the payer stamp and advance link", stored.expenses[0].pax === 1 && !!stored.expenses[0].paidByBy && !!stored.expenses[0].advanceId, JSON.stringify(stored.expenses[0].pax));
+  await fix.close();
 } finally {
   await browser.close();
   server.kill();
