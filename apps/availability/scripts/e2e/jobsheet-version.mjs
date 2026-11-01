@@ -179,10 +179,18 @@ try {
   check("the category warning is gone once the rows have one", !(await page.$(".js-category-missing")));
   check("the save moved the version on from the approval's", (await sheetNow()).updatedAt.toISOString() !== approvedVersion);
 
-  // 3 — Save refreshes the list's payout
+  // 3 — Save refreshes the list's payout. An approved job's fee is locked, so the fee changes
+  // through Unapprove, then the job is approved again.
+  check("an approved job's fee cannot be edited", await page.$eval(".js-pay-type", (x) => x.disabled));
+  await clickButton(page, "Unapprove");
+  await waitText(page, /Approval removed/);
+  await page.waitForNetworkIdle({ idleTime: 400 }).catch(() => {});
   await setFee(page, 1600);
   await clickButton(page, "Save");
   await waitText(page, /Saved ✓|Not saved/);
+  await clickButton(page, "Approve");
+  await waitText(page, /Approved ✓/);
+  await page.waitForNetworkIdle({ idleTime: 400 }).catch(() => {});
   await page.waitForFunction(() => /1,639\.00/.test(document.querySelector(".js-pay-together")?.innerText ?? ""), { timeout: 15000 }).catch(() => {});
   check("after Save the list carries the new payout (1,600 − 48 + 87 = ฿1,639) — no reload", /1,639\.00/.test(await thisJobLine(page)), await thisJobLine(page));
 

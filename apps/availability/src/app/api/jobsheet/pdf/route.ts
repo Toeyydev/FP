@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, feeIsAdjusted, feeIsLegacyHalf, shownStandardFee, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { paidByShortLabel } from "@/lib/paid-by-label";
@@ -247,6 +247,7 @@ export async function GET(req: NextRequest) {
       <thead><tr><th>Description<small>รายการ</small></th><th class="n">Rate<small>อัตราค่าจ้าง</small></th><th class="c"></th><th class="n">Qty<small>จำนวนครั้ง</small></th><th class="n">WHT %<small>อัตราภาษีหัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net Guide Fee<small>ค่าจ้างมัคคุเทศก์สุทธิ</small></th></tr></thead>
       <tbody>
         <tr><td>Guide Fee <small style="display:block;font-size:8px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</small></td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
+        ${feeIsAdjusted(guideFee) || feeIsLegacyHalf(guideFee) ? `<tr><td colspan="7">Standard Guide Fee <small>ค่าจ้างมาตรฐาน</small> ${thb(shownStandardFee(guideFee))} · Guide Fee Payable <small>ค่าจ้างที่จ่ายจริง</small> <b>${thb(t.gross)}</b>${guideFee.adjustReason ? ` · Reason <small>เหตุผล</small>: ${esc([guideFee.adjustReason, guideFee.adjustNote].filter(Boolean).join(" — "))}` : ""}</td></tr>` : ""}
       </tbody>
     </table>
     ${(() => {

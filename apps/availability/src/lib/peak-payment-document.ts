@@ -18,7 +18,7 @@
 import { advanceBlock, advanceGap, advanceGapReason, type AdvanceBlock, type AdvanceGap, type JobAdvance } from "@/lib/advances/coverage";
 import { PEAK_VAT_TYPE } from "@/lib/peak-vat";
 import { paymentPayer } from "@/lib/payer-rules";
-import { computeTotals, expenseAmount, expenseCategory, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { computeTotals, expenseAmount, expenseCategory, feeIsCompensation, isReviewExpense, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { categoryLabel } from "@/lib/peak-accounts";
 import { evidenceRequired, evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evidence";
 import {
@@ -51,6 +51,8 @@ export type PaymentJob = {
 
 export type PaymentAccounts = {
   guideFee: PeakAccount | null;
+  /** Where a job paying compensation books (510123). A job that needs it and has none is refused. */
+  guideCompensation?: PeakAccount | null;
   reviewReward: PeakAccount | null;
   /** Tour-expense category defaults from the saved chart — includes `other` only when
    *  an Other Tour Cost default has been saved. A row's own account always wins. */
@@ -243,13 +245,14 @@ export function buildGuidePaymentDocument(input: {
     // taken from the same figures the transfer is built on so the document's tax can
     // never disagree with what was actually withheld.
     const jobTotals = computeTotals(expenses, j.guideFee as GuideFee);
-    const gross = round2((Number(j.guideFee?.price) || 0) * (Number(j.guideFee?.time) || 0));
+    const gross = round2(jobTotals.gross);
     const wht = round2(jobTotals.whtOnFee);
     const reviewWht = round2(jobTotals.whtOnReview);
     if (gross > 0) {
-      const code = (accounts.guideFee?.code ?? "").trim();
-      if (!code) reasons.add(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
-      push("GUIDE_FEE", "GUIDE_FEE", code, gross, wht, `Guide fee - ${ref}${whtNote(j.guideFee?.whtPct, wht)}`);
+      const compensation = feeIsCompensation(j.guideFee);
+      const code = ((compensation ? accounts.guideCompensation : accounts.guideFee)?.code ?? "").trim();
+      if (!code) reasons.add(`${categoryLabel(compensation ? "GUIDE_COMPENSATION" : "GUIDE_FEE")} has no PEAK account mapping`);
+      push("GUIDE_FEE", "GUIDE_FEE", code, gross, wht, `${compensation ? "Guide compensation" : "Guide fee"} - ${ref}${whtNote(j.guideFee?.whtPct, wht)}`);
     }
 
     // Everything else still owed to the guide, grouped per job + category + account.

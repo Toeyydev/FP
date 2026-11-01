@@ -91,7 +91,17 @@ export type Expense = {
 };
 export const PAID_BY_SOURCES = ["operator", "guide", "category-default", "default-after-tour", "unconfirmed", "rate-default"] as const;
 export type PaidBySource = (typeof PAID_BY_SOURCES)[number];
-export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
+export type GuidePayType = "FULL" | "HALF_COMPENSATION" | "CUSTOM";
+export type GuideFee = {
+  /** The agreed rate × count: the Standard Guide Fee. A compensation never changes these. */
+  price: number | null; time: number | null; whtPct: number | null;
+  /** Absent on every sheet saved before compensation existed: reads as FULL. */
+  payType?: GuidePayType | null;
+  customPayable?: number | null; // CUSTOM only: the baht actually payable
+  customNature?: "FEE" | "COMPENSATION" | null; // CUSTOM only: which account it books to, chosen by a person
+  adjustReason?: string | null;
+  adjustNote?: string | null;
+};
 
 // The standard items that appear on every new sheet (prices editable per job).
 // Categories are set HERE, at the source, because these are known company items —
@@ -149,7 +159,63 @@ export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
  * the rate it was saved — and maybe paid — with.
  */
 export const WHT_FREE_FEE_BELOW = 1000;
-const feeGross = (gf: GuideFee | null | undefined) => (Number(gf?.price) || 0) * (Number(gf?.time) || 0);
+/** The normal agreed fee for the job: rate × count. */
+export const standardGuideFee = (gf: GuideFee | null | undefined) => (Number(gf?.price) || 0) * (Number(gf?.time) || 0);
+/**
+ * What Folkpaths actually pays for this job. Every total goes through here (computeTotals), so
+ * the summary, the transfer and PEAK all follow it. Worked in satang: half of ฿1,501 is ฿750.50.
+ */
+export function payableGuideFee(gf: GuideFee | null | undefined): number {
+  const standard = standardGuideFee(gf);
+  if (gf?.payType === "HALF_COMPENSATION") return Math.round(standard * 100 * 0.5) / 100;
+  if (gf?.payType === "CUSTOM") return Math.round((Number(gf.customPayable) || 0) * 100) / 100;
+  return standard;
+}
+/** Paid as agreed? False for a compensation, whose standard fee must stay on show. */
+export const feeIsAdjusted = (gf: GuideFee | null | undefined) => !!gf?.payType && gf.payType !== "FULL";
+/** A half fee saved before compensation existed: count 0.5, no payment type. Shown as 50%
+ *  from what is stored; nothing is rewritten, and no reason is asked of it. */
+export const feeIsLegacyHalf = (gf: GuideFee | null | undefined) => !gf?.payType && Number(gf?.time) === 0.5;
+/** The fee a job was agreed at, on screen and on paper. */
+export const shownStandardFee = (gf: GuideFee | null | undefined) => (feeIsLegacyHalf(gf) ? Number(gf?.price) || 0 : standardGuideFee(gf));
+/** Does this fee book to the compensation account (510123)? 50% always; Custom only when a
+ *  person said it is compensation. Never inferred from the reason, never for a legacy half. */
+export const feeIsCompensation = (gf: GuideFee | null | undefined) =>
+  gf?.payType === "HALF_COMPENSATION" || (gf?.payType === "CUSTOM" && gf.customNature === "COMPENSATION");
+export const FEE_ADJUST_OTHER = "Other";
+export const FEE_ADJUST_REASONS = [
+  "Tour changed by customer", "Tour cancelled by customer", "Force majeure",
+  "Attraction / venue closed", "Operational cancellation", FEE_ADJUST_OTHER,
+] as const;
+/** Why this compensation cannot be saved. Empty for a full fee, and for a valid one. */
+export function feeAdjustmentProblems(gf: GuideFee | null | undefined): string[] {
+  if (!feeIsAdjusted(gf)) return [];
+  const out: string[] = [];
+  if (gf!.payType !== "HALF_COMPENSATION" && gf!.payType !== "CUSTOM") out.push("Unknown payment type");
+  if (gf!.payType === "CUSTOM") {
+    const amount = gf!.customPayable;
+    if (amount == null || !Number.isFinite(Number(amount))) out.push("Enter the payable guide fee");
+    else if (Number(amount) < 0) out.push("The payable guide fee cannot be negative");
+    else if (Number(amount) > standardGuideFee(gf)) out.push("The payable guide fee cannot be more than the standard guide fee");
+    if (gf!.customNature !== "FEE" && gf!.customNature !== "COMPENSATION") out.push("Choose whether this amount is a guide fee or compensation");
+  }
+  const reason = (gf!.adjustReason ?? "").trim();
+  if (!(FEE_ADJUST_REASONS as readonly string[]).includes(reason)) out.push("Choose a reason for the adjustment");
+  if (reason === FEE_ADJUST_OTHER && !(gf!.adjustNote ?? "").trim()) out.push("Add a note: the reason is Other");
+  return out;
+}
+/** A full fee stores nothing extra, so a sheet that was never adjusted keeps its exact shape. */
+export function normaliseGuideFee(gf: GuideFee): GuideFee {
+  const { payType, customPayable, customNature, adjustReason, adjustNote, ...fee } = gf;
+  if (!payType || payType === "FULL") return fee;
+  return {
+    ...fee, payType,
+    ...(payType === "CUSTOM" ? { customPayable: customPayable ?? null, customNature: customNature ?? null } : {}),
+    adjustReason: (adjustReason ?? "").trim() || null,
+    ...((adjustNote ?? "").trim() ? { adjustNote: adjustNote!.trim() } : {}),
+  };
+}
+const feeGross = payableGuideFee;
 export function guideFeeWhtRule(next: GuideFee, prev?: GuideFee | null): GuideFee {
   if (feeGross(next) < WHT_FREE_FEE_BELOW) return next.whtPct === 0 ? next : { ...next, whtPct: 0 };
   if (prev && feeGross(prev) < WHT_FREE_FEE_BELOW && Number(prev.whtPct) === 0 && !Number(next.whtPct)) return { ...next, whtPct: DEFAULT_GUIDE_FEE.whtPct };
@@ -293,7 +359,7 @@ export function reviewRewardTotal(expenses: Expense[]): number {
  */
 export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   const totalExpenses = (expenses ?? []).reduce((s, e) => s + expenseAmount(e), 0);
-  const gross = n(guideFee?.price) * n(guideFee?.time);
+  const gross = payableGuideFee(guideFee);
   const rate = n(guideFee?.whtPct) / 100;
   const reviewReward = reviewRewardTotal(expenses);
   const whtBase = gross + taxableReviewTotal(expenses);

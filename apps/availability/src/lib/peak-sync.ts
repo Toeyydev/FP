@@ -20,6 +20,8 @@ import {
   expenseCategory,
   isReviewExpense,
   computeTotals,
+  feeIsCompensation,
+  payableGuideFee,
   thb,
   jobCostBreakdown,
   type Expense,
@@ -743,13 +745,14 @@ export function buildJobSheetExpense(input: {
   /** The GUIDE_FEE account. Separate because PeakAccountMap only keys tour-expense
    *  categories — the guide fee is not one of them. */
   guideFeeAccount: PeakAccount | null;
+  guideCompensationAccount?: PeakAccount | null;
   accountingDate: string;
   documentDate?: string | null;
   jobRef?: string | null;
   bookings?: Booking[];
   vatType?: string;
 }): JobSheetExpenseDoc {
-  const { guideId, peakContactId, expenses, guideFee, accounts, guideFeeAccount, accountingDate, jobRef, bookings, vatType } = input;
+  const { guideId, peakContactId, expenses, guideFee, accounts, guideFeeAccount, guideCompensationAccount, accountingDate, jobRef, bookings, vatType } = input;
   if (!peakContactId) throw new JobSheetNotPostable("Guide is not mapped to a PEAK Contact");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(accountingDate ?? "")) throw new JobSheetNotPostable("No accounting date set");
 
@@ -757,10 +760,11 @@ export function buildJobSheetExpense(input: {
   const lines: PeakExpenseLine[] = [];
 
   if (totals.guideFeeGross > 0) {
-    const code = (guideFeeAccount?.code ?? "").trim();
-    if (!code) throw new JobSheetNotPostable(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
+    const category = feeIsCompensation(guideFee) ? "GUIDE_COMPENSATION" : "GUIDE_FEE";
+    const code = ((category === "GUIDE_COMPENSATION" ? guideCompensationAccount : guideFeeAccount)?.code ?? "").trim();
+    if (!code) throw new JobSheetNotPostable(`${categoryLabel(category)} has no PEAK account mapping`);
     lines.push({
-      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.whtOnFee))}`,
+      description: `${categoryLabel(category)}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.whtOnFee))}`,
       quantity: 1,
       price: round2(totals.guideFeeGross),
       accountCode: code,
@@ -846,8 +850,9 @@ export function peakPayloadHash(input: {
   const payload = [
     `contact=${peakContactId ?? ""}`,
     `date=${accountingDate ?? ""}`,
-    `fee=${Math.round((guideFee?.price ?? 0) * (guideFee?.time ?? 0) * 100)}`,
+    `fee=${Math.round(payableGuideFee(guideFee) * 100)}`,
     `wht=${guideFee?.whtPct ?? 0}`,
+    ...(feeIsCompensation(guideFee) ? ["compensation=1"] : []), // an account change is an accounting change; absent otherwise, so no existing fingerprint moves
     `rows=${rows.join("|")}`,
     `rewards=${reviews.join("|")}`,
   ].join(";");
