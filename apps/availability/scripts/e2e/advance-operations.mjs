@@ -554,7 +554,7 @@ try {
     const filedMsg = await p2.evaluate(() => document.querySelector(".banner.ok")?.innerText ?? document.querySelector(".banner.danger")?.innerText ?? "");
     const driveLog = readFileSync(DRIVE_LOG, "utf8").slice(before);
     check("the Company advances report is filed as a PDF in Drive, in the month's Advances folder",
-      /Company advances \d{4}-\d{2}-\d{2}\.pdf filed in Drive · Folkpaths Job Sheets \/ \d{4}-\d{2} \w+ \/ Advances/.test(filedMsg) && /FOLDER[^\n]*\nFOLDER[^\n]*\nFOLDER[^\n]*\nUPLOAD /.test(driveLog) && !!(await p2.$(".js-report-link")),
+      /Company advances \d{4}-\d{2}-\d{2}\.pdf filed in Drive · Folkpaths Job Sheets \/ \d{4} \/ \d{2} \w+ \/ Advances/.test(filedMsg) && /FOLDER[^\n]*\nFOLDER[^\n]*\nFOLDER[^\n]*\nUPLOAD /.test(driveLog) && !!(await p2.$(".js-report-link")),
       filedMsg.slice(0, 200));
   }
   // Phase 1E — linking a settlement: chosen from the ledger with its exact amount, never typed.
