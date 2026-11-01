@@ -26,6 +26,8 @@ import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
 import { checkFiledDocument } from "@/lib/certificates/service";
 import { GET as certificateList, POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
 import { GET as jobSheetGet, PUT as jobSheetPut } from "@/app/api/jobsheet/route";
+import { POST as approve } from "@/app/api/jobsheet/approve/route";
+import { certificatesOnApproval } from "@/lib/certificates/auto";
 import { GET as rendererGet, POST as rendererPost } from "@/app/api/certificates/renderer/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
@@ -1770,5 +1772,92 @@ describe("a later guide report leaves an admin-recorded certificate alone", () =
     });
     const why = await refusal(() => attestCertificate(c.id, ADMIN, deps()));
     expect(why[0]).toContain("has changed since the certificate was prepared");
+  });
+});
+
+describe("approving a job sheet carries the certificate along", () => {
+  const KEY = { guideId: GUIDE, date: DATE, slotIdx: 0 };
+  const ATTESTER = { id: "u_attester", name: "Authorised", role: "ADMIN" };
+  const OPERATOR = { id: "u_ops", name: "Somchai Testsuite", role: "OPERATOR" };
+  beforeEach(async () => {
+    vi.stubEnv("CERTIFICATE_ATTESTER_EMAILS", "authorised@example.test");
+    await prisma.user.create({ data: { id: "u_attester", email: "authorised@example.test", role: "ADMIN", displayName: "Authorised" } });
+    await prisma.user.create({ data: { id: "u_ops", email: "ops@example.test", role: "OPERATOR", displayName: "Ops" } });
+  });
+
+  it("the attester's approval issues it in one click: attested in their name, filed, rows linked", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const [done] = await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(done).toMatchObject({ kind: "GUIDE_PAID", status: "LINKED", stopped: null, totalSatang: 11 * 5 * 100 });
+    const c = await prisma.expenseCertificate.findFirstOrThrow();
+    expect(c.attestedByUserId).toBe("u_attester");
+    expect(drive.active()).toHaveLength(1);
+    expect((await rowsNow())[0].evidenceWaiver?.certificateId).toBe(c.id);
+  });
+
+  it("anybody else's approval leaves a draft: their click never attests in another's name", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const [done] = await certificatesOnApproval(KEY, OPERATOR, deps());
+    expect(done).toMatchObject({ status: "READY_TO_ATTEST", stopped: null });
+    const c = await prisma.expenseCertificate.findFirstOrThrow();
+    expect(c.attestedByUserId).toBeNull();
+    expect(drive.files).toHaveLength(0);
+  });
+
+  it("an admin who is not on the attester list gets the draft too", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const [done] = await certificatesOnApproval(KEY, ADMIN, deps());
+    expect(done.status).toBe("READY_TO_ATTEST");
+  });
+
+  it("nothing to certify is nothing at all", async () => {
+    await seedSheet([e("Ferry", 11, 5, { paidBy: "company" })]);
+    expect(await certificatesOnApproval(KEY, ATTESTER, deps())).toEqual([]);
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("a guide who reported nothing stays by hand: the source is never guessed", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    expect(await certificatesOnApproval(KEY, ATTESTER, deps())).toEqual([]);
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("approving twice does not make a second one", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(await certificatesOnApproval(KEY, ATTESTER, deps())).toEqual([]);
+    expect(await prisma.expenseCertificate.count()).toBe(1);
+  });
+
+  it("a step that fails is reported where it stopped and left for the panel to retry", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    drive.failPut = "drive is down";
+    const [done] = await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(done.status).toBe("ATTESTED");
+    expect(done.stopped).toBeTruthy();
+    expect(await prisma.auditLog.count({ where: { action: "certificate.auto_stopped" } })).toBe(1);
+  });
+
+  it("a certificate that cannot be drafted never undoes the approval, and an operator is told nothing", async () => {
+    await seedSheet([e("Ferry", 11), e("Ferry", 11)]); // two rows that read the same are refused
+    authMock.auth.mockResolvedValue({ user: OPERATOR });
+    const { updatedAt } = await prisma.jobSheet.findFirstOrThrow();
+    const r = await approve(new NextRequest("http://test.local/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...KEY, reviewedUpdatedAt: updatedAt.toISOString() }) }));
+    const d = await r.json();
+    expect(d.ok).toBe(true);
+    expect(d.approvalStatus).toBe("APPROVED");
+    expect(JSON.stringify(d)).not.toMatch(/certificate/i);
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("only the attester is told beforehand what their click will certify", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const q = () => jobSheetGet(new NextRequest(`http://test.local/api/jobsheet?guideId=${GUIDE}&date=${DATE}&slotIdx=0`));
+    authMock.auth.mockResolvedValue({ user: ATTESTER });
+    expect((await (await q()).json()).approveCertifies).toBe(11 * 5 * 100);
+    authMock.auth.mockResolvedValue({ user: ADMIN });
+    expect((await (await q()).json()).approveCertifies).toBe(0);
+    authMock.auth.mockResolvedValue({ user: OPERATOR });
+    expect((await (await q()).json()).approveCertifies).toBe(0);
   });
 });

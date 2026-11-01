@@ -9,6 +9,8 @@
 //      operator sees nothing about it (certificates are admin-only)
 //   4. a sheet that needs a certificate but has none says how to make one, and opening the
 //      page creates nothing
+//   5. Approve says what it will certify to the admin who certifies, fits at 390px, and
+//      an operator's approval leaves a draft without ever mentioning it
 //
 // Run after `next build`:  node scripts/e2e/jobsheet-approval.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and
@@ -78,6 +80,10 @@ async function seed() {
     peakDocumentNo: "EXP-20990100001", peakDocumentId: "peak-doc-e2e-0001", peakDocumentSource: "JOB_SHEET_SYNC", peakLinkedAt: new Date("2099-01-03T00:00:00Z") } });
   await prisma.jobSheet.update({ where: { id: withCert.id }, data: { expenses: [{ ...e("Ferry", 15, 2), evidenceWaiver: { by: users.ADMIN.id, at: "2099-01-02T00:00:00Z", reason: "ใบรับรองแทนใบเสร็จ (ตัวอย่าง)", certificateId: cert.id, certificateNo: CERT_NO } }] } });
   const needs = await mk("2099-01-02", [e("Bus", 15, 3)]);
+  // Reported by the guide and not approved yet: Approve carries a certificate along.
+  await prisma.assignment.create({ data: { guideId: "G-901", date: "2099-01-03", slotIdx: 0, tourId: "T-900", pax: 2 } });
+  const rows = [e("Tram", 15, 2)];
+  await prisma.jobSheet.create({ data: { ref: "FOLK-BKK-20990103-01", guideId: "G-901", date: "2099-01-03", slotIdx: 0, tourId: "T-900", status: "Confirmed", expenses: rows, guideExpenses: rows, guideExpensesAt: new Date("2099-01-03T10:00:00Z"), guideFee: { price: 1200, time: 1, whtPct: 3 } } });
   return { users, withCert, needs };
 }
 
@@ -175,6 +181,34 @@ try {
   check("opening job sheets created no certificate", (await prisma.expenseCertificate.count()) === certsBefore);
   check("opening job sheets sent nothing to PEAK and wrote no attachment record", !/peakaccount|peak\.co/i.test(readFileSync(OUTBOUND, "utf8")) && (await prisma.peakAttachment.count()) === 0);
   check("no certificate audit was written", (await prisma.auditLog.count({ where: { action: { startsWith: "certificate." } } })) === 0 && auditsBefore >= 0);
+
+  // Approve says what it will certify, before it is pressed, to the one who certifies.
+  const openToApprove = async (role, width) => {
+    const p = await browser.newPage();
+    await p.setViewport({ width, height: 900 });
+    await p.setCookie(await sessionCookie(data.users[role].email));
+    await p.goto(sheetUrl("2099-01-03"), { waitUntil: "networkidle0" });
+    await p.waitForSelector(".js-check-approve", { timeout: 20000 });
+    return p;
+  };
+  for (const width of [1100, 390]) {
+    const p = await openToApprove("ADMIN", width);
+    const note = await p.$eval(".js-approve-certifies", (x) => x.innerText).catch(() => "");
+    check(`ADMIN at ${width}: Approve says it will issue the certificate`, note.includes("ใบรับรองแทนใบเสร็จ") && note.includes("30"), note);
+    const box = await p.$eval(".js-approve-certifies", (x) => { const r = x.getBoundingClientRect(); return { right: r.right, width: x.closest(".js-check-body").getBoundingClientRect().width, wide: document.documentElement.scrollWidth, view: innerWidth }; }).catch(() => null);
+    check(`ADMIN at ${width}: the note fits and the page does not scroll sideways`, Boolean(box) && box.right <= box.view && box.wide <= box.view && box.width >= 120, JSON.stringify(box));
+    if (SHOTS) await p.screenshot({ path: join(SHOTS, `approve-note-${width}.png`) });
+    await p.close();
+  }
+  const op = await openToApprove("OPERATOR", 390);
+  check("OPERATOR: Approve says nothing about a certificate", !(await op.$(".js-approve-certifies")));
+  await op.click(".js-check-approve");
+  await op.waitForFunction(() => document.body.innerText.includes("Approved ✓"), { timeout: 15000 });
+  const opText = await op.evaluate(() => document.body.innerText);
+  check("OPERATOR: approving tells them nothing about a certificate", !/certificate|ใบรับรอง/i.test(opText), opText.match(/Approved ✓.{0,80}/)?.[0] ?? "");
+  await op.close();
+  const draft = await prisma.expenseCertificate.findFirst({ where: { tourDate: "2099-01-03" } });
+  check("OPERATOR: their approval left a draft nobody has certified", draft?.status === "READY_TO_ATTEST" && !draft.attestedByUserId, draft?.status ?? "none");
 } finally {
   await browser.close();
   server.kill();

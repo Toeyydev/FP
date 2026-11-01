@@ -145,6 +145,7 @@ export default function JobSheetEditor() {
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
   const [tourDay, setTourDay] = useState<{ scheduled: string | null; steps: TimelineStep[] } | null>(null);
+  const [approveCertifies, setApproveCertifies] = useState(0); // satang Approve would certify in this user's name
   const [payment, setPayment] = useState<{ paid: boolean; paidAt: string | null; slip: string | null; status?: string | null; peakRef?: string | null; source?: "tour" | "payroll" | null } | null>(null);
   // The combined PEAK document ("Pay N jobs together") holding this job, if any.
   // Another guide finished this tour, or this guide finished it for someone (api/tour-handover).
@@ -221,7 +222,7 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setPastGaps(d.pastBookingGaps ?? null);
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
@@ -674,7 +675,9 @@ export default function JobSheetEditor() {
     const auto = (Array.isArray(d.advanceSettled) ? d.advanceSettled : []) as { advanceNo: string; ok: boolean; amount: number; reasons: string[] }[];
     const settledNote = auto.filter((x) => x.ok).map((x) => `${thb(x.amount)} settled against ${x.advanceNo}`).join(" · ");
     const refusedNote = auto.filter((x) => !x.ok).map((x) => `${x.advanceNo || "Advance"} not settled: ${x.reasons[0] ?? "see Advances"}`).join(" · ");
-    setMsg(isApproved(d.approvalStatus) ? ["Approved ✓", settledNote, refusedNote].filter(Boolean).join(" — ") : "Approval removed");
+    const certs = (Array.isArray(d.certificates) ? d.certificates : []) as { certificateNo: string | null; status: string; stopped: string | null }[];
+    const certNote = certs.map((c) => c.stopped ? `Certificate not finished: ${c.stopped}` : c.status === "READY_TO_ATTEST" ? `Certificate ${c.certificateNo} is ready to certify` : `Certificate ${c.certificateNo} issued`).join(" · ");
+    setMsg(isApproved(d.approvalStatus) ? ["Approved ✓", settledNote, refusedNote, certNote].filter(Boolean).join(" — ") : "Approval removed");
     // PEAK readiness is computed SERVER-side and one of its reasons is "Job sheet
     // is not approved". Without this refetch the panel kept the stale list and
     // contradicted the ✓ Approved badge printed four lines above it — on the one
@@ -1326,7 +1329,7 @@ export default function JobSheetEditor() {
                {cards.map((c, i) => (
                  <li key={c.key} className={`js-check-card${c.done ? " done" : ""}${i === current ? " now" : ""}${c.warn && !c.done ? " warn" : ""}`} data-step={c.key} title={c.tip || undefined}>
                    <span className="js-check-n" aria-hidden="true">{c.done ? "✓" : i + 1}</span>
-                   <span className="js-check-body"><b>{c.title}</b><small>{c.summary}</small></span>
+                   <span className="js-check-body"><b>{c.title}</b><small>{c.summary}{c.key === "approve" && !approvedNow && approveCertifies > 0 && <span className="js-approve-certifies" style={{ display: "block", marginTop: 2 }}>จะออกใบรับรองแทนใบเสร็จ {thb(approveCertifies / 100)} ในชื่อคุณด้วย</span>}</small></span>
                    {c.action}
                  </li>
                ))}
