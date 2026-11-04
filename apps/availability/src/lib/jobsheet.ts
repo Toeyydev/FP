@@ -285,11 +285,27 @@ export function adoptReportedLine(official: Expense, reported: Expense): Expense
     ...(!hasPayer(official) && hasPayer(reported) ? { paidBy: reported.paidBy, ...(reported.paidBySource ? { paidBySource: reported.paidBySource } : {}) } : {}),
   };
 }
+// A row the company or a company advance paid for is not the guide's to report: the guide
+// is not reimbursed for it, so it is never in their report. Adopting the report keeps it as
+// it is (owner report 2026-11-04: a ticket advance's rows were dropped, and the save refused).
+const notTheGuides = (e: Expense) => ["advance", "company"].includes((e.paidBy ?? "").trim());
 export function adoptReportedExpenses(official: Expense[], reported: Expense[]): Expense[] {
-  return (reported ?? []).map((g) => {
+  const adopt = (g: Expense) => {
     const o = (official ?? []).find((e) => sameLine(e, g));
     return hasPayer(o) ? { ...g, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g };
+  };
+  // In the official order, so a kept row stays where the operator put it.
+  const inOrder = (official ?? []).flatMap((e) => {
+    const g = (reported ?? []).find((r) => sameLine(e, r));
+    return g ? [adopt(g)] : notTheGuides(e) ? [e] : [];
   });
+  const extra = (reported ?? []).filter((g) => !(official ?? []).some((e) => sameLine(e, g))).map(adopt);
+  return [...inOrder, ...extra];
+}
+
+/** Official rows that adopting the guide's report would remove. */
+export function droppedByAdoption(official: Expense[], reported: Expense[]): Expense[] {
+  return (official ?? []).filter((e) => !notTheGuides(e) && !(reported ?? []).some((g) => sameLine(e, g)));
 }
 
 export function isReviewExpense(e: { description?: string | null }): boolean {

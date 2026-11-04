@@ -11,7 +11,7 @@ import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
 import { isFoodTourId } from "@/lib/bookings";
-import { adoptReportedExpenses, adoptReportedLine, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, feeIsAdjusted, feeIsLegacyHalf, FEE_ADJUST_OTHER, FEE_ADJUST_REASONS, shownStandardFee, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, type GuidePayType, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, droppedByAdoption, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, feeIsAdjusted, feeIsLegacyHalf, FEE_ADJUST_OTHER, FEE_ADJUST_REASONS, shownStandardFee, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, type GuidePayType, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -528,8 +528,7 @@ export default function JobSheetEditor() {
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const gd = sheet.guideExpenses;
     const adopted = adoptReportedExpenses(sheet.expenses ?? [], gd);
-    const gdKeys = new Set(gd.map((e) => norm(e.description)));
-    const droppedReal = (sheet.expenses ?? []).filter((e) => !gdKeys.has(norm(e.description)) && expenseAmount(e) > 0);
+    const droppedReal = droppedByAdoption(sheet.expenses ?? [], gd).filter((e) => expenseAmount(e) > 0);
     const gdTot = gd.reduce((s, e) => s + expenseAmount(e), 0);
     const warn = droppedReal.length
       ? `\n\nThe guide didn't report these — they'll be removed:\n${droppedReal.map((e) => `· ${e.description}  ${thb(expenseAmount(e))}`).join("\n")}`
