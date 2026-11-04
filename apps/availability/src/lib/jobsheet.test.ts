@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { foodCostRows, reportedFoodCost, FOOD_COST_DESCRIPTION, FOOD_COST_OVER_DESCRIPTION, adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { foodCostRows, reportedFoodCost, FOOD_COST_DESCRIPTION, FOOD_COST_OVER_DESCRIPTION, adoptReportedLine, adoptReportedExpenses, droppedByAdoption, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
 
 describe("jobsheet — fixed standard expense descriptions", () => {
   it("offers the three guide-inclusive labels in their canonical spelling", () => {
@@ -369,10 +369,21 @@ describe("jobsheet — adopting a guide's reported expenses", () => {
     ]);
     expect(out.map((e) => [e.pax, e.paidBy])).toEqual([[5, "company"], [5, "guide"], [1, "guide"]]);
   });
+  it("rows a company advance or the company paid stay: the guide never reports them", () => {
+    const official: Expense[] = [
+      { description: "Water (Inc. Guide)", price: 10, pax: null },
+      { description: "Temple ticket (example)", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance" },
+      { description: "Boat (example)", price: 50, pax: 2, paidBy: "company" },
+    ];
+    const out = adoptReportedExpenses(official, [{ description: "Water", price: 10, pax: 8 }]);
+    expect(out.map((e) => e.description)).toEqual(["Temple ticket (example)", "Boat (example)", "Water"]);
+    expect(out[0]).toEqual(official[1]);
+    expect(droppedByAdoption(official, [{ description: "Water", price: 10, pax: 8 }]).map((e) => e.description)).toEqual(["Water (Inc. Guide)"]);
+  });
   it("adoption carries where the payer came from, so a default stays marked unconfirmed", () => {
     const reported: Expense = { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" };
     expect(adoptReportedLine(official[1], reported)).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
-    expect(adoptReportedExpenses(official, [reported])[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(adoptReportedExpenses(official, [reported]).find((e) => e.description === "Bus (Inc. Guide)")).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
     // The operator's own payer wins and is labelled as the operator's.
     expect(adoptReportedExpenses(official, [{ ...reported, description: "Water (Inc. Guide)" }])[0]).toMatchObject({ paidBy: "company", paidBySource: "operator" });
   });
