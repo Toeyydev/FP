@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Note } from "@/components/PeakPaymentDialog";
 import { SLOTS } from "@/lib/slots";
+import TourDayCalendar from "@/components/TourDayCalendar";
 
 // "Record who guided" — a day that already happened, every tour on it in one place.
 //
@@ -231,6 +232,10 @@ export default function RecordPastTourDialog({ date, onClose, onChanged }: { dat
         <h3 id="recpast-h">Record who guided · {dLong(date)}</h3>
         <div className="mctx">Tours on this day with guests and no guide on the system. Nobody is notified.</div>
         <div className="mbody" style={{ display: "grid", gap: 12 }}>
+          <details className="js-who-guided">
+            <summary style={{ cursor: "pointer", fontSize: 13 }}>Who guided on other days</summary>
+            <div style={{ marginTop: 8 }}><TourDayCalendar date={date} /></div>
+          </details>
           {slots === null && <div className="skel-row" />}
           {error && <Note tone="danger">{error}</Note>}
           {notice && <Note tone="ok">{notice}</Note>}

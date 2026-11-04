@@ -1,5 +1,6 @@
 "use client";
 
+import TourDayCalendar from "@/components/TourDayCalendar";
 import { useCallback, useEffect, useState } from "react";
 import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
@@ -201,6 +202,11 @@ export default function Dispatch() {
       </div>
         <div className="nav"><a className="btn sm" href="/tour-log">📋 Past tours</a><a className="btn sm" href="/dashboard">Dashboard</a></div>
       </div>
+
+      <details className="panel js-jobs-calendar" style={{ padding: "10px 14px" }}>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>Who guided · calendar</summary>
+        <div style={{ marginTop: 10 }}><TourDayCalendar date={new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)} /></div>
+      </details>
 
       {tab === "historical" ? (
         <HistoricalBacklog />
