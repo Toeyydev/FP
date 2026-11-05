@@ -106,7 +106,7 @@ try {
     await page.setCookie(await sessionCookie(data.op.email));
     await page.goto(sheetUrl(TODAY), { waitUntil: "networkidle0" });
     await page.waitForSelector("table.js-table label.js-arrived input", { timeout: 20000 });
-    await page.click("table.js-table label.js-arrived input");
+    await Promise.all([page.waitForResponse((r) => r.url().includes("/api/jobsheet/arrived") && r.ok(), { timeout: 15000 }), page.click("table.js-table label.js-arrived input")]);
     await page.waitForFunction(() => /\d{2}:\d{2}/.test(document.querySelector("table.js-table label.js-arrived")?.textContent ?? ""), { timeout: 10000 });
     const b = await prisma.booking.findFirst({ where: { externalRef: "E2E-AR-1" } });
     check("office: the tick saves the time on the booking", !!b?.arrivedAt);
@@ -132,7 +132,7 @@ try {
     await page.goto(sheetUrl(TOMORROW), { waitUntil: "networkidle0" });
     await page.waitForSelector(".gs-cust label.js-arrived input:not([disabled])", { timeout: 20000 });
     const before = await page.$eval(".js-arrived-count", (x) => x.textContent);
-    await page.click(".gs-cust label.js-arrived input");
+    await Promise.all([page.waitForResponse((r) => r.url().includes("/api/jobsheet/arrived") && r.ok(), { timeout: 15000 }), page.click(".gs-cust label.js-arrived input")]);
     await page.waitForFunction(() => /\d{2}:\d{2}/.test(document.querySelector(".gs-cust label.js-arrived")?.textContent ?? ""), { timeout: 10000 });
     const after = await page.$eval(".js-arrived-count", (x) => x.textContent);
     check("guide 390px: count goes 0/2 → 2/2 with the time beside the guest", before.includes("0/2") && after.includes("2/2"), `${before} → ${after}`);
