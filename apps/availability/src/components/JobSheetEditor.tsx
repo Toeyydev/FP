@@ -140,6 +140,8 @@ export default function JobSheetEditor() {
   // WhatsApp links by booking number, read live from the bookings by the server — only for
   // guests this viewer may contact, and never saved on the sheet.
   const [guestContacts, setGuestContacts] = useState<Record<string, { whatsapp: string; display: string }>>({});
+  // Booking ref → when the guide ticked "มาแล้ว" (Booking.arrivedAt; never part of the saved sheet).
+  const [arrivals, setArrivals] = useState<Record<string, string>>({});
   const [moveOpen, setMoveOpen] = useState(false); // Move departure (components/MoveDepartureDialog)
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
@@ -223,7 +225,7 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setPastGaps(d.pastBookingGaps ?? null);
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setArrivals(d.arrivals && typeof d.arrivals === "object" ? d.arrivals : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
@@ -350,6 +352,24 @@ export default function JobSheetEditor() {
   const startMs = Date.parse(`${sheet.date}T00:00:00Z`) + (((SLOT_TIMES[sheet.slotIdx] || "00:00").split(":").map(Number).reduce((h, m) => h * 60 + m, 0)) * 60_000) - 7 * 3600 * 1000;
   const inNoShowWindow = Date.now() >= startMs && Date.now() <= startMs + 30 * 60_000;
   const canMarkNoShow = canEdit || (checkedIn && inNoShowWindow);
+  // "มาแล้ว": a guide ticks guests off from check-in until the no-show window closes.
+  const canMarkArrived = canEdit || (checkedIn && Date.now() <= startMs + 30 * 60_000);
+  const arrivedOf = (b: Booking) => (b.bookingNo ? arrivals[b.bookingNo.trim()] : undefined) ?? null;
+  const bkkTime = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+  const markArrived = async (b: Booking, on: boolean) => {
+    const ref = b.bookingNo.trim();
+    if (!ref) return;
+    const before = arrivals[ref];
+    setArrivals((m) => { const n = { ...m }; if (on) n[ref] = before ?? new Date().toISOString(); else delete n[ref]; return n; });
+    const res = await jfetch("/api/jobsheet/arrived", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet!.guideId, date: sheet!.date, slotIdx: sheet!.slotIdx, bookingNo: ref, arrived: on }) }).catch(() => null);
+    const d = res && res.ok ? await res.json().catch(() => null) : null;
+    if (!d?.ok) {
+      setArrivals((m) => { const n = { ...m }; if (before) n[ref] = before; else delete n[ref]; return n; });
+      setMsg("Arrival not saved — try again");
+      return;
+    }
+    setArrivals((m) => { const n = { ...m }; if (d.arrivedAt) n[ref] = d.arrivedAt; else delete n[ref]; return n; });
+  };
   // Any edit marks the sheet dirty, so the PDF / Excel / e-slip buttons (which
   // auto-save only when !saved) always persist the change before exporting/uploading.
   const up = (patch: Partial<Sheet>) => { setSheet({ ...sheet, ...patch }); setSaved(false); if (msg) setMsg(""); };
@@ -399,6 +419,9 @@ export default function JobSheetEditor() {
   // fallback for legacy rows that only carry the "no-show" status).
   const noShow = noShowStats(sheet.bookings);
   const noShowTotal = noShow.pax;
+  // Guests ticked "มาแล้ว" against everyone booked on the sheet.
+  const arrivedPax = sheet.bookings.reduce((n, b) => n + (arrivedOf(b) ? Math.max(0, (b.bookedPax ?? 0) - (b.noShowPax ?? 0)) : 0), 0);
+  const bookedTotal = sheet.bookings.reduce((n, b) => n + (b.bookedPax ?? 0), 0);
 
   // ---- Advance / settlement (cash movements; never part of the expense total) ----
   // Phase 3: the balance is the LEDGER's (lib/advances), sent with the sheet. Tagging an
@@ -1082,7 +1105,7 @@ export default function JobSheetEditor() {
             </div>
             <div className="gs-grid">
               <div>
-                <h3>Your customers ({sheet.bookings.length}){noShowTotal > 0 ? <span style={{ color: "var(--danger)", fontWeight: 700 }}> · {noShowTotal} no-show</span> : null}</h3>
+                <h3>Your customers ({sheet.bookings.length}){noShowTotal > 0 ? <span style={{ color: "var(--danger)", fontWeight: 700 }}> · {noShowTotal} no-show</span> : null}<span className="js-arrived-count" style={{ color: "#2e7d4f", fontWeight: 700 }}> · มาแล้ว {arrivedPax}/{bookedTotal}</span></h3>
                 <GuestCounts rows={sheet.bookings} sync={bookingSync} />
                 {ro && !canMarkNoShow && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", margin: "2px 0 6px" }}>{!checkedIn ? "Check in to report no-shows." : "No-show reporting is open for 30 minutes after the tour starts."}</div>}
                 {sheet.bookings.length ? (
@@ -1093,6 +1116,12 @@ export default function JobSheetEditor() {
                       const full = P > 0 && ns >= P, partial = ns > 0 && ns < P;
                       return (
                       <li key={i} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                        {(() => { const at = arrivedOf(b); return (
+                          <label className="js-arrived" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap", color: at ? "#2e7d4f" : "var(--ink-soft)", cursor: canMarkArrived && b.bookingNo ? "pointer" : "default" }} title={b.bookingNo ? "Tick when this booking has arrived" : "No reference to tick"}>
+                            <input type="checkbox" checked={!!at} disabled={!canMarkArrived || !b.bookingNo} onChange={(e) => markArrived(b, e.target.checked)} style={{ width: 18, height: 18, accentColor: "#2e7d4f" }} />
+                            มาแล้ว{at ? ` ${bkkTime(at)}` : ""}
+                          </label>
+                        ); })()}
                         <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}</span>
                         {b.tickets && <span style={{ fontSize: 11, fontWeight: 700, color: b.tickets === "included" ? "#2e7d4f" : "var(--ink-soft)", whiteSpace: "nowrap" }} title="Set by the operator">{b.tickets === "included" ? "Tickets incl." : "No tickets"}</span>}
                         {b.bookingNo && guestContacts[b.bookingNo] && <WhatsAppButton href={guestContacts[b.bookingNo].whatsapp} display={guestContacts[b.bookingNo].display} name={b.name} />}
@@ -1428,7 +1457,7 @@ export default function JobSheetEditor() {
           </div>
         )}
         <table className="js-table">
-          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print"><TH en="No-show" th="ไม่มา" /></th><th className="no-print" /></tr></thead>
+          <thead><tr><th><TH en="No." th="ลำดับ" /></th><th><TH en="Guest Name" th="ชื่อผู้เดินทาง" /></th><th><TH en="Booking No." th="เลขที่การจอง" /></th><th><TH en="Booked Pax" th="จำนวนที่จอง" /></th><th><TH en="Actual Pax" th="จำนวนผู้เดินทางจริง" /></th><th><TH en="Tickets" th="บัตรเข้าชม" /></th><th className="no-print"><TH en="Arrived" th="มาแล้ว" /></th><th className="no-print"><TH en="No-show" th="ไม่มา" /></th><th className="no-print" /></tr></thead>
           <tbody>
             {sheet.bookings.map((b, i) => (
               <tr key={i}>
@@ -1442,6 +1471,12 @@ export default function JobSheetEditor() {
                     <option value="">—</option><option value="included">Included</option><option value="not">Not incl.</option>
                   </select>
                 </td>
+                <td className="no-print">{(() => { const at = arrivedOf(b); return (
+                  <label className="js-arrived" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap", color: at ? "#2e7d4f" : "var(--ink-soft)" }} title={b.bookingNo ? "Tick when this booking has arrived" : "Add the booking no. first"}>
+                    <input type="checkbox" checked={!!at} disabled={!b.bookingNo} onChange={(e) => markArrived(b, e.target.checked)} style={{ width: 16, height: 16, accentColor: "#2e7d4f" }} />
+                    {at ? bkkTime(at) : ""}
+                  </label>
+                ); })()}</td>
                 <td className="no-print">{(() => {
                   const P = b.bookedPax ?? 0, ns = b.noShowPax ?? (b.status === "no-show" ? P : 0);
                   return (
@@ -1454,8 +1489,8 @@ export default function JobSheetEditor() {
                 <td className="no-print"><button className="btn sm danger" onClick={() => up({ bookings: sheet.bookings.filter((_, j) => j !== i) })}>×</button></td>
               </tr>
             ))}
-            <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /><td className="no-print" /></tr>
-            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show <small style={{ fontSize: 9, fontWeight: 500 }}>ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700, whiteSpace: "nowrap" }}>{noShow.pax} pax · {noShow.bookings} booking{noShow.bookings === 1 ? "" : "s"}</td><td /><td className="no-print" /><td className="no-print" /></tr>}
+            <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right" }}>Total</td><td>{sum("bookedPax")}</td><td>{sum("actualPax")}</td><td /><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>
+            {noShowTotal > 0 && <tr className="js-total"><td /><td colSpan={2} style={{ textAlign: "right", color: "var(--danger)" }}>No-show <small style={{ fontSize: 9, fontWeight: 500 }}>ไม่มาใช้บริการ</small></td><td colSpan={2} style={{ color: "var(--danger)", fontWeight: 700, whiteSpace: "nowrap" }}>{noShow.pax} pax · {noShow.bookings} booking{noShow.bookings === 1 ? "" : "s"}</td><td /><td className="no-print" /><td className="no-print" /><td className="no-print" /></tr>}
           </tbody>
         </table>
         <button className="btn sm no-print" onClick={() => up({ bookings: [...sheet.bookings, { name: "", bookingNo: "", bookedPax: null, actualPax: null, tickets: "", status: "" }] })}>+ Add booking</button>

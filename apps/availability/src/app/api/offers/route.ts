@@ -44,6 +44,13 @@ export async function GET() {
     select: { tourId: true, date: true, slotIdx: true, pax: true, assignedGuideId: true },
   }));
 
+  // Today's guests ticked "มาแล้ว" by the guide (Booking.arrivedAt), counted like pax so a
+  // split departure shows each guide their own share.
+  const arrivedPax = paxIndex((await prisma.booking.findMany({
+    where: { date: today, arrivedAt: { not: null }, tourId: { not: null }, slotIdx: { not: null }, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
+    select: { tourId: true, date: true, slotIdx: true, pax: true, noShowPax: true, assignedGuideId: true },
+  })).map((b) => ({ ...b, pax: Math.max(0, (b.pax ?? 0) - (b.noShowPax ?? 0)) })));
+
   const tourIds = [...new Set(offers.map((o) => o.tourId))];
   const guideIds = [...new Set([
     ...offers.flatMap((o) => o.responses.map((r) => r.guideId)),
@@ -72,7 +79,7 @@ export async function GET() {
       return {
         guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
         time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: livePax.for(a.tourId, a.date, a.slotIdx, a.guideId) ?? a.pax, note: a.note,
-        state, checkedAt: c ? c.at.toISOString() : null, overdue: a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx),
+        state, checkedAt: c ? c.at.toISOString() : null, arrived: a.date === today ? (arrivedPax.for(a.tourId, a.date, a.slotIdx, a.guideId) ?? 0) : null, overdue: a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx),
       };
     }),
     offers: offers.map((o) => ({

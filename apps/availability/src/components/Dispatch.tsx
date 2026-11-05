@@ -8,7 +8,7 @@ import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import HistoricalBacklog from "@/components/HistoricalBacklog";
 
-type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; overdue: boolean };
+type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; arrived?: number | null; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
 type Candidate = { guideId: string; displayName: string };
 type SlotBooking = { id: string; customerName: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null; assignedGuideId: string | null; tourId: string | null };
@@ -234,7 +234,7 @@ export default function Dispatch() {
                   {items.map((a, i) => (
                     <div key={i} className="sched-card" style={{ cursor: "default" }}>
                       <div className="sched-when"><b style={{ fontSize: 18 }}>{i + 1}</b><span>{a.time}</span></div>
-                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div><div style={{ marginTop: 4 }}><StateTag a={a} /></div></div>
+                      <div className="sched-mid"><b>{a.tourName}</b><div className="sched-sub">{a.guideId} {a.guideName}{a.pax != null ? ` · ${a.pax} pax` : ""}{a.note ? ` · ${a.note}` : ""}</div><div style={{ marginTop: 4 }}><StateTag a={a} />{a.arrived != null && a.pax ? <span className="ck js-arrived-count" style={{ marginLeft: 6, color: "#2e7d4f", fontWeight: 700 }}>มาแล้ว {a.arrived}/{a.pax}</span> : null}</div></div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <a className="btn sm" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}`}>Job sheet</a>
                         <a className="btn sm" title="This guide fell sick or was injured and someone else is finishing the tour — record the handover and move the fee" href={`/job-sheet?guideId=${a.guideId}&date=${a.date}&slotIdx=${a.slotIdx}&handover=1`}>🤒 Hand over…</a>
