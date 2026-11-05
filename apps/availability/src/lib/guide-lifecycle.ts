@@ -405,3 +405,41 @@ export async function recordNoShow(o: {
   await audit({ actorId: o.actorId, actorRole: o.actorRole, action: noShowPax > 0 ? "booking.noshow" : "booking.noshow_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, previousNoShowPax, noShowPax, by: o.via, ...(reason ? { reason } : {}) } });
   return { ok: true, noShowPax };
 }
+
+// ── Guest arrived ("มาแล้ว") ─────────────────────────────────────────────────
+// The guide ticks each booking off at the meeting point; the time of the tick is
+// kept (Booking.arrivedAt) so the office sees who is there, live, and when they came.
+// A guide may tick from check-in until the no-show window closes (30 min after the
+// start); operators may correct any time. Ticking says nothing about a no-show —
+// that stays its own report (recordNoShow).
+export type ArrivalResult =
+  | { ok: true; arrivedAt: string | null }
+  | { ok: false; status: 403; error: "not-in-window" }
+  | { ok: false; status: 404; error: "booking-not-found" };
+
+export async function recordArrival(o: {
+  guideId: string;
+  date: string;
+  slotIdx: number;
+  bookingNo: string;
+  arrived: boolean;
+  operator: boolean;
+  actorId: string | null;
+  actorRole: string;
+  via: string;
+}, nowMs: number = Date.now()): Promise<ArrivalResult> {
+  const { guideId, date, slotIdx, bookingNo } = o;
+  if (!o.operator) {
+    const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
+    const startMs = slotStartMs(date, slotIdx);
+    if (!started || nowMs > startMs + NO_SHOW_WINDOW_MS) return { ok: false, status: 403, error: "not-in-window" };
+  }
+  const where = { date, slotIdx, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
+  const b = await prisma.booking.findFirst({ where, select: { arrivedAt: true }, orderBy: { createdAt: "desc" } });
+  if (!b) return { ok: false, status: 404, error: "booking-not-found" };
+  // Ticking again keeps the first time: the guest arrived when they were first ticked.
+  const arrivedAt = o.arrived ? (b.arrivedAt ?? new Date(nowMs)) : null;
+  await prisma.booking.updateMany({ where, data: { arrivedAt } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: o.arrived ? "booking.arrived" : "booking.arrived_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, previous: b.arrivedAt?.toISOString() ?? null, arrivedAt: arrivedAt?.toISOString() ?? null, by: o.via } });
+  return { ok: true, arrivedAt: arrivedAt?.toISOString() ?? null };
+}
