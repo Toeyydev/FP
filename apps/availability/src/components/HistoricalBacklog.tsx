@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { loadBacklog } from "@/lib/historical-backlog-load";
+import { useSession } from "next-auth/react";
+import {
+  applyGeneration, dryRunGeneration, isConfirmationValid,
+  REQUIRED_CONFIRMATION, type DryRun,
+} from "@/lib/historical-generate";
 
 type Row = {
   id: string; instanceKey: string; date: string; slotIdx: number;
@@ -33,6 +38,15 @@ const TONE: Record<string, string> = {
 export default function HistoricalBacklog() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The route is the authority on who may generate; this only decides whether to
+  // show the control, so an operator is not offered a button that would 403.
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "ADMIN";
+  const [dry, setDry] = useState<DryRun | null>(null);
+  const [typed, setTyped] = useState("");
+  const [genBusy, setGenBusy] = useState<"dry" | "apply" | null>(null);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [genDone, setGenDone] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -44,6 +58,26 @@ export default function HistoricalBacklog() {
     else setError(res.error);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  async function runDryRun() {
+    setGenBusy("dry"); setGenError(null); setGenDone(null);
+    const r = await dryRunGeneration();
+    setGenBusy(null);
+    if (r.ok) setDry(r.data); else setGenError(r.error);
+  }
+
+  async function runApply() {
+    // Guarded here as well as by the disabled button: a keyboard submit must not
+    // slip past, and the route would reject it anyway.
+    if (!isConfirmationValid(typed) || genBusy) return;
+    setGenBusy("apply"); setGenError(null);
+    const r = await applyGeneration(fetch, typed);
+    setGenBusy(null);
+    if (!r.ok) { setGenError(r.error); return; }   // 409 included — never retried here
+    setGenDone(`Created ${r.data.created} review${r.data.created === 1 ? "" : "s"}.`);
+    setDry(null); setTyped("");
+    await load();   // bring the new rows on screen
+  }
 
   async function act(id: string, action: string, extra: Record<string, unknown> = {}) {
     setBusy(id); setMsg("");
@@ -96,7 +130,53 @@ export default function HistoricalBacklog() {
       {msg && <div className="hint" style={{ color: "var(--danger)" }}>{msg}</div>}
 
       {data.rows.length === 0 ? (
-        <div className="op-empty">Nothing in the backlog for {data.month}. Generate it from the admin action first.</div>
+        <div className="op-empty" style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+          <span>Nothing in the backlog for {data.month}.{!isAdmin && " An admin prepares it."}</span>
+
+          {isAdmin && !dry && (
+            <button className="btn sm primary" disabled={genBusy === "dry"} onClick={runDryRun}>
+              {genBusy === "dry" ? "Checking…" : `Prepare ${data.month} backlog`}
+            </button>
+          )}
+
+          {isAdmin && dry && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start", width: "100%", maxWidth: 520 }}>
+              {/* Counts first: nothing is written until the operator has seen them. */}
+              <div style={{ fontSize: 13 }}>
+                This will create <b>{dry.wouldCreate}</b> review{dry.wouldCreate === 1 ? "" : "s"}.{" "}
+                <span style={{ color: "var(--ink-soft)" }}>
+                  {dry.skippedExistingSheet} instance{dry.skippedExistingSheet === 1 ? "" : "s"} already
+                  {dry.skippedExistingSheet === 1 ? " has" : " have"} a job sheet and {dry.skippedExistingSheet === 1 ? "is" : "are"} skipped,
+                  out of {dry.tourInstances} tour instances.
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                Nothing has been written yet. Type <code>{REQUIRED_CONFIRMATION}</code> to confirm.
+              </div>
+              <input
+                className="search" style={{ width: "100%", maxWidth: 260, fontFamily: "monospace" }}
+                value={typed} onChange={(e) => setTyped(e.target.value)}
+                placeholder={REQUIRED_CONFIRMATION} autoComplete="off" spellCheck={false}
+                aria-label="Type the confirmation phrase"
+              />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className="btn sm primary"
+                  disabled={!isConfirmationValid(typed) || genBusy === "apply"}
+                  onClick={runApply}
+                >
+                  {genBusy === "apply" ? "Generating…" : `Generate ${dry.wouldCreate} review${dry.wouldCreate === 1 ? "" : "s"}`}
+                </button>
+                <button className="btn sm ghost" disabled={genBusy === "apply"} onClick={() => { setDry(null); setTyped(""); setGenError(null); }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {genError && <span style={{ color: "var(--danger)", fontSize: 12.5 }}>{genError}</span>}
+          {genDone && <span style={{ color: "var(--green,#2f7d4f)", fontSize: 12.5 }}>{genDone}</span>}
+        </div>
       ) : (
         <div className="js-table-scroll">
           <table className="acct-table">
