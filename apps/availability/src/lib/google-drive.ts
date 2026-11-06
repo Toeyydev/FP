@@ -171,7 +171,7 @@ async function trashFile(token: string, id: string): Promise<void> {
   }).catch(() => {});
 }
 
-export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string }> {
+export async function saveBufferToDrive(opts: { refreshToken: string; name: string; base64: string; mimeType: string; folderPath: string[] }): Promise<{ id: string; link: string; folderId?: string | null }> {
   const token = await googleAccessToken(opts.refreshToken);
   if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
   let parent: string | undefined;
@@ -189,7 +189,7 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
       method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": opts.mimeType }, body: Buffer.from(opts.base64, "base64"),
     });
     const uj = (await ur.json().catch(() => ({}))) as { id?: string; webViewLink?: string };
-    if (ur.ok && uj.id) return { id: uj.id, link: uj.webViewLink ?? `https://drive.google.com/file/d/${uj.id}/view` };
+    if (ur.ok && uj.id) return { id: uj.id, link: uj.webViewLink ?? `https://drive.google.com/file/d/${uj.id}/view`, folderId: parent ?? null };
     // if the update failed, fall through and create a fresh file
   }
 
@@ -205,7 +205,7 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   // is `unknown`, and the file only escaped that because nothing there imported it.
   const j = (await r.json().catch(() => ({}))) as { id?: string; webViewLink?: string };
   if (!r.ok || !j.id) throw new Error(`drive-upload ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
-  return { id: j.id, link: j.webViewLink ?? `https://drive.google.com/file/d/${j.id}/view` };
+  return { id: j.id, link: j.webViewLink ?? `https://drive.google.com/file/d/${j.id}/view`, folderId: parent ?? null };
 }
 
 /** The Drive file id inside a link this app stored ("…/file/d/<id>/view", "…?id=<id>"). */

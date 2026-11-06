@@ -38,6 +38,8 @@ import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
 import { payerRuleReasons, stampPayerActor, type PayerRuleRow } from "@/lib/payer-rules";
 import { claimsServerOwned, mergeServerOwned, stripServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
+import { ensureRowIds } from "@/lib/expense-row-id";
+import { attachmentsFor, mirrorAll } from "@/lib/expense-attachments/service";
 import { linkAdvanceRows } from "@/lib/advances/link";
 import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
@@ -303,6 +305,8 @@ export async function GET(req: NextRequest) {
   // WhatsApp links for the guests, read live from Booking.phone — never stored on the
   // sheet. Operators, or the guide assigned to this job for their own guests only.
   const guestContacts = await guestContactsFor(prisma, { isOps, guideId: session.user.guideId }, { guideId, date, slotIdx });
+  // Files behind each expense row, by row id (lib/expense-attachments), for whoever may see them.
+  const attachments = existing ? await attachmentsFor(prisma, existing, { id: session.user.id ?? null, role: session.user.role, guideId: session.user.guideId ?? null }) : {};
   // The last time the booking reconciliation moved this sheet's expected guest count
   // (lib/booking-reconcile) — shown as "Synced from booking · 6 → 8", never as attendance.
   const lastSync = existing ? await prisma.auditLog.findFirst({ where: { action: "jobsheet.expected_pax_changed", entityType: "JobSheet", entityId: existing.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true, detail: true } }) : null;
@@ -369,7 +373,7 @@ export async function GET(req: NextRequest) {
       // Nothing is added by itself — but a person is told what is missing, and may add it
       // with one button (lib/past-sheet-sync). Not on a replacement's copy of the list.
       const pastBookingGaps = isOps && date < todayBKK && handover?.role !== "to" ? await readPastSheetGaps(prisma, { guideId, date, slotIdx }).catch(() => null) : null;
-      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -455,7 +459,7 @@ export async function GET(req: NextRequest) {
       .map((r) => (inferTickets ? r : { ...r, tickets: "" })); // approved / paid: nothing inferred
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -464,7 +468,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts, arrivals, bookingSync, rates,
+    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts, arrivals, attachments, bookingSync, rates,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
@@ -615,7 +619,11 @@ export async function PUT(req: NextRequest) {
       const was = before.find((b) => (b.description ?? "") === (e.description ?? "")) ?? before[i];
       return (was?.paidByReason ?? "").trim() === reason && (was?.paidBy ?? "") === (e.paidBy ?? "") ? [] : [{ row: (e.description ?? "").trim(), paidBy: e.paidBy ?? null, reason }];
     });
-    const expenses = stamped as unknown as Prisma.InputJsonValue;
+    // Every row gets its stable id (lib/expense-row-id), and the legacy receipt fields are
+    // re-read from the attachments table: a file attached while this sheet was open in
+    // another tab is not wiped by saving the older copy.
+    const withIds = ensureRowIds(stamped as unknown as Expense[]).rows;
+    const expenses = (current ? await mirrorAll(tx, current.id, withIds) : withIds) as unknown as Prisma.InputJsonValue;
     if (!current) {
       return { kind: "ok" as const, sheet: await tx.jobSheet.create({ data: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null } }) };
     }

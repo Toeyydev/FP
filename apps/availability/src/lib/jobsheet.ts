@@ -31,6 +31,7 @@ export type Expense = {
   description: string;
   price: number | null;
   pax: number | null;
+  rowId?: string; // stable id of the row (lib/expense-row-id); its attachments are filed under it
   unit?: string;
   expenseType?: ExpenseType | string; // operational category (mapped to a PEAK account in the backend, not here)
   paidBy?: string; // "guide" | "operator" | "company"

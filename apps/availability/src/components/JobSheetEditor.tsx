@@ -25,6 +25,7 @@ import MoveDepartureDialog from "@/components/MoveDepartureDialog";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
 import { shrinkImage, shrunkName } from "@/lib/shrink-image";
+import ReceiptFiles, { type AttachmentView, type ReceiptChange } from "@/components/ReceiptFiles";
 import HandoverDialog from "@/components/HandoverDialog";
 import PeakPaymentDialog, { type CreatedDocument } from "@/components/PeakPaymentDialog";
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
@@ -142,6 +143,8 @@ export default function JobSheetEditor() {
   const [guestContacts, setGuestContacts] = useState<Record<string, { whatsapp: string; display: string }>>({});
   // Booking ref → when the guide ticked "มาแล้ว" (Booking.arrivedAt; never part of the saved sheet).
   const [arrivals, setArrivals] = useState<Record<string, string>>({});
+  // Row id → the files behind that expense row (lib/expense-attachments).
+  const [attachments, setAttachments] = useState<Record<string, AttachmentView[]>>({});
   const [moveOpen, setMoveOpen] = useState(false); // Move departure (components/MoveDepartureDialog)
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
@@ -225,7 +228,7 @@ export default function JobSheetEditor() {
     if (!r.ok) { setMsg("Could not load this job sheet."); return; }
     const d = await r.json();
     setPastGaps(d.pastBookingGaps ?? null);
-    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setArrivals(d.arrivals && typeof d.arrivals === "object" ? d.arrivals : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
+    setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setArrivals(d.arrivals && typeof d.arrivals === "object" ? d.arrivals : {}); setAttachments(d.attachments && typeof d.attachments === "object" ? d.attachments : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
@@ -858,34 +861,13 @@ export default function JobSheetEditor() {
     load(); // re-evaluates sync eligibility server-side
   }
 
-  // Operator: attach / detach a supporting receipt on ONE expense line. Auto-saves
-  // first so the row index the server writes to is stable. Images are shrunk client-
-  // side (same as e-slips) before upload. The server returns the updated sheet.
-  async function uploadReceipt(i: number, file: File) {
-    if (!sheet) return;
-    if (!saved) { const ok = await save(); if (!ok) return; }
-    setBusy(true); setMsg("Uploading receipt…");
-    let blob: Blob = file;
-    try { blob = await shrinkImage(file); } catch { /* fall back to the original file */ }
-    const fd = new FormData();
-    fd.append("guideId", sheet.guideId); fd.append("date", sheet.date); fd.append("slotIdx", String(sheet.slotIdx)); fd.append("expenseIndex", String(i));
-    fd.append("file", blob, shrunkName(file.name, blob));
-    const r = await jfetch("/api/jobsheet/receipt", { method: "POST", body: fd });
-    const d = await r.json().catch(() => ({}));
-    setBusy(false);
-    if (!r.ok) { setMsg(d.error === "too-large" ? "Receipt too large (max 10 MB)." : d.error === "bad-type" ? "Upload an image or a PDF." : (d.error === "not-connected" || d.error === "not-configured") ? "Connect Google Drive first." : d.error === "no-sheet" ? "Save the sheet first." : "Couldn't attach the receipt."); return; }
-    setSheet(d.sheet); setSaved(true); setMsg("Receipt attached ✓");
-  }
-  async function removeReceipt(i: number) {
-    if (!sheet) return;
-    if (!confirm("Remove this receipt from the expense line? The file stays in Drive.")) return;
-    setBusy(true); setMsg("Removing receipt…");
-    const r = await jfetch("/api/jobsheet/receipt", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, expenseIndex: i }) });
-    const d = await r.json().catch(() => ({}));
-    setBusy(false);
-    if (!r.ok) { setMsg("Couldn't remove the receipt."); return; }
-    setSheet(d.sheet); setSaved(true); setMsg("Receipt removed");
-  }
+  // A file added or removed on an expense row (components/ReceiptFiles): the server sends
+  // back the sheet (row ids, receipt link) and the files. An operator's sheet was saved
+  // first, so taking the server's copy loses nothing.
+  const receiptsChanged = (d: ReceiptChange) => {
+    if (d.attachments) setAttachments(d.attachments);
+    if (d.sheet) { setSheet(d.sheet as Sheet); if (canEdit) setSaved(true); }
+  };
 
   // Operator: return the job to the operator — unassign this guide and send its bookings
   // back to the Bookings inbox to re-dispatch. Notifies the guide. Blocked once the guide
@@ -1159,9 +1141,13 @@ export default function JobSheetEditor() {
                   {canReport && <div className="gs-exp-head">Recorded by Folkpaths<small>ที่บริษัทบันทึกไว้</small></div>}
                   <ul className="gs-exp">
                     {exp.map((e, i) => (
-                      <li key={i}>
+                      <li key={i} style={{ flexWrap: "wrap" }}>
                         <span>{e.description}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax{/inc\.?\s*guide/i.test(e.description ?? "") ? " (incl. guide)" : ""}</small></span>
                         <b>{thb(expenseAmount(e))}</b>
+                        {ro && <div className="gs-receipts" style={{ flexBasis: "100%", marginTop: 4 }}>
+                          <ReceiptFiles compact sheetKey={sheet} row={e} index={sheet.expenses.indexOf(e)} files={(e.rowId && attachments[e.rowId]) || []}
+                            canAdd={role === "GUIDE" && !!sheet.ref} onChanged={receiptsChanged} />
+                        </div>}
                       </li>
                     ))}
                     <li className="gs-total"><span>Total expenses</span><b>{thb(exp.reduce((a, e) => a + expenseAmount(e), 0))}</b></li>
@@ -1658,18 +1644,9 @@ export default function JobSheetEditor() {
                     </>);
                   })()}
                 </td>
-                <td className="no-print" style={{ whiteSpace: "nowrap", textAlign: "center" }}>
-                  {e.receiptUrl ? (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <a href={e.receiptUrl} target="_blank" rel="noopener noreferrer" title={e.receiptName || "View receipt"} style={{ fontSize: 11.5, fontWeight: 700, color: "var(--green,#2f7d4f)", maxWidth: 78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.receiptName || "View"}</a>
-                      {canEdit && <button type="button" className="btn sm danger" title="Remove receipt" onClick={() => removeReceipt(i)}>×</button>}
-                    </span>
-                  ) : canEdit ? (
-                    <label className="btn sm" style={{ cursor: "pointer", margin: 0 }} title="Attach a receipt (image or PDF, max 10 MB)">
-                      Attach
-                      <input type="file" accept="image/*,application/pdf" hidden onChange={(ev) => { const f = ev.target.files?.[0]; ev.currentTarget.value = ""; if (f) uploadReceipt(i, f); }} />
-                    </label>
-                  ) : <span style={{ color: "var(--ink-soft)" }}>—</span>}
+                <td className="no-print" style={{ textAlign: "center", minWidth: 90 }}>
+                  <ReceiptFiles sheetKey={sheet} row={e} index={i} files={(e.rowId && attachments[e.rowId]) || []} canAdd={canEdit}
+                    beforeUpload={async () => saved || (await save())} onChanged={receiptsChanged} />
                 </td>
                 <td className="js-amt">
                   {!ro && (
@@ -2491,7 +2468,11 @@ export default function JobSheetEditor() {
            ) : <div className="op-empty" style={{ padding: 14 }}>No recorded events for this job yet.</div>
          ) : (() => {
            const files: { name: string; url: string; kind: string }[] = [];
-           sheet.expenses.forEach((e, i) => { if (e.receiptUrl) files.push({ name: e.receiptName || `Receipt ${i + 1}`, url: e.receiptUrl, kind: `Receipt · ${e.description || "expense"}` }); });
+           sheet.expenses.forEach((e, i) => {
+             const more = (e.rowId && attachments[e.rowId]) || [];
+             if (e.receiptUrl && !more.some((f) => f.link === e.receiptUrl)) files.push({ name: e.receiptName || `Receipt ${i + 1}`, url: e.receiptUrl, kind: `Receipt · ${e.description || "expense"}` });
+             for (const f of more) if (f.link) files.push({ name: f.name, url: f.link, kind: `Receipt · ${e.description || "expense"}` });
+           });
            advance.advances.forEach((a) => { if (a.slipUrl) files.push({ name: `Advance slip · ${thb(a.amount)}`, url: a.slipUrl, kind: "Guide advance" }); });
            advance.returns.forEach((a) => { if (a.slipUrl) files.push({ name: `Return slip · ${thb(a.amount)}`, url: a.slipUrl, kind: "Advance return" }); });
            if (payment?.slip) files.push({ name: "Payment slip", url: payment.slip, kind: "Guide payment" });
