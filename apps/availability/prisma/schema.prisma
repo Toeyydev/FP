@@ -637,6 +637,7 @@ model JobSheet {
   createdAt          DateTime                  @default(now())
   updatedAt          DateTime                  @updatedAt
   certificates       ExpenseCertificate[]
+  attachments        ExpenseAttachment[]
 
   advanceReceipts GuideAdvanceReceipt[] // returns a guide said were for this job (intent only)
 
@@ -2039,4 +2040,41 @@ model TourCalendarEvent {
 
   @@unique([date, slotIdx, attendeeGuideId])
   @@index([syncStatus, nextAttemptAt])
+}
+
+// A file behind one Tour Expense row (receipt / ticket photo / PDF). Several per row.
+// The row is named by its stable `rowId` in JobSheet.expenses (lib/expense-row-id), never
+// by its index. The first live file on a row is also mirrored into the row's legacy
+// receipt* fields, so evidence, certificates and PEAK keep reading one place
+// (lib/expense-attachments). Removing never deletes the Drive file: the row is kept with
+// who removed it and why.
+model ExpenseAttachment {
+  id             String    @id @default(cuid())
+  jobSheetId     String
+  jobSheet       JobSheet  @relation(fields: [jobSheetId], references: [id], onDelete: Cascade)
+  expenseRowId   String
+  jobRef         String?
+  category       String? // the row's expense category / description at upload, for people to read
+  amountSatang   Int? // what the document supports, when given
+  documentDate   String? // "YYYY-MM-DD" printed on the document, when given
+  originalName   String
+  mimeType       String
+  sizeBytes      Int
+  sha256         String
+  driveFileId    String?
+  driveLink      String?
+  driveFolderId  String?
+  status         String    @default("UPLOADING") // UPLOADING | UPLOADED | FAILED | REMOVED
+  errorCode      String? // short, never a token or a Google response body
+  attempts       Int       @default(1)
+  uploadedById   String?
+  uploadedByRole String?
+  uploadedAt     DateTime  @default(now())
+  removedById    String?
+  removedAt      DateTime?
+  removeReason   String?
+  updatedAt      DateTime  @updatedAt
+
+  @@index([jobSheetId, expenseRowId])
+  @@index([sha256])
 }

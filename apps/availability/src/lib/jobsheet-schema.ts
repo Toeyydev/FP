@@ -34,6 +34,8 @@ const expenseZ = z.object({
   reimbursementRequired: z.boolean().optional(),
   estimatedAmount: numOpt,
   actualAmount: numOpt,
+  // Stable id of the row (lib/expense-row-id): what its attachments are filed under.
+  rowId: z.string().max(40).optional(),
   receiptUrl: z.string().max(2000).optional(),
   receiptFileId: z.string().max(200).optional(),
   receiptName: z.string().max(200).optional(),
