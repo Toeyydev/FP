@@ -149,6 +149,8 @@
   .faq-list details[open] summary::after { content: "−"; }
   .faq-list details p { max-width: 65ch; margin: 0; padding: 0 2rem 1.5rem 0; color: var(--muted); }
   .cta-panel { margin-bottom: clamp(3rem, 7vw, 6rem); padding: clamp(2rem, 6vw, 5rem); display: grid; grid-template-columns: 1.2fr .8fr; gap: 2rem; align-items: end; background: var(--yellow); border-radius: var(--radius-l); }
+  .cta-panel--centered { padding-block: clamp(1.25rem, 2.5vw, 2rem); }
+  .cta-panel--centered > .button { align-self: center; }
   .cta-panel p { max-width: 42rem; }
   .site-footer { padding: 3rem 0 6.5rem; background: var(--ink); color: var(--white); }
   .footer-grid { display: grid; grid-template-columns: minmax(18rem, 1.3fr) repeat(3, auto); gap: 3rem; }
