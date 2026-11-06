@@ -27,7 +27,8 @@ export default function ReceiptFiles({ sheetKey, row, index, files, canAdd, comp
   async function send(p: Pending) {
     setPending((xs) => xs.map((x) => (x.key === p.key ? { ...x, state: "uploading", hint: undefined } : x)));
     let blob: Blob = p.file;
-    try { blob = await shrinkImage(p.file); } catch { /* the original file then */ }
+    // Photos go as JPEG, always: the server files each one as a PDF page.
+    try { blob = await shrinkImage(p.file, 1600, 0.82, true); } catch { /* the original file then */ }
     const fd = new FormData();
     fd.append("guideId", sheetKey.guideId); fd.append("date", sheetKey.date); fd.append("slotIdx", String(sheetKey.slotIdx));
     if (row.rowId) fd.append("rowId", row.rowId); else fd.append("expenseIndex", String(index));

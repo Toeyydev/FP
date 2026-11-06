@@ -5,7 +5,8 @@ import { driveMonth } from "@/lib/drive-month";
 import { isApproved, type Expense } from "@/lib/jobsheet";
 import { isAccountant, isOps } from "@/lib/roles";
 import { ensureRowIds, isRowId } from "@/lib/expense-row-id";
-import { checkFile, driveFileName } from "@/lib/expense-attachments/validate";
+import { checkFile, receiptFileName } from "@/lib/expense-attachments/validate";
+import { jpegToPdf } from "@/lib/expense-attachments/image-pdf";
 
 // Files behind Tour Expense rows: several per row, filed by the row's stable id.
 //
@@ -188,13 +189,19 @@ export async function uploadAttachment(o: {
 
   const token = await o.drive.token(o.actor.id).catch(() => null);
   if (!token) return fail("drive-not-connected", 400);
+  // Filed as a PDF in the job's own folder, beside its certificates (owner, 2026-11-06).
+  // A JPEG photo is wrapped as a one-page PDF; a PDF goes as it is. A PNG or WebP that
+  // reached the server unconverted (the page sends photos as JPEG) is kept as it came.
+  const asPdf = fc.kind.ext === "pdf" ? o.file.bytes : fc.kind.ext === "jpg" ? jpegToPdf(o.file.bytes, fc.name) : null;
+  const stored = asPdf ? { bytes: asPdf, mime: "application/pdf", ext: "pdf" } : { bytes: o.file.bytes, mime: fc.kind.mime, ext: fc.kind.ext };
+  const seq = await db.expenseAttachment.count({ where: { jobSheetId: sheet.id, uploadedAt: { lte: (await db.expenseAttachment.findUniqueOrThrow({ where: { id: attId }, select: { uploadedAt: true } })).uploadedAt } } });
   let up: { id: string; link: string; folderId?: string | null };
   try {
     up = await o.drive.save({
       refreshToken: token,
-      name: driveFileName({ jobRef, rowId, at: now, sha256: fc.sha256, ext: fc.kind.ext }),
-      base64: Buffer.from(o.file.bytes).toString("base64"), mimeType: fc.kind.mime,
-      folderPath: ["Folkpaths Job Sheets", ...driveMonth(sheet.date), jobRef, "Receipts"],
+      name: receiptFileName({ seq, description: row?.description || row?.expenseType, sha256: fc.sha256, ext: stored.ext }),
+      base64: Buffer.from(stored.bytes).toString("base64"), mimeType: stored.mime,
+      folderPath: ["Folkpaths Job Sheets", ...driveMonth(sheet.date), jobRef],
     });
   } catch (e) {
     return fail(safeErr(e), 502);

@@ -777,6 +777,12 @@ model ExpenseCertificate {
   // that succeeded while the database write failed can be found and finished.
   pdfHash               String?
   driveFileId           String?          @unique
+  // A copy of the filed PDF in the job's own folder (Folkpaths Job Sheets / … / <job ref>),
+  // beside its receipts, so a job can be traced back in one place (owner, 2026-11-06). The
+  // document of record stays the private one above; this copy is for reading.
+  jobCopyFileId         String?
+  jobCopyLink           String?
+  jobCopyAt             DateTime?
   driveUrl              String?
   // The lease on an upload, and the token that fences it.
   //
