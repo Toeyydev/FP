@@ -208,6 +208,16 @@ export async function saveBufferToDrive(opts: { refreshToken: string; name: stri
   return { id: j.id, link: j.webViewLink ?? `https://drive.google.com/file/d/${j.id}/view`, folderId: parent ?? null };
 }
 
+/** Rename a file this app saved (e.g. VOID_ on a withdrawn certificate's job copy). */
+export async function renameDriveFile(refreshToken: string, fileId: string, name: string): Promise<void> {
+  const token = await googleAccessToken(refreshToken);
+  if (!token) throw new Error("drive-auth: could not refresh Google token (reconnect needed)");
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id&${ALL_DRIVES}`, {
+    method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name }),
+  });
+  if (!r.ok) throw new Error(`drive-rename ${r.status}`);
+}
+
 /** The Drive file id inside a link this app stored ("…/file/d/<id>/view", "…?id=<id>"). */
 export function driveFileIdOf(link: string | null | undefined): string | null {
   const m = (link ?? "").match(/\/(?:file\/)?d\/([A-Za-z0-9_-]{10,})/) ?? (link ?? "").match(/[?&]id=([A-Za-z0-9_-]{10,})/);

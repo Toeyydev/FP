@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { checkFile, driveFileName, MAX_ATTACHMENT_BYTES, safeOriginalName, sniff } from "@/lib/expense-attachments/validate";
+import { checkFile, receiptFileName, MAX_ATTACHMENT_BYTES, safeOriginalName, sniff } from "@/lib/expense-attachments/validate";
+import { jpegInfo, jpegToPdf } from "@/lib/expense-attachments/image-pdf";
 import { ensureRowIds, isRowId } from "@/lib/expense-row-id";
 import { canAdd, canRemove, canView, mirrorRow } from "@/lib/expense-attachments/service";
 
@@ -36,10 +37,33 @@ describe("file names", () => {
     expect(safeOriginalName("", "pdf")).toBe("receipt.pdf");
     expect(safeOriginalName("a".repeat(300) + ".jpg", "jpg")).toHaveLength(120);
   });
-  it("names the Drive file from server values only", () => {
-    const n = driveFileName({ jobRef: "FOLK-BKK-20991106-01/../x", rowId: "r_0123456789ab", at: new Date("2099-11-06T01:24:00Z"), sha256: "ab12cd34ef", ext: "jpg" });
-    expect(n).toBe("FOLK-BKK-20991106-01x_r_0123456789ab_20991106-0824_ab12cd34.jpg");
-    expect(n).not.toMatch(/[\\/]/);
+  it("names the Drive file from server values only, numbered in the job", () => {
+    expect(receiptFileName({ seq: 3, description: "Grand Palace (ticket) ../../x", sha256: "ab12cd34ef", ext: "pdf" })).toBe("Receipt_03_Grand-Palace-ticket-x_ab12cd34.pdf");
+    expect(receiptFileName({ seq: 1, description: "ค่าเรือ", sha256: "00ff00ff99", ext: "pdf" })).toBe("Receipt_01_ค่าเรือ_00ff00ff.pdf");
+    expect(receiptFileName({ seq: 12, description: "", sha256: "1234567890", ext: "pdf" })).toBe("Receipt_12_Expense_12345678.pdf");
+  });
+});
+
+describe("a photo becomes a one-page PDF", () => {
+  // A real 2×1 baseline JPEG (RGB), made once with a canvas.
+  const JPEG = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAIBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==", "base64");
+  it("reads the size from the frame header", () => {
+    expect(jpegInfo(new Uint8Array(JPEG))).toMatchObject({ width: 2, height: 1, components: 1 });
+    expect(jpegInfo(new Uint8Array([0x89, 0x50]))).toBeNull();
+  });
+  it("embeds the JPEG unchanged in a valid single-page PDF", () => {
+    const pdf = jpegToPdf(new Uint8Array(JPEG), "ตั๋ว (receipt).jpg")!;
+    const text = Buffer.from(pdf).toString("latin1");
+    expect(text.startsWith("%PDF-1.4")).toBe(true);
+    expect(text).toContain("/Count 1");
+    expect(text).toContain("/Filter /DCTDecode");
+    expect(Buffer.from(pdf).indexOf(JPEG)).toBeGreaterThan(0);
+    // xref offsets point at their objects.
+    const xref = Number(text.match(/startxref\n(\d+)/)![1]);
+    expect(text.slice(xref, xref + 4)).toBe("xref");
+    const offs = [...text.slice(xref).matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
+    offs.forEach((o, i) => expect(text.slice(o, o + 7)).toBe(`${i + 1} 0 obj`));
+    expect(jpegToPdf(new Uint8Array(Buffer.from("%PDF-1.4")))).toBeNull();
   });
 });
 

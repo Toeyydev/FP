@@ -277,6 +277,39 @@ describe("filing it, and Drive's actual behaviour", () => {
     expect(up.uploadClaimToken).toBeNull();
   });
 
+  it("puts a reading copy in the job's folder beside its receipts, and marks it VOID when voided", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const copies: { name: string; folderPath: string[]; bytes: Buffer }[] = [];
+    const renamed: string[] = [];
+    const jobCopy = {
+      token: async () => "fake-token",
+      save: async (o: { name: string; base64: string; folderPath: string[] }) => { copies.push({ name: o.name, folderPath: o.folderPath, bytes: Buffer.from(o.base64, "base64") }); return { id: "copy_1", link: "https://drive.example/copy_1" }; },
+      rename: async (_t: string, id: string, name: string) => { renamed.push(`${id}:${name}`); },
+    };
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const up = await uploadCertificate(c.id, ADMIN, deps({ jobCopy }));
+    expect(copies).toHaveLength(1);
+    expect(copies[0].name).toBe(`${c.certificateNo}.pdf`);
+    expect(copies[0].folderPath).toEqual(["Folkpaths Job Sheets", "2099", "04 April", REF]);
+    expect(fileHash(copies[0].bytes)).toBe(up.pdfHash); // the very document that was filed
+    expect(up).toMatchObject({ jobCopyFileId: "copy_1", jobCopyLink: "https://drive.example/copy_1" });
+    // The document of record is unchanged: still the private one.
+    expect(up.driveFileId).not.toBe("copy_1");
+    await voidCertificate(c.id, "issued at the wrong amount (test)", ADMIN, deps({ jobCopy }));
+    expect(renamed).toEqual([`copy_1:VOID_${c.certificateNo}.pdf`]);
+  });
+
+  it("filing still succeeds when the job-folder copy fails", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const up = await uploadCertificate(c.id, ADMIN, deps({ jobCopy: { token: async () => "t", save: async () => { throw new Error("drive-upload 500: body"); } } }));
+    expect(up.status).toBe("UPLOADED");
+    expect(up.jobCopyFileId).toBeNull();
+    expect(await prisma.auditLog.count({ where: { action: "certificate.job_copy_failed" } })).toBe(1);
+  });
+
   it("the file hash is of the bytes that are actually in Drive", async () => {
     await seedSheet([e("Ferry", 11)]);
     const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());

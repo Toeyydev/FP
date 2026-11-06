@@ -66,13 +66,11 @@ export function safeOriginalName(name: string | null | undefined, fallbackExt: s
 }
 
 /**
- * The file's name on Drive: built only from values the server controls, so it can never
- * carry a path, and unique per job by the content hash.
- * e.g. FOLK-BKK-20261106-01_r_1a2b3c4d5e6f_20261106-0824_ab12cd34.jpg
+ * The file's name on Drive, in the job's folder: built only from values the server
+ * controls (never the uploaded name), numbered in upload order for the job, and unique
+ * by the content hash. e.g. Receipt_03_Grand-Palace_ab12cd34.pdf
  */
-export function driveFileName(o: { jobRef: string; rowId: string; at: Date; sha256: string; ext: string }): string {
-  const ref = o.jobRef.replace(/[^A-Za-z0-9-]/g, "").slice(0, 40) || "JOB";
-  const t = new Date(o.at.getTime() + 7 * 3600 * 1000).toISOString();
-  const stamp = `${t.slice(0, 10).replace(/-/g, "")}-${t.slice(11, 16).replace(":", "")}`;
-  return `${ref}_${o.rowId}_${stamp}_${o.sha256.slice(0, 8)}.${o.ext}`;
+export function receiptFileName(o: { seq: number; description: string | null | undefined; sha256: string; ext: string }): string {
+  const what = String(o.description ?? "").normalize("NFC").replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "Expense";
+  return `Receipt_${String(Math.max(1, o.seq)).padStart(2, "0")}_${what}_${o.sha256.slice(0, 8)}.${o.ext}`;
 }

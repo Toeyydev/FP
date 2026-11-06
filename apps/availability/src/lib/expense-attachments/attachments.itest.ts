@@ -46,8 +46,8 @@ describe("who may attach", () => {
   it("the guide on their own job; files land in the job's own folder in its month", async () => {
     const r = await up(guide, 1);
     expect(r.ok).toBe(true);
-    expect(saved[0].folderPath).toEqual(["Folkpaths Job Sheets", "2099", "11 November", "FOLK-BKK-20991106-01", "Receipts"]);
-    expect(saved[0].name).toMatch(/^FOLK-BKK-20991106-01_r_[0-9a-f]{12}_\d{8}-\d{4}_[0-9a-f]{8}\.pdf$/);
+    expect(saved[0].folderPath).toEqual(["Folkpaths Job Sheets", "2099", "11 November", "FOLK-BKK-20991106-01"]);
+    expect(saved[0].name).toMatch(/^Receipt_01_Grand-Palace-ticket_[0-9a-f]{8}\.pdf$/);
   });
   it("not another guide, not an accountant — and nothing is sent to Drive", async () => {
     expect(await up(otherGuide, 1)).toMatchObject({ ok: false, status: 403 });

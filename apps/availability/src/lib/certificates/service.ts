@@ -14,6 +14,7 @@ import { allowedHolders, CONFIG_INVALID_EN, CONFIG_INVALID_TH, sanitisedConfigAu
 import { canMove, MIN_VOID_REASON, moveRefusal, type CertificateState } from "@/lib/certificates/state";
 import { folkpathsDriveToken } from "@/lib/google-drive";
 import { certificateEnvironment, DuplicateCertificateFile, googleCertificateDrive, type CertificateDrive } from "@/lib/certificates/drive";
+import { copyCertificateToJobFolder, markJobCopyVoid, type JobCopyDeps } from "@/lib/certificates/job-copy";
 import { blocksDocument, registeredSignature, resolveSignature, stampOf, type SignatureDeps, type SignatureStamp } from "@/lib/certificates/signature";
 import { attesterRefusal } from "@/lib/certificates/attester";
 import { defaultSource, sourceRefusal, type ExpenseSource } from "@/lib/certificates/source";
@@ -41,6 +42,8 @@ export type Deps = {
   now?: () => Date;
   /** Where the attester's signature image comes from. Supplied by tests; Drive otherwise. */
   signature?: SignatureDeps;
+  /** The reading copy in the job's folder (lib/certificates/job-copy). Supplied by tests. */
+  jobCopy?: JobCopyDeps;
 };
 
 export type Actor = { id: string; name: string; role: string };
@@ -673,7 +676,9 @@ export async function uploadCertificate(id: string, actor: Actor, deps: Deps = {
         revisionId: active.revisionId ?? null, readOnly: active.readOnly ?? false,
         reusedExistingDocument: Boolean(existing[0]) || undefined,
         supersededFiles: others.length ? others.map((f) => f.id) : undefined } });
-    return done;
+    // A reading copy beside the job's receipts. Best-effort: filing has succeeded already.
+    await copyCertificateToJobFolder(done, activeBytes, { db, ...deps.jobCopy });
+    return (await db.expenseCertificate.findUnique({ where: { id } })) ?? done;
   } catch (err) {
     if (err instanceof UploadFenced) {
       // This attempt's own candidate is put away; nothing else is touched. Not the row,
@@ -894,5 +899,6 @@ export async function voidCertificate(id: string, reason: string, actor: Actor, 
   await audit({ actorId: actor.id, actorRole: actor.role, action: "certificate.voided", entityType: "ExpenseCertificate", entityId: id,
     detail: { certificateNo: voided.certificateNo, jobRef: voided.jobRef, reason: reason.trim(), wasLinked: Boolean(voided.linkedAt),
       note: "the rows keep their waiver; it names this certificate, and a withdrawn certificate is not evidence" } });
+  await markJobCopyVoid(voided, { db: deps.db, ...deps.jobCopy });
   return voided;
 }
