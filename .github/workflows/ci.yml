@@ -278,6 +278,14 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/expense-attachments
 
+      # Today & tomorrow on an operator's phone: guide, check-in, arrivals, unstaffed marked.
+      - name: Today and tomorrow page in a real browser
+        run: node scripts/e2e/tours-today.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/tours-today
+
       # The guest WhatsApp button on a guide's phone: only readable numbers, only the
       # guide's own guests, never a cancelled booking, never printed, nothing written.
       - name: Guest WhatsApp in a real browser
