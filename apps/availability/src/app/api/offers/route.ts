@@ -79,6 +79,7 @@ export async function GET() {
       return {
         guideId: a.guideId, guideName: gDisp(a.guideId), date: a.date, slotIdx: a.slotIdx,
         time: SLOT_TIMES[a.slotIdx] ?? "", tourId: a.tourId, tourName: a.tour?.name ?? a.tourId, pax: livePax.for(a.tourId, a.date, a.slotIdx, a.guideId) ?? a.pax, note: a.note,
+        takesNewBookings: a.takesNewBookings,
         state, checkedAt: c ? c.at.toISOString() : null, arrived: a.date === today ? (arrivedPax.for(a.tourId, a.date, a.slotIdx, a.guideId) ?? 0) : null, overdue: a.date === today && state === "NONE" && nowMin >= startMin(a.slotIdx),
       };
     }),

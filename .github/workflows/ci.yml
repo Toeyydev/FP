@@ -278,6 +278,14 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/expense-attachments
 
+      # Split dialog: "New bookings go to" saved and shown again; the /jobs?split= link opens it.
+      - name: Split dialog new-bookings guide in a real browser
+        run: node scripts/e2e/split-new-bookings.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/split-new-bookings
+
       # Today & tomorrow on an operator's phone: guide, check-in, arrivals, unstaffed marked.
       - name: Today and tomorrow page in a real browser
         run: node scripts/e2e/tours-today.mjs
