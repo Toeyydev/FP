@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
     // Job No. first (lib/evidence-name), so a job's documents sort together. The bank
     // reference keeps two same-amount transfers of one job from replacing each other.
     const name = evidenceName({ jobs: [sheet.ref], what: kind === "advance" ? "advance slip" : "advance return slip", guide: guideName, date, amount, refs: [txRef, kind === "advance" ? peakRef : null, guideId] });
-    const up = await uploadSlip(session.user.id ?? undefined, file, name, date);
+    const up = await uploadSlip(session.user.id ?? undefined, file, name, date, { ref: sheet.ref, date });
     if ("error" in up) return NextResponse.json({ error: up.error }, { status: up.status });
     slip = up;
   }

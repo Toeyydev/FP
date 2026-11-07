@@ -138,6 +138,13 @@ try {
   await page.waitForSelector(".js-advance-summary .js-advance-details", { timeout: 20000 });
   check("the job sheet shows the advance as one line, details closed until asked", /Company advance/.test(await text(page, ".js-advance-summary")) && (await page.$eval(".js-advance-details", (b) => b.getAttribute("aria-expanded"))) === "false");
   if (SHOTS) { await page.$eval(".js-advance-summary", (x) => x.scrollIntoView({ block: "center" })); await page.screenshot({ path: join(SHOTS, "advance-summary.png"), fullPage: false }); }
+  // On a phone: the advance line wraps, + Record advance stays visible, no sideways scroll.
+  await page.setViewport({ width: 390, height: 844 });
+  await page.$eval(".js-advance-summary", (x) => x.scrollIntoView({ block: "center" }));
+  const phone = await page.evaluate(() => ({ fits: document.documentElement.scrollWidth <= innerWidth, rec: !!document.querySelector(".js-advance-summary .js-advance-record")?.offsetParent }));
+  check("390px: the advance line shows + Record advance, no sideways scroll", phone.fits && phone.rec, JSON.stringify(phone));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "advance-summary-390.png"), fullPage: false });
+  await page.setViewport({ width: 1280, height: 900 });
   await page.click(".js-advance-details");
   // Phase 1D: settling happens on the advance's own card (components/AdvanceOperations) — the
   // operator ticks the rows linked to it; the server still works out the amount.

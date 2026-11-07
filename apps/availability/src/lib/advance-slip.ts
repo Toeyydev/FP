@@ -21,9 +21,18 @@ export type SlipFile = { size?: number; type?: string; name?: string; arrayBuffe
 export type SlipUpload = { url: string; fileId: string };
 export type SlipFailure = { error: string; status: number };
 
-export async function uploadSlip(userId: string | undefined, file: SlipFile, name: string, date: string): Promise<SlipUpload | SlipFailure> {
-  return uploadJobFile({ userId, file, date, folder: "Advances", name: (ext) => `${name}.${ext}` });
+/**
+ * `job`, when the slip belongs to one job: filed in that job's own folder, beside its
+ * receipts and certificate (owner, 2026-11-07) — Folkpaths Job Sheets / <tour month> /
+ * <job ref>. Without one (a refund across several jobs) it goes to the month's Advances.
+ */
+export async function uploadSlip(userId: string | undefined, file: SlipFile, name: string, date: string, job?: { ref: string | null; date: string } | null): Promise<SlipUpload | SlipFailure> {
+  return uploadJobFile({ userId, file, date, folder: "Advances", name: (ext) => `${name}.${ext}`, folderPath: jobFolderPath(job) });
 }
+
+/** A job's own Drive folder, or null when there is no job ref to name it by. */
+export const jobFolderPath = (job?: { ref: string | null; date: string } | null): string[] | null =>
+  job?.ref ? ["Folkpaths Job Sheets", ...driveMonth(job.date), job.ref] : null;
 
 /** Where under a month's job-sheet folder a piece of evidence is filed. */
 export type JobFileFolder = "Advances" | "Receipts";
@@ -42,6 +51,8 @@ export async function uploadJobFile(o: {
   date: string;
   folder: JobFileFolder;
   name: (ext: string) => string;
+  /** Overrides <month> / <folder> — a job's own folder (jobFolderPath). */
+  folderPath?: string[] | null;
 }): Promise<SlipUpload | SlipFailure> {
   const { file, date } = o;
   const mime = file.type || "image/jpeg";
@@ -53,7 +64,7 @@ export async function uploadJobFile(o: {
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
   const monthFolder = driveMonth(date);
   try {
-    const up = await saveBufferToDrive({ refreshToken, name: o.name(extOf(mime)), base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", ...monthFolder, o.folder] });
+    const up = await saveBufferToDrive({ refreshToken, name: o.name(extOf(mime)), base64, mimeType: mime, folderPath: o.folderPath ?? ["Folkpaths Job Sheets", ...monthFolder, o.folder] });
     return { url: up.link, fileId: up.id };
   } catch (e) {
     return { error: `drive-failed: ${(e as Error).message.slice(0, 160)}`, status: 502 };
