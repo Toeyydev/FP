@@ -201,6 +201,9 @@ model Assignment {
   tour    Tour    @relation(fields: [tourId], references: [id])
   pax     Int?
   note    String?
+  // On a departure split between guides: this guide takes bookings that arrive later
+  // untagged (owner, 2026-11-07). At most one per departure; set in the Split dialog.
+  takesNewBookings Boolean @default(false)
 
   googleEventId    String? // guide's Google Calendar event id (for patch/delete)
   opsGoogleEventId String? // operator master-calendar event id

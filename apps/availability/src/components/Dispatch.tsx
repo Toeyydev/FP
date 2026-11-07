@@ -8,7 +8,7 @@ import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import HistoricalBacklog from "@/components/HistoricalBacklog";
 
-type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; arrived?: number | null; overdue: boolean };
+type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; arrived?: number | null; takesNewBookings?: boolean; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
 type Candidate = { guideId: string; displayName: string };
 type SlotBooking = { id: string; customerName: string | null; externalRef: string | null; confirmationCode: string | null; pax: number | null; assignedGuideId: string | null; tourId: string | null };
@@ -48,7 +48,8 @@ export default function Dispatch() {
     setDidFocus(true);
     if (!fd || fs == null) return;
     const a = data.assignments.find((x: Assignment) => x.date === fd && x.slotIdx === Number(fs));
-    window.history.replaceState(null, "", "/jobs");
+    // The query is left in the address bar: rewriting it here (history.replaceState) made the
+    // router re-render the page and the dialog this link opens closed again at once.
     // Say something when the tour has no guide to split from. Silence here read as
     // the Assign button being broken: the page loaded and simply nothing happened.
     if (a) openSplit(a);
@@ -133,6 +134,8 @@ export default function Dispatch() {
   const [splitCands, setSplitCands] = useState<Candidate[] | null>(null);
   const [splitMap, setSplitMap] = useState<Record<string, string>>({});
   const [splitBusy, setSplitBusy] = useState(false);
+  // The guide who takes bookings arriving later for this departure ("" = an operator places each).
+  const [splitNewTo, setSplitNewTo] = useState("");
   async function openSplit(a: Assignment) {
     setSplitFor(null); setSplitCands(null); setSplitMap({}); setMsg("");
     const [rb, rc] = await Promise.all([
@@ -157,6 +160,7 @@ export default function Dispatch() {
     setSplitCands(cands);
     // Default each booking to whoever holds it now (or the current guide if untagged).
     setSplitMap(Object.fromEntries(items.map((b) => [b.id, b.assignedGuideId || a.guideId])));
+    setSplitNewTo((data?.assignments ?? []).find((x) => x.date === a.date && x.slotIdx === a.slotIdx && x.takesNewBookings)?.guideId ?? "");
     setSplitFor({ a, items });
   }
   const splitPax = (gid: string) => splitFor ? splitFor.items.filter((b) => splitMap[b.id] === gid).reduce((s, b) => s + (b.pax ?? 0), 0) : 0;
@@ -170,7 +174,7 @@ export default function Dispatch() {
     for (const b of splitFor.items) (byGuide[splitMap[b.id]] ??= []).push(b.id);
     const groups = Object.entries(byGuide).map(([guideId, bookingIds]) => ({ guideId, bookingIds }));
     setSplitBusy(true);
-    const r = await fetch("/api/bookings/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: splitFor.a.date, slotIdx: splitFor.a.slotIdx, tourId: splitFor.a.tourId, groups }) });
+    const r = await fetch("/api/bookings/split", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ date: splitFor.a.date, slotIdx: splitFor.a.slotIdx, tourId: splitFor.a.tourId, groups, newBookingsTo: splitNewTo && distinct.has(splitNewTo) ? splitNewTo : null }) });
     const d = await r.json().catch(() => ({}));
     setSplitBusy(false);
     if (!r.ok) { setMsg(d.error === "over-cap" ? `A guide's group exceeds ${SPLIT_CAP} pax — rebalance.` : d.error === "handover-on-slot" ? `Can't split — ${d.reason}` : "Split failed."); return; }
@@ -315,6 +319,14 @@ export default function Dispatch() {
                       })}
                     </div>
                   )}
+                  <label className="js-split-new-to" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13 }}>
+                    <span style={{ fontWeight: 600 }}>New bookings go to</span>
+                    <select className="search" style={{ flex: "1 1 180px", maxWidth: 240 }} value={splitNewTo} onChange={(e) => setSplitNewTo(e.target.value)}>
+                      <option value="">Ask me each time</option>
+                      {Array.from(new Set(Object.values(splitMap).filter(Boolean))).map((gid) => <option key={gid} value={gid}>{gid} · {splitCands.find((c) => c.guideId === gid)?.displayName ?? ""}</option>)}
+                    </select>
+                    <small style={{ flexBasis: "100%", color: "var(--ink-soft)" }}>Bookings that arrive later for this departure join this guide's sheet while they have seats.</small>
+                  </label>
                 </>
               )}
             </div>
