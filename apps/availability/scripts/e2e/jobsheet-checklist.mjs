@@ -55,7 +55,7 @@ const PEAK_CONFIG = "";
 const G = "G-971";
 const KEY = { guideId_date_slotIdx: { guideId: G, date: DATE, slotIdx: 0 } };
 async function seed() {
-  const tables = ["AuditLog", "Notification", "Checkin", "TourReport", "TourPayment", "JobSheet", "Booking", "Assignment", "RefreshToken", "User", "Tour"];
+  const tables = ["GuideAdvance", "AuditLog", "Notification", "Checkin", "TourReport", "TourPayment", "JobSheet", "Booking", "Assignment", "RefreshToken", "User", "Tour"];
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
   await prisma.tour.create({ data: { id: "T-900", name: "Riverside Temples", time: "08:30", durationMin: 180 } });
   const hash = bcrypt.hashSync(PASSWORD, 8);
@@ -145,7 +145,26 @@ try {
   await page.waitForFunction(() => document.querySelector('.js-check-card[data-step="approve"]')?.classList.contains("done"), { timeout: 15000 }).catch(() => {});
   const after = await prisma.jobSheet.findUniqueOrThrow({ where: KEY, select: { approvalStatus: true } });
   c = await cards(page);
-  check("Approve on the card approves the sheet; Pay & PEAK is next", after.approvalStatus === "APPROVED" && c[2].done && c[3].now && /Approved — transfer on Payments/.test(c[3].text), JSON.stringify({ status: after.approvalStatus, cards: c.map((x) => [x.step, x.done, x.now]) }));
+  await page.waitForSelector(".js-check-pay", { timeout: 15000 }).catch(() => {});
+  c = await cards(page);
+  check("Approve on the card approves the sheet; Pay & PEAK is next with the amount to pay", after.approvalStatus === "APPROVED" && c[2].done && c[3].now && /฿1,010\.00 to Ploy Example/.test(c[3].text), JSON.stringify({ status: after.approvalStatus, cards: c.map((x) => [x.step, x.done, x.now, x.text]) }));
+
+  // Pay from the sheet (owner, 2026-11-07): the same Record payment dialog as Guide Payments,
+  // this job already ticked.
+  check("Pay & PEAK has a Record payment button", (await page.$(".js-check-pay")) !== null);
+  await page.click(".js-check-pay");
+  await page.waitForSelector(".paydoc-job", { timeout: 15000 }).catch(() => {});
+  const dlg = await page.$$eval(".paydoc-job", (xs) => xs.map((x) => ({ text: x.innerText.replace(/\s+/g, " "), on: !!x.querySelector("input")?.checked })));
+  check("the dialog opens with this job ticked", dlg.length === 1 && dlg[0].on && /FOLK-TEST-CK-01/.test(dlg[0].text), JSON.stringify(dlg));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "jobsheet-record-payment.png"), fullPage: false });
+  await page.reload({ waitUntil: "networkidle0" });
+
+  // An advance the guide still holds is named on the card before the transfer.
+  await prisma.guideAdvance.create({ data: { guideId: G, date: DATE, slotIdx: 0, amount: 500, paidAt: new Date(), method: "bank", txRef: "TX-E2E-CK", advanceNo: "FOLK-ADV-209911-001", advanceDate: DATE, amountSatang: 50000, accountingPeriod: DATE.slice(0, 7), jobNo: "FOLK-TEST-CK-01", allowedCategories: ["entrance"] } });
+  await page.reload({ waitUntil: "networkidle0" });
+  await page.waitForSelector(".js-pay-advance-warn", { timeout: 15000 }).catch(() => {});
+  const warn = await page.$eval(".js-pay-advance-warn", (x) => x.innerText).catch(() => "");
+  check("an unused advance is warned about on Pay & PEAK", /Advance ฿500\.00 has no row paid from it yet/.test(warn), warn);
   if (SHOTS) { await page.$eval(".js-check", (x) => x.scrollIntoView({ block: "start" })); await page.screenshot({ path: join(SHOTS, "jobsheet-checklist.png"), fullPage: false }); }
 
   // A phone: one card per line, nothing sideways.

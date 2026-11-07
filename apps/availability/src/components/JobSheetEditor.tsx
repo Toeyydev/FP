@@ -29,6 +29,7 @@ import ReceiptFiles, { type AttachmentView, type ReceiptChange } from "@/compone
 import HandoverDialog from "@/components/HandoverDialog";
 import PeakPaymentDialog, { type CreatedDocument } from "@/components/PeakPaymentDialog";
 import RecordPaymentDialog from "@/components/RecordPaymentDialog";
+import RecordGuidePaymentDialog, { type PayableJob } from "@/components/RecordGuidePaymentDialog";
 import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover";
 import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 import ExpenseCertificatePanel from "@/components/ExpenseCertificatePanel";
@@ -163,6 +164,12 @@ export default function JobSheetEditor() {
   const [combinedPayment, setCombinedPayment] = useState<{ paymentRef: string; status: string | null; documentNo: string | null; documentLink: string | null; total: number; jobCount: number } | null>(null); // paid state + slip (from the operator)
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  // Pay this job from its own sheet (owner, 2026-11-07): the guide's jobs of the month as
+  // Guide Payments lists them (/api/guide-payments/candidates — the same eligibility the
+  // service enforces), so the button only shows where a payment would be accepted.
+  type PayCandidate = { jobNo: string | null; date: string; slotIdx: number; tour: string; amountDue: number; eligible: boolean; blockedReason: string | null; accountingMonth: string };
+  const [payRows, setPayRows] = useState<PayCandidate[] | null>(null);
+  const [payOpen, setPayOpen] = useState(false);
   // The last Save the server refused, and why. Kept on screen until a save succeeds, so
   // edits still showing after a refusal can never be read as saved. `stale` means the
   // sheet changed underneath this page: nothing more may be saved from it until it is
@@ -325,6 +332,16 @@ export default function JobSheetEditor() {
     } catch { setMonthJobs(null); }
   }, [sheet?.guideId, sheet?.date, canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadMonthJobs(); }, [loadMonthJobs, peak?.peakDocumentNo, payment?.paid]);
+  const approvedForPay = !!sheet && isApproved(sheet.approvalStatus);
+  const loadPayRows = useCallback(async () => {
+    if (!sheet || !canEdit || !approvedForPay || payment?.paid) { setPayRows(null); return; }
+    try {
+      const r = await fetch(`/api/guide-payments/candidates?period=${sheet.date.slice(0, 7)}&guideId=${encodeURIComponent(sheet.guideId)}`, { cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      setPayRows(r.ok && Array.isArray(d.rows) ? d.rows : null);
+    } catch { setPayRows(null); }
+  }, [sheet?.guideId, sheet?.date, canEdit, approvedForPay, payment?.paid]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadPayRows(); }, [loadPayRows]);
   // This job is unpaid and goes into PEAK only through a combined document (one per
   // transfer — lib/combined-payment perSheetSyncRefusal); the candidates include it.
   const thisInMonthJobs = !!sheet && (monthJobs ?? []).some((j) => j.date === sheet.date && j.slotIdx === sheet.slotIdx);
@@ -437,6 +454,9 @@ export default function JobSheetEditor() {
   // Expense rows marked "From company advance" — the summary shows even before an advance exists.
   const advRows = sheet ? sheet.expenses.filter((e) => e.paidBy === "advance").length : 0;
   const liveAdvances = advance.advances.filter((a) => a.status !== "VOID");
+  // What of the job's advance the guide still holds — shown on "Pay & PEAK" before a transfer.
+  const advanceStillOut = advanceLoaded && advance.advances.length > 0 ? Math.max(0, advT.outstanding) : 0;
+  const payThis = payRows?.find((r) => r.date === sheet?.date && r.slotIdx === sheet?.slotIdx) ?? null;
   // The older labels some summaries still use, derived from the ledger status (lib/advances/summaries).
   const advSt: "SETTLED" | "NOT_REQUIRED" | "PENDING_SETTLEMENT" | "OPEN" =
     advance.status === "SETTLED" ? "SETTLED" : advance.status === "NO_ADVANCE" ? "NOT_REQUIRED" : advance.status === "RETURN_DUE" || tourCompleted ? "PENDING_SETTLEMENT" : "OPEN";
@@ -1339,8 +1359,15 @@ export default function JobSheetEditor() {
                ? <button type="button" className="btn sm ghost" disabled={busy} onClick={toggleApprove}>Unapprove</button>
                : <button type="button" className="btn sm primary js-check-approve" disabled={busy} onClick={toggleApprove}>Approve</button> },
            { key: "pay", title: "Pay & PEAK", th: "โอนเงินและลง PEAK", done: !!payment?.paid && inPeak,
-             summary: payment?.paid ? `Paid${payment.paidAt ? ` ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""} · ${peakStatus?.documentNo ?? payment.peakRef ?? (inPeak ? "in PEAK" : "not in PEAK yet")}` : approvedNow ? "Approved — transfer on Payments" : "After approval",
-             action: <a className="btn sm" href="/payments">Payments →</a> },
+             summary: payment?.paid ? `Paid${payment.paidAt ? ` ${new Date(payment.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""} · ${peakStatus?.documentNo ?? payment.peakRef ?? (inPeak ? "in PEAK" : "not in PEAK yet")}`
+               : !approvedNow ? "After approval"
+               : payThis?.eligible ? `${thb(payThis.amountDue)} to ${header?.name || sheet.guideId}`
+               : payThis?.blockedReason ?? "Approved — transfer on Payments",
+             warn: !payment?.paid && approvedNow && advanceStillOut > 0,
+             tip: advanceStillOut > 0 ? `Advance ${thb(advanceStillOut)} is still with the guide` : undefined,
+             action: payment?.paid || !approvedNow ? <a className="btn sm" href="/payments">Payments →</a>
+               : payThis?.eligible ? <button type="button" className="btn sm primary js-check-pay" onClick={() => setPayOpen(true)}>Record payment…</button>
+               : <a className="btn sm" href="/payments">Payments →</a> },
          ];
          const current = cards.findIndex((c) => !c.done);
          return (
@@ -1350,7 +1377,7 @@ export default function JobSheetEditor() {
                {cards.map((c, i) => (
                  <li key={c.key} className={`js-check-card${c.done ? " done" : ""}${i === current ? " now" : ""}${c.warn && !c.done ? " warn" : ""}`} data-step={c.key} title={c.tip || undefined}>
                    <span className="js-check-n" aria-hidden="true">{c.done ? "✓" : i + 1}</span>
-                   <span className="js-check-body"><b>{c.title}</b><small>{c.summary}{c.key === "approve" && !approvedNow && approveCertifies > 0 && <span className="js-approve-certifies" style={{ display: "block", marginTop: 2 }}>จะออกใบรับรองแทนใบเสร็จ {thb(approveCertifies / 100)} ในชื่อคุณด้วย</span>}</small></span>
+                   <span className="js-check-body"><b>{c.title}</b><small>{c.summary}{c.key === "approve" && !approvedNow && approveCertifies > 0 && <span className="js-approve-certifies" style={{ display: "block", marginTop: 2 }}>จะออกใบรับรองแทนใบเสร็จ {thb(approveCertifies / 100)} ในชื่อคุณด้วย</span>}{c.key === "pay" && !payment?.paid && approvedNow && advanceStillOut > 0 && <span className="js-pay-advance-warn" style={{ display: "block", marginTop: 2, color: "var(--danger,#c0392b)" }}>⚠ Advance {thb(advanceStillOut)} {advT.usedFromAdvance > 0 ? "not fully used or returned" : "has no row paid from it yet"}</span>}</small></span>
                    {c.action}
                  </li>
                ))}
@@ -2793,6 +2820,17 @@ export default function JobSheetEditor() {
           onClose={() => setPayTogetherOpen(false)}
           onDone={() => { setPayTogetherOpen(false); load(); loadMonthJobs(); }}
           onRecordPayment={(doc) => { setPayTogetherOpen(false); load(); loadMonthJobs(); setRecordPay(doc); }}
+        />
+      )}
+      {payOpen && sheet && payRows && (
+        <RecordGuidePaymentDialog
+          guideId={sheet.guideId}
+          guide={header?.name || sheet.guideId}
+          jobs={payRows.map((r): PayableJob => ({ date: r.date, slotIdx: r.slotIdx, ref: r.jobNo, tour: r.tour, amount: r.amountDue, payBlock: r.eligible ? null : r.blockedReason, accountingMonth: r.accountingMonth }))}
+          preselect={[`${sheet.date}|${sheet.slotIdx}`]}
+          today={new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10)}
+          onClose={() => setPayOpen(false)}
+          onDone={(m) => { setPayOpen(false); setMsg(m); void load(); }}
         />
       )}
       {recordPay && sheet && (
