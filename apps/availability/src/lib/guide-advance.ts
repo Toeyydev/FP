@@ -202,7 +202,7 @@ export async function recordAdvanceReturn(o: {
     const guideName = gUser?.fullName || gUser?.displayName || guideId;
     // Job No. first, the same as every other Drive file of this job (lib/evidence-name).
     const name = evidenceName({ jobs: [sheet.ref], what: "advance return slip", guide: guideName, date, amount, refs: [o.txRef, guideId] });
-    const up = await uploadSlip(o.actorId ?? undefined, o.slipFile, name, date);
+    const up = await uploadSlip(o.actorId ?? undefined, o.slipFile, name, date, { ref: sheet.ref, date });
     if ("error" in up) return { ok: false, status: up.status, error: up.error };
     slip = up;
   }

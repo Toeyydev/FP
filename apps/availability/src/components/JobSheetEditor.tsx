@@ -2092,7 +2092,11 @@ export default function JobSheetEditor() {
             </> : <span className="adv-missing">{advRows > 0 ? `${advRows} row${advRows === 1 ? "" : "s"} marked “From company advance” · ` : ""}No advance recorded for this job</span>}
             <span className="adv-sum-links">
               {liveAdvances.map((a) => <a key={a.id} className="mono" href={existingAdvanceHref(a.id)}>{a.advanceNo} →</a>)}
-              {!hasAdvance && <a href="/payments?view=advances">Record on Payments → Advances →</a>}
+              {/* Owner, 2026-11-07: record an advance right here again. Opens the form below
+                  (the same one, posting to the same advance ledger as Payments → Advances). */}
+              <button type="button" className="btn sm js-advance-record" disabled={advBusy || advance.frozen}
+                onClick={() => { setAdvOpenState(true); setAdvKind("advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", file: null, confirmedArrived: false }));
+                  window.setTimeout(() => document.querySelector(".js-advance-form")?.scrollIntoView({ block: "center", behavior: "smooth" }), 50); }}>+ Record advance</button>
               {hasAdvance && <button type="button" className="btn sm js-advance-details" aria-expanded={advOpen} onClick={() => setAdvOpen((o) => !o)}>{advOpen ? "Hide details" : "Details"}</button>}
             </span>
           </div>
@@ -2179,13 +2183,13 @@ export default function JobSheetEditor() {
         {/* Record forms — operator records advances and returns; the guide may record
             their own RETURN (they made the transfer back) but never an advance. */}
         <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          {canEdit && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "advance" ? null : "advance"); setAdvForm((f) => ({ ...f, amount: "", txRef: "", note: "", file: null, confirmedArrived: false })); }}>{advKind === "advance" ? "Cancel" : "+ Record advance"}</button>}
+          {canEdit && advKind === "advance" && <button className="btn sm" onClick={() => setAdvKind(null)}>Cancel</button>}
           {!canEdit && hasAdvance && advT.outstanding > 0 && <button className="btn sm" disabled={advBusy || advance.frozen} onClick={() => { setAdvKind(advKind === "return" ? null : "return"); setAdvForm((f) => ({ ...f, amount: advT.outstanding > 0 ? String(advT.outstanding) : "", txRef: "", note: "", confirmedArrived: false })); }}>{advKind === "return" ? "Cancel" : "+ Record return"}</button>}
           {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>You can also manage advances and returns on <a href="/payments?view=advances">Payments → Advances</a>.</span>}
           {!canEdit && hasAdvance && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Advance {thb(advT.totalAdvancePaid)} · Settled by expenses {thb(advT.usedFromAdvance)} · Returned {thb(advT.totalReturned)}{advT.deductedFromPayments > 0 ? ` · Deducted ${thb(advT.deductedFromPayments)}` : ""} · Balance {thb(advT.outstanding)}</span>}
         </div>
         {advKind && (
-          <div className="no-print" style={{ marginTop: 8, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg,#fafafa)", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="no-print js-advance-form" style={{ marginTop: 8, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--grey-bg,#fafafa)", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Amount (฿)<br />
               <input style={{ ...L, width: 110, marginTop: 2 }} type="number" min={1} value={advForm.amount} onChange={(e) => setAdvForm((f) => ({ ...f, amount: e.target.value }))} placeholder="฿ ยอดโอน" /></label>
             <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>{advKind === "advance" ? "Paid at" : "Returned at"}<br />

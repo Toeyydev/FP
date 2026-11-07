@@ -226,8 +226,15 @@ try {
 
   // 2 — the operator may also record an advance from the job sheet (#360). It is not pressed
   // here: the advances below are created on Payments → Advances.
-  const recordAdvanceOnSheet = await page.evaluate(() => [...document.querySelectorAll(".advance-settlement button")].some((b) => b.innerText.trim() === "+ Record advance" && !b.disabled));
-  check("2 · the job sheet offers + Record advance (#360), and no form is open until it is pressed", recordAdvanceOnSheet && (await page.$(".js-advance-submit")) === null);
+  // Owner 2026-11-07: the button sits on the Company advance line, VISIBLE, even before the
+  // job has an advance (it had been left inside the closed Details, so nobody could reach it).
+  const visibleRecord = await page.$eval(".js-advance-summary .js-advance-record", (b) => b.offsetParent !== null && !b.disabled && b.innerText.trim() === "+ Record advance").catch(() => false);
+  const formBefore = (await page.$(".js-advance-submit")) === null;
+  await page.click(".js-advance-summary .js-advance-record");
+  await page.waitForSelector(".js-advance-form .js-advance-submit", { visible: true, timeout: 5000 }).catch(() => null);
+  const formOpens = await page.$eval(".js-advance-form", (f) => f.offsetParent !== null).catch(() => false);
+  check("2 · + Record advance is on the job sheet's advance line, visible, and opens the form (#360, 2026-11-07)", visibleRecord && formBefore && formOpens);
+  await page.evaluate(() => [...document.querySelectorAll(".advance-settlement button")].find((b) => b.innerText.trim() === "Cancel")?.click());
   // Details open on this device from here on (remembered — the summary line is closed by default).
   await page.evaluate(() => localStorage.setItem("folkops.advanceDetailsOpen", "1"));
   await createAdvanceOnPayments(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });

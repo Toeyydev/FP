@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.data.bankAccount?.trim()) return NextResponse.json({ error: "Choose the company bank account used for this transfer" }, { status: 400 });
   if (!parsed.data.bankRef?.trim()) return NextResponse.json({ error: "Enter the bank transfer reference" }, { status: 400 });
   if (!(file instanceof File) || !file.size) return NextResponse.json({ error: "Attach the transfer slip" }, { status: 400 });
-  const sheet = await prisma.jobSheet.findFirst({ where: { ref: parsed.data.jobNo, guideId: parsed.data.guideId }, select: { id: true } });
+  const sheet = await prisma.jobSheet.findFirst({ where: { ref: parsed.data.jobNo, guideId: parsed.data.guideId }, select: { id: true, ref: true, date: true } });
   if (!sheet) return NextResponse.json({ error: "Choose an existing Job No. for this guide before uploading" }, { status: 400 });
   // Before anything is uploaded: one transfer is one advance (lib/advances/tx-ref) …
   const existing = await liveAdvanceForTransfer(prisma, parsed.data.bankRef);
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
   // second advance on the same job never replaces the first one's slip in Drive.
   const g = await prisma.user.findUnique({ where: { guideId: parsed.data.guideId }, select: { displayName: true, fullName: true } });
   const slipName = evidenceName({ jobs: [parsed.data.jobNo], what: "advance slip", guide: g?.fullName || g?.displayName || parsed.data.guideId, date: parsed.data.advanceDate, amount: parsed.data.amount, refs: [parsed.data.bankRef, parsed.data.guideId] });
-  const uploaded = await uploadSlip(session!.user!.id, file, slipName, parsed.data.advanceDate);
+  const uploaded = await uploadSlip(session!.user!.id, file, slipName, parsed.data.advanceDate, { ref: sheet.ref, date: sheet.date });
   if ("error" in uploaded) return NextResponse.json({ error: uploaded.error }, { status: uploaded.status });
   const slip = uploaded;
   const result = await issueAdvance(prisma, {

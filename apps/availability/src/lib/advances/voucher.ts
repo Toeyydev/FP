@@ -63,11 +63,15 @@ const PURPOSE_FALLBACK = "ค่าบัตรเข้าชมสถานท
 export const voucherDriveName = (v: Pick<VoucherInput, "advanceNo" | "jobNo">) =>
   `${v.advanceNo}${v.jobNo ? ` — ${v.jobNo}` : ""} — advance voucher`;
 
-export const voucherDriveFolder = (advanceDate: string) => [
-  "Folkpaths Job Sheets",
-  ...driveMonth(advanceDate),
-  "Advances",
-];
+/**
+ * The job's own folder when the advance is for a job (owner, 2026-11-07: every document of
+ * a job in one place, to trace it back) — month of the TOUR, like the job's other files.
+ * An advance with no job sheet found stays in the month's Advances folder.
+ */
+export const voucherDriveFolder = (advanceDate: string, job?: { ref: string | null; date: string | null } | null) =>
+  job?.ref && job.date
+    ? ["Folkpaths Job Sheets", ...driveMonth(job.date), job.ref]
+    : ["Folkpaths Job Sheets", ...driveMonth(advanceDate), "Advances"];
 
 /**
  * The voucher, as HTML that Google Drive turns into a document. Pure: everything
@@ -202,7 +206,7 @@ export async function saveAdvanceVoucher(
       refreshToken,
       name: voucherDriveName({ advanceNo: advance.advanceNo, jobNo: advance.jobNo }),
       html,
-      folderPath: voucherDriveFolder(advance.advanceDate),
+      folderPath: voucherDriveFolder(advance.advanceDate, sheet ? { ref: advance.jobNo, date: sheet.date } : null),
     });
     await db.guideAdvance.update({
       where: { id: advanceId },
