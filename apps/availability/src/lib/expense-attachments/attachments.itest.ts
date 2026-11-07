@@ -4,6 +4,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { attachmentsFor, mirrorAll, removeAttachment, uploadAttachment, type Actor, type DriveSaver } from "@/lib/expense-attachments/service";
+import { setNoReceipt } from "@/lib/expense-attachments/no-receipt";
 import { computeTotals, type Expense } from "@/lib/jobsheet";
 
 const G = "G-981";
@@ -155,5 +156,32 @@ describe("money", () => {
     expect(computeTotals(after, fee as never)).toEqual(computeTotals(before, fee as never));
     expect(after.map((r) => [r.description, r.price, r.pax, r.paidBy])).toEqual(before.map((r) => [r.description, r.price, r.pax, r.paidBy]));
     expect(await prisma.auditLog.count({ where: { action: { startsWith: "peak" } } })).toBe(peakBefore);
+  });
+});
+
+describe("no receipt + why", () => {
+  const say = (actor: Actor, reason: string | null, over: Partial<Parameters<typeof setNoReceipt>[0]> = {}) => setNoReceipt({ actor, sheet: KEY, expenseIndex: 0, reason, ...over });
+  it("the guide on their own job gives the reason; it is kept on the row and audited", async () => {
+    expect(await say(guide, "Ticket lost")).toMatchObject({ ok: true });
+    const [row] = await rows();
+    expect(row.noReceipt).toMatchObject({ reason: "Ticket lost", by: guide.id, role: "GUIDE" });
+    expect(await prisma.auditLog.count({ where: { action: "jobsheet.no_receipt_set" } })).toBe(1);
+  });
+  it("not another guide, not an accountant", async () => {
+    expect(await say(otherGuide, "Ticket lost")).toMatchObject({ ok: false, status: 403 });
+    expect(await say(accountant, "Ticket lost")).toMatchObject({ ok: false, status: 403 });
+  });
+  it("not on a row that has a receipt, and not once the sheet is approved", async () => {
+    expect(await say(op, "Ticket lost", { expenseIndex: 1 })).toMatchObject({ ok: false, error: "has-receipt" });
+    await prisma.jobSheet.updateMany({ data: { approvalStatus: "APPROVED" } });
+    expect(await say(op, "Ticket lost")).toMatchObject({ ok: false, status: 409, error: "approved" });
+  });
+  it("cleared with an empty reason; a file attached later clears it too", async () => {
+    await say(op, "Ticket lost");
+    expect(await say(op, null)).toMatchObject({ ok: true });
+    expect((await rows())[0].noReceipt).toBeUndefined();
+    await say(guide, "Ticket lost");
+    await up(guide, 1);
+    expect((await rows())[0].noReceipt).toBeUndefined();
   });
 });

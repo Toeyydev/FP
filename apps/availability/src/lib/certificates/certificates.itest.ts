@@ -1828,6 +1828,22 @@ describe("approving a job sheet carries the certificate along", () => {
     expect((await rowsNow())[0].evidenceWaiver?.certificateId).toBe(c.id);
   });
 
+  it("a row's no-receipt reason is on the certificate Approve issues, and survives an operator's save", async () => {
+    await seedSheet([e("Ferry", 11, 5, { rowId: "r_cccccccccccc", noReceipt: { reason: "Pier gives no ticket", by: "u_g", role: "GUIDE", at: "2099-04-01T10:00:00.000Z" } })]);
+    // An operator saves the sheet as their browser holds it, reason stripped: the stored one stays.
+    authMock.auth.mockResolvedValue({ user: { id: "u_ops", name: "Ops", role: "OPERATOR" } });
+    const read = await (await jobSheetGet(new NextRequest(`https://ops.example.test/api/jobsheet?guideId=${GUIDE}&date=${DATE}&slotIdx=0`))).json();
+    const sent = read.sheet.expenses.map((r: Row) => ({ ...r, noReceipt: undefined }));
+    const put = await jobSheetPut(new NextRequest("https://ops.example.test/api/jobsheet", { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: GUIDE, date: DATE, slotIdx: 0, expenses: sent, bookings: read.sheet.bookings, guideFee: read.sheet.guideFee }) }));
+    expect(put.status).toBe(200);
+    expect(((await rowsNow())[0] as Row).noReceipt).toMatchObject({ reason: "Pier gives no ticket" });
+    const [done] = await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(done).toMatchObject({ kind: "GUIDE_PAID", status: "LINKED" });
+    const c = await prisma.expenseCertificate.findFirstOrThrow();
+    expect((c.coveredRows as Row[])[0].noReceiptReason).toBe("Pier gives no ticket");
+  });
+
   it("anybody else's approval leaves a draft: their click never attests in another's name", async () => {
     await seedSheet([e("Ferry", 11)]);
     const [done] = await certificatesOnApproval(KEY, OPERATOR, deps());

@@ -205,7 +205,7 @@ export function renderCertificateHtml(v: CertificateView): string {
   const w = wordingFor(p);
   const rows = p.rows.map((r, i) => `<tr>
       <td class="c">${i + 1}</td>
-      <td>${esc(r.description)}</td>
+      <td>${esc(r.description)}${r.noReceiptReason ? `<div class="why">ไม่มีใบเสร็จ: ${esc(r.noReceiptReason)}</div>` : ""}</td>
       <td class="c nw">${esc(categoryLabelTh(r.category))}</td>
       <td class="c">${int(r.pax)}</td>
       <td class="r">${money(Math.round(int(r.price * 100)))}</td>
@@ -236,6 +236,7 @@ export function renderCertificateHtml(v: CertificateView): string {
  table.items { width: 100%; border-collapse: collapse; margin: 3px 0 6px; font-size: 10pt; }
  table.items th { background: #fef3c7; border: 1px solid #d6d3d1; padding: 5px 7px; font-weight: 600; text-align: left; }
  table.items td { border: 1px solid #e7e5e4; padding: 5px 7px; }
+ table.items .why { font-size: 0.85em; color: #57534e; margin-top: 2px; }
  .c { text-align: center; } .r { text-align: right; }
  .nw { white-space: nowrap; } /* an expense type is one term — never broken across lines */
  tr.sum td { background: #fafaf9; font-weight: 700; border-top: 2px solid #b45309; }
@@ -301,7 +302,7 @@ ${w.advances ? `  <tr><th>เงินทดรองที่ใช้ชำร
 </table>
 
 <p>${w.statement}</p>
-<p>เหตุที่ไม่มีใบเสร็จรับเงินประกอบ: ${esc(p.reason)} ${w.amounts}</p>
+<p>เหตุที่ไม่มีใบเสร็จรับเงินประกอบ: ${p.rows.length && p.rows.every((r) => r.noReceiptReason) ? "ตามที่ระบุไว้ในแต่ละรายการด้านล่าง" : `${esc(p.reason)}${p.rows.some((r) => r.noReceiptReason) ? " รายการที่มีเหตุผลเฉพาะ ระบุไว้ในรายการนั้น" : ""}`} ${w.amounts}</p>
 
 <table class="items">
   <thead><tr><th style="width:5%" class="c">ที่</th><th>รายการ</th><th style="width:25%" class="c">ประเภท</th><th style="width:9%" class="c">จำนวน</th><th style="width:15%" class="r">ราคา/หน่วย</th><th style="width:17%" class="r">จำนวนเงิน</th></tr></thead>
