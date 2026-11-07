@@ -7,6 +7,7 @@ import { evidenceState, type ExpenseWithEvidence } from "@/lib/reimbursement-evi
 import { financialIdentity, type ProtectedRow } from "@/lib/protected-expense-fields";
 import type { ExpenseSource } from "@/lib/certificates/source";
 import { requestedForCertificate, type RequestableRow } from "@/lib/certificates/request";
+import { noReceiptReason } from "@/lib/expense-attachments/no-receipt-row";
 
 // What a certificate says, reduced to one string that always comes out the same way.
 //
@@ -33,6 +34,12 @@ export type CertifiableRow = {
   price: number;
   amountSatang: number;
   category: string;
+  /**
+   * Why this row has no receipt, as the guide or the office gave it (lib/expense-attachments/
+   * no-receipt-row). Present only when given: every certificate issued before it existed
+   * fingerprints exactly as it did.
+   */
+  noReceiptReason?: string;
 };
 
 /**
@@ -127,6 +134,8 @@ export function advanceFundedConfirmed(e: Expense): boolean {
 const hasReceipt = (e: Expense) => !!(((e as ExpenseWithEvidence).receiptUrl ?? "").trim() || ((e as ExpenseWithEvidence).receiptFileId ?? "").trim());
 
 const satang = (n: number) => Math.round(n * 100);
+/** The row's own no-receipt reason, as a key that exists only when there is one. */
+const reasonOf = (e: Expense) => { const r = noReceiptReason(e as Parameters<typeof noReceiptReason>[0]); return r ? { noReceiptReason: r } : {}; };
 
 /**
  * The rows a certificate may speak for: the guide's own money, no receipt attached, and
@@ -158,6 +167,7 @@ export function certifiableRows(expenses: readonly Expense[] | null | undefined,
       price: Number(e.price ?? 0),
       amountSatang: satang(expenseAmount(e)),
       category: String(e.expenseType ?? "other"),
+      ...reasonOf(e),
     });
   });
   return out;
@@ -180,6 +190,7 @@ function advanceRows(expenses: readonly Expense[] | null | undefined, ctx: Sheet
     out.push({
       index, identity: financialIdentity(e as ProtectedRow), description: (e.description ?? "").trim(),
       pax: Number(e.pax ?? 0), price: Number(e.price ?? 0), amountSatang: satang(expenseAmount(e)), category: String(e.expenseType ?? "other"),
+      ...reasonOf(e),
     });
   });
   return out;
@@ -223,7 +234,7 @@ export function buildPayload(
 /** The payload as one string, with every key in a fixed place. */
 export function canonicalString(p: CertificatePayload): string {
   const row = (r: CertifiableRow) =>
-    [r.index, r.identity, r.description, r.pax, satang(r.price), r.amountSatang, r.category].map((v) => String(v)).join("~");
+    [r.index, r.identity, r.description, r.pax, satang(r.price), r.amountSatang, r.category, ...(r.noReceiptReason ? [`why=${r.noReceiptReason}`] : [])].map((v) => String(v)).join("~");
   return [
     `v=${p.v}`,
     `job=${p.jobRef}`,

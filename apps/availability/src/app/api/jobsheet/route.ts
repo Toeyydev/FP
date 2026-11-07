@@ -40,6 +40,7 @@ import { payerRuleReasons, stampPayerActor, type PayerRuleRow } from "@/lib/paye
 import { claimsServerOwned, mergeServerOwned, stripServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { ensureRowIds } from "@/lib/expense-row-id";
 import { attachmentsFor, mirrorAll } from "@/lib/expense-attachments/service";
+import { carryNoReceipt } from "@/lib/expense-attachments/no-receipt-row";
 import { linkAdvanceRows } from "@/lib/advances/link";
 import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
@@ -623,7 +624,9 @@ export async function PUT(req: NextRequest) {
     // re-read from the attachments table: a file attached while this sheet was open in
     // another tab is not wiped by saving the older copy.
     const withIds = ensureRowIds(stamped as unknown as Expense[]).rows;
-    const expenses = (current ? await mirrorAll(tx, current.id, withIds) : withIds) as unknown as Prisma.InputJsonValue;
+    // …and each row's "no receipt" reason is the stored one (lib/expense-attachments/no-receipt-row):
+    // a save never sets it, so an older copy of the sheet cannot wipe or forge it.
+    const expenses = carryNoReceipt((current?.expenses as { rowId?: string | null }[] | null) ?? [], current ? await mirrorAll(tx, current.id, withIds) : withIds) as unknown as Prisma.InputJsonValue;
     if (!current) {
       return { kind: "ok" as const, sheet: await tx.jobSheet.create({ data: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null } }) };
     }

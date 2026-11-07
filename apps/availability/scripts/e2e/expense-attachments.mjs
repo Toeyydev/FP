@@ -137,6 +137,18 @@ try {
     check("guide 390px: the same file again is refused and said so, with Retry", res.status() === 409 && /already attached/.test(said) && /Retry/.test(said), said);
     const folders = await prisma.expenseAttachment.findFirst({ where: { status: "UPLOADED" } });
     check("filed in the job's own Receipts folder", !!folders?.driveFolderId && /FOLDER[^\n]*\nFOLDER/.test((await import("node:fs")).readFileSync(DRIVE_LOG, "utf8")));
+    // No receipt + why, on the second row (owner, 2026-11-07): a ready-made reason, kept on the row.
+    await page.click(".gs-exp li:nth-child(2) .js-no-receipt-add");
+    await page.waitForSelector(".gs-exp li:nth-child(2) .js-no-receipt-pick", { timeout: 5000 });
+    const saidWhy = page.waitForResponse((r) => r.url().includes("/api/jobsheet/no-receipt"), { timeout: 15000 });
+    await page.select(".gs-exp li:nth-child(2) .js-no-receipt-pick", "ตั๋วหรือใบเสร็จหาย");
+    await saidWhy;
+    await page.waitForSelector(".gs-exp li:nth-child(2) .js-no-receipt", { timeout: 10000 });
+    const whyShown = await page.$eval(".gs-exp li:nth-child(2) .js-no-receipt", (x) => x.textContent);
+    const whyRow = ((await prisma.jobSheet.findFirstOrThrow()).expenses)[1];
+    check("guide 390px: No receipt + a reason on a row of their own job, kept on the row", /No receipt · ตั๋วหรือใบเสร็จหาย/.test(whyShown) && whyRow.noReceipt?.reason === "ตั๋วหรือใบเสร็จหาย" && whyRow.noReceipt?.role === "GUIDE", `${whyShown} ${JSON.stringify(whyRow.noReceipt)}`);
+    check("guide 390px: a row with files offers no 'No receipt'", (await page.$(".gs-exp li:first-child .js-no-receipt-add")) === null);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "receipts-no-receipt-390.png"), fullPage: true });
     check("guide 390px: no sideways scroll", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     check("guide 390px: no page error", errors.length === 0, errors.join(" | ").slice(0, 200));
     if (SHOTS) await page.screenshot({ path: join(SHOTS, "receipts-guide-390.png"), fullPage: true });

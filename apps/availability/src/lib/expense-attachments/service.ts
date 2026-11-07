@@ -7,6 +7,7 @@ import { isAccountant, isOps } from "@/lib/roles";
 import { ensureRowIds, isRowId } from "@/lib/expense-row-id";
 import { checkFile, receiptFileName } from "@/lib/expense-attachments/validate";
 import { jpegToPdf } from "@/lib/expense-attachments/image-pdf";
+import { withoutNoReceipt } from "@/lib/expense-attachments/no-receipt-row";
 
 // Files behind Tour Expense rows: several per row, filed by the row's stable id.
 //
@@ -83,7 +84,7 @@ export async function mirrorAll<T extends Row>(db: Db | Prisma.TransactionClient
 }
 
 /** Rewrite a sheet's rows with a guard on updatedAt; a few retries if someone saved meanwhile. */
-async function rewriteRows(db: Db, sheetId: string, change: (rows: Row[]) => Row[] | null): Promise<boolean> {
+export async function rewriteRows(db: Db, sheetId: string, change: (rows: Row[]) => Row[] | null): Promise<boolean> {
   for (let i = 0; i < 4; i++) {
     const s = await db.jobSheet.findUnique({ where: { id: sheetId }, select: { expenses: true, updatedAt: true } });
     if (!s) return false;
@@ -96,7 +97,7 @@ async function rewriteRows(db: Db, sheetId: string, change: (rows: Row[]) => Row
 }
 
 /** The row's stable id, giving the row one if it has none yet. Null when the row is gone. */
-async function rowIdFor(db: Db, sheetId: string, by: { rowId?: string | null; index?: number | null }): Promise<string | null> {
+export async function rowIdFor(db: Db, sheetId: string, by: { rowId?: string | null; index?: number | null }): Promise<string | null> {
   const s = await db.jobSheet.findUnique({ where: { id: sheetId }, select: { expenses: true } });
   const rows = ((s?.expenses as unknown as Row[]) ?? []);
   if (by.rowId) return rows.some((r) => r?.rowId === by.rowId) ? by.rowId : null;
@@ -209,7 +210,8 @@ export async function uploadAttachment(o: {
   const attachment = await db.expenseAttachment.update({ where: { id: attId }, data: { status: "UPLOADED", driveFileId: up.id, driveLink: up.link, driveFolderId: up.folderId ?? null, errorCode: null } });
   await audit({ ...base, action: "jobsheet.attachment_uploaded", detail: { ...what, driveFileId: up.id, attempts: attachment.attempts } });
   await rewriteRows(db, sheet.id, (cur) => {
-    const next = cur.map((r) => (r.rowId === rowId ? mirrorRow(r, [attachment], new Set()) : r));
+    // A receipt arrived: the row's "no receipt" reason no longer applies (lib/expense-attachments/no-receipt).
+    const next = cur.map((r) => (r.rowId === rowId ? withoutNoReceipt(mirrorRow(r, [attachment], new Set())) : r));
     return next.some((r, i) => r !== cur[i]) ? next : null;
   });
   return { ok: true, attachment, retried };

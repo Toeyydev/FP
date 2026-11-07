@@ -1166,7 +1166,7 @@ export default function JobSheetEditor() {
                         <b>{thb(expenseAmount(e))}</b>
                         {ro && <div className="gs-receipts" style={{ flexBasis: "100%", marginTop: 4 }}>
                           <ReceiptFiles compact sheetKey={sheet} row={e} index={sheet.expenses.indexOf(e)} files={(e.rowId && attachments[e.rowId]) || []}
-                            canAdd={role === "GUIDE" && !!sheet.ref} onChanged={receiptsChanged} />
+                            canAdd={role === "GUIDE" && !!sheet.ref} locked={isApproved(sheet.approvalStatus)} onChanged={receiptsChanged} />
                         </div>}
                       </li>
                     ))}
@@ -1672,7 +1672,7 @@ export default function JobSheetEditor() {
                   })()}
                 </td>
                 <td className="no-print" style={{ textAlign: "center", minWidth: 90 }}>
-                  <ReceiptFiles sheetKey={sheet} row={e} index={i} files={(e.rowId && attachments[e.rowId]) || []} canAdd={canEdit}
+                  <ReceiptFiles sheetKey={sheet} row={e} index={i} files={(e.rowId && attachments[e.rowId]) || []} canAdd={canEdit} locked={isApproved(sheet.approvalStatus)}
                     beforeUpload={async () => saved || (await save())} onChanged={receiptsChanged} />
                 </td>
                 <td className="js-amt">

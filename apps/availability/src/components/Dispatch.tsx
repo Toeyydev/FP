@@ -221,7 +221,9 @@ export default function Dispatch() {
             {(() => {
               // On-going tours = today only. Future assigned jobs still live on the
               // Board and Dashboard; this list stays focused on the day in progress.
-              const todayStr = new Date().toLocaleDateString("en-CA");
+              // Bangkok's date, as the server counts it — not the browser's own clock, which in any
+              // other timezone dropped today's tours between midnight and 07:00 Bangkok time.
+              const todayStr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
               const todayAssignments = data.assignments.filter((a) => a.date === todayStr);
               if (todayAssignments.length === 0) return <div className="op-empty">No tours scheduled for today.</div>;
               // Group by date (single date now, kept for the numbered 1, 2, 3… layout).

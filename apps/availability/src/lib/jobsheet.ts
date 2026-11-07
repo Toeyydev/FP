@@ -32,6 +32,8 @@ export type Expense = {
   price: number | null;
   pax: number | null;
   rowId?: string; // stable id of the row (lib/expense-row-id); its attachments are filed under it
+  /** Why the row has no receipt (lib/expense-attachments/no-receipt-row). Set only by its own endpoint. */
+  noReceipt?: { reason: string; by?: string | null; role?: string | null; at?: string } | null;
   unit?: string;
   expenseType?: ExpenseType | string; // operational category (mapped to a PEAK account in the backend, not here)
   paidBy?: string; // "guide" | "operator" | "company"
@@ -293,7 +295,9 @@ const notTheGuides = (e: Expense) => ["advance", "company"].includes((e.paidBy ?
 export function adoptReportedExpenses(official: Expense[], reported: Expense[]): Expense[] {
   const adopt = (g: Expense) => {
     const o = (official ?? []).find((e) => sameLine(e, g));
-    return hasPayer(o) ? { ...g, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g };
+    // The official row's stable id stays with it: its files and its "no receipt" reason are filed under it.
+    const id = o?.rowId ? { rowId: o.rowId } : {};
+    return hasPayer(o) ? { ...g, ...id, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g, ...id };
   };
   // In the official order, so a kept row stays where the operator put it.
   const inOrder = (official ?? []).flatMap((e) => {
