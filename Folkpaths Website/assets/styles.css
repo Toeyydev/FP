@@ -152,6 +152,12 @@
   .cta-panel--centered { padding-block: clamp(1.25rem, 2.5vw, 2rem); }
   .cta-panel--centered > .button { align-self: center; }
   .cta-panel p { max-width: 42rem; }
+  .faq-booking-panel { align-items: center; }
+  .travel-guides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(1.75rem, 5vw, 4rem); }
+  .travel-guides article { display: flex; flex-direction: column; align-items: start; }
+  .travel-guides p { max-width: 60ch; margin: .75rem 0 1.25rem; }
+  .travel-guide-image { display: block; width: 100%; max-width: 30rem; margin-top: auto; }
+  .travel-guide-image img { width: 100%; height: auto; }
   .site-footer { padding: 3rem 0 6.5rem; background: var(--ink); color: var(--white); }
   .footer-grid { display: grid; grid-template-columns: minmax(18rem, 1.3fr) repeat(3, auto); gap: 3rem; }
   .footer-links { display: grid; gap: .5rem; align-content: start; }
@@ -228,8 +234,7 @@
   .review-card { min-height: 15.5rem; padding: clamp(1.25rem, 3vw, 1.75rem); display: flex; flex-direction: column; scroll-snap-align: start; border: 2px solid var(--ink); border-radius: var(--radius-m); background: var(--paper); }
   .review-card:nth-child(even) { background: var(--yellow); }
   .review-source { display: flex; justify-content: space-between; gap: 1rem; color: var(--red-dark); }
-  .review-card blockquote { margin: auto 0; }
-  .review-card blockquote p { font-family: inherit; font-size: clamp(1.25rem, 2.2vw, 1.65rem); font-weight: 500; line-height: 1.4; }
+  .review-card .review-excerpt { margin: auto 0; font-family: inherit; font-size: clamp(1.25rem, 2.2vw, 1.65rem); font-weight: 500; line-height: 1.4; }
   .review-meta { margin-bottom: .5rem; color: var(--muted); font-weight: 700; }
   .review-position { display: none; }
   .consent-banner { position: fixed; z-index: 30; right: 1rem; bottom: 1rem; left: 1rem; width: min(calc(100% - 2rem), 72rem); margin-inline: auto; padding: 1.25rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.5rem; align-items: center; border: 2px solid var(--ink); border-radius: var(--radius-m); background: var(--paper); box-shadow: 0 .75rem 2.5rem oklch(20% .025 35 / .24); }
@@ -301,7 +306,7 @@
   .tour-check { grid-column: 1 / -1; }
   .tour-compare { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .tour-page-image { aspect-ratio: 4 / 3; border-radius: var(--radius-m); }
-  .split, .cta-panel, .content-grid, .review-submit-grid { grid-template-columns: 1fr; }
+  .split, .cta-panel, .content-grid, .review-submit-grid, .travel-guides { grid-template-columns: 1fr; }
   .booking-aside { position: static; }
   .booking-summary { grid-template-columns: auto minmax(0, 1fr); }
   .booking-summary dl { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); }
@@ -325,6 +330,7 @@
 }
 
 @media (max-width: 35rem) {
+  .faq-hero h1 { font-size: clamp(2.65rem, 13vw, 4rem); }
   .review-summary a { display: block; width: fit-content; margin-bottom: .3rem; }
   .review-summary-sep { display: none; }
   h1 { font-size: clamp(3.15rem, 17vw, 4.5rem); }
