@@ -27,7 +27,7 @@ import type { Expense } from "@/lib/jobsheet";
 export type AdvanceMovement = {
   id: string;
   amount: number;
-  at: Date;
+  at: Date | null; // null for a guide: no transfer dates (lib/advances/guide-card)
   method: string;
   txRef: string | null;
   note: string | null;
@@ -133,13 +133,16 @@ export async function guideAdvanceSummary(
     // not settled yet.
     status: guideStatus(summaries, tourCompleted, live.length > 0),
     categories: [...new Set(live.flatMap((a) => a.allowedCategories ?? []))],
-    advances: live.map((a) => ({ id: a.id, amount: a.amountSatang / 100, at: a.paidAt, method: a.method, txRef: a.txRef, note: [a.advanceNo, a.note].filter(Boolean).join(" · ") || null, slip: a.slipUrl })),
+    // Owner 2026-11-11: a guide sees the amount and that it was transferred, never the ADV
+    // number, transfer date, bank reference, slip or note (lib/advances/guide-card). The keys
+    // stay, empty, so the app's existing parser keeps working.
+    advances: live.map((a) => ({ id: a.id, amount: a.amountSatang / 100, at: null, method: a.method, txRef: null, note: null, slip: null })),
     // Money the guide has sent back, whatever it has been put against yet. A CLAIMED one
     // is shown as waiting on purpose: it is a claim until someone checks the bank.
     returns: receipts.map((r) => ({
-      id: r.id, amount: r.amountSatang / 100, at: r.createdAt, method: r.method, txRef: r.bankRef,
-      note: [r.receiptNo, r.status === "CLAIMED" ? "waiting to be checked" : `allocated ${(r.allocatedSatang / 100).toFixed(2)} of ${(r.amountSatang / 100).toFixed(2)}`, r.note].filter(Boolean).join(" · "),
-      slip: r.slipUrl,
+      id: r.id, amount: r.amountSatang / 100, at: null, method: r.method, txRef: null,
+      note: r.status === "CLAIMED" ? "waiting to be checked" : "received",
+      slip: null,
     })),
   };
 }

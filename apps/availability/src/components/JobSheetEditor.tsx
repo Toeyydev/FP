@@ -35,6 +35,8 @@ import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover"
 import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 import ExpenseCertificatePanel from "@/components/ExpenseCertificatePanel";
 import CopyMemo from "@/components/CopyMemo";
+import GuideAdvanceCard from "@/components/GuideAdvanceCard";
+import type { GuideAdvanceCard as GuideAdvanceCardData } from "@/lib/advances/guide-card";
 import { advanceMemo, returnMemo } from "@/lib/bank-memo";
 import { ceDate } from "@/lib/ce-date";
 
@@ -191,6 +193,8 @@ export default function JobSheetEditor() {
   const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
   // Guide advance + settlement (cash movements — separate from expenses, see lib/advance)
   const [advance, setAdvance] = useState<AdvanceData>(EMPTY_ADVANCE);
+  // A guide's cut-down Company ADV (the server sends a guide this instead of `advance`).
+  const [guideAdv, setGuideAdv] = useState<GuideAdvanceCardData | null>(null);
   // Whether the job's advances have been read from the server yet. Until they have, "no
   // advance on record" is not something this screen may say.
   const [advanceLoaded, setAdvanceLoaded] = useState(false);
@@ -238,6 +242,7 @@ export default function JobSheetEditor() {
     setPastGaps(d.pastBookingGaps ?? null);
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setArrivals(d.arrivals && typeof d.arrivals === "object" ? d.arrivals : {}); setAttachments(d.attachments && typeof d.attachments === "object" ? d.attachments : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
+    setGuideAdv(d.guideAdvance ?? null);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -538,6 +543,7 @@ export default function JobSheetEditor() {
     const fresh = await jfetch(`/api/jobsheet?guideId=${encodeURIComponent(sheet.guideId)}&date=${sheet.date}&slotIdx=${sheet.slotIdx}`);
     const fd2 = await fresh.json().catch(() => ({}));
     if (fd2.advance) setAdvance(fd2.advance);
+    if ("guideAdvance" in fd2) setGuideAdv(fd2.guideAdvance ?? null);
     if (fd2.sheet?.updatedAt) setSheet((x) => (x ? { ...x, updatedAt: fd2.sheet.updatedAt, expenses: x.expenses.map((e, i) => ({ ...e, ...(fd2.sheet.expenses?.[i]?.advanceId ? { advanceId: fd2.sheet.expenses[i].advanceId } : {}) })) } : x));
   }
   // The live advances of this job that may pay for a category (lib/advances/categories, as the
@@ -1190,7 +1196,7 @@ export default function JobSheetEditor() {
                   <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
                 {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — it is not in the figure above, and the payment waits until the operator records who paid. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย ยังไม่รวมในยอดข้างบน และจะยังจ่ายไม่ได้จนกว่า operator จะระบุ</div>}
-                {hasAdvance && (() => {
+                {canEdit && hasAdvance && (() => {
                   // Money the guide already sent back that is not counted yet: a claim being
                   // checked, or confirmed money not yet put against an advance. A receipt is a
                   // transfer, not a job, so this is the guide's whole pending amount — shown
@@ -1231,6 +1237,13 @@ export default function JobSheetEditor() {
                   </div>
                   );
                 })()}
+                {/* A guide gets only their read-only Company ADV card (lib/advances/guide-card):
+                    the server never sends them the ledger. */}
+                {!canEdit && guideAdv && (
+                  <GuideAdvanceCard card={guideAdv} job={{ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ref: sheet.ref }}
+                    onChanged={setGuideAdv}
+                    onUpload={() => document.querySelector(".gs-exp")?.scrollIntoView({ block: "start", behavior: "smooth" })} />
+                )}
                 {paid && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--ok-bg, #eef7f0)", border: "1px solid var(--ok-line, #cfe6d6)", borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700, color: "var(--green, #2f7d4f)" }}>

@@ -312,6 +312,16 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/ticket-badge
 
+      # A guide's Company ADV: only the amount, ✓ Transferred and To return reach the guide
+      # (page, job sheet JSON, PDF); every ADV write is refused to them; their own return
+      # still records; the operator keeps the full ledger.
+      - name: Guide Company ADV in a real browser
+        run: node scripts/e2e/guide-company-adv.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-company-adv
+
       # A direct assignment reaches the guide: the operator assigns, the guide's bell shows
       # it — a "You're booked" card with the tour — and a guide cannot assign.
       - name: Direct-assignment notice in a real browser
