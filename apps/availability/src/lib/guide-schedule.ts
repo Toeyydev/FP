@@ -3,7 +3,7 @@ import { ticketsFromRate } from "@/lib/rate-kind";
 import { SLOT_TIMES } from "@/lib/slots";
 import { paxIndex } from "@/lib/assigned-pax";
 import { bookingRef } from "@/lib/booking-ref";
-import { defaultExpensesForTour, isReviewExpense, type Booking as SheetBooking, type Expense } from "@/lib/jobsheet";
+import { defaultExpensesForTour, isApproved, isReviewExpense, type Booking as SheetBooking, type Expense } from "@/lib/jobsheet";
 
 // A guide's own tours, as the web My Tours (/api/schedule, /api/tour-details) and
 // FolkOPS Mobile (/api/mobile/*) both show them. The routes differ only in how
@@ -138,7 +138,7 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
   const assignment = await prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } });
   if (!assignment) return null;
 
-  const [tour, bookings, lastCheckin, sheet] = await Promise.all([
+  const [tour, bookings, lastCheckin, sheet, payment] = await Promise.all([
     prisma.tour.findUnique({ where: { id: assignment.tourId } }),
     prisma.booking.findMany({
       where: { tourId: assignment.tourId, date, slotIdx, status: { in: ["OFFERED", "ASSIGNED", "PENDING"] } },
@@ -152,19 +152,27 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
       select: { id: true, customerName: true, confirmationCode: true, externalRef: true, pax: true, source: true, noShowPax: true, phone: true, assignedGuideId: true, rateTitle: true },
     }),
     prisma.checkin.findFirst({ where: { guideId, date, slotIdx }, orderBy: { at: "desc" }, select: { type: true } }),
-    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { bookings: true, expenses: true } }),
+    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { bookings: true, expenses: true, approvalStatus: true } }),
+    prisma.tourPayment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { status: true } }),
   ]);
 
   // Whether a booking's guests already have their entrance tickets is the job
   // sheet's Tickets tag, matched the way the sheet writes its rows: by booking
-  // reference. A row on the saved sheet always wins, even blank (the sheet is the
-  // record). With no saved row for the booking, the booking's Rate fills it only
-  // where the Rate is unambiguous (lib/rate-kind); otherwise the guide is shown
-  // nothing rather than a guess.
+  // reference. A value someone chose on the sheet always wins. A blank (or no row)
+  // is filled from the booking's Rate where the Rate is unambiguous (lib/rate-kind),
+  // by the same rule the job sheet itself shows (api/jobsheet GET): only while the
+  // sheet is neither approved nor paid — an approved or paid sheet is shown as saved.
+  // The guide sees both screens, so they must agree. Unknown stays "" (no badge).
+  const inferTickets = !sheet || (!isApproved(sheet.approvalStatus) && payment?.status !== "PAID");
   const ticketsByRef = new Map<string, SheetBooking["tickets"]>();
   for (const row of ((sheet?.bookings as SheetBooking[] | null) ?? [])) {
     if (row?.bookingNo) ticketsByRef.set(row.bookingNo, row.tickets ?? "");
   }
+  const ticketsFor = (ref: string, rateTitle: string | null): string => {
+    const saved = ticketsByRef.get(ref);
+    if (saved?.trim() || !inferTickets) return saved ?? "";
+    return ticketsFromRate(rateTitle);
+  };
 
   // The costs this tour actually runs up. The operator's saved set when there is
   // one, otherwise the standard set for this tour — so a guide reporting an evening
@@ -198,6 +206,6 @@ export async function guideTourDetails(guideId: string, date: string, slotIdx: n
     expenses,
     // When the guide stops being sent the guests' numbers, so the app can say so.
     phoneVisibleUntil: opts.everyPhone ? null : new Date(phoneVisibleUntil).toISOString(),
-    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsByRef.get(bookingRef(b.externalRef, b.confirmationCode)) ?? ticketsFromRate(b.rateTitle) })),
+    bookings: shown.map((b) => ({ id: b.id, customerName: b.customerName, confirmationCode: b.confirmationCode, externalRef: b.externalRef, pax: b.pax, source: b.source, noShowPax: b.noShowPax, phone: mine.has(b.id) ? b.phone : null, tickets: ticketsFor(bookingRef(b.externalRef, b.confirmationCode), b.rateTitle) })),
   };
 }
