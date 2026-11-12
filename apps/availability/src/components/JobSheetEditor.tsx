@@ -1259,7 +1259,9 @@ export default function JobSheetEditor() {
             {canReport && isFoodTourId(sheet.tourId) && (() => {
               // Food tour (owner, 2026-10-27): one figure — what the food cost — against the
               // food advance. No list of stops, no receipt required (lib/jobsheet foodCostRows).
-              const adv = advT.totalAdvancePaid;
+              // A guide is sent only their Company ADV card (lib/advances/guide-card), not the ledger:
+              // its amount is the transferred advance. Operators keep the ledger figure.
+              const adv = canEdit ? advT.totalAdvancePaid : (guideAdv?.amount ?? 0);
               const shown = foodSpent !== "" ? foodSpent : (reportedFoodCost(sheet.guideExpenses) || "").toString();
               const spent = Number(shown) || 0;
               const diff = Math.round((adv - spent) * 100) / 100;
