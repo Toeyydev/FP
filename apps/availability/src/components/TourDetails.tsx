@@ -5,11 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { bookingRef } from "@/lib/booking-ref";
 import { whatsappDisplay, whatsappUrl } from "@/lib/contact-links";
 import WhatsAppButton from "@/components/WhatsAppButton";
+import TicketBadge from "@/components/TicketBadge";
 
 type Data = {
   date: string; slotIdx: number; time: string; pax: number | null; note: string | null;
   tour: { id: string; name: string; time: string; meetingPoint: string | null; itinerary: string | null; included: string | null; bring: string | null } | null;
-  bookings: { customerName: string | null; confirmationCode: string | null; externalRef: string | null; pax: number | null; source: string; phone: string | null }[];
+  bookings: { customerName: string | null; confirmationCode: string | null; externalRef: string | null; pax: number | null; source: string; phone: string | null; tickets?: string }[];
 };
 
 export default function TourDetails() {
@@ -71,6 +72,7 @@ export default function TourDetails() {
                   <td>{i + 1}</td>
                   <td>
                     {b.customerName || "—"}
+                    {b.tickets === "included" || b.tickets === "not" ? <div style={{ marginTop: 4 }}><TicketBadge tickets={b.tickets} /></div> : null}
                     {/* WhatsApp rather than a call: the guests are overseas, and a
                         message beats paying for an international call. Nothing at all
                         when no number was passed — an always-empty line reads as broken

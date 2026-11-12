@@ -21,6 +21,7 @@ import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak
 import { approvalView, JOB_SHEET_ROLE_NOTE_TH } from "@/lib/jobsheet-approval";
 import CertificateReference from "@/components/CertificateReference";
 import WhatsAppButton from "@/components/WhatsAppButton";
+import TicketBadge from "@/components/TicketBadge";
 import MoveDepartureDialog from "@/components/MoveDepartureDialog";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -1124,8 +1125,7 @@ export default function JobSheetEditor() {
                             มาแล้ว{at ? ` ${bkkTime(at)}` : ""}
                           </label>
                         ); })()}
-                        <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}</span>
-                        {b.tickets && <span style={{ fontSize: 11, fontWeight: 700, color: b.tickets === "included" ? "#2e7d4f" : "var(--ink-soft)", whiteSpace: "nowrap" }} title="Set by the operator">{b.tickets === "included" ? "Tickets incl." : "No tickets"}</span>}
+                        <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}{(b.tickets === "included" || b.tickets === "not") && <span style={{ display: "inline-block", marginLeft: 6, verticalAlign: "middle" }}><TicketBadge tickets={b.tickets} /></span>}</span>
                         {b.bookingNo && guestContacts[b.bookingNo] && <WhatsAppButton href={guestContacts[b.bookingNo].whatsapp} display={guestContacts[b.bookingNo].display} name={b.name} />}
                         {canMarkNoShow ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
