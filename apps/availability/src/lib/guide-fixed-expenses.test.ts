@@ -112,3 +112,19 @@ describe("operatorRowProblems — the operator's sheet follows the guide's (owne
     expect(operatorRowProblems([{ ...old, pax: 5 }], [old])).toHaveLength(1);
   });
 });
+
+import { shownAs } from "./guide-fixed-expenses";
+describe("shownAs — older boat rows read as Ferry (Inc. Guide), display only", () => {
+  const r = (description: string, paidBy?: string, expenseType = "transport") => ({ description, paidBy, expenseType }) as Expense;
+  it("Boat / Boat back / เรือ paid by the guide, or with no payer yet → Ferry (Inc. Guide), recorded as the old name", () => {
+    expect(shownAs(r("Boat", "guide"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: "Boat" });
+    expect(shownAs(r("Boat back"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: "Boat back" });
+    expect(shownAs(r("ค่าเรือ", "guide"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: "ค่าเรือ" });
+  });
+  it("everything else is shown as recorded", () => {
+    expect(shownAs(r("Boat", "company"))).toEqual({ label: "Boat", recordedAs: null });
+    expect(shownAs(r("Ferry (Inc. Guide)", "guide"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: null });
+    expect(shownAs(r("Grand Palace", "guide", "entrance")).recordedAs).toBeNull();
+    expect(shownAs(r("Boatman tip", "guide")).recordedAs).toBeNull();
+  });
+});

@@ -1545,7 +1545,7 @@ export default function AppClient({
                     <div style={{ display: "grid", gap: 6, margin: "10px 0 0", maxHeight: 240, overflowY: "auto" }}>
                       {rExp.map((e, i) => (
                         <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 76px 58px 26px", gap: 6, alignItems: "center" }}>
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>{e.description.replace(" (Inc. Guide)", "")} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. guide)</span></span>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{e.description.replace(" (Inc. Guide)", "")} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. Guide)</span></span>
                           <input type="number" inputMode="decimal" min={0} value={e.price} placeholder={t("expPrice")} aria-label={t("expPrice")} onChange={(ev) => setExp(i, { price: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
                           <input type="number" inputMode="numeric" min={0} value={e.pax} placeholder={t("expPax")} aria-label={t("expPax")} onChange={(ev) => setExp(i, { pax: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
                           <span />

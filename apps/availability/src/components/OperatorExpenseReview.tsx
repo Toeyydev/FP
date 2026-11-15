@@ -101,7 +101,7 @@ export default function OperatorExpenseReview(p: Props) {
                 const differs = open && Number(vText || reported) !== reported;
                 return (
                   <tr key={f.key} className="js-review-row" data-item={f.key} data-status={st ?? "NONE"}>
-                    <td style={{ ...td, fontWeight: 600 }}>{f.label} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. guide)</span></td>
+                    <td style={{ ...td, fontWeight: 600 }}>{f.label} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. Guide)</span></td>
                     <td style={{ ...td, fontSize: 12.5, color: acct ? "var(--ink-soft)" : "var(--danger)" }}>{acct ? `${acct.code} ${acct.name ?? ""}` : "Not mapped — Admin/Accountant to set"}</td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{mine ? <>{thb(reported)}<div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{mine.price ?? 0} × {mine.pax ?? 0}</div></> : <span style={{ color: "var(--ink-soft)" }}>Not reported</span>}</td>
                     <td style={td}>{files.length ? files.map((x, k) => <a key={x.id} href={x.link ?? undefined} target="_blank" rel="noopener noreferrer" style={{ display: "block", fontSize: 12.5 }}>File {k + 1}</a>) : <span style={{ color: "var(--ink-soft)" }}>None</span>}</td>

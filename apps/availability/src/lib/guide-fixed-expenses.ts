@@ -164,3 +164,18 @@ export function operatorRowProblems(rows: readonly Expense[], stored: readonly E
   }
   return problems;
 }
+
+// ── How an older row is SHOWN (owner 2026-11-16: "only Ferry (Inc. Guide)") ──────────────────
+// A boat fare the guide paid, saved before the fixed items as "Boat" / "Boat back" / "เรือ", is
+// shown as Ferry (Inc. Guide), with what it was recorded as beside it. Display only: the stored
+// row — and any certificate, waiver or PEAK document made for it — is never rewritten.
+const BOAT = /\bboat\b|เรือ/i;
+export function shownAs(e: Pick<Expense, "description" | "paidBy" | "expenseType">): { label: string; recordedAs: string | null } {
+  const desc = (e.description ?? "").trim();
+  const payer = (e.paidBy ?? "").trim().toLowerCase();
+  const guideOrUnset = payer === "" || payer === "guide" || payer === "guide_personal";
+  if (guideOrUnset && (e.expenseType ?? "").trim().toLowerCase() !== "entrance" && !fixedItemOf(e) && BOAT.test(desc)) {
+    return { label: FIXED_ITEMS[2].description, recordedAs: desc };
+  }
+  return { label: desc, recordedAs: null };
+}
