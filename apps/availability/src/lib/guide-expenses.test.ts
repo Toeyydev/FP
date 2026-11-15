@@ -51,8 +51,9 @@ describe("submitGuideExpenses", () => {
 
     const { where, data } = prismaMock.jobSheet.update.mock.calls[0][0];
     expect(where).toEqual(KEY);
-    // A payer sent with no word on who chose it is kept, and labelled as not confirmed.
-    expect(data.guideExpenses).toEqual([{ description: "Water", price: 10, pax: 4, paidBy: "guide", paidBySource: "unconfirmed" }]);
+    // A payer sent with no word on who chose it is kept, and labelled as not confirmed. The
+    // short name a guide types is stored under its fixed name and category (owner 2026-11-15).
+    expect(data.guideExpenses).toEqual([{ description: "Water (Inc. Guide)", expenseType: "meal", price: 10, pax: 4, paidBy: "guide", paidBySource: "unconfirmed" }]);
     expect(data.guideExpensesNote).toBe("paid cash");
     expect(data.guideExpensesAt).toBeInstanceOf(Date);
     // The operator's own `expenses` are not among the fields written.
@@ -63,7 +64,30 @@ describe("submitGuideExpenses", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     await report({ expenses: [{ description: "Water", price: 10, pax: 4, paidBy: "guide" }, { description: "Review reward", price: 50, pax: 2 }] });
     const { data } = prismaMock.jobSheet.update.mock.calls[0][0];
-    expect(data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Water"]);
+    expect(data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Water (Inc. Guide)"]);
+  });
+
+  // Owner 2026-11-15: a guide reports only Water / Bus / Ferry (Inc. Guide).
+  it("refuses a guide's line that is not Water, Bus or Ferry — and stores nothing", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
+    await expect(report({ expenses: [{ description: "Water", price: 10, pax: 4 }, { description: "Wat Pho", price: 300, pax: 2, expenseType: "entrance" }] }))
+      .rejects.toMatchObject({ refused: true, reasons: [expect.stringMatching(/Wat Pho.*cannot be reported/)] });
+    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+  });
+  it("refuses the same item twice, and drops a 0 line as not used", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
+    await expect(report({ expenses: [{ description: "Bus", price: 15, pax: 2 }, { description: "Bus (Inc. Guide)", price: 15, pax: 1 }] })).rejects.toMatchObject({ refused: true });
+    await report({ expenses: [{ description: "Bus", price: 15, pax: 2 }, { description: "Ferry (Inc. Guide)", price: 8, pax: 0 }] });
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Bus (Inc. Guide)"]);
+  });
+  it("lets a food tour send its food total; an operator filing for a guide is not limited", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-007", bookings: [] });
+    await report({ expenses: [{ description: "ค่าอาหาร Food Tour", price: 1850, pax: 1, expenseType: "meal" }] });
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses[0].description).toBe("ค่าอาหาร Food Tour");
+    prismaMock.jobSheet.update.mockClear();
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
+    await report({ actorRole: "OPERATOR", expenses: [{ description: "Wat Pho", price: 300, pax: 2 }] });
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses[0].description).toBe("Wat Pho");
   });
 
   it("fills actual pax on the sheet from the no-shows already recorded", async () => {
@@ -184,11 +208,11 @@ describe("submitGuideExpenses", () => {
 describe("Paid By on a report the guide files after the tour", () => {
   const DAY = "2030-04-06";
   const at = (hhmm: string) => new Date(`${DAY}T${hhmm}:00+07:00`);
+  // A guide reports only the three fixed items (owner 2026-11-15) — tickets are Company ADV
+  // or company-paid and never reach a guide's report, so they are not in these lines.
   const lines = () => [
     { description: "Bus (Inc. Guide)", price: 10, pax: 4, expenseType: "transport" },   // transport → the guide fronts it
     { description: "Water (Inc. Guide)", price: 10, pax: 4, expenseType: "meal" },      // a meal → nobody guesses; left blank
-    { description: "Wat Pho", price: 300, pax: 2, expenseType: "entrance" },            // a ticket → the company's advance
-    { description: "Grand Palace", price: 500, pax: null, expenseType: "entrance" },    // ฿0 line → left blank
     { description: "Ferry (Inc. Guide)", price: 5, pax: 4, paidBy: "company", expenseType: "transport" }, // the operator's own record → kept
     { description: "Review reward", price: 50, pax: 1 },                                 // compensation, not spending → left alone
   ];
@@ -211,12 +235,10 @@ describe("Paid By on a report the guide files after the tour", () => {
     expect(summary()).toEqual([
       ["Bus (Inc. Guide)", "guide", "category-default"],       // transport → the guide fronts it
       ["Water (Inc. Guide)", undefined, undefined],            // a meal → an operator must choose
-      ["Wat Pho", "advance", "category-default"],              // a ticket → bought with a company advance
-      ["Grand Palace", undefined, undefined],                  // ฿0 → nothing to decide
       ["Ferry (Inc. Guide)", "company", "operator"],           // the operator already said
       // "Review reward" is dropped: earned, not spent — the operator records it, not the report
     ]);
-    expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 0, "category-default": 2, unconfirmed: 0, "rate-default": 0 } });
+    expect(auditDetail().paidBy).toEqual({ defaultAfterTour: "applied", sources: { operator: 1, guide: 0, "default-after-tour": 0, "category-default": 1, unconfirmed: 0, "rate-default": 0 } });
   });
 
   it("counts the tour as over as soon as the guide completed it", async () => {
@@ -295,7 +317,7 @@ describe("Paid By on a report the guide files after the tour", () => {
     const created = prismaMock.jobSheet.create.mock.calls[0][0].data;
     expect(created.guideExpenses[0]).toMatchObject({ paidBy: "guide", paidBySource: "category-default" });   // transport
     expect(created.guideExpenses[1].paidBy).toBeUndefined();                                                   // a meal waits for a person
-    expect(created.guideExpenses[4]).toMatchObject({ paidBy: "company", paidBySource: "unconfirmed" }); // no operator record to match yet
+    expect(created.guideExpenses[2]).toMatchObject({ paidBy: "company", paidBySource: "unconfirmed" }); // no operator record to match yet
     expect(created.expenses.every((e: { paidBy?: string }) => e.paidBy === undefined)).toBe(true);   // the operator's set is untouched
   });
 });

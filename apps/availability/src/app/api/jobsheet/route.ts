@@ -45,6 +45,9 @@ import { carryNoReceipt } from "@/lib/expense-attachments/no-receipt-row";
 import { linkAdvanceRows } from "@/lib/advances/link";
 import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
+import { FIXED_ITEMS } from "@/lib/guide-fixed-expenses";
+import { reviewHistory } from "@/lib/job-expense-review";
+import { accountForExpenseType } from "@/lib/peak-accounts";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -313,6 +316,15 @@ export async function GET(req: NextRequest) {
   const guestContacts = await guestContactsFor(prisma, { isOps, guideId: session.user.guideId }, { guideId, date, slotIdx });
   // Files behind each expense row, by row id (lib/expense-attachments), for whoever may see them.
   const attachments = existing ? await attachmentsFor(prisma, existing, { id: session.user.id ?? null, role: session.user.role, guideId: session.user.guideId ?? null }) : {};
+  // Operator review (owner 2026-11-15, lib/job-expense-review): each fixed item's PEAK account as
+  // FolkOPS maps it (read-only; null = not mapped — Admin/Accountant set it), and the review history.
+  const review = isOps ? {
+    expenseAccounts: await (async () => {
+      const maps = await prisma.peakAccountMapping.findMany({ where: { isActive: true }, select: { folkopsCategory: true, peakAccountCode: true, peakAccountName: true, isActive: true } });
+      return Object.fromEntries(FIXED_ITEMS.map((f) => { const m = accountForExpenseType(f.expenseType, maps); return [f.key, m ? { code: m.peakAccountCode, name: m.peakAccountName } : null]; }));
+    })(),
+    reviewHistory: existing ? await reviewHistory(prisma, existing.id) : [],
+  } : {};
   // The last time the booking reconciliation moved this sheet's expected guest count
   // (lib/booking-reconcile) — shown as "Synced from booking · 6 → 8", never as attendance.
   const lastSync = existing ? await prisma.auditLog.findFirst({ where: { action: "jobsheet.expected_pax_changed", entityType: "JobSheet", entityId: existing.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true, detail: true } }) : null;
@@ -379,7 +391,7 @@ export async function GET(req: NextRequest) {
       // Nothing is added by itself — but a person is told what is missing, and may add it
       // with one button (lib/past-sheet-sync). Not on a replacement's copy of the list.
       const pastBookingGaps = isOps && date < todayBKK && handover?.role !== "to" ? await readPastSheetGaps(prisma, { guideId, date, slotIdx }).catch(() => null) : null;
-      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, ...review, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -465,7 +477,7 @@ export async function GET(req: NextRequest) {
       .map((r) => (inferTickets ? r : { ...r, tickets: "" })); // approved / paid: nothing inferred
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, ...review, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -474,7 +486,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, guestContacts, arrivals, attachments, bookingSync, rates,
+    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, guestContacts, arrivals, attachments, ...review, bookingSync, rates,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
