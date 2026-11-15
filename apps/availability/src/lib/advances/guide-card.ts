@@ -25,6 +25,10 @@ export type GuideAdvanceCard = {
   toReturn: number;
   /** Recording is paused (ADVANCE_WRITES_FROZEN) — the guide cannot record a return now. */
   frozen: boolean;
+  /** "I received it" (restored 2026-11-15): when the guide confirmed every transfer, else null. */
+  acknowledgedAt: string | null;
+  /** The transfers still to confirm — record ids only (no ADV number, reference or date). */
+  toAcknowledge: string[];
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -39,5 +43,7 @@ export function guideAdvanceCard(view: Pick<JobAdvanceView, "advances" | "return
   const claimed = view.returns.filter((r) => r.status === "CLAIMED").reduce((s, r) => s + (r.amount || 0), 0);
   const confirmedUncounted = view.returns.filter((r) => r.status === "VERIFIED" && (r.unallocated ?? 0) > 0).reduce((s, r) => s + (r.unallocated ?? 0), 0);
   const toReturn = Math.max(0, r2((view.totals?.outstanding ?? 0) - claimed - confirmedUncounted));
-  return { amount, transferred: true, toReturn, frozen: !!view.frozen };
+  const pending = live.filter((a) => !a.acknowledgedAt).map((a) => a.id);
+  const ackTimes = live.map((a) => a.acknowledgedAt).filter(Boolean).map((d) => new Date(d as Date | string).toISOString()).sort();
+  return { amount, transferred: true, toReturn, frozen: !!view.frozen, acknowledgedAt: pending.length ? null : ackTimes.at(-1) ?? null, toAcknowledge: pending };
 }

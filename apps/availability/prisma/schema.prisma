@@ -2082,6 +2082,12 @@ model ExpenseAttachment {
   removedById    String?
   removedAt      DateTime?
   removeReason   String?
+  // Operator review (owner 2026-11-15): NOT_REVIEWED | VERIFIED | REJECTED | REPLACEMENT_REQUESTED.
+  // reviewNote is shown to the guide on a rejection / request; internal notes stay in AuditLog.
+  reviewStatus   String    @default("NOT_REVIEWED")
+  reviewNote     String?
+  reviewedById   String?
+  reviewedAt     DateTime?
   updatedAt      DateTime  @updatedAt
 
   @@index([jobSheetId, expenseRowId])

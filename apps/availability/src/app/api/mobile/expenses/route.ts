@@ -28,8 +28,15 @@ export async function POST(req: Request) {
   const access = await expenseReportAccess({ kind: "guide", guideId }, { guideId, date, slotIdx });
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
 
-  return NextResponse.json(await submitGuideExpenses({
-    guideId, date, slotIdx, expenses, note: parsed.data.note,
-    actorId: a.user.id, actorRole: a.user.role,
-  }));
+  try {
+    return NextResponse.json(await submitGuideExpenses({
+      guideId, date, slotIdx, expenses, note: parsed.data.note,
+      actorId: a.user.id, actorRole: a.user.role,
+    }));
+  } catch (e) {
+    // A guide's line that is not Water / Bus / Ferry (lib/guide-fixed-expenses): refused, nothing stored.
+    const r = e as { refused?: boolean; reasons?: string[] };
+    if (r?.refused) return NextResponse.json({ error: "not-allowed", reasons: r.reasons ?? [], detail: (r.reasons ?? []).join("\n") }, { status: 400 });
+    throw e;
+  }
 }

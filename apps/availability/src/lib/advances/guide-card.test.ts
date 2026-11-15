@@ -8,7 +8,7 @@ const view = (advances: unknown[], returns: unknown[] = [], outstanding = 5000, 
 
 describe("guideAdvanceCard", () => {
   it("a live bank advance → amount + Transferred", () => {
-    expect(guideAdvanceCard(view([adv()]))).toEqual({ amount: 5000, transferred: true, toReturn: 5000, frozen: false });
+    expect(guideAdvanceCard(view([adv()]))).toEqual({ amount: 5000, transferred: true, toReturn: 5000, frozen: false, acknowledgedAt: null, toAcknowledge: ["a1"] });
   });
   it("never carries a reference, date, slip, note or ADV number", () => {
     const s = JSON.stringify(guideAdvanceCard(view([adv()])));
@@ -32,6 +32,10 @@ describe("guideAdvanceCard", () => {
     const returns = [{ status: "CLAIMED", amount: 300 }, { status: "VERIFIED", amount: 200, unallocated: 200 }, { status: "VERIFIED", amount: 100, unallocated: 0 }];
     expect(guideAdvanceCard(view([adv()], returns, 1000))?.toReturn).toBe(500);
     expect(guideAdvanceCard(view([adv()], returns, 100))?.toReturn).toBe(0);
+  });
+  it("I received it: lists unconfirmed transfers, then the confirmation time once all are confirmed", () => {
+    expect(guideAdvanceCard(view([adv(), adv({ id: "a2", amount: 100, acknowledgedAt: new Date("2099-01-01T01:00:00Z") })]))).toMatchObject({ acknowledgedAt: null, toAcknowledge: ["a1"] });
+    expect(guideAdvanceCard(view([adv({ acknowledgedAt: new Date("2099-01-01T01:00:00Z") })]))).toMatchObject({ acknowledgedAt: "2099-01-01T01:00:00.000Z", toAcknowledge: [] });
   });
   it("passes the recording freeze through", () => {
     expect(guideAdvanceCard(view([adv()], [], 0, true))?.frozen).toBe(true);

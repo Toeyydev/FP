@@ -7,7 +7,8 @@
 //      browser: not the job sheet JSON, not the page, not the PDF
 //   3. no advance, or a reversed one, shows no card and no "Transferred"
 //   4. every ADV write is refused to the guide on the server (create, delete, reverse,
-//      settle, acknowledge, voucher), and the advance row is unchanged afterwards
+//      settle, voucher), and the advance row is unchanged afterwards
+//   4b. "I received it" (restored 2026-11-15) stamps only the confirmation time
 //   5. the guide can still record their own return through the card (slip + reference),
 //      which lowers "To return" and leaves the advance's amount untouched
 //   6. an operator still receives the full ledger
@@ -140,7 +141,9 @@ try {
   const api = await (await asGuide(`/api/jobsheet?guideId=G-931&date=${DATE}&slotIdx=0`)).text();
   const j = JSON.parse(api);
   check("server: the guide gets no advance ledger", j.advance === undefined, Object.keys(j).join(","));
-  check("server: the guide gets amount + Transferred + To return only", JSON.stringify(j.guideAdvance) === JSON.stringify({ amount: 5000, transferred: true, toReturn: 5000, frozen: false }), JSON.stringify(j.guideAdvance));
+  { const g = j.guideAdvance ?? {};
+    check("server: the guide gets amount + Transferred + To return (+ which transfers to confirm, as record ids) only",
+      JSON.stringify(Object.keys(g).sort()) === JSON.stringify(["acknowledgedAt", "amount", "frozen", "toAcknowledge", "toReturn", "transferred"]) && g.amount === 5000 && g.transferred === true && g.toReturn === 5000 && g.acknowledgedAt === null && JSON.stringify(g.toAcknowledge) === JSON.stringify([data.live.id]), JSON.stringify(g)); }
   check("server: no ADV number, reference, date, slip, note or purpose in the guide's job sheet response", leaks(api).length === 0, leaks(api).join(","));
   const pdf = await (await asGuide(`/api/jobsheet/pdf?guideId=G-931&date=${DATE}&slotIdx=0`)).text();
   check("PDF: the guide's copy has the Company ADV card", /Company ADV/.test(pdf) && /Transferred/.test(pdf), "");
@@ -163,7 +166,6 @@ try {
     ["reverse the advance", await asGuide(`/api/advances/${data.live.id}/reverse`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason: "guide trying" }) }), [401, 403]],
     ["settle expenses against it", await asGuide(`/api/advances/${data.live.id}/settle-expenses`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }), [401, 403]],
     ["change its categories", await asGuide(`/api/advances/${data.live.id}/categories`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ allowedCategories: ["meal"] }) }), [401, 403, 405]],
-    ["acknowledge it", await asGuide(`/api/advances/${data.live.id}/acknowledge`, { method: "POST" }), [410]],
     ["open its voucher", await asGuide(`/api/advances/${data.live.id}/voucher`), [403]],
   ];
   for (const [what, res, ok] of refused) check(`server refuses the guide: ${what}`, ok.includes(res.status), String(res.status));
@@ -185,8 +187,16 @@ try {
     /Company ADV/.test(card) && /✓ Transferred/.test(card) && /฿5,000\.00/.test(card) && /Read-only/.test(card) && /To return/.test(card), card.replace(/\n/g, " | "));
   const html = await page.content();
   check("page: no ADV number, reference, date, slip or note anywhere in the guide's page", leaks(html).length === 0, leaks(html).join(","));
-  check("page: the old ledger and its Record advance / acknowledge controls are not there", !(await page.$(".advance-settlement")) && !(await page.$(".js-advance-record")) && !/I received it/i.test(html));
+  check("page: the old ledger and its Record advance controls are not there", !(await page.$(".advance-settlement")) && !(await page.$(".js-advance-record")) && !/Record advance/i.test(html));
   check("page: an Upload slip / receipt button is offered", !!(await page.$(".js-guide-adv-upload")));
+  // 4b. "I received it" — evidence only: the confirmation time, nothing else on the advance.
+  check("page: an \"I received it\" button is offered", !!(await page.$(".js-guide-adv-ack-btn")));
+  await page.$eval(".js-guide-adv-ack-btn", (el) => el.scrollIntoView({ block: "center" })); await pause(150);
+  await page.click(".js-guide-adv-ack-btn");
+  await page.waitForSelector(".js-guide-adv-ack", { timeout: 10000 }).catch(() => {});
+  const acked = await rowOf(data.live);
+  check("I received it: the page confirms it, and only the confirmation time is stamped", !!(await page.$(".js-guide-adv-ack")) && acked.acknowledgedAt !== null
+    && acked.amountSatang === before.amountSatang && acked.settledSatang === before.settledSatang && acked.reversedAt === null && acked.txRef === before.txRef, JSON.stringify(acked));
   const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check("page: no sideways scroll at 390 px", wide <= 0, `${wide}px`);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "guide-company-adv-390.png"), fullPage: true });
@@ -211,7 +221,7 @@ try {
   const receipts = await prisma.guideAdvanceReceipt.findMany({ select: { amountSatang: true, status: true, bankRef: true } });
   check("return: one CLAIMED return of ฿1,000 is recorded for the office to check", receipts.length === 1 && receipts[0].amountSatang === 100000 && receipts[0].status === "CLAIMED", JSON.stringify(receipts));
   const afterReturn = await rowOf(data.live);
-  check("return: the advance's amount, status and reference are untouched", afterReturn.amountSatang === before.amountSatang && afterReturn.reversedAt === null && afterReturn.txRef === before.txRef && afterReturn.acknowledgedAt === null, JSON.stringify(afterReturn));
+  check("return: the advance's amount, status and reference are untouched", afterReturn.amountSatang === before.amountSatang && afterReturn.reversedAt === null && afterReturn.txRef === before.txRef && afterReturn.acknowledgedAt !== null, JSON.stringify(afterReturn));
   check("return: still no secret on the page after the update", leaks(await page.content()).length === 0);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "guide-company-adv-after-return-390.png"), fullPage: true });
   await page.close();

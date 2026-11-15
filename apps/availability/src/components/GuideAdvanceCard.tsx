@@ -71,6 +71,24 @@ export default function GuideAdvanceCard({ card, job, onChanged, onUpload }: Pro
       </div>
       <div className="js-guide-adv-amount" style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{thb(card.amount)}</div>
       <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>🔒 Read-only · อ่านอย่างเดียว</div>
+      {/* "I received it" (restored 2026-11-15): the guide confirms the transfer reached them.
+          Evidence only — it changes no amount, status or PEAK record. */}
+      {card.acknowledgedAt ? (
+        <div className="js-guide-adv-ack" style={{ fontSize: 13, fontWeight: 600, color: "var(--green)" }}>✓ You confirmed you received it · {new Date(card.acknowledgedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" })}</div>
+      ) : (card.toAcknowledge ?? []).length > 0 ? (
+        <button type="button" className="btn sm primary js-guide-adv-ack-btn" style={{ justifySelf: "start" }} disabled={busy}
+          onClick={async () => {
+            setBusy(true); setMsg("");
+            let ok = true;
+            for (const id of card.toAcknowledge) {
+              const r = await fetch(`/api/advances/${encodeURIComponent(id)}/acknowledge`, { method: "POST" }).catch(() => null);
+              if (!r?.ok) ok = false;
+            }
+            setBusy(false);
+            if (!ok) { setMsg("Couldn't record it — try again"); return; }
+            onChanged({ ...card, acknowledgedAt: new Date().toISOString(), toAcknowledge: [] });
+          }}>I received it</button>
+      ) : null}
 
       {card.toReturn > 0 && (
         <div className="js-guide-adv-return" style={{ borderTop: "1px solid var(--line)", paddingTop: 8, display: "grid", gap: 6 }}>
