@@ -322,6 +322,16 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-company-adv
 
+      # Company ADV → PEAK reconciliation on Payments → Advances: owner's status names, Retry on a
+      # failed item, Resolve (not in PEAK) on an uncertain one with history, a read-only Re-check;
+      # ADMIN/ACCOUNTANT only; nothing reaches PEAK.
+      - name: Advance PEAK reconciliation in a real browser
+        run: node scripts/e2e/advance-peak-reconcile.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/advance-peak-reconcile
+
       # A direct assignment reaches the guide: the operator assigns, the guide's bell shows
       # it — a "You're booked" card with the tour — and a guide cannot assign.
       - name: Direct-assignment notice in a real browser

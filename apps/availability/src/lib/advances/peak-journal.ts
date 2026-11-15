@@ -10,6 +10,8 @@ export type AdvancePeakConfig = {
 export type JournalSource = {
   kind: AdvancePostingKind; amountSatang: number; date: string; guideContactId: string;
   reference: string; jobNo: string; slipUrl?: string | null;
+  /** The guide the money moved for (G-…), named in the journal text so the journal says who (owner 2026-11-15). */
+  guideId?: string;
   expenses?: { description: string; amount: number; category: string | null; peakAccountCode?: string | null }[];
 };
 const required = (s: string | undefined, label: string) => { if (!s?.trim()) throw new Error(`Set ${label} before syncing to PEAK`); return s.trim(); };
@@ -40,5 +42,5 @@ export function advanceJournal(source: JournalSource, config: AdvancePeakConfig)
       : [entry(bank,amount,"0.00",sub),entry(advance,"0.00",amount,config.advanceAccountSubId)];
   }
   return { issuedDate: source.date.replaceAll("-",""), journalTypeId: required(config.journalTypeIds[source.kind], "verified journal type"), contactId: source.guideContactId, reference: source.reference,
-    description: `${source.kind} · ${source.jobNo} · ${source.reference}${source.slipUrl ? ` · ${source.slipUrl}` : ""}`, journalEntries };
+    description: `${source.kind} · ${source.jobNo} · ${source.reference}${source.guideId ? ` · ${source.guideId}` : ""}${source.slipUrl ? ` · ${source.slipUrl}` : ""}`, journalEntries };
 }
