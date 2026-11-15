@@ -158,7 +158,7 @@ export function operatorRowProblems(rows: readonly Expense[], stored: readonly E
     // The short spelling ("Bus") is the same item: older rows carry it, and a row with a confirmed
     // payer cannot be renamed — refusing it would leave that row unsavable.
     if (fixedItemOf(e)) continue;
-    if (OPERATOR_ALSO_ALLOWED.has(desc)) continue;
+    if (OPERATOR_ALSO_ALLOWED.has(desc) || /^lotus(\s*\([^)]*guide[^)]*\))?$/i.test(desc)) continue; // Lotus, any spelling
     if (before.has(rowKey(e))) continue; // unchanged history
     problems.push(`Row ${n} “${desc || "(no name)"}”: a cost the guide paid must be Water, Bus or Ferry (Inc. Guide)${/boat|เรือ/i.test(desc) ? " — a boat fare is “Ferry (Inc. Guide)”" : ""}. If the company paid it, set Paid By to Company Direct.`);
   }

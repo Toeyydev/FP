@@ -102,7 +102,7 @@ describe("operatorRowProblems — the operator's sheet follows the guide's (owne
   it("not limited: company-paid, Company ADV, tickets, Lotus, food rows, review rewards, zero rows", () => {
     expect(operatorRowProblems([
       row("Van hire", "company"), row("Grand Palace", "advance", { expenseType: "entrance" }), row("Grand Palace", "guide", { expenseType: "entrance" }),
-      row("Lotus (Inc. Guide)", "guide", { expenseType: "other" }), row("ค่าอาหาร Food Tour (เกินเงินล่วงหน้า)", "guide", { expenseType: "meal" }),
+      row("Lotus (Inc. Guide)", "guide", { expenseType: "other" }), row("Lotus", "guide", { expenseType: "other" }), row("ค่าอาหาร Food Tour (เกินเงินล่วงหน้า)", "guide", { expenseType: "meal" }),
       row("Review reward", "guide", { expenseType: "review" } as Partial<Expense>), row("Boat", "guide", { pax: 0 }),
     ], [])).toEqual([]);
   });
