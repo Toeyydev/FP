@@ -168,10 +168,10 @@ try {
     set.call(el, m); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
   }, MONTH);
   await pause(1500);
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click()
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record without PEAK EXP/.test(b.textContent.trim()))?.click()
     ?? [...document.querySelectorAll("tr")].find((t) => /G-952/.test(t.innerText) && /PENDING|Pending/.test(t.innerText))?.click());
   await pause(600);
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click());
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record without PEAK EXP/.test(b.textContent.trim()))?.click());
   await page.waitForSelector(".js-split-transfers", { timeout: 15000 });
   const memo = await page.$eval(".modal .js-bank-memo code", (x) => x.innerText).catch(() => "");
   check("4 · Record payment shows the bank memo for the job, before the transfer", memo === "PAY FOLK-BKK-20260104-01", memo);

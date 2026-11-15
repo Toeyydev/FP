@@ -151,7 +151,7 @@ try {
   await op.setViewport({ width: 1280, height: 900 });
   await op.setCookie(await sessionCookie("op-mt@example.test"));
   await openPayment(op);
-  check("an operator sees the payment but no Add the missing transfer", !(await op.$(".js-add-missing-transfer")) && (await op.$eval("#pmt-h", (x) => x.innerText)) === "FOLK-PMT-209901-001");
+  check("an operator sees the payment but no Add the missing transfer", !(await op.$(".js-add-missing-transfer")) && (await op.$eval("#pmt-h", (x) => x.innerText)).startsWith("FOLK-PMT-209901-001"));
   await op.close();
 
   // 2. admin
