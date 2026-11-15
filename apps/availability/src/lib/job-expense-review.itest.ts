@@ -34,7 +34,7 @@ async function sheet(over: Record<string, unknown> = {}) {
     ref: "FOLK-BKK-20990614-01", ...key, tourId: "T-900", status: "Confirmed", bookings: [],
     expenses: [
       { rowId: "r_water", description: "Water (Inc. Guide)", expenseType: "meal", price: 10, pax: 7 },
-      { rowId: "r_bus", description: "Bus (Inc. Guide)", expenseType: "transport", price: 15, pax: 6, paidBy: "guide", paidByBy: "u_op", paidByAt: "2099-06-14T12:00:00Z" },
+      { rowId: "r_bus", description: "Bus (Inc. Guide)", expenseType: "transport", price: 15, pax: 6, paidBy: "company", paidByBy: "u_op", paidByAt: "2099-06-14T12:00:00Z" }, // confirmed as paid by the company
       { rowId: "r_gp", description: "Grand Palace", expenseType: "entrance", price: 500, pax: 6, paidBy: "advance" },
     ],
     guideExpenses: [
@@ -55,11 +55,11 @@ describe("reviewing the guide's fixed items", () => {
     expect(await reviewExpense(prisma, { ...key, item: "WATER", decision: { action: "APPROVE" }, actor: ops })).toMatchObject({ ok: true, status: "APPROVED", verified: 60, accountingRow: "updated" });
     const s = await rows();
     expect(item(s.guideExpenses, "Water (Inc. Guide)")[0]).toMatchObject({ reviewStatus: "APPROVED", verifiedAmount: 60, reviewedById: "u_op", reviewedOf: 60 });
-    expect(item(s.expenses, "Water (Inc. Guide)")).toEqual([expect.objectContaining({ rowId: "r_water", price: 10, pax: 6 })]);
+    expect(item(s.expenses, "Water (Inc. Guide)")).toEqual([expect.objectContaining({ rowId: "r_water", price: 10, pax: 6, paidBy: "guide", paidBySource: "operator", paidByBy: "u_op" })]);
     expect(await reviewHistory(prisma, s.id)).toEqual([expect.objectContaining({ action: "expense.review", by: "OPERATOR", detail: expect.objectContaining({ item: "WATER", status: "APPROVED" }) })]);
   });
 
-  it("another amount needs a reason; a confirmed accounting row is never rewritten", async () => {
+  it("another amount needs a reason; a row confirmed as paid by someone else is never rewritten", async () => {
     await sheet();
     expect(await reviewExpense(prisma, { ...key, item: "BUS", decision: { action: "APPROVE", verifiedAmount: 60 }, actor: ops })).toMatchObject({ ok: false, status: 400 });
     const r = await reviewExpense(prisma, { ...key, item: "BUS", decision: { action: "APPROVE", verifiedAmount: 60, reason: "One leg by boat, 4 fares" }, actor: ops });
@@ -73,9 +73,10 @@ describe("reviewing the guide's fixed items", () => {
     await sheet();
     expect(await reviewExpense(prisma, { ...key, item: "FERRY", decision: { action: "APPROVE" }, actor: ops })).toMatchObject({ ok: true, accountingRow: "added" });
     expect(await reviewExpense(prisma, { ...key, item: "FERRY", decision: { action: "APPROVE", verifiedAmount: 32, reason: "4 crossings, not 6" }, actor: ops })).toMatchObject({ ok: true, status: "ADJUSTED", accountingRow: "updated" });
+    // The first approval confirmed Guide Personal; correcting the review still updates that one row.
     const ferry = item((await rows()).expenses, "Ferry (Inc. Guide)");
     expect(ferry).toHaveLength(1);
-    expect(ferry[0]).toMatchObject({ price: 8, pax: 4, expenseType: "transport" });
+    expect(ferry[0]).toMatchObject({ price: 8, pax: 4, expenseType: "transport", paidBy: "guide", paidBySource: "operator" });
     expect(typeof ferry[0].rowId).toBe("string");
   });
 
@@ -94,6 +95,7 @@ describe("reviewing the guide's fixed items", () => {
     expect(await reviewExpense(prisma, { ...key, item: "WATER", decision: { action: "REJECT" }, actor: ops })).toMatchObject({ ok: false, status: 400 });
     expect(await reviewExpense(prisma, { ...key, item: "WATER", decision: { action: "REJECT", reason: "No water bought on this tour" }, actor: ops })).toMatchObject({ ok: true, status: "REJECTED", verified: 0 });
     expect(item((await rows()).expenses, "Water (Inc. Guide)")[0]).toMatchObject({ pax: 0 });
+    expect(item((await rows()).expenses, "Water (Inc. Guide)")[0].paidBy).toBeUndefined(); // a rejection confirms no payer
   });
 
   it("an approved sheet is locked; an item the guide did not report cannot be reviewed", async () => {
