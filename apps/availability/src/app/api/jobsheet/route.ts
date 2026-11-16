@@ -45,7 +45,7 @@ import { carryNoReceipt } from "@/lib/expense-attachments/no-receipt-row";
 import { linkAdvanceRows } from "@/lib/advances/link";
 import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
-import { FIXED_ITEMS } from "@/lib/guide-fixed-expenses";
+import { FIXED_ITEMS, operatorRowProblems } from "@/lib/guide-fixed-expenses";
 import { reviewHistory } from "@/lib/job-expense-review";
 import { accountForExpenseType } from "@/lib/peak-accounts";
 
@@ -628,6 +628,11 @@ export async function PUT(req: NextRequest) {
     if (linked.problems.length) return { kind: "advance-link" as const, problems: linked.problems };
     advanceLinks = linked.changes;
     const stamped = linked.rows as unknown as PayerRuleRow[];
+    // Owner 2026-11-16: a cost the guide paid is Water / Bus / Ferry (Inc. Guide) on the operator's
+    // sheet too (lib/guide-fixed-expenses operatorRowProblems). Rows unchanged since the last save
+    // are history and pass; the rule bites when a row is added or edited.
+    const fixedProblems = operatorRowProblems(stamped as unknown as Expense[], (current?.expenses as Expense[] | null) ?? []);
+    if (fixedProblems.length) return { kind: "fixed-items" as const, problems: fixedProblems };
     // A reason given for a payer that departs from the expected one: kept on the row, and
     // named in this save's audit with who gave it (the row's own stamp says when).
     const before = ((current?.expenses as PayerRuleRow[] | null) ?? []);
@@ -658,6 +663,9 @@ export async function PUT(req: NextRequest) {
   });
   if (written.kind === "fee-locked") {
     return NextResponse.json({ error: "fee-locked", reasons: ["This job is approved or paid, so its guide fee cannot be changed. Unapprove it first."] }, { status: 409 });
+  }
+  if (written.kind === "fixed-items") {
+    return NextResponse.json({ error: "fixed-items", reasons: written.problems, detail: written.problems.join("\n") }, { status: 400 });
   }
   if (written.kind === "fee-invalid") {
     return NextResponse.json({ error: "fee-adjustment", reasons: written.problems }, { status: 400 });

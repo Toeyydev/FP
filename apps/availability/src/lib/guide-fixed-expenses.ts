@@ -131,3 +131,51 @@ export function receiptRowStatus(files: readonly { reviewStatus?: string | null;
 
 /** The sheet rows paid from the Company ADV — tickets, not tour expenses. */
 export const isAdvanceRow = (e: Pick<Expense, "paidBy">) => (e.paidBy ?? "") === "advance";
+
+// ── The operator's accounting rows (owner 2026-11-16: "operator too") ───────────────────────
+//
+// A cost the GUIDE paid with their own money (Paid By = Guide Personal) is one of the three
+// fixed items — on the operator's sheet as on the guide's report. "Boat" paid by the guide is
+// refused: it is Ferry (Inc. Guide). Not limited: entrance tickets (Company ADV / company-paid,
+// or a guide-paid ticket the operator handles as an exception), anything the company paid
+// directly, review rewards, a food tour's food rows, and Lotus (Inc. Guide), which the operator
+// adds on the sheet when a tour has it. A row already on the sheet and unchanged is left alone:
+// history is never rewritten, the rule applies when a row is added or edited.
+const OPERATOR_ALSO_ALLOWED = new Set(["Lotus (Inc. Guide)", FOOD_COST_DESCRIPTION, FOOD_COST_OVER_DESCRIPTION]);
+const isGuidePersonal = (e: Pick<Expense, "paidBy">) => ["guide", "guide_personal"].includes((e.paidBy ?? "").trim().toLowerCase());
+const rowKey = (e: Expense) => [(e.description ?? "").trim(), Number(e.price) || 0, Number(e.pax) || 0, (e.paidBy ?? "").trim().toLowerCase(), (e.expenseType ?? "").trim().toLowerCase()].join("|");
+
+export function operatorRowProblems(rows: readonly Expense[], stored: readonly Expense[] | null | undefined): string[] {
+  const before = new Set((stored ?? []).map(rowKey));
+  const problems: string[] = [];
+  let n = 0;
+  for (const e of rows) {
+    if (isReviewExpense(e)) continue;
+    n++;
+    if (!isGuidePersonal(e) || expenseAmount(e) <= 0) continue;
+    if ((e.expenseType ?? "").trim().toLowerCase() === "entrance") continue;
+    const desc = (e.description ?? "").trim();
+    // The short spelling ("Bus") is the same item: older rows carry it, and a row with a confirmed
+    // payer cannot be renamed — refusing it would leave that row unsavable.
+    if (fixedItemOf(e)) continue;
+    if (OPERATOR_ALSO_ALLOWED.has(desc) || /^lotus(\s*\([^)]*guide[^)]*\))?$/i.test(desc)) continue; // Lotus, any spelling
+    if (before.has(rowKey(e))) continue; // unchanged history
+    problems.push(`Row ${n} “${desc || "(no name)"}”: a cost the guide paid must be Water, Bus or Ferry (Inc. Guide)${/boat|เรือ/i.test(desc) ? " — a boat fare is “Ferry (Inc. Guide)”" : ""}. If the company paid it, set Paid By to Company Direct.`);
+  }
+  return problems;
+}
+
+// ── How an older row is SHOWN (owner 2026-11-16: "only Ferry (Inc. Guide)") ──────────────────
+// A boat fare the guide paid, saved before the fixed items as "Boat" / "Boat back" / "เรือ", is
+// shown as Ferry (Inc. Guide), with what it was recorded as beside it. Display only: the stored
+// row — and any certificate, waiver or PEAK document made for it — is never rewritten.
+const BOAT = /\bboat\b|เรือ/i;
+export function shownAs(e: Pick<Expense, "description" | "paidBy" | "expenseType">): { label: string; recordedAs: string | null } {
+  const desc = (e.description ?? "").trim();
+  const payer = (e.paidBy ?? "").trim().toLowerCase();
+  const guideOrUnset = payer === "" || payer === "guide" || payer === "guide_personal";
+  if (guideOrUnset && (e.expenseType ?? "").trim().toLowerCase() !== "entrance" && !fixedItemOf(e) && BOAT.test(desc)) {
+    return { label: FIXED_ITEMS[2].description, recordedAs: desc };
+  }
+  return { label: desc, recordedAs: null };
+}

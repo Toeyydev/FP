@@ -67,7 +67,7 @@ export default function GuideTourExpenses({ sheetKey, reported, official, defaul
         return (
           <div key={f.key} className="js-fixed-item" data-item={f.key} style={{ borderTop: "1px solid var(--line)", paddingTop: 8, display: "grid", gap: 4 }}>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 64px 52px 76px", gap: 6, alignItems: "center" }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{f.label} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. guide)</span></span>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{f.label} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. Guide)</span></span>
               <input aria-label={`${f.label} price`} className="js-fixed-price" type="number" inputMode="decimal" min={0} style={L} value={rows[i].price} onChange={(e) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, price: e.target.value } : r)))} />
               <input aria-label={`${f.label} quantity`} className="js-fixed-qty" type="number" inputMode="numeric" min={0} style={L} value={rows[i].qty} onChange={(e) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, qty: e.target.value } : r)))} />
               <b style={{ textAlign: "right", fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{thb(amount(i))}</b>

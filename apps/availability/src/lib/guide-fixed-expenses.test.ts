@@ -85,3 +85,46 @@ describe("statuses", () => {
     expect(receiptRowStatus([f("REPLACEMENT_REQUESTED", "1")])).toBe("REPLACEMENT_REQUESTED");
   });
 });
+
+import { operatorRowProblems } from "./guide-fixed-expenses";
+describe("operatorRowProblems — the operator's sheet follows the guide's (owner 2026-11-16)", () => {
+  const row = (description: string, paidBy: string, more: Partial<Expense> = {}) => ({ description, price: 10, pax: 4, paidBy, expenseType: "transport", ...more }) as Expense;
+  it("a boat fare the guide paid is refused, pointing at Ferry", () => {
+    const p = operatorRowProblems([row("Boat", "guide")], []);
+    expect(p).toHaveLength(1);
+    expect(p[0]).toMatch(/Row 1 “Boat”.*Water, Bus or Ferry.*Ferry \(Inc\. Guide\)/);
+  });
+  it("the three fixed items paid by the guide pass; a short name must be the fixed one", () => {
+    expect(operatorRowProblems([row("Water (Inc. Guide)", "guide", { expenseType: "meal" }), row("Bus (Inc. Guide)", "guide"), row("Ferry (Inc. Guide)", "guide")], [])).toEqual([]);
+    // The short spelling is the same item (older rows; a confirmed row cannot be renamed).
+    expect(operatorRowProblems([row("Bus", "guide"), row("Water", "guide", { expenseType: "meal" })], [])).toEqual([]);
+  });
+  it("not limited: company-paid, Company ADV, tickets, Lotus, food rows, review rewards, zero rows", () => {
+    expect(operatorRowProblems([
+      row("Van hire", "company"), row("Grand Palace", "advance", { expenseType: "entrance" }), row("Grand Palace", "guide", { expenseType: "entrance" }),
+      row("Lotus (Inc. Guide)", "guide", { expenseType: "other" }), row("Lotus", "guide", { expenseType: "other" }), row("ค่าอาหาร Food Tour (เกินเงินล่วงหน้า)", "guide", { expenseType: "meal" }),
+      row("Review reward", "guide", { expenseType: "review" } as Partial<Expense>), row("Boat", "guide", { pax: 0 }),
+    ], [])).toEqual([]);
+  });
+  it("a row unchanged since the last save is history and passes; editing it applies the rule", () => {
+    const old = row("Boat back", "guide");
+    expect(operatorRowProblems([old], [old])).toEqual([]);
+    expect(operatorRowProblems([{ ...old, pax: 5 }], [old])).toHaveLength(1);
+  });
+});
+
+import { shownAs } from "./guide-fixed-expenses";
+describe("shownAs — older boat rows read as Ferry (Inc. Guide), display only", () => {
+  const r = (description: string, paidBy?: string, expenseType = "transport") => ({ description, paidBy, expenseType }) as Expense;
+  it("Boat / Boat back / เรือ paid by the guide, or with no payer yet → Ferry (Inc. Guide), recorded as the old name", () => {
+    expect(shownAs(r("Boat", "guide"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: "Boat" });
+    expect(shownAs(r("Boat back"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: "Boat back" });
+    expect(shownAs(r("ค่าเรือ", "guide"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: "ค่าเรือ" });
+  });
+  it("everything else is shown as recorded", () => {
+    expect(shownAs(r("Boat", "company"))).toEqual({ label: "Boat", recordedAs: null });
+    expect(shownAs(r("Ferry (Inc. Guide)", "guide"))).toEqual({ label: "Ferry (Inc. Guide)", recordedAs: null });
+    expect(shownAs(r("Grand Palace", "guide", "entrance")).recordedAs).toBeNull();
+    expect(shownAs(r("Boatman tip", "guide")).recordedAs).toBeNull();
+  });
+});

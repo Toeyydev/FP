@@ -1,5 +1,6 @@
 "use client";
 
+import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { liveJobAdvances } from "@/lib/advances/coverage";
 import SlipCheckPanel, { existingAdvanceHref, type SlipDecisionFields } from "./SlipCheckPanel";
 import AdvanceBankSelect from "./AdvanceBankSelect";
@@ -39,7 +40,7 @@ import GuideAdvanceCard from "@/components/GuideAdvanceCard";
 import GuideTourExpenses from "@/components/GuideTourExpenses";
 import GuideTicketReceipts from "@/components/GuideTicketReceipts";
 import OperatorExpenseReview from "@/components/OperatorExpenseReview";
-import { fixedItemOf, isAdvanceRow, type ReportRow } from "@/lib/guide-fixed-expenses";
+import { fixedItemOf, isAdvanceRow, operatorRowProblems, shownAs, type ReportRow } from "@/lib/guide-fixed-expenses";
 import type { GuideAdvanceCard as GuideAdvanceCardData } from "@/lib/advances/guide-card";
 import { advanceMemo, returnMemo } from "@/lib/bank-memo";
 import { ceDate } from "@/lib/ce-date";
@@ -1178,7 +1179,7 @@ export default function JobSheetEditor() {
                   <ul className="gs-exp">
                     {exp.filter((e) => !isAdvanceRow(e)).map((e, i) => (
                       <li key={i} style={{ flexWrap: "wrap" }}>
-                        <span>{e.description}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax{/inc\.?\s*guide/i.test(e.description ?? "") ? " (incl. guide)" : ""}</small></span>
+                        <span>{shownAs(e).label}{shownAs(e).recordedAs && <small className="gs-calc"> · recorded as “{shownAs(e).recordedAs}”</small>}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax{/inc\.?\s*guide/i.test(e.description ?? "") ? " (incl. guide)" : ""}</small></span>
                         <b>{thb(expenseAmount(e))}</b>
                         {ro && <div className="gs-receipts" style={{ flexBasis: "100%", marginTop: 4 }}>
                           <ReceiptFiles compact sheetKey={sheet} row={e} index={sheet.expenses.indexOf(e)} files={(e.rowId && attachments[e.rowId]) || []}
@@ -1589,7 +1590,26 @@ export default function JobSheetEditor() {
                       title="Fixed standard Job Sheet item">
                       {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
                     </select>
-                  ) : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />;
+                  ) : <>
+                    <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />
+                    {/* Owner 2026-11-16: a cost the guide paid is Water / Bus / Ferry (Inc. Guide) here too —
+                        the server refuses anything else (lib/guide-fixed-expenses operatorRowProblems). */}
+                    {shownAs(e).recordedAs && isProtected(e as ProtectedRow) && (
+                      <div className="no-print js-fixed-row-alias" style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 3 }}>Reads as {shownAs(e).label} — kept as recorded (confirmed / certified rows are not renamed)</div>
+                    )}
+                    {operatorRowProblems([e], []).length > 0 && !isProtected(e as ProtectedRow) && (
+                      <div className="no-print js-fixed-row-hint" style={{ fontSize: 11, color: "var(--danger)", marginTop: 3, display: "grid", gap: 3 }}>
+                        <span>Paid by the guide → must be Water, Bus or Ferry (Inc. Guide), or set Paid By to Company.</span>
+                        <select aria-label="Change to a fixed item" style={{ ...L, cursor: "pointer" }} value="" onChange={(ev) => {
+                          const picked = STANDARD_EXPENSE_DESCRIPTIONS.find((item) => item.description === ev.target.value);
+                          if (picked) setExpense(i, { description: picked.description, expenseType: picked.expenseType });
+                        }}>
+                          <option value="">Change to…</option>
+                          {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </>;
                 })()}</td>
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /

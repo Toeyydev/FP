@@ -62,15 +62,29 @@ export async function reviewExpense(db: PrismaClient, input: SheetKey & { item: 
   if (matches.length > 1) return fail(409, `The accounting rows list ${item.label} ${matches.length} times — merge them into one before reviewing`);
   let accountingRow: "updated" | "added" | "unchanged" = "unchanged";
   const want = pricePaxFor(decided.verified, reportedRow);
+  // Approving the guide's own-money line also confirms who paid it: Guide Personal, stamped with
+  // who and when (owner 2026-11-16) — so the job never stalls on "Paid By is not set". A row whose
+  // payer is already confirmed keeps it.
+  const payer = { paidBy: "guide", paidBySource: "operator" as const, paidByBy: input.actor.id ?? undefined, paidByAt: new Date().toISOString() };
+  const approving = decided.status !== "REJECTED";
   if (matches.length === 1) {
     const { e, i } = matches[0];
+    // Protected by nothing but a Guide Personal payer stamp (e.g. an earlier review of this item):
+    // the operator may still correct the amount while the job is unapproved and unpaid, as a
+    // Save may. A waiver, a certificate request or an advance settlement keeps the row locked.
+    const r = e as ProtectedRow & Expense;
+    const hard = !!(r.evidenceWaiver || r.certificateRequest || r.advanceSettlement);
+    const prot = isProtected(r) && (hard || (r.paidBy ?? "").trim().toLowerCase() !== "guide");
     if (r2(expenseAmount(e)) !== decided.verified) {
-      if (isProtected(e as ProtectedRow)) return fail(409, `${item.label}'s accounting row is confirmed at ${r2(expenseAmount(e)).toFixed(2)} — correct that row first, then record the review`);
-      official[i] = { ...e, price: want.price, pax: want.pax };
+      if (prot) return fail(409, `${item.label}'s accounting row is confirmed at ${r2(expenseAmount(e)).toFixed(2)} — correct that row first, then record the review`);
+      official[i] = { ...e, price: want.price, pax: want.pax, ...(approving ? payer : {}) };
+      accountingRow = "updated";
+    } else if (approving && !prot && !(e.paidBy ?? "").trim()) {
+      official[i] = { ...e, ...payer };
       accountingRow = "updated";
     }
   } else if (decided.verified > 0) {
-    official.push({ rowId: newRowId(), description: item.description, expenseType: item.expenseType, price: want.price, pax: want.pax } as Expense);
+    official.push({ rowId: newRowId(), description: item.description, expenseType: item.expenseType, price: want.price, pax: want.pax, ...payer } as Expense);
     accountingRow = "added";
   }
 
