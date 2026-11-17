@@ -50,8 +50,8 @@ CREATE TABLE "UpsellProductVersion" (
     "taxProfileId" TEXT NOT NULL,
     "priceOverridePermission" TEXT NOT NULL DEFAULT 'NONE',
     "refundPolicy" TEXT NOT NULL DEFAULT 'NON_REFUNDABLE',
-    "activeFrom" TEXT NOT NULL,
-    "activeTo" TEXT,
+    "activeFrom" DATE NOT NULL,
+    "activeTo" DATE,
     "createdById" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -68,8 +68,12 @@ CREATE TABLE "TaxProfile" (
     "revenueRecognition" TEXT,
     "breakageOnExpiry" BOOLEAN,
     "peakDocumentKind" TEXT,
-    "incentiveWhtSource" TEXT,
+    "incentiveWhtMode" TEXT NOT NULL DEFAULT 'UNCONFIRMED',
     "incentiveWhtPct" DECIMAL(5,2),
+    "incentiveWhtBearer" TEXT,
+    "fixedCostWhtMode" TEXT NOT NULL DEFAULT 'UNCONFIRMED',
+    "fixedCostWhtPct" DECIMAL(5,2),
+    "fixedCostWhtBearer" TEXT,
     "status" TEXT NOT NULL DEFAULT 'DRAFT',
     "confirmedById" TEXT,
     "confirmedAt" TIMESTAMP(3),
@@ -174,6 +178,8 @@ CREATE TABLE "CashSettlement" (
     "bankRefNormalized" TEXT,
     "bankAccountKey" TEXT,
     "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "submissionNo" INTEGER NOT NULL DEFAULT 0,
+    "submittedAt" TIMESTAMP(3),
     "returnedReason" TEXT,
     "confirmedById" TEXT,
     "confirmedAt" TIMESTAMP(3),
@@ -304,22 +310,53 @@ ALTER TABLE "UpsellProductVersion"
     CHECK ("serviceScope" IN ('EXISTING_GUIDE', 'ASSIGNED_SEPARATELY')
        AND "priceOverridePermission" IN ('NONE', 'ADMIN_APPROVAL')
        AND "refundPolicy" IN ('NON_REFUNDABLE', 'ADMIN_ONLY')),
+  -- activeFrom / activeTo are DATE columns, so Postgres itself refuses a date that does not
+  -- exist (2099-99-99, 2099-02-30); this only orders them.
   ADD CONSTRAINT "UpsellProductVersion_active_dates_check"
-    CHECK ("activeFrom" ~ '^\d{4}-\d{2}-\d{2}$' AND ("activeTo" IS NULL OR ("activeTo" ~ '^\d{4}-\d{2}-\d{2}$' AND "activeTo" >= "activeFrom")));
+    CHECK ("activeTo" IS NULL OR "activeTo" >= "activeFrom");
 
+-- Tax profile: every answer is the accountant's. Nothing here assumes a rate — "not yet
+-- answered" (UNCONFIRMED / null) is a state of its own and is never read as 0%.
 ALTER TABLE "TaxProfile"
-  ADD CONSTRAINT "TaxProfile_vat_check"
-    CHECK ("vatMode" IN ('UNCONFIRMED', 'NONE', 'INCLUSIVE', 'EXCLUSIVE') AND ("vatRateBp" IS NULL OR ("vatRateBp" >= 0 AND "vatRateBp" <= 10000))),
+  ADD CONSTRAINT "TaxProfile_vat_mode_check"
+    CHECK ("vatMode" IN ('UNCONFIRMED', 'NONE', 'ZERO_RATED', 'INCLUSIVE', 'EXCLUSIVE')),
+  -- A rate exists exactly when VAT is charged at a rate. NONE (no VAT) and ZERO_RATED (VAT
+  -- at 0%) are different answers with different documents, so 0% is its own mode, not a
+  -- rate of 0 on INCLUSIVE / EXCLUSIVE. No particular rate (e.g. 7%) is written here.
+  ADD CONSTRAINT "TaxProfile_vat_rate_check"
+    CHECK (CASE WHEN "vatMode" IN ('INCLUSIVE', 'EXCLUSIVE')
+                THEN "vatRateBp" IS NOT NULL AND "vatRateBp" > 0 AND "vatRateBp" <= 10000
+                ELSE "vatRateBp" IS NULL END),
   ADD CONSTRAINT "TaxProfile_enums_check"
     CHECK (("revenueRecognition" IS NULL OR "revenueRecognition" IN ('AT_PAYMENT', 'AT_SERVICE'))
-       AND ("peakDocumentKind" IS NULL OR "peakDocumentKind" IN ('JOURNAL', 'RECEIPT', 'TAX_INVOICE_RECEIPT'))
-       AND ("incentiveWhtSource" IS NULL OR "incentiveWhtSource" IN ('CONFIGURED', 'ENTERED'))
-       AND ("incentiveWhtPct" IS NULL OR ("incentiveWhtPct" >= 0 AND "incentiveWhtPct" <= 100))),
+       AND ("peakDocumentKind" IS NULL OR "peakDocumentKind" IN ('JOURNAL', 'RECEIPT', 'TAX_INVOICE_RECEIPT'))),
+  -- A tax invoice exists only where VAT does.
+  ADD CONSTRAINT "TaxProfile_tax_invoice_needs_vat_check"
+    CHECK ("peakDocumentKind" IS DISTINCT FROM 'TAX_INVOICE_RECEIPT' OR "vatMode" IN ('ZERO_RATED', 'INCLUSIVE', 'EXCLUSIVE')),
+  -- Withholding tax on the guide's incentive. FIXED_RATE carries its rate (> 0: "no
+  -- withholding" is NOT_WITHHELD, not 0%); ENTERED_PER_PAYMENT has no rate here — the
+  -- operator enters it on each payment. Whoever withholds, someone bears it: say who.
+  ADD CONSTRAINT "TaxProfile_incentive_wht_check"
+    CHECK ("incentiveWhtMode" IN ('UNCONFIRMED', 'NOT_WITHHELD', 'FIXED_RATE', 'ENTERED_PER_PAYMENT')
+       AND (("incentiveWhtMode" = 'FIXED_RATE') = ("incentiveWhtPct" IS NOT NULL))
+       AND ("incentiveWhtPct" IS NULL OR ("incentiveWhtPct" > 0 AND "incentiveWhtPct" <= 100))
+       AND (("incentiveWhtMode" IN ('FIXED_RATE', 'ENTERED_PER_PAYMENT')) = ("incentiveWhtBearer" IS NOT NULL))
+       AND ("incentiveWhtBearer" IS NULL OR "incentiveWhtBearer" IN ('PAYEE', 'COMPANY'))),
+  -- The same questions for the fixed (food) cost, answered separately.
+  ADD CONSTRAINT "TaxProfile_fixed_cost_wht_check"
+    CHECK ("fixedCostWhtMode" IN ('UNCONFIRMED', 'NOT_WITHHELD', 'FIXED_RATE', 'ENTERED_PER_PAYMENT')
+       AND (("fixedCostWhtMode" = 'FIXED_RATE') = ("fixedCostWhtPct" IS NOT NULL))
+       AND ("fixedCostWhtPct" IS NULL OR ("fixedCostWhtPct" > 0 AND "fixedCostWhtPct" <= 100))
+       AND (("fixedCostWhtMode" IN ('FIXED_RATE', 'ENTERED_PER_PAYMENT')) = ("fixedCostWhtBearer" IS NOT NULL))
+       AND ("fixedCostWhtBearer" IS NULL OR "fixedCostWhtBearer" IN ('PAYEE', 'COMPANY'))),
   ADD CONSTRAINT "TaxProfile_status_check" CHECK ("status" IN ('DRAFT', 'CONFIRMED')),
-  -- Confirmed means the accountant answered every question; nothing is assumed.
+  -- Confirmed means the accountant answered every question, and we know who confirmed.
   ADD CONSTRAINT "TaxProfile_confirmed_check"
     CHECK ("status" <> 'CONFIRMED' OR ("confirmedById" IS NOT NULL AND "confirmedAt" IS NOT NULL
-       AND "vatMode" <> 'UNCONFIRMED' AND "revenueRecognition" IS NOT NULL AND "peakDocumentKind" IS NOT NULL));
+       AND "vatMode" <> 'UNCONFIRMED' AND "revenueRecognition" IS NOT NULL AND "breakageOnExpiry" IS NOT NULL
+       AND "peakDocumentKind" IS NOT NULL AND "incentiveWhtMode" <> 'UNCONFIRMED' AND "fixedCostWhtMode" <> 'UNCONFIRMED')),
+  ADD CONSTRAINT "TaxProfile_draft_check"
+    CHECK ("status" <> 'DRAFT' OR ("confirmedById" IS NULL AND "confirmedAt" IS NULL));
 
 ALTER TABLE "UpsellDocCounter" ADD CONSTRAINT "UpsellDocCounter_seq_check" CHECK ("lastSeq" > 0);
 
@@ -344,7 +381,11 @@ ALTER TABLE "UpsellPayment"
   -- Cash always names the guide who took it; nothing else does.
   ADD CONSTRAINT "UpsellPayment_collector_check" CHECK (("method" = 'CASH') = ("cashCollectorId" IS NOT NULL)),
   ADD CONSTRAINT "UpsellPayment_collected_is_cash_check" CHECK ("status" <> 'COLLECTED' OR "method" = 'CASH'),
-  ADD CONSTRAINT "UpsellPayment_confirmed_check" CHECK ("status" <> 'CONFIRMED' OR "confirmedAt" IS NOT NULL),
+  ADD CONSTRAINT "UpsellPayment_confirmed_check"
+    CHECK ("status" <> 'CONFIRMED' OR ("confirmedAt" IS NOT NULL AND "confirmedById" IS NOT NULL)),
+  -- Only a payment that reached CONFIRMED (and possibly a reversal since) carries a confirmation.
+  ADD CONSTRAINT "UpsellPayment_unconfirmed_check"
+    CHECK ("status" NOT IN ('PENDING', 'COLLECTED', 'FAILED') OR ("confirmedAt" IS NULL AND "confirmedById" IS NULL)),
   ADD CONSTRAINT "UpsellPayment_bank_ref_check" CHECK (("bankRefNormalized" IS NULL) = ("bankAccountKey" IS NULL));
 
 ALTER TABLE "CashCustodyEntry"
@@ -369,7 +410,13 @@ ALTER TABLE "CashSettlement"
   ADD CONSTRAINT "CashSettlement_method_check" CHECK ("method" IN ('BANK_TRANSFER', 'CASH_AT_OFFICE')),
   ADD CONSTRAINT "CashSettlement_status_check" CHECK ("status" IN ('DRAFT', 'SUBMITTED', 'RETURNED', 'CONFIRMED', 'REVERSED')),
   ADD CONSTRAINT "CashSettlement_confirmed_check" CHECK ("status" <> 'CONFIRMED' OR ("confirmedById" IS NOT NULL AND "confirmedAt" IS NOT NULL)),
+  ADD CONSTRAINT "CashSettlement_unconfirmed_check"
+    CHECK ("status" NOT IN ('DRAFT', 'SUBMITTED', 'RETURNED') OR ("confirmedById" IS NULL AND "confirmedAt" IS NULL)),
   ADD CONSTRAINT "CashSettlement_returned_check" CHECK ("status" <> 'RETURNED' OR "returnedReason" IS NOT NULL),
+  -- Every state after DRAFT has been submitted at least once (the counter is the database's).
+  ADD CONSTRAINT "CashSettlement_submission_check"
+    CHECK ((("status" = 'DRAFT') = ("submissionNo" = 0)) AND ("submissionNo" >= 0)
+       AND (("submissionNo" = 0) = ("submittedAt" IS NULL))),
   ADD CONSTRAINT "CashSettlement_bank_ref_check" CHECK (("bankRefNormalized" IS NULL) = ("bankAccountKey" IS NULL));
 
 -- ─── Triggers ─────────────────────────────────────────────────────────────────────────────
@@ -410,32 +457,59 @@ END $$ LANGUAGE plpgsql;
 CREATE TRIGGER upsell_sale_terms_frozen BEFORE UPDATE OR DELETE ON "UpsellSale"
   FOR EACH ROW EXECUTE FUNCTION upsell_sale_terms_frozen();
 
--- Payments: a sale is never paid more than its gross, and money that has moved
--- (COLLECTED / CONFIRMED / REVERSED) is never edited or deleted.
+-- Payments. Transition matrix (anything not listed is refused):
+--   INSERT    → PENDING, or COLLECTED (cash taken on the spot)
+--   PENDING   → COLLECTED (cash) | CONFIRMED (bank transfer only) | FAILED
+--   COLLECTED → CONFIRMED | REVERSED
+--   CONFIRMED → REVERSED
+--   FAILED, REVERSED: final — nothing on the row changes again, and it is never deleted.
+-- A failed attempt is history: a retry is a new payment row, never a FAILED row revived.
+-- Who / how (sale, method, collector, request key) never changes; the amount and the bank
+-- reference change only while PENDING; a confirmation, once made, is fixed. Only a PENDING
+-- payment may be deleted. And a sale is never paid more than its gross.
 CREATE FUNCTION upsell_payment_guard() RETURNS trigger AS $$
 DECLARE
   gross int;
   live_total bigint;
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    IF OLD."status" IN ('COLLECTED', 'CONFIRMED', 'REVERSED') THEN
-      RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: payment % is %; reverse it instead of deleting', OLD."id", OLD."status";
+    IF OLD."status" <> 'PENDING' THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: payment % is %; only a PENDING payment may be deleted', OLD."id", OLD."status";
     END IF;
     RETURN OLD;
   END IF;
 
-  IF TG_OP = 'UPDATE' AND OLD."status" IN ('COLLECTED', 'CONFIRMED', 'REVERSED') THEN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."status" NOT IN ('PENDING', 'COLLECTED') THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_TRANSITION: a payment starts PENDING (or COLLECTED for cash), not %', NEW."status";
+    END IF;
+  ELSE
+    IF NEW."status" IS DISTINCT FROM OLD."status" AND NOT (
+         (OLD."status" = 'PENDING'   AND NEW."status" IN ('COLLECTED', 'CONFIRMED', 'FAILED'))
+      OR (OLD."status" = 'COLLECTED' AND NEW."status" IN ('CONFIRMED', 'REVERSED'))
+      OR (OLD."status" = 'CONFIRMED' AND NEW."status" = 'REVERSED')) THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_TRANSITION: payment % cannot go from % to %', OLD."id", OLD."status", NEW."status";
+    END IF;
+    IF OLD."status" = 'PENDING' AND NEW."status" = 'CONFIRMED' AND NEW."method" = 'CASH' THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_TRANSITION: cash is COLLECTED by the guide before it is CONFIRMED';
+    END IF;
+    IF OLD."status" IN ('FAILED', 'REVERSED')
+       AND (to_jsonb(NEW) - 'updatedAt') IS DISTINCT FROM (to_jsonb(OLD) - 'updatedAt') THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: payment % is % — final; record a new payment instead', OLD."id", OLD."status";
+    END IF;
     IF NEW."saleId" IS DISTINCT FROM OLD."saleId" OR NEW."method" IS DISTINCT FROM OLD."method"
-       OR NEW."amountSatang" IS DISTINCT FROM OLD."amountSatang" OR NEW."cashCollectorId" IS DISTINCT FROM OLD."cashCollectorId"
-       OR NEW."bankRefNormalized" IS DISTINCT FROM OLD."bankRefNormalized" OR NEW."bankAccountKey" IS DISTINCT FROM OLD."bankAccountKey"
-       OR NEW."requestKey" IS DISTINCT FROM OLD."requestKey"
-       OR (OLD."confirmedAt" IS NOT NULL AND (NEW."confirmedAt" IS DISTINCT FROM OLD."confirmedAt" OR NEW."confirmedById" IS DISTINCT FROM OLD."confirmedById")) THEN
+       OR NEW."cashCollectorId" IS DISTINCT FROM OLD."cashCollectorId" OR NEW."requestKey" IS DISTINCT FROM OLD."requestKey" THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: the sale, method and collector of payment % are fixed', OLD."id";
+    END IF;
+    IF OLD."status" <> 'PENDING' AND (
+          NEW."amountSatang" IS DISTINCT FROM OLD."amountSatang" OR NEW."evidenceId" IS DISTINCT FROM OLD."evidenceId"
+       OR NEW."bankRef" IS DISTINCT FROM OLD."bankRef" OR NEW."bankRefNormalized" IS DISTINCT FROM OLD."bankRefNormalized"
+       OR NEW."bankAccountKey" IS DISTINCT FROM OLD."bankAccountKey") THEN
       RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: payment % is %; its money cannot change', OLD."id", OLD."status";
     END IF;
-    IF NEW."status" IS DISTINCT FROM OLD."status" AND NOT (
-         (OLD."status" = 'COLLECTED' AND NEW."status" IN ('CONFIRMED', 'REVERSED'))
-      OR (OLD."status" = 'CONFIRMED' AND NEW."status" = 'REVERSED')) THEN
-      RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: payment % cannot go from % to %', OLD."id", OLD."status", NEW."status";
+    IF OLD."confirmedAt" IS NOT NULL
+       AND (NEW."confirmedAt" IS DISTINCT FROM OLD."confirmedAt" OR NEW."confirmedById" IS DISTINCT FROM OLD."confirmedById") THEN
+      RAISE EXCEPTION 'UPSELL_PAYMENT_IMMUTABLE: the confirmation of payment % is fixed', OLD."id";
     END IF;
   END IF;
 
@@ -509,7 +583,21 @@ END $$ LANGUAGE plpgsql;
 CREATE TRIGGER cash_custody_insert_guard BEFORE INSERT ON "CashCustodyEntry"
   FOR EACH ROW EXECUTE FUNCTION cash_custody_insert_guard();
 
--- Settlements: confirmed money is never edited; only a DRAFT may be deleted.
+-- Settlements. Transition matrix (anything not listed is refused):
+--   INSERT    → DRAFT | SUBMITTED
+--   DRAFT     → SUBMITTED
+--   SUBMITTED → RETURNED (with a reason) | CONFIRMED
+--   RETURNED  → SUBMITTED (the corrected remittance, a new submission)
+--   CONFIRMED → REVERSED
+--   REVERSED: final.
+-- Immutability boundary:
+--   guide, job, settlement no., request key — fixed once out of DRAFT;
+--   amounts, method, evidence, bank reference — change only in DRAFT or RETURNED (or on the
+--     move out of them), so a correction is always RETURNED → edit → SUBMITTED again, and
+--     what an admin confirms is exactly what was submitted;
+--   returnedReason — set only on the move into RETURNED; confirmation — only on the move
+--     into CONFIRMED; submissionNo / submittedAt — written by this trigger alone.
+-- Only a DRAFT may be deleted.
 CREATE FUNCTION cash_settlement_guard() RETURNS trigger AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -518,19 +606,73 @@ BEGIN
     END IF;
     RETURN OLD;
   END IF;
-  IF OLD."status" IN ('CONFIRMED', 'REVERSED') THEN
-    IF NEW."guideId" IS DISTINCT FROM OLD."guideId" OR NEW."sourceJobSheetId" IS DISTINCT FROM OLD."sourceJobSheetId"
-       OR NEW."expectedSatang" IS DISTINCT FROM OLD."expectedSatang" OR NEW."remittedSatang" IS DISTINCT FROM OLD."remittedSatang"
-       OR NEW."method" IS DISTINCT FROM OLD."method" OR NEW."bankRefNormalized" IS DISTINCT FROM OLD."bankRefNormalized"
-       OR NEW."bankAccountKey" IS DISTINCT FROM OLD."bankAccountKey" OR NEW."settlementNo" IS DISTINCT FROM OLD."settlementNo"
-       OR NEW."confirmedAt" IS DISTINCT FROM OLD."confirmedAt" OR NEW."confirmedById" IS DISTINCT FROM OLD."confirmedById" THEN
-      RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: settlement % is %; its money cannot change', OLD."settlementNo", OLD."status";
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."status" NOT IN ('DRAFT', 'SUBMITTED') THEN
+      RAISE EXCEPTION 'UPSELL_SETTLEMENT_TRANSITION: a settlement starts DRAFT or SUBMITTED, not %', NEW."status";
     END IF;
-    IF NEW."status" IS DISTINCT FROM OLD."status" AND NOT (OLD."status" = 'CONFIRMED' AND NEW."status" = 'REVERSED') THEN
-      RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: settlement % cannot go from % to %', OLD."settlementNo", OLD."status", NEW."status";
-    END IF;
+    NEW."submissionNo" := CASE WHEN NEW."status" = 'SUBMITTED' THEN 1 ELSE 0 END;
+    NEW."submittedAt"  := CASE WHEN NEW."status" = 'SUBMITTED' THEN now() ELSE NULL END;
+    RETURN NEW;
+  END IF;
+
+  IF NEW."status" IS DISTINCT FROM OLD."status" AND NOT (
+       (OLD."status" = 'DRAFT'     AND NEW."status" = 'SUBMITTED')
+    OR (OLD."status" = 'SUBMITTED' AND NEW."status" IN ('RETURNED', 'CONFIRMED'))
+    OR (OLD."status" = 'RETURNED'  AND NEW."status" = 'SUBMITTED')
+    OR (OLD."status" = 'CONFIRMED' AND NEW."status" = 'REVERSED')) THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_TRANSITION: settlement % cannot go from % to %', OLD."settlementNo", OLD."status", NEW."status";
+  END IF;
+
+  IF OLD."status" <> 'DRAFT' AND (
+        NEW."guideId" IS DISTINCT FROM OLD."guideId" OR NEW."sourceJobSheetId" IS DISTINCT FROM OLD."sourceJobSheetId"
+     OR NEW."settlementNo" IS DISTINCT FROM OLD."settlementNo" OR NEW."requestKey" IS DISTINCT FROM OLD."requestKey") THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: the guide and job of settlement % are fixed', OLD."settlementNo";
+  END IF;
+
+  IF OLD."status" NOT IN ('DRAFT', 'RETURNED') AND (
+        NEW."expectedSatang" IS DISTINCT FROM OLD."expectedSatang" OR NEW."remittedSatang" IS DISTINCT FROM OLD."remittedSatang"
+     OR NEW."method" IS DISTINCT FROM OLD."method" OR NEW."evidenceId" IS DISTINCT FROM OLD."evidenceId"
+     OR NEW."bankRef" IS DISTINCT FROM OLD."bankRef" OR NEW."bankRefNormalized" IS DISTINCT FROM OLD."bankRefNormalized"
+     OR NEW."bankAccountKey" IS DISTINCT FROM OLD."bankAccountKey") THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: settlement % is %; return it to correct the money', OLD."settlementNo", OLD."status";
+  END IF;
+
+  IF NEW."returnedReason" IS DISTINCT FROM OLD."returnedReason"
+     AND NOT (OLD."status" = 'SUBMITTED' AND NEW."status" = 'RETURNED') THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: a return reason is given only when returning settlement %', OLD."settlementNo";
+  END IF;
+
+  IF (NEW."confirmedAt" IS DISTINCT FROM OLD."confirmedAt" OR NEW."confirmedById" IS DISTINCT FROM OLD."confirmedById")
+     AND NOT (OLD."status" = 'SUBMITTED' AND NEW."status" = 'CONFIRMED') THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: settlement % is confirmed only by confirming a submission', OLD."settlementNo";
+  END IF;
+
+  IF NEW."status" = 'SUBMITTED' AND OLD."status" <> 'SUBMITTED' THEN
+    NEW."submissionNo" := OLD."submissionNo" + 1;
+    NEW."submittedAt"  := now();
+  ELSIF NEW."submissionNo" IS DISTINCT FROM OLD."submissionNo" OR NEW."submittedAt" IS DISTINCT FROM OLD."submittedAt" THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: the submission count of settlement % is the database''s', OLD."settlementNo";
   END IF;
   RETURN NEW;
 END $$ LANGUAGE plpgsql;
-CREATE TRIGGER cash_settlement_guard BEFORE UPDATE OR DELETE ON "CashSettlement"
+CREATE TRIGGER cash_settlement_guard BEFORE INSERT OR UPDATE OR DELETE ON "CashSettlement"
   FOR EACH ROW EXECUTE FUNCTION cash_settlement_guard();
+
+-- A confirmed tax profile is the accountant's answer of record: it is never edited or
+-- deleted (a changed answer is a new profile), and it never goes back to DRAFT.
+CREATE FUNCTION tax_profile_confirmed_frozen() RETURNS trigger AS $$
+BEGIN
+  IF OLD."status" = 'CONFIRMED' THEN
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'UPSELL_TAX_PROFILE_FROZEN: tax profile % is confirmed; it cannot be deleted', OLD."code";
+    END IF;
+    IF (to_jsonb(NEW) - 'updatedAt') IS DISTINCT FROM (to_jsonb(OLD) - 'updatedAt') THEN
+      RAISE EXCEPTION 'UPSELL_TAX_PROFILE_FROZEN: tax profile % is confirmed; create a new profile instead', OLD."code";
+    END IF;
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER tax_profile_confirmed_frozen BEFORE UPDATE OR DELETE ON "TaxProfile"
+  FOR EACH ROW EXECUTE FUNCTION tax_profile_confirmed_frozen();

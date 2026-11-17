@@ -2155,8 +2155,8 @@ model UpsellProductVersion {
   taxProfile                TaxProfile    @relation(fields: [taxProfileId], references: [id], onDelete: Restrict)
   priceOverridePermission   String        @default("NONE") // NONE | ADMIN_APPROVAL
   refundPolicy              String        @default("NON_REFUNDABLE") // NON_REFUNDABLE | ADMIN_ONLY
-  activeFrom                String // "YYYY-MM-DD"
-  activeTo                  String? // "YYYY-MM-DD"
+  activeFrom                DateTime      @db.Date // a real calendar date (Postgres DATE)
+  activeTo                  DateTime?     @db.Date
   createdById               String?
   createdAt                 DateTime      @default(now())
 
@@ -2165,19 +2165,32 @@ model UpsellProductVersion {
   @@unique([productId, version])
 }
 
-// VAT / revenue recognition / PEAK document kind / incentive WHT. Stays DRAFT until the
-// accountant confirms it; while DRAFT nothing built on it may be sent to PEAK.
+// VAT / revenue recognition / breakage / PEAK document kind / withholding tax. Stays DRAFT
+// until the accountant has answered every question; while DRAFT nothing built on it may be
+// sent to PEAK. No rate is assumed anywhere: every rate is the accountant's answer, and
+// "unanswered" (UNCONFIRMED / null) is never read as zero. Once CONFIRMED it is frozen — a
+// changed answer is a new profile.
 model TaxProfile {
   id                 String    @id @default(cuid())
   code               String    @unique
   name               String
-  vatMode            String    @default("UNCONFIRMED") // UNCONFIRMED | NONE | INCLUSIVE | EXCLUSIVE
-  vatRateBp          Int? // basis points, only when VAT applies
+  // UNCONFIRMED | NONE (no VAT: exempt / outside VAT) | ZERO_RATED (VAT at 0%) |
+  // INCLUSIVE | EXCLUSIVE (VAT at vatRateBp, which must then be > 0)
+  vatMode            String    @default("UNCONFIRMED")
+  vatRateBp          Int? // basis points; present exactly when INCLUSIVE / EXCLUSIVE
   revenueRecognition String? // AT_PAYMENT | AT_SERVICE
-  breakageOnExpiry   Boolean?
+  breakageOnExpiry   Boolean? // recognise revenue on an unused, expired service?
   peakDocumentKind   String? // JOURNAL | RECEIPT | TAX_INVOICE_RECEIPT
-  incentiveWhtSource String? // CONFIGURED | ENTERED — never assumed
+  // Withholding tax, answered separately for the guide's incentive and for the fixed
+  // (food) cost: UNCONFIRMED | NOT_WITHHELD | FIXED_RATE (the pct below, > 0) |
+  // ENTERED_PER_PAYMENT (the operator enters the rate on each payment). Bearer: who carries
+  // the withheld amount — PAYEE (deducted from the payment) | COMPANY (grossed up).
+  incentiveWhtMode   String    @default("UNCONFIRMED")
   incentiveWhtPct    Decimal?  @db.Decimal(5, 2)
+  incentiveWhtBearer String?
+  fixedCostWhtMode   String    @default("UNCONFIRMED")
+  fixedCostWhtPct    Decimal?  @db.Decimal(5, 2)
+  fixedCostWhtBearer String?
   status             String    @default("DRAFT") // DRAFT | CONFIRMED
   confirmedById      String?
   confirmedAt        DateTime?
@@ -2240,6 +2253,8 @@ model UpsellPayment {
   sale              UpsellSale @relation(fields: [saleId], references: [id], onDelete: Restrict)
   method            String // CASH | BANK_TRANSFER
   amountSatang      Int
+  // PENDING → COLLECTED (cash) | CONFIRMED (transfer) | FAILED; COLLECTED → CONFIRMED | REVERSED;
+  // CONFIRMED → REVERSED. FAILED and REVERSED are final. Enforced by upsell_payment_guard.
   status            String     @default("PENDING") // PENDING | COLLECTED | CONFIRMED | FAILED | REVERSED
   statusSource      String? // GUIDE_CASH | ADMIN_BANK_MATCH
   cashCollectorId   String? // required exactly when method = CASH
@@ -2305,7 +2320,11 @@ model CashSettlement {
   bankRef           String?
   bankRefNormalized String?
   bankAccountKey    String?
+  // DRAFT → SUBMITTED → CONFIRMED → REVERSED; SUBMITTED → RETURNED → (corrected) → SUBMITTED.
+  // Enforced by cash_settlement_guard; amounts change only in DRAFT / RETURNED.
   status            String    @default("DRAFT") // DRAFT | SUBMITTED | RETURNED | CONFIRMED | REVERSED
+  submissionNo      Int       @default(0) // set by the database: +1 on every move into SUBMITTED
+  submittedAt       DateTime? // set by the database on every move into SUBMITTED
   returnedReason    String?
   confirmedById     String?
   confirmedAt       DateTime?
