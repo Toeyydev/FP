@@ -190,6 +190,20 @@ CREATE TABLE "CashSettlement" (
     CONSTRAINT "CashSettlement_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "CashSettlementReturn" (
+    "id" TEXT NOT NULL,
+    "settlementId" TEXT NOT NULL,
+    "submissionNo" INTEGER NOT NULL,
+    "reason" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "CashSettlementReturn_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CashSettlementReturn_settlementId_submissionNo_key" ON "CashSettlementReturn"("settlementId", "submissionNo");
+
 -- CreateIndex
 CREATE UNIQUE INDEX "UpsellProduct_productCode_key" ON "UpsellProduct"("productCode");
 
@@ -277,6 +291,9 @@ ALTER TABLE "CashCustodyEntry" ADD CONSTRAINT "CashCustodyEntry_reversesId_fkey"
 -- AddForeignKey
 ALTER TABLE "CashSettlement" ADD CONSTRAINT "CashSettlement_sourceJobSheetId_fkey" FOREIGN KEY ("sourceJobSheetId") REFERENCES "JobSheet"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+
+-- AddForeignKey
+ALTER TABLE "CashSettlementReturn" ADD CONSTRAINT "CashSettlementReturn_settlementId_fkey" FOREIGN KEY ("settlementId") REFERENCES "CashSettlement"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- ─── CHECK constraints ────────────────────────────────────────────────────────────────────
 
@@ -412,7 +429,9 @@ ALTER TABLE "CashSettlement"
   ADD CONSTRAINT "CashSettlement_confirmed_check" CHECK ("status" <> 'CONFIRMED' OR ("confirmedById" IS NOT NULL AND "confirmedAt" IS NOT NULL)),
   ADD CONSTRAINT "CashSettlement_unconfirmed_check"
     CHECK ("status" NOT IN ('DRAFT', 'SUBMITTED', 'RETURNED') OR ("confirmedById" IS NULL AND "confirmedAt" IS NULL)),
-  ADD CONSTRAINT "CashSettlement_returned_check" CHECK ("status" <> 'RETURNED' OR "returnedReason" IS NOT NULL),
+  -- A reason exists exactly while RETURNED, and is never blank.
+  ADD CONSTRAINT "CashSettlement_returned_check"
+    CHECK ((("status" = 'RETURNED') = ("returnedReason" IS NOT NULL)) AND ("returnedReason" IS NULL OR btrim("returnedReason") <> '')),
   -- Every state after DRAFT has been submitted at least once (the counter is the database's).
   ADD CONSTRAINT "CashSettlement_submission_check"
     CHECK ((("status" = 'DRAFT') = ("submissionNo" = 0)) AND ("submissionNo" >= 0)
@@ -595,8 +614,12 @@ CREATE TRIGGER cash_custody_insert_guard BEFORE INSERT ON "CashCustodyEntry"
 --   amounts, method, evidence, bank reference — change only in DRAFT or RETURNED (or on the
 --     move out of them), so a correction is always RETURNED → edit → SUBMITTED again, and
 --     what an admin confirms is exactly what was submitted;
---   returnedReason — set only on the move into RETURNED; confirmation — only on the move
---     into CONFIRMED; submissionNo / submittedAt — written by this trigger alone.
+--   returnedReason — NULL on insert; given only on SUBMITTED → RETURNED (and required
+--     there); never edited while RETURNED; on RETURNED → SUBMITTED the database clears it
+--     from the row — the reason stays, unchangeable, in CashSettlementReturn (one row per
+--     return, written by cash_settlement_return_history);
+--   confirmation — only on the move into CONFIRMED;
+--   submissionNo / submittedAt — written by this trigger alone.
 -- Only a DRAFT may be deleted.
 CREATE FUNCTION cash_settlement_guard() RETURNS trigger AS $$
 BEGIN
@@ -610,6 +633,9 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW."status" NOT IN ('DRAFT', 'SUBMITTED') THEN
       RAISE EXCEPTION 'UPSELL_SETTLEMENT_TRANSITION: a settlement starts DRAFT or SUBMITTED, not %', NEW."status";
+    END IF;
+    IF NEW."returnedReason" IS NOT NULL THEN
+      RAISE EXCEPTION 'UPSELL_SETTLEMENT_RETURN_REASON: a new settlement has no return reason';
     END IF;
     NEW."submissionNo" := CASE WHEN NEW."status" = 'SUBMITTED' THEN 1 ELSE 0 END;
     NEW."submittedAt"  := CASE WHEN NEW."status" = 'SUBMITTED' THEN now() ELSE NULL END;
@@ -638,8 +664,17 @@ BEGIN
     RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: settlement % is %; return it to correct the money', OLD."settlementNo", OLD."status";
   END IF;
 
-  IF NEW."returnedReason" IS DISTINCT FROM OLD."returnedReason"
-     AND NOT (OLD."status" = 'SUBMITTED' AND NEW."status" = 'RETURNED') THEN
+  IF OLD."status" = 'SUBMITTED' AND NEW."status" = 'RETURNED' THEN
+    IF NEW."returnedReason" IS NULL OR btrim(NEW."returnedReason") = '' THEN
+      RAISE EXCEPTION 'UPSELL_SETTLEMENT_RETURN_REASON: returning settlement % needs a reason', OLD."settlementNo";
+    END IF;
+  ELSIF OLD."status" = 'RETURNED' AND NEW."status" = 'SUBMITTED' THEN
+    -- The resubmission may not rewrite the reason on its way out; the DB clears it (history kept).
+    IF NEW."returnedReason" IS DISTINCT FROM OLD."returnedReason" AND NEW."returnedReason" IS NOT NULL THEN
+      RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: the return reason of settlement % cannot be rewritten', OLD."settlementNo";
+    END IF;
+    NEW."returnedReason" := NULL;
+  ELSIF NEW."returnedReason" IS DISTINCT FROM OLD."returnedReason" THEN
     RAISE EXCEPTION 'UPSELL_SETTLEMENT_IMMUTABLE: a return reason is given only when returning settlement %', OLD."settlementNo";
   END IF;
 
@@ -658,6 +693,33 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER cash_settlement_guard BEFORE INSERT OR UPDATE OR DELETE ON "CashSettlement"
   FOR EACH ROW EXECUTE FUNCTION cash_settlement_guard();
+
+-- Return history: written here, on every SUBMITTED → RETURNED, with the round returned.
+CREATE FUNCTION cash_settlement_return_history() RETURNS trigger AS $$
+BEGIN
+  INSERT INTO "CashSettlementReturn" ("id", "settlementId", "submissionNo", "reason")
+  VALUES (gen_random_uuid()::text, NEW."id", NEW."submissionNo", NEW."returnedReason");
+  RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER cash_settlement_return_history AFTER UPDATE ON "CashSettlement"
+  FOR EACH ROW WHEN (OLD."status" = 'SUBMITTED' AND NEW."status" = 'RETURNED')
+  EXECUTE FUNCTION cash_settlement_return_history();
+
+-- Return history is append-only, and a row must match the return it records — so it cannot
+-- be invented by a direct insert, nor edited or deleted afterwards.
+CREATE FUNCTION cash_settlement_return_guard() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_RETURN_HISTORY: return history is never %', lower(TG_OP) || 'd';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM "CashSettlement" s WHERE s."id" = NEW."settlementId" AND s."status" = 'RETURNED'
+                   AND s."submissionNo" = NEW."submissionNo" AND s."returnedReason" = NEW."reason") THEN
+    RAISE EXCEPTION 'UPSELL_SETTLEMENT_RETURN_HISTORY: history is recorded only by returning the settlement';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER cash_settlement_return_guard BEFORE INSERT OR UPDATE OR DELETE ON "CashSettlementReturn"
+  FOR EACH ROW EXECUTE FUNCTION cash_settlement_return_guard();
 
 -- A confirmed tax profile is the accountant's answer of record: it is never edited or
 -- deleted (a changed answer is a new profile), and it never goes back to DRAFT.

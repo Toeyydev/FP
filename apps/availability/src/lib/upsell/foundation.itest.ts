@@ -471,7 +471,7 @@ describe("settlements — immutability boundary (3)", () => {
   it("the reason is given only when returning; confirmation only by confirming a submission", async () => {
     const s = await settlementIn("SUBMITTED");
     await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { returnedReason: "sneaky" } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
-    await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "RETURNED" } }), /CashSettlement_returned_check/);
+    await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "RETURNED" } }), /UPSELL_SETTLEMENT_RETURN_REASON/);
     const r = await settlementIn("RETURNED");
     await fails(prisma.cashSettlement.update({ where: { id: r.id }, data: { returnedReason: "rewritten" } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
     await fails(prisma.cashSettlement.update({ where: { id: r.id }, data: { confirmedById: "admin-x", confirmedAt: new Date() } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
@@ -488,6 +488,71 @@ describe("settlements — immutability boundary (3)", () => {
     await expect(prisma.cashSettlement.delete({ where: { id: d.id } })).resolves.toBeTruthy();
     const s = await settlementIn("SUBMITTED");
     await fails(prisma.cashSettlement.delete({ where: { id: s.id } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
+  });
+});
+
+describe("settlements — return reason and its history", () => {
+  const base = () => ({ guideId: SELLER, sourceJobSheetId: jobId, expectedSatang: 60000, remittedSatang: 60000, method: "BANK_TRANSFER" });
+  const history = (settlementId: string) =>
+    prisma.cashSettlementReturn.findMany({ where: { settlementId }, orderBy: { submissionNo: "asc" }, select: { submissionNo: true, reason: true } });
+
+  it("INSERT as DRAFT with a reason is refused", async () => {
+    await fails(prisma.cashSettlement.create({ data: { ...base(), settlementNo: "FOLK-CSH-209904-010", returnedReason: "pre-filled" } }), /UPSELL_SETTLEMENT_RETURN_REASON/);
+  });
+  it("INSERT as SUBMITTED with a reason is refused", async () => {
+    await fails(prisma.cashSettlement.create({ data: { ...base(), settlementNo: "FOLK-CSH-209904-011", status: "SUBMITTED", returnedReason: "pre-filled" } }), /UPSELL_SETTLEMENT_RETURN_REASON/);
+  });
+  it("SUBMITTED → RETURNED with a reason is accepted, and recorded in the history", async () => {
+    const s = await settlementIn("SUBMITTED");
+    await expect(prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "RETURNED", returnedReason: "slip shows 590 baht" } }))
+      .resolves.toMatchObject({ status: "RETURNED", returnedReason: "slip shows 590 baht" });
+    expect(await history(s.id)).toEqual([{ submissionNo: 1, reason: "slip shows 590 baht" }]);
+  });
+  it("SUBMITTED → RETURNED without a reason (missing or blank) is refused", async () => {
+    const s = await settlementIn("SUBMITTED");
+    await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "RETURNED" } }), /UPSELL_SETTLEMENT_RETURN_REASON/);
+    await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "RETURNED", returnedReason: "   " } }), /UPSELL_SETTLEMENT_RETURN_REASON/);
+    expect(await history(s.id)).toEqual([]);
+  });
+  it("a reason exists only on the move into RETURNED — not on DRAFT, SUBMITTED, CONFIRMED or REVERSED", async () => {
+    for (const st of ["DRAFT", "SUBMITTED", "CONFIRMED", "REVERSED"] as const) {
+      const s = await settlementIn(st);
+      await expect(prisma.cashSettlement.update({ where: { id: s.id }, data: { returnedReason: "late reason" } }), st)
+        .rejects.toThrow(/UPSELL_SETTLEMENT_IMMUTABLE/);
+    }
+    const draft = await settlementIn("DRAFT");
+    await fails(prisma.cashSettlement.update({ where: { id: draft.id }, data: { status: "SUBMITTED", returnedReason: "x" } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
+  });
+  it("RETURNED → SUBMITTED clears the reason from the row; the history keeps it unchanged", async () => {
+    const s = await settlementIn("RETURNED"); // reason "slip amount does not match", round 1
+    const again = await prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "SUBMITTED", remittedSatang: 59000 } });
+    expect(again).toMatchObject({ status: "SUBMITTED", returnedReason: null, submissionNo: 2 });
+    expect(await history(s.id)).toEqual([{ submissionNo: 1, reason: "slip amount does not match" }]);
+    // a second return is a second history row; the first is untouched
+    await prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "RETURNED", returnedReason: "wrong account" } });
+    expect(await history(s.id)).toEqual([
+      { submissionNo: 1, reason: "slip amount does not match" },
+      { submissionNo: 2, reason: "wrong account" },
+    ]);
+    const confirmed = await prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "SUBMITTED" } })
+      .then(() => setTo(s.id, "CONFIRMED"));
+    expect(confirmed).toMatchObject({ status: "CONFIRMED", returnedReason: null, submissionNo: 3 });
+    expect(await history(s.id)).toHaveLength(2);
+  });
+  it("the resubmission cannot rewrite the reason on its way out", async () => {
+    const s = await settlementIn("RETURNED");
+    await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { status: "SUBMITTED", returnedReason: "softer wording" } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
+    await fails(prisma.cashSettlement.update({ where: { id: s.id }, data: { returnedReason: "softer wording" } }), /UPSELL_SETTLEMENT_IMMUTABLE/);
+    expect(await history(s.id)).toEqual([{ submissionNo: 1, reason: "slip amount does not match" }]);
+  });
+  it("history is append-only and cannot be invented by a direct insert", async () => {
+    const s = await settlementIn("RETURNED");
+    const [row] = await prisma.cashSettlementReturn.findMany({ where: { settlementId: s.id } });
+    await fails(prisma.cashSettlementReturn.update({ where: { id: row.id }, data: { reason: "edited" } }), /UPSELL_SETTLEMENT_RETURN_HISTORY/);
+    await fails(prisma.cashSettlementReturn.delete({ where: { id: row.id } }), /UPSELL_SETTLEMENT_RETURN_HISTORY/);
+    const other = await settlementIn("SUBMITTED");
+    await fails(prisma.cashSettlementReturn.create({ data: { settlementId: other.id, submissionNo: 1, reason: "invented" } }), /UPSELL_SETTLEMENT_RETURN_HISTORY/);
+    await fails(prisma.cashSettlementReturn.create({ data: { settlementId: s.id, submissionNo: 1, reason: "slip amount does not match" } }), /Unique constraint|submissionNo/);
   });
 });
 

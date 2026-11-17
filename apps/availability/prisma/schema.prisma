@@ -2325,6 +2325,8 @@ model CashSettlement {
   status            String    @default("DRAFT") // DRAFT | SUBMITTED | RETURNED | CONFIRMED | REVERSED
   submissionNo      Int       @default(0) // set by the database: +1 on every move into SUBMITTED
   submittedAt       DateTime? // set by the database on every move into SUBMITTED
+  // The reason for the CURRENT return: present exactly while RETURNED, cleared by the
+  // database on resubmission. Every return is kept, unchangeable, in CashSettlementReturn.
   returnedReason    String?
   confirmedById     String?
   confirmedAt       DateTime?
@@ -2333,7 +2335,22 @@ model CashSettlement {
   updatedAt         DateTime  @updatedAt
 
   entries CashCustodyEntry[]
+  returns CashSettlementReturn[]
 
   @@unique([guideId, sourceJobSheetId])
   @@unique([bankAccountKey, bankRefNormalized])
+}
+
+// The history of a settlement's returns: one row per SUBMITTED → RETURNED, written by the
+// database itself (cash_settlement_return_history) with the round it returned. Append-only —
+// a reason, once given, can never be edited or removed.
+model CashSettlementReturn {
+  id           String         @id @default(cuid())
+  settlementId String
+  settlement   CashSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  submissionNo Int // the submission that was returned
+  reason       String
+  createdAt    DateTime       @default(now())
+
+  @@unique([settlementId, submissionNo])
 }
