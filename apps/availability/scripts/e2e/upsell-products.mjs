@@ -56,9 +56,11 @@ function browserPath() {
 const runSeed = () => spawnSync(process.execPath, [join(appDir, "node_modules", "tsx", "dist", "cli.mjs"), "prisma/seed.ts"], {
   cwd: appDir, encoding: "utf8", env: { ...process.env, ADMIN_EMAIL: ADMIN, ADMIN_PASSWORD: PASSWORD },
 });
+// CI runs every e2e against ONE database, in order. Truncate only what this test writes —
+// never shared configuration such as PeakAccountMapping, which a later test relies on.
 async function seed() {
   const tables = ["AuditLog", "Notification", "CashCustodyEntry", "CashSettlementReturn", "CashSettlement", "UpsellPayment", "UpsellSale",
-    "UpsellProductVersion", "UpsellProduct", "TaxProfile", "UpsellDocCounter", "PeakAccountMapping", "JobSheet", "Booking", "Assignment", "RefreshToken", "User", "Tour"];
+    "UpsellProductVersion", "UpsellProduct", "TaxProfile", "UpsellDocCounter", "JobSheet", "Booking", "Assignment", "RefreshToken", "User", "Tour"];
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
   const first = runSeed();
   check("the deploy seed runs", first.status === 0, first.status === 0 ? "" : (first.stderr || first.stdout).slice(-600));
