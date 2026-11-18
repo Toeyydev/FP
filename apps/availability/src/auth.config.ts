@@ -50,7 +50,9 @@ export const authConfig = {
         // screens (APIs enforce their own per-action role checks).
         const role = (auth.user as { role?: string }).role;
         if (role === "ACCOUNTANT" && !p.startsWith("/api") &&
-            !(p.startsWith("/payments") || p.startsWith("/tour-log") || p.startsWith("/job-sheet"))) {
+            !(p.startsWith("/payments") || p.startsWith("/tour-log") || p.startsWith("/job-sheet") ||
+              // Upsell products: read only for the accountant (the page and its API refuse edits).
+              p === "/admin/upsell-products" || p.startsWith("/admin/upsell-products/"))) {
           const h = request.headers.get("x-forwarded-host") || request.headers.get("host") || request.nextUrl.host;
           const pr = request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "") || "https";
           return NextResponse.redirect(new URL("/payments", `${pr}://${h}`));

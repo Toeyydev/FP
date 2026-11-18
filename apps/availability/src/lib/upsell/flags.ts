@@ -1,4 +1,4 @@
-// Tour Upsell switches (PR1). Every one is OFF unless set to exactly "1", like the other
+// Tour Upsell switches (PR1; the on-site switch joined in PR2). Every one is OFF unless set to exactly "1", like the other
 // switches in this app (lib/advances/freeze). The owner sets them in Railway; code never
 // turns them on. A child switch is on only while UPSELL_ENABLED is on too.
 //
@@ -16,6 +16,9 @@ export const upsellRouteExtensionEnabled = () => upsellEnabled() && on("UPSELL_R
 /** Food Tour sales — a new booking and job. */
 export const upsellFoodTourEnabled = () => upsellEnabled() && on("UPSELL_FOOD_TOUR_ENABLED");
 
+/** Three Temples on-site: a walk-in seat on the guide's own T-001 / T-002 job, paid in cash. */
+export const upsellOnsiteTourEnabled = () => upsellEnabled() && on("UPSELL_ONSITE_TOUR_ENABLED");
+
 /** Card payments through a payment link. */
 export const upsellPaymentLinkEnabled = () => upsellEnabled() && on("UPSELL_PAYMENT_LINK_ENABLED");
 
@@ -28,6 +31,7 @@ export function upsellSwitches() {
     enabled: upsellEnabled(),
     routeExtension: upsellRouteExtensionEnabled(),
     foodTour: upsellFoodTourEnabled(),
+    onsiteTour: upsellOnsiteTourEnabled(),
     paymentLink: upsellPaymentLinkEnabled(),
     peakAutoSync: upsellPeakAutoSyncEnabled(),
   };
