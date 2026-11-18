@@ -1,5 +1,8 @@
 -- Tour Upsell — product configuration (PR2).
 --
+-- Route extensions also lose what they could never use: a fixed cost, an incentive, a
+-- validity period (no service-approval lifecycle exists for them).
+--
 -- Adds the third product type, JOIN_SOURCE_TOUR (Three Temples on-site): a walk-in seat
 -- sold by the guide on their OWN T-001 / T-002 job. It creates a Booking on that existing
 -- job and never a new job; the guest pays the guide cash only; there is no fixed cost and
@@ -64,6 +67,8 @@ BEGIN
     ELSIF NOT NEW."createsNewBooking" OR NEW."createsNewJob" OR NEW."serviceTourId" IS NOT NULL THEN
       bad := 'creates a booking on the guide''s existing job, never a new job or a tour of its own';
     ELSIF cardinality(NEW."eligibleSourceTourIds") = 0 THEN bad := 'needs at least one eligible tour';
+    -- The owner's list (18 Nov 2026). A settings page may narrow it; nothing may widen it.
+    ELSIF NOT (NEW."eligibleSourceTourIds" <@ ARRAY['T-001', 'T-002']::text[]) THEN bad := 'joins only T-001 or T-002';
     ELSIF EXISTS (SELECT 1 FROM unnest(NEW."eligibleSourceTourIds") x WHERE btrim(x) = '')
        OR cardinality(NEW."eligibleSourceTourIds") <> (SELECT count(DISTINCT x) FROM unnest(NEW."eligibleSourceTourIds") x) THEN
       bad := 'lists each eligible tour once, by id';
@@ -83,6 +88,16 @@ BEGIN
     ELSIF NEW."remittanceMethod" <> 'ANY' THEN bad := 'leaves the remittance method open (JOIN_SOURCE_TOUR only)';
     ELSIF t = 'ROUTE_EXTENSION' AND (NEW."createsNewBooking" OR NEW."createsNewJob") THEN
       bad := 'stays on the source job: no new booking or job';
+    -- A route extension is delivered on the job it was sold on. It has no service report or
+    -- approval of its own, so nothing could ever earn a fixed cost or an incentive on it, and
+    -- nothing could expire: none of them may be set.
+    ELSIF t = 'ROUTE_EXTENSION' AND (NEW."fixedCostPerGuestSatang" <> 0 OR NEW."fixedCostBasis" IS NOT NULL OR NEW."fixedCostCategory" IS NOT NULL) THEN
+      bad := 'has no fixed cost';
+    ELSIF t = 'ROUTE_EXTENSION' AND (NEW."incentivePerGuestSatang" <> 0 OR NEW."incentiveTrigger" <> 'NONE') THEN
+      bad := 'has no incentive';
+    ELSIF t = 'ROUTE_EXTENSION' AND (NEW."serviceValidityDays" IS NOT NULL OR NEW."checkoutLinkExpiryMinutes" IS NOT NULL
+                                    OR NEW."capacityGroupKey" IS NOT NULL OR NEW."serviceScope" <> 'EXISTING_GUIDE') THEN
+      bad := 'is used on the job it was sold on, by its guide — no validity period, payment link or seat group';
     ELSIF t = 'NEW_TOUR' AND NOT (NEW."createsNewBooking" AND NEW."createsNewJob" AND NEW."serviceTourId" IS NOT NULL) THEN
       bad := 'creates a new booking and job on its own tour';
     END IF;

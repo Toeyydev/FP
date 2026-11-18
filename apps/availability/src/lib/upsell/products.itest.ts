@@ -113,7 +113,15 @@ describe("the migration: what a JOIN_SOURCE_TOUR version may hold", () => {
     await fails(insert({ serviceTourId: "T-001" }), /UPSELL_PRODUCT_RULE.*existing job/);
     await fails(insert({ eligibleSourceTourIds: [] }), /UPSELL_PRODUCT_RULE.*eligible tour|booking_needs_tour_check/);
     await fails(insert({ eligibleSourceTourIds: ["T-001", "T-001"] }), /UPSELL_PRODUCT_RULE.*once/);
-    await fails(insert({ eligibleSourceTourIds: ["T-001", " "] }), /UPSELL_PRODUCT_RULE.*once/);
+    await fails(insert({ eligibleSourceTourIds: ["T-001", " "] }), /UPSELL_PRODUCT_RULE/);
+  });
+  it("joins only T-001 or T-002 — a tour that exists is still refused if it is not on the owner's list", async () => {
+    await fails(insert({ eligibleSourceTourIds: ["T-003"] }), /UPSELL_PRODUCT_RULE.*only T-001 or T-002/);
+    await fails(insert({ eligibleSourceTourIds: ["T-001", "T-003"] }), /UPSELL_PRODUCT_RULE.*only T-001 or T-002/);
+    const [seeded] = await versionsOf("THREE-TEMPLES-ONSITE");
+    await fails(prisma.upsellProductVersion.update({ where: { id: seeded.id }, data: { eligibleSourceTourIds: ["T-002", "T-008"] } }), /UPSELL_PRODUCT_RULE.*only T-001 or T-002/);
+    await fails(prisma.$executeRaw`UPDATE "UpsellProductVersion" SET "eligibleSourceTourIds" = ARRAY['T-003'] WHERE "id" = ${seeded.id}`, /only T-001 or T-002/);
+    await expect(insert({ eligibleSourceTourIds: ["T-002"] })).resolves.toBeTruthy();
   });
   it("must allow OTA guests on the job and be remitted by bank transfer", async () => {
     await fails(insert({ allowsOtaMix: false }), /UPSELL_PRODUCT_RULE.*OTA/);
@@ -146,6 +154,20 @@ describe("the migration: the other types stay as they were", () => {
     await fails(prisma.upsellProductVersion.update({ where: { id: r.id }, data: { createsNewBooking: true, serviceTourId: "T-008" } }), /UPSELL_PRODUCT_RULE.*source job/);
     const [f] = await versionsOf("FOOD-BKK");
     await fails(prisma.upsellProductVersion.update({ where: { id: f.id }, data: { createsNewJob: false } }), /UPSELL_PRODUCT_RULE.*new booking and job/);
+  });
+  it("a route extension has no fixed cost, incentive, validity period, payment link or seat group — nothing would ever approve or expire them", async () => {
+    const [r] = await versionsOf("RTE-WPWA");
+    const up = (data: Record<string, unknown>) => prisma.upsellProductVersion.update({ where: { id: r.id }, data });
+    await fails(up({ fixedCostPerGuestSatang: 5000, fixedCostBasis: "PAID", fixedCostCategory: "FOOD_COST" }), /UPSELL_PRODUCT_RULE.*no fixed cost/);
+    await fails(up({ incentivePerGuestSatang: 5000, incentiveTrigger: "SERVICE_APPROVED" }), /UPSELL_PRODUCT_RULE.*no incentive/);
+    await fails(up({ serviceValidityDays: 7 }), /UPSELL_PRODUCT_RULE.*no validity period/);
+    await fails(up({ checkoutLinkExpiryMinutes: 30 }), /UPSELL_PRODUCT_RULE/);
+    await fails(up({ capacityGroupKey: "SOME-GROUP" }), /UPSELL_PRODUCT_RULE/);
+    await fails(up({ serviceScope: "ASSIGNED_SEPARATELY" }), /UPSELL_PRODUCT_RULE/);
+    await fails(prisma.$executeRaw`UPDATE "UpsellProductVersion" SET "incentivePerGuestSatang" = 100, "incentiveTrigger" = 'SERVICE_APPROVED' WHERE "id" = ${r.id}`, /no incentive/);
+    // The food tour keeps both — it has a service report and approval.
+    const [f] = await versionsOf("FOOD-BKK");
+    expect(f).toMatchObject({ fixedCostPerGuestSatang: 35000, incentivePerGuestSatang: 10000, serviceValidityDays: 7 });
   });
   it("a product's type never changes", async () => {
     await fails(prisma.upsellProduct.update({ where: { productCode: "RTE-WPWA" }, data: { productType: "JOIN_SOURCE_TOUR" } }), /UPSELL_PRODUCT_TYPE_FROZEN/);
@@ -254,10 +276,30 @@ describe("Save", () => {
     expect(await code(saveProduct(prisma, "THREE-TEMPLES-ONSITE", { ...(await formOf("THREE-TEMPLES-ONSITE")), eligibleTourIds: ["T-003"] }, admin()))).toBe("BAD_TOURS");
     expect(await versionsOf("RTE-WPWA")).toHaveLength(1);
   });
+  it("is not live between versions, or before its first version starts, even Active with its switch on", async () => {
+    vi.stubEnv("UPSELL_ROUTE_EXTENSION_ENABLED", "1");
+    await setProductActive(prisma, "RTE-WPWA", { expectedUpdatedAt: await stamp("RTE-WPWA"), active: true }, admin());
+    const status = async () => [(await listProducts(prisma)).find((p) => p.code === "RTE-WPWA")!, (await getProduct(prisma, "RTE-WPWA")).product];
+    for (const s of await status()) expect(s).toMatchObject({ status: "LIVE", live: true, onSaleToday: true });
+
+    // A gap: v1 ended yesterday, v2 starts in five days.
+    const [v1] = await versionsOf("RTE-WPWA");
+    await prisma.upsellProductVersion.update({ where: { id: v1.id }, data: { activeFrom: new Date(`${addDays(TODAY, -10)}T00:00:00Z`), activeTo: new Date(`${addDays(TODAY, -1)}T00:00:00Z`) } });
+    await prisma.upsellProductVersion.create({ data: { productId: v1.productId, version: 2, unitPriceSatang: 25000, allowedPaymentMethods: ["CASH"], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: v1.taxProfileId, activeFrom: new Date(`${addDays(TODAY, 5)}T00:00:00Z`) } });
+    for (const s of await status()) expect(s).toMatchObject({ status: "NOT_ON_SALE_TODAY", live: false, onSaleToday: false, switchOn: true, active: true });
+
+    // Only a version that has not started yet.
+    await prisma.upsellProductVersion.deleteMany({ where: { id: v1.id } });
+    for (const s of await status()) expect(s).toMatchObject({ status: "NOT_ON_SALE_TODAY", live: false });
+
+    // v2 starts today: live again.
+    await prisma.upsellProductVersion.updateMany({ where: { productId: v1.productId }, data: { activeFrom: new Date(`${TODAY}T00:00:00Z`) } });
+    for (const s of await status()) expect(s).toMatchObject({ status: "LIVE", live: true });
+  });
   it("Activate changes only `active`, and is not live while the switch is off", async () => {
     await setProductActive(prisma, "THREE-TEMPLES-ONSITE", { expectedUpdatedAt: await stamp("THREE-TEMPLES-ONSITE"), active: true }, admin());
     const row = (await listProducts(prisma)).find((p) => p.code === "THREE-TEMPLES-ONSITE")!;
-    expect(row).toMatchObject({ active: true, switchOn: false, live: false });
+    expect(row).toMatchObject({ active: true, switchOn: false, live: false, status: "SWITCH_OFF" });
     vi.stubEnv("UPSELL_ONSITE_TOUR_ENABLED", "1");
     expect((await listProducts(prisma)).find((p) => p.code === "THREE-TEMPLES-ONSITE")).toMatchObject({ live: true });
     expect(await code(setProductActive(prisma, "THREE-TEMPLES-ONSITE", { expectedUpdatedAt: "2000-01-01T00:00:00.000Z", active: false }, admin()))).toBe("STALE");

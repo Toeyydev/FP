@@ -222,9 +222,25 @@ function inEffect<T extends { activeFrom: Date; activeTo: Date | null }>(version
 
 const shortDay = (s: string) => new Date(`${s}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 
-function liveState(type: ProductType, active: boolean) {
+export type LiveStatus = "INACTIVE" | "SWITCH_OFF" | "NOT_ON_SALE_TODAY" | "LIVE";
+
+/**
+ * Whether a product can be sold right now, and if not, the first reason why. Pure. Live needs
+ * all three: the product is Active, its switch is on, and one of its versions is on sale
+ * today — a product between versions (v1 ended, v2 not started) cannot be sold, so it is not
+ * live whatever its switch says.
+ */
+export function liveStatus(s: { active: boolean; switchOn: boolean; onSaleToday: boolean }): LiveStatus {
+  if (!s.active) return "INACTIVE";
+  if (!s.switchOn) return "SWITCH_OFF";
+  if (!s.onSaleToday) return "NOT_ON_SALE_TODAY";
+  return "LIVE";
+}
+
+function liveState(type: ProductType, active: boolean, onSaleToday: boolean) {
   const switchOn = upsellSwitches()[TYPE_SWITCH[type]];
-  return { active, switchOn, live: active && switchOn };
+  const status = liveStatus({ active, switchOn, onSaleToday });
+  return { active, switchOn, onSaleToday, status, live: status === "LIVE" };
 }
 
 export async function listProducts(db: Db, today = bangkokToday()) {
@@ -242,7 +258,7 @@ export async function listProducts(db: Db, today = bangkokToday()) {
     return {
       code: p.productCode, name: p.productName, type, typeLabel: TYPE_LABEL[type],
       unitPriceSatang: shown?.unitPriceSatang ?? null, pricingBasis: shown?.pricingBasis ?? null, versionLabel,
-      ...liveState(type, p.active),
+      ...liveState(type, p.active, !!current),
     };
   });
 }
@@ -275,7 +291,7 @@ export async function getProduct(db: Db, code: string, today = bangkokToday()) {
   const locked = latest._count.sales > 0;
 
   return {
-    product: { code: p.productCode, name: p.productName, type, typeLabel: TYPE_LABEL[type], updatedAt: p.updatedAt.toISOString(), ...liveState(type, p.active) },
+    product: { code: p.productCode, name: p.productName, type, typeLabel: TYPE_LABEL[type], updatedAt: p.updatedAt.toISOString(), ...liveState(type, p.active, !!inEffect(p.versions, today).current) },
     locked, latestVersion: latest.version, latestSales: latest._count.sales,
     // What the form starts with. A locked version's next version starts tomorrow by default.
     form: {

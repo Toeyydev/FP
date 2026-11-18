@@ -5,7 +5,8 @@
 //  • The three product pages at 1280 and 390 px: nothing reaches past the screen edge, every
 //    control has a name, nothing interactive is smaller than 44 px, ids are unique.
 //  • Three Temples on-site shows the owner's rules; Save edits an unsold version, and after a
-//    sale Save makes v2 instead. Activate is not "live" while the switch is off.
+//    sale Save makes v2 instead. Activate is not "live" while the switch is off, nor while no
+//    version is on sale today (a gap between versions).
 //  • ACCOUNTANT reads with no controls; OPERATOR is turned away; the API says the same.
 //  • The server makes no request to PEAK, a payment gateway or anything else off this machine.
 //
@@ -85,8 +86,10 @@ async function startServer() {
   const child = spawn(process.execPath, ["--require", join(appDir, "scripts/e2e/outbound-guard.cjs"), nextBin, "start", "-p", String(PORT)], {
     cwd: appDir, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, OUTBOUND_LOG: OUTBOUND, AUTH_TRUST_HOST: "true", NEXT_TELEMETRY_DISABLED: "1", AUTH_SECRET,
-      // Only the master switch: the page exists. Every product switch stays off.
-      UPSELL_ENABLED: "1", UPSELL_ROUTE_EXTENSION_ENABLED: "", UPSELL_FOOD_TOUR_ENABLED: "", UPSELL_ONSITE_TOUR_ENABLED: "",
+      // The master switch (the page exists) and, in this throwaway server only, the route
+      // extension's — so "live" and "no version on sale today" can be seen. Production keeps
+      // every switch off; nothing here can sell (PR2 has no sale path).
+      UPSELL_ENABLED: "1", UPSELL_ROUTE_EXTENSION_ENABLED: "1", UPSELL_FOOD_TOUR_ENABLED: "", UPSELL_ONSITE_TOUR_ENABLED: "",
       UPSELL_PAYMENT_LINK_ENABLED: "", UPSELL_PEAK_AUTO_SYNC: "", PEAK_ADVANCE_AUTO_SYNC: "" },
   });
   let log = "";
@@ -169,7 +172,7 @@ const browser = await puppeteer.launch({ executablePath: browserPath(), headless
 const pageErrors = [];
 try {
   const health = await (await fetch(`${BASE}/api/health`)).json();
-  check("/api/health reports six upsell switches, only the master on", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: false, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
+  check("/api/health reports six upsell switches, as this test server set them", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: true, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
 
   // ── ADMIN ──
   const page = await browser.newPage();
@@ -226,6 +229,30 @@ try {
   await page.click("button.up-active");
   await page.waitForFunction(() => /Active · switch off/.test(document.body.innerText), { timeout: 10000 });
   check("Activate makes it Active · switch off — not live", (await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "THREE-TEMPLES-ONSITE" } })).active === true);
+
+  // Live needs Active + switch + a version on sale today. A gap between versions is not live.
+  page.once("dialog", (d) => d.accept());
+  await goto(page, "/admin/upsell-products/RTE-WPWA");
+  await page.click("button.up-active");
+  await page.waitForFunction(() => /Active · live/.test(document.body.innerText), { timeout: 10000 });
+  check("Active + switch on + v1 on sale today = Active · live", true);
+  const rv1 = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "RTE-WPWA" } } });
+  const day = (n) => new Date(new Date(`${BKK_TODAY}T00:00:00Z`).getTime() + n * 86400000);
+  await prisma.upsellProductVersion.update({ where: { id: rv1.id }, data: { activeFrom: day(-10), activeTo: day(-1) } });
+  await prisma.upsellProductVersion.create({ data: { productId: rv1.productId, version: 2, unitPriceSatang: 25000, allowedPaymentMethods: ["CASH"], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: rv1.taxProfileId, activeFrom: day(5) } });
+  await goto(page, "/admin/upsell-products/RTE-WPWA");
+  const gapText = await text(page);
+  check("between versions the product page says not on sale today, never live", gapText.includes("Active · no version on sale today") && !gapText.includes("Active · live"));
+  for (const [w, h] of [[1280, 900], [390, 844]]) {
+    await page.setViewport({ width: w, height: h });
+    await goto(page, "/admin/upsell-products");
+    const lt = await text(page);
+    const row = lt.slice(lt.indexOf("Wat Pho + Wat Arun"), lt.indexOf("Three Temples"));
+    check(`${w}px list: the product between versions is not live`, row.includes("Active · no version on sale today") && !row.includes("live"), row.replace(/\s+/g, " "));
+    const gf = await fits(page); check(`${w}px list with the longest status fits`, gf.over <= 1, gf.culprits.join(" "));
+    await shot(page, `list-gap-${w}`);
+  }
+  await page.setViewport({ width: 1280, height: 900 });
 
   // After a sale the version is locked: Save makes v2.
   await sellUnder("FOOD-BKK");

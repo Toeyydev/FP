@@ -17,8 +17,9 @@ import { PAX_PER_GUIDE } from "@/lib/capacity";
 type ProductType = "ROUTE_EXTENSION" | "NEW_TOUR" | "JOIN_SOURCE_TOUR";
 type ListItem = {
   code: string; name: string; type: ProductType; typeLabel: string; unitPriceSatang: number | null; pricingBasis: string | null;
-  versionLabel: string; active: boolean; switchOn: boolean; live: boolean;
+  versionLabel: string; active: boolean; switchOn: boolean; live: boolean; status: LiveStatus;
 };
+type LiveStatus = "INACTIVE" | "SWITCH_OFF" | "NOT_ON_SALE_TODAY" | "LIVE";
 type Form = {
   price: string; pricingBasis: string; paymentMethods: string[]; discount: string; refundPolicy: string; revenueCategory: string;
   taxProfileId: string; serviceValidityDays: number | null; fixedCostPerGuest: string; incentivePerGuest: string; eligibleTourIds: string[];
@@ -26,7 +27,7 @@ type Form = {
 };
 type Detail = {
   canEdit: boolean; today: string; locked: boolean; latestVersion: number; latestSales: number;
-  product: { code: string; name: string; type: ProductType; typeLabel: string; updatedAt: string; active: boolean; switchOn: boolean; live: boolean };
+  product: { code: string; name: string; type: ProductType; typeLabel: string; updatedAt: string; active: boolean; switchOn: boolean; live: boolean; status: LiveStatus };
   form: Form;
   fixed: { serviceTour: { id: string; name: string } | null; capacityGroupKey: string | null; fixedCostCategory: string; remittanceMethod: string; allowsOtaMix: boolean };
   options: {
@@ -45,10 +46,15 @@ const baht = (satang: number) => `฿${(satang / 100).toLocaleString("en-US", { 
 const shortDay = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 const addDays = (d: string, n: number) => new Date(new Date(`${d}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 
-function Status({ p }: { p: { active: boolean; live: boolean } }) {
-  const tone = p.live ? { bg: "#EAF4EF", fg: "#0B6136", mark: "●", text: "Active · live" }
-    : p.active ? { bg: "#FBF4E4", fg: C.warn, mark: "●", text: "Active · switch off" }
-    : { bg: "#F4F4F5", fg: C.soft, mark: "○", text: "Inactive" };
+// Live needs Active + its switch + a version on sale today; otherwise the first missing one.
+const TONE: Record<LiveStatus, { bg: string; fg: string; mark: string; text: string }> = {
+  LIVE: { bg: "#EAF4EF", fg: "#0B6136", mark: "●", text: "Active · live" },
+  SWITCH_OFF: { bg: "#FBF4E4", fg: C.warn, mark: "●", text: "Active · switch off" },
+  NOT_ON_SALE_TODAY: { bg: "#FBF4E4", fg: C.warn, mark: "●", text: "Active · no version on sale today" },
+  INACTIVE: { bg: "#F4F4F5", fg: C.soft, mark: "○", text: "Inactive" },
+};
+function Status({ p }: { p: { status: LiveStatus } }) {
+  const tone = TONE[p.status];
   return (
     <span className="up-status" style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 99, background: tone.bg, color: tone.fg, fontSize: 12.5, fontWeight: 650 }}>
       <span aria-hidden="true">{tone.mark}</span> {tone.text}

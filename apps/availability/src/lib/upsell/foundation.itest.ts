@@ -63,7 +63,9 @@ describe("product versions", () => {
   it("refuse a payment link before the gateway work, and any incentive basis but paid guests", async () => {
     await fails(seedProduct({ allowedPaymentMethods: ["CASH", "PAYMENT_LINK"] }), /UpsellProductVersion_methods_check/);
     await fails(seedProduct({ incentiveBasis: "ATTENDED_GUESTS" }), /UpsellProductVersion_incentive_basis_check/);
-    await fails(seedProduct({ incentivePerGuestSatang: 10000 }), /UpsellProductVersion_incentive_trigger_check/);
+    // On a new tour: a route extension cannot carry an incentive at all (PR2 trigger), which
+    // would answer first and hide the CHECK this line is about.
+    await fails(seedProduct({ incentivePerGuestSatang: 10000, createsNewBooking: true, createsNewJob: true, serviceTourId: "T-909" }, "NEW_TOUR"), /UpsellProductVersion_incentive_trigger_check/);
   });
   it("a new tour with a fixed food cost must pay per PAID guest (owner decision D2)", async () => {
     const food = { createsNewBooking: true, createsNewJob: true, serviceTourId: "T-909", unitPriceSatang: 100000, fixedCostPerGuestSatang: 35000, fixedCostCategory: "FOOD_COST" };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FORM, planSave, rulesFromForm, sameRules, addDays, isRealDay, UpsellProductError, type FormInput } from "./products";
+import { FORM, planSave, rulesFromForm, sameRules, addDays, isRealDay, liveStatus, UpsellProductError, type FormInput } from "./products";
 import { REVENUE_CATEGORY, SEED_PRODUCTS, ONSITE_SOURCE_TOURS } from "./catalog";
 
 // Pure rules of Settings › Upsell products. The database checks the same per-type rules
@@ -136,5 +136,17 @@ describe("the seed", () => {
   it("has no gateway fee and no per-product guest limit", () => {
     const text = JSON.stringify(SEED_PRODUCTS);
     expect(text).not.toMatch(/fee|maxGuests|capacityPerGuide/i);
+  });
+});
+
+describe("live status", () => {
+  it("is LIVE only when Active, switched on AND a version is on sale today; otherwise the first thing missing", () => {
+    const all = [true, false].flatMap((active) => [true, false].flatMap((switchOn) => [true, false].map((onSaleToday) => ({ active, switchOn, onSaleToday }))));
+    const live = all.filter((x) => liveStatus(x) === "LIVE");
+    expect(live).toEqual([{ active: true, switchOn: true, onSaleToday: true }]);
+    expect(liveStatus({ active: false, switchOn: true, onSaleToday: true })).toBe("INACTIVE");
+    expect(liveStatus({ active: true, switchOn: false, onSaleToday: true })).toBe("SWITCH_OFF");
+    // Between versions (v1 ended, v2 not started) nothing can be sold.
+    expect(liveStatus({ active: true, switchOn: true, onSaleToday: false })).toBe("NOT_ON_SALE_TODAY");
   });
 });
