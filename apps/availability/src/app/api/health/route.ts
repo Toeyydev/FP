@@ -8,6 +8,7 @@ import { readPeakSafety } from "@/lib/peak-switches";
 import { lineEnabled } from "@/lib/line";
 import { pushEnabled } from "@/lib/push";
 import { emailEnabled } from "@/lib/email";
+import { upsellSwitches } from "@/lib/upsell/flags";
 
 // Public health check: confirms the app can reach Postgres and reports the
 // round-trip latency (dbMs). Consumed by the external uptime/latency monitor —
@@ -39,6 +40,10 @@ export async function GET() {
       // last time it was ASKED TO RENDER one, not from an environment variable. A word
       // and a short code, never a path, an environment or a stack.
       certificateRenderer: rendererStatusForHealth(),
+
+      // The six Tour Upsell switches (lib/upsell/flags), on or off. All off until the owner
+      // turns one on in Railway.
+      upsell: upsellSwitches(),
 
       advances: { build: ADVANCE_BUILD, dbApplicationName: DB_APPLICATION_NAME, writes: advanceWritesFrozen() ? "frozen" : "open", switch: advanceWritesFrozen() ? "on" : "off" },
       // The PEAK switches across both services (lib/peak-switches): states only. `state`

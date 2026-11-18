@@ -16,9 +16,9 @@ const fails = async (p: Promise<unknown>, code: RegExp) => {
   await expect(p).rejects.toThrow(code);
 };
 
-async function seedProduct(over: Record<string, unknown> = {}) {
+async function seedProduct(over: Record<string, unknown> = {}, productType = "ROUTE_EXTENSION") {
   const tax = await prisma.taxProfile.create({ data: { code: `TP-${Math.random().toString(36).slice(2, 8)}`, name: "Draft profile" } });
-  const product = await prisma.upsellProduct.create({ data: { productCode: `RTE-${Math.random().toString(36).slice(2, 8)}`, productName: "Riverside extension", productType: "ROUTE_EXTENSION" } });
+  const product = await prisma.upsellProduct.create({ data: { productCode: `RTE-${Math.random().toString(36).slice(2, 8)}`, productName: "Riverside extension", productType } });
   const v = await prisma.upsellProductVersion.create({
     data: {
       productId: product.id, version: 1, unitPriceSatang: 20000, allowedPaymentMethods: ["CASH"],
@@ -63,13 +63,15 @@ describe("product versions", () => {
   it("refuse a payment link before the gateway work, and any incentive basis but paid guests", async () => {
     await fails(seedProduct({ allowedPaymentMethods: ["CASH", "PAYMENT_LINK"] }), /UpsellProductVersion_methods_check/);
     await fails(seedProduct({ incentiveBasis: "ATTENDED_GUESTS" }), /UpsellProductVersion_incentive_basis_check/);
-    await fails(seedProduct({ incentivePerGuestSatang: 10000 }), /UpsellProductVersion_incentive_trigger_check/);
+    // On a new tour: a route extension cannot carry an incentive at all (PR2 trigger), which
+    // would answer first and hide the CHECK this line is about.
+    await fails(seedProduct({ incentivePerGuestSatang: 10000, createsNewBooking: true, createsNewJob: true, serviceTourId: "T-909" }, "NEW_TOUR"), /UpsellProductVersion_incentive_trigger_check/);
   });
   it("a new tour with a fixed food cost must pay per PAID guest (owner decision D2)", async () => {
     const food = { createsNewBooking: true, createsNewJob: true, serviceTourId: "T-909", unitPriceSatang: 100000, fixedCostPerGuestSatang: 35000, fixedCostCategory: "FOOD_COST" };
-    await fails(seedProduct({ ...food, fixedCostBasis: "ATTENDED" }), /UpsellProductVersion_new_tour_paid_basis_check/);
-    await fails(seedProduct({ ...food }), /UpsellProductVersion_fixed_basis_required_check/);
-    await expect(seedProduct({ ...food, fixedCostBasis: "PAID", incentivePerGuestSatang: 10000, incentiveTrigger: "SERVICE_APPROVED" })).resolves.toBeTruthy();
+    await fails(seedProduct({ ...food, fixedCostBasis: "ATTENDED" }, "NEW_TOUR"), /UpsellProductVersion_new_tour_paid_basis_check/);
+    await fails(seedProduct({ ...food }, "NEW_TOUR"), /UpsellProductVersion_fixed_basis_required_check/);
+    await expect(seedProduct({ ...food, fixedCostBasis: "PAID", incentivePerGuestSatang: 10000, incentiveTrigger: "SERVICE_APPROVED" }, "NEW_TOUR")).resolves.toBeTruthy();
   });
   it("a version that has been sold under is frozen except its end date", async () => {
     await seedSale();

@@ -2115,7 +2115,7 @@ model UpsellProduct {
   id          String   @id @default(cuid())
   productCode String   @unique // e.g. RTE-WPWA, FOOD-BKK
   productName String
-  productType String // ROUTE_EXTENSION | NEW_TOUR (CHECK)
+  productType String // ROUTE_EXTENSION | NEW_TOUR | JOIN_SOURCE_TOUR (CHECK); never changes once set (trigger)
   active      Boolean  @default(false)
   createdById String?
   createdAt   DateTime @default(now())
@@ -2139,6 +2139,11 @@ model UpsellProductVersion {
   createsNewBooking         Boolean       @default(false)
   createsNewJob             Boolean       @default(false)
   serviceTourId             String? // the tour a new booking is filed under (resolved per slot by slotAwareTourId)
+  // JOIN_SOURCE_TOUR only (trigger): the tours whose own job a walk-in seat can join; empty otherwise.
+  eligibleSourceTourIds     String[]      @default([])
+  // JOIN_SOURCE_TOUR only (trigger): its booking may sit on a job that also carries OTA guests.
+  allowsOtaMix              Boolean       @default(false)
+  remittanceMethod          String        @default("ANY") // ANY | BANK_TRANSFER (JOIN_SOURCE_TOUR: BANK_TRANSFER)
   capacityGroupKey          String? // departures that share seats, e.g. FOOD-CHINATOWN; set explicitly, never guessed
   fixedCostPerGuestSatang   Int           @default(0)
   fixedCostBasis            String? // PAID | ATTENDED — required when there is a fixed cost; a food tour is PAID
