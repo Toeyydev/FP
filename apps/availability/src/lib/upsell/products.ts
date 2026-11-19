@@ -13,14 +13,14 @@
 //  • What each type may hold is the database's rule too (trigger
 //    upsell_product_version_type_rules); this file only decides what the form offers.
 //
-// Nothing here sells, posts to PEAK or calls a gateway. Admin edits; Accountant reads.
+// Nothing here sells, posts to PEAK or calls a gateway. Admin edits; Operator and Accountant read.
 
 import { z } from "zod";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { bahtToSatang } from "./money";
 import { upsellSwitches } from "./flags";
 import {
-  FIXED_COST_CATEGORY, ONSITE_SOURCE_TOURS, REVENUE_CATEGORY, TYPE_LABEL, TYPE_SWITCH, isProductType, type ProductType,
+  CASH_ONLY_TYPES, FIXED_COST_CATEGORY, ONSITE_SOURCE_TOURS, REVENUE_CATEGORY, TYPE_LABEL, TYPE_SWITCH, isProductType, type ProductType,
 } from "./catalog";
 
 type Db = PrismaClient;
@@ -50,7 +50,6 @@ const baht = z.string().trim().max(12);
 const common = {
   expectedUpdatedAt: z.string().min(1),
   price: baht,
-  discount: z.enum(["NONE", "ADMIN_APPROVAL"]),
   refundPolicy: z.enum(["NON_REFUNDABLE", "ADMIN_ONLY"]),
   revenueCategory: z.string().min(1).max(80),
   taxProfileId: z.string().min(1).max(64),
@@ -58,17 +57,24 @@ const common = {
   activeTo: day.nullable(),
 };
 const methods = z.array(z.enum(["CASH", "BANK_TRANSFER"])).min(1).max(2);
+const MAX_ELIGIBLE_TOURS = 50;
+const discount = z.enum(["NONE", "ADMIN_APPROVAL"]);
 export const FORM: Record<ProductType, z.ZodTypeAny> = {
-  ROUTE_EXTENSION: z.object({ ...common, pricingBasis: z.enum(["PER_GUEST", "PER_GROUP"]), paymentMethods: methods }).strict(),
+  // The guest pays a Route Extension in cash only (owner, 19 Nov 2026), so there is no
+  // payment-method field: sending one is a 400 like any other field the type lacks.
+  // Nor a pricing basis or a discount: always per guest, never discounted (owner, 19 Nov 2026).
+  ROUTE_EXTENSION: z.object({
+    ...common, eligibleTourIds: z.array(z.string().min(1).max(20)).max(MAX_ELIGIBLE_TOURS),
+  }).strict(),
   NEW_TOUR: z.object({
-    ...common, pricingBasis: z.enum(["PER_GUEST", "PER_GROUP"]), paymentMethods: methods,
+    ...common, discount, pricingBasis: z.enum(["PER_GUEST", "PER_GROUP"]), paymentMethods: methods,
     serviceValidityDays: z.number().int().min(1).max(365),
     fixedCostPerGuest: baht, incentivePerGuest: baht,
   }).strict(),
-  JOIN_SOURCE_TOUR: z.object({ ...common, eligibleTourIds: z.array(z.string().min(1).max(20)).min(1).max(ONSITE_SOURCE_TOURS.length) }).strict(),
+  JOIN_SOURCE_TOUR: z.object({ ...common, discount, eligibleTourIds: z.array(z.string().min(1).max(20)).min(1).max(ONSITE_SOURCE_TOURS.length) }).strict(),
 };
 export type FormInput = z.infer<typeof FORM.ROUTE_EXTENSION> & Partial<{
-  pricingBasis: "PER_GUEST" | "PER_GROUP"; paymentMethods: ("CASH" | "BANK_TRANSFER")[]; serviceValidityDays: number;
+  discount: "NONE" | "ADMIN_APPROVAL"; pricingBasis: "PER_GUEST" | "PER_GROUP"; paymentMethods: ("CASH" | "BANK_TRANSFER")[]; serviceValidityDays: number;
   fixedCostPerGuest: string; incentivePerGuest: string; eligibleTourIds: string[];
 }>;
 
@@ -108,14 +114,12 @@ export function rulesFromForm(type: ProductType, f: FormInput, ctx: { taxProfile
   const r: VersionRules = {
     unitPriceSatang: money("Price", f.price, { positive: true }),
     pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH"],
-    priceOverridePermission: f.discount, refundPolicy: f.refundPolicy, revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId,
+    priceOverridePermission: type === "ROUTE_EXTENSION" ? "NONE" : f.discount!, refundPolicy: f.refundPolicy, revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId,
     serviceValidityDays: null, fixedCostPerGuestSatang: 0, fixedCostBasis: null, fixedCostCategory: null,
     incentivePerGuestSatang: 0, incentiveTrigger: "NONE", eligibleSourceTourIds: [],
   };
-  if (type !== "JOIN_SOURCE_TOUR") {
-    r.pricingBasis = f.pricingBasis!;
-    r.allowedPaymentMethods = sortedUnique(f.paymentMethods!);
-  }
+  if (type === "NEW_TOUR") r.pricingBasis = f.pricingBasis!;
+  if (!CASH_ONLY_TYPES.includes(type)) r.allowedPaymentMethods = sortedUnique(f.paymentMethods!);
   if (type === "NEW_TOUR") {
     r.serviceValidityDays = f.serviceValidityDays!;
     r.fixedCostPerGuestSatang = money("Fixed food cost", f.fixedCostPerGuest!, { positive: false });
@@ -134,8 +138,20 @@ export function rulesFromForm(type: ProductType, f: FormInput, ctx: { taxProfile
     }
     r.eligibleSourceTourIds = ids;
   }
+  if (type === "ROUTE_EXTENSION") {
+    // Any tour an Admin picks (owner, 19 Nov 2026: eligibility is the product's, never a tour
+    // id written in code). Empty is allowed — it is then sold nowhere and cannot be activated.
+    const ids = sortedUnique(f.eligibleTourIds!);
+    if (ids.length !== f.eligibleTourIds!.length) throw new UpsellProductError(400, "BAD_TOURS", "List each eligible tour once.");
+    const unknown = ids.filter((id) => !ctx.tourIds.includes(id));
+    if (unknown.length) throw new UpsellProductError(400, "BAD_TOURS", `No such tour: ${unknown.join(", ")}.`);
+    r.eligibleSourceTourIds = ids;
+  }
   return r;
 }
+
+/** A Route Extension with no eligible tour is sold nowhere: it may be saved, never activated. */
+export const needsTours = (type: ProductType, eligibleSourceTourIds: string[]) => type === "ROUTE_EXTENSION" && eligibleSourceTourIds.length === 0;
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export function rulesOf(v: VersionRules): VersionRules {
@@ -283,7 +299,7 @@ export async function getProduct(db: Db, code: string, today = bangkokToday()) {
   const [creators, taxProfiles, tours, mappings] = await Promise.all([
     creatorIds.length ? db.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, displayName: true, role: true } }) : [],
     db.taxProfile.findMany({ orderBy: { code: "asc" }, select: { id: true, code: true, name: true, status: true } }),
-    db.tour.findMany({ where: { id: { in: [...ONSITE_SOURCE_TOURS, ...(latest.serviceTourId ? [latest.serviceTourId] : [])] } }, select: { id: true, name: true, time: true } }),
+    db.tour.findMany({ orderBy: { id: "asc" }, select: { id: true, name: true, time: true } }),
     db.peakAccountMapping.findMany({ where: { folkopsCategory: { in: [REVENUE_CATEGORY[type], FIXED_COST_CATEGORY] } } }),
   ]);
   const who = new Map(creators.map((u) => [u.id, u.role === "ADMIN" ? "Admin" : u.displayName]));
@@ -291,7 +307,11 @@ export async function getProduct(db: Db, code: string, today = bangkokToday()) {
   const locked = latest._count.sales > 0;
 
   return {
-    product: { code: p.productCode, name: p.productName, type, typeLabel: TYPE_LABEL[type], updatedAt: p.updatedAt.toISOString(), ...liveState(type, p.active, !!inEffect(p.versions, today).current) },
+    product: {
+      code: p.productCode, name: p.productName, type, typeLabel: TYPE_LABEL[type], updatedAt: p.updatedAt.toISOString(),
+      ...liveState(type, p.active, !!inEffect(p.versions, today).current),
+      needsTours: needsTours(type, latest.eligibleSourceTourIds),
+    },
     locked, latestVersion: latest.version, latestSales: latest._count.sales,
     // What the form starts with. A locked version's next version starts tomorrow by default.
     form: {
@@ -313,10 +333,13 @@ export async function getProduct(db: Db, code: string, today = bangkokToday()) {
       revenueCategory: { key: REVENUE_CATEGORY[type], mapped: mapped(REVENUE_CATEGORY[type]) },
       fixedCostCategoryMapped: mapped(FIXED_COST_CATEGORY),
       onsiteTours: ONSITE_SOURCE_TOURS.map((id) => tours.find((t) => t.id === id)).filter((t): t is NonNullable<typeof t> => !!t),
+      // Every tour, for a Route Extension's eligible list.
+      tours,
     },
     versions: p.versions.map((v) => ({
       version: v.version, activeFrom: toDay(v.activeFrom), activeTo: v.activeTo ? toDay(v.activeTo) : null,
       unitPriceSatang: v.unitPriceSatang, fixedCostPerGuestSatang: v.fixedCostPerGuestSatang, incentivePerGuestSatang: v.incentivePerGuestSatang,
+      eligibleTourIds: [...v.eligibleSourceTourIds].sort(),
       sales: v._count.sales, locked: v._count.sales > 0, createdBy: v.createdById ? who.get(v.createdById) ?? "a former user" : "Seed",
     })),
     today,
@@ -370,10 +393,13 @@ export async function saveProduct(db: Db, code: string, body: unknown, actor: Ac
       assertFresh(p.updatedAt, f.expectedUpdatedAt);
       const [taxProfiles, tours, versions] = await Promise.all([
         tx.taxProfile.findMany({ select: { id: true } }),
-        tx.tour.findMany({ where: { id: { in: [...ONSITE_SOURCE_TOURS] } }, select: { id: true } }),
+        tx.tour.findMany({ where: p.productType === "ROUTE_EXTENSION" ? {} : { id: { in: [...ONSITE_SOURCE_TOURS] } }, select: { id: true } }),
         tx.upsellProductVersion.findMany({ where: { productId: p.id }, orderBy: { version: "asc" }, select: { ...versionSelect } }),
       ]);
       const rules = rulesFromForm(p.productType, f, { taxProfileIds: taxProfiles.map((t) => t.id), tourIds: tours.map((t) => t.id) });
+      if (p.active && needsTours(p.productType, rules.eligibleSourceTourIds)) {
+        throw new UpsellProductError(400, "NEEDS_TOURS", "An active Route Extension needs at least one eligible tour. Deactivate it before clearing the list.");
+      }
       const latest = versions[versions.length - 1];
       const plan = planSave(
         versions.map((v) => ({ id: v.id, version: v.version, activeFrom: toDay(v.activeFrom), activeTo: v.activeTo ? toDay(v.activeTo) : null, sales: v._count.sales })),
@@ -432,10 +458,26 @@ export async function setProductActive(db: Db, code: string, body: unknown, acto
     const p = await lockProduct(tx, code);
     assertFresh(p.updatedAt, parsed.data.expectedUpdatedAt);
     if (p.active === parsed.data.active) throw new UpsellProductError(400, "NOTHING_CHANGED", parsed.data.active ? "Already active." : "Already inactive.");
+    if (parsed.data.active) {
+      const latest = await tx.upsellProductVersion.findFirst({ where: { productId: p.id }, orderBy: { version: "desc" }, select: { eligibleSourceTourIds: true } });
+      if (latest && needsTours(p.productType, latest.eligibleSourceTourIds)) {
+        throw new UpsellProductError(409, "NO_ELIGIBLE_TOURS", "Choose at least one eligible source tour before activating.");
+      }
+    }
     const after = await tx.upsellProduct.update({ where: { id: p.id }, data: { active: parsed.data.active, updatedAt: new Date() }, select: { updatedAt: true } });
     await tx.auditLog.create({
       data: { actorId: actor.id, actorRole: actor.role, action: parsed.data.active ? "upsell.product.activated" : "upsell.product.deactivated", entityType: "UpsellProduct", entityId: p.id, detail: { productCode: code } },
     });
     return { active: parsed.data.active, updatedAt: after.updatedAt.toISOString() };
   }, { timeout: 10_000, maxWait: 5_000 });
+}
+
+/** Upsell products whose versions list this tour as eligible (any version, sold or not). A tour
+ *  on such a list cannot be merged away or deleted: the list would keep a tour id that no
+ *  longer exists, and a sold version's list can never be rewritten. */
+export async function productsListingTour(db: Db, tourId: string): Promise<string[]> {
+  const rows = await db.upsellProductVersion.findMany({
+    where: { eligibleSourceTourIds: { has: tourId } }, select: { product: { select: { productCode: true } } }, distinct: ["productId"],
+  });
+  return rows.map((r) => r.product.productCode).sort();
 }

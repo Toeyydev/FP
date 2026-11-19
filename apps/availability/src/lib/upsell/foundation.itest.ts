@@ -16,12 +16,18 @@ const fails = async (p: Promise<unknown>, code: RegExp) => {
   await expect(p).rejects.toThrow(code);
 };
 
-async function seedProduct(over: Record<string, unknown> = {}, productType = "ROUTE_EXTENSION") {
+// The default product is a NEW_TOUR taking cash or a bank transfer: these tests are about the
+// PR1 tables (sales, payments, custody, settlements), and since PR3 a Route Extension is cash
+// only and sold only on its listed tours (migrations/*_upsell_route_extension_rules), which
+// would hide the payment and settlement rules under test. Type-specific rules pass productType.
+const NEW_TOUR_BASE = { allowedPaymentMethods: ["BANK_TRANSFER", "CASH"], createsNewBooking: true, createsNewJob: true, serviceTourId: "T-909" };
+async function seedProduct(over: Record<string, unknown> = {}, productType = "NEW_TOUR") {
   const tax = await prisma.taxProfile.create({ data: { code: `TP-${Math.random().toString(36).slice(2, 8)}`, name: "Draft profile" } });
-  const product = await prisma.upsellProduct.create({ data: { productCode: `RTE-${Math.random().toString(36).slice(2, 8)}`, productName: "Riverside extension", productType } });
+  const product = await prisma.upsellProduct.create({ data: { productCode: `UPS-${Math.random().toString(36).slice(2, 8)}`, productName: "Riverside extension", productType } });
+  const base = productType === "NEW_TOUR" ? NEW_TOUR_BASE : { allowedPaymentMethods: ["CASH"] };
   const v = await prisma.upsellProductVersion.create({
     data: {
-      productId: product.id, version: 1, unitPriceSatang: 20000, allowedPaymentMethods: ["CASH"],
+      productId: product.id, version: 1, unitPriceSatang: 20000, ...base,
       revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: tax.id, activeFrom: new Date("2099-01-01"), ...over,
     },
   });
@@ -192,8 +198,8 @@ describe("tax profiles — VAT semantics (5)", () => {
 
 describe("product version dates are real calendar dates (4)", () => {
   const insert = (from: string, to: string | null = null) => prisma.$executeRaw`
-    INSERT INTO "UpsellProductVersion" ("id","productId","version","unitPriceSatang","allowedPaymentMethods","revenueCategory","taxProfileId","activeFrom","activeTo")
-    VALUES (${`v-${Math.random().toString(36).slice(2, 10)}`}, ${productId}, ${2 + Math.floor(Math.random() * 1e6)}, 20000, ARRAY['CASH'], 'UPSELL_ROUTE_REVENUE', ${taxId}, ${from}::date, ${to}::date)`;
+    INSERT INTO "UpsellProductVersion" ("id","productId","version","unitPriceSatang","allowedPaymentMethods","createsNewBooking","createsNewJob","serviceTourId","revenueCategory","taxProfileId","activeFrom","activeTo")
+    VALUES (${`v-${Math.random().toString(36).slice(2, 10)}`}, ${productId}, ${2 + Math.floor(Math.random() * 1e6)}, 20000, ARRAY['CASH'], true, true, 'T-909', 'UPSELL_ROUTE_REVENUE', ${taxId}, ${from}::date, ${to}::date)`;
   it("the columns are DATE", async () => {
     const cols = await prisma.$queryRaw<{ column_name: string; data_type: string }[]>`
       SELECT column_name, data_type FROM information_schema.columns

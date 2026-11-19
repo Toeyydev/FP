@@ -20,6 +20,9 @@ type ListItem = {
   versionLabel: string; active: boolean; switchOn: boolean; live: boolean; status: LiveStatus;
 };
 type LiveStatus = "INACTIVE" | "SWITCH_OFF" | "NOT_ON_SALE_TODAY" | "LIVE";
+type TourOption = { id: string; name: string; time: string };
+/** "08.30 AM" → "08:30" */
+const clock = (time: string) => time.replace(/\s*(AM|PM)$/i, "").replace(".", ":");
 type Form = {
   price: string; pricingBasis: string; paymentMethods: string[]; discount: string; refundPolicy: string; revenueCategory: string;
   taxProfileId: string; serviceValidityDays: number | null; fixedCostPerGuest: string; incentivePerGuest: string; eligibleTourIds: string[];
@@ -27,15 +30,15 @@ type Form = {
 };
 type Detail = {
   canEdit: boolean; today: string; locked: boolean; latestVersion: number; latestSales: number;
-  product: { code: string; name: string; type: ProductType; typeLabel: string; updatedAt: string; active: boolean; switchOn: boolean; live: boolean; status: LiveStatus };
+  product: { code: string; name: string; type: ProductType; typeLabel: string; updatedAt: string; active: boolean; switchOn: boolean; live: boolean; status: LiveStatus; needsTours: boolean };
   form: Form;
   fixed: { serviceTour: { id: string; name: string } | null; capacityGroupKey: string | null; fixedCostCategory: string; remittanceMethod: string; allowsOtaMix: boolean };
   options: {
     taxProfiles: { id: string; code: string; name: string; status: string }[];
     revenueCategory: { key: string; mapped: boolean }; fixedCostCategoryMapped: boolean;
-    onsiteTours: { id: string; name: string; time: string }[];
+    onsiteTours: TourOption[]; tours: TourOption[];
   };
-  versions: { version: number; activeFrom: string; activeTo: string | null; unitPriceSatang: number; fixedCostPerGuestSatang: number; incentivePerGuestSatang: number; sales: number; locked: boolean; createdBy: string }[];
+  versions: { version: number; activeFrom: string; activeTo: string | null; unitPriceSatang: number; fixedCostPerGuestSatang: number; incentivePerGuestSatang: number; eligibleTourIds: string[]; sales: number; locked: boolean; createdBy: string }[];
 };
 
 const SWITCH_NAME: Record<ProductType, string> = {
@@ -161,6 +164,23 @@ function Choices({ legend, name, value, options, onChange, multi }: {
     </fieldset>
   );
 }
+/** The eligible tours: one row per tour — its id, start time and full name (owner, 19 Nov 2026). */
+function TourList({ tours, value, onToggle, hint, hintWarn }: { tours: TourOption[]; value: string[]; onToggle: (id: string) => void; hint: string; hintWarn: boolean }) {
+  return (
+    <fieldset className="up-tours" aria-describedby="tours-hint" style={{ ...rowStyle, border: 0, margin: 0, padding: "10px 0", minWidth: 0 }}>
+      <legend style={{ ...labelStyle, float: "left", padding: 0 }}>Eligible source tours</legend>
+      <div style={{ ...valueStyle, display: "flex", flexDirection: "column" }}>
+        {tours.map((x) => (
+          <label key={x.id} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44, cursor: "pointer" }}>
+            <input type="checkbox" name="tours" value={x.id} checked={value.includes(x.id)} onChange={() => onToggle(x.id)} style={tick} />
+            <span><b>{x.id}</b> · {clock(x.time)} · {x.name}</span>
+          </label>
+        ))}
+        <span id="tours-hint" style={{ fontSize: 13, color: hintWarn ? C.warn : C.softer, marginTop: 2 }}>{hint}</span>
+      </div>
+    </fieldset>
+  );
+}
 function Money({ id, label, value, onChange, hint, width = 120 }: { id: string; label: string; value: string; onChange: (v: string) => void; hint: string; width?: number }) {
   return (
     <div style={rowStyle}>
@@ -209,14 +229,16 @@ export function UpsellProductEdit({ code }: { code: string }) {
 
   const body = () => {
     const b: Record<string, unknown> = {
-      expectedUpdatedAt: d.product.updatedAt, price: f.price, discount: f.discount, refundPolicy: f.refundPolicy,
+      expectedUpdatedAt: d.product.updatedAt, price: f.price, refundPolicy: f.refundPolicy,
       revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId, activeFrom: f.activeFrom, activeTo: f.activeTo || null,
     };
-    if (t !== "JOIN_SOURCE_TOUR") { b.pricingBasis = f.pricingBasis; b.paymentMethods = f.paymentMethods; }
+    if (t !== "ROUTE_EXTENSION") b.discount = f.discount; // a Route Extension is never discounted
     if (t === "NEW_TOUR") {
+      b.pricingBasis = f.pricingBasis; // a Route Extension is always per guest
+      b.paymentMethods = f.paymentMethods;
       b.serviceValidityDays = Number(f.serviceValidityDays); b.fixedCostPerGuest = f.fixedCostPerGuest; b.incentivePerGuest = f.incentivePerGuest;
     }
-    if (t === "JOIN_SOURCE_TOUR") b.eligibleTourIds = f.eligibleTourIds;
+    if (t !== "NEW_TOUR") b.eligibleTourIds = f.eligibleTourIds;
     return b;
   };
   const save = async () => {
@@ -262,7 +284,8 @@ export function UpsellProductEdit({ code }: { code: string }) {
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
             <Status p={d.product} />
             {d.canEdit && (
-              <button type="button" className="up-active" disabled={busy} onClick={() => setActive(!d.product.active)}
+              <button type="button" className="up-active" disabled={busy || (!d.product.active && d.product.needsTours)} onClick={() => setActive(!d.product.active)}
+                aria-describedby={!d.product.active && d.product.needsTours ? "act-why" : undefined}
                 style={{ minHeight: 44, padding: "0 16px", border: `1px solid ${d.product.active ? C.field : C.brand}`, borderRadius: 8, background: "#fff", color: d.product.active ? C.ink : C.brand, font: "inherit", fontWeight: 600, cursor: "pointer" }}>
                 {d.product.active ? "Deactivate…" : "Activate…"}
               </button>
@@ -270,6 +293,11 @@ export function UpsellProductEdit({ code }: { code: string }) {
           </div>
         </div>
 
+        {!d.product.active && d.product.needsTours && (
+          <div id="act-why" role="note" style={{ background: "#FBF4E4", border: "1px solid #EADFC3", color: C.warn, borderRadius: 10, padding: "12px 14px", fontSize: 13.5 }}>
+            Choose at least one eligible source tour{d.canEdit ? " and save" : ""} before {d.canEdit ? "you can activate" : "it can be activated"}. Until then no guide sees this product.
+          </div>
+        )}
         {!d.canEdit && <div role="note" style={{ background: "#F4F4F5", borderRadius: 10, padding: "10px 14px", fontSize: 13.5, color: C.soft }}>Read only — an Admin changes these settings.</div>}
         {d.locked && (
           <div role="note" style={{ background: "#FBF4E4", border: "1px solid #EADFC3", color: C.warn, borderRadius: 10, padding: "12px 14px", fontSize: 13.5 }}>
@@ -282,23 +310,30 @@ export function UpsellProductEdit({ code }: { code: string }) {
             <legend className="sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{d.product.name} settings</legend>
 
             <Section id="s-price" title="Price and payment">
-              <Money id="price" label="Price (฿)" value={f.price} onChange={(v) => set("price", v)} hint={t === "JOIN_SOURCE_TOUR" || f.pricingBasis === "PER_GUEST" ? "per guest" : "per group"} />
-              {t !== "JOIN_SOURCE_TOUR" && (
+              <Money id="price" label="Price (฿)" value={f.price} onChange={(v) => set("price", v)} hint={t !== "NEW_TOUR" || f.pricingBasis === "PER_GUEST" ? "per guest" : "per group"} />
+              {t === "NEW_TOUR" && (
                 <Choices legend="Charged" name="basis" value={f.pricingBasis} onChange={(v) => set("pricingBasis", v)}
                   options={[{ v: "PER_GUEST", label: "Per guest" }, { v: "PER_GROUP", label: "Per group" }]} />
               )}
-              {t === "JOIN_SOURCE_TOUR"
+              {t === "ROUTE_EXTENSION" && <Fixed label="Charged">Per guest <span style={{ color: C.softer }}>(fixed)</span></Fixed>}
+              {t !== "NEW_TOUR"
                 ? <Fixed label="Guest pays by">Cash to the guide only <span style={{ color: C.softer }}>(fixed)</span></Fixed>
                 : <Choices legend="Guest pays by" name="methods" multi value={f.paymentMethods} onChange={(v) => toggle("paymentMethods", v)}
                     options={[{ v: "CASH", label: "Cash to the guide" }, { v: "BANK_TRANSFER", label: "Bank transfer" }]} />}
-              <Choices legend="Discount" name="discount" value={f.discount} onChange={(v) => set("discount", v)}
-                options={[{ v: "NONE", label: "Not allowed" }, { v: "ADMIN_APPROVAL", label: "Guide asks, Admin approves" }]} />
+              {t === "ROUTE_EXTENSION"
+                ? <Fixed label="Discount">Not allowed <span style={{ color: C.softer }}>(fixed)</span></Fixed>
+                : <Choices legend="Discount" name="discount" value={f.discount} onChange={(v) => set("discount", v)}
+                    options={[{ v: "NONE", label: "Not allowed" }, { v: "ADMIN_APPROVAL", label: "Guide asks, Admin approves" }]} />}
             </Section>
 
             <Section id="s-svc" title="Service">
               {t === "ROUTE_EXTENSION" && <>
                 <Fixed label="Creates">Extra stops on the same tour · same guide</Fixed>
-                <Fixed label="Usable">On that tour only</Fixed>
+                <TourList tours={d.options.tours} value={f.eligibleTourIds} onToggle={(v) => toggle("eligibleTourIds", v)}
+                  hintWarn={f.eligibleTourIds.length === 0}
+                  hint={f.eligibleTourIds.length === 0
+                    ? `None chosen yet. A guide sees “Sell ${d.product.name}” only on a job of a tour ticked here.`
+                    : `Sold only on jobs of ${f.eligibleTourIds.join(", ")}.`} />
               </>}
               {t === "NEW_TOUR" && <>
                 <Fixed label="Creates">New booking and job · guide assigned separately</Fixed>
@@ -316,8 +351,8 @@ export function UpsellProductEdit({ code }: { code: string }) {
               </>}
               {t === "JOIN_SOURCE_TOUR" && <>
                 <Fixed label="Creates">Booking on existing job · no new job</Fixed>
-                <Choices legend="Eligible tours" name="tours" multi value={f.eligibleTourIds} onChange={(v) => toggle("eligibleTourIds", v)}
-                  options={d.options.onsiteTours.map((x) => ({ v: x.id, label: `${x.id} · ${x.time.replace(/\s*(AM|PM)$/i, "").replace(".", ":")}` }))} />
+                <TourList tours={d.options.onsiteTours} value={f.eligibleTourIds} onToggle={(v) => toggle("eligibleTourIds", v)}
+                  hintWarn={false} hint={`Only ${d.options.onsiteTours.map((x) => x.id).join(" and ")} can take an on-site seat.`} />
                 <Fixed label="Guide">Selling Guide = Service Guide <span style={{ color: C.softer }}>(fixed)</span></Fixed>
                 <Fixed label="OTA mix">Allowed for this product</Fixed>
                 <Fixed label="Capacity">Max {PAX_PER_GUIDE} guests on the job, OTA + on-site <span style={{ color: C.softer }}>(system setting)</span></Fixed>
@@ -329,6 +364,13 @@ export function UpsellProductEdit({ code }: { code: string }) {
                 <Money id="fc" label="Fixed food cost (฿)" width={96} value={f.fixedCostPerGuest} onChange={(v) => set("fixedCostPerGuest", v)} hint="per paid guest → service guide" />
                 <Fixed label="Counted on">Paid guests, no-shows included <span style={{ color: C.softer }}>(fixed)</span></Fixed>
                 <Money id="inc" label="Sales incentive (฿)" width={96} value={f.incentivePerGuest} onChange={(v) => set("incentivePerGuest", v)} hint="per paid guest → selling guide, after service approval" />
+              </Section>
+            )}
+            {t === "ROUTE_EXTENSION" && (
+              <Section id="s-cash" title="Cash hand-in">
+                <Fixed label="Hand in"><span style={{ fontVariantNumeric: "tabular-nums" }}>All of it — {baht(priceSatang)} per guest</span></Fixed>
+                <Fixed label="Remittance">Bank transfer to Folkpaths only <span style={{ color: C.softer }}>(fixed)</span></Fixed>
+                <Fixed label="When">With that tour&rsquo;s end-tour report</Fixed>
               </Section>
             )}
             {t === "JOIN_SOURCE_TOUR" && <>
@@ -401,7 +443,7 @@ export function UpsellProductEdit({ code }: { code: string }) {
               </div>
             </Section>
 
-            {t !== "JOIN_SOURCE_TOUR" && <p style={{ margin: 0, fontSize: 13, color: C.softer }}>Cash is handed in with the end-tour report of the tour where it was sold.</p>}
+            {t === "NEW_TOUR" && <p style={{ margin: 0, fontSize: 13, color: C.softer }}>Cash is handed in with the end-tour report of the tour where it was sold.</p>}
           </fieldset>
 
           <div ref={msgRef} tabIndex={-1} role={msg && !msg.ok ? "alert" : "status"} aria-live="polite"
@@ -428,6 +470,7 @@ export function UpsellProductEdit({ code }: { code: string }) {
               <li key={v.version}>
                 v{v.version} · {v.activeTo ? `${shortDay(v.activeFrom)}–${shortDay(v.activeTo)}` : `from ${shortDay(v.activeFrom)}`} · {baht(v.unitPriceSatang)}
                 {t === "NEW_TOUR" && ` · food ${baht(v.fixedCostPerGuestSatang)} · incentive ${baht(v.incentivePerGuestSatang)}`}
+                {t !== "NEW_TOUR" && ` · ${v.eligibleTourIds.length ? v.eligibleTourIds.join(", ") : "no tours"}`}
                 {` · ${v.sales} ${v.sales === 1 ? "sale" : "sales"} · ${v.locked ? "locked" : "editable"} · by ${v.createdBy}`}
               </li>
             ))}

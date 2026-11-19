@@ -49,22 +49,33 @@ async function formOf(productCode: string) {
   const d = await getProduct(prisma, productCode);
   const f = d.form;
   const b: Record<string, unknown> = {
-    expectedUpdatedAt: d.product.updatedAt, price: f.price, discount: f.discount, refundPolicy: f.refundPolicy,
+    expectedUpdatedAt: d.product.updatedAt, price: f.price, refundPolicy: f.refundPolicy,
     revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId, activeFrom: f.activeFrom, activeTo: f.activeTo,
   };
-  if (d.product.type !== "JOIN_SOURCE_TOUR") { b.pricingBasis = f.pricingBasis; b.paymentMethods = f.paymentMethods; }
-  if (d.product.type === "NEW_TOUR") { b.serviceValidityDays = f.serviceValidityDays; b.fixedCostPerGuest = f.fixedCostPerGuest; b.incentivePerGuest = f.incentivePerGuest; }
-  if (d.product.type === "JOIN_SOURCE_TOUR") b.eligibleTourIds = f.eligibleTourIds;
+  if (d.product.type !== "ROUTE_EXTENSION") b.discount = f.discount; // a Route Extension is never discounted
+  if (d.product.type === "NEW_TOUR") { b.pricingBasis = f.pricingBasis; b.paymentMethods = f.paymentMethods; b.serviceValidityDays = f.serviceValidityDays; b.fixedCostPerGuest = f.fixedCostPerGuest; b.incentivePerGuest = f.incentivePerGuest; }
+  if (d.product.type !== "NEW_TOUR") b.eligibleTourIds = f.eligibleTourIds;
   return b;
+}
+/** Give the unsold RTE-WPWA v1 an eligible tour — needed before it can be activated or sold under (PR3). */
+async function withRouteTour(tourId = "T-001") {
+  const [v1] = await versionsOf("RTE-WPWA");
+  await prisma.upsellProductVersion.update({ where: { id: v1.id }, data: { eligibleSourceTourIds: [tourId] } });
 }
 let saleSeq = 0;
 async function sellUnder(versionId: string) {
+  // Since PR3 a Route Extension / on-site sale must be on a tour its version lists (M3).
+  const v = await prisma.upsellProductVersion.findUniqueOrThrow({ where: { id: versionId }, include: { product: true } });
+  if (v.product.productType === "ROUTE_EXTENSION" && !v.eligibleSourceTourIds.includes("T-001")) {
+    await prisma.upsellProductVersion.update({ where: { id: versionId }, data: { eligibleSourceTourIds: [...v.eligibleSourceTourIds, "T-001"].sort() } });
+  }
   const job = await prisma.jobSheet.create({ data: { guideId: SELLER, date: `2099-05-${String(10 + saleSeq).padStart(2, "0")}`, slotIdx: 0, tourId: "T-001" } });
   saleSeq++;
   return prisma.upsellSale.create({
     data: {
       saleNo: `FOLK-UPS-209905-${String(saleSeq).padStart(3, "0")}`, productVersionId: versionId, ruleSnapshot: { test: true },
-      sourceJobSheetId: job.id, sellingGuideId: SELLER, guests: 1, unitPriceSatang: 70000, grossSatang: 70000,
+      // At the version's own price: a Route Extension sale cannot be at any other (M3).
+      sourceJobSheetId: job.id, sellingGuideId: SELLER, guests: 1, unitPriceSatang: v.unitPriceSatang, grossSatang: v.unitPriceSatang,
       status: "PENDING_PAYMENT", requestKey: `ups-${saleSeq}`,
     },
   });
@@ -141,13 +152,11 @@ describe("the migration: what a JOIN_SOURCE_TOUR version may hold", () => {
 });
 
 describe("the migration: the other types stay as they were", () => {
-  it("only JOIN_SOURCE_TOUR joins a tour, mixes with OTA guests or fixes the remittance", async () => {
-    for (const productCode of ["RTE-WPWA", "FOOD-BKK"]) {
-      const [v] = await versionsOf(productCode);
-      await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { allowsOtaMix: true } }), /UPSELL_PRODUCT_RULE.*OTA/);
-      await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { eligibleSourceTourIds: ["T-001"] } }), /UPSELL_PRODUCT_RULE.*eligible/);
-      await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { remittanceMethod: "BANK_TRANSFER" } }), /UPSELL_PRODUCT_RULE.*remittance/);
-    }
+  it("a new tour never joins a tour, mixes with OTA guests or fixes the remittance", async () => {
+    const [v] = await versionsOf("FOOD-BKK");
+    await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { allowsOtaMix: true } }), /UPSELL_PRODUCT_RULE.*OTA/);
+    await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { eligibleSourceTourIds: ["T-001"] } }), /UPSELL_PRODUCT_RULE.*eligible/);
+    await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { remittanceMethod: "BANK_TRANSFER" } }), /UPSELL_PRODUCT_RULE.*remittance/);
   });
   it("a route extension never makes a booking; a new tour always makes its own booking and job", async () => {
     const [r] = await versionsOf("RTE-WPWA");
@@ -278,6 +287,7 @@ describe("Save", () => {
   });
   it("is not live between versions, or before its first version starts, even Active with its switch on", async () => {
     vi.stubEnv("UPSELL_ROUTE_EXTENSION_ENABLED", "1");
+    await withRouteTour();
     await setProductActive(prisma, "RTE-WPWA", { expectedUpdatedAt: await stamp("RTE-WPWA"), active: true }, admin());
     const status = async () => [(await listProducts(prisma)).find((p) => p.code === "RTE-WPWA")!, (await getProduct(prisma, "RTE-WPWA")).product];
     for (const s of await status()) expect(s).toMatchObject({ status: "LIVE", live: true, onSaleToday: true });
@@ -285,7 +295,7 @@ describe("Save", () => {
     // A gap: v1 ended yesterday, v2 starts in five days.
     const [v1] = await versionsOf("RTE-WPWA");
     await prisma.upsellProductVersion.update({ where: { id: v1.id }, data: { activeFrom: new Date(`${addDays(TODAY, -10)}T00:00:00Z`), activeTo: new Date(`${addDays(TODAY, -1)}T00:00:00Z`) } });
-    await prisma.upsellProductVersion.create({ data: { productId: v1.productId, version: 2, unitPriceSatang: 25000, allowedPaymentMethods: ["CASH"], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: v1.taxProfileId, activeFrom: new Date(`${addDays(TODAY, 5)}T00:00:00Z`) } });
+    await prisma.upsellProductVersion.create({ data: { productId: v1.productId, version: 2, unitPriceSatang: 25000, allowedPaymentMethods: ["CASH"], remittanceMethod: "BANK_TRANSFER", eligibleSourceTourIds: ["T-001"], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: v1.taxProfileId, activeFrom: new Date(`${addDays(TODAY, 5)}T00:00:00Z`) } });
     for (const s of await status()) expect(s).toMatchObject({ status: "NOT_ON_SALE_TODAY", live: false, onSaleToday: false, switchOn: true, active: true });
 
     // Only a version that has not started yet.
@@ -342,11 +352,20 @@ describe("who may use the API", () => {
     expect((await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "FOOD-BKK" } })).active).toBe(false);
     expect(await (await visibleRoute()).json()).toEqual({ visible: true });
   });
-  it("OPERATOR, GUIDE and a stale session are refused", async () => {
+  it("OPERATOR reads (owner, 19 Nov 2026), and every write is 403 with nothing written", async () => {
     as(operatorId, "OPERATOR");
-    expect((await listRoute()).status).toBe(403);
-    expect((await put("RTE-WPWA", {})).status).toBe(403);
-    expect(await (await visibleRoute()).json()).toEqual({ visible: false });
+    expect((await listRoute()).status).toBe(200);
+    const d = await (await getRoute(new Request("http://x") as never, ctx("RTE-WPWA"))).json();
+    expect(d).toMatchObject({ canEdit: false, product: { code: "RTE-WPWA" } });
+    const before = await prisma.upsellProductVersion.findMany({ orderBy: { id: "asc" } });
+    expect((await put("RTE-WPWA", { ...(await formOf("RTE-WPWA")), eligibleTourIds: ["T-001"] })).status).toBe(403);
+    expect(await prisma.upsellProductVersion.findMany({ orderBy: { id: "asc" } })).toEqual(before);
+    await withRouteTour(); // so that only the role — not a missing tour — stops the activation below
+    expect((await post("RTE-WPWA", { expectedUpdatedAt: await stamp("RTE-WPWA"), active: true })).status).toBe(403);
+    expect((await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "RTE-WPWA" } })).active).toBe(false);
+    expect(await (await visibleRoute()).json()).toEqual({ visible: true });
+  });
+  it("GUIDE and a stale session are refused", async () => {
     authMock.auth.mockResolvedValue({ user: { id: "g", role: "GUIDE" } });
     expect((await listRoute()).status).toBe(403);
     // Signed in as ADMIN, demoted since: the database says no.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FORM, planSave, rulesFromForm, sameRules, addDays, isRealDay, liveStatus, UpsellProductError, type FormInput } from "./products";
+import { FORM, planSave, rulesFromForm, sameRules, addDays, isRealDay, liveStatus, needsTours, UpsellProductError, type FormInput } from "./products";
 import { REVENUE_CATEGORY, SEED_PRODUCTS, ONSITE_SOURCE_TOURS } from "./catalog";
 
 // Pure rules of Settings › Upsell products. The database checks the same per-type rules
@@ -8,7 +8,9 @@ import { REVENUE_CATEGORY, SEED_PRODUCTS, ONSITE_SOURCE_TOURS } from "./catalog"
 
 const ctx = { taxProfileIds: ["tp1"], tourIds: ["T-001", "T-002", "T-003"] };
 const base = { expectedUpdatedAt: "x", price: "200", discount: "NONE", refundPolicy: "NON_REFUNDABLE", taxProfileId: "tp1", activeFrom: "2099-01-01", activeTo: null } as const;
-const route = { ...base, revenueCategory: REVENUE_CATEGORY.ROUTE_EXTENSION, pricingBasis: "PER_GUEST", paymentMethods: ["CASH", "BANK_TRANSFER"] };
+// A Route Extension's form has no discount or pricing basis (owner, 19 Nov 2026).
+const { discount: _noDiscount, ...baseNoDiscount } = base;
+const route = { ...baseNoDiscount, revenueCategory: REVENUE_CATEGORY.ROUTE_EXTENSION, eligibleTourIds: ["T-003"] };
 const food = { ...base, price: "1000", revenueCategory: REVENUE_CATEGORY.NEW_TOUR, pricingBasis: "PER_GUEST", paymentMethods: ["BANK_TRANSFER", "CASH"], serviceValidityDays: 7, fixedCostPerGuest: "350", incentivePerGuest: "100" };
 const onsite = { ...base, price: "700", revenueCategory: REVENUE_CATEGORY.JOIN_SOURCE_TOUR, eligibleTourIds: ["T-002", "T-001"] };
 
@@ -20,6 +22,12 @@ describe("the form, per product type", () => {
     expect(FORM.JOIN_SOURCE_TOUR.safeParse({ ...onsite, paymentMethods: ["CASH"] }).success).toBe(false);
     expect(FORM.ROUTE_EXTENSION.safeParse({ ...route, incentivePerGuest: "10" }).success).toBe(false);
     expect(FORM.ROUTE_EXTENSION.safeParse({ ...route, saleNo: "FOLK-UPS-209901-001" }).success).toBe(false);
+    // PR3: the guest pays a Route Extension in cash only, so it has no payment-method field.
+    expect(FORM.ROUTE_EXTENSION.safeParse({ ...route, paymentMethods: ["CASH"] }).success).toBe(false);
+    // ...nor a pricing basis or a discount: always per guest, never discounted.
+    for (const extra of [{ pricingBasis: "PER_GUEST" }, { pricingBasis: "PER_GROUP" }, { discount: "NONE" }, { discount: "ADMIN_APPROVAL" }]) {
+      expect(FORM.ROUTE_EXTENSION.safeParse({ ...route, ...extra }).success, JSON.stringify(extra)).toBe(false);
+    }
     for (const [t, f] of [["ROUTE_EXTENSION", route], ["NEW_TOUR", food], ["JOIN_SOURCE_TOUR", onsite]] as const) {
       expect(FORM[t].safeParse(f).success).toBe(true);
     }
@@ -56,11 +64,24 @@ describe("the form, per product type", () => {
     expect(code(() => rulesFromForm("JOIN_SOURCE_TOUR", { ...onsite, revenueCategory: "FOOD_TOUR_REVENUE" } as FormInput, ctx))).toBe("BAD_CATEGORY");
     expect(code(() => rulesFromForm("ROUTE_EXTENSION", { ...route, taxProfileId: "nope" } as FormInput, ctx))).toBe("BAD_TAX_PROFILE");
   });
-  it("payment-method order does not count as a change", () => {
-    const a = rulesFromForm("ROUTE_EXTENSION", route as FormInput, ctx);
-    const b = rulesFromForm("ROUTE_EXTENSION", { ...route, paymentMethods: ["BANK_TRANSFER", "CASH"] } as FormInput, ctx);
+  it("payment-method and tour order do not count as a change", () => {
+    const a = rulesFromForm("NEW_TOUR", food as FormInput, ctx);
+    const b = rulesFromForm("NEW_TOUR", { ...food, paymentMethods: ["CASH", "BANK_TRANSFER"] } as FormInput, ctx);
     expect(sameRules(a, b)).toBe(true);
     expect(sameRules(a, { ...b, unitPriceSatang: 20100 })).toBe(false);
+    const r1 = rulesFromForm("ROUTE_EXTENSION", { ...route, eligibleTourIds: ["T-003", "T-001"] } as FormInput, ctx);
+    const r2 = rulesFromForm("ROUTE_EXTENSION", { ...route, eligibleTourIds: ["T-001", "T-003"] } as FormInput, ctx);
+    expect(sameRules(r1, r2)).toBe(true);
+  });
+
+  it("Route Extension (PR3): cash from the guest only, any existing tours, each once, or none", () => {
+    expect(rulesFromForm("ROUTE_EXTENSION", route as FormInput, ctx)).toMatchObject({ allowedPaymentMethods: ["CASH"], pricingBasis: "PER_GUEST", priceOverridePermission: "NONE", eligibleSourceTourIds: ["T-003"], fixedCostPerGuestSatang: 0, incentivePerGuestSatang: 0 });
+    expect(rulesFromForm("ROUTE_EXTENSION", { ...route, eligibleTourIds: [] } as FormInput, ctx).eligibleSourceTourIds).toEqual([]);
+    expect(code(() => rulesFromForm("ROUTE_EXTENSION", { ...route, eligibleTourIds: ["T-404"] } as FormInput, ctx))).toBe("BAD_TOURS");
+    expect(code(() => rulesFromForm("ROUTE_EXTENSION", { ...route, eligibleTourIds: ["T-003", "T-003"] } as FormInput, ctx))).toBe("BAD_TOURS");
+    expect(needsTours("ROUTE_EXTENSION", [])).toBe(true);
+    expect(needsTours("ROUTE_EXTENSION", ["T-003"])).toBe(false);
+    expect(needsTours("JOIN_SOURCE_TOUR", [])).toBe(false); // its own rule: the database refuses an empty list
   });
 });
 
@@ -132,6 +153,9 @@ describe("the seed", () => {
     const onsiteSeed = SEED_PRODUCTS[2].v1;
     expect(onsiteSeed).toMatchObject({ allowedPaymentMethods: ["CASH"], eligibleSourceTourIds: [...ONSITE_SOURCE_TOURS], allowsOtaMix: true, remittanceMethod: "BANK_TRANSFER", fixedCostPerGuestSatang: 0, incentivePerGuestSatang: 0, createsNewJob: false });
     expect(SEED_PRODUCTS[0].v1).toMatchObject({ fixedCostPerGuestSatang: 35000, fixedCostBasis: "PAID", incentivePerGuestSatang: 10000, serviceValidityDays: 7 });
+    // PR3 (owner, 19 Nov 2026): the guest pays a Route Extension in cash only; the guide hands
+    // it in by bank transfer only; an Admin picks its tours, so none are seeded.
+    expect(SEED_PRODUCTS[1].v1).toMatchObject({ allowedPaymentMethods: ["CASH"], remittanceMethod: "BANK_TRANSFER", eligibleSourceTourIds: [] });
   });
   it("has no gateway fee and no per-product guest limit", () => {
     const text = JSON.stringify(SEED_PRODUCTS);

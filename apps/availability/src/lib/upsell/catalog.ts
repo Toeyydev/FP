@@ -26,6 +26,10 @@ export const REVENUE_CATEGORY: Record<ProductType, string> = {
 /** The fixed food cost's accounting category (a new tour with a fixed cost only). */
 export const FIXED_COST_CATEGORY = "FOOD_COST";
 
+/** What the guest pays a product of this type with. A Route Extension and an on-site seat are
+ *  paid in cash to the guide only (owner, 19 Nov 2026); the trigger enforces the same. */
+export const CASH_ONLY_TYPES: ProductType[] = ["ROUTE_EXTENSION", "JOIN_SOURCE_TOUR"];
+
 /** The tours a Three Temples on-site seat may join — the owner's list. The settings page can
  *  narrow it, never widen it. */
 export const ONSITE_SOURCE_TOURS = ["T-001", "T-002"] as const;
@@ -86,7 +90,12 @@ export const SEED_PRODUCTS: SeedProduct[] = [
   },
   {
     productCode: "RTE-WPWA", productName: "Wat Pho + Wat Arun", productType: "ROUTE_EXTENSION",
-    v1: { ...NONE, eligibleSourceTourIds: [], unitPriceSatang: 20000, pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH", "BANK_TRANSFER"], revenueCategory: REVENUE_CATEGORY.ROUTE_EXTENSION },
+    // Owner, 19 Nov 2026: the guest pays the guide cash only; the guide hands it in by bank
+    // transfer only. No tours yet — an Admin picks them, and it cannot be activated until then.
+    v1: {
+      ...NONE, eligibleSourceTourIds: [], unitPriceSatang: 20000, pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH"],
+      remittanceMethod: "BANK_TRANSFER", revenueCategory: REVENUE_CATEGORY.ROUTE_EXTENSION,
+    },
   },
   {
     productCode: "THREE-TEMPLES-ONSITE", productName: "Three Temples (on-site)", productType: "JOIN_SOURCE_TOUR",

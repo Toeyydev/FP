@@ -8,8 +8,8 @@ import { signOut } from "next-auth/react";
 // drops its Google Drive status here), and Sign out pinned at the bottom.
 // Grouped Operations / Finance / Reporting / Settings — existing pages only
 // (no dead links; Expenses / PEAK Sync / Logs pages join their groups when built).
-// `upsell` items show only to someone /api/upsell/settings-visible says may open them: ADMIN or
-// ACCOUNTANT, and only while UPSELL_ENABLED is on.
+// `upsell` items show only to someone /api/upsell/settings-visible says may open them: ADMIN,
+// OPERATOR or ACCOUNTANT, and only while UPSELL_ENABLED is on.
 const GROUPS: { label?: string; items: { key: string; label: string; href: string; adminOnly?: boolean; upsell?: boolean }[] }[] = [
   {
     items: [

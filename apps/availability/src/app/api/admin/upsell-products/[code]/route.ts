@@ -11,7 +11,7 @@ const answer = (e: unknown) => {
   throw e;
 };
 
-// GET — one product: its form, the rules it does not edit, and every version. ADMIN and
+// GET — one product: its form, the rules it does not edit, and every version. ADMIN, OPERATOR and
 // ACCOUNTANT. Reads only.
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ code: string }> }) {
   const a = await upsellSettingsAccess();
