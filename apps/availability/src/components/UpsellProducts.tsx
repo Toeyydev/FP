@@ -229,11 +229,12 @@ export function UpsellProductEdit({ code }: { code: string }) {
 
   const body = () => {
     const b: Record<string, unknown> = {
-      expectedUpdatedAt: d.product.updatedAt, price: f.price, discount: f.discount, refundPolicy: f.refundPolicy,
+      expectedUpdatedAt: d.product.updatedAt, price: f.price, refundPolicy: f.refundPolicy,
       revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId, activeFrom: f.activeFrom, activeTo: f.activeTo || null,
     };
-    if (t !== "JOIN_SOURCE_TOUR") b.pricingBasis = f.pricingBasis;
+    if (t !== "ROUTE_EXTENSION") b.discount = f.discount; // a Route Extension is never discounted
     if (t === "NEW_TOUR") {
+      b.pricingBasis = f.pricingBasis; // a Route Extension is always per guest
       b.paymentMethods = f.paymentMethods;
       b.serviceValidityDays = Number(f.serviceValidityDays); b.fixedCostPerGuest = f.fixedCostPerGuest; b.incentivePerGuest = f.incentivePerGuest;
     }
@@ -309,17 +310,20 @@ export function UpsellProductEdit({ code }: { code: string }) {
             <legend className="sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{d.product.name} settings</legend>
 
             <Section id="s-price" title="Price and payment">
-              <Money id="price" label="Price (฿)" value={f.price} onChange={(v) => set("price", v)} hint={t === "JOIN_SOURCE_TOUR" || f.pricingBasis === "PER_GUEST" ? "per guest" : "per group"} />
-              {t !== "JOIN_SOURCE_TOUR" && (
+              <Money id="price" label="Price (฿)" value={f.price} onChange={(v) => set("price", v)} hint={t !== "NEW_TOUR" || f.pricingBasis === "PER_GUEST" ? "per guest" : "per group"} />
+              {t === "NEW_TOUR" && (
                 <Choices legend="Charged" name="basis" value={f.pricingBasis} onChange={(v) => set("pricingBasis", v)}
                   options={[{ v: "PER_GUEST", label: "Per guest" }, { v: "PER_GROUP", label: "Per group" }]} />
               )}
+              {t === "ROUTE_EXTENSION" && <Fixed label="Charged">Per guest <span style={{ color: C.softer }}>(fixed)</span></Fixed>}
               {t !== "NEW_TOUR"
                 ? <Fixed label="Guest pays by">Cash to the guide only <span style={{ color: C.softer }}>(fixed)</span></Fixed>
                 : <Choices legend="Guest pays by" name="methods" multi value={f.paymentMethods} onChange={(v) => toggle("paymentMethods", v)}
                     options={[{ v: "CASH", label: "Cash to the guide" }, { v: "BANK_TRANSFER", label: "Bank transfer" }]} />}
-              <Choices legend="Discount" name="discount" value={f.discount} onChange={(v) => set("discount", v)}
-                options={[{ v: "NONE", label: "Not allowed" }, { v: "ADMIN_APPROVAL", label: "Guide asks, Admin approves" }]} />
+              {t === "ROUTE_EXTENSION"
+                ? <Fixed label="Discount">Not allowed <span style={{ color: C.softer }}>(fixed)</span></Fixed>
+                : <Choices legend="Discount" name="discount" value={f.discount} onChange={(v) => set("discount", v)}
+                    options={[{ v: "NONE", label: "Not allowed" }, { v: "ADMIN_APPROVAL", label: "Guide asks, Admin approves" }]} />}
             </Section>
 
             <Section id="s-svc" title="Service">
@@ -364,7 +368,7 @@ export function UpsellProductEdit({ code }: { code: string }) {
             )}
             {t === "ROUTE_EXTENSION" && (
               <Section id="s-cash" title="Cash hand-in">
-                <Fixed label="Hand in"><span style={{ fontVariantNumeric: "tabular-nums" }}>All of it — {baht(priceSatang)} {f.pricingBasis === "PER_GROUP" ? "per group" : "per guest"}</span></Fixed>
+                <Fixed label="Hand in"><span style={{ fontVariantNumeric: "tabular-nums" }}>All of it — {baht(priceSatang)} per guest</span></Fixed>
                 <Fixed label="Remittance">Bank transfer to Folkpaths only <span style={{ color: C.softer }}>(fixed)</span></Fixed>
                 <Fixed label="When">With that tour&rsquo;s end-tour report</Fixed>
               </Section>

@@ -244,6 +244,8 @@ try {
     && tr.includes("Choose at least one eligible source tour and save before you can activate."));
   check("cash from the guest and bank-transfer hand-in are fixed, not choices", tr.includes("Cash to the guide only") && tr.includes("Bank transfer to Folkpaths only")
     && tr.includes("With that tour’s end-tour report") && await page.evaluate(() => !document.querySelector('input[name="methods"]')));
+  check("Charged is fixed at Per guest and Discount at Not allowed — shown, not choices", /Charged\s*Per guest \(fixed\)/.test(tr) && /Discount\s*Not allowed \(fixed\)/.test(tr)
+    && await page.evaluate(() => !document.querySelector('input[name="basis"], input[name="discount"]')), tr.slice(0, 400).replace(/\s+/g, " "));
   const ra = await a11y(page); check("Route Extension settings accessibility", ra.length === 0, ra.join("; "));
   await page.click('input[name="tours"][value="T-005"]');
   await page.click("button.up-save");

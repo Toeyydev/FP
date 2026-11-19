@@ -115,6 +115,71 @@ describe("M1 / M1b: what a Route Extension version may hold", () => {
   });
 });
 
+describe("M1c: a Route Extension is priced per guest, with no discount — INSERT, UPDATE and raw SQL", () => {
+  const RULE = /UPSELL_PRODUCT_RULE: a ROUTE_EXTENSION product (is priced per guest|has no discount)/;
+  const newVersion = async (over: Record<string, unknown>) => {
+    const v1 = await rteVersion();
+    return prisma.upsellProductVersion.create({ data: {
+      productId: v1.productId, version: 2, unitPriceSatang: 20000, allowedPaymentMethods: ["CASH"], remittanceMethod: "BANK_TRANSFER",
+      revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: v1.taxProfileId, activeFrom: new Date("2099-01-01"), ...over,
+    } });
+  };
+  const rawInsert = async (pricingBasis: string, permission: string) => {
+    const v1 = await rteVersion();
+    return prisma.$executeRaw`
+      INSERT INTO "UpsellProductVersion" ("id","productId","version","unitPriceSatang","pricingBasis","priceOverridePermission","allowedPaymentMethods","remittanceMethod","revenueCategory","taxProfileId","activeFrom")
+      VALUES (${`v-raw-${Math.random().toString(36).slice(2, 10)}`}, ${v1.productId}, ${3 + Math.floor(Math.random() * 1e6)}, 20000, ${pricingBasis}, ${permission}, ARRAY['CASH'], 'BANK_TRANSFER', 'UPSELL_ROUTE_REVENUE', ${v1.taxProfileId}, '2099-02-01'::date)`;
+  };
+  it("INSERT: per group or a discount is refused; per guest with none is accepted", async () => {
+    await fails(newVersion({ pricingBasis: "PER_GROUP" }), RULE);
+    await fails(newVersion({ priceOverridePermission: "ADMIN_APPROVAL" }), RULE);
+    await expect(newVersion({ pricingBasis: "PER_GUEST", priceOverridePermission: "NONE" })).resolves.toBeTruthy();
+  });
+  it("UPDATE: neither can be changed on an existing version", async () => {
+    const v = await rteVersion();
+    await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { pricingBasis: "PER_GROUP" } }), RULE);
+    await fails(prisma.upsellProductVersion.update({ where: { id: v.id }, data: { priceOverridePermission: "ADMIN_APPROVAL" } }), RULE);
+    expect(await rteVersion()).toMatchObject({ pricingBasis: "PER_GUEST", priceOverridePermission: "NONE" });
+  });
+  it("raw SQL, past the application: INSERT and UPDATE are refused the same way", async () => {
+    await fails(rawInsert("PER_GROUP", "NONE"), RULE);
+    await fails(rawInsert("PER_GUEST", "ADMIN_APPROVAL"), RULE);
+    await expect(rawInsert("PER_GUEST", "NONE")).resolves.toBe(1);
+    const v = await rteVersion();
+    await fails(prisma.$executeRaw`UPDATE "UpsellProductVersion" SET "pricingBasis" = 'PER_GROUP' WHERE "id" = ${v.id}`, RULE);
+    await fails(prisma.$executeRaw`UPDATE "UpsellProductVersion" SET "priceOverridePermission" = 'ADMIN_APPROVAL' WHERE "id" = ${v.id}`, RULE);
+  });
+  it("other types keep their choice: a food tour may still be per group or discounted", async () => {
+    const food = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "FOOD-BKK" } } });
+    await expect(prisma.upsellProductVersion.update({ where: { id: food.id }, data: { pricingBasis: "PER_GROUP", priceOverridePermission: "ADMIN_APPROVAL" } })).resolves.toBeTruthy();
+  });
+  it("a Route Extension sale is per guest at its version's price, never overridden — even in raw SQL", async () => {
+    const v = await putOnSale();
+    const sale = (over: { basis?: string; unit?: number; gross?: number; reason?: string | null; approver?: string | null }) => prisma.$executeRaw`
+      INSERT INTO "UpsellSale" ("id","saleNo","productVersionId","ruleSnapshot","sourceJobSheetId","sellingGuideId","pricingBasis","guests","unitPriceSatang","grossSatang","priceOverrideReason","priceOverrideApprovedById","status","requestKey","updatedAt")
+      VALUES (${`s-raw-${Math.random().toString(36).slice(2, 10)}`}, ${`FOLK-UPS-209902-${String(++keySeq).padStart(3, "0")}`}, ${v.id}, '{}'::jsonb, ${jobId}, ${SELLER},
+              ${over.basis ?? "PER_GUEST"}, 2, ${over.unit ?? 20000}, ${over.gross ?? 2 * (over.unit ?? 20000)}, ${over.reason ?? null}, ${over.approver ?? null}, 'PAID', ${key()}, now())`;
+    await fails(sale({ basis: "PER_GROUP", gross: 20000 }), /UPSELL_SALE_PRICE/);
+    await fails(sale({ unit: 15000 }), /UPSELL_SALE_PRICE/);
+    await fails(sale({ reason: "friend of the guide", approver: adminId }), /UPSELL_SALE_PRICE/);
+    await expect(sale({})).resolves.toBe(1);
+  });
+  it("the settings API and the sale API take neither a pricing basis nor a discount", async () => {
+    const d = await getProduct(prisma, "RTE-WPWA");
+    const f = d.form;
+    const form = { expectedUpdatedAt: d.product.updatedAt, price: f.price, refundPolicy: f.refundPolicy, revenueCategory: f.revenueCategory,
+      taxProfileId: f.taxProfileId, activeFrom: f.activeFrom, activeTo: f.activeTo, eligibleTourIds: [TOUR] };
+    for (const extra of [{ pricingBasis: "PER_GUEST" }, { pricingBasis: "PER_GROUP" }, { discount: "NONE" }, { discount: "ADMIN_APPROVAL" }]) {
+      expect(await errCode(saveProduct(prisma, "RTE-WPWA", { ...form, ...extra }, { id: adminId, role: "ADMIN" })), JSON.stringify(extra)).toBe("UNKNOWN_FIELD");
+    }
+    const v = await putOnSale();
+    for (const extra of [{ pricingBasis: "PER_GROUP" }, { discount: "ADMIN_APPROVAL" }, { priceOverridePermission: "ADMIN_APPROVAL" }, { priceOverrideReason: "x" }, { unitPriceSatang: 1 }]) {
+      expect(await errCode(sell(sellBody(v, 1, extra))), JSON.stringify(extra)).toBe("UNKNOWN_FIELD");
+    }
+    expect(await prisma.upsellSale.count()).toBe(0);
+  });
+});
+
 describe("M3: a sale follows its version", () => {
   const rawSale = (versionId: string, jobSheetId: string) => prisma.upsellSale.create({
     data: {
@@ -193,6 +258,13 @@ describe("M2 / M2b: the seeded RTE-WPWA is changed only exactly as the seed left
     await fails(runM2(), /UPSELL_MIGRATION_STOP: RTE-WPWA has 1 sale/);
     expect(await state()).toEqual(OLD);
   });
+  it("stops if v1 is not per guest or allows a discount", async () => {
+    await asPr2Seed({ pricingBasis: "PER_GROUP" });
+    await fails(runM2(), /UPSELL_MIGRATION_STOP: RTE-WPWA v1 is not as the seed left it/);
+    await asPr2Seed({ pricingBasis: "PER_GUEST", priceOverridePermission: "ADMIN_APPROVAL" });
+    await fails(runM2(), /UPSELL_MIGRATION_STOP: RTE-WPWA v1 is not as the seed left it/);
+    expect(await state()).toEqual(OLD);
+  });
   it("stops if the value is not the seed's — remittance not ANY, other payment methods, tours set, or a second version", async () => {
     await asPr2Seed({ remittanceMethod: "BANK_TRANSFER" });
     await fails(runM2(), /UPSELL_MIGRATION_STOP: RTE-WPWA v1 is not as the seed left it/);
@@ -216,7 +288,7 @@ describe("Route Extension settings: tours, cash only, Admin only", () => {
   async function form() {
     const d = await getProduct(prisma, "RTE-WPWA");
     const f = d.form;
-    return { expectedUpdatedAt: d.product.updatedAt, price: f.price, pricingBasis: f.pricingBasis, discount: f.discount, refundPolicy: f.refundPolicy,
+    return { expectedUpdatedAt: d.product.updatedAt, price: f.price, refundPolicy: f.refundPolicy,
       revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId, activeFrom: f.activeFrom, activeTo: f.activeTo, eligibleTourIds: f.eligibleTourIds };
   }
   it("cannot be activated with no eligible tour (409), and can once one is saved", async () => {

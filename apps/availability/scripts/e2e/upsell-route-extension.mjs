@@ -166,6 +166,25 @@ const collisions = (page) => page.evaluate(() => {
   }
   return out;
 });
+/** Rows in the money tables that point at this test's own sales, payments, custody, job or guide —
+ *  by any column: the row's whole JSON is searched for every id and ref. Not a count of the whole
+ *  table, which other CI steps share. */
+async function moneyRowsReferencing() {
+  const sales = await prisma.upsellSale.findMany({ select: { id: true, saleNo: true } });
+  const payments = await prisma.upsellPayment.findMany({ select: { id: true } });
+  const custody = await prisma.cashCustodyEntry.findMany({ select: { id: true } });
+  const sheet = await prisma.jobSheet.findFirstOrThrow({ where: { guideId: GUIDE_ID, date: TODAY, slotIdx: SLOT } });
+  const needles = [...sales.flatMap((x) => [x.id, x.saleNo]), ...payments.map((x) => x.id), ...custody.map((x) => x.id), sheet.id, sheet.ref, GUIDE_ID]
+    .filter(Boolean).map((x) => `%${x}%`);
+  const out = {};
+  for (const table of ["AdvancePeakSync", "GuidePayment", "GuidePaymentJob", "GuideAdvance", "GuideAdvanceEntry"]) {
+    const exists = await prisma.$queryRawUnsafe(`SELECT to_regclass('"${table}"') IS NOT NULL AS ok`);
+    if (!exists[0].ok) { out[table] = "missing table"; continue; }
+    const [{ n }] = await prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "${table}" t WHERE to_jsonb(t)::text LIKE ANY ($1::text[])`, needles);
+    out[table] = n;
+  }
+  return { needles: needles.length, sales: sales.length, refs: out };
+}
 const block = (page) => page.evaluate(() => document.querySelector(".js-upsell")?.innerText ?? "");
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: join(SHOTS, `upsell-rte-${name}.png`), fullPage: true }); };
 const goto = async (page, path) => { await page.goto(`${BASE}${path}`, { waitUntil: "networkidle0", timeout: 30000 }); await new Promise((r) => setTimeout(r, 400)); };
@@ -346,6 +365,9 @@ try {
   check("no page error", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
   const outbound = readFileSync(OUTBOUND, "utf8").trim();
   check("the server called nothing off this machine (no PEAK, no gateway)", outbound === "", outbound.slice(0, 300));
+  const refRows = await moneyRowsReferencing();
+  check("no PEAK outbox, guide payment or Company ADV row refers to this test's sales, payments, custody, job, Sale Refs or guide",
+    refRows.sales === 3 && refRows.needles >= 3 * 2 + 3 + 3 + 3 && Object.values(refRows.refs).every((n) => n === 0), JSON.stringify(refRows));
   const moneyAfter = await moneyRows();
   check("no new PEAK outbox row, guide payment or Company ADV entry", JSON.stringify(moneyAfter) === JSON.stringify(moneyBefore), `${JSON.stringify(moneyBefore)} → ${JSON.stringify(moneyAfter)}`);
   check("the job sheet's expenses and fee are untouched", JSON.stringify((await prisma.jobSheet.findFirstOrThrow({ where: { guideId: GUIDE_ID } })).expenses) === "[]");

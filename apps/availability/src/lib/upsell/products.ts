@@ -50,7 +50,6 @@ const baht = z.string().trim().max(12);
 const common = {
   expectedUpdatedAt: z.string().min(1),
   price: baht,
-  discount: z.enum(["NONE", "ADMIN_APPROVAL"]),
   refundPolicy: z.enum(["NON_REFUNDABLE", "ADMIN_ONLY"]),
   revenueCategory: z.string().min(1).max(80),
   taxProfileId: z.string().min(1).max(64),
@@ -59,22 +58,23 @@ const common = {
 };
 const methods = z.array(z.enum(["CASH", "BANK_TRANSFER"])).min(1).max(2);
 const MAX_ELIGIBLE_TOURS = 50;
+const discount = z.enum(["NONE", "ADMIN_APPROVAL"]);
 export const FORM: Record<ProductType, z.ZodTypeAny> = {
   // The guest pays a Route Extension in cash only (owner, 19 Nov 2026), so there is no
   // payment-method field: sending one is a 400 like any other field the type lacks.
+  // Nor a pricing basis or a discount: always per guest, never discounted (owner, 19 Nov 2026).
   ROUTE_EXTENSION: z.object({
-    ...common, pricingBasis: z.enum(["PER_GUEST", "PER_GROUP"]),
-    eligibleTourIds: z.array(z.string().min(1).max(20)).max(MAX_ELIGIBLE_TOURS),
+    ...common, eligibleTourIds: z.array(z.string().min(1).max(20)).max(MAX_ELIGIBLE_TOURS),
   }).strict(),
   NEW_TOUR: z.object({
-    ...common, pricingBasis: z.enum(["PER_GUEST", "PER_GROUP"]), paymentMethods: methods,
+    ...common, discount, pricingBasis: z.enum(["PER_GUEST", "PER_GROUP"]), paymentMethods: methods,
     serviceValidityDays: z.number().int().min(1).max(365),
     fixedCostPerGuest: baht, incentivePerGuest: baht,
   }).strict(),
-  JOIN_SOURCE_TOUR: z.object({ ...common, eligibleTourIds: z.array(z.string().min(1).max(20)).min(1).max(ONSITE_SOURCE_TOURS.length) }).strict(),
+  JOIN_SOURCE_TOUR: z.object({ ...common, discount, eligibleTourIds: z.array(z.string().min(1).max(20)).min(1).max(ONSITE_SOURCE_TOURS.length) }).strict(),
 };
 export type FormInput = z.infer<typeof FORM.ROUTE_EXTENSION> & Partial<{
-  pricingBasis: "PER_GUEST" | "PER_GROUP"; paymentMethods: ("CASH" | "BANK_TRANSFER")[]; serviceValidityDays: number;
+  discount: "NONE" | "ADMIN_APPROVAL"; pricingBasis: "PER_GUEST" | "PER_GROUP"; paymentMethods: ("CASH" | "BANK_TRANSFER")[]; serviceValidityDays: number;
   fixedCostPerGuest: string; incentivePerGuest: string; eligibleTourIds: string[];
 }>;
 
@@ -114,11 +114,11 @@ export function rulesFromForm(type: ProductType, f: FormInput, ctx: { taxProfile
   const r: VersionRules = {
     unitPriceSatang: money("Price", f.price, { positive: true }),
     pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH"],
-    priceOverridePermission: f.discount, refundPolicy: f.refundPolicy, revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId,
+    priceOverridePermission: type === "ROUTE_EXTENSION" ? "NONE" : f.discount!, refundPolicy: f.refundPolicy, revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId,
     serviceValidityDays: null, fixedCostPerGuestSatang: 0, fixedCostBasis: null, fixedCostCategory: null,
     incentivePerGuestSatang: 0, incentiveTrigger: "NONE", eligibleSourceTourIds: [],
   };
-  if (type !== "JOIN_SOURCE_TOUR") r.pricingBasis = f.pricingBasis!;
+  if (type === "NEW_TOUR") r.pricingBasis = f.pricingBasis!;
   if (!CASH_ONLY_TYPES.includes(type)) r.allowedPaymentMethods = sortedUnique(f.paymentMethods!);
   if (type === "NEW_TOUR") {
     r.serviceValidityDays = f.serviceValidityDays!;

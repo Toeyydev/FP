@@ -108,7 +108,10 @@ async function sellable(db: Db | Tx, tourId: string, today: string) {
   });
   return products.flatMap((p) => {
     const v = p.versions[0];
-    if (!v || !v.eligibleSourceTourIds.includes(tourId) || !v.allowedPaymentMethods.includes("CASH")) return [];
+    // Cash from the guest, per guest, never discounted (owner, 19 Nov 2026; the database holds the
+    // same rules — a version that broke them would not be offered here anyway).
+    if (!v || !v.eligibleSourceTourIds.includes(tourId) || !v.allowedPaymentMethods.includes("CASH")
+      || v.pricingBasis !== "PER_GUEST" || v.priceOverridePermission !== "NONE") return [];
     return [{ product: p, version: v }];
   });
 }

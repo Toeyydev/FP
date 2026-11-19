@@ -49,11 +49,11 @@ async function formOf(productCode: string) {
   const d = await getProduct(prisma, productCode);
   const f = d.form;
   const b: Record<string, unknown> = {
-    expectedUpdatedAt: d.product.updatedAt, price: f.price, discount: f.discount, refundPolicy: f.refundPolicy,
+    expectedUpdatedAt: d.product.updatedAt, price: f.price, refundPolicy: f.refundPolicy,
     revenueCategory: f.revenueCategory, taxProfileId: f.taxProfileId, activeFrom: f.activeFrom, activeTo: f.activeTo,
   };
-  if (d.product.type !== "JOIN_SOURCE_TOUR") b.pricingBasis = f.pricingBasis;
-  if (d.product.type === "NEW_TOUR") { b.paymentMethods = f.paymentMethods; b.serviceValidityDays = f.serviceValidityDays; b.fixedCostPerGuest = f.fixedCostPerGuest; b.incentivePerGuest = f.incentivePerGuest; }
+  if (d.product.type !== "ROUTE_EXTENSION") b.discount = f.discount; // a Route Extension is never discounted
+  if (d.product.type === "NEW_TOUR") { b.pricingBasis = f.pricingBasis; b.paymentMethods = f.paymentMethods; b.serviceValidityDays = f.serviceValidityDays; b.fixedCostPerGuest = f.fixedCostPerGuest; b.incentivePerGuest = f.incentivePerGuest; }
   if (d.product.type !== "NEW_TOUR") b.eligibleTourIds = f.eligibleTourIds;
   return b;
 }
@@ -74,7 +74,8 @@ async function sellUnder(versionId: string) {
   return prisma.upsellSale.create({
     data: {
       saleNo: `FOLK-UPS-209905-${String(saleSeq).padStart(3, "0")}`, productVersionId: versionId, ruleSnapshot: { test: true },
-      sourceJobSheetId: job.id, sellingGuideId: SELLER, guests: 1, unitPriceSatang: 70000, grossSatang: 70000,
+      // At the version's own price: a Route Extension sale cannot be at any other (M3).
+      sourceJobSheetId: job.id, sellingGuideId: SELLER, guests: 1, unitPriceSatang: v.unitPriceSatang, grossSatang: v.unitPriceSatang,
       status: "PENDING_PAYMENT", requestKey: `ups-${saleSeq}`,
     },
   });

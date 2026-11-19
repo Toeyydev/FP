@@ -6,6 +6,9 @@
 -- M1b The guest pays a Route Extension in cash to the guide, nothing else
 --     (allowedPaymentMethods = {CASH}). BANK_TRANSFER is how the guide hands the cash in — never
 --     how the guest pays.
+-- M1c A Route Extension is priced per guest (pricingBasis = PER_GUEST) and has no discount
+--     (priceOverridePermission = NONE, "Not allowed") — owner, 19 Nov 2026. A sale under one
+--     carries the version's own price, per guest, with no override (M3).
 -- M2 / M2b  The seeded RTE-WPWA v1 still carries the old rules (remittance ANY, guest pays
 --     CASH or BANK_TRANSFER). The owner approved changing it here, on one condition: the
 --     migration stops — it never overwrites silently — unless RTE-WPWA is exactly what the
@@ -52,6 +55,8 @@ BEGIN
     -- The tour list may be empty (then it is sold nowhere, and cannot be activated); every
     -- tour on it must exist, once.
     IF NEW."allowedPaymentMethods" IS DISTINCT FROM ARRAY['CASH']::text[] THEN bad := 'is paid in cash to the guide only';
+    ELSIF NEW."pricingBasis" <> 'PER_GUEST' THEN bad := 'is priced per guest';
+    ELSIF NEW."priceOverridePermission" <> 'NONE' THEN bad := 'has no discount: its price is never overridden';
     ELSIF NEW."createsNewBooking" OR NEW."createsNewJob" THEN bad := 'stays on the source job: no new booking or job';
     ELSIF EXISTS (SELECT 1 FROM unnest(NEW."eligibleSourceTourIds") x WHERE btrim(x) = '')
        OR cardinality(NEW."eligibleSourceTourIds") <> (SELECT count(DISTINCT x) FROM unnest(NEW."eligibleSourceTourIds") x) THEN
@@ -118,6 +123,7 @@ BEGIN
   SELECT * INTO v FROM "UpsellProductVersion" WHERE "productId" = p."id";
   SELECT array_agg(m ORDER BY m) INTO methods FROM unnest(v."allowedPaymentMethods") m;
   IF v."version" <> 1 OR v."remittanceMethod" <> 'ANY' OR methods IS DISTINCT FROM ARRAY['BANK_TRANSFER', 'CASH']::text[]
+     OR v."pricingBasis" <> 'PER_GUEST' OR v."priceOverridePermission" <> 'NONE'
      OR cardinality(v."eligibleSourceTourIds") <> 0 OR v."allowsOtaMix" OR v."createsNewBooking" OR v."createsNewJob"
      OR v."fixedCostPerGuestSatang" <> 0 OR v."incentivePerGuestSatang" <> 0 THEN
     RAISE EXCEPTION 'UPSELL_MIGRATION_STOP: RTE-WPWA v1 is not as the seed left it (remittance %, methods %, % tours) — nothing changed',
@@ -138,15 +144,21 @@ END $$;
 
 -- ─── M3: sales and payments follow their version ──────────────────────────────────────────
 
--- A Route Extension or on-site seat is sold only on a job whose tour its version lists.
+-- A Route Extension or on-site seat is sold only on a job whose tour its version lists; a Route
+-- Extension sale is per guest, at its version's own price, never overridden.
 CREATE FUNCTION upsell_sale_eligibility() RETURNS trigger AS $$
 DECLARE
   t text;
   tours text[];
+  price int;
   job_tour text;
 BEGIN
-  SELECT p."productType", v."eligibleSourceTourIds" INTO t, tours
+  SELECT p."productType", v."eligibleSourceTourIds", v."unitPriceSatang" INTO t, tours, price
     FROM "UpsellProductVersion" v JOIN "UpsellProduct" p ON p."id" = v."productId" WHERE v."id" = NEW."productVersionId";
+  IF t = 'ROUTE_EXTENSION' AND (NEW."pricingBasis" <> 'PER_GUEST' OR NEW."unitPriceSatang" <> price
+       OR NEW."priceOverrideReason" IS NOT NULL OR NEW."priceOverrideApprovedById" IS NOT NULL) THEN
+    RAISE EXCEPTION 'UPSELL_SALE_PRICE: a ROUTE_EXTENSION sale is per guest at its version''s price (% satang), with no discount', price;
+  END IF;
   IF t IN ('ROUTE_EXTENSION', 'JOIN_SOURCE_TOUR') THEN
     SELECT "tourId" INTO job_tour FROM "JobSheet" WHERE "id" = NEW."sourceJobSheetId";
     IF job_tour IS NULL OR NOT (job_tour = ANY (tours)) THEN
