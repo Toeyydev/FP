@@ -192,15 +192,15 @@ model Availability {
 }
 
 model Assignment {
-  id      String  @id @default(cuid())
-  guideId String
-  guide   User    @relation(fields: [guideId], references: [guideId], onDelete: Cascade)
-  date    String
-  slotIdx Int
-  tourId  String
-  tour    Tour    @relation(fields: [tourId], references: [id])
-  pax     Int?
-  note    String?
+  id               String  @id @default(cuid())
+  guideId          String
+  guide            User    @relation(fields: [guideId], references: [guideId], onDelete: Cascade)
+  date             String
+  slotIdx          Int
+  tourId           String
+  tour             Tour    @relation(fields: [tourId], references: [id])
+  pax              Int?
+  note             String?
   // On a departure split between guides: this guide takes bookings that arrive later
   // untagged (owner, 2026-11-07). At most one per departure; set in the Split dialog.
   takesNewBookings Boolean @default(false)
@@ -863,6 +863,7 @@ model ExpenseCertificate {
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
 
+  @@unique([activeJobSheetId, kind])
   @@index([jobSheetId, status])
   @@index([guideId])
   @@index([status])
@@ -870,8 +871,6 @@ model ExpenseCertificate {
   // payment's EXP covers several job sheets and may carry several certificates.
   @@index([peakDocumentNo])
   @@index([peakPaymentRef])
-
-  @@unique([activeJobSheetId, kind])
 }
 
 /// One attempt to attach one certificate's PDF to one PEAK expense document.
@@ -1504,17 +1503,17 @@ model GuideAdvance {
   // A partial unique index (live advances only) means one transfer is one advance, even
   // across jobs, sessions and two requests arriving at once. A reversed advance leaves
   // the index, so a transfer recorded against the wrong guide can be recorded again.
-  txRefKey         String?
+  txRefKey String?
 
   // The slip check run when it was recorded (lib/advances/slip-check): MATCH | PARTIAL |
   // MISMATCH | UNKNOWN, what was compared (statuses and masked digits — no names), and who
   // confirmed a result short of MATCH, with their reason. Null on advances recorded before
   // the check existed.
-  slipCheckResult      String?
-  slipCheck            Json?
+  slipCheckResult        String?
+  slipCheck              Json?
   slipCheckConfirmedById String?
-  slipCheckReason      String?
-  slipCheckAt          DateTime?
+  slipCheckReason        String?
+  slipCheckAt            DateTime?
 
   returns          GuideAdvanceReturn[]
   entries          GuideAdvanceEntry[]
@@ -2358,4 +2357,52 @@ model CashSettlementReturn {
   createdAt    DateTime       @default(now())
 
   @@unique([settlementId, submissionNo])
+}
+
+// ── Bank transactions (PR4-0, owner 19 Nov 2026) ─────────────────────────────
+// One real bank transfer = one BankTransaction, whatever tables record it. Every table that
+// records a transfer (advances, advance receipts / returns / refunds, guide payments and their
+// transfers, PEAK payment documents, upsell bank payments) is linked to it by a database
+// trigger (migrations/*_bank_transaction_registry), as a USE (the money applied: counts toward
+// the transfer's amount) or a DOC (a document describing the same transfer: counts nothing).
+// The live USEs of a transfer never add up to more than the transfer — one transfer cannot pay
+// twice. A transaction is never deleted or released: reversing or voiding a record does not
+// undo the bank movement; its use stops counting, the transfer stays.
+model BankTransaction {
+  id           String   @id @default(cuid())
+  direction    String // IN (to Folkpaths) | OUT (from Folkpaths)
+  accountKey   String? // Folkpaths' account (lib/payment-transfer bankAccountKey); null = not recorded
+  refRaw       String? // the reference as first recorded, unchanged
+  refKey       String? // folk_tx_ref_key(refRaw) — set only when refStatus = BANK_REF
+  refStatus    String // BANK_REF | PENDING_VERIFICATION (kept as typed; not matched) | INTERNAL
+  internalCode String?  @unique // a transfer with no bank reference (never a made-up bank number)
+  amountSatang Int? // the transfer's amount, from its first USE (and that USE's group); null while only documents name it
+  amountGroup  String? // the group of the first USE: rows recorded as parts of ONE transfer (GuidePayment.transferGroup)
+  transferDate String? // "YYYY-MM-DD"
+  reviewStatus String   @default("OK") // OK | NEEDS_REVIEW
+  reviewNote   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  uses BankTransactionUse[]
+
+  @@index([direction, refKey])
+  @@index([reviewStatus])
+}
+
+model BankTransactionUse {
+  id            String          @id @default(cuid())
+  transactionId String
+  transaction   BankTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  sourceTable   String // the table of the row that records the transfer
+  sourceId      String
+  role          String // USE | DOC
+  amountSatang  Int? // USE: the amount applied; DOC: null
+  groupKey      String? // rows recorded together as parts of one transfer (GuidePayment.transferGroup)
+  live          Boolean // false once the record is reversed, voided or no longer names this transfer
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @default(now()) @updatedAt
+
+  @@unique([sourceTable, sourceId])
+  @@index([transactionId])
 }
