@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { NextRequest } from "next/server";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import { join } from "node:path";
 const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 
+import { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { seedUpsellProducts } from "./catalog";
@@ -83,6 +84,116 @@ beforeEach(async () => {
   vi.stubEnv("UPSELL_ROUTE_EXTENSION_ENABLED", "1");
 });
 afterEach(() => { vi.unstubAllEnvs(); });
+
+// ── M4: no dangling tour id, also under concurrency ─────────────────────────
+
+/** Tour ids that any version lists but no Tour row has. Must always be 0. */
+const dangling = async () => (await prisma.$queryRaw<{ n: number }[]>`
+  SELECT count(*)::int AS n FROM "UpsellProductVersion" v, unnest(v."eligibleSourceTourIds") x
+   WHERE NOT EXISTS (SELECT 1 FROM "Tour" t WHERE t."id" = x)`)[0].n;
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** A transaction that does `work`, then holds its locks until released. */
+function held(client: PrismaClient, work: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<unknown>) {
+  let release!: () => void, ready!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const started = new Promise<void>((r) => { ready = r; });
+  const done = client.$transaction(async (tx) => { await work(tx); ready(); await gate; }, { timeout: 30_000, maxWait: 10_000 });
+  return { started, release, done };
+}
+/** Settles to "ok" or the error text; `pending()` says whether it is still waiting. */
+function watch(p: Promise<unknown>) {
+  let settled = false;
+  const result = p.then(() => "ok", (e) => String(e instanceof Error ? e.message : e)).finally(() => { settled = true; });
+  return { result, pending: () => !settled };
+}
+
+describe("M4: a tour on an eligible list cannot disappear — DELETE, raw SQL, and two transactions at once", () => {
+  const other = new PrismaClient(); // a second connection pool: a second, concurrent session
+  afterAll(async () => { await other.$disconnect(); });
+  const SPARE = "T-077";
+  beforeEach(async () => { await prisma.tour.create({ data: { id: SPARE, name: "Invented spare tour", time: "09.00 AM" } }); });
+  const listSpare = (client: PrismaClient | Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0], id: string) =>
+    client.upsellProductVersion.update({ where: { id }, data: { eligibleSourceTourIds: [TOUR, SPARE] } });
+
+  it("DELETE through Prisma and through raw SQL is refused while any version lists the tour; an id change too", async () => {
+    const v = await putOnSale([TOUR, SPARE]);
+    await fails(prisma.tour.delete({ where: { id: SPARE } }), /UPSELL_TOUR_IN_USE: tour T-077 is an eligible tour of RTE-WPWA/);
+    await fails(prisma.$executeRaw`DELETE FROM "Tour" WHERE "id" = ${SPARE}`, /UPSELL_TOUR_IN_USE/);
+    await fails(prisma.$executeRaw`UPDATE "Tour" SET "id" = 'T-078' WHERE "id" = ${SPARE}`, /UPSELL_TOUR_IN_USE/);
+    // Other edits to the tour are not affected.
+    await expect(prisma.$executeRaw`UPDATE "Tour" SET "name" = 'Invented spare tour (renamed)' WHERE "id" = ${SPARE}`).resolves.toBe(1);
+    expect(await prisma.tour.count({ where: { id: SPARE } })).toBe(1);
+    // Once no version lists it, it may go.
+    await prisma.upsellProductVersion.update({ where: { id: v.id }, data: { eligibleSourceTourIds: [TOUR] } });
+    await expect(prisma.$executeRaw`DELETE FROM "Tour" WHERE "id" = ${SPARE}`).resolves.toBe(1);
+    expect(await dangling()).toBe(0);
+  });
+  it("a sold version keeps protecting its tours after a new version drops them", async () => {
+    const v1 = await putOnSale([TOUR, SPARE]);
+    await sell(sellBody(v1, 1));
+    await prisma.upsellProductVersion.update({ where: { id: v1.id }, data: { activeTo: new Date(`${addDays(TODAY, 1)}T00:00:00Z`) } });
+    await prisma.upsellProductVersion.create({ data: { productId: v1.productId, version: 2, unitPriceSatang: 20000, allowedPaymentMethods: ["CASH"], remittanceMethod: "BANK_TRANSFER", eligibleSourceTourIds: [TOUR], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: v1.taxProfileId, activeFrom: new Date(`${addDays(TODAY, 2)}T00:00:00Z`) } });
+    await fails(prisma.tour.delete({ where: { id: SPARE } }), /UPSELL_TOUR_IN_USE/);
+  });
+  it("an on-site seat's list is protected the same way, and must name tours that exist", async () => {
+    await fails(prisma.tour.delete({ where: { id: "T-001" } }), /UPSELL_TOUR_IN_USE: tour T-001 is an eligible tour of THREE-TEMPLES-ONSITE/);
+    const onsite = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "THREE-TEMPLES-ONSITE" } } });
+    await prisma.upsellProductVersion.update({ where: { id: onsite.id }, data: { eligibleSourceTourIds: ["T-001"] } });
+    await prisma.tour.delete({ where: { id: "T-002" } });
+    await fails(prisma.upsellProductVersion.update({ where: { id: onsite.id }, data: { eligibleSourceTourIds: ["T-001", "T-002"] } }), /UPSELL_PRODUCT_RULE.*tours that exist/);
+  });
+
+  it("listing first, deleting second: the delete waits for the listing, then is refused — no dangling id", async () => {
+    const v = await rteVersion();
+    const tx1 = held(prisma, (tx) => listSpare(tx, v.id));
+    await tx1.started;
+    const del = watch(other.tour.delete({ where: { id: SPARE } }));
+    await pause(500);
+    expect(del.pending()).toBe(true); // blocked on the tour row the listing holds
+    tx1.release(); await tx1.done;
+    expect(await del.result).toMatch(/UPSELL_TOUR_IN_USE/);
+    expect(await prisma.tour.count({ where: { id: SPARE } })).toBe(1);
+    expect((await rteVersion()).eligibleSourceTourIds).toContain(SPARE);
+    expect(await dangling()).toBe(0);
+  });
+  it("deleting first, listing second: the listing waits for the delete, then is refused — no dangling id", async () => {
+    const v = await rteVersion();
+    const tx2 = held(other, (tx) => tx.tour.delete({ where: { id: SPARE } }));
+    await tx2.started;
+    const add = watch(listSpare(prisma, v.id));
+    await pause(500);
+    expect(add.pending()).toBe(true); // blocked on the tour row the delete holds
+    tx2.release(); await tx2.done;
+    expect(await add.result).toMatch(/UPSELL_PRODUCT_RULE.*tours that exist/);
+    expect(await prisma.tour.count({ where: { id: SPARE } })).toBe(0);
+    expect((await rteVersion()).eligibleSourceTourIds).not.toContain(SPARE);
+    expect(await dangling()).toBe(0);
+  });
+  it("a merge racing a listing: the merge is refused whole — its moved bookings roll back — no dangling id", async () => {
+    asRole(operatorId, "OPERATOR");
+    await prisma.booking.create({ data: { source: "manual", externalId: "bk-spare-1", tourId: SPARE, date: TODAY, slotIdx: 5, pax: 2, status: "PENDING", customerName: "Invented Guest" } });
+    const v = await rteVersion();
+    const tx1 = held(prisma, (tx) => listSpare(tx, v.id));
+    await tx1.started;
+    const merge = watch(toursRoute(new Request("http://x", { method: "POST", body: JSON.stringify({ action: "merge", fromId: SPARE, toId: TOUR }) }) as never)
+      .then(async (r) => { if (r.status !== 200) throw new Error(`${r.status} ${JSON.stringify(await r.json())}`); }));
+    await pause(500);
+    expect(merge.pending()).toBe(true); // the merge's delete waits on the listing
+    tx1.release(); await tx1.done;
+    expect(await merge.result).toMatch(/^409 .*upsell-eligible/);
+    expect(await prisma.tour.count({ where: { id: SPARE } })).toBe(1);
+    expect(await prisma.booking.count({ where: { tourId: SPARE } })).toBe(1); // the remap rolled back with the delete
+    expect(await dangling()).toBe(0);
+  });
+  it("a merge with nothing listing the tour still works, in one transaction", async () => {
+    asRole(operatorId, "OPERATOR");
+    await prisma.booking.create({ data: { source: "manual", externalId: "bk-spare-2", tourId: SPARE, date: TODAY, slotIdx: 5, pax: 2, status: "PENDING", customerName: "Invented Guest" } });
+    const r = await toursRoute(new Request("http://x", { method: "POST", body: JSON.stringify({ action: "merge", fromId: SPARE, toId: ELSEWHERE }) }) as never);
+    expect(r.status).toBe(200);
+    expect(await prisma.tour.count({ where: { id: SPARE } })).toBe(0);
+    expect(await prisma.booking.count({ where: { tourId: ELSEWHERE, externalId: "bk-spare-2" } })).toBe(1);
+  });
+});
 
 // ── the migration ────────────────────────────────────────────────────────────
 

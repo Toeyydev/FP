@@ -16,6 +16,10 @@
 --     product does not exist yet (the seed runs after migrations) and there is nothing to change.
 -- M3  The database refuses a Route Extension / on-site sale on a tour its version does not
 --     list, and a payment by a method its version does not allow.
+-- M4  An eligible-tour list never names a tour that does not exist — also under concurrency.
+--     A version locks the tours it lists (FOR KEY SHARE) and requires each to exist; a Tour
+--     that any version lists cannot be deleted or have its id changed (trigger on "Tour").
+--     Whichever of the two commits second sees the first: no dangling tour id either way.
 --
 -- Nothing here sells anything; every feature switch stays off.
 
@@ -26,8 +30,18 @@ CREATE OR REPLACE FUNCTION upsell_product_version_type_rules() RETURNS trigger A
 DECLARE
   t text;
   bad text := NULL;
+  missing int := 0;
 BEGIN
   SELECT "productType" INTO t FROM "UpsellProduct" WHERE "id" = NEW."productId";
+
+  -- M4: hold the tours this version names until we commit (a concurrent delete or merge of one
+  -- waits for us, then sees this version and is refused), and count any that do not exist (a
+  -- tour deleted by a transaction that committed while we waited is gone by now).
+  IF cardinality(NEW."eligibleSourceTourIds") > 0 THEN
+    PERFORM 1 FROM "Tour" WHERE "id" = ANY (NEW."eligibleSourceTourIds") FOR KEY SHARE;
+    SELECT count(*) INTO missing FROM (SELECT DISTINCT x FROM unnest(NEW."eligibleSourceTourIds") x) d
+     WHERE NOT EXISTS (SELECT 1 FROM "Tour" WHERE "id" = d.x);
+  END IF;
 
   IF t = 'JOIN_SOURCE_TOUR' THEN
     IF NEW."allowedPaymentMethods" IS DISTINCT FROM ARRAY['CASH']::text[] THEN bad := 'is paid in cash to the guide only';
@@ -40,6 +54,7 @@ BEGIN
     ELSIF EXISTS (SELECT 1 FROM unnest(NEW."eligibleSourceTourIds") x WHERE btrim(x) = '')
        OR cardinality(NEW."eligibleSourceTourIds") <> (SELECT count(DISTINCT x) FROM unnest(NEW."eligibleSourceTourIds") x) THEN
       bad := 'lists each eligible tour once, by id';
+    ELSIF missing > 0 THEN bad := 'lists only tours that exist';
     ELSIF NOT NEW."allowsOtaMix" THEN bad := 'joins jobs that carry OTA guests';
     ELSIF NEW."remittanceMethod" <> 'BANK_TRANSFER' THEN bad := 'is remitted by bank transfer';
     ELSIF NEW."fixedCostPerGuestSatang" <> 0 OR NEW."fixedCostBasis" IS NOT NULL OR NEW."fixedCostCategory" IS NOT NULL THEN
@@ -61,8 +76,7 @@ BEGIN
     ELSIF EXISTS (SELECT 1 FROM unnest(NEW."eligibleSourceTourIds") x WHERE btrim(x) = '')
        OR cardinality(NEW."eligibleSourceTourIds") <> (SELECT count(DISTINCT x) FROM unnest(NEW."eligibleSourceTourIds") x) THEN
       bad := 'lists each eligible tour once, by id';
-    ELSIF EXISTS (SELECT 1 FROM unnest(NEW."eligibleSourceTourIds") x WHERE NOT EXISTS (SELECT 1 FROM "Tour" WHERE "id" = x)) THEN
-      bad := 'lists only tours that exist';
+    ELSIF missing > 0 THEN bad := 'lists only tours that exist';
     ELSIF NEW."allowsOtaMix" THEN bad := 'never shares a job with OTA guests (JOIN_SOURCE_TOUR only)';
     ELSIF NEW."remittanceMethod" <> 'BANK_TRANSFER' THEN bad := 'is remitted by bank transfer';
     -- Delivered on the job it was sold on, with no service report or approval of its own:
@@ -186,3 +200,24 @@ BEGIN
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER upsell_payment_method_allowed BEFORE INSERT ON "UpsellPayment"
   FOR EACH ROW EXECUTE FUNCTION upsell_payment_method_allowed();
+
+-- ─── M4: a tour on an eligible list cannot disappear ───────────────────────────────────────
+-- Any version, sold or not, active or not: a sold version's list can never be rewritten, so a
+-- tour it names stays. DELETE (a tour removed, or merged into another) and a change of id are
+-- refused; other edits to the tour (its name, time, meeting point) are not affected.
+CREATE FUNCTION tour_upsell_eligibility_guard() RETURNS trigger AS $$
+DECLARE
+  codes text;
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW."id" = OLD."id" THEN RETURN NEW; END IF;
+  SELECT string_agg(DISTINCT p."productCode", ', ' ORDER BY p."productCode") INTO codes
+    FROM "UpsellProductVersion" v JOIN "UpsellProduct" p ON p."id" = v."productId"
+   WHERE OLD."id" = ANY (v."eligibleSourceTourIds");
+  IF codes IS NOT NULL THEN
+    RAISE EXCEPTION 'UPSELL_TOUR_IN_USE: tour % is an eligible tour of %; remove it in Upsell settings first', OLD."id", codes;
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER tour_upsell_eligibility_guard BEFORE DELETE OR UPDATE OF "id" ON "Tour"
+  FOR EACH ROW EXECUTE FUNCTION tour_upsell_eligibility_guard();
