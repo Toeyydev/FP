@@ -194,6 +194,10 @@ await seed();
 const server = await startServer();
 const browser = await puppeteer.launch({ executablePath: browserPath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const pageErrors = [];
+// CI runs every e2e against one database: earlier steps leave their own guide payments, advances
+// and PEAK outbox rows. What matters is that this test adds none.
+const moneyRows = async () => ({ outbox: await prisma.advancePeakSync.count(), guidePayments: await prisma.guidePayment.count(), advances: await prisma.guideAdvanceEntry.count() });
+const moneyBefore = await moneyRows();
 try {
   const health = await (await fetch(`${BASE}/api/health`)).json();
   check("/api/health: only UPSELL_ENABLED and the route extension switch are on in this test server", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: true, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
@@ -342,7 +346,8 @@ try {
   check("no page error", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
   const outbound = readFileSync(OUTBOUND, "utf8").trim();
   check("the server called nothing off this machine (no PEAK, no gateway)", outbound === "", outbound.slice(0, 300));
-  check("no PEAK outbox row, guide payment or Company ADV entry", (await prisma.advancePeakSync.count()) === 0 && (await prisma.guidePayment.count()) === 0 && (await prisma.guideAdvanceEntry.count()) === 0);
+  const moneyAfter = await moneyRows();
+  check("no new PEAK outbox row, guide payment or Company ADV entry", JSON.stringify(moneyAfter) === JSON.stringify(moneyBefore), `${JSON.stringify(moneyBefore)} → ${JSON.stringify(moneyAfter)}`);
   check("the job sheet's expenses and fee are untouched", JSON.stringify((await prisma.jobSheet.findFirstOrThrow({ where: { guideId: GUIDE_ID } })).expenses) === "[]");
 } finally {
   await browser.close();
