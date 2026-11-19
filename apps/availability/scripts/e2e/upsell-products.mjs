@@ -7,7 +7,9 @@
 //  • Three Temples on-site shows the owner's rules; Save edits an unsold version, and after a
 //    sale Save makes v2 instead. Activate is not "live" while the switch is off, nor while no
 //    version is on sale today (a gap between versions).
-//  • ACCOUNTANT reads with no controls; OPERATOR is turned away; the API says the same.
+//  • Route Extension (PR3, C2): every tour listed by id, time and full name; none ticked at first,
+//    so it cannot be activated; cash from the guest and bank-transfer hand-in, both fixed.
+//  • ACCOUNTANT and OPERATOR read with no controls; their writes are 403.
 //  • The server makes no request to PEAK, a payment gateway or anything else off this machine.
 //
 // Run after `next build`:  node scripts/e2e/upsell-products.mjs
@@ -232,6 +234,23 @@ try {
   await page.waitForFunction(() => /Active · switch off/.test(document.body.innerText), { timeout: 10000 });
   check("Activate makes it Active · switch off — not live", (await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "THREE-TEMPLES-ONSITE" } })).active === true);
 
+  // Route Extension settings (C2): tours by id, time and full name; none ticked, so no Activate.
+  await goto(page, "/admin/upsell-products/RTE-WPWA");
+  const tr = await text(page);
+  const tours = await page.$$eval('input[name="tours"]', (xs) => xs.map((x) => [x.value, x.checked, x.closest("label")?.textContent?.trim()]));
+  check("Route Extension lists all nine tours, by id · time · full name, none ticked", tours.length === 9 && tours.every(([, on]) => !on)
+    && tours.some(([id, , label]) => id === "T-005" && label === "T-005 · 14:00 · Wat Phrakaew & Grand Palace"), JSON.stringify(tours.slice(0, 3)));
+  check("Activate is off until a tour is chosen, and the page says why", await page.$eval("button.up-active", (b) => b.disabled && b.getAttribute("aria-describedby") === "act-why")
+    && tr.includes("Choose at least one eligible source tour and save before you can activate."));
+  check("cash from the guest and bank-transfer hand-in are fixed, not choices", tr.includes("Cash to the guide only") && tr.includes("Bank transfer to Folkpaths only")
+    && tr.includes("With that tour’s end-tour report") && await page.evaluate(() => !document.querySelector('input[name="methods"]')));
+  const ra = await a11y(page); check("Route Extension settings accessibility", ra.length === 0, ra.join("; "));
+  await page.click('input[name="tours"][value="T-005"]');
+  await page.click("button.up-save");
+  await page.waitForFunction(() => /Saved v1\./.test(document.querySelector('[role="status"]')?.textContent ?? ""), { timeout: 10000 });
+  const rv = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "RTE-WPWA" } } });
+  check("ticking T-005 and Save stores it on v1, cash only, bank-transfer hand-in", JSON.stringify(rv.eligibleSourceTourIds) === '["T-005"]' && JSON.stringify(rv.allowedPaymentMethods) === '["CASH"]' && rv.remittanceMethod === "BANK_TRANSFER");
+
   // Live needs Active + switch + a version on sale today. A gap between versions is not live.
   page.once("dialog", (d) => d.accept());
   await goto(page, "/admin/upsell-products/RTE-WPWA");
@@ -241,7 +260,7 @@ try {
   const rv1 = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "RTE-WPWA" } } });
   const day = (n) => new Date(new Date(`${BKK_TODAY}T00:00:00Z`).getTime() + n * 86400000);
   await prisma.upsellProductVersion.update({ where: { id: rv1.id }, data: { activeFrom: day(-10), activeTo: day(-1) } });
-  await prisma.upsellProductVersion.create({ data: { productId: rv1.productId, version: 2, unitPriceSatang: 25000, allowedPaymentMethods: ["CASH"], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: rv1.taxProfileId, activeFrom: day(5) } });
+  await prisma.upsellProductVersion.create({ data: { productId: rv1.productId, version: 2, unitPriceSatang: 25000, allowedPaymentMethods: ["CASH"], remittanceMethod: "BANK_TRANSFER", eligibleSourceTourIds: ["T-005"], revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: rv1.taxProfileId, activeFrom: day(5) } });
   await goto(page, "/admin/upsell-products/RTE-WPWA");
   const gapText = await text(page);
   check("between versions the product page says not on sale today, never live", gapText.includes("Active · no version on sale today") && !gapText.includes("Active · live"));
@@ -291,14 +310,24 @@ try {
   check("ACCOUNTANT writes are 403", put.status === 403 && act.status === 403, `${put.status} ${act.status}`);
   await acct.close();
 
-  // ── OPERATOR: turned away ──
+  // ── OPERATOR: reads, no controls, writes refused (owner, 19 Nov 2026) ──
   const ops = await browser.newPage();
+  ops.on("pageerror", (e) => pageErrors.push(String(e)));
+  await ops.setViewport({ width: 390, height: 844 });
   await ops.setCookie(await sessionCookie(OPS));
-  await goto(ops, "/admin/upsell-products");
-  check("OPERATOR is sent away from the page", !ops.url().includes("/admin/upsell-products"), ops.url());
-  const r = await api(ops, "/api/admin/upsell-products");
-  check("OPERATOR gets 403 from the API", r.status === 403, String(r.status));
-  check("OPERATOR's menu has no Upsell products", await ops.evaluate(async () => { await new Promise((x) => setTimeout(x, 300)); return ![...document.querySelectorAll(".op-nav a")].some((a) => a.getAttribute("href") === "/admin/upsell-products"); }));
+  await goto(ops, "/admin/upsell-products/RTE-WPWA");
+  const ot = await text(ops);
+  check("OPERATOR opens the Route Extension page, read only, with its tours", ops.url().endsWith("/admin/upsell-products/RTE-WPWA") && ot.includes("Read only — an Admin changes these settings.") && ot.includes("T-005 · 14:00 · Wat Phrakaew & Grand Palace"));
+  check("OPERATOR sees no Save or Activate, and every control is disabled", await ops.evaluate(() =>
+    !document.querySelector("button.up-save, button.up-active") && [...document.querySelectorAll(".op-main input, .op-main select")].every((el) => el.matches(":disabled"))));
+  const oa = await a11y(ops); check("OPERATOR view accessibility", oa.length === 0, oa.join("; "));
+  const of = await fits(ops); check("390px OPERATOR view fits", of.over <= 1, of.culprits.join(" "));
+  await shot(ops, "operator-390");
+  const ostamp = (await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "RTE-WPWA" } })).updatedAt.toISOString();
+  const oput = await api(ops, "/api/admin/upsell-products/RTE-WPWA", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedUpdatedAt: ostamp, price: "1" }) });
+  const oact = await api(ops, "/api/admin/upsell-products/RTE-WPWA/active", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedUpdatedAt: ostamp, active: false }) });
+  check("OPERATOR writes are 403", oput.status === 403 && oact.status === 403, `${oput.status} ${oact.status}`);
+  check("OPERATOR's menu has Upsell products", await ops.evaluate(async () => { await new Promise((x) => setTimeout(x, 500)); return [...document.querySelectorAll(".op-nav a")].some((a) => a.getAttribute("href") === "/admin/upsell-products"); }));
   await ops.close();
 
   check("no page error", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));

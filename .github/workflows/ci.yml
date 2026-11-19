@@ -554,14 +554,27 @@ jobs:
 
       # Settings › Upsell products (PR2): the real deploy seed run twice (the second changes
       # nothing); the three products at 1280 and 390 px with labels, 44 px targets and unique
-      # ids; Save edits an unsold version and makes v2 after a sale; ACCOUNTANT reads only,
-      # OPERATOR is refused; only UPSELL_ENABLED is on and the server calls nothing outside.
+      # ids; Save edits an unsold version and makes v2 after a sale; Route Extension tours and
+      # bank-transfer hand-in (PR3); ACCOUNTANT and OPERATOR read only; the server calls nothing outside.
       - name: Upsell products settings in a real browser
         run: node scripts/e2e/upsell-products.mjs
         env:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-products
+
+      # Tour Upsell PR3: the guide sells Wat Pho + Wat Arun on their own job and takes the cash.
+      # 390 + 1280 px, accessibility, a payment confirmation (never a receipt) with Sale Ref and
+      # Job Ref, cash held / to remit from the custody ledger, a double tap = one sale, a lost
+      # response = "Checking the status…" then the same sale (also after a reload), a request
+      # that never arrived = Send again with the same key, the guest limit, nothing after the
+      # end-tour report, no Extras for an operator, and nothing called outside this machine.
+      - name: Upsell Route Extension sale in a real browser
+        run: node scripts/e2e/upsell-route-extension.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-route-extension
 
       # A tour that already has a guide is offered only as an explicit replacement: the
       # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.

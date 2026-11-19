@@ -7,6 +7,7 @@ import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import UpsellExtras from "./UpsellExtras";
 import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
@@ -1162,6 +1163,9 @@ export default function JobSheetEditor() {
                     })}
                   </ol>
                 ) : <div className="gs-empty">No customer list yet.</div>}
+                {/* Extras (Tour Upsell PR3): the guide's own job only; draws nothing while the
+                    Route Extension switch is off or nothing is on sale here. */}
+                {role === "GUIDE" && <UpsellExtras guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />}
               </div>
               <div>
                 <h3>Payout</h3>

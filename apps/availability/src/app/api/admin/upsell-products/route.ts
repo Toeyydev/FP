@@ -5,7 +5,7 @@ import { upsellSettingsAccess } from "@/lib/upsell/settings-access";
 
 export const dynamic = "force-dynamic";
 
-// GET — the upsell products, for Settings › Upsell products. ADMIN and ACCOUNTANT; 404 while
+// GET — the upsell products, for Settings › Upsell products. ADMIN, OPERATOR and ACCOUNTANT; 404 while
 // UPSELL_ENABLED is off. Reads only.
 export async function GET() {
   const a = await upsellSettingsAccess();

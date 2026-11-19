@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { productsListingTour } from "@/lib/upsell/products";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
@@ -67,6 +68,8 @@ export async function POST(req: NextRequest) {
     if (!p.success || p.data.fromId === p.data.toId) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const [from, to] = await Promise.all([prisma.tour.findUnique({ where: { id: p.data.fromId } }), prisma.tour.findUnique({ where: { id: p.data.toId } })]);
     if (!from || !to) return NextResponse.json({ error: "no-tour" }, { status: 404 });
+    const upsell = await productsListingTour(prisma, p.data.fromId);
+    if (upsell.length) return NextResponse.json({ error: "upsell-eligible", message: `${p.data.fromId} is an eligible tour of ${upsell.join(", ")} — remove it in Upsell settings first.` }, { status: 409 });
     await remapTour(p.data.fromId, p.data.toId);
     await prisma.tour.delete({ where: { id: p.data.fromId } });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "tour.merged", entityType: "Tour", entityId: p.data.fromId, detail: { into: p.data.toId } });
@@ -81,6 +84,8 @@ export async function POST(req: NextRequest) {
       prisma.assignment.count({ where: { tourId: p.data.id } }),
     ]);
     if (bk > 0 || asg > 0) return NextResponse.json({ error: "in-use", message: "This tour still has bookings or assignments — merge it into another tour instead." }, { status: 409 });
+    const upsell = await productsListingTour(prisma, p.data.id);
+    if (upsell.length) return NextResponse.json({ error: "upsell-eligible", message: `${p.data.id} is an eligible tour of ${upsell.join(", ")} — remove it in Upsell settings first.` }, { status: 409 });
     await prisma.tour.delete({ where: { id: p.data.id } });
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "tour.deleted", entityType: "Tour", entityId: p.data.id });
     return NextResponse.json({ ok: true });
