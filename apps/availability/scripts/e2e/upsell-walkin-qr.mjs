@@ -259,10 +259,10 @@ try {
   await prisma.tourReport.create({ data: { guideId: GUIDE_ID, date: TODAY, slotIdx: SLOT, tourId: TOUR } });
   await guide.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
   await goto(guide, JOB_PATH);
-  await tap(guide, ".ups-prepare");
-  await guide.waitForSelector(".ups-memo", { timeout: 15000 });
+  await guide.waitForSelector(".js-handin .ups-transfer-ref-code", { timeout: 15000 });
   const code = await text(guide, ".ups-code");
-  check("after the report: the hand-in code covers both walk-in sales (฿2,100) before any transfer", /^FOLK-CSH-\d{6}-\d{3}$/.test((await text(guide, ".ups-memo")).trim()) && /฿2,100/.test(code) && (await prisma.cashSettlementTransfer.count()) === 0, code.slice(0, 240));
+  const jobRefNow = (await prisma.jobSheet.findFirstOrThrow({ where: { guideId: GUIDE_ID, date: TODAY, slotIdx: SLOT } })).ref;
+  check("after the report: one ref.โอนเงิน (the Job Ref) and the hand-in covers both walk-in sales (฿2,100) before any transfer", (await text(guide, ".js-handin .ups-transfer-ref-code")).trim() === jobRefNow && /฿2,100/.test(code) && (await prisma.cashSettlementTransfer.count()) === 0, code.slice(0, 240));
   await shot(guide, "guide-handin-code-390");
 
   // ── An Admin refunds the QR guest (the company pays it back): the guest's page tells the truth ──

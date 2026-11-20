@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { upsellSaleAccess } from "@/lib/upsell/access";
-import { recordRouteExtensionSale, UpsellSaleError } from "@/lib/upsell/sales";
+import { listCashSales, recordRouteExtensionSale, UpsellSaleError } from "@/lib/upsell/sales";
+import { cashActor, only } from "@/lib/upsell/cash-access";
 
 export const dynamic = "force-dynamic";
 
@@ -22,4 +23,13 @@ export async function POST(req: NextRequest) {
     if (e instanceof UpsellSaleError) return NextResponse.json({ error: e.code, message: e.message, ...(e.detail ?? {}) }, { status: e.status });
     throw e;
   }
+}
+
+// GET — finance roles (Admin, operator, accountant) read the guides' cash sales as recorded: what
+// the guide's "Send to Admin" put in front of Admin. Read only.
+export async function GET() {
+  const a = await cashActor();
+  if (a instanceof NextResponse) return a;
+  const no = only(a, "ADMIN", "OPERATOR", "ACCOUNTANT"); if (no) return no;
+  return NextResponse.json({ rows: await listCashSales(prisma) });
 }

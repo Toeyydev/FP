@@ -8,6 +8,7 @@ import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import UpsellExtras from "./UpsellExtras";
+import { InlineExtra, UpsellJobProvider } from "./upsell/UpsellJob";
 import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
@@ -1123,6 +1124,9 @@ export default function JobSheetEditor() {
               <div className="gs-when">{sheet.date} · {SLOT_TIMES[sheet.slotIdx] ?? ""}{totalPax ? ` · ${totalPax} pax` : ""}</div>
             </div>
             <div className="gs-grid">
+              {/* Extras (Tour Upsell): one provider for the tick after each name and the Send below;
+                  the guide's own job only — nothing is drawn while the switch is off. */}
+              <UpsellJobProvider enabled={role === "GUIDE"} guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} sheetRefs={sheet.bookings.map((b) => b.bookingNo ?? "")}>
               <div>
                 <h3>Your customers ({sheet.bookings.length}){noShowTotal > 0 ? <span style={{ color: "var(--danger)", fontWeight: 700 }}> · {noShowTotal} no-show</span> : null}<span className="js-arrived-count" style={{ color: "#2e7d4f", fontWeight: 700 }}> · มาแล้ว {arrivedPax}/{bookedTotal}</span></h3>
                 <GuestCounts rows={sheet.bookings} sync={bookingSync} />
@@ -1142,6 +1146,7 @@ export default function JobSheetEditor() {
                           </label>
                         ); })()}
                         <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}{(b.tickets === "included" || b.tickets === "not") && <span style={{ display: "inline-block", marginLeft: 6, verticalAlign: "middle" }}><TicketBadge tickets={b.tickets} /></span>}</span>
+                        {role === "GUIDE" && <InlineExtra bookingNo={b.bookingNo} />}
                         {b.bookingNo && guestContacts[b.bookingNo] && <WhatsAppButton href={guestContacts[b.bookingNo].whatsapp} display={guestContacts[b.bookingNo].display} name={b.name} />}
                         {canMarkNoShow ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
@@ -1163,10 +1168,9 @@ export default function JobSheetEditor() {
                     })}
                   </ol>
                 ) : <div className="gs-empty">No customer list yet.</div>}
-                {/* Extras (Tour Upsell PR3): the guide's own job only; draws nothing while the
-                    Route Extension switch is off or nothing is on sale here. */}
-                {role === "GUIDE" && <UpsellExtras guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />}
+                {role === "GUIDE" && <UpsellExtras />}
               </div>
+              </UpsellJobProvider>
               <div>
                 <h3>Payout</h3>
                 {/* The operator's recorded expenses, ALWAYS visible. This list used to

@@ -179,15 +179,15 @@ try {
   await guide.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
   await goto(guide, JOB_PATH);
   await guide.waitForSelector(".js-handin", { timeout: 15000 });
-  check("reading the page makes no hand-in code", !(await guide.$(".ups-memo")) && (await prisma.cashSettlement.count()) === 0);
-  await tap(guide, ".ups-prepare");
-  await guide.waitForSelector(".ups-memo", { timeout: 10000 });
-  const memo = (await text(guide, ".ups-memo")).trim();
+  // One ref.โอนเงิน — the Job Ref — shown from the start; nothing is minted by reading the page.
+  const sheetRef = (await prisma.jobSheet.findUniqueOrThrow({ where: { id: sheet.id } })).ref;
+  const memo = (await text(guide, ".js-handin .ups-transfer-ref-code")).trim();
   const codeCard = await text(guide, ".ups-code");
-  check("the hand-in code is shown, copyable, with the job and the sales it covers — before any transfer", /^FOLK-CSH-\d{6}-\d{3}$/.test(memo) && !!(await guide.$(".ups-copy")) && /FOLK-UPS-/.test(codeCard) && /To hand in/.test(codeCard), codeCard.slice(0, 200));
-  check("no receiving account yet: the guide is told to keep the cash and contact Admin — no Send", !!(await guide.$(".ups-no-account")) && !(await guide.$(".ups-send")) && !(await guide.$(".ups-add-transfer")));
+  check("the hand-in shows ONE ref.โอนเงิน = the Job Ref, copyable, with the sales it covers — no separate code to get", memo === sheetRef && !!(await guide.$(".js-handin .ups-copy-ref")) && !(await guide.$(".ups-prepare")) && /FOLK-UPS-/.test(codeCard) && /To hand in/.test(codeCard), `${memo} vs ${sheetRef}`);
+  check("reading the page makes no hand-in document", (await prisma.cashSettlement.count()) === 0);
+  check("no receiving account yet: the guide is told to keep the cash and contact Admin — no Send, no upload", !!(await guide.$(".ups-no-account")) && !(await guide.$(".ups-send")) && !(await guide.$(".ups-upload")));
   await goto(guide, JOB_PATH);
-  check("after a refresh: the same code, no second one", (await text(guide, ".ups-memo")).trim() === memo && (await prisma.cashSettlement.count()) === 1);
+  check("after a refresh: the same ref, still no document", (await text(guide, ".js-handin .ups-transfer-ref-code")).trim() === memo && (await prisma.cashSettlement.count()) === 0);
 
   // The Admin sets the account (from PEAK in production; the PEAK lookup itself is tested elsewhere).
   const admin = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN } });
@@ -248,7 +248,7 @@ try {
   await goto(guide, JOB_PATH);
   await guide.waitForSelector(".ups-returned", { timeout: 10000 });
   const back = await text(guide, ".js-handin");
-  check("returned: the same hand-in code", (await text(guide, ".ups-memo")).trim() === memo);
+  check("returned: the same ref.โอนเงิน", (await text(guide, ".js-handin .ups-transfer-ref-code")).trim() === memo);
   check("returned: the slip stays, do not transfer again", /do not transfer again/i.test(back) && (await guide.$$(".ups-slip")).length === 1, back.slice(0, 300));
   await tap(guide, ".ups-send");
   await guide.waitForFunction(() => /ส่งแล้ว รอตรวจสอบ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });

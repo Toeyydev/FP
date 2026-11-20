@@ -10,7 +10,7 @@ import { prisma } from "@/lib/db";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { seedUpsellProducts } from "./catalog";
 import { addDays, bangkokToday } from "./products";
-import { recordRouteExtensionSale } from "./sales";
+import { listCashSales, recordRouteExtensionSale } from "./sales";
 import { chooseGuests } from "@/test/upsell-allocation";
 import {
   SettlementError, confirmHandIn, handInView, listHandIns, prepareHandIn, removeHandInSlip, reportTransfer, returnHandIn, reviewHandInSlip,
@@ -333,5 +333,19 @@ describe("RECEIVING ACCOUNT SNAPSHOT (Codex): the account a slip was paid into i
     expect(s.submission.kind).toBe("TRANSFERS");
     expect((await confirmHandIn(prisma, admin, { settlementId: s.settlement.id, submissionNo: 1, transferIds: [t.id] })).remittedSatang).toBe(80000);
     expect(await held()).toBe(0);
+  });
+});
+
+describe("Send to Admin (owner, 20 Nov 2026): the recorded sale is in front of Admin at once", () => {
+  it("listed for finance with the guide, job, bookings × guests and the hand-in state; then the slip's state", async () => {
+    await ready();
+    const rows = await listCashSales(prisma);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.guideId === G && r.handIn === "NOT_SENT" && r.bookings.length > 0)).toBe(true);
+    expect(rows.map((r) => r.grossSatang).sort()).toEqual([20000, 60000]);
+    expect(rows.reduce((n, r) => n + r.bookings.reduce((k, b) => k + b.guests, 0), 0)).toBe(4);
+    const sl = await upload();
+    await submitHandInSlips(prisma, guide, { jobSheetId: jobId, slipIds: [sl.id] });
+    expect((await listCashSales(prisma)).every((r) => r.handIn === "SUBMITTED")).toBe(true);
   });
 });

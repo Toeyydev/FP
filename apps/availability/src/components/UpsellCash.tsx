@@ -13,6 +13,7 @@ type Slip = { id: string; seq: number; status: string; url: string | null; uploa
   reviewed: { amountSatang: number; transferredAt: string; bankRef: string; accountId: string; accountVersion: number; toAccount: string; reviewedAt: string } | null; transferId: string | null };
 type HandIn = { id: string; settlementNo: string; guideId: string; jobRef: string | null; jobDate: string; status: string; submissionNo: number; returnedReason: string | null; owedSatang: number;
   submission: { submissionNo: number; kind: string; expectedSatang: number; slipIds: string[]; totalSatang: number; transferIds: string[]; status: string; saleRefs: string[] } | null; transfers: Transfer[]; slips: Slip[] };
+type CashSale = { saleNo: string; guideId: string; jobRef: string | null; jobDate: string; productName: string; kind: string; guests: number; grossSatang: number; status: string; recordedAt: string; bookings: { bookingRef: string; guests: number; status: string }[]; handIn: string };
 type KnownAccount = { id: string; version: number; label: string; display: string; retired: boolean };
 type Reversal = { id: string; kind: string; status: string; reason: string; saleNo: string; grossSatang: number; guideId: string; jobRef: string | null; guideAffirmationText: string | null; guideAffirmedAt: string | null; refundAmountSatang: number | null; refundPaidBy: string | null; refundEvidenceUrl: string | null; createdAt: string };
 type Account = { id: string; version: number; label: string; display: string; peakPaymentMethodName: string | null; confirmedAt: string; retiredAt: string | null };
@@ -87,6 +88,7 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
             )}
         </section>
 
+        <CashSalesPanel />
         <PeakPanel isAdmin={isAdmin} onDone={done} />
         <ReversalsPanel rows={reversals} isAdmin={isAdmin} onDone={done} />
         <AccountPanel accounts={accounts} isAdmin={isAdmin} onDone={done} />
@@ -160,7 +162,7 @@ function SlipsDialog({ h, known, onClose, onDone, onReload, onReturn }: { h: Han
     <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="modal js-slips-dialog" role="dialog" aria-modal="true" aria-labelledby="sl-h" style={{ width: "min(620px, 100%)" }}>
         <h3 id="sl-h">Check the slips · {baht(sub.expectedSatang)} owed</h3>
-        <div className="mctx">{h.guideId} · {h.settlementNo} (the memo) · {h.jobRef ?? h.jobDate} · submission {sub.submissionNo} · owed now {baht(h.owedSatang)}</div>
+        <div className="mctx">{h.guideId} · ref.โอนเงิน {h.jobRef ?? "—"} · hand-in {h.settlementNo} · {h.jobDate} · submission {sub.submissionNo} · owed now {baht(h.owedSatang)}</div>
         <div className="mbody">
           {slips.map((x) => (
             <div key={x.id} className="js-slip" style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 10, display: "grid", gap: 6, fontSize: 13.5 }}>
@@ -224,6 +226,34 @@ function SlipReview({ h, slip, known, onSaved, onCancel }: { h: HandIn; slip: Sl
         <button className="btn sm primary js-slip-save" onClick={() => void save()} disabled={busy || !f.amount || !f.date || !f.time || !f.ref.trim() || !f.verified}>{busy ? "…" : "Save what the slip shows"}</button>
       </div>
     </div>
+  );
+}
+
+/** The guides' cash sales as recorded ("Send to Admin" on the job sheet) — read only. */
+const HANDIN: Record<string, string> = { NOT_SENT: "Cash with the guide", DRAFT: "Cash with the guide", SUBMITTED: "Slip sent — check it above", RETURNED: "Returned to the guide", CONFIRMED: "Handed in", REVERSED: "Reversed" };
+function CashSalesPanel() {
+  const [rows, setRows] = useState<CashSale[] | null>(null);
+  useEffect(() => { void call("/api/upsell/sales", { cache: "no-store" }).then((d) => setRows(d.rows)).catch(() => setRows([])); }, []);
+  return (
+    <section className="panel js-cash-sales" style={{ marginBottom: 14 }}>
+      <div className="op-toolbar"><b>Cash sales from guides</b><span className="muted" style={{ fontSize: 12 }}>Sent by the guide when the cash was received · read only</span></div>
+      {rows == null ? <div style={{ padding: 14 }}><div className="skel-row" /></div>
+        : rows.length === 0 ? <div className="op-empty" style={{ padding: 18 }}>No cash sales yet.</div>
+        : (
+          <div style={{ padding: "0 10px 10px", display: "grid", gap: 8 }}>
+            {rows.map((r) => (
+              <div key={r.saleNo} className="js-cash-sale" style={{ border: "1px solid var(--line)", borderRadius: 10, padding: "8px 10px", display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: "4px 12px", fontSize: 13.5 }}>
+                <span style={{ minWidth: 0, flex: "1 1 220px", wordBreak: "break-word" }}>
+                  <b>{r.productName}</b> · {r.guests} {r.guests === 1 ? "guest" : "guests"}{r.status === "REVERSED" ? " · reversed" : ""}
+                  <br /><span className="muted" style={{ fontSize: 12 }}>{r.guideId} · {r.jobRef ?? r.jobDate} · {r.saleNo} · {when(r.recordedAt)}</span>
+                  {r.bookings.length > 0 && <><br /><span className="muted" style={{ fontSize: 12 }}>{r.bookings.map((b) => `${b.bookingRef} × ${b.guests}${b.status === "RELEASED" ? " (reversed)" : ""}`).join(" · ")}</span></>}
+                </span>
+                <span style={{ textAlign: "right", whiteSpace: "nowrap" }}><b>{baht(r.grossSatang)}</b><br /><span className="muted" style={{ fontSize: 12 }}>{HANDIN[r.handIn] ?? r.handIn}</span></span>
+              </div>
+            ))}
+          </div>
+        )}
+    </section>
   );
 }
 

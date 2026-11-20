@@ -468,3 +468,28 @@ export async function walkInOffer(db: Db | Tx, jobSheetId: string, productVersio
   const pax = await jobPax(db, sheet);
   return { open: true as const, sheet, product: onSale.product, version: onSale.version, pax, seatsLeft: Math.max(0, PAX_PER_GUIDE - pax) };
 }
+
+// ── Finance: the guides' cash sales, as recorded ─────────────────────────────
+
+export type CashSaleRow = {
+  saleNo: string; guideId: string; jobRef: string | null; jobDate: string; productName: string; kind: "ROUTE_EXTENSION" | "WALK_IN";
+  guests: number; grossSatang: number; status: string; recordedAt: string;
+  bookings: { bookingRef: string; guests: number; status: string }[];
+  /** The job's hand-in: NOT_SENT until the guide uploads a slip and sends. */
+  handIn: string;
+};
+
+/** Every cash sale a guide recorded, newest first — what "Send to Admin" puts in front of Admin. Read only. */
+export async function listCashSales(db: Db, take = 100): Promise<CashSaleRow[]> {
+  const sales = await db.upsellSale.findMany({ orderBy: { createdAt: "desc" }, take,
+    include: { sourceJobSheet: { select: { ref: true, date: true } }, allocations: { orderBy: { createdAt: "asc" }, select: { bookingRef: true, guests: true, status: true } } } });
+  const keys = [...new Set(sales.map((s) => `${s.sellingGuideId}|${s.sourceJobSheetId}`))];
+  const settlements = keys.length ? await db.cashSettlement.findMany({ where: { OR: keys.map((k) => { const [guideId, sourceJobSheetId] = k.split("|"); return { guideId, sourceJobSheetId }; }) }, select: { guideId: true, sourceJobSheetId: true, status: true } }) : [];
+  const handIn = new Map(settlements.map((s) => [`${s.guideId}|${s.sourceJobSheetId}`, s.status]));
+  return sales.map((s) => {
+    const v = saleView(s, s.sourceJobSheet.ref);
+    return { saleNo: s.saleNo, guideId: s.sellingGuideId, jobRef: s.sourceJobSheet.ref, jobDate: s.sourceJobSheet.date, productName: v.productName, kind: v.kind,
+      guests: s.guests, grossSatang: s.grossSatang, status: s.status, recordedAt: s.createdAt.toISOString(), bookings: s.allocations,
+      handIn: handIn.get(`${s.sellingGuideId}|${s.sourceJobSheetId}`) ?? "NOT_SENT" };
+  });
+}

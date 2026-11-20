@@ -1,10 +1,13 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { TransferRef } from "@/components/UpsellExtras";
 
 // The guide hands in the Extras cash of one job — slips only (owner, 20 Nov 2026: "ให้อัพโหลดสลิป
-// อย่างเดียวก็พอแล้ว"): get the code (the transfer's memo), transfer the amount owed to the account
-// shown, upload the slip(s), Send. The guide never types an amount, a time or a reference — an Admin
+// อย่างเดียวก็พอแล้ว"): transfer the amount owed to the account shown with ref.โอนเงิน — the Job Ref,
+// the same one code shown since the sale — in the memo, upload the slip(s), Send. The hand-in's own
+// number (FOLK-CSH, made when the first slip is uploaded) stays the internal document; one issued
+// earlier keeps showing, small, so a memo already used with it is still recognised. The guide never types an amount, a time or a reference — an Admin
 // reads them off the slip and the statement. Returned = the slips stay; add or take out a wrong one,
 // never transfer again. Transfers reported the earlier way stay readable. Everything shown comes
 // from the server (lib/upsell/settlement).
@@ -38,7 +41,6 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
   const [v, setV] = useState<View | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [takeOut, setTakeOut] = useState<{ id: string; reason: string } | null>(null);
   const [fileKey, setFileKey] = useState(0);
 
@@ -49,7 +51,6 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
   if (!v || (v.heldSatang === 0 && v.status === "NOT_SENT" && v.transfers.length === 0 && v.slips.length === 0)) return null;
 
   const editable = v.status === "NOT_SENT" || v.status === "DRAFT" || v.status === "RETURNED";
-  const prepared = !!v.memo;
   const active = v.slips.filter((x) => x.status === "ACTIVE");
   const legacy = v.transfers.filter((t) => t.status === "REPORTED");
 
@@ -58,8 +59,6 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
     try { await fn(); await load(); } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
-  // The hand-in code comes first: the guide puts it in the transfer's memo (owner, 20 Nov 2026).
-  const prepare = () => run(() => call(`/api/upsell/hand-in/${jobSheetId}/prepare`, { method: "POST" }));
   const upload = (files: FileList | null) => run(async () => {
     for (const f of Array.from(files ?? [])) { const fd = new FormData(); fd.append("file", f); await call(`/api/upsell/hand-in/${jobSheetId}/slip`, { method: "POST", body: fd }); }
     setFileKey((k) => k + 1);
@@ -70,9 +69,6 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
   });
   const send = () => run(() => call(`/api/upsell/hand-in/${jobSheetId}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slipIds: active.map((x) => x.id) }) }));
   const sendLegacy = () => run(() => call(`/api/upsell/hand-in/${jobSheetId}/submit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transferIds: legacy.map((t) => t.id) }) }));
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(v.memo ?? ""); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* select the text by hand */ }
-  };
 
   const slipRow = (x: Slip) => {
     const out = x.status === "REMOVED", ok = x.confirmed;
@@ -116,28 +112,16 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
       {v.status === "SUBMITTED" && <div role="status" className="ups-sent" style={{ background: C.warnBg, border: `1px solid ${C.warnLine}`, borderRadius: 10, padding: "10px 12px", color: C.warnInk, fontSize: 13.5 }}><b>ส่งแล้ว รอตรวจสอบ</b> · Sent — Admin is checking · {v.settlementNo}<br />Cash held stays {baht(v.heldSatang)} until Admin confirms it against the bank.</div>}
       {v.status === "CONFIRMED" && <div role="status" className="ups-confirmed" style={{ background: C.okBg, border: `1px solid ${C.okLine}`, borderRadius: 10, padding: "10px 12px", color: C.okInk, fontSize: 13.5 }}><b>✓ Confirmed</b> · {v.settlementNo}. Locked — a correction after confirmation is made by Admin (later).</div>}
 
-      {editable && !prepared && (
-        <>
-          <p style={{ margin: 0, fontSize: 13.5 }}>First get this job’s hand-in code — you put it in the memo of your bank transfer, so Folkpaths can match the money to this tour.</p>
-          <button type="button" className="ups-prepare" disabled={busy} onClick={() => void prepare()} style={btn(true)}>Get the hand-in code</button>
-        </>
-      )}
-      {prepared && (
-        <div className="ups-code" style={{ border: `1px solid ${C.brand}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 12.5, color: C.soft }}>Hand-in code — put it in the transfer’s memo <small>ใส่รหัสนี้ในบันทึกช่วยจำของการโอน</small></div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <code className="ups-memo" style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 20, fontWeight: 800, overflowWrap: "anywhere", userSelect: "all" }}>{v.memo}</code>
-            <button type="button" className="ups-copy" onClick={() => void copy()} style={{ minHeight: 44, padding: "0 14px", borderRadius: 8, border: `1px solid ${C.brand}`, background: "#fff", color: C.brand, font: "inherit", fontWeight: 700, cursor: "pointer" }}>{copied ? "Copied" : "Copy"}</button>
-          </div>
-          <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "4px 12px", fontSize: 13.5, fontVariantNumeric: "tabular-nums" }}>
-            <dt style={{ color: C.soft }}>Job</dt><dd style={{ margin: 0, textAlign: "right", overflowWrap: "anywhere" }}>{v.jobRef ?? "—"}</dd>
-            {v.coverage.map((c) => <Fragment key={c.saleNo}><dt style={{ color: C.soft, overflowWrap: "anywhere" }}>{c.saleNo} · {c.productName}{c.reversal === "REFUNDED_BY_COMPANY" ? ` · refunded by the company (sale ${baht(c.grossSatang)}) — the cash is still yours to hand in` : ""}</dt><dd style={{ margin: 0, textAlign: "right" }}>{baht(c.heldSatang)}</dd></Fragment>)}
-            <dt style={{ fontWeight: 800 }}>To hand in</dt><dd className="ups-owed" style={{ margin: 0, textAlign: "right", fontWeight: 800 }}>{baht(v.toRemitSatang)}</dd>
-            {v.receivingAccount && <><dt style={{ color: C.soft }}>Transfer to</dt><dd className="ups-account" style={{ margin: 0, textAlign: "right", overflowWrap: "anywhere" }}>{v.receivingAccount.label} · {v.receivingAccount.display}</dd></>}
-          </dl>
-        </div>
-      )}
-      {editable && prepared && !v.receivingAccount && (
+      <div className="ups-code" style={{ border: `1px solid ${C.brand}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+        <TransferRef jobRef={v.jobRef} />
+        <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "4px 12px", fontSize: 13.5, fontVariantNumeric: "tabular-nums" }}>
+          {v.coverage.map((c) => <Fragment key={c.saleNo}><dt style={{ color: C.soft, overflowWrap: "anywhere" }}>{c.saleNo} · {c.productName}{c.reversal === "REFUNDED_BY_COMPANY" ? ` · refunded by the company (sale ${baht(c.grossSatang)}) — the cash is still yours to hand in` : ""}</dt><dd style={{ margin: 0, textAlign: "right" }}>{baht(c.heldSatang)}</dd></Fragment>)}
+          <dt style={{ fontWeight: 800 }}>To hand in</dt><dd className="ups-owed" style={{ margin: 0, textAlign: "right", fontWeight: 800 }}>{baht(v.toRemitSatang)}</dd>
+          {v.receivingAccount && <><dt style={{ color: C.soft }}>Transfer to</dt><dd className="ups-account" style={{ margin: 0, textAlign: "right", overflowWrap: "anywhere" }}>{v.receivingAccount.label} · {v.receivingAccount.display}</dd></>}
+        </dl>
+        {v.memo && <small className="ups-memo" style={{ color: C.soft }}>Hand-in no. {v.memo} · internal</small>}
+      </div>
+      {editable && !v.receivingAccount && (
         <div className="ups-no-account" style={{ background: C.warnBg, border: `1px solid ${C.warnLine}`, borderRadius: 10, padding: "10px 12px", color: C.warnInk, fontSize: 13.5 }}>
           <b>Receiving account not set yet</b><br />An Admin has not chosen the account for Extras cash. Keep the cash; hand in once it is set. <b>Contact Admin.</b>
         </div>
@@ -145,7 +129,7 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
       {v.transfers.length > 0 && <ul aria-label="Transfers reported earlier" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>{v.transfers.map(transferRow)}</ul>}
       {v.slips.length > 0 && <ul aria-label="Your slips" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>{v.slips.map(slipRow)}</ul>}
 
-      {editable && prepared && v.receivingAccount && legacy.length === 0 && (
+      {editable && v.receivingAccount && legacy.length === 0 && (
         <>
           <label className="ups-upload" style={{ ...btn(active.length === 0), display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", opacity: busy ? 0.6 : 1 }}>
             {busy ? "Uploading…" : active.length ? "+ Add another slip" : "Upload the bank slip"}
