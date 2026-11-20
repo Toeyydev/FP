@@ -60,25 +60,54 @@ from this session. No private data: every figure, name and reference is invented
   - Journals have no reference lookup. An Admin enters the code from PEAK, and it is verified
     (live, lines, date) before POSTED.
 
+## Built since (20 Nov 2026, commits 714d864 … 4ba3f50 on feat/upsell-settlement)
+
+- **Coverage is per-sale net custody.** A company-refunded sale stays covered, because the
+  guide still holds its cash. A submission is refused unless the covered sales add up to
+  what is owed.
+- **Automatic sync in the payment worker** (`syncUpsellPeakBatch`), off unless `UPSELL_PEAK_AUTO_SYNC=1`:
+  - it recovers expired leases;
+  - it re-checks BLOCKED events against their kept needs and their dependencies;
+  - it sends the oldest PENDING events first (lease + CAS);
+  - it reads UNCERTAIN events back: found → POSTED, otherwise it waits for an Admin. It never resends.
+  - A clearing, recognition or cancel waits (BLOCKED, "Waits for the PEAK receipt of …") until the sale's receipt is POSTED.
+- **Receipt client and adapter** (official POST/GET `/Receipts`):
+  - not VAT-registered → taxStatus 2, vatType 1, isTaxInvoice 0, the guest's total;
+  - the Sale Ref is the reference and the Job Ref is in the remark;
+  - it credits revenue, or unearned revenue for a future service;
+  - the payment goes into guide cash held;
+  - read-back is by reference.
+- **Revenue recognition journal** on the service date: Dr unearned, Cr revenue.
+- **PEAK status on Extras cash:** Queued / Synced / Failed / Uncertain / Blocked.
+  - Admin: Send again for FAILED, Check in PEAK for UNCERTAIN.
+- **The `markDocumentPaid` race is closed.** `peakPaymentConfirmedAt` is stamped as soon as
+  PEAK says paid. A later local failure → PAYMENT_UNCERTAIN.
+  - "Payment not found" is refused, and a DB trigger stops it from ever becoming payable again.
+- **Re-recording a reversed advance** from Bank transfers → Record advance, with the reference locked; Admin only.
+- **Walk-in seat backend** (`recordWalkInSale`), behind `UPSELL_ONSITE_TOUR_ENABLED`, no UI yet:
+  - ฿700 a guest, booked to Tour Service Revenue;
+  - seats are 12 per guide less every live guest on the job (OTA included);
+  - one `walk-in` booking per sale;
+  - an old-category version is refused.
+  - Mockup: `mockups/pr4w-walkin-sale.html`.
+
 ## Remaining before production
 
-1. Owner: slips for Q-T1; confirm Q-T2 (no-digit references flagged, never matched).
-2. Read-only preflight of the registry backfill on today's data (authorised; not yet run).
-3. Done: the PR4-0b and PR4 screens, the slip upload (evidence id), and the browser e2e
-   (hand-in 17/17, bank transfers 12/12).
-4. PR4-P, still open:
-   - **UAT / account questions (concrete inputs):**
-     - (a) the PEAK payment-method id of the KASIKORN receiving account, plus its account code and sub-id for journals;
-     - (b) the PEAK account for `UPSELL_GUIDE_CASH_HELD`;
-     - (c) the accounts for `UPSELL_ROUTE_REVENUE` and `TOUR_SERVICE_REVENUE`;
-     - (d) the journal type and contact for the clearing journal;
-     - (e) the PEAK no-VAT receipt document type and its API contract (no receipts client exists);
-     - (f) UAT access to check all of the above;
-     - (g) the accountant confirms the tax profile.
-   - Receipt / void / credit-note adapters after (e).
-   - The existing `markDocumentPaid` post-PEAK race: reconcile it and show UNCERTAIN. The precheck does not remove it.
-   - An automatic sender loop (cron/worker). Today it is the Admin send/read-back routes only.
-5. Walk-in sale (JOIN_SOURCE_TOUR, ฿700 total, Tour Service Revenue, THREE-TEMPLES-ONSITE v2): mockup first.
-6. Re-record a reversed transfer for advances from the Bank transfers screen (guide payments only so far).
-7. Over-transfer after a reversal (money already banked exceeds what is owed) and partial / SHORT
-   hand-ins: later PR (currently refused, fail-closed).
+1. Owner: slips for Q-T1. Confirm Q-T2 (references with no digits are flagged, never matched).
+2. Read-only preflight of the registry backfill on today's data (authorised, not yet run).
+3. **PEAK UAT is blocked.** UAT ClientToken returned 600 "API Client Token Validate User
+   Failed" (Codex, 20 Nov). It needs PEAK to validate the UAT user; no email has been sent.
+   Until then, nothing is verified live.
+4. **Configuration still unknown** (BLOCKED in code, named):
+   - `PEAK_UPSELL_CONFIG`:
+     - `receivingAccounts[<KBank payment-method id>]` {accountCode, accountSubId};
+     - `clearingJournalTypeId`, `clearingContactId`;
+     - `receiptContactId`, `recognitionJournalTypeId`;
+     - `receiptPayment` (ACCOUNT_CODE or PAYMENT_METHOD + id).
+   - Mappings: `UPSELL_GUIDE_CASH_HELD`, `UPSELL_ROUTE_REVENUE`, `TOUR_SERVICE_REVENUE`, `UPSELL_UNEARNED_REVENUE`.
+   - Tax profile confirmed by the accountant, with `peakDocumentKind`.
+   - The wrapper-key case (`peakReceipts` vs `PeakReceipts`): the docs disagree; check on UAT.
+5. Void / credit note for sale reversals: still BLOCKED (decided after UAT). PEAK documents
+   `POST /Receipts/void` (by id or code).
+6. Walk-in guide UI, after review of `pr4w-walkin-sale.html`. Lead name: required or optional?
+7. Over-transfer after a reversal, and partial / SHORT hand-ins: a later PR (refused now, fail-closed).
