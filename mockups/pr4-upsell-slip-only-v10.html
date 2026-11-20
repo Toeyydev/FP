@@ -11,11 +11,11 @@
   :root { --ink:#18181B; --soft:#71717A; --brand:#0E3B2E; --line:#E5E7EB; --warnBg:#FBF4E4; --warnLine:#EADFC3; --warnInk:#5C3B06; --okBg:#EAF4EF; --okInk:#0E5A33; --badBg:#FBEDEA; --badLine:#EFCFC7; --badInk:#8A2A1C; }
   * { box-sizing: border-box; }
   body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: #F4F4F5; }
-  h1 { font-size: 18px; margin: 16px; }
+  h1 { font-size: 22px; margin: 16px; }
   .row { display: flex; flex-wrap: wrap; gap: 16px; padding: 0 16px 24px; }
   .phone { width: 390px; max-width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
   .cap { font-size: 12px; color: var(--soft); text-transform: uppercase; letter-spacing: .04em; }
-  h4 { margin: 0; font-size: 15px; } h4 small { font-weight: 500; color: var(--soft); }
+  h2 { margin: 0; font-size: 19px; } h2 small { font-weight: 500; color: var(--soft); }
   .code { border: 1px solid var(--brand); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
   .memo { font: 800 20px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
   dl { margin: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 12px; font-size: 13.5px; }
@@ -39,7 +39,7 @@
 
   <section class="phone" aria-label="Guide, before sending">
     <div class="cap">Guide · 1 — transfer, then upload the slip</div>
-    <h4>Hand in the Extras cash <small>นำส่งเงินขายเพิ่ม</small></h4>
+    <h2>Hand in the Extras cash <small>นำส่งเงินขายเพิ่ม</small></h2>
     <div class="code">
       <div class="note">Hand-in code — put it in the transfer’s memo <small>ใส่รหัสนี้ในบันทึกช่วยจำของการโอน</small></div>
       <div style="display:flex;gap:8px;align-items:center"><span class="memo">FOLK-CSH-209911-001</span><button class="btn sm">Copy</button></div>
@@ -68,7 +68,7 @@
 
   <section class="phone" aria-label="Admin, checking the slips">
     <div class="cap">Admin · Finance › Extras cash › Check slips…</div>
-    <h4>Check the slips · ฿400 owed</h4>
+    <h2>Check the slips · ฿400 owed</h2>
     <div class="note">G-900 · FOLK-CSH-209911-001 (the memo) · FOLK-BKK-20991101-01 · submission 1 · owed now ฿400</div>
     <div class="slip" style="display:grid;gap:6px">
       <div><b>Slip 1</b> · uploaded 1 Nov, 13:00 · <a href="#">open the slip</a> · guide was shown ···7890 (v1)</div>
