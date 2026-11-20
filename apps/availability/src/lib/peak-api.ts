@@ -1086,3 +1086,67 @@ export async function createDailyJournal(journal: DailyJournalPayload): Promise<
   if ("error" in call) return { ok: false, uncertain: !!call.sent, desc: sanitizePeakError(call.error) };
   return dailyJournalResult(call.r.status, call.j);
 }
+
+// ── Receipts (ใบเสร็จรับเงิน) — https://developers.peakaccount.com/reference/post_api-v1-receipts ──
+// Read from the official reference on 2026-11-20, not yet exercised on UAT (its token was
+// refused): request wrapper `peakReceipts.receipts[]` (lower-case like every other request
+// here); a reply answers per ROW — the wrapper says 200 even when the row failed — so only the
+// row's resCode, id and code count. GET /Receipts takes `reference` (documented) and `code`.
+
+export type ReceiptPayload = {
+  issuedDate: string; // yyyyMMdd
+  contactId?: string;
+  reference: string; // ≤ 32
+  remark?: string;
+  taxStatus: 0 | 1 | 2; // 2 = no VAT on this document
+  isTaxInvoice: 0 | 1;
+  products: { accountCode: string; accountSubId?: string; description: string; quantity: number; price: number; vatType: 1 | 2 | 3 }[];
+  paidPayments: { paymentDate: string; payments: { amount: number; paymentMethodId?: string; accountCode?: string; accountSubId?: string; note?: string }[] };
+  status: "Approve";
+};
+
+type ReceiptRow = { id?: string; code?: string; resCode?: string; resDesc?: string; reference?: string; isVoid?: unknown; netAmount?: unknown; paymentAmount?: unknown };
+
+/** Pure: what a create-receipt reply proves. */
+export function receiptResult(httpStatus: number, body: Record<string, unknown>): Res<{ id?: string; uncertain?: boolean }> {
+  const wrap = peakWrap<{ resCode?: string; resDesc?: string; receipts?: ReceiptRow[] }>(body, "peakReceipts");
+  const row = wrap?.receipts?.[0];
+  if (httpStatus >= 200 && httpStatus < 300 && row?.resCode === "200" && row.id && row.code) return { ok: true, id: row.id, code: row.code };
+  // Only an explicit refusal of the row (or of the request) proves no receipt was made.
+  const rejected = httpStatus < 500 && (row?.resCode === "400" || (!row && wrap?.resCode === "400") || httpStatus === 400 || httpStatus === 401 || httpStatus === 403);
+  return { ok: false, uncertain: !rejected, desc: sanitizePeakError(row?.resDesc || wrap?.resDesc || `Unconfirmed PEAK response (HTTP ${httpStatus})`) };
+}
+
+export type PeakReceiptState = { id: string | null; code: string; reference: string | null; isVoid: boolean; netAmount: number | null };
+
+/** Pure: the receipts a GET returned (an empty list inside HTTP 200 is "none"). */
+export function parsePeakReceipts(j: Record<string, unknown>): { receipts: PeakReceiptState[] } | { error: string } {
+  const wrap = peakWrap<{ receipts?: unknown; resCode?: unknown; resDesc?: unknown }>(j ?? {}, "peakReceipts");
+  if (!wrap || typeof wrap !== "object") return { error: "PEAK returned no PeakReceipts wrapper" };
+  if (peakCodeIsError(wrap.resCode) && String(wrap.resCode) !== "200") return { error: sanitizePeakError(String(wrap.resDesc ?? `PEAK error ${String(wrap.resCode)}`)) };
+  if (!Array.isArray(wrap.receipts)) return { error: "PEAK returned no receipts array" };
+  const num = (v: unknown) => (v == null || v === "" ? null : Number(v));
+  return { receipts: (wrap.receipts as ReceiptRow[]).map((r) => ({ id: r.id ? String(r.id) : null, code: String(r.code ?? ""), reference: r.reference == null ? null : String(r.reference), isVoid: Number(r.isVoid ?? 0) === 1 || r.isVoid === true, netAmount: num(r.netAmount) })) };
+}
+
+/** Never retried: a lost answer is an unresolved document, read back by its reference. */
+export async function createReceipt(receipt: ReceiptPayload): Promise<Res<{ id?: string; uncertain?: boolean }>> {
+  if (!peakEnabled) return { ok: false, uncertain: false, desc: "PEAK connection is not configured" };
+  if (peakWritesUnsafe()) return { ok: false, uncertain: false, desc: PEAK_WRITE_UNSAFE };
+  const call = await authedCall(`${API}/Receipts`, {
+    method: "POST", body: JSON.stringify({ peakReceipts: { receipts: [receipt] } }),
+  }, "peakReceipts", { fresh: true, retry: false, timeoutMs: WRITE_TIMEOUT_MS });
+  if ("error" in call) return { ok: false, uncertain: !!call.sent, desc: sanitizePeakError(call.error) };
+  return receiptResult(call.r.status, call.j);
+}
+
+/** GET only — the receipts PEAK holds under this reference. */
+export async function getReceiptsByReference(reference: string): Promise<Res<{ receipts?: PeakReceiptState[] }>> {
+  if (!peakEnabled) return { ok: false, desc: "PEAK not fully configured (need PEAK_USER_TOKEN)" };
+  const call = await authedCall(`${API}/Receipts?${new URLSearchParams({ reference }).toString()}`, { method: "GET" }, "peakReceipts");
+  if ("error" in call) return { ok: false, desc: call.error };
+  if (!call.r.ok) return { ok: false, desc: `HTTP ${call.r.status}` };
+  const parsed = parsePeakReceipts(call.j);
+  if ("error" in parsed) return { ok: false, desc: parsed.error };
+  return { ok: true, receipts: parsed.receipts };
+}

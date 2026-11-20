@@ -17,6 +17,7 @@ import {
 import { ABSENCE_GRACE_MS, GUIDE_CASH_HELD, UpsellPeakRefused, recheckBlocked, recordRevenueRecognition, recoverExpiredLeases, resolveUncertain, sendPeakEvent, type UpsellPeakAdapter } from "./peak-outbox";
 import { upsellPeakAdapter, type PeakJournalClient } from "./peak-adapter";
 import { adminResolvePeakEvent, adminSendPeakEvent } from "./peak-send";
+import { syncUpsellPeakBatch, READ_BACK_EVERY_MS } from "./peak-sync";
 import type { DailyJournalPayload } from "@/lib/peak-api";
 import { setVatRegistration } from "./tax-profile";
 
@@ -619,5 +620,87 @@ describe("coverage is each sale's net custody (Codex 20 Nov 2026): a company ref
     const prep = await prepareHandIn(prisma, guide, { jobSheetId: jobId });
     expect(prep.owedSatang).toBe(60000);
     expect(prep.coverage.map((c) => c.saleNo)).not.toContain(s2.saleNo);
+  });
+});
+
+describe("PR4-P automatic sync: business action → worker → PEAK, no Admin send", () => {
+  const CFG = { clearingJournalTypeId: "jt-test", clearingContactId: "ct-test", receivingAccounts: { "pm-7890": { accountCode: "111299", accountSubId: "sub-test" } },
+    receiptContactId: "ct-walkin-test", recognitionJournalTypeId: "5", receiptPayment: { mode: "ACCOUNT_CODE" as const } };
+  const MAP: [string, string][] = [[GUIDE_CASH_HELD, "113999"], ["UPSELL_ROUTE_REVENUE", "410299"]];
+  afterEach(() => prisma.peakAccountMapping.deleteMany({ where: { folkopsCategory: { in: MAP.map((m) => m[0]) } } }));
+  async function configured() {
+    for (const [c, code] of MAP) await prisma.peakAccountMapping.upsert({ where: { folkopsCategory: c }, update: { peakAccountCode: code, isActive: true }, create: { folkopsCategory: c, peakAccountCode: code, peakAccountName: "Invented" } });
+    await prisma.taxProfile.updateMany({ where: { code: "UPSELL-STD" }, data: { status: "CONFIRMED", peakDocumentKind: "RECEIPT", vatMode: "NONE", revenueRecognition: "AT_SERVICE", breakageOnExpiry: false,
+      incentiveWhtMode: "NOT_WITHHELD", fixedCostWhtMode: "NOT_WITHHELD", confirmedById: admin.userId, confirmedAt: new Date() } });
+  }
+  function fakePeak(opts: { receipt?: "ok" | "timeout" } = {}) {
+    const docs: { kind: string; reference: string; body: unknown }[] = [];
+    let n = 0;
+    const client: PeakJournalClient = {
+      async createDailyJournal(j) { docs.push({ kind: "JOURNAL", reference: j.reference, body: j }); n++; return { ok: true, id: `pj-${n}`, code: `JV-TEST-${n}` }; },
+      async getDailyJournal() { return { ok: true, notFound: true }; },
+      async createReceipt(r) { docs.push({ kind: "RECEIPT", reference: r.reference, body: r }); n++; return opts.receipt === "timeout" ? { ok: false, uncertain: true, desc: "timeout" } : { ok: true, id: `rc-${n}`, code: `RE-TEST-${n}` }; },
+      async getReceiptsByReference() { return { ok: true, receipts: [] }; },
+    };
+    return { docs, adapter: upsellPeakAdapter(client, () => CFG) };
+  }
+
+  it("off unless switched on: the worker does nothing", async () => {
+    await sale(1); await configured();
+    const { docs, adapter } = fakePeak();
+    expect(await syncUpsellPeakBatch(prisma, adapter)).toEqual({ skipped: true });
+    expect(docs).toHaveLength(0);
+  });
+
+  it("sale → receipt posted by the worker; confirmed hand-in → clearing waits for the receipts, then posts — each once", async () => {
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    await ready(); // two sales, report, account
+    await configured();
+    const t = (await transfer(80000, "KB-7731-0301")).transfer;
+    const sub = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [t.id] });
+    await confirmHandIn(prisma, admin, { settlementId: sub.settlement.id, submissionNo: 1, transferIds: [t.id] });
+    // Receipts were BLOCKED at the sale (nothing configured then). Hold one receipt back: the clearing must wait for it.
+    const receipts = await prisma.upsellPeakEvent.findMany({ where: { eventKind: "RECEIPT" }, orderBy: { createdAt: "asc" } });
+    const { docs, adapter } = fakePeak();
+    // Tick 1: both receipts re-checked → PENDING → sent; the clearing waits (its receipts were not in PEAK when checked).
+    await syncUpsellPeakBatch(prisma, adapter);
+    expect((await prisma.upsellPeakEvent.findMany({ where: { eventKind: "RECEIPT" } })).every((e) => e.status === "POSTED" && e.peakCode?.startsWith("RE-TEST-"))).toBe(true);
+    const clearing = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "BANK_CLEARING" } });
+    // Tick 2 (and 3): the clearing is released and posted, exactly once.
+    await syncUpsellPeakBatch(prisma, adapter);
+    await syncUpsellPeakBatch(prisma, adapter);
+    expect(await prisma.upsellPeakEvent.findUniqueOrThrow({ where: { id: clearing.id } })).toMatchObject({ status: "POSTED", peakCode: expect.stringMatching(/^JV-TEST-/) });
+    expect(docs.map((d) => d.kind)).toEqual(["RECEIPT", "RECEIPT", "JOURNAL"]);
+    expect(docs.slice(0, 2).map((d) => d.reference)).toEqual(receipts.map((r) => (r.payload as { reference: string }).reference));
+    expect((docs[0].body as { taxStatus: number; isTaxInvoice: number }).taxStatus).toBe(2);
+  });
+
+  it("the clearing is shown waiting while a receipt it depends on is not in PEAK", async () => {
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    await ready();
+    const t = (await transfer(80000, "KB-7731-0302")).transfer;
+    const sub = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [t.id] });
+    await confirmHandIn(prisma, admin, { settlementId: sub.settlement.id, submissionNo: 1, transferIds: [t.id] });
+    // Only the clearing's own mapping is configured; the receipts stay blocked (no revenue account).
+    await prisma.peakAccountMapping.upsert({ where: { folkopsCategory: GUIDE_CASH_HELD }, update: { peakAccountCode: "113999", isActive: true }, create: { folkopsCategory: GUIDE_CASH_HELD, peakAccountCode: "113999" } });
+    const { docs, adapter } = fakePeak();
+    await syncUpsellPeakBatch(prisma, adapter);
+    const clearing = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "BANK_CLEARING" } });
+    expect(clearing.status).toBe("BLOCKED");
+    expect(clearing.blockedReasons.join(" ")).toMatch(/Waits for the PEAK receipt of FOLK-UPS-/);
+    expect(docs).toHaveLength(0);
+  });
+
+  it("a lost answer: UNCERTAIN, read back automatically, never sent again by the worker", async () => {
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    await sale(1); await configured();
+    const { docs, adapter } = fakePeak({ receipt: "timeout" });
+    await syncUpsellPeakBatch(prisma, adapter);
+    const e = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "RECEIPT" } });
+    expect(e.status).toBe("UNCERTAIN");
+    const later = new Date(Date.now() + READ_BACK_EVERY_MS + 60_000);
+    for (let i = 0; i < 3; i++) await syncUpsellPeakBatch(prisma, adapter, new Date(later.getTime() + i * (READ_BACK_EVERY_MS + 1000)));
+    expect(docs).toHaveLength(1); // PEAK said "not there" (reliably) — still an Admin decision
+    expect(await prisma.upsellPeakEvent.findUniqueOrThrow({ where: { id: e.id } })).toMatchObject({ status: "UNCERTAIN", lastError: expect.stringContaining("Admin decides") });
   });
 });

@@ -29,6 +29,10 @@ import { extractFromText } from "@/lib/payments/slip-evidence";
 import { autoSyncBokun, reconcileAssignedBookings } from "@/lib/booking-import";
 import { sweepExpiredOffers } from "@/lib/offers";
 import { bokunApiEnabled } from "@/lib/bokun-api";
+import * as peakApi from "@/lib/peak-api";
+import { upsellPeakAdapter } from "@/lib/upsell/peak-adapter";
+import { syncUpsellPeakBatch } from "@/lib/upsell/peak-sync";
+import { upsellPeakAutoSyncEnabled } from "@/lib/upsell/flags";
 
 const POLL_INTERVAL_MS = Number(process.env.PAYMENT_WORKER_POLL_MS ?? 15_000);
 const BATCH_SIZE = Number(process.env.PAYMENT_WORKER_BATCH ?? 10);
@@ -130,6 +134,19 @@ async function reportPostingDecision(): Promise<void> {
   lastRefusal = code;
 }
 
+/**
+ * Upsell events → PEAK (lib/upsell/peak-sync), off unless UPSELL_PEAK_AUTO_SYNC=1. Logged only
+ * when something moved — counts, never payloads or configuration.
+ */
+async function syncUpsellPeak(): Promise<void> {
+  try {
+    const r = await syncUpsellPeakBatch(prisma, upsellPeakAdapter(peakApi));
+    if (!("skipped" in r) && Object.values(r).some((n) => n > 0)) log("upsell-peak-sync", r);
+  } catch (err) {
+    log("upsell-peak-sync-error", { error: String(err).slice(0, 200) });
+  }
+}
+
 async function tick(): Promise<void> {
   if (ticking || shuttingDown) return;
   ticking = true;
@@ -137,6 +154,7 @@ async function tick(): Promise<void> {
     await recordServiceStatus(prisma, "payment-worker");
     await reportPostingDecision();
     await syncAdvanceBatch(prisma);
+    await syncUpsellPeak();
     const n = await processQueuedBatch();
     if (n > 0) log("batch-processed", { count: n });
     await recordServiceStatus(prisma, "payment-worker", { success: true });
@@ -214,6 +232,7 @@ async function main(): Promise<void> {
     // On means an admin is matching old movements to documents PEAK already holds,
     // and this worker sends nothing until it is off again.
     advanceLinksMode: existingPeakLinksEnabled(),
+    upsellPeakAutoSync: upsellPeakAutoSyncEnabled(),
     node: process.version,
   });
   // Both switches on in this environment: the sender refuses every batch (lib/advances/

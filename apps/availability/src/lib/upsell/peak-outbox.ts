@@ -31,7 +31,7 @@ export const GUIDE_CASH_HELD = "UPSELL_GUIDE_CASH_HELD";
 
 export const UNDECIDED_REVERSAL_DOCUMENT = "Void or credit note is decided per document type after the PEAK UAT — not chosen yet";
 
-type Needs = { taxProfileId?: string | null; revenueCategory?: string | null; guideCashHeld?: boolean; receivingAccountId?: string | null; blocked?: string[] };
+type Needs = { taxProfileId?: string | null; revenueCategory?: string | null; guideCashHeld?: boolean; unearnedRevenue?: boolean; receivingAccountId?: string | null; blocked?: string[] };
 
 /** The mapping an event would use now, and every reason it cannot be sent yet. Reads only. */
 export async function evaluateMapping(db: Db, needs: Needs): Promise<{ snapshot: Record<string, unknown>; reasons: string[] }> {
@@ -47,7 +47,7 @@ export async function evaluateMapping(db: Db, needs: Needs): Promise<{ snapshot:
     if (t?.vatRegistration === "REGISTERED" && t.vatMode === "UNCONFIRMED") reasons.push("The VAT treatment is not confirmed");
     if (t && !t.peakDocumentKind) reasons.push(t.vatRegistration === "NOT_REGISTERED" ? "The PEAK no-VAT document type is not confirmed (verified on UAT first)" : "The PEAK document type is not confirmed");
   }
-  const categories = [needs.revenueCategory, needs.guideCashHeld ? GUIDE_CASH_HELD : null].filter((c): c is string => !!c);
+  const categories = [needs.revenueCategory, needs.guideCashHeld ? GUIDE_CASH_HELD : null, needs.unearnedRevenue ? UNEARNED_REVENUE : null].filter((c): c is string => !!c);
   if (categories.length) {
     const rows = await db.peakAccountMapping.findMany({ where: { folkopsCategory: { in: categories }, isActive: true }, select: { folkopsCategory: true, peakAccountCode: true, peakAccountName: true } });
     snapshot.accounts = Object.fromEntries(rows.map((r) => [r.folkopsCategory, { code: r.peakAccountCode, name: r.peakAccountName }]));
@@ -71,6 +71,8 @@ export async function recordPeakEvent(tx: Tx, input: { kind: UpsellPeakEventKind
   const existing = await tx.upsellPeakEvent.findUnique({ where: { eventKind_sourceTable_sourceId: { eventKind: input.kind, sourceTable: input.sourceTable, sourceId: input.sourceId } } });
   if (existing) return existing;
   const { snapshot, reasons } = await evaluateMapping(tx, input.needs);
+  // What the event needs is kept with it, so the worker can re-check a BLOCKED event on its own.
+  snapshot.needs = input.needs;
   const event = await tx.upsellPeakEvent.create({
     data: {
       eventKind: input.kind, sourceTable: input.sourceTable, sourceId: input.sourceId, eventDate: input.eventDate,
@@ -117,7 +119,7 @@ export async function recordRevenueRecognition(tx: Tx, s: { saleId: string; sale
   return recordPeakEvent(tx, {
     kind: "REVENUE_RECOGNITION", sourceTable: "UpsellSale", sourceId: s.saleId, eventDate: s.serviceDate,
     payload: { reference: s.saleNo, saleId: s.saleId, amountSatang: s.grossSatang, serviceDate: s.serviceDate, from: UNEARNED_REVENUE, to: s.revenueCategory },
-    needs: { taxProfileId: s.taxProfileId, revenueCategory: s.revenueCategory, blocked: [] },
+    needs: { taxProfileId: s.taxProfileId, revenueCategory: s.revenueCategory, unearnedRevenue: true, blocked: [] },
   });
 }
 
@@ -182,7 +184,7 @@ export async function recoverExpiredLeases(db: PrismaClient, now = new Date()) {
  * PENDING. Anything else: stays UNCERTAIN. Compare-and-set on the version read, so a stale answer
  * can never overwrite a POSTED event or open a second send.
  */
-export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string, now = new Date(), opts: { peakCode?: string } = {}) {
+export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string, now = new Date(), opts: { peakCode?: string; requeueOnAbsence?: boolean } = {}) {
   const e = await db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
   if (e.status !== "UNCERTAIN") throw new UpsellPeakRefused("Only an UNCERTAIN event is read back");
   // `peakCode`: a code an Admin read off PEAK (journals have no reference lookup) — verified by the adapter, never trusted.
@@ -192,17 +194,26 @@ export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdap
   if ("unknown" in r) done = await cas({ lastError: r.error.slice(0, 500) });
   else if (r.found) done = await cas({ status: "POSTED", peakId: r.peakId, peakCode: r.peakCode, lastError: null });
   else if (!r.reliable) done = await cas({ lastError: "PEAK did not find it, but cannot promise it is absent — read back again later" });
+  // The worker reads back on its own but never requeues: a proven absence waits for an Admin.
+  else if (opts.requeueOnAbsence === false) done = await cas({ lastError: "PEAK says it is not there — an Admin decides whether to send it again" });
   else if (!e.lastAttemptAt || now.getTime() - e.lastAttemptAt.getTime() < ABSENCE_GRACE_MS) done = await cas({ lastError: "Not found yet — PEAK may still be writing it; read back again after the grace period" });
   else done = await cas({ status: "PENDING", lastError: "Read back from PEAK: not there after the grace period — safe to send again" });
   if (done.count !== 1) throw new UpsellPeakRefused("This event changed while PEAK was being asked — read it again");
   return db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
 }
 
-/** Re-check a BLOCKED event against today's configuration (the payload never changes). */
-export async function recheckBlocked(db: PrismaClient, eventId: string, needs: Needs) {
+/**
+ * Re-check a BLOCKED event against today's configuration (the payload never changes).
+ * `extraReasons` are reasons outside the mapping — an earlier event it depends on (the sale's
+ * receipt) that is not in PEAK yet.
+ */
+export async function recheckBlocked(db: PrismaClient, eventId: string, needs?: Needs, extraReasons: string[] = []) {
   const e = await db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
   if (e.status !== "BLOCKED") return e;
-  const { snapshot, reasons } = await evaluateMapping(db, needs);
+  const kept = needs ?? ((e.mappingSnapshot as { needs?: Needs } | null)?.needs ?? {});
+  const { snapshot, reasons: mapping } = await evaluateMapping(db, kept);
+  snapshot.needs = kept;
+  const reasons = [...mapping, ...extraReasons];
   const done = await db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "BLOCKED", version: e.version },
     data: reasons.length ? { blockedReasons: reasons, mappingSnapshot: snapshot as Prisma.InputJsonValue } : { status: "PENDING", blockedReasons: [], mappingSnapshot: snapshot as Prisma.InputJsonValue } });
   if (done.count !== 1) throw new UpsellPeakRefused("This event changed meanwhile — read it again");

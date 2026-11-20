@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearingJournal, journalMatches, upsellPeakAdapter, upsellPeakConfig, type PeakJournalClient, type UpsellPeakConfig } from "./peak-adapter";
-import { GUIDE_CASH_HELD } from "./peak-outbox";
+import { clearingJournal, journalMatches, recognitionJournal, saleReceipt, upsellPeakAdapter, upsellPeakConfig, type PeakJournalClient, type UpsellPeakConfig } from "./peak-adapter";
+import { GUIDE_CASH_HELD, UNEARNED_REVENUE } from "./peak-outbox";
 
 // Invented data only (the repo is public).
 const CONFIG: UpsellPeakConfig = { clearingJournalTypeId: "jt-9", clearingContactId: "ct-9", receivingAccounts: { "pm-kb": { accountCode: "111203", accountSubId: "sub-kb" } } };
@@ -65,7 +65,7 @@ describe("upsellPeakAdapter.post", () => {
   it("refuses unbuilt kinds and missing config without calling PEAK", async () => {
     const c = fakeClient();
     const a = upsellPeakAdapter(c, () => CONFIG);
-    for (const kind of ["RECEIPT", "REVENUE_RECOGNITION", "SALE_CANCELLED", "SALE_REFUNDED"] as const) {
+    for (const kind of ["SALE_CANCELLED", "SALE_REFUNDED"] as const) {
       expect(await a.post({ ...EVENT, eventKind: kind })).toMatchObject({ ok: false, outcome: "REJECTED" });
     }
     expect(await upsellPeakAdapter(c, () => upsellPeakConfig("")).post(EVENT)).toMatchObject({ ok: false, outcome: "REJECTED", error: "PEAK_UPSELL_CONFIG is not set" });
@@ -150,5 +150,113 @@ describe("contract — real peak-api client, faked HTTP", () => {
       { id: "pj-7", code: "JV-TEST-7", issuedDate: "2026-11-20", journalEntries: [{ accountCode: "111203", accountSubId: "sub-kb", debit: "900.00", credit: "0" }, { accountCode: "213900", debit: "0", credit: "900.00" }] },
     ] } }));
     expect(await adapter.readBack({ ...EVENT, peakCode: "JV-TEST-7" })).toEqual({ found: true, peakId: "pj-7", peakCode: "JV-TEST-7" });
+  });
+});
+
+// ── Receipts and revenue recognition ────────────────────────────────────────────────────────
+const RCFG: UpsellPeakConfig = { ...CONFIG, receiptContactId: "ct-walkin", recognitionJournalTypeId: "5", receiptPayment: { mode: "ACCOUNT_CODE" } };
+const RPAY = { reference: "FOLK-UPS-209911-001", saleId: "s1", jobRef: "FOLK-BKK-20991101-01", productCode: "RTE-WPWA", version: 1, guests: 1, grossSatang: 20000,
+  paymentDate: "2099-11-01", serviceDate: "2099-11-01", credit: "UPSELL_ROUTE_REVENUE", deferred: false };
+const RSNAP = { accounts: { UPSELL_ROUTE_REVENUE: { code: "410299" }, [GUIDE_CASH_HELD]: { code: "113999" }, [UNEARNED_REVENUE]: { code: "213800" }, TOUR_SERVICE_REVENUE: { code: "410199" } },
+  taxProfile: { status: "CONFIRMED", vatRegistration: "NOT_REGISTERED", peakDocumentKind: "RECEIPT_NO_VAT" } };
+const REVENT = { id: "ev-r", eventKind: "RECEIPT" as const, eventDate: "2099-11-01", payload: RPAY, mappingSnapshot: RSNAP };
+
+describe("saleReceipt — not VAT-registered, the guest's total", () => {
+  it("฿200 route extension: no VAT, not a tax invoice, Sale Ref + Job Ref, paid into guide cash held", () => {
+    const r = saleReceipt(RPAY, RSNAP, RCFG);
+    if (!("receipt" in r)) throw new Error(r.error);
+    expect(r.receipt).toMatchObject({ issuedDate: "20991101", contactId: "ct-walkin", reference: RPAY.reference, taxStatus: 2, isTaxInvoice: 0, status: "Approve" });
+    expect(r.receipt.remark).toContain("FOLK-BKK-20991101-01");
+    expect(r.receipt.products).toEqual([expect.objectContaining({ accountCode: "410299", quantity: 1, price: 200, vatType: 1 })]);
+    expect(r.receipt.paidPayments).toEqual({ paymentDate: "20991101", payments: [expect.objectContaining({ amount: 200, accountCode: "113999" })] });
+  });
+  it("฿700 full walk-in seat (2 guests ฿1,400) books Tour Service Revenue, priced per guest, nothing added", () => {
+    const r = saleReceipt({ ...RPAY, productCode: "THREE-TEMPLES-ONSITE", version: 2, guests: 2, grossSatang: 140000, credit: "TOUR_SERVICE_REVENUE" }, RSNAP, RCFG);
+    if (!("receipt" in r)) throw new Error(r.error);
+    expect(r.receipt.products[0]).toMatchObject({ accountCode: "410199", quantity: 2, price: 700, vatType: 1 });
+    expect(r.receipt.paidPayments.payments[0].amount).toBe(1400);
+  });
+  it("a service still to come credits unearned revenue", () => {
+    const r = saleReceipt({ ...RPAY, serviceDate: "2099-11-05", credit: UNEARNED_REVENUE, deferred: true }, RSNAP, RCFG);
+    expect("receipt" in r && r.receipt.products[0].accountCode).toBe("213800");
+  });
+  it("payment by a PEAK payment method when configured that way", () => {
+    const r = saleReceipt(RPAY, RSNAP, { ...RCFG, receiptPayment: { mode: "PAYMENT_METHOD", paymentMethodId: "pm-cash" } });
+    expect("receipt" in r && r.receipt.paidPayments.payments[0]).toMatchObject({ paymentMethodId: "pm-cash" });
+  });
+  it.each([
+    ["tax profile unconfirmed", RPAY, { ...RSNAP, taxProfile: { ...RSNAP.taxProfile, status: "DRAFT" } }, RCFG, "not confirmed"],
+    ["a VAT-registered company (not built)", RPAY, { ...RSNAP, taxProfile: { ...RSNAP.taxProfile, vatRegistration: "REGISTERED" } }, RCFG, "not VAT-registered only"],
+    ["no document type", RPAY, { ...RSNAP, taxProfile: { ...RSNAP.taxProfile, peakDocumentKind: null } }, RCFG, "document type"],
+    ["no revenue account", RPAY, { ...RSNAP, accounts: { [GUIDE_CASH_HELD]: { code: "113999" } } }, RCFG, "UPSELL_ROUTE_REVENUE"],
+    ["no guide-cash-held account", RPAY, { ...RSNAP, accounts: { UPSELL_ROUTE_REVENUE: { code: "410299" } } }, RCFG, GUIDE_CASH_HELD],
+    ["no payment mode", RPAY, RSNAP, { ...RCFG, receiptPayment: undefined }, "receiptPayment"],
+  ])("refuses with %s", (_n, pay, snap, cfg, msg) => {
+    const r = saleReceipt(pay, snap, cfg as UpsellPeakConfig);
+    expect("error" in r && r.error).toContain(msg);
+  });
+});
+
+describe("recognitionJournal", () => {
+  it("Dr unearned, Cr revenue on the service date", () => {
+    const r = recognitionJournal({ reference: RPAY.reference, amountSatang: 20000, serviceDate: "2099-11-05", from: UNEARNED_REVENUE, to: "UPSELL_ROUTE_REVENUE" }, RSNAP, RCFG);
+    if (!("journal" in r)) throw new Error(r.error);
+    expect(r.journal).toMatchObject({ issuedDate: "20991105", journalTypeId: "5", reference: `${RPAY.reference}-REV` });
+    expect(r.journal.journalEntries.map((e) => [e.accountCode, e.debit, e.credit])).toEqual([["213800", "200.00", "0.00"], ["410299", "0.00", "200.00"]]);
+  });
+  it("refuses without its journal type", () => {
+    expect("error" in recognitionJournal({ reference: "X", amountSatang: 1, serviceDate: "2099-11-05", to: "UPSELL_ROUTE_REVENUE" }, RSNAP, { ...RCFG, recognitionJournalTypeId: undefined })).toBe(true);
+  });
+});
+
+describe("contract — receipts through the real peak-api client, faked HTTP", () => {
+  const reply = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as unknown as Response;
+  const TOKEN = reply({ peakClientToken: { token: "ct-fresh" } });
+  async function withPeak(...replies: (Response | Error)[]) {
+    vi.resetModules();
+    vi.stubEnv("PEAK_CONNECT_ID", "cid"); vi.stubEnv("PEAK_CONNECT_KEY", "ckey"); vi.stubEnv("PEAK_USER_TOKEN", "utok");
+    vi.stubEnv("PEAK_API_BASE_URL", "https://peak.test/api/v1");
+    const fetchMock = vi.fn();
+    for (const r of replies) r instanceof Error ? fetchMock.mockRejectedValueOnce(r) : fetchMock.mockResolvedValueOnce(r);
+    vi.stubGlobal("fetch", fetchMock);
+    const api = await import("@/lib/peak-api");
+    const { upsellPeakAdapter: make } = await import("./peak-adapter");
+    return { adapter: make(api, () => RCFG), fetchMock };
+  }
+  const calls = (f: ReturnType<typeof vi.fn>) => f.mock.calls.filter(([u]) => String(u).includes("/Receipts"));
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.resetModules(); });
+
+  it("one POST in the documented shape; the row's id and code are read from the capitalised reply", async () => {
+    const { adapter, fetchMock } = await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", resDesc: "PeakReceipts have Completed", receipts: [{ resCode: "200", resDesc: "Success", id: "rc-1", code: "RE-209911-0001" }] } }));
+    expect(await adapter.post(REVENT)).toEqual({ ok: true, peakId: "rc-1", peakCode: "RE-209911-0001" });
+    const c = calls(fetchMock);
+    expect(c).toHaveLength(1);
+    expect(String(c[0][0])).toMatch(/\/Receipts$/);
+    const body = JSON.parse((c[0][1] as RequestInit).body as string);
+    expect(body.peakReceipts.receipts[0]).toMatchObject({ reference: RPAY.reference, taxStatus: 2, isTaxInvoice: 0 });
+  });
+  it("the wrapper says 200 but the row failed (PEAK's documented error) → REJECTED, sent once", async () => {
+    const { adapter, fetchMock } = await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [{ resCode: "400", resDesc: "Bad Json Request : Missing Product Transaction" }] } }));
+    expect(await adapter.post(REVENT)).toMatchObject({ ok: false, outcome: "REJECTED", error: expect.stringContaining("Missing Product") });
+    expect(calls(fetchMock)).toHaveLength(1);
+  });
+  it("a row-level 500, an HTTP 5xx or a dropped connection → UNKNOWN, never retried", async () => {
+    for (const r of [reply({ PeakReceipts: { resCode: "200", receipts: [{ resCode: "500", resDesc: "Internal" }] } }), reply({}, 503), new Error("ECONNRESET")]) {
+      const { adapter, fetchMock } = await withPeak(TOKEN, r);
+      expect(await adapter.post(REVENT)).toMatchObject({ ok: false, outcome: "UNKNOWN" });
+      expect(calls(fetchMock)).toHaveLength(1);
+    }
+  });
+  it("read-back by the documented reference: one live match with the same amount → found", async () => {
+    const { adapter, fetchMock } = await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [{ id: "rc-1", code: "RE-209911-0001", reference: RPAY.reference, netAmount: 200 }] } }));
+    expect(await adapter.readBack(REVENT)).toEqual({ found: true, peakId: "rc-1", peakCode: "RE-209911-0001" });
+    expect(String(calls(fetchMock)[0][0])).toContain(`reference=${encodeURIComponent(RPAY.reference)}`);
+  });
+  it("read-back: none → absent; two live or another amount → unknown; only voided → not reliably absent", async () => {
+    expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [] } }))).adapter.readBack(REVENT)).toEqual({ found: false, reliable: true });
+    const two = [{ id: "a", code: "RE-1", reference: RPAY.reference, netAmount: 200 }, { id: "b", code: "RE-2", reference: RPAY.reference, netAmount: 200 }];
+    expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: two } }))).adapter.readBack(REVENT)).toMatchObject({ unknown: true });
+    expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [{ ...two[0], netAmount: 300 }] } }))).adapter.readBack(REVENT)).toMatchObject({ unknown: true });
+    expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [{ ...two[0], isVoid: 1 }] } }))).adapter.readBack(REVENT)).toEqual({ found: false, reliable: false });
   });
 });
