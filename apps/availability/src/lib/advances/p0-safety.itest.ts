@@ -106,11 +106,18 @@ describe("one bank transfer is one advance", () => {
     await expect(prisma.guideAdvance.create({ data: row("FOLK-ADV-209903-902", "trxx 0001") })).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
   });
 
-  it("a reversed advance leaves the rule: the transfer recorded against the wrong guide can be recorded again", async () => {
+  // Changed by the bank-transaction registry (PR4-0, Codex review 20 Nov 2026): a reversed advance
+  // is not a new bank transfer. Its transfer stays spent; recording it again needs an Admin to hand
+  // the share on to the new record (lib/bank-transactions reallocateTransfer — no screen yet,
+  // PR4-0b). Until then the app answers 409 with the reason, never a crash.
+  it("a reversed advance keeps its transfer: recording the same transfer again is refused with a 409", async () => {
     await seedGuide(GUIDE);
     const first = await issueAdvance(prisma, { ...base, bankRef: "TRXX99031012345" });
     await prisma.guideAdvance.update({ where: { id: (first as { advance: { id: string } }).advance.id }, data: { reversedAt: new Date(), reversalReason: "recorded against the wrong guide" } });
-    expect((await issueAdvance(prisma, { ...base, bankRef: "TRXX99031012345" })).ok).toBe(true);
+    const again = await issueAdvance(prisma, { ...base, bankRef: "TRXX99031012345" });
+    expect(again).toMatchObject({ ok: false, status: 409 });
+    expect(JSON.stringify(again)).toMatch(/already fully recorded elsewhere/);
+    expect(await prisma.guideAdvance.count()).toBe(1);
   });
 
   it("no reference (cash) is never a duplicate of anything", async () => {

@@ -30,6 +30,7 @@ import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, t
 import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import { parseBangkokDateTime } from "@/lib/bangkok-time";
+import { bankTxRefusal } from "@/lib/bank-transactions";
 import {
   MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
   fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
@@ -230,6 +231,8 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
         if (winner) return refuseDuplicate(winner);
         if (attempt < 2) continue; // two advances numbered at the same moment
       }
+      const refused = bankTxRefusal(e);
+      if (refused) return { ...fail(409, refused), code: DUPLICATE_TRANSFER };
       throw e;
     }
   }

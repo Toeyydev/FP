@@ -1091,6 +1091,7 @@ model GuidePayment {
   // review incentive go out as one transfer but are separate payments — separate vouchers,
   // PEAK documents and 50 ทวิ (owner policy 2026-10-06). They share the slip and bank reference.
   transferGroup        String?
+  transferTotal        Decimal?  @db.Decimal(12, 2) // with transferGroup: what the one transfer moved in all
   note                 String?
   createdById          String?
   createdAt            DateTime  @default(now())
@@ -2362,12 +2363,16 @@ model CashSettlementReturn {
 // ── Bank transactions (PR4-0, owner 19 Nov 2026) ─────────────────────────────
 // One real bank transfer = one BankTransaction, whatever tables record it. Every table that
 // records a transfer (advances, advance receipts / returns / refunds, guide payments and their
-// transfers, PEAK payment documents, upsell bank payments) is linked to it by a database
-// trigger (migrations/*_bank_transaction_registry), as a USE (the money applied: counts toward
-// the transfer's amount) or a DOC (a document describing the same transfer: counts nothing).
-// The live USEs of a transfer never add up to more than the transfer — one transfer cannot pay
-// twice. A transaction is never deleted or released: reversing or voiding a record does not
-// undo the bank movement; its use stops counting, the transfer stays.
+// transfers, PEAK payment documents, upsell bank payments) is linked to it by database triggers
+// (migrations/*_bank_transaction_registry) as a USE (money applied) or a DOC (a document about
+// the same transfer: counts nothing). The triggers also refuse any write to these tables that
+// does not match the source rows. The rules:
+//   • the amount is fixed when first set, with its provenance (amountSource), and changes only
+//     by an Admin correction audited in the same transaction — never by adding allocations;
+//   • what a transfer pays never exceeds it: live uses, plus verified uses that were reversed
+//     (a reversal does not undo the bank movement), unless released to a named target;
+//   • a link never moves: a record that names another reference leaves its old link dead.
+// Not a defence against a role that can rewrite triggers (see the migration's header).
 model BankTransaction {
   id           String   @id @default(cuid())
   direction    String // IN (to Folkpaths) | OUT (from Folkpaths)
@@ -2376,15 +2381,17 @@ model BankTransaction {
   refKey       String? // folk_tx_ref_key(refRaw) — set only when refStatus = BANK_REF
   refStatus    String // BANK_REF | PENDING_VERIFICATION (kept as typed; not matched) | INTERNAL
   internalCode String?  @unique // a transfer with no bank reference (never a made-up bank number)
-  amountSatang Int? // the transfer's amount, from its first USE (and that USE's group); null while only documents name it
-  amountGroup  String? // the group of the first USE: rows recorded as parts of ONE transfer (GuidePayment.transferGroup)
+  amountSatang Int? // the transfer's amount; null while only documents name it
+  amountSource String? // FIRST_USE | GROUP_TOTAL | CLAIM (unverified) | TRANSFER_ROW (#323) | HISTORICAL_GROUP_SUM | CORRECTED
+  amountGroup  String? // GuidePayment.transferGroup whose recorded total set the amount
   transferDate String? // "YYYY-MM-DD"
   reviewStatus String   @default("OK") // OK | NEEDS_REVIEW
   reviewNote   String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
 
-  uses BankTransactionUse[]
+  uses     BankTransactionUse[]
+  releases BankTransactionRelease[]
 
   @@index([direction, refKey])
   @@index([reviewStatus])
@@ -2400,9 +2407,30 @@ model BankTransactionUse {
   amountSatang  Int? // USE: the amount applied; DOC: null
   groupKey      String? // rows recorded together as parts of one transfer (GuidePayment.transferGroup)
   live          Boolean // false once the record is reversed, voided or no longer names this transfer
+  verified      Boolean         @default(false) // the money was seen (not only claimed): it keeps its share when dead
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @default(now()) @updatedAt
 
-  @@unique([sourceTable, sourceId])
+  releasedBy BankTransactionRelease? @relation("ReleaseFrom")
+
+  @@unique([sourceTable, sourceId, transactionId]) // + one LIVE link per source (partial index, SQL)
+  @@index([transactionId])
+}
+
+// A dead, verified use's share handed to ONE named record of the same transfer: the only way
+// money that moved once can be applied again. Never updated or deleted.
+model BankTransactionRelease {
+  id            String             @id @default(cuid())
+  transactionId String
+  transaction   BankTransaction    @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  fromUseId     String             @unique
+  fromUse       BankTransactionUse @relation("ReleaseFrom", fields: [fromUseId], references: [id], onDelete: Restrict)
+  kind          String // MOVED_TO_TRANSFERS | REALLOCATION | HISTORICAL_REUSE
+  targetTable   String
+  targetId      String
+  auditLogId    String? // REALLOCATION: the Admin's AuditLog row, written in the same transaction
+  reason        String
+  createdAt     DateTime           @default(now())
+
   @@index([transactionId])
 }

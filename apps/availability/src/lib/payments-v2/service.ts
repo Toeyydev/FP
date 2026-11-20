@@ -24,6 +24,7 @@ import {
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
 import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
+import { bankTxRefusal } from "@/lib/bank-transactions";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 export type Actor = { actorId: string | null; actorRole: string | null };
@@ -41,6 +42,9 @@ export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip" | "transfers"> &
   today?: string;
   /** Set by recordPayment when one transfer is recorded as two linked payments. */
   transferGroup?: string | null;
+  /** Set by recordPayment with transferGroup: what the ONE bank transfer moved in all. The bank
+   *  registry takes the transfer's amount from it, never from the parts (BankTransaction). */
+  transferTotal?: number | null;
 };
 
 export type RecordedPayment = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[]; supplements: { id: string; type: string; netAmount: number }[] };
@@ -168,8 +172,8 @@ async function splitTransfer(db: Db, input: RecordPaymentInput): Promise<{ jobs:
   const group = input.transferGroup ?? `tg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
   return {
     reviewNet: reviewNetSatang / 100,
-    jobs: { ...input, supplements: [], amountTransferred: (toSatang(input.amountTransferred) - reviewNetSatang) / 100, transferGroup: group },
-    reviews: { ...input, jobs: [], adjustments: [], mismatchReason: null, amountTransferred: reviewNetSatang / 100, transferGroup: group },
+    jobs: { ...input, supplements: [], amountTransferred: (toSatang(input.amountTransferred) - reviewNetSatang) / 100, transferGroup: group, transferTotal: input.amountTransferred },
+    reviews: { ...input, jobs: [], adjustments: [], mismatchReason: null, amountTransferred: reviewNetSatang / 100, transferGroup: group, transferTotal: input.amountTransferred },
   };
 }
 
@@ -240,6 +244,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
       periodOverrideReason: check.periods.length > 1 ? t(input.periodOverrideReason) : null,
       peakPaymentRef: input.source === "PEAK_DOCUMENT" ? t(input.peakPaymentRef) : null,
       transferGroup: input.transferGroup ?? null,
+      transferTotal: input.transferGroup ? input.transferTotal ?? null : null,
       note: t(input.note), createdById: input.actor.actorId,
       jobs: {
         create: check.jobs.map((j) => {
@@ -350,6 +355,8 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
     } catch (e) {
       if (e instanceof PaymentConflict) return { ok: false, code: "conflict", reasons: [e.message] };
       if (e instanceof LedgerConflict) return { ok: false, code: "conflict", reasons: [e.message] };
+      const refused = bankTxRefusal(e);
+      if (refused) return { ok: false, code: "conflict", reasons: [refused] };
       const target = uniqueTarget(e);
       if (target.includes("paymentNo")) continue; // two payments took the same number at once: try the next one
       if (target.includes("Supplement")) return { ok: false, code: "conflict", reasons: ["This supplemental payment was paid by another payment a moment ago — reload and check"] };
