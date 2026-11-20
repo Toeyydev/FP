@@ -106,7 +106,30 @@ export function clearingJournal(payload: unknown, snapshot: unknown, config: Ups
   };
 }
 
-type ReceiptEventPayload = { reference: string; saleId: string; jobRef: string | null; productCode: string; version: number; guests: number; grossSatang: number; paymentDate: string; serviceDate: string; credit: string; deferred: boolean };
+type ReceiptEventPayload = { reference: string; saleId: string; jobRef: string | null; productCode: string; version: number; guests: number; grossSatang: number; paymentDate: string; serviceDate: string; credit: string; deferred: boolean;
+  /** Route Extension (PR4e): whose guests — booking refs and counts, frozen at the sale. Absent on older and walk-in payloads. */
+  allocations?: unknown };
+
+/** PEAK's documented remark limit. */
+const REMARK_MAX = 1000;
+/** "FX-0001×1, FX-0002×2" from the frozen allocations: refs and counts only (never a name or contact),
+ *  well-formed rows only, cut to fit with "+N more" rather than a half reference. */
+export function guestsLine(allocations: unknown, room = 400): string {
+  if (!Array.isArray(allocations)) return "";
+  const parts = allocations.flatMap((a) => {
+    const ref = typeof (a as { bookingRef?: unknown })?.bookingRef === "string" ? (a as { bookingRef: string }).bookingRef.replace(/[^\w\-./]/g, "").slice(0, 40) : "";
+    const n = (a as { guests?: unknown })?.guests;
+    return ref && Number.isSafeInteger(n) && (n as number) > 0 ? [`${ref}×${n}`] : [];
+  });
+  let out = "";
+  for (let i = 0; i < parts.length; i++) {
+    const next = out ? `${out}, ${parts[i]}` : parts[i];
+    const rest = parts.length - i - 1;
+    if (next.length + (rest ? ` +${rest} more`.length : 0) > room) return out ? `${out} +${parts.length - i} more` : `+${parts.length} bookings`;
+    out = next;
+  }
+  return out;
+}
 const ymd = (d: string | undefined) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? "") ? d!.replaceAll("-", "") : null);
 
 /** The PEAK receipt for one sale, or why it cannot be built. Pure. */
@@ -138,7 +161,7 @@ export function saleReceipt(payload: unknown, snapshot: unknown, config: UpsellP
   return {
     receipt: {
       issuedDate: issued, ...(config.receiptContactId ? { contactId: config.receiptContactId } : {}),
-      reference: p.reference, remark: `${p.reference} · ${p.jobRef ?? "no job ref"} · ${what}`.slice(0, 1000),
+      reference: p.reference, remark: (() => { const g = guestsLine(p.allocations); return `${p.reference} · ${p.jobRef ?? "no job ref"} · ${what}${g ? ` · guests: ${g}` : ""}`.slice(0, REMARK_MAX); })(),
       taxStatus: 2, isTaxInvoice: 0,
       products: [{ accountCode: credit, description: what.slice(0, 1000), quantity: perGuest.quantity, price: perGuest.price, vatType: 1 }],
       paidPayments: { paymentDate: issued, payments: [payment] },

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearingJournal, journalMatches, recognitionJournal, saleReceipt, upsellPeakAdapter, upsellPeakConfig, type PeakJournalClient, type UpsellPeakConfig } from "./peak-adapter";
+import { clearingJournal, guestsLine, journalMatches, recognitionJournal, saleReceipt, upsellPeakAdapter, upsellPeakConfig, type PeakJournalClient, type UpsellPeakConfig } from "./peak-adapter";
 import { GUIDE_CASH_HELD, UNEARNED_REVENUE } from "./peak-outbox";
 
 // Invented data only (the repo is public).
@@ -258,5 +258,27 @@ describe("contract — receipts through the real peak-api client, faked HTTP", (
     expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: two } }))).adapter.readBack(REVENT)).toMatchObject({ unknown: true });
     expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [{ ...two[0], netAmount: 300 }] } }))).adapter.readBack(REVENT)).toMatchObject({ unknown: true });
     expect(await (await withPeak(TOKEN, reply({ PeakReceipts: { resCode: "200", receipts: [{ ...two[0], isVoid: 1 }] } }))).adapter.readBack(REVENT)).toEqual({ found: false, reliable: false });
+  });
+});
+
+describe("receipt remark names whose guests (PR4e), from the frozen allocations", () => {
+  it("Sale Ref stays the reference; the remark adds Job Ref and booking ref × guests — no names", () => {
+    const r = saleReceipt({ ...RPAY, guests: 3, grossSatang: 60000, allocations: [{ bookingRef: "FX-0001", guests: 1, product: "GetYourGuide", rate: "Invented palace only" }, { bookingRef: "FX-0002", guests: 2, name: "Invented Name" }] }, RSNAP, RCFG);
+    if (!("receipt" in r)) throw new Error(r.error);
+    expect(r.receipt.reference).toBe(RPAY.reference);
+    expect(r.receipt.remark).toBe(`${RPAY.reference} · FOLK-BKK-20991101-01 · RTE-WPWA v1 · 3 guests · guests: FX-0001×1, FX-0002×2`);
+    expect(r.receipt.remark).not.toMatch(/Invented Name/);
+  });
+  it("an old or walk-in payload (no allocations) keeps the old remark; malformed rows are dropped; a long list is cut with +N more within the limit", () => {
+    const old = saleReceipt(RPAY, RSNAP, RCFG);
+    expect("receipt" in old && old.receipt.remark).toBe(`${RPAY.reference} · FOLK-BKK-20991101-01 · RTE-WPWA v1 · 1 guest`);
+    expect(guestsLine([{ bookingRef: "FX-1", guests: 1 }, { bookingRef: "", guests: 2 }, { bookingRef: "FX-2", guests: -1 }, { bookingRef: "FX-3", guests: 1.5 }, null, "x", { bookingRef: "FX<script>", guests: 1 }])).toBe("FX-1×1, FXscript×1");
+    expect(guestsLine("not a list")).toBe("");
+    const many = Array.from({ length: 200 }, (_, i) => ({ bookingRef: `FX-${String(i).padStart(4, "0")}`, guests: 1 }));
+    const line = guestsLine(many);
+    expect(line.length).toBeLessThanOrEqual(400);
+    expect(line).toMatch(/^FX-0000×1, .* \+\d+ more$/);
+    const r = saleReceipt({ ...RPAY, allocations: many }, RSNAP, RCFG);
+    expect("receipt" in r && r.receipt.remark!.length).toBeLessThanOrEqual(1000);
   });
 });
