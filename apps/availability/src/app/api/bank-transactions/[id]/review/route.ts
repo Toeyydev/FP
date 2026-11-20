@@ -8,19 +8,22 @@ import { forbidden, refusalResponse, sessionAdmin } from "@/lib/bank-transaction
 export const dynamic = "force-dynamic";
 
 const body = z.object({
+  outcome: z.enum(["NO_REFERENCE_ON_SLIP", "CONFIRMED_ON_SLIP"]),
   note: z.string().max(500),
-  evidence: z.object({ url: z.string().url().max(500).nullish(), evidenceId: z.string().max(64).nullish() }).nullish(),
+  evidenceId: z.string().min(1).max(64),
+  expectedVersion: z.string().min(1).max(64),
 }).strict();
 
-// POST { note, evidence? } — ADMIN: the transfer has been checked against its slip; clears
-// NEEDS_REVIEW. Never changes a reference or invents one.
+// POST { outcome, note, evidenceId, expectedVersion } — ADMIN: checked against the slip; clears
+// NEEDS_REVIEW. Never changes a reference or invents one: a slip showing a real reference for a
+// "no digits" record is corrected on that record (lib/bank-transactions markTransferReviewed).
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const admin = await sessionAdmin(await auth());
   if (!admin) return forbidden();
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   try {
-    await markTransferReviewed(prisma, { transactionId: (await ctx.params).id, note: parsed.data.note, evidence: parsed.data.evidence ?? null, admin });
+    await markTransferReviewed(prisma, { transactionId: (await ctx.params).id, outcome: parsed.data.outcome, note: parsed.data.note, evidence: { evidenceId: parsed.data.evidenceId }, expectedVersion: parsed.data.expectedVersion, admin });
     return NextResponse.json({ ok: true });
   } catch (e) { return refusalResponse(e); }
 }

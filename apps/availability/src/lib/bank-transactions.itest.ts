@@ -55,6 +55,13 @@ async function user(role: "ADMIN" | "OPERATOR" | "GUIDE", state: "ACTIVE" | "SUS
   return { actorId: u.id, actorRole: role as string };
 }
 
+/** A slip or statement on file (PaymentEvidence), as /api/bank-transactions/evidence files it. */
+async function evidence() {
+  const n = Math.random().toString(36).slice(2, 12);
+  return (await prisma.paymentEvidence.create({ data: { googleDriveFileId: `drive-${n}`, fileHash: `hash-${n}`, driveLink: `https://example.test/evidence-${n}`, evidenceType: "BANK_STATEMENT" } })).id;
+}
+const versionOf = async (id: string) => (await prisma.bankTransaction.findUniqueOrThrow({ where: { id } })).updatedAt.toISOString();
+
 const txs = () => prisma.bankTransaction.findMany({ include: { uses: true, releases: true }, orderBy: { createdAt: "asc" } });
 const tx1 = async () => { const all = await txs(); expect(all).toHaveLength(1); return all[0]; };
 /** The source's live link, or (when none) its latest one. */
@@ -300,12 +307,17 @@ describe("a reversed payment is not a new bank transfer", () => {
     const admin = await user("ADMIN");
     const p = await payment({ bankRef: "KB-2099-0006", amount: 1000 });
     const t = (await useOf("GuidePayment", p.id)).transactionId;
-    await expect(correctTransferAmount(prisma, { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", evidence: { url: "https://example.test/statement" }, admin: await user("OPERATOR") })).rejects.toThrow(BankTxRefused);
-    await correctTransferAmount(prisma, { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", evidence: { url: "https://example.test/statement" }, admin });
+    const ev = await evidence();
+    const base = { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", evidence: { evidenceId: ev } };
+    await expect(correctTransferAmount(prisma, { ...base, expectedVersion: await versionOf(t), admin: await user("OPERATOR") })).rejects.toThrow(BankTxRefused);
+    // Evidence must be on file; a made-up id is refused. A stale screen is refused.
+    await expect(correctTransferAmount(prisma, { ...base, evidence: { evidenceId: "not-on-file" }, expectedVersion: await versionOf(t), admin })).rejects.toThrow(/not on file/);
+    await expect(correctTransferAmount(prisma, { ...base, expectedVersion: "2001-01-01T00:00:00.000Z", admin })).rejects.toThrow(/changed since you opened it/);
+    await correctTransferAmount(prisma, { ...base, expectedVersion: await versionOf(t), admin });
     expect(await tx1()).toMatchObject({ amountSatang: 120000, amountSource: "CORRECTED" });
-    expect((await prisma.auditLog.findFirstOrThrow({ where: { action: "bank_tx.amount_corrected" } })).detail).toMatchObject({ before: { amountSatang: 100000 }, after: { amountSatang: 120000 } });
+    expect((await prisma.auditLog.findFirstOrThrow({ where: { action: "bank_tx.amount_corrected" } })).detail).toMatchObject({ evidenceId: ev, before: { amountSatang: 100000 }, after: { amountSatang: 120000 } });
     // Never below what is applied.
-    await expect(correctTransferAmount(prisma, { transactionId: t, amountSatang: 50000, reason: "typo (example)", evidence: { url: "https://example.test/statement" }, admin })).rejects.toThrow(/BANK_TX_OVERUSED/);
+    await expect(correctTransferAmount(prisma, { ...base, amountSatang: 50000, reason: "typo (example)", expectedVersion: await versionOf(t), admin })).rejects.toThrow(/BANK_TX_OVERUSED/);
   });
 
   it("editing a payment's reference leaves the old link dead and still counted; editing back revives it", async () => {
@@ -556,13 +568,19 @@ describe("references that are not checkable (Q-T2)", () => {
     expect((await useOf("GuidePayment", b.id)).transaction.refRaw).toBe("bank");
   });
 
-  it("an Admin's audited review clears the flag; nothing else does", async () => {
+  it("an Admin's audited review clears the flag — never by hiding a real reference; nothing else does", async () => {
     const admin = await user("ADMIN");
     const p = await payment({ bankRef: "BANK" });
     const t = (await useOf("GuidePayment", p.id)).transactionId;
-    await expect(markTransferReviewed(prisma, { transactionId: t, note: "x", admin })).rejects.toThrow(BankTxRefused);
-    await markTransferReviewed(prisma, { transactionId: t, note: "slip checked: no reference printed (example)", admin });
-    expect(await tx1()).toMatchObject({ reviewStatus: "OK" });
+    const ev = await evidence();
+    const base = { transactionId: t, note: "slip checked: no reference printed (example)", evidence: { evidenceId: ev }, admin };
+    await expect(markTransferReviewed(prisma, { ...base, outcome: "NO_REFERENCE_ON_SLIP", note: "x", expectedVersion: await versionOf(t) })).rejects.toThrow(BankTxRefused);
+    // The slip shows a real reference: review refuses — the record is corrected instead.
+    await expect(markTransferReviewed(prisma, { ...base, outcome: "CONFIRMED_ON_SLIP", expectedVersion: await versionOf(t) })).rejects.toThrow(/correct it on the record itself/);
+    await expect(markTransferReviewed(prisma, { ...base, outcome: "NO_REFERENCE_ON_SLIP", evidence: { evidenceId: "made-up" }, expectedVersion: await versionOf(t) })).rejects.toThrow(/not on file/);
+    await markTransferReviewed(prisma, { ...base, outcome: "NO_REFERENCE_ON_SLIP", expectedVersion: await versionOf(t) });
+    expect(await tx1()).toMatchObject({ reviewStatus: "OK", refStatus: "PENDING_VERIFICATION", refKey: null });
+    expect((await prisma.auditLog.findFirstOrThrow({ where: { action: "bank_tx.reviewed" } })).detail).toMatchObject({ outcome: "NO_REFERENCE_ON_SLIP", evidenceId: ev });
   });
 
   it("correcting it to a real number links a real transfer; the pending one stays on record", async () => {

@@ -24,7 +24,7 @@ import {
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
 import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
-import { BankTxRefused, bankTxPrecheck, bankTxRefusal, handOnReversedShare } from "@/lib/bank-transactions";
+import { BankTxRefused, assertSameTransfer, bankTxPrecheck, bankTxRefusal, handOnReversedShare } from "@/lib/bank-transactions";
 import { randomUUID } from "node:crypto";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -374,6 +374,7 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
           const recorded = await recordPaymentInTx(tx, { ...input, id, handedOnSatang: share.amountSatang });
           // Refused by the rules: nothing of the hand-on may stay behind.
           if (!recorded.ok) throw new ReuseRefused(recorded);
+          await assertSameTransfer(tx, { table: "GuidePayment", id }, share.transaction.id);
           return recorded;
         }
         if (!split) return recordPaymentInTx(tx, input);

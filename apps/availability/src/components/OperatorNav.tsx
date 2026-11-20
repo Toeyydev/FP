@@ -39,6 +39,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "expense-review", label: "Guide expenses to review", href: "/expense-review" },
       { key: "payment-batches", label: "Payment batches", href: "/payment-batches" },
       { key: "payment-slips", label: "Payment slips", href: "/payment-slips" },
+      { key: "bank-transfers", label: "Bank transfers", href: "/bank-transfers" },
     ],
   },
   {

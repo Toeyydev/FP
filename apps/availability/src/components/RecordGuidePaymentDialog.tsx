@@ -20,7 +20,10 @@ const dShort = (d: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString(
 type Adjustment = { type: AdjustmentType; amount: string; description: string; advanceId?: string };
 type OpenAdvance = { id: string; advanceNo: string; advanceDate: string; jobNo: string | null; outstanding: number };
 
-export default function RecordGuidePaymentDialog({ guideId, guide, jobs, preselect, today, onClose, onDone }: {
+export default function RecordGuidePaymentDialog({ guideId, guide, jobs, preselect, today, onClose, onDone, reuseReversed }: {
+  /** Admin: this payment re-records a REVERSED payment's transfer (Bank transfers › Re-record).
+   *  Its bank reference is the reversed one's, fixed; no new bank transfer is made. */
+  reuseReversed?: { paymentId: string; paymentNo: string; bankRef: string; reason: string } | null;
   guideId: string;
   guide: string;
   jobs: PayableJob[];
@@ -42,7 +45,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
   const [amount, setAmount] = useState("");
   const [amountTouched, setAmountTouched] = useState(false);
   const [adjustments, setAdjustments] = useState<Adjustment[]>([]);
-  const [bankRef, setBankRef] = useState("");
+  const [bankRef, setBankRef] = useState(reuseReversed?.bankRef ?? "");
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [noSlipReason, setNoSlipReason] = useState("");
@@ -119,6 +122,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
       mismatchReason: recon.balanced ? null : mismatchReason.trim() || null,
       periodOverrideReason: crossMonth ? periodReason.trim() || null : null,
       ...(chosenReviews.length ? { supplements: chosenReviews.map((x) => x.id) } : {}),
+      ...(reuseReversed ? { reuseReversed: { paymentId: reuseReversed.paymentId, reason: reuseReversed.reason } } : {}),
     };
     const fd = new FormData();
     fd.append("payload", JSON.stringify(payload));
@@ -173,6 +177,11 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
         <h3 id="recpay-review-h">Review payment</h3>
         <div className="mctx">{guideId} · {guide} · accounting month {months.join(" + ") || "—"}</div>
         <div className="mbody" style={{ display: "grid", gap: 12 }}>
+          {reuseReversed && (
+            <div className="ob warn js-reuse-banner" role="note" style={{ display: "block", whiteSpace: "normal", lineHeight: 1.45, padding: "8px 10px" }}>
+              Re-recording the transfer of reversed <b>{reuseReversed.paymentNo}</b> (reference <b style={{ wordBreak: "break-all" }}>{reuseReversed.bankRef}</b>). No new bank transfer is made: its share goes to this payment only, once.
+            </div>
+          )}
           <div className="grid-scroll">
             <table className="acct-table pay-review" aria-label="Jobs in this payment">
               <thead><tr><th>Job No.</th><th>Tour date</th><th className="r">Payable</th><th className="r">Amount paid</th></tr></thead>
@@ -233,6 +242,11 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
         <h3 id="recpay-h">Record payment</h3>
         <div className="mctx">{guideId} · {guide} · {split ? `${parts.length} bank transfers, one payment` : "one bank transfer"}</div>
         <div className="mbody" style={{ display: "grid", gap: 14 }}>
+          {reuseReversed && (
+            <div className="ob warn js-reuse-banner" role="note" style={{ display: "block", whiteSpace: "normal", lineHeight: 1.45, padding: "8px 10px" }}>
+              Re-recording the transfer of reversed <b>{reuseReversed.paymentNo}</b> (reference <b style={{ wordBreak: "break-all" }}>{reuseReversed.bankRef}</b>). No new bank transfer is made: its share goes to this payment only, once.
+            </div>
+          )}
           {chosen.length > 0 && <CopyMemo memo={payMemo({ guideId, jobs: chosen.map((j) => ({ jobNo: j.ref, date: j.date })), withReview: chosenReviews.length > 0 })} label="Before you transfer" />}
           <Note tone="warn">A job becomes paid because this payment exists. Give the date the money actually left the bank — not today, if the transfer was earlier.</Note>
 
@@ -343,7 +357,7 @@ export default function RecordGuidePaymentDialog({ guideId, guide, jobs, presele
               <input value={amount} inputMode="decimal" className="num" onChange={(e) => { setAmountTouched(true); setAmount(e.target.value); }} disabled={busy || split} />
             </label>
             {!split && <><label><span className="paydoc-label">Bank reference · optional</span>
-              <input value={bankRef} onChange={(e) => setBankRef(e.target.value)} placeholder="Transaction id from the slip" disabled={busy} />
+              <input value={bankRef} onChange={(e) => setBankRef(e.target.value)} placeholder="Transaction id from the slip" disabled={busy || !!reuseReversed} />
             </label>
             <label><span className="paydoc-label">Bank slip</span>
               <input type="file" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} disabled={busy} />

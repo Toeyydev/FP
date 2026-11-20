@@ -84,7 +84,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
   // ?view=advances&advance=<id> opens one advance — where a refused duplicate transfer
   // points the person (lib/advances/tx-ref).
   const [view, setView] = useState<"board" | "guide-payments" | "advances">("board");
-  useEffect(() => { if (new URLSearchParams(window.location.search).get("view") === "advances") setView("advances"); }, []);
+  useEffect(() => { const v = new URLSearchParams(window.location.search).get("view"); if (v === "advances" || v === "guide-payments") setView(v); }, []);
   const [period, setPeriod] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals>({ tours: 0, netFee: 0, expenses: 0, payout: 0 });

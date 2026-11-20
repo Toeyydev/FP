@@ -10,10 +10,11 @@ export const dynamic = "force-dynamic";
 const body = z.object({
   amount: z.number().positive(),
   reason: z.string().max(500),
-  evidence: z.object({ url: z.string().url().max(500).nullish(), evidenceId: z.string().max(64).nullish() }),
+  evidenceId: z.string().min(1).max(64),
+  expectedVersion: z.string().min(1).max(64),
 }).strict();
 
-// POST { amount (baht), reason, evidence } — ADMIN: the transfer's real amount from the slip or
+// POST { amount (baht), reason, evidenceId (from /api/bank-transactions/evidence), expectedVersion } — ADMIN: the transfer's real amount from the slip or
 // statement. Old and new values, the evidence and the Admin are kept in the audit.
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const admin = await sessionAdmin(await auth());
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const amountSatang = Math.round(parsed.data.amount * 100);
   if (Math.abs(parsed.data.amount * 100 - amountSatang) > 1e-6) return NextResponse.json({ error: "bad-body", reasons: ["At most two decimals"] }, { status: 400 });
   try {
-    const t = await correctTransferAmount(prisma, { transactionId: (await ctx.params).id, amountSatang, reason: parsed.data.reason, evidence: parsed.data.evidence, admin });
+    const t = await correctTransferAmount(prisma, { transactionId: (await ctx.params).id, amountSatang, reason: parsed.data.reason, evidence: { evidenceId: parsed.data.evidenceId }, expectedVersion: parsed.data.expectedVersion, admin });
     return NextResponse.json({ ok: true, amountSatang: t.amountSatang, amountSource: t.amountSource });
   } catch (e) { return refusalResponse(e); }
 }

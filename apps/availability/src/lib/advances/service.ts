@@ -30,7 +30,7 @@ import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, t
 import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import { parseBangkokDateTime } from "@/lib/bangkok-time";
-import { BankTxRefused, advanceBankAccountKey, bankTxPrecheck, bankTxRefusal, handOnReversedShare, reversedShareOf } from "@/lib/bank-transactions";
+import { BankTxRefused, advanceBankAccountKey, assertSameTransfer, bankTxPrecheck, bankTxRefusal, handOnReversedShare, reversedShareOf } from "@/lib/bank-transactions";
 import { randomUUID } from "node:crypto";
 import { advancePeakConfig } from "@/lib/advances/peak-sync";
 import {
@@ -212,14 +212,12 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
       const advance = await prisma.$transaction(async (tx) => {
         const advanceNo = await nextNo(tx, "ADV", input.advanceDate);
         const id = randomUUID();
-        if (input.reuseReversed) {
-          await handOnReversedShare(tx, {
-            from: { table: "GuideAdvance", id: input.reuseReversed.advanceId }, targetTable: "GuideAdvance", targetId: id,
-            reason: input.reuseReversed.reason ?? "", admin: { actorId: input.actor.actorId ?? "", actorRole: input.actor.actorRole ?? "" },
-            ref: input.bankRef, direction: "OUT",
-          });
-        }
-        return tx.guideAdvance.create({
+        const share = input.reuseReversed ? await handOnReversedShare(tx, {
+          from: { table: "GuideAdvance", id: input.reuseReversed.advanceId }, targetTable: "GuideAdvance", targetId: id,
+          reason: input.reuseReversed.reason ?? "", admin: { actorId: input.actor.actorId ?? "", actorRole: input.actor.actorRole ?? "" },
+          ref: input.bankRef, direction: "OUT", account: advanceAccountKey,
+        }) : null;
+        const created = await tx.guideAdvance.create({
           data: {
             ...(input.reuseReversed ? { id } : {}), guideId: input.guideId, advanceNo, jobNo,
             advanceDate: input.advanceDate, amountSatang, accountingPeriod: periodOf(input.advanceDate),
@@ -236,6 +234,8 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
           },
           select: { id: true, advanceNo: true },
         });
+        if (share) await assertSameTransfer(tx, { table: "GuideAdvance", id }, share.transaction.id);
+        return created;
       });
       await audit({ ...input.actor, action: "advance.issued", entityType: "GuideAdvance", entityId: advance.id, detail: { advanceNo: advance.advanceNo, guideId: input.guideId, advanceDate: input.advanceDate, amount: fromSatang(amountSatang), jobNo: input.jobNo ?? null, purpose, allowedCategories } });
       if (input.slipCheck) {
