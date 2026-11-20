@@ -63,6 +63,7 @@ function browserPath() {
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────
+let reversedAdvanceId = "";
 async function seed() {
   const tables = ["AuditLog", "BankTransactionRelease", "BankTransactionUse", "BankTransaction", "GuidePaymentTransfer", "GuidePaymentJob", "GuidePayment", "GuidePaymentDocument", "PaymentEvidence", "RefreshToken", "User"];
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
@@ -77,6 +78,11 @@ async function seed() {
   await pay(`FOLK-PMT-${PERIOD.replace("-", "")}-901`, "KBANK");
   const reversed = await pay(`FOLK-PMT-${PERIOD.replace("-", "")}-902`, "KB-E2E-7731-0001-LONG-REFERENCE-9876543210");
   await prisma.guidePayment.update({ where: { id: reversed.id }, data: { status: "REVERSED", reversedAt: new Date(), reversalReason: "recorded against the wrong job (example)" } });
+  // A reversed advance (recorded for the wrong guide) on its own transfer.
+  const adv = await prisma.guideAdvance.create({ data: { guideId: GUIDE_ID, advanceNo: `ADV-${PERIOD.replace("-", "")}-901`, advanceDate: `${PERIOD}-03`, amountSatang: 50000, accountingPeriod: PERIOD,
+    purpose: "Ticket advance", allowedCategories: ["entrance"], method: "bank", txRef: "KB-E2E-ADV-7731-0009", date: `${PERIOD}-03`, slotIdx: -1, amount: 500, paidAt: new Date(`${PERIOD}-03T05:00:00.000Z`) } });
+  await prisma.guideAdvance.update({ where: { id: adv.id }, data: { reversedAt: new Date(), reversalReason: "recorded for the wrong guide (example)" } });
+  reversedAdvanceId = adv.id;
   return reversed;
 }
 
@@ -202,6 +208,23 @@ try {
   const locked = await page.evaluate(() => [...document.querySelectorAll(".modal input")].find((i) => i.value.includes("LONG-REFERENCE"))?.disabled);
   check("its bank reference is fixed to the reversed one", locked === true);
   await shot(page, "rerecord");
+
+  // Re-record a reversed ADVANCE: hand-off to Record advance, reference fixed
+  await goto(page, "/bank-transfers");
+  await page.select('select[aria-label="Show"]', "all");
+  await pause(800);
+  for (const row of await page.$$(".js-bank-transfers tbody tr")) { if (/KB-E2E-ADV-7731-0009/.test(await row.evaluate((e) => e.textContent))) { await row.click(); break; } }
+  await page.waitForSelector(".js-rerecord");
+  await page.click(".js-rerecord");
+  await page.type("#bt-rr-why", "the advance was for another guide (example)");
+  const advHref = await page.$eval(".js-rerecord-form a.btn", (a) => a.getAttribute("href"));
+  check("re-record of a reversed advance hands off to Record advance", !!advHref && advHref.includes(`reuseAdvance=${reversedAdvanceId}`) && advHref.includes("view=advances"), advHref ?? "no link");
+  await goto(page, advHref);
+  await page.waitForSelector(".js-reuse-banner", { timeout: 15000 }).catch(() => {});
+  const advBanner = await text(page, ".js-reuse-banner");
+  check("Record advance opens with the reversed advance named and no new transfer", /ADV-\d{6}-901/.test(advBanner) && /No new bank transfer/.test(advBanner), advBanner.slice(0, 160));
+  const advLocked = await page.evaluate(() => [...document.querySelectorAll(".modal input")].find((i) => i.value === "KB-E2E-ADV-7731-0009")?.readOnly);
+  check("its bank reference is fixed to the reversed advance's", advLocked === true);
 } catch (e) {
   check("the run completed", false, String(e?.stack ?? e).slice(0, 800));
 } finally {

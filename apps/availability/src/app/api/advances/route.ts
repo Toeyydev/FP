@@ -65,6 +65,14 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => i.message) }, { status: 400 });
 
   const file = form?.get("file");
+  const { reuseReversedAdvanceId, reuseReason, ...fields } = parsed.data;
+  // Re-recording a reversed advance's transfer is an Admin correction (lib/bank-transactions):
+  // the role on the session is checked against the database too, and the reason is required.
+  if (reuseReversedAdvanceId) {
+    const me = session?.user?.id ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { role: true, state: true } }) : null;
+    if (me?.role !== "ADMIN" || me.state !== "ACTIVE") return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can re-record a reversed advance's transfer"] }, { status: 403 });
+    if ((reuseReason ?? "").trim().length < 5) return NextResponse.json({ error: "bad-body", reasons: ["Say why this transfer is re-recorded (kept in the audit)"] }, { status: 400 });
+  }
   if (!parsed.data.jobNo?.trim()) return NextResponse.json({ error: "Choose a Job No. for this advance" }, { status: 400 });
   if (!parsed.data.bankAccount?.trim()) return NextResponse.json({ error: "Choose the company bank account used for this transfer" }, { status: 400 });
   if (!parsed.data.bankRef?.trim()) return NextResponse.json({ error: "Enter the bank transfer reference" }, { status: 400 });
@@ -87,7 +95,7 @@ export async function POST(req: NextRequest) {
   if ("error" in uploaded) return NextResponse.json({ error: uploaded.error }, { status: uploaded.status });
   const slip = uploaded;
   const result = await issueAdvance(prisma, {
-    ...parsed.data, slipUrl: slip?.url, slipFileId: slip?.fileId, today: bangkokToday(), slipCheck: gate.stored, actor,
+    ...fields, reuseReversed: reuseReversedAdvanceId ? { advanceId: reuseReversedAdvanceId, reason: (reuseReason ?? "").trim() } : null, slipUrl: slip?.url, slipFileId: slip?.fileId, today: bangkokToday(), slipCheck: gate.stored, actor,
   });
   if (!result.ok) {
     if (result.duplicateOf) return NextResponse.json(duplicateTransferBody(result.duplicateOf, { amount: parsed.data.amount, advanceDate: parsed.data.advanceDate }), { status: 409 });

@@ -22,6 +22,10 @@ export const advanceBody = z.object({
   allowedCategories: z.union([z.array(z.string().max(20)).max(4), z.string().max(80)]).optional()
     .transform((v) => (typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : v)),
   otherReason: z.string().max(300).nullish(),
+  // Admin correction (Bank transfers › Re-record): this advance takes the money of a REVERSED
+  // advance on the same bank reference and company account.
+  reuseReversedAdvanceId: z.string().max(60).nullish(),
+  reuseReason: z.string().max(500).nullish(),
 });
 
 export const receiptBody = z.object({

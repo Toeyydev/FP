@@ -229,7 +229,9 @@ function ReviewForm({ t, onDone, onCancel }: { t: Detail; onDone: (m: string) =>
 function RerecordForm({ t, reversed, onCancel }: { t: Detail; reversed: Rec[]; onCancel: () => void }) {
   const [pick, setPick] = useState(reversed[0]?.id ?? ""), [reason, setReason] = useState("");
   const r = reversed.find((x) => x.id === pick);
-  const href = r?.table === "GuidePayment" ? `/payments?view=guide-payments&reuse=${encodeURIComponent(r.id)}&why=${encodeURIComponent(reason.trim())}` : null;
+  const why = encodeURIComponent(reason.trim());
+  const href = r?.table === "GuidePayment" ? `/payments?view=guide-payments&reuse=${encodeURIComponent(r.id)}&why=${why}`
+    : r?.table === "GuideAdvance" ? `/payments?view=advances&reuseAdvance=${encodeURIComponent(r.id)}&why=${why}` : null;
   return (
     <fieldset className="js-rerecord-form" style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12, display: "grid", gap: 8 }}>
       <legend style={{ fontWeight: 700 }}>Re-record with this transfer</legend>
@@ -243,7 +245,7 @@ function RerecordForm({ t, reversed, onCancel }: { t: Detail; reversed: Rec[]; o
       <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Old: {r?.docNo ?? "—"} for {r?.guideId ?? "—"}. New: the guide, jobs and payee you choose on the next step. Saved together, or not at all; the reversed record cannot come back after.</p>
       {r && !href && <div className="ob warn" style={{ whiteSpace: "normal" }}>Re-record a {TABLE[r.table] ?? r.table} from its own form (Payments › Advances) with “re-record a reversed transfer”.</div>}
       <div style={{ display: "flex", gap: 8 }}><button className="btn sm" onClick={onCancel}>Cancel</button>
-        {href ? <a className="btn sm primary" href={reason.trim().length >= 5 ? href : undefined} aria-disabled={reason.trim().length < 5} style={reason.trim().length < 5 ? { opacity: 0.4, pointerEvents: "none" } : undefined}>Continue to Record payment</a> : null}
+        {href ? <a className="btn sm primary" href={reason.trim().length >= 5 ? href : undefined} aria-disabled={reason.trim().length < 5} style={reason.trim().length < 5 ? { opacity: 0.4, pointerEvents: "none" } : undefined}>{r?.table === "GuideAdvance" ? "Continue to Record advance" : "Continue to Record payment"}</a> : null}
       </div>
     </fieldset>
   );
