@@ -176,7 +176,7 @@ const browser = await puppeteer.launch({ executablePath: browserPath(), headless
 const pageErrors = [];
 try {
   const health = await (await fetch(`${BASE}/api/health`)).json();
-  check("/api/health reports six upsell switches, as this test server set them", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: true, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
+  check("/api/health reports seven upsell switches, as this test server set them", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: true, foodTour: false, onsiteTour: false, walkInQr: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
 
   // ── ADMIN ──
   const page = await browser.newPage();
@@ -204,7 +204,7 @@ try {
 
   const t3 = await text(page);
   const want = ["Cash to the guide only", "Booking on existing job · no new job", "T-001 · 08:30", "T-002 · 13:30", "Selling Guide = Service Guide", "OTA mix", "Allowed for this product",
-    "Max 12 guests on the job, OTA + on-site", "None — no fixed cost, no incentive", "All of it — ฿700 per guest", "Bank transfer only", "UPSELL_ONSITE_TOUR_REVENUE · awaiting accountant",
+    "Max 12 guests on the job, OTA + on-site", "None — no fixed cost, no incentive", "All of it — ฿700 per guest", "Bank transfer only", "TOUR_SERVICE_REVENUE · awaiting accountant",
     "New category, not mapped yet: PEAK export stays blocked.", "UPSELL-STD · Draft", "FOLK-UPS-YYYYMM-NNN", "FOLK-CSH-YYYYMM-NNN"];
   const missing = want.filter((s) => !t3.includes(s));
   check("Three Temples on-site shows every owner rule", missing.length === 0, missing.join(" | "));
