@@ -219,7 +219,7 @@ const moneyRows = async () => ({ outbox: await prisma.advancePeakSync.count(), g
 const moneyBefore = await moneyRows();
 try {
   const health = await (await fetch(`${BASE}/api/health`)).json();
-  check("/api/health: only UPSELL_ENABLED and the route extension switch are on in this test server", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: true, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
+  check("/api/health: only UPSELL_ENABLED and the route extension switch are on in this test server", JSON.stringify(health.upsell) === JSON.stringify({ enabled: true, routeExtension: true, foodTour: false, onsiteTour: false, walkInQr: false, paymentLink: false, peakAutoSync: false }), JSON.stringify(health.upsell));
 
   const page = await browser.newPage();
   page.on("pageerror", (e) => pageErrors.push(String(e)));
@@ -253,15 +253,17 @@ try {
   const sale1 = await prisma.upsellSale.findFirst({ orderBy: { createdAt: "asc" } });
   check("a double tap records one sale: one sale, one cash payment, one custody entry", JSON.stringify(await counts()) === JSON.stringify({ sales: 1, payments: 1, custody: 1 }));
   check("the sale is ฿600 for 3 guests, paid in cash to the guide, custody +฿600", sale1?.grossSatang === 60000 && sale1?.guests === 3 && (await prisma.upsellPayment.findFirst())?.method === "CASH" && (await prisma.cashCustodyEntry.findFirst())?.amountSatang === 60000);
-  check("the payment confirmation shows the Sale Ref and Job Ref the system made", t.includes("Folkpaths · payment confirmation".toUpperCase()) || t.toLowerCase().includes("folkpaths · payment confirmation"));
+  check("the payment acknowledgement shows the Sale Ref and Job Ref the system made", t.toLowerCase().includes("folkpaths · payment acknowledgement"));
   const saleRef = await page.$eval(".ups-sale-ref", (e) => e.textContent);
   const jobRef = await page.$eval(".ups-job-ref", (e) => e.textContent);
   const sheet = await prisma.jobSheet.findFirstOrThrow({ where: { guideId: GUIDE_ID } });
   check("Sale Ref on screen = the sale's FOLK-UPS number", saleRef === sale1?.saleNo && /^FOLK-UPS-\d{6}-\d{3}$/.test(saleRef), saleRef);
   check("Job Ref on screen = the job's FOLK-BKK number", jobRef === `Job Ref ${sheet.ref}` && /FOLK-BKK-\d{8}-\d{2}$/.test(jobRef), jobRef);
   check("the refs are read only — no field on the confirmation", await page.evaluate(() => !document.querySelector(".ups-confirmation input, .ups-confirmation textarea, .ups-confirmation select")));
-  check("it says it is not a tax invoice or official receipt, and is never called a receipt otherwise",
-    t.includes("Not a tax invoice or official receipt.") && !/receipt|tax invoice/i.test(t.replace("Not a tax invoice or official receipt.", "").replace("ไม่ใช่ใบเสร็จรับเงินหรือใบกำกับภาษี", "")));
+  // Codex 20 Nov (pr4q #6): an acknowledgement, never called the official receipt; the official
+  // receipt is described by its PEAK status and never said to be issued before PEAK has it.
+  check("it acknowledges the cash, says it is not the official receipt, gives the receipt's real status, no tax invoice",
+    t.includes("it is not the official receipt") && t.includes("No tax invoice") && /Official receipt: issued in PEAK once the office finishes its set-up/.test(t) && !/Official receipt issued/.test(t));
   const fc = await fits(page); check("390px payment confirmation fits", fc.over <= 1, fc.culprits.join(" "));
   const cc = await collisions(page); check("390px confirmation rows: no label overlaps or is squeezed", cc.length === 0, cc.join("; "));
   const ac = await a11y(page); check("payment confirmation accessibility", ac.length === 0, ac.join("; "));

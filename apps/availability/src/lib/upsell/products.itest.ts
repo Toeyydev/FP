@@ -389,9 +389,9 @@ describe("who may use the API", () => {
 });
 
 describe("/api/health", () => {
-  it("reports all six upsell switches, off", async () => {
-    for (const k of ["UPSELL_ENABLED", "UPSELL_ROUTE_EXTENSION_ENABLED", "UPSELL_FOOD_TOUR_ENABLED", "UPSELL_ONSITE_TOUR_ENABLED", "UPSELL_PAYMENT_LINK_ENABLED", "UPSELL_PEAK_AUTO_SYNC"]) vi.stubEnv(k, "");
+  it("reports all seven upsell switches, off", async () => {
+    for (const k of ["UPSELL_ENABLED", "UPSELL_ROUTE_EXTENSION_ENABLED", "UPSELL_FOOD_TOUR_ENABLED", "UPSELL_ONSITE_TOUR_ENABLED", "UPSELL_WALKIN_QR_ENABLED", "UPSELL_PAYMENT_LINK_ENABLED", "UPSELL_PEAK_AUTO_SYNC"]) vi.stubEnv(k, "");
     const j = await (await healthRoute()).json();
-    expect(j.upsell).toEqual({ enabled: false, routeExtension: false, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false });
+    expect(j.upsell).toEqual({ enabled: false, routeExtension: false, foodTour: false, onsiteTour: false, walkInQr: false, paymentLink: false, peakAutoSync: false });
   });
 });

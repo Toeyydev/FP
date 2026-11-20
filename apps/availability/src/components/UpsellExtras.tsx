@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import UpsellHandIn from "@/components/UpsellHandIn";
+import WalkInGuestQr from "@/components/WalkInGuestQr";
 
 // The Extras block on the guide's own job sheet (PR3, mockup approved 19 Nov 2026): sell a
 // Route Extension, record the cash taken, show the guest a payment confirmation, and see the
@@ -293,6 +294,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
           {p.guestsLeft > 0
             ? <button type="button" className="ups-sell ups-sell-walkin" onClick={() => startSell(p)} style={btn(false)}>Sell a walk-in seat</button>
             : <p className="ups-full" style={{ margin: 0, fontSize: 13, color: C.soft }}>No walk-in seats left on this job ({p.seatsPerGuide} guests per guide). Ask Operations.</p>}
+          <WalkInGuestQr jobSheetId={x.jobSheetId} onSold={() => void load()} />
         </> : <>
           {x.sales.length === 0 && <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>Guests on this tour can add <b>{p.name}</b> for <b>{baht(p.unitPriceSatang)} {per(p.pricingBasis)}</b>.<br /><small style={{ color: C.soft }}>ขายเพิ่ม {p.name} {p.pricingBasis === "PER_GROUP" ? "ต่อกลุ่ม" : "คนละ"} {(p.unitPriceSatang / 100).toLocaleString("en-US")} บาท</small></p>}
           {p.guestsLeft > 0
