@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bank transfers review</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=swap">
+<style>
+:root{--ink:#18181B;--muted:#52525B;--line:#E5E7EB;--bg:#F7F7F5;--card:#fff;--green:#0E3B2E;--ok-bg:#EAF4EF;--ok-line:#CBE5D6;--ok-ink:#0E5A33;--warn-bg:#FBF4E4;--warn-line:#EADFC3;--warn-ink:#5C3B06;--bad:#8A2A1C;--bad-bg:#FBEDEA}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--ink:#F4F4F5;--muted:#A1A1AA;--line:#3F3F46;--bg:#111113;--card:#1C1C1F;--green:#7FD1A8;--ok-bg:#12291F;--ok-line:#1F4A36;--ok-ink:#9BE3BD;--warn-bg:#2A2212;--warn-line:#4A3B1C;--warn-ink:#F1D39A;--bad:#F2A496;--bad-bg:#2E1814}}
+:root[data-theme="dark"]{--ink:#F4F4F5;--muted:#A1A1AA;--line:#3F3F46;--bg:#111113;--card:#1C1C1F;--green:#7FD1A8;--ok-bg:#12291F;--ok-line:#1F4A36;--ok-ink:#9BE3BD;--warn-bg:#2A2212;--warn-line:#4A3B1C;--warn-ink:#F1D39A;--bad:#F2A496;--bad-bg:#2E1814}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Sarabun,system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:20px}
+h1{margin:0;font-size:22px;font-weight:800}
+h2{margin:0;font-size:17px}
+.note{font-size:13px;color:var(--muted);margin:0}
+.board{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.art{flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.label{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+.scroll{overflow-x:auto}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.r{text-align:right}
+dl{margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:6px 12px;font-size:14px}
+dt{color:var(--muted)}dd{margin:0;text-align:right}
+.tag{display:inline-block;border-radius:6px;padding:0 6px;font-size:12px;font-weight:700}
+.warn{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink)}
+.ok{background:var(--ok-bg);border:1px solid var(--ok-line);color:var(--ok-ink)}
+.bad{background:var(--bad-bg);color:var(--bad)}
+.box{border-radius:10px;padding:10px 12px;font-size:13.5px}
+label{font-weight:700;font-size:14px}
+input,textarea,select{width:100%;font:inherit;font-size:14px;padding:9px 10px;border:1px solid #8A8A93;border-radius:8px;background:var(--card);color:var(--ink)}
+.row{display:flex;gap:8px}
+button{min-height:44px;border-radius:10px;font:inherit;font-weight:700;padding:0 14px;cursor:pointer}
+.primary{background:var(--green);color:#fff;border:0}
+:root[data-theme="dark"] .primary{color:#0B1A14}
+.plain{background:var(--card);color:var(--ink);border:1px solid #8A8A93}
+.danger{background:var(--card);color:var(--bad);border:1px solid var(--bad)}
+ul{margin:0;padding-left:18px;font-size:13.5px;line-height:1.55}
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>PR4-0b · Bank transfers: review and correct</h1>
+    <p class="note">Mockup for review (Codex / owner). Admin only; Operator and Accountant see the list and detail read-only. Every figure, name and reference here is invented.</p>
+  </div>
+
+  <div class="board">
+    <!-- A · list -->
+    <section class="art" aria-labelledby="a">
+      <div class="label" id="a">A · Payments › Bank transfers (needs review first)</div>
+      <div class="card">
+        <div class="row" style="flex-wrap:wrap">
+          <select aria-label="Show"><option>Needs review (3)</option><option>All transfers</option></select>
+          <input aria-label="Find a reference or document" placeholder="Reference or FOLK-… number">
+        </div>
+        <div class="scroll"><table style="min-width:520px">
+          <thead><tr><th>Reference</th><th>In/out</th><th class="r">Amount</th><th>Records</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">KBANK</td><td>Out</td><td class="r">฿1,553</td><td>FOLK-PMT-209909-003</td><td><span class="tag warn">Reference has no digits</span></td></tr>
+            <tr><td class="mono">Confirmed</td><td>In</td><td class="r">฿1,000</td><td>FOLK-ADR-209910-001</td><td><span class="tag warn">Reference has no digits</span></td></tr>
+            <tr><td class="mono">…0001</td><td>Out</td><td class="r">฿1,000</td><td>FOLK-PMT-209901-004 <span class="tag bad">reversed</span></td><td><span class="tag warn">Reversed — share still spent</span></td></tr>
+          </tbody>
+        </table></div>
+        <p class="note">Nothing here is changed by opening it. A transfer is never deleted.</p>
+      </div>
+    </section>
+
+    <!-- B · detail -->
+    <section class="art" aria-labelledby="b">
+      <div class="label" id="b">B · One transfer</div>
+      <div class="card">
+        <h2>Out · reference …0001</h2>
+        <dl>
+          <dt>Amount</dt><dd><b>฿1,000.00</b> · from the first record (FOLK-PMT-209901-004)</dd>
+          <dt>Transfer date</dt><dd>10 Jan 2099</dd>
+          <dt>Company account</dt><dd>ACC ···7890</dd>
+          <dt>Applied</dt><dd>฿1,000.00 of ฿1,000.00</dd>
+        </dl>
+        <div class="scroll"><table style="min-width:480px">
+          <thead><tr><th>Record</th><th>Role</th><th class="r">Amount</th><th>State</th></tr></thead>
+          <tbody>
+            <tr><td>FOLK-PMT-209901-004</td><td>Pays</td><td class="r">฿1,000</td><td><span class="tag bad">Reversed</span> money moved · still counted</td></tr>
+            <tr><td>FOLK-PAY-209901-07</td><td>Document</td><td class="r">—</td><td>Describes it</td></tr>
+          </tbody>
+        </table></div>
+        <div class="row" style="flex-wrap:wrap">
+          <button class="primary">Re-record with this transfer…</button>
+          <button class="plain">Correct the amount…</button>
+          <button class="plain">Mark reviewed…</button>
+        </div>
+        <details><summary style="min-height:44px;display:flex;align-items:center;font-weight:700">History</summary>
+          <ul><li>10 Jan · recorded by FOLK-PMT-209901-004 (Admin Example)</li><li>12 Jan · FOLK-PMT-209901-004 reversed: “wrong job” (Admin Example)</li></ul>
+        </details>
+      </div>
+    </section>
+
+    <!-- C · re-record (reallocation to a named record) -->
+    <section class="art" aria-labelledby="c">
+      <div class="label" id="c">C · Re-record with this transfer (hand the reversed share on)</div>
+      <div class="card" role="dialog" aria-labelledby="c-h">
+        <h2 id="c-h">Re-record ฿1,000 from FOLK-PMT-209901-004</h2>
+        <div class="box warn">The reversed payment keeps its share of this transfer until it is handed on. It goes to <b>the one payment you record now</b> — no other record can use it.</div>
+        <label for="c1">What the money was really for</label>
+        <select id="c1"><option>Guide payment — G-901 · choose the jobs on the next step</option><option>Company advance (ADV)</option></select>
+        <label for="c2">Why <small style="font-weight:400">kept in the audit</small></label>
+        <textarea id="c2" rows="2">Paid for the right job; first record named the wrong job.</textarea>
+        <ul><li>One step: the hand-on and the new payment are saved together, or neither is</li><li>The new payment may use up to ฿1,000; anything left stays spent</li><li>The reversed payment cannot come back afterwards</li></ul>
+        <div class="row"><button class="plain" style="flex:1">Cancel</button><button class="primary" style="flex:2">Continue to Record payment</button></div>
+      </div>
+    </section>
+
+    <!-- D · correct amount -->
+    <section class="art" aria-labelledby="d">
+      <div class="label" id="d">D · Correct the amount (from the slip or statement)</div>
+      <div class="card" role="dialog" aria-labelledby="d-h">
+        <h2 id="d-h">Correct transfer …0001</h2>
+        <dl><dt>Now</dt><dd>฿1,000.00 · from FOLK-PMT-209901-004</dd><dt>Applied</dt><dd>฿1,000.00</dd></dl>
+        <label for="d1">Amount on the slip (฿)</label><input id="d1" value="1,200.00" inputmode="decimal">
+        <label for="d2">Evidence <small style="font-weight:400">required</small></label><input id="d2" type="file" aria-describedby="d2n"><span class="note" id="d2n">Slip or statement line showing this reference and amount.</span>
+        <label for="d3">Why</label><textarea id="d3" rows="2">Statement shows 1,200; first record typed 1,000.</textarea>
+        <p class="note">Refused below what is already applied. Old and new values, the evidence and you are kept in the audit.</p>
+        <div class="row"><button class="plain" style="flex:1">Cancel</button><button class="primary" style="flex:2">Save ฿1,200.00</button></div>
+      </div>
+    </section>
+
+    <!-- E · mark reviewed -->
+    <section class="art" aria-labelledby="e">
+      <div class="label" id="e">E · Mark reviewed (a reference that is not a bank number)</div>
+      <div class="card" role="dialog" aria-labelledby="e-h">
+        <h2 id="e-h">Review “KBANK” · FOLK-PMT-209909-003</h2>
+        <fieldset style="border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px">
+          <legend style="font-weight:700;padding-bottom:4px">What the slip shows</legend>
+          <label style="font-weight:400;display:flex;gap:8px;align-items:center;min-height:44px"><input type="radio" name="e" style="width:20px" checked> A real reference — correct the record to it (from the record's own Correct action)</label>
+          <label style="font-weight:400;display:flex;gap:8px;align-items:center;min-height:44px"><input type="radio" name="e" style="width:20px"> No reference printed — keep as typed; it stays unmatched</label>
+        </fieldset>
+        <label for="e2">Evidence</label><input id="e2" type="file">
+        <label for="e3">Note</label><textarea id="e3" rows="2">Slip checked: no reference number printed.</textarea>
+        <p class="note">Never a made-up number. Clearing the flag needs an Admin and is audited.</p>
+        <div class="row"><button class="plain" style="flex:1">Cancel</button><button class="primary" style="flex:2">Mark reviewed</button></div>
+      </div>
+    </section>
+
+    <!-- F · refused -->
+    <section class="art" aria-labelledby="f">
+      <div class="label" id="f">F · Refused, nothing saved</div>
+      <div class="card"><ul>
+        <li>anyone but an active Admin (Operator, Accountant: read only; checked on the server)</li>
+        <li>a hand-on to anything but the one record recorded in the same step</li>
+        <li>an amount below what is applied, or without evidence and a reason</li>
+        <li>history that pays a transfer twice is never repaired here automatically — each case is resolved from its slip</li>
+      </ul></div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

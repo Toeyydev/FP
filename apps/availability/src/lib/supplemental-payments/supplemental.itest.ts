@@ -514,6 +514,30 @@ describe("a review incentive: paid in full, no withholding tax (owner decision 2
     expect(JSON.stringify(r.body)).toMatch(/already fully recorded elsewhere/);
     expect(await prisma.guidePayment.count()).toBe(before);
   });
+  it("through the routes: a reversed payment's transfer is re-recorded only by an Admin, handed to the new payment by name", async () => {
+    const { body } = await create(reviewIncentive());
+    const first = await pay([body.id], { amountTransferred: 200, bankRef: "BANK-REUSE-EXAMPLE-0001" });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    const reversed = await call(await REVERSE(json(`/api/guide-payments/${first.body.payment.id}/reverse`, "POST", { reason: "recorded with the wrong month (example)" }), { params: Promise.resolve({ id: first.body.payment.id }) }));
+    expect(reversed.status, JSON.stringify(reversed.body)).toBe(200);
+    // The money moved once: paying again with that transfer is refused…
+    expect((await pay([body.id], { amountTransferred: 200, bankRef: "BANK-REUSE-EXAMPLE-0001" })).status).toBe(409);
+    const reuse = { reuseReversed: { paymentId: first.body.payment.id, reason: "same transfer, right month (example)" } };
+    // …an Operator cannot hand it on…
+    expect((await pay([body.id], { amountTransferred: 200, bankRef: "BANK-REUSE-EXAMPLE-0001", ...reuse })).status).toBe(403);
+    // …an Admin can, to this one payment.
+    const admin = await prisma.user.create({ data: { email: "admin-reuse@example.test", displayName: "Admin Example", role: "ADMIN", state: "ACTIVE" } });
+    as("ADMIN", admin.id);
+    const again = await pay([body.id], { amountTransferred: 200, bankRef: "BANK-REUSE-EXAMPLE-0001", ...reuse });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    const release = await prisma.bankTransactionRelease.findFirstOrThrow();
+    expect(release).toMatchObject({ kind: "REALLOCATION", targetTable: "GuidePayment", targetId: again.body.payment.id });
+    expect(await prisma.auditLog.findUniqueOrThrow({ where: { id: release.auditLogId! } })).toMatchObject({ action: "bank_tx.reallocated", actorId: admin.id, actorRole: "ADMIN" });
+    // Handed on once.
+    const { body: other } = await create(reviewIncentive({ workMonth: "2025-05" }));
+    expect((await pay([other.id], { amountTransferred: 200, bankRef: "BANK-REUSE-EXAMPLE-0001" })).status).toBe(409);
+    expect((await pay([other.id], { amountTransferred: 200, bankRef: "BANK-REUSE-EXAMPLE-0001", ...reuse })).status).toBe(409);
+  });
   it("a bonus cannot ride in a job's transfer — only a company-borne review incentive can", async () => {
     const { body } = await create(review({ jobs: [] }));
     const fd = new FormData();

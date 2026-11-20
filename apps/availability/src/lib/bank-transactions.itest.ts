@@ -300,12 +300,12 @@ describe("a reversed payment is not a new bank transfer", () => {
     const admin = await user("ADMIN");
     const p = await payment({ bankRef: "KB-2099-0006", amount: 1000 });
     const t = (await useOf("GuidePayment", p.id)).transactionId;
-    await expect(correctTransferAmount(prisma, { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", admin: await user("OPERATOR") })).rejects.toThrow(BankTxRefused);
-    await correctTransferAmount(prisma, { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", admin });
+    await expect(correctTransferAmount(prisma, { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", evidence: { url: "https://example.test/statement" }, admin: await user("OPERATOR") })).rejects.toThrow(BankTxRefused);
+    await correctTransferAmount(prisma, { transactionId: t, amountSatang: 120000, reason: "statement shows 1,200 (example)", evidence: { url: "https://example.test/statement" }, admin });
     expect(await tx1()).toMatchObject({ amountSatang: 120000, amountSource: "CORRECTED" });
     expect((await prisma.auditLog.findFirstOrThrow({ where: { action: "bank_tx.amount_corrected" } })).detail).toMatchObject({ before: { amountSatang: 100000 }, after: { amountSatang: 120000 } });
     // Never below what is applied.
-    await expect(correctTransferAmount(prisma, { transactionId: t, amountSatang: 50000, reason: "typo (example)", admin })).rejects.toThrow(/BANK_TX_OVERUSED/);
+    await expect(correctTransferAmount(prisma, { transactionId: t, amountSatang: 50000, reason: "typo (example)", evidence: { url: "https://example.test/statement" }, admin })).rejects.toThrow(/BANK_TX_OVERUSED/);
   });
 
   it("editing a payment's reference leaves the old link dead and still counted; editing back revives it", async () => {

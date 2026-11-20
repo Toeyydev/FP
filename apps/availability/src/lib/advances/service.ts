@@ -30,7 +30,8 @@ import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, t
 import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import { parseBangkokDateTime } from "@/lib/bangkok-time";
-import { advanceBankAccountKey, bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
+import { BankTxRefused, advanceBankAccountKey, bankTxPrecheck, bankTxRefusal, handOnReversedShare, reversedShareOf } from "@/lib/bank-transactions";
+import { randomUUID } from "node:crypto";
 import { advancePeakConfig } from "@/lib/advances/peak-sync";
 import {
   MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
@@ -162,6 +163,9 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
   otherReason?: string | null;
   /** The slip check, as the route ran and gated it (lib/advances/slip-check). */
   slipCheck?: StoredSlipCheck | null;
+  /** Admin only: this advance re-records the money of a REVERSED advance (same bank reference) —
+   *  e.g. recorded against the wrong guide. Its share is handed to this advance by name. */
+  reuseReversed?: { advanceId: string; reason: string } | null;
 }): Promise<{ ok: true; advance: { id: string; advanceNo: string } } | (Fail & { code?: string; duplicateOf?: ExistingAdvance })> {
   const reasons = checkIssueAdvance(input);
   const wanted = input.allowedCategories?.length ? input.allowedCategories : DEFAULT_ALLOWED;
@@ -181,7 +185,12 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
   if (already) return refuseDuplicate(already);
   // The same transfer recorded anywhere else (a guide payment, a refund, a reversed advance).
   const advanceAccountKey = advanceBankAccountKey(input.bankAccount, configuredAdvanceBank());
-  const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: input.bankRef, amountSatang, account: advanceAccountKey });
+  let handedOnSatang = 0;
+  if (input.reuseReversed) {
+    try { handedOnSatang = (await reversedShareOf(prisma, { table: "GuideAdvance", id: input.reuseReversed.advanceId })).amountSatang; }
+    catch (e) { if (e instanceof BankTxRefused) return fail(409, e.message); throw e; }
+  }
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: input.bankRef, amountSatang, account: advanceAccountKey, handedOnSatang });
   if (elsewhere) return { ...fail(409, elsewhere), code: DUPLICATE_TRANSFER };
 
   // Which job this advance belongs to decides which job sheet shows it (the legacy
@@ -202,9 +211,17 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
     try {
       const advance = await prisma.$transaction(async (tx) => {
         const advanceNo = await nextNo(tx, "ADV", input.advanceDate);
+        const id = randomUUID();
+        if (input.reuseReversed) {
+          await handOnReversedShare(tx, {
+            from: { table: "GuideAdvance", id: input.reuseReversed.advanceId }, targetTable: "GuideAdvance", targetId: id,
+            reason: input.reuseReversed.reason ?? "", admin: { actorId: input.actor.actorId ?? "", actorRole: input.actor.actorRole ?? "" },
+            ref: input.bankRef, direction: "OUT",
+          });
+        }
         return tx.guideAdvance.create({
           data: {
-            guideId: input.guideId, advanceNo, jobNo,
+            ...(input.reuseReversed ? { id } : {}), guideId: input.guideId, advanceNo, jobNo,
             advanceDate: input.advanceDate, amountSatang, accountingPeriod: periodOf(input.advanceDate),
             bankAccount: input.bankAccount ?? null, bankAccountKey: advanceAccountKey, purpose, allowedCategories, method: input.method ?? "bank", txRef: input.bankRef ?? null,
             note: input.note ?? null, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null,
@@ -241,6 +258,7 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
         if (winner) return refuseDuplicate(winner);
         if (attempt < 2) continue; // two advances numbered at the same moment
       }
+      if (e instanceof BankTxRefused) return fail(409, e.message);
       const refused = bankTxRefusal(e);
       if (refused) return { ...fail(409, refused), code: DUPLICATE_TRANSFER };
       throw e;
