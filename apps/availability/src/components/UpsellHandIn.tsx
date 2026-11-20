@@ -11,7 +11,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 type Transfer = { id: string; seq: number; amountSatang: number; transferredAt: string; transferDate: string; bankRef: string; hasSlip: boolean; toAccount: string; status: string; withdrawnReason: string | null };
 type View = {
   heldSatang: number; toRemitSatang: number; status: string; settlementNo: string | null; submissionNo: number; returnedReason: string | null;
-  memo: string | null; jobRef: string | null; coverage: { saleNo: string; productName: string; guests: number; grossSatang: number; status: string }[];
+  memo: string | null; jobRef: string | null; coverage: { saleNo: string; productName: string; guests: number; grossSatang: number; heldSatang: number; status: string; reversal: string | null }[];
   receivingAccount: { id: string; version: number; label: string; display: string } | null;
   transfers: Transfer[];
   history: { submissionNo: number; totalSatang: number; transferIds: string[]; status: string; submittedAt: string; returnedReason: string | null; returnedAt: string | null; confirmedAt: string | null }[];
@@ -152,7 +152,7 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
           </div>
           <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "4px 12px", fontSize: 13.5, fontVariantNumeric: "tabular-nums" }}>
             <dt style={{ color: C.soft }}>Job</dt><dd style={{ margin: 0, textAlign: "right", overflowWrap: "anywhere" }}>{v.jobRef ?? "—"}</dd>
-            {v.coverage.filter((c) => c.status !== "REVERSED").map((c) => <Fragment key={c.saleNo}><dt style={{ color: C.soft, overflowWrap: "anywhere" }}>{c.saleNo} · {c.productName}</dt><dd style={{ margin: 0, textAlign: "right" }}>{baht(c.grossSatang)}</dd></Fragment>)}
+            {v.coverage.map((c) => <Fragment key={c.saleNo}><dt style={{ color: C.soft, overflowWrap: "anywhere" }}>{c.saleNo} · {c.productName}{c.reversal === "REFUNDED_BY_COMPANY" ? ` · refunded by the company (sale ${baht(c.grossSatang)}) — the cash is still yours to hand in` : ""}</dt><dd style={{ margin: 0, textAlign: "right" }}>{baht(c.heldSatang)}</dd></Fragment>)}
             <dt style={{ fontWeight: 800 }}>To hand in</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 800 }}>{baht(v.toRemitSatang)}</dd>
           </dl>
           <small style={{ color: C.soft }}>The memo is not the bank reference: after the transfer, report the bank’s own transaction reference from the slip. One code for all the transfers of this job.</small>

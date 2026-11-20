@@ -55,12 +55,28 @@ async function step<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
 
 // ── What the job shows ─────────────────────────────────────────────────────────────────────
 
-/** The sales a job's hand-in covers: each Sale Ref, product and amount still owed in cash. */
+/**
+ * The sales a job's hand-in covers, each with the cash the guide still holds FOR it (its net
+ * custody: collected less any reversal that reduced the guide's cash) and its original gross.
+ * A sale the company refunded keeps its cash with the guide — it is covered (status REVERSED,
+ * refunded) even though the guest got their money back from the company. A sale whose cash was
+ * taken back (recorded in error, or refunded from the guide's cash) holds nothing and drops out.
+ * Remittances carry no sale, so the per-sale sums add up to what is owed before a hand-in.
+ */
 async function coverageOf(db: Db | Tx, guideId: string, jobSheetId: string) {
   const sales = await db.upsellSale.findMany({ where: { sourceJobSheetId: jobSheetId, payments: { some: { method: "CASH", cashCollectorId: guideId } } }, orderBy: { createdAt: "asc" },
-    select: { saleNo: true, grossSatang: true, status: true, guests: true, ruleSnapshot: true } });
-  return sales.map((x) => ({ saleNo: x.saleNo, productName: ((x.ruleSnapshot as { product?: { name?: string } } | null)?.product?.name) ?? "Extra", guests: x.guests, grossSatang: x.grossSatang, status: x.status }));
+    select: { id: true, saleNo: true, grossSatang: true, status: true, guests: true, ruleSnapshot: true, reversals: { where: { status: "APPROVED" }, select: { kind: true, refundPaidBy: true } } } });
+  const held = await db.cashCustodyEntry.groupBy({ by: ["saleId"], where: { custodianId: guideId, sourceJobSheetId: jobSheetId, saleId: { in: sales.map((x) => x.id) } }, _sum: { amountSatang: true } });
+  const heldBy = new Map(held.map((h) => [h.saleId, h._sum.amountSatang ?? 0]));
+  return sales.map((x) => {
+    const rev = x.reversals[0];
+    return { saleNo: x.saleNo, productName: ((x.ruleSnapshot as { product?: { name?: string } } | null)?.product?.name) ?? "Extra", guests: x.guests,
+      grossSatang: x.grossSatang, heldSatang: heldBy.get(x.id) ?? 0, status: x.status,
+      reversal: rev ? (rev.kind === "REFUNDED" ? (rev.refundPaidBy === "GUIDE_CASH" ? "REFUNDED_FROM_GUIDE_CASH" : "REFUNDED_BY_COMPANY") : "RECORDED_IN_ERROR") : null };
+  });
 }
+/** What a hand-in covers: only sales whose cash the guide still holds. */
+const covered = <T extends { heldSatang: number }>(c: T[]) => c.filter((x) => x.heldSatang !== 0);
 
 /** What a guide writes in the transfer's memo: the hand-in code itself (short enough for a bank app). */
 export const bankMemo = (settlementNo: string) => settlementNo;
@@ -70,7 +86,7 @@ export async function handInView(db: Db, guideId: string, jobSheetId: string) {
     heldOn(db, guideId, jobSheetId),
     db.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId, sourceJobSheetId: jobSheetId } }, include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "asc" } }, returns: { orderBy: { submissionNo: "asc" } } } }),
     currentReceivingAccount(db),
-    coverageOf(db, guideId, jobSheetId),
+    coverageOf(db, guideId, jobSheetId).then(covered),
     db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { ref: true } }),
   ]);
   // Read only: a GET never makes a hand-in code — prepareHandIn does, once.
@@ -111,7 +127,7 @@ export async function prepareHandIn(db: Db, guide: Guide, input: { jobSheetId: s
       s = await tx.cashSettlement.create({ data: { settlementNo: await nextUpsellDocNo("FOLK-CSH", new Date(), tx), guideId: guide.guideId, sourceJobSheetId: job.id, expectedSatang: 0, remittedSatang: 0, method: "BANK_TRANSFER", status: "DRAFT" } });
       await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_prepared", entityType: "CashSettlement", entityId: s.id, detail: { settlementNo: s.settlementNo, jobRef: job.ref } } });
     }
-    return { settlementId: s.id, settlementNo: s.settlementNo, memo: bankMemo(s.settlementNo), status: s.status, jobRef: job.ref, owedSatang: await heldOn(tx, guide.guideId, job.id), coverage: await coverageOf(tx, guide.guideId, job.id) };
+    return { settlementId: s.id, settlementNo: s.settlementNo, memo: bankMemo(s.settlementNo), status: s.status, jobRef: job.ref, owedSatang: await heldOn(tx, guide.guideId, job.id), coverage: covered(await coverageOf(tx, guide.guideId, job.id)) };
   });
 }
 
@@ -195,7 +211,10 @@ export async function submitHandIn(db: Db, guide: Guide, input: { jobSheetId: st
     if (owed <= 0) refuse(409, "NOTHING_OWED", "No Extras cash is owed on this job");
     if (total !== owed) refuse(409, "NOT_EXACT", `The transfers add up to ${thb(total)}; ${thb(owed)} is owed. Only the exact amount is handed in — if you cannot, contact Admin`);
     const sent = await tx.cashSettlement.update({ where: { id: s.id }, data: { status: "SUBMITTED", method: "BANK_TRANSFER", expectedSatang: owed, remittedSatang: total } });
-    const coverage = (await coverageOf(tx, guide.guideId, job.id)).filter((c) => c.status !== "REVERSED");
+    const coverage = covered(await coverageOf(tx, guide.guideId, job.id));
+    // Fail closed: the sales covered must account for every satang owed (frozen with the submission).
+    const coveredSatang = coverage.reduce((n, c) => n + c.heldSatang, 0);
+    if (coveredSatang !== owed) refuse(409, "COVERAGE_MISMATCH", `The sales held add up to ${thb(coveredSatang)} but ${thb(owed)} is owed — contact Admin`);
     const submission = await tx.cashSettlementSubmission.create({ data: { settlementId: s.id, submissionNo: sent.submissionNo, expectedSatang: owed, totalSatang: total, transferIds: reported.map((t) => t.id), coverage: coverage as unknown as Prisma.InputJsonValue, submittedById: guide.userId } });
     await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_sent", entityType: "CashSettlement", entityId: s.id,
       detail: { settlementNo: sent.settlementNo, submissionNo: sent.submissionNo, totalSatang: total, transfers: reported.map((t) => ({ seq: t.seq, amountSatang: t.amountSatang, transferDate: t.transferDate, bankRef: t.bankRef, toAccount: t.receivingAccountDisplay })) } } });

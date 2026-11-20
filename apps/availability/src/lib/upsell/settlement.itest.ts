@@ -587,3 +587,37 @@ describe("PR4-P: a confirmed hand-in reaches PEAK as one daily journal (real ada
     expect(await prisma.auditLog.count({ where: { action: "upsell.peak_event_read_back", entityId: e.id } })).toBe(4);
   });
 });
+
+describe("coverage is each sale's net custody (Codex 20 Nov 2026): a company refund leaves the cash with the guide", () => {
+  it("company full refund → prepare / submit / confirm cover it; sums reconcile to owed; payload and submission frozen", async () => {
+    await ready(); // ฿600 + ฿200
+    const [s1, s2] = await prisma.upsellSale.findMany({ orderBy: { createdAt: "asc" } });
+    const r = await requestRefundReversal(prisma, admin, { saleNo: s2.saleNo, reason: "guest changed plans (example)", paidBy: "COMPANY", evidence: { url: "https://example.test/refund-9" } });
+    await decideReversal(prisma, admin, { reversalId: r.id, approve: true });
+    expect(await held()).toBe(80000); // the company paid the guest back; the guide still holds ฿800
+    const prep = await prepareHandIn(prisma, guide, { jobSheetId: jobId });
+    expect(prep.owedSatang).toBe(80000);
+    expect(prep.coverage.map((c) => [c.saleNo, c.heldSatang, c.grossSatang, c.reversal])).toEqual([[s1.saleNo, 60000, 60000, null], [s2.saleNo, 20000, 20000, "REFUNDED_BY_COMPANY"]]);
+    const t = (await transfer(80000, "KB-7731-0201")).transfer;
+    const sent = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [t.id] });
+    const frozen = sent.submission.coverage as { saleNo: string; heldSatang: number }[];
+    expect(frozen.reduce((n, c) => n + c.heldSatang, 0)).toBe(sent.submission.expectedSatang);
+    expect(frozen.map((c) => c.saleNo)).toEqual([s1.saleNo, s2.saleNo]);
+    await confirmHandIn(prisma, admin, { settlementId: sent.settlement.id, submissionNo: 1, transferIds: [t.id] });
+    const clearing = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "BANK_CLEARING" } });
+    expect(clearing.payload).toMatchObject({ totalSatang: 80000, saleRefs: [s1.saleNo, s2.saleNo] });
+    // Frozen: the submission's coverage does not follow later changes.
+    await expect(prisma.cashSettlementSubmission.update({ where: { id: sent.submission.id }, data: { coverage: [] } })).rejects.toThrow();
+    expect(await held()).toBe(0);
+  });
+
+  it("a sale whose cash was taken back (recorded in error / refunded from guide cash) is not covered", async () => {
+    await ready();
+    const [, s2] = await prisma.upsellSale.findMany({ orderBy: { createdAt: "asc" } });
+    const r = await requestRefundReversal(prisma, admin, { saleNo: s2.saleNo, reason: "guest unwell (example)", paidBy: "GUIDE_CASH", evidence: { url: "https://example.test/refund-8" } });
+    await decideReversal(prisma, admin, { reversalId: r.id, approve: true });
+    const prep = await prepareHandIn(prisma, guide, { jobSheetId: jobId });
+    expect(prep.owedSatang).toBe(60000);
+    expect(prep.coverage.map((c) => c.saleNo)).not.toContain(s2.saleNo);
+  });
+});
