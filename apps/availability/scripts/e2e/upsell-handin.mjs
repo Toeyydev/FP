@@ -246,6 +246,9 @@ try {
   check("the bank clearing is queued and blocked until configured (nothing sent to PEAK)", (await prisma.upsellPeakEvent.count({ where: { eventKind: "BANK_CLEARING", status: "BLOCKED" } })) === 1);
   await desk.setViewport({ width: 390, height: 844 });
   await goto(desk, "/upsell-cash");
+  await desk.waitForSelector(".js-peak-sync");
+  const peak = await text(desk, ".js-peak-sync");
+  check("the PEAK panel says sending is off and shows the clearing and receipts as Blocked, with the reason", /Automatic sending is off/.test(peak) && /Bank clearing/.test(peak) && /Blocked/.test(peak) && /No PEAK account is mapped/.test(peak), peak.slice(0, 300));
   const f2 = await fits(desk);
   check("390 px (Admin): nothing pushes the page sideways", f2.over <= 0, f2.culprits.join(" "));
   await shot(desk, "admin-390");

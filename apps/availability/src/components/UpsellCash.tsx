@@ -83,6 +83,7 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
             )}
         </section>
 
+        <PeakPanel isAdmin={isAdmin} onDone={done} />
         <ReversalsPanel rows={reversals} isAdmin={isAdmin} onDone={done} />
         <AccountPanel accounts={accounts} isAdmin={isAdmin} onDone={done} />
         <VatPanel vat={vat} isAdmin={isAdmin} onDone={done} />
@@ -262,6 +263,54 @@ function VatPanel({ vat, isAdmin, onDone }: { vat: { vatRegistration: string; va
           <input className="search" aria-label="Source of the answer" value={source} onChange={(e) => setSource(e.target.value)} />
           <button className="btn sm js-record-vat" onClick={() => void save()} disabled={source.trim().length < 5}>Record: not VAT-registered</button>
         </div>
+      )}
+      {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
+    </section>
+  );
+}
+
+type PeakEvent = { id: string; kind: string; status: string; eventDate: string; reference: string | null; blockedReasons: string[]; lastError: string | null; peakCode: string | null; attempts: number; updatedAt: string };
+// One word per state, the same on every row.
+const SYNC: Record<string, string> = { BLOCKED: "Blocked", PENDING: "Queued", SENDING: "Queued", POSTED: "Synced", FAILED: "Failed", UNCERTAIN: "Uncertain", CANCELLED: "Cancelled" };
+const KIND: Record<string, string> = { RECEIPT: "Receipt", BANK_CLEARING: "Bank clearing", REVENUE_RECOGNITION: "Revenue", SALE_CANCELLED: "Cancel", SALE_REFUNDED: "Refund" };
+
+function PeakPanel({ isAdmin, onDone }: { isAdmin: boolean; onDone: (m: string) => Promise<void> }) {
+  const [data, setData] = useState<{ autoSync: boolean; counts: Record<string, number>; rows: PeakEvent[] } | null>(null);
+  const [codes, setCodes] = useState<Record<string, string>>({});
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => { setData(await call("/api/upsell/peak-events", { cache: "no-store" }).catch(() => null)); }, []);
+  useEffect(() => { void load(); }, [load]);
+  const act = async (url: string, body: unknown, m: string) => {
+    setErr("");
+    try { const r = await postJson(url, body); await load(); await onDone(r.status === "POSTED" ? `${m} — synced` : `${m} — ${SYNC[r.status] ?? r.status}${r.lastError ? `: ${r.lastError}` : ""}`); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  if (!data) return null;
+  const n = (k: string[]) => k.reduce((t, s) => t + (data.counts[s] ?? 0), 0);
+  return (
+    <section className="panel js-peak-sync" style={{ marginBottom: 14, padding: 14, display: "grid", gap: 8 }}>
+      <b>PEAK</b>
+      <div className="muted" style={{ fontSize: 12.5 }}>{data.autoSync ? "Sent automatically." : "Automatic sending is off — nothing goes to PEAK."} Queued {n(["PENDING", "SENDING"])} · Synced {n(["POSTED"])} · Failed {n(["FAILED"])} · Uncertain {n(["UNCERTAIN"])} · Blocked {n(["BLOCKED"])}</div>
+      {data.rows.length === 0 ? <div className="muted">Nothing yet.</div> : (
+        <div className="grid-scroll"><table className="acct-table">
+          <thead><tr><th>What</th><th>Ref</th><th>Date</th><th>PEAK</th><th /></tr></thead>
+          <tbody>{data.rows.map((e) => (
+            <tr key={e.id} className={`js-peak-${e.status.toLowerCase()}`}>
+              <td>{KIND[e.kind] ?? e.kind}</td>
+              <td style={{ wordBreak: "break-all", fontSize: 12.5 }}>{e.reference}</td>
+              <td style={{ whiteSpace: "nowrap" }}>{e.eventDate}</td>
+              <td style={{ whiteSpace: "normal", minWidth: 200 }}><b>{SYNC[e.status] ?? e.status}</b>{e.peakCode ? ` · ${e.peakCode}` : ""}
+                {e.status === "BLOCKED" && <div className="muted" style={{ fontSize: 12 }}>{e.blockedReasons.join(" · ")}</div>}
+                {(e.status === "FAILED" || e.status === "UNCERTAIN") && e.lastError && <div className="muted" style={{ fontSize: 12 }}>{e.lastError}</div>}
+                {e.status === "UNCERTAIN" && <div className="muted" style={{ fontSize: 12 }}>It may be in PEAK. Never send it again — find it in PEAK first.</div>}</td>
+              <td style={{ whiteSpace: "nowrap" }}>{isAdmin && e.status === "FAILED" && <button className="btn sm" onClick={() => void act(`/api/upsell/peak-events/${e.id}/retry`, {}, `${e.reference} queued again`)}>Send again</button>}
+                {isAdmin && e.status === "UNCERTAIN" && <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                  {e.kind !== "RECEIPT" && <input className="search" style={{ width: 150 }} aria-label="PEAK document number" placeholder="Code in PEAK" value={codes[e.id] ?? ""} onChange={(x) => setCodes({ ...codes, [e.id]: x.target.value })} />}
+                  <button className="btn sm" onClick={() => void act(`/api/upsell/peak-events/${e.id}/resolve`, { peakCode: codes[e.id] || undefined }, `${e.reference} checked in PEAK`)}>Check in PEAK</button>
+                </span>}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
       )}
       {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
     </section>
