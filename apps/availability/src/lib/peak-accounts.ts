@@ -15,7 +15,14 @@ export type AccountingCategory =
   | "TRANSPORTATION"
   | "MEAL_REFRESHMENT"
   | "OTHER_TOUR_COST"
-  | "REVIEW_REWARD";
+  | "REVIEW_REWARD"
+  // Extras (Tour Upsell). Keys are the ones lib/upsell reads from PeakAccountMapping.
+  | "UPSELL_ROUTE_REVENUE"
+  | "FOOD_TOUR_REVENUE"
+  | "TOUR_SERVICE_REVENUE"
+  | "UPSELL_UNEARNED_REVENUE"
+  | "UPSELL_GUIDE_CASH_HELD"
+  | "FOOD_COST";
 
 // Where a category's PEAK account is decided.
 //
@@ -31,7 +38,12 @@ export type AccountingCategory =
 //
 // This is internal vocabulary — the UI never says "scope", "global" or "per-job"
 // mapping. It says "choose once here" or "choose on the Job Sheet".
-export type MappingScope = "FIXED" | "PER_JOB";
+//  EXTRAS   — Tour Upsell accounts (revenue, unearned revenue, cash a guide holds, the
+//             fixed food cost). Chosen once here by the accountant, but NEVER part of
+//             accountChartReady: an unmapped one holds back only that Extras event's
+//             PEAK export (lib/upsell/peak-outbox), never a job sheet. Never reachable
+//             from a job-sheet expense row either (categoryForExpenseType).
+export type MappingScope = "FIXED" | "PER_JOB" | "EXTRAS";
 
 export type CategorySpec = {
   key: AccountingCategory;
@@ -60,6 +72,13 @@ export const ACCOUNTING_CATEGORIES: CategorySpec[] = [
   // not a reimbursement. The key stays REVIEW_REWARD — every stored row, mapping and
   // PEAK account (510110) is filed under it.
   { key: "REVIEW_REWARD", label: "Review incentive", th: "ค่าตอบแทนรีวิวไกด์", example: "Extra pay to the guide when a guest leaves a review — withheld on like the guide fee", scope: "FIXED" },
+  // Extras. Labels match lib/upsell/catalog REVENUE_CATEGORY_LABEL.
+  { key: "UPSELL_ROUTE_REVENUE", label: "Additional Tour Revenue (Upsell)", th: "รายได้ขายเพิ่มระหว่างทัวร์", example: "Route Extension — Wat Pho + Wat Arun on the guest's own tour", scope: "EXTRAS" },
+  { key: "FOOD_TOUR_REVENUE", label: "Food Tour Revenue", th: "รายได้ Food Tour", example: "A Food Tour sold during a tour", scope: "EXTRAS" },
+  { key: "TOUR_SERVICE_REVENUE", label: "Tour Service Revenue", th: "รายได้ค่าบริการนำเที่ยว", example: "Three Temples on-site (walk-in) seat", scope: "EXTRAS" },
+  { key: "UPSELL_UNEARNED_REVENUE", label: "Unearned revenue (Extras)", th: "รายได้รับล่วงหน้า", example: "Paid, but the tour has not happened yet", scope: "EXTRAS" },
+  { key: "UPSELL_GUIDE_CASH_HELD", label: "Cash held by guides (Extras)", th: "เงินสดขายเพิ่มที่ไกด์ถืออยู่", example: "Guest paid the guide; not yet transferred to the company", scope: "EXTRAS" },
+  { key: "FOOD_COST", label: "Food cost (Food Tour)", th: "ต้นทุนอาหาร Food Tour", example: "Fixed food cost per guest", scope: "EXTRAS" },
 ];
 
 // The categories that gate accountChartReady: every FIXED one. OTHER_TOUR_COST is
@@ -72,6 +91,9 @@ export const isPerJobCategory = (key: AccountingCategory): boolean =>
 
 export const isAccountingCategory = (v: string): v is AccountingCategory =>
   ACCOUNTING_CATEGORIES.some((c) => c.key === v);
+
+export const isExtrasCategory = (key: string): boolean =>
+  ACCOUNTING_CATEGORIES.find((c) => c.key === key)?.scope === "EXTRAS";
 
 export type AccountMapping = {
   folkopsCategory: string;
@@ -131,7 +153,8 @@ export function categoryForExpenseType(expenseType?: string | null): AccountingC
   if (!raw) return null;
   if (FROM_EXPENSE_TYPE[raw]) return FROM_EXPENSE_TYPE[raw];
   const upper = raw.toUpperCase();
-  return isAccountingCategory(upper) ? upper : null;
+  // A job-sheet row never books to an Extras account (revenue, cash held, food cost).
+  return isAccountingCategory(upper) && !isExtrasCategory(upper) ? upper : null;
 }
 
 // The account a job-sheet expense row would book to, given the saved chart.
