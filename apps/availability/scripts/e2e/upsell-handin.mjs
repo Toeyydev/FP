@@ -295,6 +295,30 @@ try {
   await goto(guide, JOB_PATH);
   check("the guide sees it confirmed and locked", /Confirmed/.test(await text(guide, ".js-handin")) && !(await guide.$(".ups-send")));
   await shot(guide, "guide-confirmed");
+
+  // ── PR8: the Admin records the accountant's answers and confirms the tax profile (390 px) ──
+  await desk.waitForSelector(".js-tax-confirm .js-tax-agree");
+  const offFirst = await desk.$eval(".js-tax-confirm-btn", (b) => b.disabled);
+  await desk.click(".js-tax-agree");
+  await setVal(".js-tax-breakage", "no");
+  await setVal('select[aria-label="WHT on the sales incentive (฿100): withholding"]', "FIXED_RATE");
+  await desk.waitForSelector('input[aria-label="WHT on the sales incentive (฿100): rate %"]');
+  await setVal('input[aria-label="WHT on the sales incentive (฿100): rate %"]', "3");
+  await setVal('select[aria-label="WHT on the sales incentive (฿100): who bears it"]', "PAYEE");
+  await setVal('select[aria-label="WHT on the fixed food cost (฿350): withholding"]', "NOT_WITHHELD");
+  await setVal(".js-tax-source", "Accountant (example), 22 Nov 2026");
+  await desk.waitForFunction(() => document.querySelector(".js-tax-confirm-btn")?.disabled === false, { timeout: 10000 });
+  const f4 = await fits(desk);
+  check("390 px (Admin, tax answers): nothing pushes the page sideways", f4.over <= 0, f4.culprits.join(" "));
+  await shot(desk, "admin-tax-confirm-390");
+  await desk.click(".js-tax-confirm-btn");
+  await desk.waitForFunction(() => /Confirmed/.test(document.querySelector(".js-tax-confirm")?.textContent ?? ""), { timeout: 10000 });
+  const tp = await prisma.taxProfile.findUnique({ where: { code: "UPSELL-STD" } });
+  check("tax profile: Confirm stays off until every answer is in, then it is CONFIRMED with the answers given",
+    offFirst === true && tp?.status === "CONFIRMED" && tp.peakDocumentKind === "RECEIPT" && tp.incentiveWhtMode === "FIXED_RATE" && Number(tp.incentiveWhtPct) === 3 && tp.fixedCostWhtMode === "NOT_WITHHELD" && tp.breakageOnExpiry === false,
+    JSON.stringify({ s: tp?.status, inc: tp?.incentiveWhtMode }));
+  const shownTax = await text(desk, ".js-tax-confirm");
+  check("tax profile: shown read-only once confirmed, no form left", /Fixed rate 3%, deducted from the payee/.test(shownTax) && !(await desk.$(".js-tax-confirm-btn")), shownTax.slice(0, 300));
 } catch (e) {
   check("the run completed", false, String(e?.stack ?? e).slice(0, 800));
 } finally {

@@ -93,6 +93,7 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
         <ReversalsPanel rows={reversals} isAdmin={isAdmin} onDone={done} />
         <AccountPanel accounts={accounts} isAdmin={isAdmin} onDone={done} />
         <VatPanel vat={vat} isAdmin={isAdmin} onDone={done} />
+        <TaxConfirmPanel key={vat?.vatRegistration ?? "none"} isAdmin={isAdmin} onDone={done} />
       </div>
       {confirming && (confirming.submission?.kind === "SLIPS"
         ? <SlipsDialog key={confirming.id} h={handIns?.find((x) => x.id === confirming.id) ?? confirming} known={known} onClose={() => setConfirming(null)} onDone={done} onReload={load} onReturn={() => { setReturning(confirming); setConfirming(null); }} />
@@ -388,6 +389,107 @@ function VatPanel({ vat, isAdmin, onDone }: { vat: { vatRegistration: string; va
         <div style={{ display: "grid", gap: 6, maxWidth: 520 }}>
           <input className="search" aria-label="Source of the answer" value={source} onChange={(e) => setSource(e.target.value)} />
           <button className="btn sm js-record-vat" onClick={() => void save()} disabled={source.trim().length < 5}>Record: not VAT-registered</button>
+        </div>
+      )}
+      {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
+    </section>
+  );
+}
+
+type TaxProfileView = {
+  code: string; status: string; vatRegistration: string; breakageOnExpiry: boolean | null;
+  incentiveWhtMode: string; incentiveWhtPct: string | null; incentiveWhtBearer: string | null;
+  fixedCostWhtMode: string; fixedCostWhtPct: string | null; fixedCostWhtBearer: string | null; confirmedAt: string | null;
+};
+const WHT_LABEL: Record<string, string> = { NOT_WITHHELD: "Not withheld", FIXED_RATE: "Fixed rate", ENTERED_PER_PAYMENT: "Entered on each payment" };
+const BEARER_LABEL: Record<string, string> = { PAYEE: "deducted from the payee", COMPANY: "borne by the company" };
+const whtText = (mode: string, pct: string | null, bearer: string | null) =>
+  `${WHT_LABEL[mode] ?? mode}${mode === "FIXED_RATE" && pct ? ` ${Number(pct)}%` : ""}${bearer ? `, ${BEARER_LABEL[bearer] ?? bearer}` : ""}`;
+
+function WhtFields({ id, label, v, set }: { id: string; label: string; v: { mode: string; pct: string; bearer: string }; set: (v: { mode: string; pct: string; bearer: string }) => void }) {
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 6 }}>
+      <legend style={{ fontWeight: 600, marginBottom: 4 }}>{label}</legend>
+      <select className="search" id={`${id}-mode`} aria-label={`${label}: withholding`} value={v.mode} onChange={(e) => set({ ...v, mode: e.target.value })}>
+        <option value="">Choose…</option>
+        <option value="NOT_WITHHELD">Not withheld</option>
+        <option value="FIXED_RATE">Fixed rate</option>
+        <option value="ENTERED_PER_PAYMENT">Entered on each payment</option>
+      </select>
+      {v.mode === "FIXED_RATE" && <input className="search" inputMode="decimal" aria-label={`${label}: rate %`} placeholder="Rate %, e.g. 3" value={v.pct} onChange={(e) => set({ ...v, pct: e.target.value })} />}
+      {(v.mode === "FIXED_RATE" || v.mode === "ENTERED_PER_PAYMENT") && (
+        <select className="search" aria-label={`${label}: who bears it`} value={v.bearer} onChange={(e) => set({ ...v, bearer: e.target.value })}>
+          <option value="">Who bears it…</option>
+          <option value="PAYEE">Deducted from the payee</option>
+          <option value="COMPANY">Borne by the company</option>
+        </select>
+      )}
+    </fieldset>
+  );
+}
+
+// The accountant's answers, recorded by an Admin. Until this is confirmed every Extras PEAK event
+// stays Blocked; confirming is final (a changed answer is a new profile).
+function TaxConfirmPanel({ isAdmin, onDone }: { isAdmin: boolean; onDone: (m: string) => Promise<void> }) {
+  const [p, setP] = useState<TaxProfileView | null>(null);
+  const [agree, setAgree] = useState(false);
+  const [breakage, setBreakage] = useState("");
+  const [inc, setInc] = useState({ mode: "", pct: "", bearer: "" });
+  const [food, setFood] = useState({ mode: "", pct: "", bearer: "" });
+  const [source, setSource] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    const r = await fetch("/api/upsell/tax-profile/confirm", { cache: "no-store" }).catch(() => null);
+    const d = r?.ok ? await r.json().catch(() => null) : null;
+    setP(d?.profile ?? null);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  if (!p) return null;
+  const whtBody = (v: { mode: string; pct: string; bearer: string }) => ({ mode: v.mode, pct: v.mode === "FIXED_RATE" ? Number(v.pct) : null, bearer: v.mode === "NOT_WITHHELD" ? null : v.bearer || null });
+  const whtDone = (v: { mode: string; pct: string; bearer: string }) => v.mode === "NOT_WITHHELD" || (v.mode === "ENTERED_PER_PAYMENT" && !!v.bearer) || (v.mode === "FIXED_RATE" && Number(v.pct) > 0 && !!v.bearer);
+  const ready = agree && breakage !== "" && whtDone(inc) && whtDone(food) && source.trim().length >= 5;
+  const save = async () => {
+    setErr(""); setBusy(true);
+    try {
+      await postJson("/api/upsell/tax-profile/confirm", { code: p.code, agreeFixedTreatment: agree, breakageOnExpiry: breakage === "yes", incentiveWht: whtBody(inc), fixedCostWht: whtBody(food), source });
+      await load(); await onDone("Tax profile confirmed — blocked Extras events are checked again");
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <section className="panel js-tax-confirm" style={{ padding: 14, display: "grid", gap: 8 }}>
+      <b>Accountant's answers (tax profile)</b>
+      {p.status === "CONFIRMED" ? (
+        <div style={{ display: "grid", gap: 4 }}>
+          <div><span className="ob ok">Confirmed</span> {p.confirmedAt ? new Date(p.confirmedAt).toLocaleDateString("en-GB") : ""}</div>
+          <div>No VAT · PEAK receipt, not a tax invoice · revenue on the tour date</div>
+          <div>Unused, expired Food Tour: {p.breakageOnExpiry ? "recognised as revenue" : "not recognised as revenue"}</div>
+          <div>Sales incentive WHT: {whtText(p.incentiveWhtMode, p.incentiveWhtPct, p.incentiveWhtBearer)}</div>
+          <div>Food cost WHT: {whtText(p.fixedCostWhtMode, p.fixedCostWhtPct, p.fixedCostWhtBearer)}</div>
+        </div>
+      ) : p.vatRegistration !== "NOT_REGISTERED" ? (
+        <div className="muted">Record the VAT registration above first.</div>
+      ) : !isAdmin ? (
+        <div><span className="ob warn">Not confirmed</span> — Extras stay out of PEAK until an Admin records the accountant's answers.</div>
+      ) : (
+        <div style={{ display: "grid", gap: 10, maxWidth: 520 }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <input type="checkbox" className="js-tax-agree" style={{ width: 20, height: 20, flex: "none", marginTop: 2 }} checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+            <span>The accountant agrees how Extras are booked: no VAT; a PEAK receipt, not a tax invoice; revenue on the tour date (paid earlier = unearned until then).</span>
+          </label>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span style={{ fontWeight: 600 }}>Food Tour paid but never used, after it expires</span>
+            <select className="search js-tax-breakage" value={breakage} onChange={(e) => setBreakage(e.target.value)}>
+              <option value="">Choose…</option>
+              <option value="yes">Recognise as revenue</option>
+              <option value="no">Do not recognise as revenue</option>
+            </select>
+          </label>
+          <WhtFields id="tax-inc" label="WHT on the sales incentive (฿100)" v={inc} set={setInc} />
+          <WhtFields id="tax-food" label="WHT on the fixed food cost (฿350)" v={food} set={setFood} />
+          <input className="search js-tax-source" aria-label="Where these answers come from" placeholder="Where these answers come from (accountant, date)" value={source} onChange={(e) => setSource(e.target.value)} />
+          <button className="btn sm js-tax-confirm-btn" onClick={() => void save()} disabled={!ready || busy}>Confirm the tax profile</button>
+          <div className="muted" style={{ fontSize: 12.5 }}>Confirming is final: a changed answer needs a new profile.</div>
         </div>
       )}
       {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
