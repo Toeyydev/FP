@@ -11,7 +11,7 @@ const version = {
   fixedCostPerGuestSatang: 0, fixedCostBasis: null, fixedCostCategory: null,
   incentivePerGuestSatang: 0, incentiveTrigger: "NONE", incentiveBasis: "PAID_GUESTS",
   serviceValidityDays: null, checkoutLinkExpiryMinutes: null, remittanceTrigger: "SOURCE_JOB_END", serviceScope: "EXISTING_GUIDE",
-  revenueCategory: "UPSELL_ONSITE_TOUR_REVENUE", taxProfileId: "tp1", priceOverridePermission: "NONE", refundPolicy: "NON_REFUNDABLE",
+  revenueCategory: "TOUR_SERVICE_REVENUE", taxProfileId: "tp1", priceOverridePermission: "NONE", refundPolicy: "NON_REFUNDABLE",
   activeFrom: new Date("2099-03-01T00:00:00Z"), activeTo: null,
 };
 const tax = { id: "tp1", code: "UPSELL-STD", status: "DRAFT" };
@@ -28,7 +28,7 @@ describe("rule snapshot", () => {
       service: { createsNewJob: false, eligibleSourceTourIds: ["T-001", "T-002"], allowsOtaMix: true },
       fixedCost: { perGuestSatang: 0 }, incentive: { perGuestSatang: 0, trigger: "NONE" },
       remittance: { method: "BANK_TRANSFER" },
-      accounting: { revenueCategory: "UPSELL_ONSITE_TOUR_REVENUE", taxProfileCode: "UPSELL-STD", taxProfileStatus: "DRAFT" },
+      accounting: { revenueCategory: "TOUR_SERVICE_REVENUE", taxProfileCode: "UPSELL-STD", taxProfileStatus: "DRAFT" },
     });
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });

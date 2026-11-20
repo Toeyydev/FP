@@ -17,6 +17,7 @@
 //  • Nothing here writes a ledger entry, a PEAK export or an outbox row, or calls PEAK: sale,
 //    remittance check and accounting sync are separate steps (PR4, PR8).
 
+import { GUIDE_CASH_HELD, recordPeakEvent } from "./peak-outbox";
 import { z } from "zod";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { ensureJobRef } from "@/lib/jobref";
@@ -259,6 +260,12 @@ export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Act
           paymentId: payment.id, saleId: sale.id, idempotencyKey: `${req.requestKey}:collected`, createdById: actor.userId,
         },
       });
+      // PEAK, as two distinct events frozen now (lib/upsell/peak-outbox): the receipt — paid via the
+      // cash the guide holds, on the payment date — and the revenue, on the service date.
+      const peakNeeds = { taxProfileId: version.taxProfileId, revenueCategory: version.revenueCategory };
+      const peakBase = { reference: saleNo, saleId: sale.id, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross, revenueCategory: version.revenueCategory };
+      await recordPeakEvent(tx, { kind: "RECEIPT", sourceTable: "UpsellSale", sourceId: sale.id, eventDate: today, payload: { ...peakBase, paymentDate: today, paidVia: GUIDE_CASH_HELD }, needs: { ...peakNeeds, guideCashHeld: true } });
+      await recordPeakEvent(tx, { kind: "REVENUE_RECOGNITION", sourceTable: "UpsellSale", sourceId: sale.id, eventDate: sheet.date, payload: { ...peakBase, serviceDate: sheet.date }, needs: peakNeeds });
       await tx.auditLog.create({
         data: {
           actorId: actor.userId, actorRole: "GUIDE", action: "upsell.sale.recorded", entityType: "UpsellSale", entityId: sale.id,

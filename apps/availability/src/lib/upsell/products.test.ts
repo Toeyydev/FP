@@ -38,7 +38,7 @@ describe("the form, per product type", () => {
     expect(r).toMatchObject({
       unitPriceSatang: 70000, pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH"], eligibleSourceTourIds: ["T-001", "T-002"],
       fixedCostPerGuestSatang: 0, fixedCostBasis: null, incentivePerGuestSatang: 0, incentiveTrigger: "NONE",
-      revenueCategory: "UPSELL_ONSITE_TOUR_REVENUE",
+      revenueCategory: "TOUR_SERVICE_REVENUE",
     });
   });
   it("Three Temples on-site joins only the owner's tours, each once", () => {

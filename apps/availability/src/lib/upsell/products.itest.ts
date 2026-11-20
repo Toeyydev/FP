@@ -100,7 +100,7 @@ describe("the migration: what a JOIN_SOURCE_TOUR version may hold", () => {
   const good = () => ({
     productId, version: 9, unitPriceSatang: 70000, pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH"],
     createsNewBooking: true, createsNewJob: false, eligibleSourceTourIds: ["T-001", "T-002"], allowsOtaMix: true, remittanceMethod: "BANK_TRANSFER",
-    revenueCategory: "UPSELL_ONSITE_TOUR_REVENUE", taxProfileId, activeFrom: new Date("2099-09-01"),
+    revenueCategory: "TOUR_SERVICE_REVENUE", taxProfileId, activeFrom: new Date("2099-09-01"),
   });
   beforeEach(async () => {
     const p = await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "THREE-TEMPLES-ONSITE" }, include: { versions: true } });

@@ -1450,23 +1450,23 @@ model LineContact {
 //   outstanding = advances − advance-paid expenses − returns.
 // Keyed by the house job tuple (guideId + date + slotIdx), like TourPayment.
 model GuideAdvance {
-  id          String   @id @default(cuid())
-  guideId     String
-  date        String // "YYYY-MM-DD"
-  slotIdx     Int
-  amount      Float
-  paidAt      DateTime
-  method      String   @default("bank") // bank | cash | other
-  bankAccount String? // explicitly selected PEAK bank subaccount ID
+  id             String   @id @default(cuid())
+  guideId        String
+  date           String // "YYYY-MM-DD"
+  slotIdx        Int
+  amount         Float
+  paidAt         DateTime
+  method         String   @default("bank") // bank | cash | other
+  bankAccount    String? // explicitly selected PEAK bank subaccount ID
   bankAccountKey String? // the company account in the bank registry's identity (lib/bank-transactions advanceBankAccountKey); null = unknown
-  txRef       String? // bank transaction reference
-  peakRef     String? // PEAK expense/advance ref once posted (future PEAK sync)
-  slipUrl     String? // Drive link to the transfer slip (evidence)
-  slipFileId  String?
-  note        String?
-  createdById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  txRef          String? // bank transaction reference
+  peakRef        String? // PEAK expense/advance ref once posted (future PEAK sync)
+  slipUrl        String? // Drive link to the transfer slip (evidence)
+  slipFileId     String?
+  note           String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   // ── Phase 3 ledger ────────────────────────────────────────────────────────
   // The columns above stay exactly as they were (legacy read paths still use
@@ -2246,8 +2246,9 @@ model UpsellSale {
   createdAt                 DateTime             @default(now())
   updatedAt                 DateTime             @updatedAt
 
-  payments UpsellPayment[]
-  custody  CashCustodyEntry[]
+  payments  UpsellPayment[]
+  custody   CashCustodyEntry[]
+  reversals UpsellSaleReversal[]
 
   @@index([sourceJobSheetId])
   @@index([sellingGuideId, createdAt])
@@ -2343,8 +2344,10 @@ model CashSettlement {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  entries CashCustodyEntry[]
-  returns CashSettlementReturn[]
+  entries     CashCustodyEntry[]
+  returns     CashSettlementReturn[]
+  transfers   CashSettlementTransfer[]
+  submissions CashSettlementSubmission[]
 
   @@unique([guideId, sourceJobSheetId])
   @@unique([bankAccountKey, bankRefNormalized])
@@ -2394,8 +2397,9 @@ model BankTransaction {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
 
-  uses     BankTransactionUse[]
-  releases BankTransactionRelease[]
+  uses      BankTransactionUse[]
+  releases  BankTransactionRelease[]
+  peakLinks UpsellPeakEventBankLink[]
 
   @@index([direction, refKey])
   @@index([reviewStatus])
@@ -2437,4 +2441,136 @@ model BankTransactionRelease {
   createdAt     DateTime           @default(now())
 
   @@index([transactionId])
+}
+
+// ── Tour Upsell PR4: hand-in, reversal, PEAK events (migrations/*_upsell_settlement) ──────────
+
+// The company account Extras cash goes to. Versions, chosen from PEAK and confirmed by an Admin;
+// none in use = a hand-in cannot be sent ("Contact Admin"). Never edited — a change is a new
+// version; transfers keep the account they were reported to.
+model UpsellReceivingAccount {
+  id                    String    @id @default(cuid())
+  version               Int       @unique
+  label                 String
+  peakPaymentMethodId   String
+  peakPaymentMethodName String?
+  bankAccountKey        String // lib/payment-transfer bankAccountKey of the PEAK payment method
+  accountDisplay        String // "···7890"
+  confirmedById         String
+  confirmedAt           DateTime
+  retiredAt             DateTime?
+  createdAt             DateTime  @default(now())
+
+  transfers CashSettlementTransfer[]
+}
+
+// One real transfer of a guide's hand-in. Never edited; REPORTED → CONFIRMED | WITHDRAWN.
+model CashSettlementTransfer {
+  id                      String                 @id @default(cuid())
+  settlementId            String
+  settlement              CashSettlement         @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  guideId                 String
+  seq                     Int
+  amountSatang            Int
+  transferredAt           DateTime // when the bank sent it (from the guide's slip)
+  transferDate            String // "YYYY-MM-DD" (Bangkok) of transferredAt
+  bankRef                 String
+  slipUrl                 String?
+  evidenceId              String?
+  receivingAccountId      String
+  receivingAccount        UpsellReceivingAccount @relation(fields: [receivingAccountId], references: [id], onDelete: Restrict)
+  receivingAccountKey     String // snapshot when reported
+  receivingAccountDisplay String // snapshot when reported
+  status                  String                 @default("REPORTED") // REPORTED | CONFIRMED | WITHDRAWN
+  reportedById            String
+  withdrawnReason         String?
+  withdrawnById           String?
+  withdrawnAt             DateTime?
+  confirmedById           String?
+  confirmedAt             DateTime?
+  requestKey              String                 @unique
+  createdAt               DateTime               @default(now())
+
+  @@unique([settlementId, seq])
+  @@index([settlementId])
+}
+
+// Each send of a hand-in: the transfers chosen and what was owed then. Confirmed or returned as is.
+model CashSettlementSubmission {
+  id             String         @id @default(cuid())
+  settlementId   String
+  settlement     CashSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  submissionNo   Int
+  expectedSatang Int
+  totalSatang    Int
+  transferIds    String[]
+  status         String         @default("SUBMITTED") // SUBMITTED | RETURNED | CONFIRMED
+  submittedById  String
+  submittedAt    DateTime       @default(now())
+  returnedReason String?
+  returnedById   String?
+  returnedAt     DateTime?
+  confirmedById  String?
+  confirmedAt    DateTime?
+
+  @@unique([settlementId, submissionNo])
+}
+
+// A sale undone: RECORDED_IN_ERROR (the guide's own affirmation, then an Admin) or REFUNDED in
+// full (proof, and who paid it back — the company's refund never reduces the guide's cash).
+model UpsellSaleReversal {
+  id                   String     @id @default(cuid())
+  saleId               String
+  sale                 UpsellSale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  kind                 String // RECORDED_IN_ERROR | REFUNDED
+  status               String // AWAITING_ADMIN | APPROVED | REJECTED
+  reason               String
+  requestedById        String
+  guideAffirmationText String?
+  guideAffirmedById    String?
+  guideAffirmedAt      DateTime?
+  refundAmountSatang   Int?
+  refundPaidBy         String? // GUIDE_CASH | COMPANY
+  refundEvidenceUrl    String?
+  refundEvidenceId     String?
+  decidedById          String?
+  decidedAt            DateTime?
+  decisionNote         String?
+  createdAt            DateTime   @default(now())
+
+  @@index([saleId])
+}
+
+// What PEAK must receive, frozen when the business event happens (sending: PR4-P, off).
+model UpsellPeakEvent {
+  id              String    @id @default(cuid())
+  eventKind       String // RECEIPT | REVENUE_RECOGNITION | BANK_CLEARING | SALE_CANCELLED | SALE_REFUNDED
+  sourceTable     String
+  sourceId        String
+  eventDate       String // payment date / service date / transfer date, per kind
+  payload         Json
+  mappingSnapshot Json
+  status          String // BLOCKED | PENDING | SENDING | POSTED | FAILED | UNCERTAIN
+  blockedReasons  String[]  @default([])
+  peakId          String?
+  peakCode        String?
+  attempts        Int       @default(0)
+  lastError       String?
+  lastAttemptAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  bankLinks UpsellPeakEventBankLink[]
+
+  @@unique([eventKind, sourceTable, sourceId])
+  @@index([status])
+}
+
+model UpsellPeakEventBankLink {
+  eventId           String
+  event             UpsellPeakEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  bankTransactionId String          @unique
+  bankTransaction   BankTransaction @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+
+  @@id([eventId, bankTransactionId])
 }

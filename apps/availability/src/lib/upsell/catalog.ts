@@ -18,9 +18,21 @@ export const TYPE_LABEL: Record<ProductType, string> = {
 /** The revenue category each type books to. A new category: no PEAK account is mapped to it
  *  until the accountant chooses one, and until then its PEAK export stays blocked (B5). */
 export const REVENUE_CATEGORY: Record<ProductType, string> = {
+  // An extra stop on the guest's own tour: Additional Tour Revenue (Upsell).
   ROUTE_EXTENSION: "UPSELL_ROUTE_REVENUE",
   NEW_TOUR: "FOOD_TOUR_REVENUE",
-  JOIN_SOURCE_TOUR: "UPSELL_ONSITE_TOUR_REVENUE",
+  // A full walk-in seat on the guide's tour is a tour sale like any other: Tour Service Revenue,
+  // not Upsell (owner, 20 Nov 2026). The seeded THREE-TEMPLES-ONSITE v1 predates this and keeps
+  // its old category until the walk-in PR gives it a version 2 (a version is never rewritten).
+  JOIN_SOURCE_TOUR: "TOUR_SERVICE_REVENUE",
+};
+
+/** What each revenue category is called in the accounts — the accountant maps each to a PEAK
+ *  account (PeakAccountMapping); no account code is written here. */
+export const REVENUE_CATEGORY_LABEL: Record<string, string> = {
+  UPSELL_ROUTE_REVENUE: "Additional Tour Revenue (Upsell)",
+  TOUR_SERVICE_REVENUE: "Tour Service Revenue",
+  FOOD_TOUR_REVENUE: "Food Tour Revenue",
 };
 
 /** The fixed food cost's accounting category (a new tour with a fixed cost only). */

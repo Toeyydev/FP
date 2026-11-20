@@ -362,9 +362,9 @@ describe("custody ledger", () => {
     const sale = await seedSale();
     const p = await cashPayment(sale.id);
     await custody({ kind: "COLLECTED", amountSatang: 60000, paymentId: p.id });
-    const s = await prisma.cashSettlement.create({ data: { settlementNo: "FOLK-CSH-209904-001", guideId: SELLER, sourceJobSheetId: jobId, expectedSatang: 60000, remittedSatang: 60000, method: "BANK_TRANSFER", status: "SUBMITTED" } });
-    await fails(custody({ kind: "REMITTED", amountSatang: -60001, settlementId: s.id }), /UPSELL_CUSTODY_NEGATIVE/);
-    await expect(custody({ kind: "REMITTED", amountSatang: -60000, settlementId: s.id })).resolves.toBeTruthy();
+    // (A REMITTED entry exists only through a confirmed hand-in since PR4 — upsell/settlement.itest.)
+    await fails(custody({ kind: "DEDUCT_APPROVED", amountSatang: -60001, sourceRefId: "approval-example" }), /UPSELL_CUSTODY_NEGATIVE/);
+    await expect(custody({ kind: "DEDUCT_APPROVED", amountSatang: -60000, sourceRefId: "approval-example" })).resolves.toBeTruthy();
     const [{ balance }] = await prisma.$queryRaw<{ balance: bigint }[]>`SELECT COALESCE(SUM("amountSatang"),0) AS balance FROM "CashCustodyEntry" WHERE "custodianId" = ${SELLER}`;
     expect(Number(balance)).toBe(0);
   });
