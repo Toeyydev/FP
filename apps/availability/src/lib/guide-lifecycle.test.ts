@@ -6,6 +6,8 @@ const prismaMock = vi.hoisted(() => ({
   booking: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   jobSheet: { findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
   tourReport: { upsert: vi.fn() },
+  $queryRaw: vi.fn(async () => []),
+  $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prismaMock)),
   user: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));

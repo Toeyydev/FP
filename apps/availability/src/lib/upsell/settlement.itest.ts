@@ -385,7 +385,7 @@ describe("reversing a sale", () => {
     expect(r).toMatchObject({ status: "AWAITING_ADMIN", guideAffirmationText: text, guideAffirmedById: G });
     expect(await held()).toBe(80000); // nothing changes before the Admin
     expect(await code(decideReversal(prisma, operator, { reversalId: r.id, approve: true }))).toBe("ADMIN_ONLY");
-    expect(await decideReversal(prisma, admin, { reversalId: r.id, approve: true, note: "same guest as the first sale (example)" })).toEqual({ approved: true, guideCashReduced: true });
+    expect(await decideReversal(prisma, admin, { reversalId: r.id, approve: true, note: "same guest as the first sale (example)" })).toEqual({ approved: true, guideCashReduced: true, walkInBookingCancelled: false });
     expect(await held()).toBe(60000);
     expect(await prisma.upsellSale.findUniqueOrThrow({ where: { saleNo: s.saleNo } })).toMatchObject({ status: "REVERSED" });
     // Its receipt never reached PEAK: cancelled before it can be sent; no cancelling document needed.
@@ -423,7 +423,7 @@ describe("reversing a sale", () => {
     expect(await code(requestRefundReversal(prisma, admin, { saleNo: s1.saleNo, reason: "guest changed plans (example)", paidBy: "COMPANY", evidence: {} }))).not.toBe("OK"); // proof required
     const company = await requestRefundReversal(prisma, admin, { saleNo: s1.saleNo, reason: "guest changed plans (example)", paidBy: "COMPANY", evidence: { url: "https://example.test/refund-1" } });
     expect(company.refundAmountSatang).toBe(20000); // the full sale, always
-    expect(await decideReversal(prisma, admin, { reversalId: company.id, approve: true })).toEqual({ approved: true, guideCashReduced: false });
+    expect(await decideReversal(prisma, admin, { reversalId: company.id, approve: true })).toEqual({ approved: true, guideCashReduced: false, walkInBookingCancelled: false });
     expect(await held()).toBe(100000);
     // The money was received: its receipt stays; the refund is its own document.
     expect((await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "RECEIPT", payload: { path: ["reference"], equals: s1.saleNo } } })).status).toBe("BLOCKED");

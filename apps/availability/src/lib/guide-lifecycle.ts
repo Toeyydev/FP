@@ -223,10 +223,15 @@ export async function submitTourReport(o: {
   }
 
   const completedPax = bookedPax != null ? Math.max(0, bookedPax - noShow - leftEarly) : null;
-  await prisma.tourReport.upsert({
-    where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-    create: { guideId, date, slotIdx, tourId: assignment.tourId, bookedPax: bookedPax ?? null, noShow, leftEarly, completedPax, comments: comments ?? null },
-    update: { bookedPax: bookedPax ?? null, noShow, leftEarly, completedPax, comments: comments ?? null, submittedAt: new Date() },
+  // Under the job sheet's row lock — the one an Extras sale holds (lib/upsell/sales) — so a sale
+  // and the end-tour report never cross: a sale either commits first or sees the report.
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "JobSheet" WHERE "guideId" = ${guideId} AND "date" = ${date} AND "slotIdx" = ${slotIdx} FOR UPDATE`;
+    await tx.tourReport.upsert({
+      where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
+      create: { guideId, date, slotIdx, tourId: assignment.tourId, bookedPax: bookedPax ?? null, noShow, leftEarly, completedPax, comments: comments ?? null },
+      update: { bookedPax: bookedPax ?? null, noShow, leftEarly, completedPax, comments: comments ?? null, submittedAt: new Date() },
+    });
   });
   // Completing the report completes the tour.
   await prisma.checkin.create({ data: { guideId, date, slotIdx, tourId: assignment.tourId, type: "COMPLETE" } });

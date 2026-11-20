@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // NOT_RECEIVED. Used after a lost connection, before anything is sent again: the app never
 // starts a new sale while this is unknown. Only the guide's own keys.
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ key: string }> }) {
-  const a = await upsellSaleAccess();
+  const a = await upsellSaleAccess("ANY");
   if (!a.ok) return NextResponse.json({ error: a.status === 404 ? "not-found" : "forbidden" }, { status: a.status });
   const { key } = await ctx.params;
   if (!/^[A-Za-z0-9-]{16,80}$/.test(key)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });

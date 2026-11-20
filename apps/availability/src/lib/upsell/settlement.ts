@@ -390,6 +390,7 @@ export async function decideReversal(db: Db, admin: Admin, input: { reversalId: 
     }
     if (r!.kind === "REFUNDED") receiptInPeak = true; // the refund is its own document either way
     await tx.upsellSale.update({ where: { id: sale.id }, data: { status: "REVERSED" } });
+    const walkIn = await cancelWalkInSeat(tx, admin, sale.id, `${r!.kind} · reversal ${r!.id}`);
     await tx.upsellSaleReversal.update({ where: { id: r!.id }, data: { status: "APPROVED", decidedById: admin.userId, decidedAt: now, decisionNote: input.note ?? null } });
     if (receiptInPeak) await recordPeakEvent(tx, {
       kind: r!.kind === "REFUNDED" ? "SALE_REFUNDED" : "SALE_CANCELLED", sourceTable: "UpsellSaleReversal", sourceId: r!.id, eventDate: bangkokToday(),
@@ -397,9 +398,39 @@ export async function decideReversal(db: Db, admin: Admin, input: { reversalId: 
       needs: { blocked: [UNDECIDED_REVERSAL_DOCUMENT] },
     });
     await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: "ADMIN", action: "upsell.sale_reversed", entityType: "UpsellSale", entityId: sale.id,
-      detail: { saleNo: sale.saleNo, reversalId: r!.id, kind: r!.kind, refundPaidBy: r!.refundPaidBy, guideCashReduced: reducesCash && !!collected, amountSatang: sale.grossSatang } } });
-    return { approved: true, guideCashReduced: reducesCash && !!collected };
+      detail: { saleNo: sale.saleNo, reversalId: r!.id, kind: r!.kind, refundPaidBy: r!.refundPaidBy, guideCashReduced: reducesCash && !!collected, amountSatang: sale.grossSatang, walkInBookingCancelled: walkIn } } });
+    return { approved: true, guideCashReduced: reducesCash && !!collected, walkInBookingCancelled: walkIn };
   });
+}
+
+/**
+ * A reversed walk-in sale's seat: its booking is CANCELLED (never deleted — the booking, the
+ * sale, the reversal and this audit keep the history), its row leaves the job's guest list
+ * (a row with a reported no-show stays, marked cancelled — owner rule), and the assignment pax
+ * drops by its guests. Nothing else on the departure is touched: OTA bookings keep their rows.
+ * Locks follow booking-reconcile's order (assignments, then the job sheet). Returns whether a seat
+ * was cancelled (false for a sale that made no booking, e.g. a Route Extension).
+ */
+async function cancelWalkInSeat(tx: Tx, admin: Admin, saleId: string, why: string): Promise<boolean> {
+  const sale = await tx.upsellSale.findUniqueOrThrow({ where: { id: saleId }, select: { saleNo: true, serviceBookingId: true, sourceJobSheetId: true } });
+  if (!sale.serviceBookingId) return false;
+  const b = await tx.booking.findUnique({ where: { id: sale.serviceBookingId } });
+  if (!b || b.source !== "walk-in" || b.status === "CANCELLED") return false;
+  const sheet0 = await tx.jobSheet.findUniqueOrThrow({ where: { id: sale.sourceJobSheetId }, select: { date: true, slotIdx: true } });
+  await tx.$queryRaw`SELECT id FROM "Assignment" WHERE "date" = ${sheet0.date} AND "slotIdx" = ${sheet0.slotIdx} ORDER BY id FOR UPDATE`;
+  const [sheet] = await tx.$queryRaw<{ id: string; guideId: string; date: string; slotIdx: number; bookings: unknown }[]>`
+    SELECT "id", "guideId", "date", "slotIdx", "bookings" FROM "JobSheet" WHERE "id" = ${sale.sourceJobSheetId} FOR UPDATE`;
+  await tx.booking.update({ where: { id: b.id }, data: { status: "CANCELLED" } });
+  const rows = Array.isArray(sheet.bookings) ? (sheet.bookings as { bookingNo?: string; noShowPax?: number; status?: string; actualPax?: number | null }[]) : [];
+  const mine = (x: { bookingNo?: string }) => (x.bookingNo ?? "").trim() === sale.saleNo;
+  const row = rows.find(mine);
+  const kept = rows.flatMap((x) => (!mine(x) ? [x] : (x.noShowPax ?? 0) > 0 ? [{ ...x, status: "cancelled", actualPax: 0 }] : []));
+  await tx.jobSheet.update({ where: { id: sheet.id }, data: { bookings: kept as unknown as Prisma.InputJsonValue } });
+  const a = await tx.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx } }, select: { id: true, pax: true } });
+  if (a) await tx.assignment.update({ where: { id: a.id }, data: { pax: Math.max(0, (a.pax ?? 0) - (b.pax ?? 0)) } });
+  await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: "ADMIN", action: "upsell.walk_in_cancelled", entityType: "Booking", entityId: b.id,
+    detail: { saleNo: sale.saleNo, why, pax: b.pax, sheetRow: (row ?? null) as Prisma.InputJsonValue, rowKept: kept.length === rows.length } } });
+  return true;
 }
 
 // ── The receiving account (Settings) ───────────────────────────────────────────────────────

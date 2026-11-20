@@ -13,19 +13,26 @@ import UpsellHandIn from "@/components/UpsellHandIn";
 // says "Checking the status…" and asks the server about that same key — it never starts a new
 // sale, so the guest's cash is never recorded twice. The key survives closing the app.
 //
-// Nothing here says "receipt" or "tax invoice": the Tax Profile and PEAK document type are not
-// confirmed, so the guest gets a payment confirmation with the Sale Ref.
+// Two kinds of Extra, each shown only on a job the server sells it on (its version lists the
+// tour): a Route Extension added to the guest's own tour, and a walk-in seat — a new guest
+// joining the whole tour (approved mockup pr4w). They never appear as one another.
+//
+// What the guest is shown is a payment acknowledgement, never called the official receipt: the
+// company's official receipt is issued in PEAK, and the block says where that stands (issued,
+// being issued, waiting for set-up). No tax invoice — the company is not VAT-registered.
 
-type Product = { productCode: string; name: string; productVersionId: string; unitPriceSatang: number; pricingBasis: string; guestsLeft: number };
-type Sale = { saleNo: string; jobRef: string | null; productName: string; guests: number; unitPriceSatang: number; pricingBasis: string; grossSatang: number; method: "CASH"; recordedAt: string };
+type Kind = "ROUTE_EXTENSION" | "WALK_IN";
+type Product = { productCode: string; name: string; productVersionId: string; unitPriceSatang: number; pricingBasis: string; guestsLeft: number; kind: Kind; jobPax: number; seatsPerGuide: number };
+type Receipt = { state: "SYNCED" | "QUEUED" | "WAITING" | "CHECKING" | "NONE"; peakCode: string | null };
+type Sale = { saleNo: string; jobRef: string | null; productName: string; guests: number; unitPriceSatang: number; pricingBasis: string; grossSatang: number; method: "CASH"; recordedAt: string; kind: Kind; status: string; receipt: Receipt };
 type Cash = { heldSatang: number; toRemitSatang: number; remitBy: "BANK_TRANSFER"; remitWhen: "END_TOUR_REPORT"; status: string };
 type Extras =
   | { show: false }
   | { show: true; jobSheetId: string; jobRef: string | null; jobPax: number; closed: { code: string; message: string } | null; products: Product[]; sales: Sale[]; cash: Cash };
-type Pending = { requestKey: string; body: Record<string, unknown>; productName: string };
+type Pending = { requestKey: string; body: Record<string, unknown>; productName: string; kind?: Kind };
 type View =
   | { kind: "block" }
-  | { kind: "sell"; product: Product; guests: number; error?: string; restart?: boolean }
+  | { kind: "sell"; product: Product; guests: number; lead: string; error?: string; restart?: boolean }
   | { kind: "sending" }
   | { kind: "checking"; note?: string }
   | { kind: "notRecorded" }
@@ -37,6 +44,13 @@ const at = (iso: string) => new Date(iso).toLocaleString("en-GB", { timeZone: "A
 const time = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
 const per = (basis: string) => (basis === "PER_GROUP" ? "per group" : "per guest");
 const totalOf = (p: Product, guests: number) => (p.pricingBasis === "PER_GROUP" ? p.unitPriceSatang : p.unitPriceSatang * guests);
+/** Where the company's official receipt stands — the guide's words, never "issued" before PEAK has it. */
+const receiptLine = (r: Receipt) => r.state === "SYNCED" ? `Official receipt issued in PEAK · ${r.peakCode}`
+  : r.state === "QUEUED" ? "Official receipt: being issued in PEAK"
+  : r.state === "CHECKING" ? "Official receipt: being checked by the office"
+  : r.state === "WAITING" ? "Official receipt: issued in PEAK once the office finishes its set-up"
+  : "No official receipt for this sale";
+const walkInName = (p: { kind: Kind }) => p.kind === "WALK_IN";
 const STATUS: Record<string, string> = {
   NOT_SENT: "Not sent yet", DRAFT: "Not sent yet", SUBMITTED: "Sent — waiting for Admin", RETURNED: "Returned — send again", CONFIRMED: "Confirmed", REVERSED: "Reversed",
 };
@@ -104,7 +118,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
   const sendOnce = async (p: Pending, product?: Product, guests?: number) => {
     writePending(key, p); // saved before it is sent: survives a closed app or a lost signal
     setView({ kind: "sending" });
-    const r = await fetch("/api/upsell/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestKey: p.requestKey, ...p.body }) }).catch(() => null);
+    const r = await fetch(p.kind === "WALK_IN" ? "/api/upsell/sales/walk-in" : "/api/upsell/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestKey: p.requestKey, ...p.body }) }).catch(() => null);
     if (r && r.ok) {
       const j = await r.json();
       writePending(key, null);
@@ -116,20 +130,21 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       // A definite refusal: nothing was recorded, so the key is done with.
       const j = await r.json().catch(() => ({}));
       writePending(key, null);
-      if (product && guests) setView({ kind: "sell", product, guests, error: j.message ?? "Not recorded.", restart: j.error === "PRICE_CHANGED" || j.error === "NOT_ON_SALE" });
+      if (product && guests) setView({ kind: "sell", product, guests, lead: String(p.body.leadName ?? ""), error: j.message ?? "Not recorded.", restart: j.error === "PRICE_CHANGED" || j.error === "NOT_ON_SALE" });
       else { setView({ kind: "block" }); void load(); }
       return;
     }
     await check(); // no answer, or a server error: it may be saved — find out before anything else
   };
 
-  const startSell = (product: Product) => setView({ kind: "sell", product, guests: 1 });
-  const confirmCash = (product: Product, guests: number) => {
+  const startSell = (product: Product) => setView({ kind: "sell", product, guests: 1, lead: "" });
+  const confirmCash = (product: Product, guests: number, lead: string) => {
     if (!x || !x.show || inFlight.current || readPending(key)) return;
     void send({
       requestKey: newKey(),
-      body: { jobSheetId: x.jobSheetId, productVersionId: product.productVersionId, guests, expectedUnitPriceSatang: product.unitPriceSatang },
-      productName: product.name,
+      body: { jobSheetId: x.jobSheetId, productVersionId: product.productVersionId, guests, expectedUnitPriceSatang: product.unitPriceSatang,
+        ...(product.kind === "WALK_IN" && lead.trim() ? { leadName: lead.trim() } : {}) },
+      productName: product.name, kind: product.kind,
     }, product, guests);
   };
 
@@ -182,7 +197,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       </div>
       <div className="ups-confirmation" aria-labelledby="ups-h" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: C.brand, fontWeight: 700 }}>Folkpaths · payment confirmation</div>
+          <div style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: C.brand, fontWeight: 700 }}>Folkpaths · payment acknowledgement</div>
           {heading(s.productName)}
         </div>
         <div>
@@ -196,24 +211,27 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
         </dl>
         <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10, fontSize: 12.5, color: C.soft, display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="ups-job-ref">Job Ref {s.jobRef ?? "—"}</span>
-          <span>Confirms payment to Folkpaths. Not a tax invoice or official receipt.<br />ยืนยันการชำระเงินเท่านั้น ไม่ใช่ใบเสร็จรับเงินหรือใบกำกับภาษี</span>
+          {s.kind === "WALK_IN" && <span className="ups-walkin-added">Added to this job’s guest list · เพิ่มในรายชื่อแขกของงานนี้แล้ว</span>}
+          <span className="ups-receipt-state">{receiptLine(s.receipt)}</span>
+          <span>This acknowledges the cash paid to Folkpaths; it is not the official receipt. No tax invoice — Folkpaths is not VAT-registered.<br />ยืนยันการรับชำระเงินเท่านั้น ใบเสร็จรับเงินฉบับทางการออกจากระบบ PEAK ของบริษัท</span>
         </div>
       </div>
-      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>Show this payment confirmation to the guest. The Sale Ref and Job Ref are made by the system — nothing here can be typed or changed.</p>
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>Show this payment acknowledgement to the guest. The Sale Ref and Job Ref are made by the system — nothing here can be typed or changed.</p>
       <button type="button" className="ups-back" onClick={() => setView({ kind: "block" })} style={btn(true)}>Back to the job</button>
       <p style={{ margin: 0, fontSize: 12.5, color: C.soft }}>Recorded the wrong number? Tell the operator — a recorded sale can’t be deleted from your phone.</p>
     </>);
   }
 
   if (view.kind === "sell") {
-    const { product: p, guests } = view;
+    const { product: p, guests, lead } = view;
+    const walkIn = walkInName(p);
     const total = totalOf(p, guests);
     const max = p.guestsLeft;
     return shell(<>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div>
-          {heading(`Sell ${p.name}`)}
-          <div style={{ fontSize: 13, color: C.soft, marginTop: 2 }}>On this job{x.show && x.jobRef ? ` · ${x.jobRef}` : ""}</div>
+          {heading(walkIn ? "Walk-in seat — joins this tour" : `Sell ${p.name}`)}
+          <div style={{ fontSize: 13, color: C.soft, marginTop: 2 }}>{walkIn ? `${p.name} · a new guest joins the whole tour you are giving now` : "On this job"}{x.show && x.jobRef ? ` · ${x.jobRef}` : ""}</div>
         </div>
         <button type="button" aria-label="Close" onClick={() => setView({ kind: "block" })} style={{ width: 44, height: 44, flex: "none", border: "1px solid #D4D4D8", borderRadius: 10, background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.ink} strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -228,23 +246,34 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
         <button type="button" className="ups-restart" onClick={() => { setView({ kind: "block" }); void load(); }} style={plain}>Start again</button>
       ) : <>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <label htmlFor="ups-guests" style={{ fontWeight: 700, fontSize: 14 }}>Guests <small style={{ fontWeight: 500, color: C.soft }}>จำนวนแขก</small></label>
+          <label htmlFor="ups-guests" style={{ fontWeight: 700, fontSize: 14 }}>{walkIn ? "New guests" : "Guests"} <small style={{ fontWeight: 500, color: C.soft }}>{walkIn ? "แขกใหม่" : "จำนวนแขก"}</small></label>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button type="button" aria-label="One guest fewer" disabled={guests <= 1} onClick={() => setView({ ...view, guests: guests - 1, error: undefined })} style={{ width: 48, height: 48, border: "1px solid #D4D4D8", borderRadius: 10, background: "#fff", fontSize: 22, fontWeight: 700, cursor: "pointer", color: C.ink }}>−</button>
             <input id="ups-guests" type="number" readOnly value={guests} aria-describedby="ups-guests-hint" style={{ width: 72, height: 48, boxSizing: "border-box", textAlign: "center", border: "1px solid #D4D4D8", borderRadius: 10, font: "inherit", fontSize: 20, fontWeight: 800, background: "#F7F7F5", color: C.ink }} />
             <button type="button" aria-label="One guest more" disabled={guests >= max} onClick={() => setView({ ...view, guests: guests + 1, error: undefined })} style={{ width: 48, height: 48, border: "1px solid #D4D4D8", borderRadius: 10, background: "#fff", fontSize: 22, fontWeight: 700, cursor: "pointer", color: C.ink }}>+</button>
           </div>
-          <div id="ups-guests-hint" style={{ fontSize: 12.5, color: C.soft }}>Up to {max}{x.show && max < x.jobPax ? ` now — ${x.jobPax} guests on this job, ${x.jobPax - max} already bought it` : " — the guests on this job"} · ไม่เกินจำนวนแขกในงานนี้</div>
+          {walkIn
+            ? <div id="ups-guests-hint" className="ups-seats" style={{ fontSize: 12.5, color: C.soft }}>Seats left on this job: {max} of {p.seatsPerGuide} ({p.jobPax} guests now) · ที่นั่งว่าง {max}</div>
+            : <div id="ups-guests-hint" style={{ fontSize: 12.5, color: C.soft }}>Up to {max}{x.show && max < x.jobPax ? ` now — ${x.jobPax} guests on this job, ${x.jobPax - max} already bought it` : " — the guests on this job"} · ไม่เกินจำนวนแขกในงานนี้</div>}
         </div>
+        {walkIn && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <label htmlFor="ups-lead" style={{ fontWeight: 700, fontSize: 14 }}>Lead guest’s name <small style={{ fontWeight: 500, color: C.soft }}>optional · ไม่บังคับ</small></label>
+            <input id="ups-lead" value={lead} maxLength={120} autoComplete="off" onChange={(e) => setView({ ...view, lead: e.target.value })} placeholder="Leave empty if the guest prefers"
+              style={{ minHeight: 48, border: "1px solid #D4D4D8", borderRadius: 10, padding: "0 12px", font: "inherit", fontSize: 15 }} />
+            <div style={{ fontSize: 12.5, color: C.soft }}>Shown on the guest list. Empty: “Walk-in · Sale Ref”.</div>
+          </div>
+        )}
         <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "8px 12px", fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
-          <dt style={{ color: C.soft }}>Price {per(p.pricingBasis)}</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 700 }}>{baht(p.unitPriceSatang)} <small style={{ fontWeight: 500, color: C.soft }}>set by Folkpaths</small></dd>
+          <dt style={{ color: C.soft }}>Price {per(p.pricingBasis)}</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 700 }}>{baht(p.unitPriceSatang)} <small style={{ fontWeight: 500, color: C.soft }}>{walkIn ? "the total the guest pays" : "set by Folkpaths"}</small></dd>
           <dt style={{ color: C.soft }}>Payment</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 700 }}>Cash to you <small style={{ fontWeight: 500, color: C.soft }}>เงินสด</small></dd>
         </dl>
         <div style={{ background: "#F4F4F5", borderRadius: 10, padding: 12, fontVariantNumeric: "tabular-nums" }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 17, fontWeight: 800 }}><span>Collect from the guest</span><span className="ups-total">{baht(total)}</span></div>
         </div>
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>This cash belongs to Folkpaths. Amount to remit: the full {baht(total)}, with this job’s end-tour report.<br /><small style={{ color: C.soft }}>เงินนี้เป็นของบริษัท ยอดนำส่งเต็ม {baht(total)} พร้อมรายงานจบทัวร์ของงานนี้</small></p>
-        <button type="button" className="ups-confirm" disabled={max < 1} onClick={() => confirmCash(p, guests)} style={{ ...btn(true), minHeight: 52, fontSize: 16, fontWeight: 800 }}>
+        {walkIn && <p style={{ margin: 0, fontSize: 13 }}>They are added to this job’s guest list. Nothing is added to the price.</p>}
+        <button type="button" className="ups-confirm" disabled={max < 1 || guests > max} onClick={() => confirmCash(p, guests, lead)} style={{ ...btn(true), minHeight: 52, fontSize: 16, fontWeight: 800 }}>
           I’ve received {baht(total)} cash<br /><small style={{ fontWeight: 500, fontSize: 12.5 }}>รับเงินสดแล้ว</small>
         </button>
         <button type="button" onClick={() => setView({ kind: "block" })} style={plain}>Cancel</button>
@@ -259,10 +288,17 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
     {heading("Extras", "ขายเพิ่ม")}
     {!x.closed && x.products.map((p) => (
       <div key={p.productCode} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {x.sales.length === 0 && <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>Guests can add <b>{p.name}</b> for <b>{baht(p.unitPriceSatang)} {per(p.pricingBasis)}</b>.<br /><small style={{ color: C.soft }}>ขายเพิ่ม {p.name} {p.pricingBasis === "PER_GROUP" ? "ต่อกลุ่ม" : "คนละ"} {(p.unitPriceSatang / 100).toLocaleString("en-US")} บาท</small></p>}
-        {p.guestsLeft > 0
-          ? <button type="button" className="ups-sell" onClick={() => startSell(p)} style={btn(x.sales.length === 0)}>{x.sales.length === 0 ? `Sell ${p.name}` : `Sell ${p.name} to more guests`}</button>
-          : <p style={{ margin: 0, fontSize: 13, color: C.soft }}>Every guest on this job already has {p.name}.</p>}
+        {p.kind === "WALK_IN" ? <>
+          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}><b>Walk-in seat</b> — a new guest joins this tour for <b>{baht(p.unitPriceSatang)} a guest</b>, the total they pay. {p.guestsLeft} of {p.seatsPerGuide} seats left.<br /><small style={{ color: C.soft }}>แขก walk-in ร่วมทัวร์นี้ คนละ {(p.unitPriceSatang / 100).toLocaleString("en-US")} บาท</small></p>
+          {p.guestsLeft > 0
+            ? <button type="button" className="ups-sell ups-sell-walkin" onClick={() => startSell(p)} style={btn(false)}>Sell a walk-in seat</button>
+            : <p className="ups-full" style={{ margin: 0, fontSize: 13, color: C.soft }}>No walk-in seats left on this job ({p.seatsPerGuide} guests per guide). Ask Operations.</p>}
+        </> : <>
+          {x.sales.length === 0 && <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>Guests on this tour can add <b>{p.name}</b> for <b>{baht(p.unitPriceSatang)} {per(p.pricingBasis)}</b>.<br /><small style={{ color: C.soft }}>ขายเพิ่ม {p.name} {p.pricingBasis === "PER_GROUP" ? "ต่อกลุ่ม" : "คนละ"} {(p.unitPriceSatang / 100).toLocaleString("en-US")} บาท</small></p>}
+          {p.guestsLeft > 0
+            ? <button type="button" className="ups-sell" onClick={() => startSell(p)} style={btn(x.sales.length === 0)}>{x.sales.length === 0 ? `Sell ${p.name}` : `Sell ${p.name} to more guests`}</button>
+            : <p style={{ margin: 0, fontSize: 13, color: C.soft }}>Every guest on this job already has {p.name}.</p>}
+        </>}
       </div>
     ))}
     {x.closed && x.sales.length > 0 && <p style={{ margin: 0, fontSize: 13, color: C.soft }}>{x.closed.message}</p>}
@@ -270,7 +306,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       <ul className="ups-sales" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
         {x.sales.map((s) => (
           <li key={s.saleNo} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 10, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
-            <span><b>{s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small></span>
+            <span><b>{s.kind === "WALK_IN" ? "Walk-in seat" : s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}{s.status === "REVERSED" ? " · reversed" : ""}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small><br /><small className="ups-sale-receipt" style={{ color: C.soft }}>{receiptLine(s.receipt)}</small></span>
             <b>{baht(s.grossSatang)}</b>
             {(x.cash.status === "NOT_SENT" || x.cash.status === "DRAFT" || x.cash.status === "RETURNED") && <ErrorReversal saleNo={s.saleNo} />}
           </li>
