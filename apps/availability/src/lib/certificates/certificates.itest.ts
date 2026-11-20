@@ -1005,9 +1005,12 @@ describe("dying part way through", () => {
     const create = slow.createActive.bind(slow);
     slow.createActive = async (o) => { const f = await create(o); await new Promise((r) => setTimeout(r, 200)); return f; };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slow, leaseMs: 60, heartbeatMs: 10_000, newToken: () => "token-A" }));
+    // Attach A's expectation now: A may be refused while B is still running, and a
+    // rejection with no handler yet fails the whole run as an unhandled rejection.
+    const aRefused = expect(a).rejects.toMatchObject({ reasons: [expect.stringContaining("took over filing")] });
     await new Promise((r) => setTimeout(r, 140));
     const b = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B" }));
-    await expect(a).rejects.toMatchObject({ reasons: [expect.stringContaining("took over filing")] });
+    await aRefused;
 
     expect(drive.active()).toHaveLength(1);
     expect(drive.active()[0].id).toBe(b.driveFileId);
