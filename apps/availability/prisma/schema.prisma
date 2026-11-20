@@ -652,6 +652,8 @@ model JobSheet {
 
   @@unique([guideId, date, slotIdx])
   @@index([date])
+  walkInQrs           WalkInQr[]
+  walkInRegistrations WalkInRegistration[]
 }
 
 // A certificate that stands in for receipts on one job sheet.
@@ -2173,6 +2175,8 @@ model UpsellProductVersion {
   sales UpsellSale[]
 
   @@unique([productId, version])
+  walkInQrs           WalkInQr[]
+  walkInRegistrations WalkInRegistration[]
 }
 
 // VAT / revenue recognition / breakage / PEAK document kind / withholding tax. Stays DRAFT
@@ -2258,6 +2262,7 @@ model UpsellSale {
 
   @@index([sourceJobSheetId])
   @@index([sellingGuideId, createdAt])
+  walkInRegistration WalkInRegistration?
 }
 
 // Money in for a sale. Cash is recorded by the guide who took it (and is then that guide's
@@ -2583,4 +2588,60 @@ model UpsellPeakEventBankLink {
   bankTransaction   BankTransaction @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
 
   @@id([eventId, bankTransactionId])
+}
+
+// A guest QR for walk-in seats on one job + product version (migration 20261124090000). Tokens
+// are stored hashed (lookup) and encrypted (to show the same QR again); never in logs or URLs
+// to a third party. One live QR per job + version; revoking is final.
+model WalkInQr {
+  id               String               @id @default(cuid())
+  tokenHash        String               @unique
+  tokenEnc         String
+  jobSheetId       String
+  jobSheet         JobSheet             @relation(fields: [jobSheetId], references: [id], onDelete: Restrict)
+  productVersionId String
+  productVersion   UpsellProductVersion @relation(fields: [productVersionId], references: [id], onDelete: Restrict)
+  createdById      String
+  createdAt        DateTime             @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  revokedById      String?
+  revokeReason     String?
+
+  registrations WalkInRegistration[]
+
+  @@index([jobSheetId])
+}
+
+// A guest's registration from the QR: PENDING until the guide records the cash (CONFIRMED, with
+// its sale) or it ends (CANCELLED / EXPIRED). It is never money and reserves no seat.
+model WalkInRegistration {
+  id               String               @id @default(cuid())
+  reference        String               @unique // W-XXXX-XXXX, shown to the guest and the guide
+  viewTokenHash    String               @unique
+  viewTokenEnc     String
+  qrId             String
+  qr               WalkInQr             @relation(fields: [qrId], references: [id], onDelete: Restrict)
+  jobSheetId       String
+  jobSheet         JobSheet             @relation(fields: [jobSheetId], references: [id], onDelete: Restrict)
+  productVersionId String
+  productVersion   UpsellProductVersion @relation(fields: [productVersionId], references: [id], onDelete: Restrict)
+  requestKey       String
+  guests           Int
+  unitPriceSatang  Int
+  totalSatang      Int
+  leadName         String?
+  contactEnc       String? // encrypted; cleared when the registration ends unpaid
+  status           String               @default("PENDING") // PENDING | CONFIRMED | CANCELLED | EXPIRED
+  saleId           String?              @unique
+  sale             UpsellSale?          @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  expiresAt        DateTime
+  createdAt        DateTime             @default(now())
+  decidedAt        DateTime?
+  decidedById      String?
+  endReason        String?
+
+  @@unique([qrId, requestKey])
+  @@index([jobSheetId, status])
+  @@index([qrId, createdAt])
 }

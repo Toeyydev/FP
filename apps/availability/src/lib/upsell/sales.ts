@@ -244,6 +244,10 @@ type CashSpec = {
   before?(tx: Tx, saleNo: string, sheet: SheetRow): Promise<{ serviceBookingId?: string }>;
   /** A version that may not be sold as it stands (its revenue category). */
   refuseVersion?(v: { revenueCategory: string }): string | null;
+  /** First thing in the transaction (a guest registration's own row lock and checks). */
+  guard?(tx: Tx): Promise<void>;
+  /** Last thing in the transaction, with the sale (the registration becomes CONFIRMED). */
+  after?(tx: Tx, sale: { id: string; saleNo: string }): Promise<void>;
 };
 
 export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Actor, now = new Date()): Promise<{ sale: SaleView; replay: boolean }> {
@@ -269,6 +273,7 @@ async function recordCashSale(db: Db, req: SaleRequest, actor: Actor, now: Date,
 
   try {
     return await db.$transaction(async (tx) => {
+      await spec.guard?.(tx);
       await spec.lockFirst?.(tx, { date: head.date, slotIdx: head.slotIdx });
       // One sale at a time per job: the guest count below cannot race (and the end-tour report
       // takes the same lock — lib/guide-lifecycle — so a sale and the report never cross).
@@ -328,6 +333,7 @@ async function recordCashSale(db: Db, req: SaleRequest, actor: Actor, now: Date,
           detail: { saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross, method: "CASH" },
         },
       });
+      await spec.after?.(tx, sale);
       return { sale: saleView(sale, jobRef, receiptEvent), replay: false };
     }, { timeout: 10_000, maxWait: 5_000 });
   } catch (e) {
@@ -361,12 +367,13 @@ export const walkInDisplayName = (saleNo: string, leadName?: string | null) => (
  * guests takes walk-ins only when the version allows the mix. Locks: the departure's
  * assignments, then the job sheet (booking-reconcile's order). Behind UPSELL_ONSITE_TOUR_ENABLED.
  */
-export async function recordWalkInSale(db: Db, body: unknown, actor: Actor, now = new Date()): Promise<{ sale: SaleView; replay: boolean }> {
+export async function recordWalkInSale(db: Db, body: unknown, actor: Actor, now = new Date(), extra: Pick<CashSpec, "guard" | "after"> = {}): Promise<{ sale: SaleView; replay: boolean }> {
   if (body && typeof body === "object" && CLIENT_REF_FIELDS.some((k) => Object.prototype.hasOwnProperty.call(body, k))) parseSaleRequest(body);
   const parsed = WALK_IN_REQUEST.safeParse(body);
   if (!parsed.success) throw new UpsellSaleError(400, "BAD_REQUEST", `Check ${parsed.error.issues[0]?.path.join(".") || "the request"}.`);
   const { leadName, ...req } = parsed.data;
   return recordCashSale(db, req, actor, now, {
+    ...extra,
     type: "JOIN_SOURCE_TOUR",
     refuseVersion: (v) => (v.revenueCategory !== REVENUE_CATEGORY.JOIN_SOURCE_TOUR ? "This walk-in seat's version still books the old revenue category — an Admin saves a new version first" : null),
     async lockFirst(tx, job) {
@@ -393,4 +400,22 @@ export async function recordWalkInSale(db: Db, body: unknown, actor: Actor, now 
       return { serviceBookingId: b.id };
     },
   });
+}
+
+
+/**
+ * Whether a walk-in seat of this exact product version is sold on this job now, by the same rules
+ * a sale uses (day of the job, still assigned, no end-tour report, the version on sale for the
+ * tour, the Tour Service Revenue category), and the seats left. Reads only — for the guest QR.
+ */
+export async function walkInOffer(db: Db | Tx, jobSheetId: string, productVersionId: string, now = new Date()) {
+  const sheet = await db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { id: true, ref: true, guideId: true, date: true, slotIdx: true, tourId: true, bookings: true } });
+  if (!sheet) return { open: false as const, reason: "NO_JOB" };
+  const closed = await closedReason(db, sheet, bangkokToday(now));
+  if (closed) return { open: false as const, reason: closed.code, sheet };
+  const onSale = (await sellable(db, sheet.tourId, bangkokToday(now), "JOIN_SOURCE_TOUR")).find((x) => x.version.revenueCategory === REVENUE_CATEGORY.JOIN_SOURCE_TOUR);
+  if (!onSale) return { open: false as const, reason: "NOT_ON_SALE", sheet };
+  if (onSale.version.id !== productVersionId) return { open: false as const, reason: "PRODUCT_CHANGED", sheet, current: onSale };
+  const pax = await jobPax(db, sheet);
+  return { open: true as const, sheet, product: onSale.product, version: onSale.version, pax, seatsLeft: Math.max(0, PAX_PER_GUIDE - pax) };
 }

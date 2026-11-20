@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guest QR — walk-in seat registration — mockup (for review)</title>
+<style>
+  :root { --ink:#18181B; --soft:#71717A; --line:#E5E7EB; --bg:#f6f7f9; --brand:#0E3B2E; --ok:#EAF4EF; --okink:#0E5A33; --warn:#FBF4E4; --warnink:#5C3B06; --bad:#FBEDEA; --badink:#8A2A1C; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 -apple-system,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:16px 20px; background:#fff; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:17px; } header p { margin:4px 0 0; color:var(--soft); font-size:13px; }
+  .boards { display:flex; flex-wrap:wrap; gap:22px; padding:20px; align-items:flex-start; }
+  .board { width:390px; max-width:100%; }
+  .board > h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--soft); margin:0 0 8px; }
+  .phone { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; display:grid; gap:12px; }
+  .brand { font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--brand); font-weight:700; }
+  h3 { margin:0; font-size:18px; } .soft { color:var(--soft); font-size:13px; }
+  .note { border-radius:10px; padding:10px 12px; font-size:13.5px; } .ok { background:var(--ok); color:var(--okink); } .warn { background:var(--warn); color:var(--warnink); } .bad { background:var(--bad); color:var(--badink); }
+  dl { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 12px; margin:0; font-size:14px; } dt { color:var(--soft); } dd { margin:0; text-align:right; }
+  label { font-weight:700; font-size:14px; display:block; margin-bottom:4px; }
+  input { width:100%; min-height:48px; border:1px solid #D4D4D8; border-radius:10px; padding:0 12px; font:inherit; }
+  .step { display:flex; align-items:center; gap:10px; } .step b { width:72px; height:48px; display:flex; align-items:center; justify-content:center; border:1px solid #D4D4D8; border-radius:10px; font-size:20px; }
+  .step span { width:48px; height:48px; border:1px solid #D4D4D8; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:22px; }
+  .btn { min-height:48px; border-radius:10px; border:1px solid var(--brand); background:#fff; color:var(--brand); font:inherit; font-weight:700; width:100%; }
+  .btn.primary { background:var(--brand); color:#fff; }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:13px; word-break:break-all; }
+  .qr { width:220px; height:220px; margin:0 auto; background:
+      repeating-linear-gradient(90deg,#000 0 8px,#fff 8px 16px), repeating-linear-gradient(0deg,#000 0 8px,#fff 8px 16px); background-blend-mode:difference; border:10px solid #fff; outline:1px solid var(--line); }
+  .row { border:1px solid var(--line); border-radius:12px; padding:10px; display:grid; gap:6px; }
+  .qs { max-width:900px; margin:0 20px 30px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 18px; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Guest QR for a walk-in seat — mockup for review (pr4q)</h1>
+  <p>Local file, invented data only. The guest scans, registers, and pays the guide in cash; only the guide's "cash received" makes it a sale. The pattern in the QR is a placeholder — the app draws the real code on the device.</p>
+</header>
+
+<div class="boards">
+  <section class="board">
+    <h2>1 · Guide's job — Extras › Walk-in seat › Guest QR</h2>
+    <div class="phone">
+      <div class="soft">Three Temples (morning) · FOLK-BKK-20991120-03 · 7 guests · 5 of 12 seats left</div>
+      <div class="qr" role="img" aria-label="QR code"></div>
+      <div style="text-align:center"><b>Guests scan to register for a walk-in seat</b><br><span class="soft">฿700 a guest · pay you in cash · valid today until the end-tour report</span></div>
+      <button class="btn">New QR (the old one stops working)</button>
+      <button class="btn">Stop the QR</button>
+      <div class="note warn">Registering does not book a seat. Only "Cash received" below records the sale.</div>
+    </div>
+  </section>
+
+  <section class="board">
+    <h2>2 · Guest's phone (390 px) — after scanning</h2>
+    <div class="phone">
+      <div class="brand">Folkpaths</div>
+      <h3>Join today's Three Temples tour</h3>
+      <div class="soft">Thu 20 Nov · 08:30 · with your guide now</div>
+      <dl><dt>Price</dt><dd><b>฿700</b> a guest, the total you pay</dd><dt>Seats</dt><dd>5 available now</dd></dl>
+      <div><label>Guests</label><div class="step"><span>−</span><b>2</b><span>+</span></div></div>
+      <div><label>Your name <span class="soft">optional</span></label><input placeholder="Leave empty if you prefer"></div>
+      <div><label>Phone or email <span class="soft">optional</span></label><input placeholder="Only if you want the office to contact you"></div>
+      <dl><dt>To pay your guide in cash</dt><dd><b>฿1,400</b></dd></dl>
+      <div class="note warn">Your seat is <b>not booked yet</b>. Show this screen to your guide and pay ฿1,400 in cash — the guide confirms it, then it is booked.</div>
+      <button class="btn primary">Register</button>
+    </div>
+  </section>
+
+  <section class="board">
+    <h2>3 · Guest — registered, waiting for the guide</h2>
+    <div class="phone">
+      <div class="brand">Folkpaths · registration</div>
+      <div class="note warn"><b>Waiting for your guide</b> — not paid, no seat yet.</div>
+      <dl><dt>Registration</dt><dd class="mono">W-7K3Q-9DPA</dd><dt>Guests</dt><dd>2</dd><dt>To pay in cash</dt><dd><b>฿1,400</b></dd><dt>Valid until</dt><dd>today 12:30</dd></dl>
+      <div class="soft">This page updates when your guide records the cash. You don't need an account.</div>
+      <button class="btn">Cancel my registration</button>
+    </div>
+  </section>
+
+  <section class="board">
+    <h2>4 · Guest — after the guide confirmed the cash</h2>
+    <div class="phone">
+      <div class="brand">Folkpaths · payment acknowledgement</div>
+      <div class="note ok"><b>Paid · you're on the tour</b></div>
+      <dl><dt>Sale Ref</dt><dd class="mono">FOLK-UPS-209911-014</dd><dt>Job Ref</dt><dd class="mono">FOLK-BKK-20991120-03</dd><dt>Guests</dt><dd>2</dd><dt>Paid in cash</dt><dd><b>฿1,400</b></dd></dl>
+      <div class="soft">Official receipt: issued by Folkpaths in its accounting system — status shown here (being issued / issued RE-…). No tax invoice: Folkpaths is not VAT-registered.</div>
+    </div>
+  </section>
+
+  <section class="board">
+    <h2>5 · Guide — waiting registrations on this job</h2>
+    <div class="phone">
+      <div class="row"><b>W-7K3Q-9DPA · 2 guests · ฿1,400</b><span class="soft">Ana (example) · registered 08:41 · valid until 12:30</span>
+        <button class="btn primary">Cash received — ฿1,400</button><button class="btn">Not coming</button></div>
+      <div class="row"><b>W-2MXD-4RTE · 1 guest · ฿700</b><span class="soft">No name · registered 08:44</span>
+        <div class="note bad">The price is now ฿750 a guest. Tell the guest the new total (฿750) before you take the cash.</div>
+        <button class="btn primary">Guest agreed — cash received ฿750</button></div>
+      <div class="note warn">Full (12 per guide)? "Cash received" is refused — no seat is taken by registering.</div>
+    </div>
+  </section>
+</div>
+
+<div class="qs">
+  <b>For review</b>
+  <ol>
+    <li>Cash to the guide only — no PromptPay, card or online payment; the guest can never mark "I paid".</li>
+    <li>One QR per job and product version, for the job's day; a new QR revokes the old; stopping it, the report, or a product change closes it.</li>
+    <li>The guest sees only the tour, date, time, price, seats available and their own registration — nothing about other guests, the guide's IDs or contacts.</li>
+    <li>Registration lasts 4 hours (or until the report); it reserves nothing. Bots cannot fill seats: only the guide's cash confirmation books one.</li>
+    <li>Contact is optional and seen only by the guide of the job and Admin; it is cleared when the registration ends unpaid.</li>
+  </ol>
+</div>
+</body>
+</html>

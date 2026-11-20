@@ -32,7 +32,8 @@ import { bokunApiEnabled } from "@/lib/bokun-api";
 import * as peakApi from "@/lib/peak-api";
 import { upsellPeakAdapter } from "@/lib/upsell/peak-adapter";
 import { syncUpsellPeakBatch } from "@/lib/upsell/peak-sync";
-import { upsellPeakAutoSyncEnabled } from "@/lib/upsell/flags";
+import { upsellPeakAutoSyncEnabled, upsellWalkInQrEnabled } from "@/lib/upsell/flags";
+import { sweepWalkInRegistrations } from "@/lib/upsell/walk-in-qr";
 
 const POLL_INTERVAL_MS = Number(process.env.PAYMENT_WORKER_POLL_MS ?? 15_000);
 const BATCH_SIZE = Number(process.env.PAYMENT_WORKER_BATCH ?? 10);
@@ -155,6 +156,11 @@ async function tick(): Promise<void> {
     await reportPostingDecision();
     await syncAdvanceBatch(prisma);
     await syncUpsellPeak();
+    // Guest walk-in registrations that can no longer be paid end, and their personal data goes.
+    if (upsellWalkInQrEnabled()) {
+      try { const n = await sweepWalkInRegistrations(prisma); if (n > 0) log("walk-in-registrations-ended", { count: n }); }
+      catch (err) { log("walk-in-sweep-error", { error: String(err).slice(0, 200) }); }
+    }
     const n = await processQueuedBatch();
     if (n > 0) log("batch-processed", { count: n });
     await recordServiceStatus(prisma, "payment-worker", { success: true });
