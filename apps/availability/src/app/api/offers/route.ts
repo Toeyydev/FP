@@ -27,7 +27,11 @@ export async function GET() {
   // One row per tour-slot: keep only the most recent offer, and hide offers for slots
   // already filled (those show under assignments). Stops a slot's repeated re-offers
   // from stacking up as many duplicate UNFILLED rows.
-  const assignedKey = new Set(assigns.map((a) => `${a.date}|${a.slotIdx}|${a.tourId}`));
+  // Read for the offers' own dates, not from the capped list above: an accepted offer far
+  // ahead must not reappear under Offers because 200 nearer assignments filled the list.
+  const offerDates = [...new Set(allOffers.map((o) => o.date))];
+  const filled = offerDates.length ? await prisma.assignment.findMany({ where: { date: { in: offerDates } }, select: { date: true, slotIdx: true, tourId: true } }) : [];
+  const assignedKey = new Set([...assigns, ...filled].map((a) => `${a.date}|${a.slotIdx}|${a.tourId}`));
   const seenSlot = new Set<string>();
   const offers = allOffers.filter((o) => {
     const k = `${o.date}|${o.slotIdx}|${o.tourId}`;
