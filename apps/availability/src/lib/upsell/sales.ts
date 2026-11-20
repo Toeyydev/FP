@@ -26,7 +26,9 @@ import { nextUpsellDocNo } from "./counter";
 import { buildRuleSnapshot } from "./snapshot";
 import { jobCash, type JobCash } from "./cash-ledger";
 import { bangkokToday } from "./products";
-import { upsellRouteExtensionEnabled } from "./flags";
+import { upsellOnsiteTourEnabled, upsellRouteExtensionEnabled } from "./flags";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
+import { REVENUE_CATEGORY } from "./catalog";
 
 type Db = PrismaClient;
 type Tx = Prisma.TransactionClient;
@@ -98,12 +100,15 @@ async function closedReason(db: Db | Tx, s: SheetRow, today: string): Promise<{ 
   return null;
 }
 
-/** Route Extensions on sale today on this tour, with the version on sale. */
-async function sellable(db: Db | Tx, tourId: string, today: string) {
-  if (!upsellRouteExtensionEnabled()) return [];
+type CashType = "ROUTE_EXTENSION" | "JOIN_SOURCE_TOUR";
+const TYPE_ON: Record<CashType, () => boolean> = { ROUTE_EXTENSION: upsellRouteExtensionEnabled, JOIN_SOURCE_TOUR: upsellOnsiteTourEnabled };
+
+/** Products of this type (Route Extension by default) on sale today on this tour, with the version on sale. */
+async function sellable(db: Db | Tx, tourId: string, today: string, type: CashType = "ROUTE_EXTENSION") {
+  if (!TYPE_ON[type]()) return [];
   const t = new Date(`${today}T00:00:00Z`);
   const products = await db.upsellProduct.findMany({
-    where: { productType: "ROUTE_EXTENSION", active: true },
+    where: { productType: type, active: true },
     orderBy: { createdAt: "asc" },
     include: { versions: { where: { activeFrom: { lte: t }, OR: [{ activeTo: null }, { activeTo: { gte: t } }] }, orderBy: { version: "desc" }, take: 1 } },
   });
@@ -201,8 +206,27 @@ function fromDbError(e: unknown): never {
 
 const isUniqueViolation = (e: unknown) => (e as { code?: string } | null)?.code === "P2002";
 
+type CashSpec = {
+  type: CashType;
+  /** How many more guests this sale may take on the job, and what to say when it is too many. */
+  room(tx: Tx, sheet: SheetRow, productId: string): Promise<{ left: number; tooMany: (left: number) => string }>;
+  /** Anything made with the sale, before it (a walk-in's booking); returns fields for the sale. */
+  before?(tx: Tx, saleNo: string, sheet: SheetRow): Promise<{ serviceBookingId?: string }>;
+  /** A version that may not be sold as it stands (its revenue category). */
+  refuseVersion?(v: { revenueCategory: string }): string | null;
+};
+
 export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Actor, now = new Date()): Promise<{ sale: SaleView; replay: boolean }> {
-  const req = parseSaleRequest(body);
+  return recordCashSale(db, parseSaleRequest(body), actor, now, {
+    type: "ROUTE_EXTENSION",
+    async room(tx, sheet, productId) {
+      const pax = await jobPax(tx, sheet);
+      return { left: pax - (await guestsSold(tx, sheet.id, productId)), tooMany: (left) => (left > 0 ? `${left} is the most now — this job has ${pax} guests.` : `Every guest on this job (${pax}) already has it.`) };
+    },
+  });
+}
+
+async function recordCashSale(db: Db, req: SaleRequest, actor: Actor, now: Date, spec: CashSpec): Promise<{ sale: SaleView; replay: boolean }> {
   const again = await replay(db, req, actor);
   if (again) return again;
 
@@ -224,28 +248,28 @@ export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Act
       if (closed) throw new UpsellSaleError(409, closed.code, closed.message);
 
       const version = await tx.upsellProductVersion.findUnique({ where: { id: req.productVersionId }, include: { product: true, taxProfile: true } });
-      if (!version || version.product.productType !== "ROUTE_EXTENSION") throw new UpsellSaleError(404, "NO_PRODUCT", "No such product.");
-      const onSale = (await sellable(tx, sheet.tourId, today)).find((x) => x.product.id === version.productId);
+      if (!version || version.product.productType !== spec.type) throw new UpsellSaleError(404, "NO_PRODUCT", "No such product.");
+      const wrong = spec.refuseVersion?.(version);
+      if (wrong) throw new UpsellSaleError(409, "VERSION_NOT_SELLABLE", wrong);
+      const onSale = (await sellable(tx, sheet.tourId, today, spec.type)).find((x) => x.product.id === version.productId);
       if (!onSale) throw new UpsellSaleError(409, "NOT_ON_SALE", `${version.product.productName} is not on sale on this job now.`);
       if (onSale.version.id !== version.id || version.unitPriceSatang !== req.expectedUnitPriceSatang) {
         throw new UpsellSaleError(409, "PRICE_CHANGED", `The price is now ฿${(onSale.version.unitPriceSatang / 100).toLocaleString("en-US")}. Check with the guest, then start again.`,
           { unitPriceSatang: onSale.version.unitPriceSatang, productVersionId: onSale.version.id });
       }
-      const pax = await jobPax(tx, sheet);
-      const left = pax - (await guestsSold(tx, sheet.id, version.productId));
-      if (req.guests > left) {
-        throw new UpsellSaleError(409, "TOO_MANY_GUESTS", left > 0 ? `${left} is the most now — this job has ${pax} guests.` : `Every guest on this job (${pax}) already has it.`, { guestsLeft: Math.max(0, left) });
-      }
+      const { left, tooMany } = await spec.room(tx, sheet, version.productId);
+      if (req.guests > left) throw new UpsellSaleError(409, "TOO_MANY_GUESTS", tooMany(left), { guestsLeft: Math.max(0, left) });
 
       const gross = grossOf(version.pricingBasis, req.guests, version.unitPriceSatang);
       const saleNo = await nextUpsellDocNo("FOLK-UPS", now, tx);
+      const made = (await spec.before?.(tx, saleNo, sheet)) ?? {};
       const snapshot = buildRuleSnapshot(version.product, version, { id: version.taxProfile.id, code: version.taxProfile.code, status: version.taxProfile.status });
       const sale = await tx.upsellSale.create({
         data: {
           saleNo, productVersionId: version.id, ruleSnapshot: snapshot as object, sourceJobSheetId: sheet.id,
           sellingGuideId: actor.guideId, serviceGuideId: actor.guideId, pricingBasis: version.pricingBasis,
           guests: req.guests, unitPriceSatang: version.unitPriceSatang, grossSatang: gross, status: "PAID",
-          requestKey: req.requestKey, createdById: actor.userId,
+          requestKey: req.requestKey, createdById: actor.userId, ...made,
         },
       });
       const payment = await tx.upsellPayment.create({
@@ -283,5 +307,38 @@ export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Act
     }
     fromDbError(e);
   }
+}
+
+// ── a walk-in seat on the guide's own job (JOIN_SOURCE_TOUR; mockup pr4w awaiting review) ────
+
+export const WALK_IN_REQUEST = SALE_REQUEST.extend({ leadName: z.string().trim().min(2).max(120) }).strict();
+
+/**
+ * A new guest joins the whole tour the guide is giving now, paying the guide cash — ฿700 a guest
+ * as the total (no VAT added; owner, 20 Nov 2026), booked to Tour Service Revenue. The seat is
+ * real: one booking (source "walk-in", its Sale Ref as the external id) is added to the job in
+ * the same transaction, so the guest list and the job's pax include it, and the next walk-in
+ * counts it. Seats: PAX_PER_GUIDE less every live guest on the job, OTA and walk-in alike.
+ * Behind UPSELL_ONSITE_TOUR_ENABLED (off). No UI yet.
+ */
+export async function recordWalkInSale(db: Db, body: unknown, actor: Actor, now = new Date()): Promise<{ sale: SaleView; replay: boolean }> {
+  if (body && typeof body === "object" && CLIENT_REF_FIELDS.some((k) => Object.prototype.hasOwnProperty.call(body, k))) parseSaleRequest(body);
+  const parsed = WALK_IN_REQUEST.safeParse(body);
+  if (!parsed.success) throw new UpsellSaleError(400, "BAD_REQUEST", `Check ${parsed.error.issues[0]?.path.join(".") || "the request"}.`);
+  const { leadName, ...req } = parsed.data;
+  return recordCashSale(db, req, actor, now, {
+    type: "JOIN_SOURCE_TOUR",
+    refuseVersion: (v) => (v.revenueCategory !== REVENUE_CATEGORY.JOIN_SOURCE_TOUR ? "This walk-in seat's version still books the old revenue category — an Admin saves a new version first" : null),
+    async room(tx, sheet) {
+      const pax = await jobPax(tx, sheet);
+      return { left: PAX_PER_GUIDE - pax, tooMany: (left) => (left > 0 ? `Only ${left} seat${left === 1 ? " is" : "s are"} left on this job (${PAX_PER_GUIDE} guests per guide). Ask Operations before taking more.` : `This job is full (${PAX_PER_GUIDE} guests per guide). Ask Operations.`) };
+    },
+    async before(tx, saleNo, sheet) {
+      const b = await tx.booking.create({ data: { source: "walk-in", externalId: saleNo, tourId: sheet.tourId, date: sheet.date, slotIdx: sheet.slotIdx, pax: req.guests,
+        customerName: leadName, status: "ASSIGNED", assignedGuideId: sheet.guideId, paymentStatus: "paid", datePinned: true, bookingDate: sheet.date,
+        notes: `Walk-in seat ${saleNo}, paid to the guide in cash` }, select: { id: true } });
+      return { serviceBookingId: b.id };
+    },
+  });
 }
 

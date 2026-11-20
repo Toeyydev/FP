@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walk-in seat on the guide's job — mockup (for review)</title>
+<style>
+  :root { --ink:#1d2433; --soft:#5b6478; --line:#dfe3ea; --bg:#f6f7f9; --primary:#1f5fbf; --ok:#e8f5ec; --okink:#1d6b3a; --warn:#fff6e0; --warnink:#7a5600; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:16px 20px; background:#fff; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:17px; } header p { margin:4px 0 0; color:var(--soft); font-size:13px; }
+  .boards { display:flex; flex-wrap:wrap; gap:22px; padding:20px; align-items:flex-start; }
+  .board { width:390px; max-width:100%; }
+  .board > h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--soft); margin:0 0 8px; }
+  .phone { background:#fff; border:1px solid var(--line); border-radius:16px; padding:14px; display:grid; gap:12px; }
+  .job { font-size:13px; color:var(--soft); }
+  .item { border:1px solid var(--line); border-radius:12px; padding:12px; display:grid; gap:8px; }
+  .item h3 { margin:0; font-size:15px; } .item .sub { color:var(--soft); font-size:13px; }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .step { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .step button { width:44px; height:44px; border:0; background:#fff; font-size:20px; }
+  .step span { min-width:40px; text-align:center; font-weight:700; }
+  .btn { min-height:44px; border-radius:10px; border:1px solid var(--line); background:#fff; font:inherit; font-weight:600; padding:0 14px; }
+  .btn.primary { background:var(--primary); color:#fff; border-color:var(--primary); width:100%; }
+  .btn[disabled] { opacity:.45; }
+  .note { border-radius:10px; padding:10px; font-size:13.5px; }
+  .note.ok { background:var(--ok); color:var(--okink); } .note.warn { background:var(--warn); color:var(--warnink); }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; margin:0; font-size:13.5px; } dt { color:var(--soft); } dd { margin:0; text-align:right; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size:12.5px; word-break:break-all; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .qs { max-width:820px; margin:0 20px 30px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 18px; font-size:14px; }
+  .qs h2 { font-size:15px; margin:0 0 6px; } .qs li { margin:4px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Walk-in seat on the guide's own Three Temples job — mockup for review</h1>
+  <p>Local file, invented data only. It extends the existing Extras block on the guide's job (PR3). Nothing here is built into the guide UI until this is approved.</p>
+</header>
+
+<div class="boards">
+
+  <!-- A: the Extras block with both items -->
+  <section class="board">
+    <h2>A · Guide, job day, before the end-tour report</h2>
+    <div class="phone">
+      <div class="job">Extras · <span class="mono">FOLK-BKK-20991120-03</span> · Three Temples (morning) · 7 guests on this job</div>
+
+      <div class="item">
+        <h3>Wat Pho + Wat Arun</h3>
+        <div class="sub">Added to this tour for guests already on it · ฿200 a guest · cash</div>
+        <div class="row"><span>Guests</span><span class="step"><button aria-label="fewer">−</button><span>0</span><button aria-label="more">+</button></span></div>
+      </div>
+
+      <div class="item">
+        <h3>Walk-in seat — joins this tour</h3>
+        <div class="sub">A new guest joins the whole tour you are giving now · ฿700 a guest, the total the guest pays · cash</div>
+        <div class="row"><span>New guests</span><span class="step"><button aria-label="fewer">−</button><span>2</span><button aria-label="more">+</button></span></div>
+        <div class="row"><span>Lead guest's name</span><input aria-label="Lead guest's name" value="Invented Walk-in" style="min-height:44px;border:1px solid var(--line);border-radius:10px;padding:0 10px;width:55%"></div>
+        <dl><dt>Seats left on this job</dt><dd>5 of 12</dd><dt>Guest pays</dt><dd><b>฿1,400</b></dd></dl>
+        <button class="btn primary">Record ฿1,400 cash — 2 walk-in guests</button>
+        <div class="sub">They are added to this job's guest list. Nothing is added to the price.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B: confirmation -->
+  <section class="board">
+    <h2>B · After recording</h2>
+    <div class="phone">
+      <div class="note ok"><b>Payment recorded</b> — not a receipt. Give the guest the company receipt later if asked.</div>
+      <dl>
+        <dt>Sale Ref</dt><dd class="mono">FOLK-UPS-209911-014</dd>
+        <dt>Job Ref</dt><dd class="mono">FOLK-BKK-20991120-03</dd>
+        <dt>What</dt><dd>Walk-in seat · 2 guests</dd>
+        <dt>Cash received</dt><dd><b>฿1,400</b></dd>
+        <dt>Guests on this job now</dt><dd>9</dd>
+      </dl>
+      <div class="note warn">Cash held on this job: ฿1,400. Hand it in by bank transfer after the end-tour report (the hand-in code comes first).</div>
+    </div>
+  </section>
+
+  <!-- C: limits -->
+  <section class="board">
+    <h2>C · Refusals the guide can act on</h2>
+    <div class="phone">
+      <div class="item"><h3>Walk-in seat — joins this tour</h3>
+        <div class="note warn">Only 1 seat is left on this job (12 guests per guide). Ask Operations before taking more.</div>
+        <button class="btn primary" disabled>Record ฿1,400 cash — 2 walk-in guests</button></div>
+      <div class="item"><h3>Walk-in seat</h3><div class="note warn">The end-tour report is sent — nothing more can be sold on this job.</div></div>
+      <div class="item"><h3>Walk-in seat</h3><div class="note warn">Walk-in seats are sold on a Three Temples job on the day only.</div></div>
+      <div class="item"><h3>Lost connection</h3><div class="note warn">Checking the status… — the same request is resent with the same key; it never records twice.</div></div>
+    </div>
+  </section>
+
+  <!-- D: Admin / Finance -->
+  <section class="board" style="width:560px">
+    <h2>D · Finance › Extras cash and PEAK (Admin)</h2>
+    <div class="phone">
+      <table>
+        <thead><tr><th>Sale</th><th>What</th><th>Revenue</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">FOLK-UPS-209911-013</td><td>Wat Pho + Wat Arun · 3</td><td>Additional Tour Revenue (Upsell)</td><td style="text-align:right">฿600</td></tr>
+          <tr><td class="mono">FOLK-UPS-209911-014</td><td>Walk-in seat · 2</td><td><b>Tour Service Revenue</b></td><td style="text-align:right">฿1,400</td></tr>
+        </tbody>
+      </table>
+      <div class="sub">PEAK: one receipt per sale, no VAT (the company is not VAT-registered), Sale Ref as the reference, Job Ref in the remark; the walk-in seat is credited to Tour Service Revenue. Hand-in and bank clearing are the same as for any Extras cash.</div>
+    </div>
+  </section>
+</div>
+
+<div class="qs">
+  <h2>What this mockup asks Codex / the owner to confirm</h2>
+  <ol>
+    <li>The two items are shown apart: Route Extension (฿200, for guests already on the tour) vs Walk-in seat (฿700, a new guest joining the whole tour).</li>
+    <li>Seats: 12 per guide (PAX_PER_GUIDE) less every live guest on the job, OTA and walk-in alike (OTA mix allowed). Over the limit is refused, not split.</li>
+    <li>Each walk-in sale adds one booking (source <span class="mono">walk-in</span>, its Sale Ref as the external id, the lead guest's name) to the job, so the guest list and pax include them; it is never synced from or to an OTA.</li>
+    <li>Lead guest's name: required or optional? (shown as required here).</li>
+    <li>Built behind UPSELL_ONSITE_TOUR_ENABLED (off). THREE-TEMPLES-ONSITE gets a version 2 crediting Tour Service Revenue — created by an Admin in Settings › Products when it goes live, not by a production seed.</li>
+  </ol>
+</div>
+</body>
+</html>
