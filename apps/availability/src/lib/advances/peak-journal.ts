@@ -4,6 +4,10 @@ export type AdvancePostingKind = "ADVANCE" | "RETURN" | "EXPENSE";
 export type AdvancePeakConfig = {
   advanceAccountCode: string; advanceAccountSubId?: string;
   bankName?: string; bankAccountCode: string; bankAccountSubId: string;
+  /** The same account in the bank registry's identity (lib/payment-transfer bankAccountKey:
+   *  "ACC:<digits>"), set by the Admin who configured it — never derived from a label. Unset =
+   *  the account is not known to the registry (it then matches records on any account). */
+  bankAccountKey?: string;
   journalTypeIds: Record<AdvancePostingKind, string>;
   expenseAccounts: Record<string, string>;
 };

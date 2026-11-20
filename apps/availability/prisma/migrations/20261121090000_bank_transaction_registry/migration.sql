@@ -51,6 +51,10 @@ ALTER TABLE "GuidePayment" ADD COLUMN "transferTotal" DECIMAL(12,2);
 -- Who rejected an ADV return claim, and when (the reason was already kept): a rejection releases
 -- the claim's hold on its bank reference, so it is an attributed, audited act.
 ALTER TABLE "GuideAdvanceReceipt" ADD COLUMN "rejectedById" TEXT, ADD COLUMN "rejectedAt" TIMESTAMP(3);
+-- The company account a return reached, in the registry's identity, when it is known (set by the
+-- application from configuration — never derived from a label). Null = unknown, as before.
+ALTER TABLE "GuideAdvanceReceipt" ADD COLUMN "bankAccountKey" TEXT;
+ALTER TABLE "GuideAdvance" ADD COLUMN "bankAccountKey" TEXT;
 ALTER TABLE "GuidePayment" ADD CONSTRAINT "GuidePayment_transfer_total_check"
   CHECK ("transferTotal" IS NULL OR ("transferGroup" IS NOT NULL AND "transferTotal" > 0 AND "amountTransferred" <= "transferTotal"));
 
@@ -177,10 +181,10 @@ RETURNS TABLE (dir text, role text, amount int, ref text, account text, live boo
 BEGIN
   CASE p_table
   WHEN 'GuideAdvance' THEN RETURN QUERY
-    SELECT 'OUT'::text, 'USE'::text, s."amountSatang", s."txRef", NULL::text, s."reversedAt" IS NULL, true, s."advanceDate", NULL::text, NULL::int, NULL::text, s."createdAt"
+    SELECT 'OUT'::text, 'USE'::text, s."amountSatang", s."txRef", s."bankAccountKey", s."reversedAt" IS NULL, true, s."advanceDate", NULL::text, NULL::int, NULL::text, s."createdAt"
       FROM "GuideAdvance" s WHERE s."id" = p_id;
   WHEN 'GuideAdvanceReceipt' THEN RETURN QUERY
-    SELECT 'IN'::text, 'USE'::text, s."amountSatang", s."bankRef", NULL::text, s."status" IN ('CLAIMED', 'VERIFIED') AND s."voidedAt" IS NULL,
+    SELECT 'IN'::text, 'USE'::text, s."amountSatang", s."bankRef", s."bankAccountKey", s."status" IN ('CLAIMED', 'VERIFIED') AND s."voidedAt" IS NULL,
            s."verifiedAt" IS NOT NULL OR s."status" = 'VERIFIED', s."receivedDate", NULL::text, NULL::int, NULL::text, s."createdAt"
       FROM "GuideAdvanceReceipt" s WHERE s."id" = p_id;
   WHEN 'GuideAdvanceReturn' THEN RETURN QUERY
@@ -703,9 +707,9 @@ BEGIN
   RETURN NULL;
 END $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER bank_tx_guide_advance AFTER INSERT OR UPDATE OF "txRef", "amountSatang", "reversedAt" OR DELETE ON "GuideAdvance"
+CREATE TRIGGER bank_tx_guide_advance AFTER INSERT OR UPDATE OF "txRef", "bankAccountKey", "amountSatang", "reversedAt" OR DELETE ON "GuideAdvance"
   FOR EACH ROW EXECUTE FUNCTION bank_tx_source();
-CREATE TRIGGER bank_tx_guide_advance_receipt AFTER INSERT OR UPDATE OF "bankRef", "amountSatang", "status", "voidedAt", "verifiedAt" OR DELETE ON "GuideAdvanceReceipt"
+CREATE TRIGGER bank_tx_guide_advance_receipt AFTER INSERT OR UPDATE OF "bankRef", "bankAccountKey", "amountSatang", "status", "voidedAt", "verifiedAt" OR DELETE ON "GuideAdvanceReceipt"
   FOR EACH ROW EXECUTE FUNCTION bank_tx_source();
 CREATE TRIGGER bank_tx_guide_advance_return AFTER INSERT OR UPDATE OF "txRef", "amount" OR DELETE ON "GuideAdvanceReturn"
   FOR EACH ROW EXECUTE FUNCTION bank_tx_source();

@@ -34,6 +34,17 @@ export function bankTxRefusal(e: unknown): string | null {
 type Reader = Pick<PrismaClient, "$queryRaw">;
 
 /**
+ * The registry identity of the company bank account an ADV movement names (its PEAK bank
+ * sub-account id), from the deployment's configuration only: the configured account's
+ * bankAccountKey when it is that account, else null (unknown — never guessed).
+ */
+export function advanceBankAccountKey(subAccountId: string | null | undefined, config: { bankAccountSubId?: string; bankAccountKey?: string } | null): string | null {
+  const id = (subAccountId ?? "").trim();
+  const key = (config?.bankAccountKey ?? "").trim();
+  return id && key && config?.bankAccountSubId === id && /^ACC:\d+$|^PM:.+$/.test(key) ? key : null;
+}
+
+/**
  * Asked BEFORE writing a record that names a bank transfer: the reason it would be refused, or
  * null. Read-only; the database triggers remain the authority when two people write at once
  * (the caller still maps a trigger refusal with bankTxRefusal). `source` is the record itself,

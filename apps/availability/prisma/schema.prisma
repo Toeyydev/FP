@@ -1458,6 +1458,7 @@ model GuideAdvance {
   paidAt      DateTime
   method      String   @default("bank") // bank | cash | other
   bankAccount String? // explicitly selected PEAK bank subaccount ID
+  bankAccountKey String? // the company account in the bank registry's identity (lib/bank-transactions advanceBankAccountKey); null = unknown
   txRef       String? // bank transaction reference
   peakRef     String? // PEAK expense/advance ref once posted (future PEAK sync)
   slipUrl     String? // Drive link to the transfer slip (evidence)
@@ -1556,6 +1557,7 @@ model GuideAdvanceReceipt {
   verifiedById    String?
   verifiedAt      DateTime?
   rejectedReason  String?
+  bankAccountKey  String? // the company account in the bank registry's identity (lib/bank-transactions advanceBankAccountKey); null = unknown
   rejectedById    String? // who rejected the claim (it releases the claim's hold on its bank reference)
   rejectedAt      DateTime?
   legacyReturnId  String?   @unique // the GuideAdvanceReturn row this came from

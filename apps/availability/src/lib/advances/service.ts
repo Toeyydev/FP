@@ -30,7 +30,8 @@ import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, t
 import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import { parseBangkokDateTime } from "@/lib/bangkok-time";
-import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
+import { advanceBankAccountKey, bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
+import { advancePeakConfig } from "@/lib/advances/peak-sync";
 import {
   MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
   fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
@@ -49,6 +50,11 @@ export type AutomaticTrigger = "jobsheet.approve" | "jobsheet.save" | "return.ve
 const automaticDetail = (t: AutomaticTrigger | undefined) => (t ? { automatic: true, trigger: t } : {});
 export type Fail = { ok: false; status: number; reasons: string[] };
 const fail = (status: number, ...reasons: string[]): Fail => ({ ok: false, status, reasons });
+
+/** The configured ADV bank, or null when the deployment has none (no account identity then). */
+function configuredAdvanceBank() {
+  try { return advancePeakConfig(); } catch { return null; }
+}
 
 export class LedgerConflict extends Error {
   constructor(message: string) { super(message); this.name = "LedgerConflict"; }
@@ -174,7 +180,8 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
   const already = await duplicate();
   if (already) return refuseDuplicate(already);
   // The same transfer recorded anywhere else (a guide payment, a refund, a reversed advance).
-  const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: input.bankRef, amountSatang });
+  const advanceAccountKey = advanceBankAccountKey(input.bankAccount, configuredAdvanceBank());
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: input.bankRef, amountSatang, account: advanceAccountKey });
   if (elsewhere) return { ...fail(409, elsewhere), code: DUPLICATE_TRANSFER };
 
   // Which job this advance belongs to decides which job sheet shows it (the legacy
@@ -199,7 +206,7 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
           data: {
             guideId: input.guideId, advanceNo, jobNo,
             advanceDate: input.advanceDate, amountSatang, accountingPeriod: periodOf(input.advanceDate),
-            bankAccount: input.bankAccount ?? null, purpose, allowedCategories, method: input.method ?? "bank", txRef: input.bankRef ?? null,
+            bankAccount: input.bankAccount ?? null, bankAccountKey: advanceAccountKey, purpose, allowedCategories, method: input.method ?? "bank", txRef: input.bankRef ?? null,
             note: input.note ?? null, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null,
             evidenceId: input.evidenceId ?? null, createdById: input.actor.actorId,
             ...(input.slipCheck ? {
@@ -272,7 +279,8 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
   }
   const link = await loadReturnLink(prisma, { guideId: input.guideId }, input.advanceId ?? null, input.jobSheetId ?? null);
   if (!link.ok) return link;
-  const elsewhere = await bankTxPrecheck(prisma, { direction: "IN", ref: bankRef, amountSatang });
+  const accountKey = advanceBankAccountKey(input.bankAccount, configuredAdvanceBank());
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "IN", ref: bankRef, amountSatang, account: accountKey });
   if (elsewhere) return fail(409, elsewhere);
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -283,7 +291,7 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
           data: {
             receiptNo, guideId: input.guideId, receivedDate: input.receivedDate, amountSatang,
             status: !input.byGuide && input.confirmedArrived ? "VERIFIED" : "CLAIMED",
-            method: input.method ?? "bank", bankAccount: input.bankAccount ?? null, bankRef,
+            method: input.method ?? "bank", bankAccount: input.bankAccount ?? null, bankAccountKey: accountKey, bankRef,
             slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null, evidenceId: input.evidenceId ?? null,
             note: input.note ?? null,
             advanceId: link.advanceId, jobSheetId: link.jobSheetId,
@@ -309,7 +317,7 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
 
 /** The operator has seen the money in the bank. One conditional statement, so two tabs cannot both verify. */
 export async function verifyReceipt(prisma: PrismaClient, input: { receiptId: string; actor: Actor; bankAccount?: string | null; bankRef?: string | null }): Promise<{ ok: true } | Fail> {
-  const receipt = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId }, select: { id: true, guideId: true, receiptNo: true, status: true, bankRef: true, amountSatang: true, advanceId: true, jobSheetId: true } });
+  const receipt = await prisma.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId }, select: { id: true, guideId: true, receiptNo: true, status: true, bankRef: true, bankAccount: true, amountSatang: true, advanceId: true, jobSheetId: true } });
   if (!receipt) return fail(404, "No such return");
   if (receipt.status !== "CLAIMED") return fail(409, `${receipt.receiptNo} is ${receipt.status.toLowerCase()} — only a return waiting to be checked can be verified`);
   if (!(receipt.amountSatang > 0)) return fail(409, `${receipt.receiptNo} has no amount`);
@@ -322,13 +330,16 @@ export async function verifyReceipt(prisma: PrismaClient, input: { receiptId: st
     const clash = await prisma.guideAdvanceReceipt.findFirst({ where: { guideId: receipt.guideId, bankRef, id: { not: receipt.id } }, select: { receiptNo: true } });
     if (clash) return fail(409, `Bank reference ${bankRef} is already recorded on ${clash.receiptNo}`);
   }
-  const elsewhere = await bankTxPrecheck(prisma, { direction: "IN", ref: bankRef ?? receipt.bankRef, amountSatang: receipt.amountSatang, source: { table: "GuideAdvanceReceipt", id: receipt.id } });
+  // The account the operator chose (or the one recorded), in the registry's identity: a reference
+  // on several known accounts matches the right one instead of being called ambiguous.
+  const accountKey = advanceBankAccountKey(input.bankAccount ?? receipt.bankAccount, configuredAdvanceBank());
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "IN", ref: bankRef ?? receipt.bankRef, amountSatang: receipt.amountSatang, account: accountKey, source: { table: "GuideAdvanceReceipt", id: receipt.id } });
   if (elsewhere) return fail(409, `${receipt.receiptNo}: ${elsewhere}`);
   let moved: { count: number };
   try {
     moved = await prisma.guideAdvanceReceipt.updateMany({
       where: { id: input.receiptId, status: "CLAIMED" },
-      data: { status: "VERIFIED", verifiedAt: new Date(), verifiedById: input.actor.actorId, ...(input.bankAccount ? { bankAccount: input.bankAccount } : {}), ...(bankRef ? { bankRef } : {}) },
+      data: { status: "VERIFIED", verifiedAt: new Date(), verifiedById: input.actor.actorId, ...(input.bankAccount ? { bankAccount: input.bankAccount } : {}), ...(accountKey ? { bankAccountKey: accountKey } : {}), ...(bankRef ? { bankRef } : {}) },
     });
   } catch (e) {
     const refused = bankTxRefusal(e);

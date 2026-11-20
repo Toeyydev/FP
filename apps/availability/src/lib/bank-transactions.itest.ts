@@ -507,6 +507,32 @@ describe("application boundaries answer 409 with the reason, never 500", () => {
     expect((await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: claim.receipt.id } })).status).toBe("CLAIMED");
   });
 
+  it("verifying a return on the account the operator chose: matched by account, not called ambiguous", async () => {
+    const op = await user("OPERATOR");
+    // The same reference already reached two OTHER company accounts.
+    for (const [g, acct] of [["G-911", "ACC:2222222222"], ["G-912", "ACC:3333333333"]] as const) {
+      await prisma.guideAdvanceReceipt.create({ data: { receiptNo: `FOLK-ADR-209903-${n()}`, guideId: g, receivedDate: "2099-03-11", amountSatang: 50000, bankRef: "KB-IN-0501", bankAccountKey: acct, status: "VERIFIED", verifiedAt: new Date() } });
+    }
+    const claim = async () => {
+      const c = await recordReceipt(prisma, { guideId: "G-902", receivedDate: "2099-03-11", amount: 500, byGuide: true, today: "2099-12-31", bankRef: null, actor: { actorId: null, actorRole: "GUIDE" } });
+      if (!c.ok) throw new Error(JSON.stringify(c));
+      return c.receipt.id;
+    };
+    // Without the account's registry identity configured, the account is unknown: ambiguous, refused.
+    const first = await claim();
+    const unknown = await verifyReceipt(prisma, { receiptId: first, bankRef: "KB-IN-0501", bankAccount: "sub-bank", actor: op });
+    expect(unknown).toMatchObject({ ok: false, status: 409 });
+    expect(JSON.stringify(unknown)).toMatch(/more than one Folkpaths account/);
+    // Configured by the Admin: the chosen account is a third account — its own transfer.
+    vi.stubEnv("PEAK_ADVANCE_CONFIG", JSON.stringify({ ...CONFIG, bankAccountKey: "ACC:1111111111" }));
+    expect(await verifyReceipt(prisma, { receiptId: first, bankRef: "KB-IN-0501", bankAccount: "sub-bank", actor: op })).toEqual({ ok: true });
+    expect(await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: first } })).toMatchObject({ status: "VERIFIED", bankAccountKey: "ACC:1111111111" });
+    expect((await useOf("GuideAdvanceReceipt", first)).transaction).toMatchObject({ accountKey: "ACC:1111111111", refKey: "KBIN0501" });
+    // …and a second return on that same account and reference is the same transfer, already used.
+    const second = await claim();
+    expect(await verifyReceipt(prisma, { receiptId: second, bankRef: "KB-IN-0501", bankAccount: "sub-bank", actor: op })).toMatchObject({ ok: false, status: 409 });
+  });
+
   it("a missing transfer whose reference an advance already used", async () => {
     const admin = await user("ADMIN");
     const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
