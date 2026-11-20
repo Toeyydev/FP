@@ -7,6 +7,7 @@ import { OperatorNav } from "@/components/OperatorNav";
 import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import HistoricalBacklog from "@/components/HistoricalBacklog";
+import UpcomingAssigned from "@/components/UpcomingAssigned";
 
 type Assignment ={ guideId: string; guideName: string; date: string; slotIdx: number; time: string; tourId: string; tourName: string; pax: number | null; note: string | null; state: string; checkedAt: string | null; arrived?: number | null; takesNewBookings?: boolean; overdue: boolean };
 type Offer = { id: string; tourId: string; tourName: string; date: string; slotIdx: number; time: string; pax: number | null; note: string | null; status: string; expiresAt: string; assignedGuide: string | null; candidates: number; accepted: string[]; denied: string[]; pending: number; awaiting: string[]; soloGuideId: string | null };
@@ -214,7 +215,7 @@ export default function Dispatch() {
 
       {tab === "historical" ? (
         <HistoricalBacklog />
-      ) : tab === "assigned" ? (
+      ) : tab === "assigned" ? (<>
         <section className="panel">
           <div className="panel-head"><h2>On-going tours</h2><span className="hint" style={{ color: msg ? "var(--green,#1a7f37)" : undefined, fontWeight: msg ? 600 : undefined }}>{msg || "Today only — auto-updates"}</span></div>
           <div style={{ padding: 14 }}>
@@ -255,7 +256,8 @@ export default function Dispatch() {
             })()}
           </div>
         </section>
-      ) : (
+        <UpcomingAssigned />
+      </>) : (
         <section className="panel">
           <div className="panel-head"><h2>Job offers</h2>{selected.size > 0 ? <button className="btn sm danger" onClick={removeSelected}>🗑 Remove selected ({selected.size})</button> : <span className="hint">Tick the tours to remove several at once</span>}</div>
           <div style={{ padding: 14 }}>
