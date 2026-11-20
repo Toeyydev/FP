@@ -1276,6 +1276,7 @@ model GuidePaymentAdjustment {
 model GuidePaymentDocument {
   id                 String    @id @default(cuid())
   paymentRef         String    @unique // FOLK-PAY-YYYYMM-NN — sent to PEAK as the document reference
+  peakPaymentConfirmedAt DateTime? // PEAK confirmed the payment: never payable again, whatever failed locally after
   guideId            String
   paymentDate        String? // "YYYY-MM-DD" — set when the payment is recorded (stage 2)
   paymentMethodId    String? // PEAK payment method (the Paid By account) — set at stage 2

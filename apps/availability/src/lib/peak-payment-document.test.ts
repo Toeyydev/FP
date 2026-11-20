@@ -68,7 +68,7 @@ function fakeStore(opts: {
   const doc = { status: "NONE", documentNo: null as string | null, documentId: null as string | null };
   const calls = {
     claim: 0, createExpense: [] as Record<string, unknown>[], created: 0, createFailed: [] as { uncertain: boolean }[],
-    claimPayment: 0, check: 0, upload: 0, pay: [] as Record<string, unknown>[], paid: 0, payFailed: [] as { uncertain: boolean }[], attach: 0, notify: 0,
+    claimPayment: 0, check: 0, upload: 0, pay: [] as Record<string, unknown>[], paid: 0, peakConfirmed: 0, conflicts: [] as string[], payFailed: [] as { uncertain: boolean }[], attach: 0, notify: 0,
   };
   const create: CreateDocumentDeps = {
     async claim(d) {
@@ -110,6 +110,8 @@ function fakeStore(opts: {
       if (typeof opts.pay === "function") opts.pay();
       return (opts.pay as PaymentWriteResult) ?? { ok: true, remainPaymentAmount: 0, remainWhtAmount: 0 };
     },
+    async notePeakPaid() { calls.peakConfirmed++; },
+    async recordPaidConflict(p) { calls.conflicts.push(p.reason); if (doc.status === "PAYING") doc.status = "PAYMENT_UNCERTAIN"; },
     async recordPaid(p) {
       if (opts.recordPaidFails) throw new Error("database unavailable");
       calls.paid++;
@@ -553,6 +555,23 @@ describe("order of operations — stage 2, paying the document", () => {
     expect(res).toMatchObject({ status: "PAID", notified: false });
     if (res.status === "PAID") expect(res.recordError).toContain("could not mark the jobs paid");
     expect(calls.notify).toBe(0);
+  });
+
+  it("PEAK paid, then the local write failed: stamped confirmed first, left PAYMENT_UNCERTAIN, never payable again", async () => {
+    const { calls, doc, pay, payInput } = await ready({ recordPaidFails: true });
+    await payCombinedDocument(pay, payInput());
+    expect(calls.peakConfirmed).toBe(1);
+    expect(calls.conflicts).toHaveLength(1);
+    expect(doc.status).toBe("PAYMENT_UNCERTAIN");
+    expect(calls.payFailed).toHaveLength(0); // never the "nothing was paid" path
+    await expect(payCombinedDocument(pay, payInput())).rejects.toThrow("not awaiting payment");
+    expect(calls.pay).toHaveLength(1);
+  });
+
+  it("the confirmed stamp is only set after PEAK said paid", async () => {
+    const { calls, pay, payInput } = await ready({ pay: { ok: false, uncertain: true, desc: "timeout" } as never });
+    await payCombinedDocument(pay, payInput());
+    expect(calls.peakConfirmed).toBe(0);
   });
 });
 

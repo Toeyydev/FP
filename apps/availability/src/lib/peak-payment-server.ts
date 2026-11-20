@@ -733,6 +733,15 @@ export function prismaPayDeps(opts: {
       await markDocumentPaid({ paymentRef, documentNo: docNo, documentId: doc.peakDocumentId, slipLink: slipLink || null, bankRef: bankRefNormalized, slipAmount: opts.slipAmount, verified: opts.verified, paymentDate: current?.paymentDate ?? bangkokToday(), actor, alreadyPaid: !!doc.alreadyPaid });
     },
 
+    async notePeakPaid({ paymentRef }) {
+      await prisma.guidePaymentDocument.updateMany({ where: { paymentRef, status: { in: ["PAYING", "PAYMENT_UNCERTAIN"] }, peakPaymentConfirmedAt: null }, data: { peakPaymentConfirmedAt: new Date() } });
+    },
+
+    async recordPaidConflict({ paymentRef, reason }) {
+      await prisma.guidePaymentDocument.updateMany({ where: { paymentRef, status: "PAYING" }, data: { status: "PAYMENT_UNCERTAIN", error: reason } });
+      await audit({ ...actor, action: "pay.peak_payment_record_conflict", entityType: "GuidePaymentDocument", detail: { paymentRef, documentNo: docNo, reason } });
+    },
+
     async recordPaymentFailed({ paymentRef, reason, uncertain }) {
       if (uncertain) {
         await prisma.guidePaymentDocument.updateMany({ where: { paymentRef, status: "PAYING" }, data: { status: "PAYMENT_UNCERTAIN", error: reason } });
@@ -953,8 +962,10 @@ export async function resolvePaymentDocument(
   if (r.resolution === "payment-found" || r.resolution === "payment-not-found") {
     if (st !== "PAYMENT_UNCERTAIN" && st !== "PAYING") return { ok: false, status: 409, error: `This document is ${String(st ?? doc.status).toLowerCase()}, not waiting on PEAK to confirm a payment` };
     if (r.resolution === "payment-not-found") {
+      // PEAK itself confirmed this payment: it is never "not found" — paying again would pay twice.
+      if (doc.peakPaymentConfirmedAt) return { ok: false, status: 409, error: `PEAK confirmed the payment on ${doc.peakDocumentNo ?? "this document"} — record it as found (fix what stopped FolkOPS marking the jobs), never pay it again` };
       await prisma.guidePaymentDocument.updateMany({
-        where: { paymentRef, status: { in: ["PAYMENT_UNCERTAIN", "PAYING"] } },
+        where: { paymentRef, status: { in: ["PAYMENT_UNCERTAIN", "PAYING"] }, peakPaymentConfirmedAt: null },
         // The whole claim is withdrawn, evidence included: a bank reference must not stay
         // recorded against a document that settles nothing.
         data: {
