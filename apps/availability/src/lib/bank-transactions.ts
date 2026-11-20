@@ -6,7 +6,8 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 // which the database checks (an ACTIVE ADMIN user, this action, this transaction).
 //
 // `admin` must come from the authenticated session (lib/auth), never from a request body: these
-// are not exposed by any route yet (PR4-0b brings the Admin screen, mockup first).
+// are not exposed by any route yet (PR4-0b brings the Admin screen, mockup first). The database
+// checks the AuditLog row again (bank_tx_admin_audit), so a forged role here gains nothing.
 
 export type BankAdmin = { actorId: string; actorRole: string };
 
@@ -16,15 +17,36 @@ export class BankTxRefused extends Error {}
  * The registry's refusal (a BANK_TX_* error raised by its triggers) in words for the person
  * recording: null for any other error. Lets a service answer 409 instead of failing with 500.
  */
+// Only the ledger's own refusals: a BANK_TX_GUARD from an application write means the code wrote
+// something its source rows do not say — a bug, left to fail loudly (500), never dressed as a 409.
+const REFUSALS = {
+  OVERUSED: "This bank transfer is already fully recorded elsewhere — even a reversed record keeps its share, because the money moved. If it is the same money re-recorded, an Admin must hand it on to the new record.",
+  AMBIGUOUS: "This bank reference is on more than one Folkpaths account — choose the account it was sent from.",
+  GROUP: "The parts of this one bank transfer do not agree on what it moved in all — reload and record it again.",
+} as const;
+
 export function bankTxRefusal(e: unknown): string | null {
-  const m = /BANK_TX_(OVERUSED|AMBIGUOUS|GROUP_TOTAL_MISSING|GROUP_TOTAL_MISMATCH|GUARD)/.exec(String((e as Error | null)?.message ?? ""));
+  const m = /BANK_TX_(OVERUSED|AMBIGUOUS|GROUP_TOTAL_MISSING|GROUP_TOTAL_MISMATCH)\b/.exec(String((e as Error | null)?.message ?? ""));
   if (!m) return null;
-  switch (m[1]) {
-    case "OVERUSED": return "This bank transfer is already fully recorded elsewhere — even a reversed record keeps its share, because the money moved. If it is the same money re-recorded, an Admin must hand it on to the new record.";
-    case "AMBIGUOUS": return "This bank reference is on more than one Folkpaths account — choose the account it was sent from.";
-    case "GROUP_TOTAL_MISSING": case "GROUP_TOTAL_MISMATCH": return "The parts of this one bank transfer do not agree on what it moved in all — reload and record it again.";
-    default: return "The bank registry refused this change — it does not match the recorded transfers.";
-  }
+  return m[1] === "OVERUSED" ? REFUSALS.OVERUSED : m[1] === "AMBIGUOUS" ? REFUSALS.AMBIGUOUS : REFUSALS.GROUP;
+}
+
+type Reader = Pick<PrismaClient, "$queryRaw">;
+
+/**
+ * Asked BEFORE writing a record that names a bank transfer: the reason it would be refused, or
+ * null. Read-only; the database triggers remain the authority when two people write at once
+ * (the caller still maps a trigger refusal with bankTxRefusal). `source` is the record itself,
+ * when it already exists (verifying a claim): its own share is not counted against it.
+ */
+export async function bankTxPrecheck(db: Reader | Tx, input: { direction: "IN" | "OUT"; ref: string | null | undefined; amountSatang: number | null; account?: string | null; source?: { table: string; id: string } }): Promise<string | null> {
+  if (!(input.ref ?? "").trim()) return null;
+  const [room] = await (db as Reader).$queryRaw<{ state: string; amount: number | null; applied: bigint | null }[]>`
+    SELECT * FROM bank_tx_room(${input.direction}, ${input.ref}, ${input.account ?? null}, ${input.source?.table ?? null}, ${input.source?.id ?? null})`;
+  if (!room) return null;
+  if (room.state === "AMBIGUOUS") return REFUSALS.AMBIGUOUS;
+  if (room.state !== "OK" || room.amount == null || input.amountSatang == null) return null;
+  return Number(room.applied ?? 0) + input.amountSatang > room.amount ? REFUSALS.OVERUSED : null;
 }
 
 type Tx = Prisma.TransactionClient;

@@ -2,6 +2,7 @@
 // the database, and supplies the side effects lib/peak-payment-document orders — for
 // stage 1 (create the PEAK expense document) and stage 2 (record its payment).
 import { driveMonth } from "@/lib/drive-month";
+import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
 import { isHistoricalPayment } from "@/lib/payments-v2/rules";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -633,6 +634,12 @@ export function prismaPayDeps(opts: {
         });
         const held = holders.find((h) => h.paymentRef !== p.paymentRef);
         if (held) throw new PaymentClaimRefused(bankRefTaken(bankRef, held));
+        // A document only describes its transfer, so the registry can refuse it for one reason:
+        // the reference names transfers on two accounts and this one does not say which.
+        if (!doc.alreadyPaid) {
+          const ambiguous = await bankTxPrecheck(prisma, { direction: "OUT", ref: bankRef, account: opts.bankAccountKey, amountSatang: null });
+          if (ambiguous) throw new PaymentClaimRefused(ambiguous);
+        }
       }
       try {
         await prisma.$transaction(async (tx) => {
@@ -671,6 +678,8 @@ export function prismaPayDeps(opts: {
             : null;
           throw new PaymentClaimRefused(bankRefTaken(bankRef, other));
         }
+        const refused = bankTxRefusal(e);
+        if (refused) throw new PaymentClaimRefused(refused);
         throw e;
       }
       await audit({

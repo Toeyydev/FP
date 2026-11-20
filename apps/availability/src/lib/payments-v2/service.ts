@@ -24,7 +24,7 @@ import {
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
 import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
-import { bankTxRefusal } from "@/lib/bank-transactions";
+import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 export type Actor = { actorId: string | null; actorRole: string | null };
@@ -215,6 +215,13 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
   const supplementFacts = await loadSupplementFacts(tx, input.supplements);
   const check = checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), supplements: supplementFacts, ...(await evidenceContext(tx, input)) });
   if (check.reasons.length) return { ok: false, code: "invalid", reasons: check.reasons, reconciliation: check.reconciliation };
+  // The same transfer recorded in any other system (an advance, a refund, a reversed payment):
+  // refused with a reason here, so callers inside a wider transaction (slip match, PEAK
+  // document) can route it to review instead of failing the whole request.
+  const elsewhere = (input.transfers ?? []).length
+    ? (await Promise.all((input.transfers ?? []).map((part) => bankTxPrecheck(tx, { direction: "OUT", ref: part.bankRef, amountSatang: toSatang(part.amount) })))).find(Boolean) ?? null
+    : await bankTxPrecheck(tx, { direction: "OUT", ref: input.bankRef, amountSatang: toSatang(check.reconciliation.amountTransferred) });
+  if (elsewhere) return { ok: false, code: "invalid", reasons: [elsewhere], reconciliation: check.reconciliation };
 
   // A line still active on a REVERSED payment can only come from a build without this
   // feature reversing it; it holds nothing, so it is closed before this payment's line.
@@ -485,8 +492,27 @@ export async function addMissingTransfers(prisma: PrismaClient, input: MissingTr
     ...input.added.map((a, i) => ({ seq: i + 2, amount: a.amount, transferDate: a.date, bankRef: t(a.bankRef), slipUrl: a.slip?.url ?? null, evidenceId: a.slip?.evidenceId ?? null })),
   ];
   const last = parts[parts.length - 1];
+  // The added transfers must be free everywhere, not only among guide payments.
+  for (const a of parts.slice(1)) {
+    const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: a.bankRef, amountSatang: toSatang(a.amount) });
+    if (elsewhere) return { ok: false, status: 409, reasons: [`Transfer ${a.seq}: ${elsewhere}`] };
+  }
+  const detail = {
+    paymentNo: p.paymentNo, guideId: p.guideId, reason,
+    note: "evidence corrected; jobs, figures, WHT, payment date and PEAK document unchanged",
+    before: { amountTransferred: Number(p.amountTransferred), transfers: 1, bankRef: p.bankRef, slip: !!p.slipUrl },
+    after: { amountTransferred: Number(p.amountTransferred), transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slip: !!x.slipUrl })) },
+  };
   try {
     await prisma.$transaction(async (tx) => {
+      // The bank registry narrows the recorded reference to transfer 1 only on THIS audited
+      // action (bank_tx_transfers_audit): the audit is written first, in the same transaction,
+      // and keeps the transfer's amount and provenance as they were.
+      const held = await tx.bankTransactionUse.findFirst({ where: { sourceTable: "GuidePayment", sourceId: p.id, live: true }, include: { transaction: true } });
+      await tx.auditLog.create({ data: {
+        actorId: input.actor.actorId, actorRole: input.actor.actorRole, action: "payment.transfers_added", entityType: "GuidePayment", entityId: p.id,
+        detail: { ...detail, registry: held ? { transactionId: held.transactionId, amountSatang: held.transaction.amountSatang, amountSource: held.transaction.amountSource } : null },
+      } });
       // Only while it is still recorded as one transfer — a second press, or a reversal in
       // between, changes nothing.
       const moved = await tx.guidePayment.updateMany({
@@ -500,16 +526,9 @@ export async function addMissingTransfers(prisma: PrismaClient, input: MissingTr
     });
   } catch (e) {
     if (e instanceof PaymentConflict) return { ok: false, status: 409, reasons: [e.message] };
+    const refused = bankTxRefusal(e);
+    if (refused) return { ok: false, status: 409, reasons: [refused] };
     throw e;
   }
-  await audit({
-    ...input.actor, action: "payment.transfers_added", entityType: "GuidePayment", entityId: p.id,
-    detail: {
-      paymentNo: p.paymentNo, guideId: p.guideId, reason,
-      note: "evidence corrected; jobs, figures, WHT, payment date and PEAK document unchanged",
-      before: { amountTransferred: Number(p.amountTransferred), transfers: 1, bankRef: p.bankRef, slip: !!p.slipUrl },
-      after: { amountTransferred: Number(p.amountTransferred), transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slip: !!x.slipUrl })) },
-    },
-  });
   return { ok: true, paymentNo: p.paymentNo, transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slipUrl: x.slipUrl })) };
 }

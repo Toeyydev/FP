@@ -30,7 +30,7 @@ import { DUPLICATE_TRANSFER, duplicateTransferReasons, liveAdvanceForTransfer, t
 import type { StoredSlipCheck } from "@/lib/advances/slip-check";
 import { checkSettlementLines, markSettled, settlementRequestKey, unmarkSettled, type LineRequest, type SheetRow } from "@/lib/advances/settlement";
 import { parseBangkokDateTime } from "@/lib/bangkok-time";
-import { bankTxRefusal } from "@/lib/bank-transactions";
+import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
 import {
   MIN_REASON, advanceNoFor, advanceSummary, checkAllocations, isBookedInGuidePayment, checkConfirmation, checkDeduction, checkIssueAdvance, checkReceipt, checkReversal,
   fromSatang, idempotencyKeyFor, outstandingSatang, periodOf, receiptNoFor, toSatang, type SettlementStatus,
@@ -173,6 +173,9 @@ export async function issueAdvance(prisma: PrismaClient, input: IssueAdvanceInpu
     ({ ...fail(409, ...duplicateTransferReasons(existing, { amount: input.amount, advanceDate: input.advanceDate })), code: DUPLICATE_TRANSFER, duplicateOf: existing });
   const already = await duplicate();
   if (already) return refuseDuplicate(already);
+  // The same transfer recorded anywhere else (a guide payment, a refund, a reversed advance).
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: input.bankRef, amountSatang });
+  if (elsewhere) return { ...fail(409, elsewhere), code: DUPLICATE_TRANSFER };
 
   // Which job this advance belongs to decides which job sheet shows it (the legacy
   // columns date + slotIdx are the job key). A Job No. is resolved to its own sheet and
@@ -269,6 +272,8 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
   }
   const link = await loadReturnLink(prisma, { guideId: input.guideId }, input.advanceId ?? null, input.jobSheetId ?? null);
   if (!link.ok) return link;
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "IN", ref: bankRef, amountSatang });
+  if (elsewhere) return fail(409, elsewhere);
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -294,6 +299,8 @@ export async function recordReceipt(prisma: PrismaClient, input: ReceiptInput & 
       return { ok: true, receipt };
     } catch (e) {
       if (isUnique(e) && attempt < 2) continue;
+      const refused = bankTxRefusal(e);
+      if (refused) return fail(409, refused);
       throw e;
     }
   }
@@ -315,10 +322,19 @@ export async function verifyReceipt(prisma: PrismaClient, input: { receiptId: st
     const clash = await prisma.guideAdvanceReceipt.findFirst({ where: { guideId: receipt.guideId, bankRef, id: { not: receipt.id } }, select: { receiptNo: true } });
     if (clash) return fail(409, `Bank reference ${bankRef} is already recorded on ${clash.receiptNo}`);
   }
-  const moved = await prisma.guideAdvanceReceipt.updateMany({
-    where: { id: input.receiptId, status: "CLAIMED" },
-    data: { status: "VERIFIED", verifiedAt: new Date(), verifiedById: input.actor.actorId, ...(input.bankAccount ? { bankAccount: input.bankAccount } : {}), ...(bankRef ? { bankRef } : {}) },
-  });
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "IN", ref: bankRef ?? receipt.bankRef, amountSatang: receipt.amountSatang, source: { table: "GuideAdvanceReceipt", id: receipt.id } });
+  if (elsewhere) return fail(409, `${receipt.receiptNo}: ${elsewhere}`);
+  let moved: { count: number };
+  try {
+    moved = await prisma.guideAdvanceReceipt.updateMany({
+      where: { id: input.receiptId, status: "CLAIMED" },
+      data: { status: "VERIFIED", verifiedAt: new Date(), verifiedById: input.actor.actorId, ...(input.bankAccount ? { bankAccount: input.bankAccount } : {}), ...(bankRef ? { bankRef } : {}) },
+    });
+  } catch (e) {
+    const refused = bankTxRefusal(e);
+    if (refused) return fail(409, `${receipt.receiptNo}: ${refused}`);
+    throw e;
+  }
   if (moved.count !== 1) return fail(409, `${receipt.receiptNo} is already ${receipt.status.toLowerCase()} — reload the page`);
   await audit({ ...input.actor, action: "advance.return_verified", entityType: "GuideAdvanceReceipt", entityId: receipt.id, detail: {
     receiptNo: receipt.receiptNo, guideId: receipt.guideId, amount: fromSatang(receipt.amountSatang), bankRef,
@@ -329,12 +345,27 @@ export async function verifyReceipt(prisma: PrismaClient, input: { receiptId: st
 
 export async function rejectReceipt(prisma: PrismaClient, input: { receiptId: string; reason: string; actor: Actor }): Promise<{ ok: true } | Fail> {
   if ((input.reason ?? "").trim().length < 5) return fail(400, "Say why this return could not be confirmed");
-  const moved = await prisma.guideAdvanceReceipt.updateMany({
-    where: { id: input.receiptId, status: "CLAIMED" },
-    data: { status: "REJECTED", rejectedReason: input.reason.trim() },
-  });
-  if (moved.count !== 1) return fail(409, "Only a return that is still waiting to be checked can be rejected");
-  await audit({ ...input.actor, action: "advance.return_rejected", entityType: "GuideAdvanceReceipt", entityId: input.receiptId, detail: { reason: input.reason.trim() } });
+  if (!input.actor.actorId) return fail(403, "A rejection is made by a signed-in person");
+  // A rejected claim stops holding its bank reference (lib/bank-transactions), so who rejected it
+  // and why are on the row, and the audit is written in the SAME transaction — the database
+  // refuses the rejection without it.
+  try {
+    await prisma.$transaction(async (tx) => {
+      const r = await tx.guideAdvanceReceipt.findUnique({ where: { id: input.receiptId }, select: { receiptNo: true, guideId: true, amountSatang: true, bankRef: true } });
+      await tx.auditLog.create({ data: {
+        actorId: input.actor.actorId, actorRole: input.actor.actorRole, action: "advance.return_rejected", entityType: "GuideAdvanceReceipt", entityId: input.receiptId,
+        detail: { reason: input.reason.trim(), receiptNo: r?.receiptNo ?? null, guideId: r?.guideId ?? null, amount: r ? fromSatang(r.amountSatang) : null, bankRef: r?.bankRef ?? null },
+      } });
+      const moved = await tx.guideAdvanceReceipt.updateMany({
+        where: { id: input.receiptId, status: "CLAIMED" },
+        data: { status: "REJECTED", rejectedReason: input.reason.trim(), rejectedById: input.actor.actorId, rejectedAt: new Date() },
+      });
+      if (moved.count !== 1) throw new LedgerConflict("Only a return that is still waiting to be checked can be rejected");
+    });
+  } catch (e) {
+    if (e instanceof LedgerConflict) return fail(409, e.message);
+    throw e;
+  }
   return { ok: true };
 }
 
@@ -503,6 +534,10 @@ export async function voidReceipt(prisma: PrismaClient, input: { receiptId: stri
   if (inPeak) return fail(409, `${r.receiptNo} is in PEAK (${inPeak}) — reverse it in PEAK first; nothing was changed here`);
   try {
     await prisma.$transaction(async (tx) => {
+      // In the same transaction: voiding an unverified claim releases its hold on the bank
+      // reference, which the database allows only with this audit row.
+      await tx.auditLog.create({ data: { actorId: input.actor.actorId, actorRole: input.actor.actorRole, action: "advance.return_voided", entityType: "GuideAdvanceReceipt", entityId: r.id,
+        detail: { receiptNo: r.receiptNo, guideId: r.guideId, amount: fromSatang(r.amountSatang), from: r.status, reason: input.reason.trim() } } });
       const moved = await tx.guideAdvanceReceipt.updateMany({
         where: { id: r.id, status: { in: ["CLAIMED", "VERIFIED"] }, allocatedSatang: 0, refundedSatang: 0 },
         data: { status: "VOIDED", voidedAt: new Date(), voidedById: input.actor.actorId ?? "unknown", voidReason: input.reason.trim() },
@@ -519,7 +554,6 @@ export async function voidReceipt(prisma: PrismaClient, input: { receiptId: stri
     if (e instanceof LedgerConflict) return fail(409, e.message);
     throw e;
   }
-  await audit({ ...input.actor, action: "advance.return_voided", entityType: "GuideAdvanceReceipt", entityId: r.id, detail: { receiptNo: r.receiptNo, guideId: r.guideId, amount: fromSatang(r.amountSatang), from: r.status, reason: input.reason.trim() } });
   return { ok: true };
 }
 
@@ -584,6 +618,8 @@ export async function payRefund(prisma: PrismaClient, input: { refundId: string;
   if (f.status !== "APPROVED") return fail(409, `${f.refundNo} is ${f.status.toLowerCase()} — a refund is paid only after it is approved`);
   const clash = await prisma.guideAdvanceRefund.findFirst({ where: { guideId: f.guideId, bankRef, id: { not: f.id } }, select: { refundNo: true } });
   if (clash) return fail(409, `Bank reference ${bankRef} is already recorded on ${clash.refundNo}`);
+  const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: bankRef, amountSatang: f.amountSatang });
+  if (elsewhere) return fail(409, `${f.refundNo}: ${elsewhere}`);
   try {
     await prisma.$transaction(async (tx) => {
       const moved = await tx.guideAdvanceRefund.updateMany({ where: { id: f.id, status: "APPROVED" }, data: { status: "PAID", paidAt, paidById: input.actor.actorId ?? "unknown", bankRef, slipUrl: input.slipUrl ?? null, slipFileId: input.slipFileId ?? null } });
@@ -597,6 +633,8 @@ export async function payRefund(prisma: PrismaClient, input: { refundId: string;
       return fail(409, e.message);
     }
     if (isUnique(e)) return fail(409, `Bank reference ${bankRef} is already recorded on another refund`);
+    const refused = bankTxRefusal(e);
+    if (refused) return fail(409, `${f.refundNo}: ${refused}`);
     throw e;
   }
   const r = await prisma.guideAdvanceReceipt.findUnique({ where: { id: f.receiptId }, select: { receiptNo: true } });

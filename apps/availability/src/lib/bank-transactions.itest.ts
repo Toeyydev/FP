@@ -1,11 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireTestDatabase, resetDatabase } from "@/test/db";
+import { requireTestDatabase, resetDatabase, seedGuide, workerMatchesEnv } from "@/test/db";
 import { addMissingTransfers } from "@/lib/payments-v2/service";
-import { BankTxRefused, correctTransferAmount, markTransferReviewed, reallocateTransfer } from "./bank-transactions";
+import { approveRefund, issueAdvance, payRefund, recordReceipt, recordRefund, rejectReceipt, verifyReceipt, voidReceipt } from "@/lib/advances/service";
+import { BankTxRefused, bankTxPrecheck, bankTxRefusal, correctTransferAmount, markTransferReviewed, reallocateTransfer } from "./bank-transactions";
 
 // The central bank-transaction registry (PR4-0): one row per real bank movement, linked from
 // every record that names it. Rules and guards are database triggers, so these tests write the
@@ -204,6 +205,22 @@ describe("raw SQL cannot rewrite the registry (an application-role script)", () 
     await fails(prisma.$executeRawUnsafe(`DELETE FROM "BankTransaction"`), /BANK_TX_KEPT/);
   });
 
+  it("cannot pre-seed a transaction: one is born only from the record that names it", async () => {
+    // An empty row, ahead of the real record (it would poison the reference with a wrong account).
+    await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw","refKey","accountKey") VALUES ('seed1','OUT','BANK_REF','KB-2099-0009','KB20990009','ACC:9999999999')`), /BANK_TX_GUARD/);
+    await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw","refKey") VALUES ('seed2','OUT','BANK_REF','KB-2099-0009','KB20990009')`), /BANK_TX_GUARD/);
+    expect(await prisma.bankTransaction.count()).toBe(0);
+    // The real records then link normally, with no false "two accounts".
+    await document("KB-2099-0009", "ACC:1111111111");
+    await payment({ bankRef: "KB-2099-0009" });
+    expect(await tx1()).toMatchObject({ accountKey: "ACC:1111111111", amountSatang: 100000 });
+    // A second row for a reference already recorded is refused even inside a transaction.
+    await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw","refKey","accountKey") VALUES ('seed3','OUT','BANK_REF','KB 2099 0009','KB20990009','ACC:1111111111')`), /BANK_TX_GUARD: a transfer with this reference is already recorded/);
+    await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw","refKey") VALUES ('seed4','OUT','BANK_REF','KB 2099 0009','KB20990009')`), /BANK_TX_GUARD: a transfer with this reference is already recorded/);
+    // (Another account is another transfer — allowed only from a record that names it.)
+    await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw","refKey","accountKey") VALUES ('seed5','OUT','BANK_REF','KB 2099 0009','KB20990009','ACC:2222222222')`), /BANK_TX_GUARD: transfer …0009 has no record/);
+  });
+
   it("the shape checks hold in raw SQL", async () => {
     await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw") VALUES ('x1','OUT','BANK_REF','KB1')`), /check|GUARD/i);
     await fails(prisma.$executeRawUnsafe(`INSERT INTO "BankTransaction" ("id","direction","refStatus","refRaw","refKey") VALUES ('x2','SIDEWAYS','BANK_REF','KB1','KB1')`), /check/i);
@@ -312,11 +329,25 @@ describe("a reversed payment is not a new bank transfer", () => {
 });
 
 describe("advance receipts: a claim is not money until verified", () => {
-  it("a rejected, never-verified claim releases its reservation; a new claim on the reference is allowed", async () => {
+  it("a rejected, never-verified claim releases its reservation — through the audited rejection only", async () => {
+    const op = await user("OPERATOR");
     const r = await receipt("KB-IN-7002", 50000);
     expect(await tx1()).toMatchObject({ amountSatang: 50000, amountSource: "CLAIM" });
     await fails(receipt("KB-IN-7002", 50000, "CLAIMED", "G-902"), /BANK_TX_OVERUSED/); // reserved while claimed
-    await prisma.guideAdvanceReceipt.update({ where: { id: r.id }, data: { status: "REJECTED", rejectedReason: "not on the statement" } });
+    // Not by a raw write, not by an unknown actor, not without a reason.
+    await fails(prisma.guideAdvanceReceipt.update({ where: { id: r.id }, data: { status: "REJECTED", rejectedReason: "not on the statement" } }), /BANK_TX_GUARD/);
+    await fails(prisma.guideAdvanceReceipt.update({ where: { id: r.id }, data: { status: "REJECTED", rejectedReason: "not on the statement", rejectedById: op.actorId } }), /BANK_TX_GUARD/);
+    await fails(rejectReceipt(prisma, { receiptId: r.id, reason: "not on the statement", actor: { actorId: "nobody", actorRole: "ADMIN" } }), /BANK_TX_GUARD/);
+    await fails(prisma.guideAdvanceReceipt.delete({ where: { id: r.id } }), /BANK_TX_GUARD/);
+    // A real operator's audit row from an EARLIER transaction does not authorise a raw rejection.
+    await prisma.auditLog.create({ data: { actorId: op.actorId, actorRole: "OPERATOR", action: "advance.return_rejected", entityType: "GuideAdvanceReceipt", entityId: r.id, detail: { reason: "replayed" } } });
+    await fails(prisma.guideAdvanceReceipt.update({ where: { id: r.id }, data: { status: "REJECTED", rejectedReason: "not on the statement", rejectedById: op.actorId } }), /BANK_TX_GUARD/);
+    await fails(prisma.guideAdvanceReceipt.update({ where: { id: r.id }, data: { bankRef: "KB-IN-7999" } }), /BANK_TX_GUARD/);
+    expect(await useOf("GuideAdvanceReceipt", r.id)).toMatchObject({ live: true });
+    // The operator's rejection: who, why, and its audit in the same transaction.
+    expect(await rejectReceipt(prisma, { receiptId: r.id, reason: "not on the statement (example)", actor: op })).toEqual({ ok: true });
+    expect(await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({ status: "REJECTED", rejectedById: op.actorId, rejectedAt: expect.any(Date) });
+    expect(await prisma.auditLog.findFirstOrThrow({ where: { action: "advance.return_rejected", entityId: r.id } })).toMatchObject({ actorId: op.actorId, actorRole: "OPERATOR" });
     expect(await useOf("GuideAdvanceReceipt", r.id)).toMatchObject({ live: false, verified: false });
     const again = await receipt("KB-IN-7002", 30000, "CLAIMED", "G-902");
     expect(await tx1()).toMatchObject({ amountSatang: 30000, amountSource: "CLAIM" });
@@ -331,7 +362,7 @@ describe("advance receipts: a claim is not money until verified", () => {
 
   it("verified then voided still counts: the money arrived, so the reference cannot be claimed again", async () => {
     const r = await receipt("KB-IN-7004", 50000, "VERIFIED");
-    await prisma.guideAdvanceReceipt.update({ where: { id: r.id }, data: { status: "VOIDED", voidedAt: new Date(), voidedById: "u-admin", voidReason: "recorded on the wrong job" } });
+    expect(await voidReceipt(prisma, { receiptId: r.id, reason: "recorded on the wrong job (example)", actor: await user("ADMIN") })).toEqual({ ok: true });
     expect(await useOf("GuideAdvanceReceipt", r.id)).toMatchObject({ live: false, verified: true });
     await fails(receipt("KB-IN-7004", 50000, "CLAIMED", "G-902"), /BANK_TX_OVERUSED/);
     await fails(receipt("KB-IN-7004", 1, "CLAIMED", "G-903"), /BANK_TX_OVERUSED/);
@@ -357,6 +388,134 @@ describe("Add the missing transfer… (#323), through the real service", () => {
     expect(all.find((t) => t.refKey === "KB20990202")).toMatchObject({ amountSatang: 90000, amountSource: "FIRST_USE" });
     await fails(payment({ bankRef: "KB-2099-0201", amount: 900 }), /BANK_TX_OVERUSED/);
     await fails(payment({ bankRef: "KB-2099-0202", amount: 1 }), /BANK_TX_OVERUSED/);
+    // The audit keeps the old amount, its provenance and the parts with their dates.
+    const a2 = await prisma.auditLog.findFirstOrThrow({ where: { action: "payment.transfers_added", entityId: p.id } });
+    expect(a2).toMatchObject({ actorId: admin.actorId, actorRole: "ADMIN" });
+    expect(a2.detail).toMatchObject({ registry: { amountSatang: 100000, amountSource: "FIRST_USE" }, after: { transfers: [{ seq: 1, amount: 100, date: today }, { seq: 2, amount: 900, date: today }] } });
+  });
+
+  /** The same correction done by hand: clear the payment's reference, add transfer rows. */
+  const byHand = (paymentId: string, today: string, audit?: (db: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<unknown>) =>
+    prisma.$transaction(async (db) => {
+      if (audit) await audit(db);
+      await db.guidePayment.update({ where: { id: paymentId }, data: { bankRef: null } });
+      await db.guidePaymentTransfer.create({ data: { paymentId, seq: 1, amount: 100, transferDate: today, bankRef: "KB-2099-0201" } });
+      await db.guidePaymentTransfer.create({ data: { paymentId, seq: 2, amount: 900, transferDate: today, bankRef: "KB-2099-0202" } });
+    });
+  const auditOf = (paymentId: string, actor: { actorId: string; actorRole: string }, today: string, parts = [{ seq: 1, amount: 100 }, { seq: 2, amount: 900 }]) =>
+    (db: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => db.auditLog.create({ data: { actorId: actor.actorId, actorRole: actor.actorRole, action: "payment.transfers_added", entityType: "GuidePayment", entityId: paymentId,
+      detail: { before: { bankRef: "KB-2099-0201" }, after: { transfers: parts.map((x) => ({ ...x, date: today, bankRef: x.seq === 1 ? "KB-2099-0201" : "KB-2099-0202" })) } } } });
+
+  it("done by hand, without the Admin action, the payment keeps its share: refused, nothing changes", async () => {
+    const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const p = await payment({ bankRef: "KB-2099-0201", amount: 1000, date: today });
+    await fails(byHand(p.id, today), /BANK_TX_OVERUSED/);
+    await fails(byHand(p.id, today, auditOf(p.id, await user("OPERATOR"), today)), /BANK_TX_OVERUSED/);
+    await fails(byHand(p.id, today, auditOf(p.id, { ...(await user("GUIDE")), actorRole: "ADMIN" }, today)), /BANK_TX_OVERUSED/);
+    // An Admin's audit that misdescribes the payment's own earlier reference does not count.
+    const lying = (db: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => db.auditLog.create({ data: { actorId: admin2.actorId, actorRole: "ADMIN", action: "payment.transfers_added", entityType: "GuidePayment", entityId: p.id,
+      detail: { before: { bankRef: "KB-2099-0999" }, after: { transfers: [{ seq: 1, amount: 100, date: today, bankRef: "KB-2099-0201" }, { seq: 2, amount: 900, date: today, bankRef: "KB-2099-0202" }] } } } });
+    const admin2 = await user("ADMIN");
+    await fails(byHand(p.id, today, lying), /BANK_TX_OVERUSED/);
+    // An Admin's audit whose parts do not add up to the payment does not count either.
+    await fails(byHand(p.id, today, auditOf(p.id, await user("ADMIN"), today, [{ seq: 1, amount: 100 }, { seq: 2, amount: 800 }])), /BANK_TX_OVERUSED/);
+    expect(await tx1()).toMatchObject({ amountSatang: 100000, amountSource: "FIRST_USE", releases: [] });
+    expect(await prisma.guidePaymentTransfer.count()).toBe(0);
+  });
+});
+
+describe("the read-only precheck services ask before writing", () => {
+  it("says why a record would be refused, without writing — so a caller inside a wider transaction can route it to review", async () => {
+    const p = await payment({ bankRef: "KB-2099-0401", amount: 1000 });
+    const n0 = await prisma.bankTransactionUse.count();
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "kb 2099 0401", amountSatang: 1 })).toMatch(/already fully recorded elsewhere/);
+    expect(await bankTxPrecheck(prisma, { direction: "IN", ref: "KB-2099-0401", amountSatang: 1 })).toBeNull(); // money in is another transfer
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "KB-2099-0402", amountSatang: 1 })).toBeNull(); // nothing yet
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "BANK", amountSatang: 1 })).toBeNull(); // never matched
+    // The record itself is not counted against itself (an edit, a verification).
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "KB-2099-0401", amountSatang: 100000, source: { table: "GuidePayment", id: p.id } })).toBeNull();
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "KB-2099-0401", amountSatang: 100001, source: { table: "GuidePayment", id: p.id } })).toMatch(/already fully recorded/);
+    await reverse(p.id);
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "KB-2099-0401", amountSatang: 1 })).toMatch(/already fully recorded/); // reversed still counts
+    await document("REF-777002", "ACC:1111111111");
+    await document("REF-777002", "ACC:2222222222");
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "REF-777002", amountSatang: 1 })).toMatch(/more than one Folkpaths account/);
+    expect(await bankTxPrecheck(prisma, { direction: "OUT", ref: "REF-777002", account: "ACC:1111111111", amountSatang: 1 })).toBeNull();
+    expect(await prisma.bankTransactionUse.count()).toBe(n0 + 2);
+  });
+
+  it("maps only the ledger's refusals; a guard error is a bug and is not turned into a 409", () => {
+    expect(bankTxRefusal(new Error("ERROR: BANK_TX_OVERUSED: transfer …0001"))).toMatch(/already fully recorded/);
+    expect(bankTxRefusal(new Error("ERROR: BANK_TX_AMBIGUOUS: x"))).toMatch(/more than one/);
+    expect(bankTxRefusal(new Error("ERROR: BANK_TX_GUARD: a link must say"))).toBeNull();
+    expect(bankTxRefusal(new TypeError("cannot read properties of undefined"))).toBeNull();
+  });
+});
+
+describe("application boundaries answer 409 with the reason, never 500", () => {
+  const CONFIG = { advanceAccountCode: "111100", advanceAccountSubId: "sub-advance", bankName: "Company account", bankAccountCode: "111300", bankAccountSubId: "sub-bank", journalTypeIds: { ADVANCE: "5", RETURN: "5", EXPENSE: "5" }, expenseAccounts: {} };
+  beforeEach(async () => {
+    vi.stubEnv("PEAK_ADVANCE_CONFIG", JSON.stringify(CONFIG));
+    vi.stubEnv("ADVANCE_WRITES_FROZEN", "0");
+    vi.stubEnv("ADVANCE_EXISTING_PEAK_LINKS_ENABLED", "0");
+    vi.stubEnv("PEAK_ADVANCE_AUTO_SYNC", "0");
+    await workerMatchesEnv();
+    await seedGuide("G-901");
+    await seedGuide("G-902");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+  const adv = (bankRef: string, op: { actorId: string; actorRole: string }) =>
+    issueAdvance(prisma, { guideId: "G-901", advanceDate: "2099-03-09", amount: 1000, today: "2099-03-10", method: "bank", bankAccount: "sub-bank", bankRef, actor: op });
+
+  it("an advance on a transfer a guide payment already used", async () => {
+    await payment({ bankRef: "KB-2099-0301" });
+    const r = await adv("KB-2099-0301", await user("OPERATOR"));
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(JSON.stringify(r)).toMatch(/already fully recorded elsewhere/);
+    expect(await prisma.guideAdvance.count()).toBe(0);
+  });
+
+  it("an advance on a REVERSED payment's transfer", async () => {
+    const p = await payment({ bankRef: "KB-2099-0302" });
+    await reverse(p.id);
+    expect(await adv("KB-2099-0302", await user("OPERATOR"))).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("a refund paid with an advance's transfer reference", async () => {
+    const [opA, opB] = [await user("OPERATOR"), await user("ADMIN")];
+    expect((await adv("KB-2099-0303", opA)).ok).toBe(true);
+    const rec = await recordReceipt(prisma, { guideId: "G-901", receivedDate: "2099-03-11", amount: 500, byGuide: false, confirmedArrived: true, today: "2099-12-31", bankRef: "KB-IN-0303", actor: opA });
+    expect(rec.ok, JSON.stringify(rec)).toBe(true);
+    const f = await recordRefund(prisma, { receiptId: rec.ok ? rec.receipt.id : "", amount: 100, reason: "guide sent too much (example)", actor: opA });
+    if (!f.ok) throw new Error(JSON.stringify(f));
+    expect(await approveRefund(prisma, { refundId: f.refund.id, actor: opB })).toEqual({ ok: true });
+    const paid = await payRefund(prisma, { refundId: f.refund.id, paidAt: "2026-09-30T04:00:00Z", bankRef: "KB-2099-0303", actor: opA });
+    expect(paid).toMatchObject({ ok: false, status: 409 });
+    expect(JSON.stringify(paid)).toMatch(/already fully recorded elsewhere/);
+  });
+
+  it("a guide's second return on another guide's verified transfer — at recording and at verification", async () => {
+    const op = await user("OPERATOR");
+    const first = await recordReceipt(prisma, { guideId: "G-901", receivedDate: "2099-03-11", amount: 500, byGuide: false, confirmedArrived: true, today: "2099-12-31", bankRef: "KB-IN-0304", actor: op });
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    const again = await recordReceipt(prisma, { guideId: "G-902", receivedDate: "2099-03-11", amount: 500, byGuide: false, confirmedArrived: true, today: "2099-12-31", bankRef: "KB-IN-0304", actor: op });
+    expect(again).toMatchObject({ ok: false, status: 409 });
+    const claim = await recordReceipt(prisma, { guideId: "G-902", receivedDate: "2099-03-11", amount: 500, byGuide: true, today: "2099-12-31", bankRef: null, actor: { actorId: null, actorRole: "GUIDE" } });
+    if (!claim.ok) throw new Error(JSON.stringify(claim));
+    const v = await verifyReceipt(prisma, { receiptId: claim.receipt.id, bankRef: "KB-IN-0304", actor: op });
+    expect(v).toMatchObject({ ok: false, status: 409 });
+    expect((await prisma.guideAdvanceReceipt.findUniqueOrThrow({ where: { id: claim.receipt.id } })).status).toBe("CLAIMED");
+  });
+
+  it("a missing transfer whose reference an advance already used", async () => {
+    const admin = await user("ADMIN");
+    const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    expect((await adv("KB-2099-0305", await user("OPERATOR"))).ok).toBe(true);
+    const p = await payment({ bankRef: "KB-2099-0306", amount: 1000, date: today });
+    const r = await addMissingTransfers(prisma, { paymentId: p.id, recordedAmount: 100, reason: "the recorded slip shows 100 (example)", added: [{ amount: 900, date: today, bankRef: "KB-2099-0305", slip: { url: "https://example.test/slip" } }], actor: admin });
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(JSON.stringify(r)).toMatch(/already fully recorded elsewhere/);
+    expect(await prisma.guidePaymentTransfer.count()).toBe(0);
   });
 });
 
@@ -463,17 +622,22 @@ describe("the backfill in the migration", () => {
     expect(await prisma.bankTransactionUse.count()).toBe(5);
   });
 
-  it("a payment reversed and recorded again before the registry: linked, lineage kept, flagged for review", async () => {
+  it("a payment reversed and recorded again before the registry: STOPS, names both documents, writes nothing", async () => {
+    let first = "", second = "";
     await history(async () => {
-      await payment({ bankRef: "KB-2099-0001", reversedAt: new Date(Date.now() - 60_000), status: "REVERSED" });
-      await payment({ bankRef: "KB-2099-0001" });
+      first = (await payment({ bankRef: "KB-2099-0001", reversedAt: new Date(Date.now() - 60_000), status: "REVERSED" })).paymentNo;
+      second = (await payment({ bankRef: "KB-2099-0001" })).paymentNo;
     });
-    await runBackfill();
-    const t = await tx1();
-    expect(t).toMatchObject({ amountSatang: 100000, reviewStatus: "NEEDS_REVIEW" });
-    expect(t.releases).toEqual([expect.objectContaining({ kind: "HISTORICAL_REUSE" })]);
-    // …and after the migration nobody else can use it.
-    await fails(payment({ bankRef: "KB-2099-0001", amount: 1 }), /BANK_TX_OVERUSED/);
+    const before = await prisma.guidePayment.findMany({ orderBy: { id: "asc" } });
+    let err = "";
+    try { await runBackfill(); } catch (e) { err = String((e as Error).message); }
+    expect(err).toMatch(/BANK_TX_BACKFILL_STOPPED/);
+    expect(err).toMatch(/BANK_TX_OVERUSED/);
+    expect(err).toContain(first);
+    expect(err).toContain(second);
+    expect(await prisma.bankTransaction.count()).toBe(0);
+    expect(await prisma.bankTransactionRelease.count()).toBe(0);
+    expect(await prisma.guidePayment.findMany({ orderBy: { id: "asc" } })).toEqual(before);
   });
 
   it("HISTORICAL provenance is refused outside the migration", async () => {
@@ -487,7 +651,7 @@ describe("the backfill in the migration", () => {
       await payment({ bankRef: "KB-2099-0001" });
       await receipt("KB-IN-7005");
     });
-    await fails(runBackfill(), /BANK_TX_OVERUSED/);
+    await fails(runBackfill(), /BANK_TX_BACKFILL_STOPPED.*BANK_TX_OVERUSED/s);
     expect(await prisma.bankTransaction.count()).toBe(0);
     expect(await prisma.bankTransactionUse.count()).toBe(0);
   });

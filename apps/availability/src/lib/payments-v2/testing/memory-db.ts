@@ -100,5 +100,8 @@ export function memoryDb(seed: Partial<Record<string, Row[]>> = {}) {
     const snapshot = Object.fromEntries(names.map((n) => [n, t[n].map((r) => ({ ...r }))]));
     try { return await fn(db); } catch (e) { for (const n of names) t[n] = snapshot[n]; throw e; }
   };
+  // The bank-transaction registry lives in database triggers and is tested against Postgres
+  // (lib/bank-transactions.itest.ts); here its read-only precheck sees no transfer yet.
+  db.$queryRaw = async () => [];
   return { db: db as any, tables: t };
 }

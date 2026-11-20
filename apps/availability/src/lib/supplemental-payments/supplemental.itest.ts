@@ -503,6 +503,17 @@ describe("a review incentive: paid in full, no withholding tax (owner decision 2
     const again = await pay([other.id], { amountTransferred: 200, bankRef: "BANK-SHARED-0001" });
     expect(again.status).toBe(409);
   });
+  it("through the route: a transfer an advance already used is refused with 409 and nothing is recorded", async () => {
+    const { body } = await create(reviewIncentive());
+    await prisma.guideAdvance.create({ data: {
+      guideId: G, date: "2025-06-30", slotIdx: -1, amount: 200, paidAt: new Date("2025-06-30T03:00:00Z"), method: "bank", txRef: "BANK-ADV-EXAMPLE-0001",
+      advanceNo: "FOLK-ADV-202506-901", advanceDate: "2025-06-30", amountSatang: 20000, accountingPeriod: "2025-06" } });
+    const before = await prisma.guidePayment.count();
+    const r = await pay([body.id], { amountTransferred: 200, bankRef: "BANK-ADV-EXAMPLE-0001" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(JSON.stringify(r.body)).toMatch(/already fully recorded elsewhere/);
+    expect(await prisma.guidePayment.count()).toBe(before);
+  });
   it("a bonus cannot ride in a job's transfer — only a company-borne review incentive can", async () => {
     const { body } = await create(review({ jobs: [] }));
     const fd = new FormData();

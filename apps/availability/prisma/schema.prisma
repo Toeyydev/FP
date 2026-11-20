@@ -1556,6 +1556,8 @@ model GuideAdvanceReceipt {
   verifiedById    String?
   verifiedAt      DateTime?
   rejectedReason  String?
+  rejectedById    String? // who rejected the claim (it releases the claim's hold on its bank reference)
+  rejectedAt      DateTime?
   legacyReturnId  String?   @unique // the GuideAdvanceReturn row this came from
   createdById     String?
   createdAt       DateTime  @default(now())
@@ -2425,7 +2427,7 @@ model BankTransactionRelease {
   transaction   BankTransaction    @relation(fields: [transactionId], references: [id], onDelete: Restrict)
   fromUseId     String             @unique
   fromUse       BankTransactionUse @relation("ReleaseFrom", fields: [fromUseId], references: [id], onDelete: Restrict)
-  kind          String // MOVED_TO_TRANSFERS | REALLOCATION | HISTORICAL_REUSE
+  kind          String // MOVED_TO_TRANSFERS | REALLOCATION
   targetTable   String
   targetId      String
   auditLogId    String? // REALLOCATION: the Admin's AuditLog row, written in the same transaction

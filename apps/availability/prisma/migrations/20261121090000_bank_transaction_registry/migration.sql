@@ -18,12 +18,13 @@
 --       GROUP_TOTAL GuidePayment.transferTotal — what ONE transfer for jobs + reviews moved in
 --                   all (lib/payments-v2 splitTransfer). Never the sum of the parts.
 --       HISTORICAL_GROUP_SUM  only in this migration's backfill, for groups recorded before
---                   transferTotal existed
+--                   transferTotal existed (flagged for review unless exactly jobs + reviews)
 --       CORRECTED   an Admin correction, with its AuditLog row in the same transaction
 --       TRANSFER_ROW  "Add the missing transfer…" (#323): a payment recorded as one transfer
 --                   turned out to be several; the amount narrows to its transfer row's slip
 --                   amount (never grows), and the payment's own share counts nothing
 --     Adding allocations never raises it.
+--   • History is never repaired automatically: the backfill stops on any double use and names it.
 --   • What a transfer pays never exceeds it (BANK_TX_OVERUSED). Counted: every LIVE use, and every
 --     DEAD VERIFIED use — reversing or voiding a record does not undo the bank movement. A dead use
 --     counts nothing only if the money was never seen (a rejected claim). A dead verified use's
@@ -47,6 +48,9 @@
 -- registry rows, and STOPS the whole migration on a real double use.
 
 ALTER TABLE "GuidePayment" ADD COLUMN "transferTotal" DECIMAL(12,2);
+-- Who rejected an ADV return claim, and when (the reason was already kept): a rejection releases
+-- the claim's hold on its bank reference, so it is an attributed, audited act.
+ALTER TABLE "GuideAdvanceReceipt" ADD COLUMN "rejectedById" TEXT, ADD COLUMN "rejectedAt" TIMESTAMP(3);
 ALTER TABLE "GuidePayment" ADD CONSTRAINT "GuidePayment_transfer_total_check"
   CHECK ("transferTotal" IS NULL OR ("transferGroup" IS NOT NULL AND "transferTotal" > 0 AND "amountTransferred" <= "transferTotal"));
 
@@ -140,7 +144,7 @@ ALTER TABLE "BankTransactionUse"
   ADD CONSTRAINT "BankTransactionUse_amount_check" CHECK (("role" = 'USE') = ("amountSatang" IS NOT NULL) AND ("amountSatang" IS NULL OR "amountSatang" > 0));
 
 ALTER TABLE "BankTransactionRelease"
-  ADD CONSTRAINT "BankTransactionRelease_kind_check" CHECK ("kind" IN ('MOVED_TO_TRANSFERS', 'REALLOCATION', 'HISTORICAL_REUSE')),
+  ADD CONSTRAINT "BankTransactionRelease_kind_check" CHECK ("kind" IN ('MOVED_TO_TRANSFERS', 'REALLOCATION')),
   ADD CONSTRAINT "BankTransactionRelease_reason_check" CHECK (length(btrim("reason")) >= 5),
   ADD CONSTRAINT "BankTransactionRelease_audit_check" CHECK (("kind" = 'REALLOCATION') = ("auditLogId" IS NOT NULL));
 
@@ -257,6 +261,33 @@ CREATE FUNCTION bank_tx_admin_audit(p_audit text, p_action text, p_tx text) RETU
        AND a.xmin::text::bigint = txid_current() % 4294967296)
 $$ LANGUAGE sql STABLE;
 
+-- An AuditLog row written IN THIS TRANSACTION, by an ACTIVE user of one of p_roles, as p_actor.
+CREATE FUNCTION bank_tx_actor_audit(p_actions text[], p_entity_type text, p_entity text, p_actor text, p_roles text[]) RETURNS boolean AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM "AuditLog" a JOIN "User" u ON u."id" = a."actorId"
+     WHERE a."action" = ANY (p_actions) AND a."entityType" = p_entity_type AND a."entityId" = p_entity
+       AND a."actorId" = p_actor AND u."role"::text = ANY (p_roles) AND a."actorRole" = u."role"::text AND u."state"::text = 'ACTIVE'
+       AND a.xmin::text::bigint = txid_current() % 4294967296)
+$$ LANGUAGE sql STABLE;
+
+-- "Add the missing transfer…" (#323), as the Admin action wrote it IN THIS TRANSACTION: the parts
+-- add up to the payment, this transfer row is one of them (amount, date, reference), and its
+-- reference is the payment's own earlier one — only that reference is narrowed.
+CREATE FUNCTION bank_tx_transfers_audit(p_transfer text) RETURNS boolean AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM "GuidePaymentTransfer" t JOIN "GuidePayment" p ON p."id" = t."paymentId"
+      JOIN "AuditLog" a ON a."action" = 'payment.transfers_added' AND a."entityType" = 'GuidePayment' AND a."entityId" = p."id"
+      JOIN "User" u ON u."id" = a."actorId"
+     WHERE t."id" = p_transfer
+       AND a."actorRole" = 'ADMIN' AND u."role"::text = 'ADMIN' AND u."state"::text = 'ACTIVE'
+       AND a.xmin::text::bigint = txid_current() % 4294967296
+       AND folk_tx_ref_key(a."detail"->'before'->>'bankRef') = folk_tx_ref_key(t."bankRef")
+       AND (SELECT sum(round((x->>'amount')::numeric * 100)) FROM jsonb_array_elements(a."detail"->'after'->'transfers') x) = round(p."amountTransferred" * 100)
+       AND EXISTS (SELECT 1 FROM jsonb_array_elements(a."detail"->'after'->'transfers') x
+                    WHERE (x->>'seq')::int = t."seq" AND round((x->>'amount')::numeric * 100) = round(t."amount" * 100)
+                      AND x->>'date' = t."transferDate" AND folk_tx_ref_key(x->>'bankRef') IS NOT DISTINCT FROM folk_tx_ref_key(t."bankRef")))
+$$ LANGUAGE sql STABLE;
+
 -- ─── Guards: every write must match the sources ────────────────────────────────────────────
 
 CREATE FUNCTION bank_tx_guard_tx() RETURNS trigger AS $$
@@ -272,6 +303,13 @@ BEGIN
     END IF;
     IF NEW."refStatus" = 'BANK_REF' AND (NEW."refKey" IS DISTINCT FROM folk_tx_ref_key(NEW."refRaw") OR NEW."refKey" !~ '[0-9]') THEN
       RAISE EXCEPTION 'BANK_TX_GUARD: refKey must be folk_tx_ref_key(refRaw) and hold a digit';
+    END IF;
+    -- Only when no transfer with this reference could be meant already (as bank_tx_sync decides):
+    -- a pre-made row cannot claim a reference or an account ahead of the real record.
+    IF NEW."refStatus" = 'BANK_REF' AND EXISTS (
+         SELECT 1 FROM "BankTransaction" b WHERE b."direction" = NEW."direction" AND b."refStatus" = 'BANK_REF' AND b."refKey" = NEW."refKey"
+            AND (NEW."accountKey" IS NULL OR b."accountKey" IS NULL OR b."accountKey" = NEW."accountKey")) THEN
+      RAISE EXCEPTION 'BANK_TX_GUARD: a transfer with this reference is already recorded — records link to it, never a second one';
     END IF;
     IF NEW."refStatus" = 'PENDING_VERIFICATION' AND (folk_tx_ref_key(NEW."refRaw") IS NULL OR folk_tx_ref_key(NEW."refRaw") ~ '[0-9]' OR NEW."reviewStatus" <> 'NEEDS_REVIEW') THEN
       RAISE EXCEPTION 'BANK_TX_GUARD: only a reference with no digit waits for verification, and it needs review';
@@ -306,7 +344,13 @@ BEGIN
           JOIN "BankTransactionUse" f ON f."id" = r."fromUseId"
           JOIN "BankTransactionUse" t ON t."transactionId" = r."transactionId" AND t."sourceTable" = 'GuidePaymentTransfer' AND t."sourceId" = r."targetId" AND t."live"
          WHERE r."transactionId" = NEW."id" AND r."kind" = 'MOVED_TO_TRANSFERS'
-           AND f."amountSatang" = OLD."amountSatang" AND t."amountSatang" = NEW."amountSatang");
+           AND f."amountSatang" = OLD."amountSatang" AND t."amountSatang" = NEW."amountSatang"
+           AND bank_tx_transfers_audit(t."sourceId")
+           AND EXISTS (SELECT 1 FROM "AuditLog" a WHERE a."action" = 'payment.transfers_added' AND a."entityId" = f."sourceId"
+                          AND a.xmin::text::bigint = txid_current() % 4294967296
+                          AND a."detail"->'registry'->>'transactionId' = NEW."id"
+                          AND (a."detail"->'registry'->>'amountSatang')::int = OLD."amountSatang"
+                          AND a."detail"->'registry'->>'amountSource' = OLD."amountSource"));
     ELSIF OLD."amountSatang" IS NOT NULL THEN
       ok := false; -- fixed once: never re-derived, never grown by allocations
     ELSIF NEW."amountSource" IN ('FIRST_USE', 'CLAIM') THEN
@@ -343,6 +387,25 @@ BEGIN
   RETURN NEW;
 END $$ LANGUAGE plpgsql;
 CREATE TRIGGER bank_tx_guard_tx BEFORE INSERT OR UPDATE ON "BankTransaction" FOR EACH ROW EXECUTE FUNCTION bank_tx_guard_tx();
+
+-- At commit: a transaction exists only because a record names it — its reference as that record
+-- typed it, and its account (if any) that of a linked record.
+CREATE FUNCTION bank_tx_born_linked() RETURNS trigger AS $$
+DECLARE b record;
+BEGIN
+  SELECT * INTO b FROM "BankTransaction" WHERE "id" = NEW."id";
+  IF NOT EXISTS (SELECT 1 FROM "BankTransactionUse" u, LATERAL bank_tx_expected(u."sourceTable", u."sourceId") e
+                  WHERE u."transactionId" = b."id" AND e.ref = b."refRaw") THEN
+    RAISE EXCEPTION 'BANK_TX_GUARD: transfer …% has no record that names it — transfers are created only from their records', right(coalesce(b."refKey", b."refRaw", ''), 4);
+  END IF;
+  IF b."accountKey" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "BankTransactionUse" u, LATERAL bank_tx_expected(u."sourceTable", u."sourceId") e
+                  WHERE u."transactionId" = b."id" AND e.account = b."accountKey") THEN
+    RAISE EXCEPTION 'BANK_TX_GUARD: transfer …% names an account no record of it names', right(coalesce(b."refKey", b."refRaw", ''), 4);
+  END IF;
+  RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE CONSTRAINT TRIGGER bank_tx_born_linked AFTER INSERT ON "BankTransaction" DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION bank_tx_born_linked();
 
 CREATE FUNCTION bank_tx_after_tx() RETURNS trigger AS $$
 BEGIN
@@ -410,14 +473,13 @@ BEGIN
     -- "Add the missing transfer…" (#323): a payment's reference moved onto its own transfer rows.
     SELECT g.* INTO p FROM "GuidePaymentTransfer" t JOIN "GuidePayment" g ON g."id" = t."paymentId" WHERE t."id" = NEW."targetId";
     ok := u."sourceTable" = 'GuidePayment' AND NEW."targetTable" = 'GuidePaymentTransfer' AND target_exists
-          AND p."id" = u."sourceId" AND p."status" = 'RECORDED' AND p."reversedAt" IS NULL AND p."bankRef" IS NULL;
+          AND p."id" = u."sourceId" AND p."status" = 'RECORDED' AND p."reversedAt" IS NULL AND p."bankRef" IS NULL
+          AND bank_tx_transfers_audit(NEW."targetId");
   WHEN 'REALLOCATION' THEN
     ok := EXISTS (SELECT 1 FROM "AuditLog" a WHERE a."id" = NEW."auditLogId"
                      AND a."detail"->>'fromUseId' = NEW."fromUseId" AND a."detail"->>'targetTable' = NEW."targetTable"
                      AND a."detail"->>'targetId' = NEW."targetId")
           AND bank_tx_admin_audit(NEW."auditLogId", 'bank_tx.reallocated', NEW."transactionId");
-  WHEN 'HISTORICAL_REUSE' THEN
-    ok := bank_tx_installed_at() IS NULL;
   ELSE ok := false;
   END CASE;
   IF NOT coalesce(ok, false) THEN
@@ -436,8 +498,8 @@ $$;
 -- Bring the registry in line with one source row as it now stands.
 CREATE FUNCTION bank_tx_sync(p_table text, p_id text) RETURNS void AS $$
 DECLARE
-  e record; k text; status text; tx_id text; n int; u record; t record; pu_id text; pu_amount int; d record;
-  use_id text; own_share bigint; other bigint; excess bigint; remaining bigint; take bigint; live_sum bigint;
+  e record; k text; status text; tx_id text; n int; u record; t record; pu_id text; pu_amount int;
+  use_id text;
 BEGIN
   SELECT * INTO e FROM bank_tx_expected(p_table, p_id);
   k := folk_tx_ref_key(e.ref);
@@ -501,7 +563,10 @@ BEGIN
       SELECT x."id", x."amountSatang" INTO pu_id, pu_amount FROM "BankTransactionUse" x JOIN "GuidePayment" g ON g."id" = x."sourceId"
        WHERE x."transactionId" = tx_id AND x."sourceTable" = 'GuidePayment' AND x."sourceId" = e.parent_id
          AND NOT x."live" AND x."verified" AND g."status" = 'RECORDED' AND g."reversedAt" IS NULL AND g."bankRef" IS NULL
-         AND NOT EXISTS (SELECT 1 FROM "BankTransactionRelease" r WHERE r."fromUseId" = x."id");
+         AND NOT EXISTS (SELECT 1 FROM "BankTransactionRelease" r WHERE r."fromUseId" = x."id")
+         AND bank_tx_transfers_audit(p_id);
+      -- Without that audited action there is no release: the payment keeps its share, and the
+      -- row is refused as a second use of the transfer.
       IF pu_id IS NOT NULL THEN
         INSERT INTO "BankTransactionRelease" ("id", "transactionId", "fromUseId", "kind", "targetTable", "targetId", "reason")
         VALUES (bank_tx_new_id('btr'), tx_id, pu_id, 'MOVED_TO_TRANSFERS', p_table, p_id,
@@ -509,39 +574,6 @@ BEGIN
       END IF;
     END IF;
 
-    -- Backfill only: history re-applied a reversed transfer before this registry existed. The
-    -- live records must still fit; the old share is handed to this record and flagged for review.
-    IF bank_tx_installed_at() IS NULL AND t."amountSatang" IS NOT NULL THEN
-      SELECT COALESCE(sum(CASE WHEN x."live" THEN x."amountSatang" WHEN x."verified" THEN x."amountSatang" ELSE 0 END), 0) INTO own_share
-        FROM "BankTransactionUse" x WHERE x."transactionId" = tx_id AND x."sourceTable" = p_table AND x."sourceId" = p_id AND x."role" = 'USE';
-      other := bank_tx_applied(tx_id) - own_share;
-      IF NOT EXISTS (SELECT 1 FROM "BankTransactionUse" x WHERE x."transactionId" = tx_id AND x."sourceTable" = p_table AND x."sourceId" = p_id) THEN
-        other := other - COALESCE((SELECT sum(LEAST(x."amountSatang", e.amount)) FROM "BankTransactionRelease" r
-                                     JOIN "BankTransactionUse" x ON x."id" = r."fromUseId"
-                                    WHERE r."transactionId" = tx_id AND r."targetTable" = p_table AND r."targetId" = p_id), 0);
-      END IF;
-      excess := other + e.amount - t."amountSatang";
-      SELECT COALESCE(sum(x."amountSatang"), 0) INTO live_sum FROM "BankTransactionUse" x
-       WHERE x."transactionId" = tx_id AND x."role" = 'USE' AND x."live" AND NOT (x."sourceTable" = p_table AND x."sourceId" = p_id);
-      IF excess > 0 AND live_sum + e.amount <= t."amountSatang" THEN
-        remaining := e.amount;
-        FOR d IN SELECT x.* FROM "BankTransactionUse" x
-                  WHERE x."transactionId" = tx_id AND x."role" = 'USE' AND NOT x."live" AND x."verified"
-                    AND NOT EXISTS (SELECT 1 FROM "BankTransactionRelease" r WHERE r."fromUseId" = x."id")
-                  ORDER BY x."createdAt", x."id" LOOP
-          EXIT WHEN excess <= 0 OR remaining <= 0;
-          take := LEAST(d."amountSatang", remaining);
-          INSERT INTO "BankTransactionRelease" ("id", "transactionId", "fromUseId", "kind", "targetTable", "targetId", "reason")
-          VALUES (bank_tx_new_id('btr'), tx_id, d."id", 'HISTORICAL_REUSE', p_table, p_id,
-                  'Recorded again after a reversal, before the bank registry existed — Admin to confirm');
-          excess := excess - take; remaining := remaining - take; n := -1;
-        END LOOP;
-        IF n = -1 THEN UPDATE "BankTransaction" SET "reviewStatus" = 'NEEDS_REVIEW',
-               "reviewNote" = concat_ws(' · ', "reviewNote", 'A reversed record''s transfer was recorded again before the registry; confirm it is the same money'),
-               "updatedAt" = now()
-         WHERE "id" = tx_id; END IF;
-      END IF;
-    END IF;
   END IF;
 
   IF e.role = 'USE' AND e.live AND t."amountSource" = 'CLAIM'
@@ -585,6 +617,75 @@ BEGIN
   END IF;
 END $$ LANGUAGE plpgsql;
 
+-- ─── Claims: a reservation is released only by an audited rejection or void ────────────────
+-- An unverified claim (a guide's ADV return, a guest's upsell transfer) holds its transfer while
+-- live. Ending it unverified frees it — so that is allowed only through the application's
+-- action: the actor and reason on the row, and that action's AuditLog row by the same active
+-- staff member IN THIS TRANSACTION. A claimed row is never deleted.
+CREATE FUNCTION bank_tx_claim_guard() RETURNS trigger AS $$
+DECLARE actor text; act text; why text; open_claim boolean;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF EXISTS (SELECT 1 FROM "BankTransactionUse" u WHERE u."sourceTable" = TG_TABLE_NAME AND u."sourceId" = OLD."id" AND u."live" AND NOT u."verified") THEN
+      RAISE EXCEPTION 'BANK_TX_GUARD: a claimed transfer is rejected or voided, never deleted';
+    END IF;
+    RETURN OLD;
+  END IF;
+  IF TG_TABLE_NAME = 'GuideAdvanceReceipt' THEN
+    open_claim := OLD."status" = 'CLAIMED' AND OLD."voidedAt" IS NULL AND OLD."verifiedAt" IS NULL AND folk_tx_ref_key(OLD."bankRef") IS NOT NULL;
+    IF NOT open_claim OR NEW."status" = 'VERIFIED' OR NEW."verifiedAt" IS NOT NULL THEN RETURN NEW; END IF;
+    IF NEW."status" = 'REJECTED' THEN
+      actor := NEW."rejectedById"; act := 'advance.return_rejected'; why := NEW."rejectedReason";
+    ELSIF NEW."status" = 'VOIDED' OR NEW."voidedAt" IS NOT NULL THEN
+      actor := NEW."voidedById"; act := 'advance.return_voided'; why := NEW."voidReason";
+    ELSIF folk_tx_ref_key(NEW."bankRef") IS DISTINCT FROM folk_tx_ref_key(OLD."bankRef") THEN
+      RAISE EXCEPTION 'BANK_TX_GUARD: a claimed return keeps its bank reference until it is verified, rejected or voided';
+    ELSE
+      RETURN NEW;
+    END IF;
+    IF length(btrim(coalesce(why, ''))) < 5 OR NOT bank_tx_actor_audit(ARRAY[act], 'GuideAdvanceReceipt', NEW."id", actor, ARRAY['ADMIN', 'OPERATOR']) THEN
+      RAISE EXCEPTION 'BANK_TX_GUARD: releasing a claimed transfer needs who, why, and that action''s audit in the same transaction';
+    END IF;
+    RETURN NEW;
+  END IF;
+  -- UpsellPayment: a guest's bank transfer waiting to be matched. No application path ends one
+  -- unconfirmed yet; any future one writes 'upsell.bank_payment_released' as an Admin.
+  open_claim := OLD."method" = 'BANK_TRANSFER' AND OLD."status" = 'PENDING' AND OLD."confirmedAt" IS NULL AND folk_tx_ref_key(OLD."bankRef") IS NOT NULL;
+  IF NOT open_claim OR NEW."confirmedAt" IS NOT NULL OR NEW."status" IN ('PENDING', 'CONFIRMED') AND folk_tx_ref_key(NEW."bankRef") IS NOT DISTINCT FROM folk_tx_ref_key(OLD."bankRef") THEN
+    RETURN NEW;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM "AuditLog" a JOIN "User" u ON u."id" = a."actorId"
+                  WHERE a."action" = 'upsell.bank_payment_released' AND a."entityType" = 'UpsellPayment' AND a."entityId" = NEW."id"
+                    AND a."actorRole" = 'ADMIN' AND u."role"::text = 'ADMIN' AND u."state"::text = 'ACTIVE'
+                    AND a.xmin::text::bigint = txid_current() % 4294967296) THEN
+    RAISE EXCEPTION 'BANK_TX_GUARD: releasing a claimed transfer needs an Admin''s audited action in the same transaction';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER bank_tx_claim_guard BEFORE UPDATE OR DELETE ON "GuideAdvanceReceipt" FOR EACH ROW EXECUTE FUNCTION bank_tx_claim_guard();
+CREATE TRIGGER bank_tx_claim_guard BEFORE UPDATE OR DELETE ON "UpsellPayment" FOR EACH ROW EXECUTE FUNCTION bank_tx_claim_guard();
+
+-- ─── Room left on a transfer: what the application asks BEFORE writing ─────────────────────
+-- Read-only. NEW (no transfer yet), PENDING (not a checkable reference), AMBIGUOUS, or OK with the
+-- amount and what is applied — excluding the asking record's own share. The triggers stay the
+-- authority (two writers at once); this lets a service refuse with a reason instead of an error.
+CREATE FUNCTION bank_tx_room(p_dir text, p_ref text, p_account text, p_table text, p_id text)
+RETURNS TABLE (state text, amount int, applied bigint) AS $$
+DECLARE k text := folk_tx_ref_key(p_ref); n int; tx_id text; own bigint;
+BEGIN
+  IF k IS NULL THEN RETURN QUERY SELECT 'NONE'::text, NULL::int, NULL::bigint; RETURN; END IF;
+  IF k !~ '[0-9]' THEN RETURN QUERY SELECT 'PENDING'::text, NULL::int, NULL::bigint; RETURN; END IF;
+  SELECT count(*) INTO n FROM "BankTransaction" WHERE "direction" = p_dir AND "refStatus" = 'BANK_REF' AND "refKey" = k
+     AND (p_account IS NULL OR "accountKey" IS NULL OR "accountKey" = p_account);
+  IF n = 0 THEN RETURN QUERY SELECT 'NEW'::text, NULL::int, NULL::bigint; RETURN; END IF;
+  SELECT "id" INTO tx_id FROM "BankTransaction" WHERE "direction" = p_dir AND "refStatus" = 'BANK_REF' AND "refKey" = k
+     AND (CASE WHEN n = 1 THEN (p_account IS NULL OR "accountKey" IS NULL OR "accountKey" = p_account) ELSE "accountKey" = p_account END) LIMIT 1;
+  IF tx_id IS NULL THEN RETURN QUERY SELECT 'AMBIGUOUS'::text, NULL::int, NULL::bigint; RETURN; END IF;
+  SELECT COALESCE(sum(CASE WHEN u."live" OR u."verified" THEN u."amountSatang" ELSE 0 END), 0) INTO own
+    FROM "BankTransactionUse" u WHERE u."transactionId" = tx_id AND u."role" = 'USE' AND u."sourceTable" = p_table AND u."sourceId" = p_id;
+  RETURN QUERY SELECT 'OK'::text, b."amountSatang", bank_tx_applied(tx_id) - own FROM "BankTransaction" b WHERE b."id" = tx_id;
+END $$ LANGUAGE plpgsql STABLE;
+
 -- ─── One trigger per source table ──────────────────────────────────────────────────────────
 
 CREATE FUNCTION bank_tx_source() RETURNS trigger AS $$
@@ -619,11 +720,25 @@ CREATE TRIGGER bank_tx_guide_payment_document AFTER INSERT OR UPDATE OF "bankRef
 CREATE TRIGGER bank_tx_upsell_payment AFTER INSERT OR UPDATE OF "bankRef", "bankAccountKey", "amountSatang", "status", "confirmedAt", "method" OR DELETE ON "UpsellPayment"
   FOR EACH ROW EXECUTE FUNCTION bank_tx_source();
 
+-- The document number a person knows a source row by (for refusals that must name it).
+CREATE FUNCTION bank_tx_doc_no(p_table text, p_id text) RETURNS text AS $$
+  SELECT CASE p_table
+    WHEN 'GuideAdvance' THEN (SELECT "advanceNo" FROM "GuideAdvance" WHERE "id" = p_id)
+    WHEN 'GuideAdvanceReceipt' THEN (SELECT "receiptNo" FROM "GuideAdvanceReceipt" WHERE "id" = p_id)
+    WHEN 'GuideAdvanceRefund' THEN (SELECT "refundNo" FROM "GuideAdvanceRefund" WHERE "id" = p_id)
+    WHEN 'GuidePayment' THEN (SELECT "paymentNo" FROM "GuidePayment" WHERE "id" = p_id)
+    WHEN 'GuidePaymentTransfer' THEN (SELECT p."paymentNo" || ' transfer ' || t."seq" FROM "GuidePaymentTransfer" t JOIN "GuidePayment" p ON p."id" = t."paymentId" WHERE t."id" = p_id)
+    WHEN 'GuidePaymentDocument' THEN (SELECT "paymentRef" FROM "GuidePaymentDocument" WHERE "id" = p_id)
+    ELSE p_table || ' ' || p_id END
+$$ LANGUAGE sql STABLE;
+
 -- ─── Backfill: the transfers already recorded, oldest first ────────────────────────────────
--- History decides (the first USE sets the amount). A real double use — the LIVE records of one
--- transfer adding up to more than it — raises here: the whole migration stops, nothing written.
+-- History decides (the first USE sets the amount). History is never repaired here: if records
+-- already pay one transfer more than once — live, or a reversed record and a later one on the
+-- same reference — the migration STOPS, names the documents, and writes nothing (owner rule:
+-- an Admin resolves each case from the slip first).
 DO $$
-DECLARE r record;
+DECLARE r record; k text; docs text;
 BEGIN
   FOR r IN
     SELECT * FROM (
@@ -638,7 +753,15 @@ BEGIN
     ) x
     ORDER BY at, tbl, id
   LOOP
-    PERFORM bank_tx_sync(r.tbl, r.id);
+    BEGIN
+      PERFORM bank_tx_sync(r.tbl, r.id);
+    EXCEPTION WHEN OTHERS THEN
+      SELECT folk_tx_ref_key(e.ref) INTO k FROM bank_tx_expected(r.tbl, r.id) e;
+      SELECT string_agg(DISTINCT bank_tx_doc_no(u."sourceTable", u."sourceId"), ', ') INTO docs
+        FROM "BankTransactionUse" u JOIN "BankTransaction" b ON b."id" = u."transactionId" WHERE b."refKey" = k;
+      RAISE EXCEPTION 'BANK_TX_BACKFILL_STOPPED: % (%) cannot be linked — %. Already on reference …%: %. Nothing was migrated; an Admin must resolve this from the slip first.',
+        bank_tx_doc_no(r.tbl, r.id), r.tbl, SQLERRM, right(coalesce(k, ''), 4), coalesce(docs, 'none');
+    END;
   END LOOP;
 
   -- History whose state cannot be told from the rows: flagged, never silently reused.
