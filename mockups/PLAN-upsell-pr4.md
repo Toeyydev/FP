@@ -9,8 +9,8 @@ from this session. No private data: every figure, name and reference is invented
 |---|---|---|
 | #411 PR4-0 | `feat/bank-transaction-registry` | Central bank-transaction registry, DB-enforced |
 | #412 PR4-0b | `feat/bank-correction-admin` | Admin corrections (routes + re-record a reversed transfer); UI waits on `pr4-0b-bank-corrections.html` |
-| PR4 | `feat/upsell-settlement` | Extras cash hand-in, confirm/return, reverse sale, PEAK outbox; UI waits on `pr4-upsell-settlement-v9a.html` |
-| PR4-P | — | PEAK adapter + UAT (interfaces and sender state machine ready in PR4) |
+| #413 PR4 | `feat/upsell-settlement` | Extras cash hand-in (code before transfer), confirm/return, reverse sale, PEAK outbox; guide + Admin screens built to `pr4-upsell-settlement-v9a.html` |
+| PR4-P | `feat/upsell-settlement` (67a0616) | PEAK adapter for the bank-clearing journal, behind `UPSELL_PEAK_AUTO_SYNC`; receipts not built (UAT) |
 
 ## Decisions recorded (owner + Codex, 19–20 Nov 2026)
 
@@ -41,14 +41,44 @@ from this session. No private data: every figure, name and reference is invented
   confirmation, mapping or receiving account → BLOCKED with the reasons shown. Void vs credit note is
   chosen per document type after UAT. Timeout → UNCERTAIN → read back, never a blind resend.
 
+- **Owner answers (20 Nov 2026), final — not asked again.** Not VAT-registered. The ฿200 upsell
+  and the ฿700 full walk-in are TOTAL guest payments (no VAT added). Receiving bank KASIKORN,
+  account holder บจก.โฟล์คพาธส์. The exact PEAK channel is resolved read-only and never assumed
+  to be the advance account. Only the masked last digits are shown.
+- **Direction is ops.folkpaths.com → PEAK.** Durable automatic sync with read-back of id, code and
+  status. No manual duplicate entry in PEAK.
+- **Hand-in code before any transfer.**
+  - Idempotent *Get the hand-in code* after the end-tour report, own job only. A GET never mints one.
+  - The code (FOLK-CSH-…) is the bank memo, shown with the job ref and the sales it covers.
+  - It stays the same across Return. It is never a bank reference or a dedupe key.
+  - Coverage is frozen per submission. The code appears on the guide and Admin screens and on the
+    PEAK journal (reference and description).
+- **PEAK clearing journal (PR4-P).**
+  - Dr the receiving bank (code and sub-id per PEAK payment method from `PEAK_UPSELL_CONFIG`),
+    Cr guide cash held (the account frozen on the event).
+  - A refusal inside HTTP 200 → FAILED. A 5xx, a timeout or a drop → UNCERTAIN, never resent.
+  - Journals have no reference lookup. An Admin enters the code from PEAK, and it is verified
+    (live, lines, date) before POSTED.
+
 ## Remaining before production
 
 1. Owner: slips for Q-T1; confirm Q-T2 (no-digit references flagged, never matched).
 2. Read-only preflight of the registry backfill on today's data (authorised; not yet run).
-3. PR4-0b and PR4 UI after functional review of the two mockups.
-4. Slip upload for hand-in transfers in the guide app (the API takes an uploaded slip's URL or evidence id).
-5. PR4-P: PEAK adapter, UAT K1–K4, mapping of `UPSELL_GUIDE_CASH_HELD`, revenue categories and the
-   receiving account; tax profile confirmed by the accountant. Include the existing
-   `markDocumentPaid` post-PEAK race: reconcile, show UNCERTAIN — the precheck does not remove it.
-6. Over-transfer after a reversal (money already banked exceeds what is owed) and partial / SHORT
+3. Done: the PR4-0b and PR4 screens, the slip upload (evidence id), and the browser e2e
+   (hand-in 17/17, bank transfers 12/12).
+4. PR4-P, still open:
+   - **UAT / account questions (concrete inputs):**
+     - (a) the PEAK payment-method id of the KASIKORN receiving account, plus its account code and sub-id for journals;
+     - (b) the PEAK account for `UPSELL_GUIDE_CASH_HELD`;
+     - (c) the accounts for `UPSELL_ROUTE_REVENUE` and `TOUR_SERVICE_REVENUE`;
+     - (d) the journal type and contact for the clearing journal;
+     - (e) the PEAK no-VAT receipt document type and its API contract (no receipts client exists);
+     - (f) UAT access to check all of the above;
+     - (g) the accountant confirms the tax profile.
+   - Receipt / void / credit-note adapters after (e).
+   - The existing `markDocumentPaid` post-PEAK race: reconcile it and show UNCERTAIN. The precheck does not remove it.
+   - An automatic sender loop (cron/worker). Today it is the Admin send/read-back routes only.
+5. Walk-in sale (JOIN_SOURCE_TOUR, ฿700 total, Tour Service Revenue, THREE-TEMPLES-ONSITE v2): mockup first.
+6. Re-record a reversed transfer for advances from the Bank transfers screen (guide payments only so far).
+7. Over-transfer after a reversal (money already banked exceeds what is owed) and partial / SHORT
    hand-ins: later PR (currently refused, fail-closed).
