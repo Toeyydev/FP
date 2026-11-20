@@ -66,6 +66,12 @@ export async function POST(req: NextRequest) {
   const parsed = paymentBody.safeParse(JSON.parse(String(form?.get("payload") ?? "null")));
   if (!parsed.success) return NextResponse.json({ error: "bad-body", reasons: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   const body = parsed.data;
+  // Re-recording a reversed payment's transfer is an Admin correction (lib/bank-transactions):
+  // the role on the session is checked against the database too.
+  if (body.reuseReversed) {
+    const me = actor.actorId ? await prisma.user.findUnique({ where: { id: actor.actorId }, select: { role: true, state: true } }) : null;
+    if (me?.role !== "ADMIN" || me.state !== "ACTIVE") return NextResponse.json({ error: "forbidden", reasons: ["Only an admin can re-record a reversed payment's transfer"] }, { status: 403 });
+  }
   // Cutover: a payment may still be recorded, but not one that settles an advance.
   if ((body.adjustments ?? []).some((a) => a.type === "ADVANCE_SETTLEMENT")) {
     const refused = await accountingWriteRefusal(prisma);

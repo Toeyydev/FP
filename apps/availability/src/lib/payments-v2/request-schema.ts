@@ -19,4 +19,6 @@ export const paymentBody = z.object({
   // Paid in several bank transfers: each with its own amount, date and reference; its slip
   // comes as the multipart field file_<index>.
   transfers: z.array(z.object({ amount: z.number(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), bankRef: z.string().max(120).nullish() })).max(10).optional(),
+  // Admin only (checked on the server): this payment re-records a REVERSED payment's transfer.
+  reuseReversed: z.object({ paymentId: z.string().min(1).max(64), reason: z.string().max(500) }).nullish(),
 });

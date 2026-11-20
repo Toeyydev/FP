@@ -72,6 +72,9 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
   const [loading, setLoading] = useState(true);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [payFor, setPayFor] = useState<{ guideId: string; guide: string; jobs: PayableJob[]; preselect: string[] } | null>(null);
+  // Bank transfers › Re-record: ?reuse=<reversed payment id>&why=<reason> opens Record payment for
+  // that guide with the reversed payment's reference fixed (Admin only; the server checks again).
+  const [reuse, setReuse] = useState<{ paymentId: string; paymentNo: string; bankRef: string; reason: string; guideId: string; guide: string; jobs: string[] } | null>(null);
   const [openPayment, setOpenPayment] = useState<Detail | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -93,6 +96,26 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
     setLoading(false);
   }, []);
   useEffect(() => { load(period); }, [period, load]);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("reuse");
+    if (!id || !isAdmin) return;
+    fetch(`/api/guide-payments/${encodeURIComponent(id)}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((p) => {
+      if (!p || p.status !== "REVERSED" || !p.bankRef) { setMsg("That payment is not a reversed payment with a bank reference — re-record it from Bank transfers"); return; }
+      setReuse({ paymentId: p.id, paymentNo: p.paymentNo, bankRef: p.bankRef, reason: q.get("why") ?? "", guideId: p.guideId, guide: p.guide ?? p.guideId, jobs: (p.jobs ?? []).map((j: { date: string; slotIdx: number }) => `${j.date}|${j.slotIdx}`) });
+      setPeriod(p.accountingPeriod);
+    });
+  }, [isAdmin]);
+  useEffect(() => {
+    if (!reuse || payFor || loading) return;
+    // Opened even when nothing is payable yet: the dialog then says so, instead of nothing happening.
+    const guideRows = rows.filter((r) => r.guideId === reuse.guideId);
+    setPayFor({
+      guideId: reuse.guideId, guide: guideRows[0]?.guide ?? reuse.guide,
+      jobs: guideRows.map((r) => ({ date: r.date, slotIdx: r.slotIdx, ref: r.jobNo, tour: r.tour, amount: r.amountDue, payBlock: r.blockedReason, accountingMonth: r.accountingMonth })),
+      preselect: guideRows.filter((r) => reuse.jobs.includes(`${r.date}|${r.slotIdx}`)).map((r) => key(r)),
+    });
+  }, [reuse, rows, loading, payFor]);
 
   // A payment is one transfer to one guide: the first tick fixes the guide.
   const pickedRows = rows.filter((r) => picked.has(`${r.guideId}|${key(r)}`));
@@ -405,8 +428,9 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
           jobs={payFor.jobs}
           preselect={payFor.preselect}
           today={today}
-          onClose={() => setPayFor(null)}
-          onDone={(m) => { setPayFor(null); setMsg(m); load(period); }}
+          reuseReversed={reuse ? { paymentId: reuse.paymentId, paymentNo: reuse.paymentNo, bankRef: reuse.bankRef, reason: reuse.reason } : null}
+          onClose={() => { setPayFor(null); setReuse(null); }}
+          onDone={(m) => { setPayFor(null); setReuse(null); setMsg(m); load(period); }}
         />
       )}
     </div>

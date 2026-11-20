@@ -24,7 +24,8 @@ import {
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
 import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
-import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
+import { BankTxRefused, assertSameTransfer, bankTxPrecheck, bankTxRefusal, handOnReversedShare } from "@/lib/bank-transactions";
+import { randomUUID } from "node:crypto";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 export type Actor = { actorId: string | null; actorRole: string | null };
@@ -45,6 +46,13 @@ export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip" | "transfers"> &
   /** Set by recordPayment with transferGroup: what the ONE bank transfer moved in all. The bank
    *  registry takes the transfer's amount from it, never from the parts (BankTransaction). */
   transferTotal?: number | null;
+  /** Admin only: this payment re-records the money of a REVERSED payment (same bank reference).
+   *  Its share of the transfer is handed to this payment in the same transaction, by name
+   *  (lib/bank-transactions handOnReversedShare); no other record can use it. */
+  reuseReversed?: { paymentId: string; reason: string } | null;
+  /** Internal: the id chosen for the payment when a share is handed to it, and that share. */
+  id?: string;
+  handedOnSatang?: number;
 };
 
 export type RecordedPayment = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[]; supplements: { id: string; type: string; netAmount: number }[] };
@@ -220,7 +228,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
   // document) can route it to review instead of failing the whole request.
   const elsewhere = (input.transfers ?? []).length
     ? (await Promise.all((input.transfers ?? []).map((part) => bankTxPrecheck(tx, { direction: "OUT", ref: part.bankRef, amountSatang: toSatang(part.amount) })))).find(Boolean) ?? null
-    : await bankTxPrecheck(tx, { direction: "OUT", ref: input.bankRef, amountSatang: toSatang(check.reconciliation.amountTransferred) });
+    : await bankTxPrecheck(tx, { direction: "OUT", ref: input.bankRef, amountSatang: toSatang(check.reconciliation.amountTransferred), handedOnSatang: input.handedOnSatang });
   if (elsewhere) return { ok: false, code: "invalid", reasons: [elsewhere], reconciliation: check.reconciliation };
 
   // A line still active on a REVERSED payment can only come from a build without this
@@ -240,6 +248,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
   const evidence = parts.length ? lastSlip : input.slip ?? null;
   const payment = await tx.guidePayment.create({
     data: {
+      ...(input.id ? { id: input.id } : {}),
       paymentNo, guideId: input.guideId, accountingPeriod: check.accountingPeriod!, paymentDate: input.paymentDate,
       jobTotal: check.reconciliation.jobTotal, adjustmentTotal: check.reconciliation.adjustmentTotal, amountTransferred: check.reconciliation.amountTransferred,
       kind: check.supplements.length ? "SUPPLEMENTAL" : "REGULAR", supplementTotal: check.reconciliation.supplementTotal ?? 0,
@@ -345,11 +354,29 @@ const uniqueTarget = (e: unknown): string => {
 };
 
 /** Record a payment in its own transaction, then audit it. */
+class ReuseRefused extends Error {
+  constructor(public result: RecordPaymentResult) { super("refused"); }
+}
+
 export async function recordPayment(prisma: PrismaClient, input: RecordPaymentInput): Promise<RecordPaymentResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const result = await prisma.$transaction(async (tx) => {
         const split = await splitTransfer(tx, input);
+        if (input.reuseReversed) {
+          if (split || (input.transfers ?? []).length) throw new PaymentConflict("Re-record a reversed transfer as one payment with its single bank reference");
+          const id = randomUUID();
+          const share = await handOnReversedShare(tx, {
+            from: { table: "GuidePayment", id: input.reuseReversed.paymentId }, targetTable: "GuidePayment", targetId: id,
+            reason: input.reuseReversed.reason ?? "", admin: { actorId: input.actor.actorId ?? "", actorRole: input.actor.actorRole ?? "" },
+            ref: input.bankRef, direction: "OUT",
+          });
+          const recorded = await recordPaymentInTx(tx, { ...input, id, handedOnSatang: share.amountSatang });
+          // Refused by the rules: nothing of the hand-on may stay behind.
+          if (!recorded.ok) throw new ReuseRefused(recorded);
+          await assertSameTransfer(tx, { table: "GuidePayment", id }, share.transaction.id);
+          return recorded;
+        }
         if (!split) return recordPaymentInTx(tx, input);
         const jobs = await recordPaymentInTx(tx, split.jobs);
         if (!jobs.ok) return jobs;
@@ -362,6 +389,8 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
     } catch (e) {
       if (e instanceof PaymentConflict) return { ok: false, code: "conflict", reasons: [e.message] };
       if (e instanceof LedgerConflict) return { ok: false, code: "conflict", reasons: [e.message] };
+      if (e instanceof ReuseRefused) return e.result;
+      if (e instanceof BankTxRefused) return { ok: false, code: "conflict", reasons: [e.message] };
       const refused = bankTxRefusal(e);
       if (refused) return { ok: false, code: "conflict", reasons: [refused] };
       const target = uniqueTarget(e);

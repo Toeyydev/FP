@@ -584,6 +584,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-route-extension
 
+      # Payments > Bank transfers (PR4-0b): finance reads, an Admin corrects; review never hides a
+      # real reference; evidence is filed first; re-record hands off to Record payment, ref fixed.
+      - name: Bank transfers review and corrections in a real browser
+        run: node scripts/e2e/bank-transfers.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/bank-transfers
+
       # A tour that already has a guide is offered only as an explicit replacement: the
       # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.
       - name: Offer on a staffed tour asks to replace, in a real browser
