@@ -25,6 +25,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { PrismaClient } from "@prisma/client";
@@ -173,7 +174,7 @@ try {
     /Review never changes a reference/.test(await text(page, ".js-review-form")) && !(await page.$(".js-review-form button.primary")));
   await page.evaluate(() => [...document.querySelectorAll(".js-review-form label")].find((l) => /No reference printed/.test(l.textContent))?.querySelector("input")?.click());
   await page.waitForSelector(".js-review-form input[type=file]");
-  const slip = join(appDir, ".e2e-bank-slip.png");
+  const slip = join(tmpdir(), "fp-e2e-bank-slip.png");
   writeFileSync(slip, Buffer.from("89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D4944415478DA63F8FFFF3F0005FE02FEA7D6A5D20000000049454E44AE426082", "hex"));
   await (await page.$(".js-review-form input[type=file]")).uploadFile(slip);
   await page.type("#bt-rev-note", "slip checked: no reference printed (example)");
