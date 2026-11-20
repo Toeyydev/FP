@@ -88,6 +88,8 @@ const prismaMock = vi.hoisted(() => {
     guidePaymentTransfer: table(() => []),
   };
   client.$transaction = vi.fn(async (arg: any) => (typeof arg === "function" ? arg(client) : Promise.all(arg)));
+  // The bank registry's read-only precheck (Postgres triggers, covered by lib/bank-transactions.itest.ts): no transfer yet.
+  client.$queryRaw = vi.fn(async () => []);
   return client;
 });
 

@@ -485,10 +485,34 @@ describe("a review incentive: paid in full, no withholding tax (owner decision 2
     expect({ amount: Number(jobs.amountTransferred), jobs: jobs.jobs.length, sups: jobs.supplements.length }).toEqual({ amount: jobPayable, jobs: 1, sups: 0 });
     expect({ amount: Number(reviews.amountTransferred), jobs: reviews.jobs.length, sups: reviews.supplements.length, period: reviews.accountingPeriod }).toEqual({ amount: 200, jobs: 0, sups: 1, period: "2025-06" });
     expect(r.body.reconciliation).toMatchObject({ expectedTransfer: jobPayable + 200, amountTransferred: jobPayable + 200, balanced: true });
+    // The bank registry takes the ONE transfer's amount from the recorded total, never from the parts.
+    expect(both.map((p) => Number(p.transferTotal))).toEqual([jobPayable + 200, jobPayable + 200]);
+    const tx = await prisma.bankTransaction.findMany({ where: { refKey: "BANKSHARED0001" }, include: { uses: true } });
+    expect(tx).toHaveLength(1);
+    expect(tx[0]).toMatchObject({ amountSatang: (jobPayable + 200) * 100, amountSource: "GROUP_TOTAL", amountGroup: both[0].transferGroup });
+    expect(tx[0].uses.filter((u) => u.live).map((u) => u.amountSatang).sort((a, b) => a! - b!)).toEqual([20000, jobPayable * 100]);
+    // A third "member" of the completed group cannot raise the ceiling, with or without a total.
+    const fake = (total: number | null) => prisma.guidePayment.create({ data: {
+      paymentNo: `FOLK-PMT-202507-9${total ?? 0}`.slice(0, 19), guideId: G, accountingPeriod: "2025-07", paymentDate: "2025-07-02", jobTotal: 1, adjustmentTotal: 0, amountTransferred: 1,
+      bankRef: "BANK-SHARED-0001", transferGroup: both[0].transferGroup, transferTotal: total } });
+    await expect(fake(jobPayable + 200)).rejects.toThrow(/BANK_TX_OVERUSED/);
+    await expect(fake(jobPayable + 201)).rejects.toThrow(/BANK_TX_GROUP_TOTAL_MISMATCH/);
+    await expect(fake(null)).rejects.toThrow(/BANK_TX_GROUP_TOTAL_MISSING/);
     // The same bank reference is still refused for any OTHER payment.
     const { body: other } = await create(reviewIncentive({ workMonth: "2025-05" }));
     const again = await pay([other.id], { amountTransferred: 200, bankRef: "BANK-SHARED-0001" });
     expect(again.status).toBe(409);
+  });
+  it("through the route: a transfer an advance already used is refused with 409 and nothing is recorded", async () => {
+    const { body } = await create(reviewIncentive());
+    await prisma.guideAdvance.create({ data: {
+      guideId: G, date: "2025-06-30", slotIdx: -1, amount: 200, paidAt: new Date("2025-06-30T03:00:00Z"), method: "bank", txRef: "BANK-ADV-EXAMPLE-0001",
+      advanceNo: "FOLK-ADV-202506-901", advanceDate: "2025-06-30", amountSatang: 20000, accountingPeriod: "2025-06" } });
+    const before = await prisma.guidePayment.count();
+    const r = await pay([body.id], { amountTransferred: 200, bankRef: "BANK-ADV-EXAMPLE-0001" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(JSON.stringify(r.body)).toMatch(/already fully recorded elsewhere/);
+    expect(await prisma.guidePayment.count()).toBe(before);
   });
   it("a bonus cannot ride in a job's transfer — only a company-borne review incentive can", async () => {
     const { body } = await create(review({ jobs: [] }));

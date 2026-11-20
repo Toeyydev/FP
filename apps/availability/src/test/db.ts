@@ -7,7 +7,10 @@ import { localSwitches, type ServiceName } from "@/lib/peak-switches";
 
 /** Tables these tests write, in an order safe to truncate together. */
 const TABLES = [
-  "AuditLog", "ExpenseAttachment", "ServiceStatus", "ReceiptClassification", "Checkin", "TourReport", "PushSubscription", "Notification",
+  "AuditLog", "ExpenseAttachment", "ServiceStatus",
+  // The bank-transaction registry (PR4-0): rebuilt by triggers from the rows below, so a test's
+  // transfers must not outlive its rows (TRUNCATE fires no row trigger).
+  "BankTransactionRelease", "BankTransactionUse", "BankTransaction", "ReceiptClassification", "Checkin", "TourReport", "PushSubscription", "Notification",
   // The advance ledger and everything that hangs off it. Listed before JobSheet
   // and User because these rows reference them.
   "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",

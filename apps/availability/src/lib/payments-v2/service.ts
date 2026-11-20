@@ -24,6 +24,7 @@ import {
   type AdjustmentInput, type JobFacts, type PaymentCheck, type PaymentRequest, type PaymentSource, type Reconciliation, type SupplementFacts,
 } from "@/lib/payments-v2/rules";
 import { SUPPLEMENTAL_LABEL, type SupplementalType } from "@/lib/supplemental-payments/rules";
+import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 export type Actor = { actorId: string | null; actorRole: string | null };
@@ -41,6 +42,9 @@ export type RecordPaymentInput = Omit<PaymentRequest, "hasSlip" | "transfers"> &
   today?: string;
   /** Set by recordPayment when one transfer is recorded as two linked payments. */
   transferGroup?: string | null;
+  /** Set by recordPayment with transferGroup: what the ONE bank transfer moved in all. The bank
+   *  registry takes the transfer's amount from it, never from the parts (BankTransaction). */
+  transferTotal?: number | null;
 };
 
 export type RecordedPayment = { id: string; paymentNo: string; paymentDate: string; amountTransferred: number; accountingPeriod: string; jobs: { jobNo: string; date: string; slotIdx: number; payable: number }[]; supplements: { id: string; type: string; netAmount: number }[] };
@@ -168,8 +172,8 @@ async function splitTransfer(db: Db, input: RecordPaymentInput): Promise<{ jobs:
   const group = input.transferGroup ?? `tg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
   return {
     reviewNet: reviewNetSatang / 100,
-    jobs: { ...input, supplements: [], amountTransferred: (toSatang(input.amountTransferred) - reviewNetSatang) / 100, transferGroup: group },
-    reviews: { ...input, jobs: [], adjustments: [], mismatchReason: null, amountTransferred: reviewNetSatang / 100, transferGroup: group },
+    jobs: { ...input, supplements: [], amountTransferred: (toSatang(input.amountTransferred) - reviewNetSatang) / 100, transferGroup: group, transferTotal: input.amountTransferred },
+    reviews: { ...input, jobs: [], adjustments: [], mismatchReason: null, amountTransferred: reviewNetSatang / 100, transferGroup: group, transferTotal: input.amountTransferred },
   };
 }
 
@@ -211,6 +215,13 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
   const supplementFacts = await loadSupplementFacts(tx, input.supplements);
   const check = checkPayment(request(input), facts, { today: input.today ?? bangkokToday(), supplements: supplementFacts, ...(await evidenceContext(tx, input)) });
   if (check.reasons.length) return { ok: false, code: "invalid", reasons: check.reasons, reconciliation: check.reconciliation };
+  // The same transfer recorded in any other system (an advance, a refund, a reversed payment):
+  // refused with a reason here, so callers inside a wider transaction (slip match, PEAK
+  // document) can route it to review instead of failing the whole request.
+  const elsewhere = (input.transfers ?? []).length
+    ? (await Promise.all((input.transfers ?? []).map((part) => bankTxPrecheck(tx, { direction: "OUT", ref: part.bankRef, amountSatang: toSatang(part.amount) })))).find(Boolean) ?? null
+    : await bankTxPrecheck(tx, { direction: "OUT", ref: input.bankRef, amountSatang: toSatang(check.reconciliation.amountTransferred) });
+  if (elsewhere) return { ok: false, code: "invalid", reasons: [elsewhere], reconciliation: check.reconciliation };
 
   // A line still active on a REVERSED payment can only come from a build without this
   // feature reversing it; it holds nothing, so it is closed before this payment's line.
@@ -240,6 +251,7 @@ export async function recordPaymentInTx(tx: Prisma.TransactionClient, input: Rec
       periodOverrideReason: check.periods.length > 1 ? t(input.periodOverrideReason) : null,
       peakPaymentRef: input.source === "PEAK_DOCUMENT" ? t(input.peakPaymentRef) : null,
       transferGroup: input.transferGroup ?? null,
+      transferTotal: input.transferGroup ? input.transferTotal ?? null : null,
       note: t(input.note), createdById: input.actor.actorId,
       jobs: {
         create: check.jobs.map((j) => {
@@ -350,6 +362,8 @@ export async function recordPayment(prisma: PrismaClient, input: RecordPaymentIn
     } catch (e) {
       if (e instanceof PaymentConflict) return { ok: false, code: "conflict", reasons: [e.message] };
       if (e instanceof LedgerConflict) return { ok: false, code: "conflict", reasons: [e.message] };
+      const refused = bankTxRefusal(e);
+      if (refused) return { ok: false, code: "conflict", reasons: [refused] };
       const target = uniqueTarget(e);
       if (target.includes("paymentNo")) continue; // two payments took the same number at once: try the next one
       if (target.includes("Supplement")) return { ok: false, code: "conflict", reasons: ["This supplemental payment was paid by another payment a moment ago — reload and check"] };
@@ -478,8 +492,27 @@ export async function addMissingTransfers(prisma: PrismaClient, input: MissingTr
     ...input.added.map((a, i) => ({ seq: i + 2, amount: a.amount, transferDate: a.date, bankRef: t(a.bankRef), slipUrl: a.slip?.url ?? null, evidenceId: a.slip?.evidenceId ?? null })),
   ];
   const last = parts[parts.length - 1];
+  // The added transfers must be free everywhere, not only among guide payments.
+  for (const a of parts.slice(1)) {
+    const elsewhere = await bankTxPrecheck(prisma, { direction: "OUT", ref: a.bankRef, amountSatang: toSatang(a.amount) });
+    if (elsewhere) return { ok: false, status: 409, reasons: [`Transfer ${a.seq}: ${elsewhere}`] };
+  }
+  const detail = {
+    paymentNo: p.paymentNo, guideId: p.guideId, reason,
+    note: "evidence corrected; jobs, figures, WHT, payment date and PEAK document unchanged",
+    before: { amountTransferred: Number(p.amountTransferred), transfers: 1, bankRef: p.bankRef, slip: !!p.slipUrl },
+    after: { amountTransferred: Number(p.amountTransferred), transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slip: !!x.slipUrl })) },
+  };
   try {
     await prisma.$transaction(async (tx) => {
+      // The bank registry narrows the recorded reference to transfer 1 only on THIS audited
+      // action (bank_tx_transfers_audit): the audit is written first, in the same transaction,
+      // and keeps the transfer's amount and provenance as they were.
+      const held = await tx.bankTransactionUse.findFirst({ where: { sourceTable: "GuidePayment", sourceId: p.id, live: true }, include: { transaction: true } });
+      await tx.auditLog.create({ data: {
+        actorId: input.actor.actorId, actorRole: input.actor.actorRole, action: "payment.transfers_added", entityType: "GuidePayment", entityId: p.id,
+        detail: { ...detail, registry: held ? { transactionId: held.transactionId, amountSatang: held.transaction.amountSatang, amountSource: held.transaction.amountSource } : null },
+      } });
       // Only while it is still recorded as one transfer — a second press, or a reversal in
       // between, changes nothing.
       const moved = await tx.guidePayment.updateMany({
@@ -493,16 +526,9 @@ export async function addMissingTransfers(prisma: PrismaClient, input: MissingTr
     });
   } catch (e) {
     if (e instanceof PaymentConflict) return { ok: false, status: 409, reasons: [e.message] };
+    const refused = bankTxRefusal(e);
+    if (refused) return { ok: false, status: 409, reasons: [refused] };
     throw e;
   }
-  await audit({
-    ...input.actor, action: "payment.transfers_added", entityType: "GuidePayment", entityId: p.id,
-    detail: {
-      paymentNo: p.paymentNo, guideId: p.guideId, reason,
-      note: "evidence corrected; jobs, figures, WHT, payment date and PEAK document unchanged",
-      before: { amountTransferred: Number(p.amountTransferred), transfers: 1, bankRef: p.bankRef, slip: !!p.slipUrl },
-      after: { amountTransferred: Number(p.amountTransferred), transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slip: !!x.slipUrl })) },
-    },
-  });
   return { ok: true, paymentNo: p.paymentNo, transfers: parts.map((x) => ({ seq: x.seq, amount: x.amount, date: x.transferDate, bankRef: x.bankRef, slipUrl: x.slipUrl })) };
 }
