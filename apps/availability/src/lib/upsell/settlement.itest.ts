@@ -20,7 +20,7 @@ import { upsellPeakAdapter, type PeakJournalClient } from "./peak-adapter";
 import { adminResolvePeakEvent, adminSendPeakEvent } from "./peak-send";
 import { syncUpsellPeakBatch, READ_BACK_EVERY_MS } from "./peak-sync";
 import type { DailyJournalPayload } from "@/lib/peak-api";
-import { setVatRegistration } from "./tax-profile";
+import { confirmTaxProfile, setVatRegistration } from "./tax-profile";
 
 const TODAY = bangkokToday();
 const G = "G-961", G2 = "G-962", TOUR = "T-005";
@@ -127,6 +127,47 @@ describe("VAT registration on the tax profile (owner 20 Nov 2026: not registered
     expect(await prisma.auditLog.count({ where: { action: "upsell.tax_vat_registration_set", entityId: t.id } })).toBe(1);
     await expect(prisma.taxProfile.update({ where: { id: t.id }, data: { vatMode: "INCLUSIVE", vatRateBp: 700 } })).rejects.toThrow(/TaxProfile_not_registered_check/);
     await expect(prisma.taxProfile.update({ where: { id: t.id }, data: { peakDocumentKind: "TAX_INVOICE_RECEIPT" } })).rejects.toThrow(/check/);
+  });
+});
+
+describe("confirming the tax profile (PR8: the accountant's answers, recorded by an Admin)", () => {
+  const ANSWERS = {
+    code: "UPSELL-STD", agreeFixedTreatment: true, breakageOnExpiry: false,
+    incentiveWht: { mode: "FIXED_RATE" as const, pct: 3, bearer: "PAYEE" as const },
+    fixedCostWht: { mode: "NOT_WITHHELD" as const },
+    source: "Accountant (example), 22 Nov 2026",
+  };
+  it("refuses anything short of every answer, from anyone but an Admin", async () => {
+    await sale(1); // seeds the profile, recorded as not VAT-registered
+    expect(await code(confirmTaxProfile(prisma, operator, ANSWERS))).toBe("ADMIN_ONLY");
+    expect(await code(confirmTaxProfile(prisma, admin, { ...ANSWERS, source: "" }))).toBe("SOURCE");
+    expect(await code(confirmTaxProfile(prisma, admin, { ...ANSWERS, agreeFixedTreatment: false }))).toBe("AGREE");
+    expect(await code(confirmTaxProfile(prisma, admin, { ...ANSWERS, breakageOnExpiry: null }))).toBe("BREAKAGE");
+    expect(await code(confirmTaxProfile(prisma, admin, { ...ANSWERS, incentiveWht: undefined }))).toBe("WHT");
+    expect(await code(confirmTaxProfile(prisma, admin, { ...ANSWERS, incentiveWht: { mode: "FIXED_RATE", pct: 0, bearer: "PAYEE" } }))).toBe("WHT_RATE"); // 0% is not a rate
+    expect(await code(confirmTaxProfile(prisma, admin, { ...ANSWERS, fixedCostWht: { mode: "ENTERED_PER_PAYMENT" } }))).toBe("WHT_BEARER");
+    expect(await prisma.taxProfile.findUniqueOrThrow({ where: { code: "UPSELL-STD" } })).toMatchObject({ status: "DRAFT", confirmedById: null });
+  });
+  it("refuses while VAT registration is unknown — receipts are built for a company that is not registered", async () => {
+    await sale(1);
+    await prisma.taxProfile.update({ where: { code: "UPSELL-STD" }, data: { vatRegistration: "UNKNOWN", vatRegistrationSource: null } });
+    expect(await code(confirmTaxProfile(prisma, admin, ANSWERS))).toBe("VAT_REGISTRATION");
+  });
+  it("confirms once, with the system's fixed treatment, audited; frozen after; the blocked receipt no longer waits on it", async () => {
+    await sale(1);
+    const receipt = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "RECEIPT" } });
+    expect(receipt.blockedReasons.join(" | ")).toMatch(/tax profile is not confirmed/);
+    expect(await code(confirmTaxProfile(prisma, admin, ANSWERS))).toBe("OK");
+    const t = await prisma.taxProfile.findUniqueOrThrow({ where: { code: "UPSELL-STD" } });
+    expect(t).toMatchObject({ status: "CONFIRMED", confirmedById: admin.userId, vatMode: "NONE", vatRateBp: null, peakDocumentKind: "RECEIPT", revenueRecognition: "AT_SERVICE",
+      breakageOnExpiry: false, incentiveWhtMode: "FIXED_RATE", incentiveWhtBearer: "PAYEE", fixedCostWhtMode: "NOT_WITHHELD", fixedCostWhtPct: null, fixedCostWhtBearer: null });
+    expect(Number(t.incentiveWhtPct)).toBe(3);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { action: "upsell.tax_profile_confirmed", entityId: t.id } });
+    expect(audit.detail).toMatchObject({ source: ANSWERS.source });
+    expect(await code(confirmTaxProfile(prisma, admin, ANSWERS))).toBe("CONFIRMED"); // once
+    await expect(prisma.taxProfile.update({ where: { id: t.id }, data: { breakageOnExpiry: true } })).rejects.toThrow(/UPSELL_TAX_PROFILE_FROZEN/);
+    const again = await recheckBlocked(prisma, receipt.id);
+    expect(again.blockedReasons.join(" | ")).not.toMatch(/tax profile is not confirmed|document type is not confirmed/);
   });
 });
 
