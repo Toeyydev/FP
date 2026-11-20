@@ -137,6 +137,21 @@ const deps = (over: Deps = {}): Deps => ({
   ...over,
 });
 
+/**
+ * Parks a request inside a Drive call until the test lets it go. `arrived` resolves once
+ * the request is in there (so it already holds its claim); `open()` lets it carry on.
+ * Ordering by this, not by sleeping, keeps the lease tests from racing a slow CI box.
+ */
+const gate = () => {
+  let reach!: () => void;
+  let open!: () => void;
+  const arrived = new Promise<void>((r) => { reach = r; });
+  const opened = new Promise<void>((r) => { open = r; });
+  return { arrived, opened, reach, open };
+};
+/** A second request's clock, well past a first request's short test lease. */
+const afterLease = () => new Date(Date.now() + 60_000);
+
 const seedSheet = async (expenses: Row[], over: Record<string, unknown> = {}) =>
   prisma.jobSheet.create({
     data: {
@@ -675,16 +690,19 @@ describe("a request that loses its lease while it is working", () => {
     // A claims, then goes away for longer than its own lease.
     const slowDrive = fakeDrive();
     const put = slowDrive.putAttempt.bind(slowDrive);
-    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 400)); return put(o); };
+    const g = gate();
+    slowDrive.putAttempt = async (o) => { g.reach(); await g.opened; return put(o); };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 60, heartbeatMs: 10_000, newToken: () => "token-A" }));
+    const aRefused = expect(a).rejects.toMatchObject({ reasons: [expect.stringContaining("took over filing")] });
+    await g.arrived;
 
-    // B waits for A's lease to lapse, then takes over and files properly.
-    await new Promise((r) => setTimeout(r, 150));
-    const bDone = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B" }));
+    // B comes after A's lease has lapsed, takes over and files properly.
+    const bDone = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B", now: afterLease }));
     expect(bDone.status).toBe("UPLOADED");
 
     // A comes back and must change nothing.
-    await expect(a).rejects.toMatchObject({ reasons: [expect.stringContaining("took over filing")] });
+    g.open();
+    await aRefused;
 
     const after = await held(c.id);
     expect(after!.status).toBe("UPLOADED");
@@ -711,11 +729,14 @@ describe("a request that loses its lease while it is working", () => {
     const c = await attested();
     const slowDrive = fakeDrive();
     const put = slowDrive.putAttempt.bind(slowDrive);
-    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 400)); return put(o); };
+    const g = gate();
+    slowDrive.putAttempt = async (o) => { g.reach(); await g.opened; return put(o); };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 60, heartbeatMs: 10_000, newToken: () => "token-A" }));
-    await new Promise((r) => setTimeout(r, 150));
-    const bDone = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B" }));
-    await expect(a).rejects.toThrow();
+    const aRefused = expect(a).rejects.toMatchObject({ reasons: [expect.stringContaining("took over filing")] });
+    await g.arrived;
+    const bDone = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B", now: afterLease }));
+    g.open();
+    await aRefused;
 
     // What becomes evidence is B's file, and the bytes in it hash to what B recorded.
     const linked = await linkCertificate(c.id, ADMIN, deps());
@@ -730,15 +751,19 @@ describe("a request that loses its lease while it is working", () => {
     const c = await attested();
     const slowDrive = fakeDrive();
     const put = slowDrive.putAttempt.bind(slowDrive);
-    slowDrive.putAttempt = async (o) => { await new Promise((r) => setTimeout(r, 300)); return put(o); };
+    const g = gate();
+    slowDrive.putAttempt = async (o) => { g.reach(); await g.opened; return put(o); };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slowDrive, leaseMs: 50, heartbeatMs: 10_000, newToken: () => "token-A" }));
-    await new Promise((r) => setTimeout(r, 120));
-    // B claims and keeps hold of it — it has not finished.
-    await prisma.expenseCertificate.updateMany({
-      where: { id: c.id, OR: [{ uploadClaimToken: null }, { uploadLeaseUntil: { lt: new Date() } }] },
-      data: { uploadClaimToken: "token-B", uploadLeaseUntil: new Date(Date.now() + 60_000) },
+    const aRefused = expect(a).rejects.toThrow();
+    await g.arrived;
+    // B claims once A's lease has lapsed (B's clock), and keeps hold of it — it has not finished.
+    const taken = await prisma.expenseCertificate.updateMany({
+      where: { id: c.id, OR: [{ uploadClaimToken: null }, { uploadLeaseUntil: { lt: afterLease() } }] },
+      data: { uploadClaimToken: "token-B", uploadLeaseUntil: new Date(Date.now() + 120_000) },
     });
-    await expect(a).rejects.toThrow();
+    expect(taken.count).toBe(1);
+    g.open();
+    await aRefused;
     expect((await held(c.id))!.uploadClaimToken).toBe("token-B");   // still B's
   });
 
@@ -1003,13 +1028,15 @@ describe("dying part way through", () => {
     const c = await attested();
     const slow = fakeDrive();
     const create = slow.createActive.bind(slow);
-    slow.createActive = async (o) => { const f = await create(o); await new Promise((r) => setTimeout(r, 200)); return f; };
+    const g = gate();
+    slow.createActive = async (o) => { const f = await create(o); g.reach(); await g.opened; return f; };
     const a = uploadCertificate(c.id, ADMIN, deps({ drive: slow, leaseMs: 60, heartbeatMs: 10_000, newToken: () => "token-A" }));
     // Attach A's expectation now: A may be refused while B is still running, and a
     // rejection with no handler yet fails the whole run as an unhandled rejection.
     const aRefused = expect(a).rejects.toMatchObject({ reasons: [expect.stringContaining("took over filing")] });
-    await new Promise((r) => setTimeout(r, 140));
-    const b = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B" }));
+    await g.arrived;   // A's document exists; its database transition has not happened
+    const b = await uploadCertificate(c.id, ADMIN, deps({ newToken: () => "token-B", now: afterLease }));
+    g.open();
     await aRefused;
 
     expect(drive.active()).toHaveLength(1);
