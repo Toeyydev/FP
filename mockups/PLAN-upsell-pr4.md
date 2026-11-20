@@ -109,5 +109,5 @@ from this session. No private data: every figure, name and reference is invented
    - The wrapper-key case (`peakReceipts` vs `PeakReceipts`): the docs disagree; check on UAT.
 5. Void / credit note for sale reversals: still BLOCKED (decided after UAT). PEAK documents
    `POST /Receipts/void` (by id or code).
-6. Walk-in guide UI, after review of `pr4w-walkin-sale.html`. Lead name: required or optional?
+6. Done: the walk-in UI (lead name optional) and the guest QR (`pr4q-guest-qr-walkin.html`). Both are behind `UPSELL_ONSITE_TOUR_ENABLED` / `UPSELL_WALKIN_QR_ENABLED` (off). Activating needs THREE-TEMPLES-ONSITE v2 at Tour Service Revenue, saved by an Admin in Settings › Products.
 7. Over-transfer after a reversal, and partial / SHORT hand-ins: a later PR (refused now, fail-closed).
