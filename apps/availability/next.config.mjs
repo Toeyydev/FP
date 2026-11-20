@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // NEXT_DIST_DIR: build into another folder (e.g. to test while a local server keeps serving .next).
+  // Unset everywhere that matters — Railway and CI build and serve the default .next.
+  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   // A unique id per build, baked into BOTH the client and (via inlining) the
   // /api/version response, so they always match for a given deploy and differ
   // across deploys — that's what makes the auto-refresh work without looping.

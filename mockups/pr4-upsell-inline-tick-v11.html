@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Extras — tick after the guest's name (v11)</title>
+<!-- Owner, 20 Nov 2026: "ทำให้มันง่ายกว่านี้ ถ้าขายติ๊กหลังชื่อลูกค้า แล้ว send to admin แล้วก็เพิ่ม ref. ในการโอนเงิน".
+     One tick after each customer's name, ONE Send to Admin, one ref.โอนเงิน (the Job Ref). The
+     "recorded in error" form is hidden under แก้ไข…. Invented data only — this repository is public. -->
+<style>
+  :root { --ink:#18181B; --soft:#71717A; --brand:#0E3B2E; --line:#E5E7EB; --ok:#2e7d4f; --ext:#8A4B00; --extBg:#FFF4E5; --warnBg:#FBF4E4; --warnLine:#EADFC3; --warnInk:#5C3B06; --okBg:#EAF4EF; --okInk:#0E5A33; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: #F4F4F5; }
+  h1 { font-size: 22px; margin: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; padding: 0 16px 24px; }
+  .phone { width: 390px; max-width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .cap { font-size: 12px; color: var(--soft); text-transform: uppercase; letter-spacing: .04em; }
+  h2 { margin: 0; font-size: 19px; }
+  ol { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+  li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .arr { font-size: 11.5px; font-weight: 700; color: var(--soft); display: inline-flex; gap: 5px; align-items: center; }
+  .ref { color: var(--soft); font-size: 13px; }
+  .ext { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 10px; border: 1.5px solid var(--ext); border-radius: 999px; color: var(--ext); font-weight: 700; font-size: 13px; background: #fff; }
+  .ext.on { background: var(--extBg); }
+  .ext input { width: 18px; height: 18px; accent-color: var(--ext); margin: 0; }
+  .sold { font-size: 12.5px; font-weight: 700; color: var(--ext); background: var(--extBg); border-radius: 999px; padding: 3px 10px; }
+  .qty { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .qty button { width: 36px; height: 36px; border: 1px solid #D4D4D8; border-radius: 8px; background: #fff; font-size: 18px; }
+  .sum { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+  .btn { min-height: 52px; width: 100%; border-radius: 10px; border: 0; background: var(--brand); color: #fff; font: inherit; font-weight: 800; font-size: 16px; }
+  .refbox { display: flex; justify-content: space-between; align-items: center; gap: 8px; border: 1px dashed var(--brand); border-radius: 10px; padding: 8px 12px; }
+  .refbox b { font: 800 16px ui-monospace, Menlo, monospace; }
+  .copy { min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--brand); background: #fff; color: var(--brand); font-weight: 700; }
+  .sale { font-size: 13.5px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  details summary { font-size: 13px; color: var(--soft); cursor: pointer; min-height: 32px; }
+  .note { font-size: 12.5px; color: var(--soft); }
+</style>
+</head>
+<body>
+<h1>Extras — tick after the guest's name (v11, owner 20 Nov 2026)</h1>
+<div class="row">
+  <section class="phone" aria-label="Guide, choosing">
+    <div class="cap">1 · tick who bought it</div>
+    <h2>Your customers (2)</h2>
+    <ol>
+      <li><span class="arr"><input type="checkbox" checked> มาแล้ว</span><span><b>Example Guest A</b> <span class="ref">· EX-0001 · 1 pax</span></span>
+        <label class="ext on"><input type="checkbox" checked> ขายเพิ่ม +฿200</label></li>
+      <li><span class="arr"><input type="checkbox"> มาแล้ว</span><span><b>Example Guest B</b> <span class="ref">· EX-0002 · 3 pax</span></span>
+        <label class="ext on"><input type="checkbox" checked> ขายเพิ่ม +฿200</label>
+        <span class="qty"><button>−</button><b>2</b><button>+</button> of 3</span></li>
+    </ol>
+    <div class="sum">
+      <div style="display:flex;justify-content:space-between;font-weight:800"><span>ขายเพิ่ม · 3 guests</span><span>฿600</span></div>
+      <button class="btn">Send to Admin · ยืนยันเก็บเงินแล้ว ฿600</button>
+      <div class="note">Press only once the cash is in your hand. Nothing is sent when you tick.</div>
+    </div>
+  </section>
+
+  <section class="phone" aria-label="Guide, sent">
+    <div class="cap">2 · sent — the row shows what was sold</div>
+    <h2>Your customers (2)</h2>
+    <ol>
+      <li><span class="arr"><input type="checkbox" checked> มาแล้ว</span><span><b>Example Guest A</b> <span class="ref">· EX-0001 · 1 pax</span></span><span class="sold">ขายเพิ่มแล้ว ฿200</span></li>
+      <li><span class="arr"><input type="checkbox" checked> มาแล้ว</span><span><b>Example Guest B</b> <span class="ref">· EX-0002 · 3 pax</span></span><span class="sold">ขายเพิ่มแล้ว ฿400 · 2</span>
+        <label class="ext"><input type="checkbox"> ขายเพิ่ม +฿200</label></li>
+    </ol>
+    <div class="sale"><span><b>Wat Pho + Wat Arun</b> · 3 guests<br><small class="ref">FOLK-UPS-209911-001 · ส่งให้ Admin แล้ว</small></span><b>฿600</b></div>
+    <details><summary>แก้ไข…</summary><span class="note">บันทึกผิด — ไม่ได้รับเงินสด… (opens the existing form; Admin decides)</span></details>
+    <div class="refbox"><span><small class="note">ref.โอนเงิน — ใส่ในบันทึกช่วยจำตอนโอน</small><br><b>FOLK-BKK-20991101-01</b></span><button class="copy">Copy</button></div>
+    <div class="note">Cash to hand in ฿600 · next: send the end-tour report, then transfer and upload the slip.</div>
+  </section>
+
+  <section class="phone" aria-label="Guide, after report">
+    <div class="cap">3 · after the end-tour report</div>
+    <ol>
+      <li><span><b>Example Guest A</b> <span class="ref">· EX-0001</span></span><span class="sold">ขายเพิ่มแล้ว ฿200</span></li>
+      <li><span><b>Example Guest B</b> <span class="ref">· EX-0002</span></span><span class="sold">ขายเพิ่มแล้ว ฿400 · 2</span><label class="ext" style="opacity:.55"><input type="checkbox" disabled> ส่งรายงานแล้ว</label></li>
+    </ol>
+    <div class="refbox"><span><small class="note">ref.โอนเงิน</small><br><b>FOLK-BKK-20991101-01</b></span><button class="copy">Copy</button></div>
+    <div class="note">To hand in ฿600 → transfer, upload the slip, Send (already built).</div>
+  </section>
+</div>
+</body>
+</html>

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ACCOUNTING_CATEGORIES, FIXED_CATEGORIES, accountChartReady, categoryStatus,
-  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, isPerJobCategory,
+  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, isPerJobCategory, isExtrasCategory,
   type AccountMapping,
 } from "@/lib/peak-accounts";
 
@@ -10,13 +10,26 @@ const map = (k: string, code: string | null, name: string | null = "ต้นท
 const allFixed = FIXED_CATEGORIES.map((k) => map(k, "51010"));
 
 describe("account chart readiness", () => {
-  it("the seven categories exist and five take a fixed account", () => {
+  it("the seven tour categories and six Extras categories exist; five take a fixed account", () => {
     expect(ACCOUNTING_CATEGORIES.map((c) => c.key)).toEqual([
       "GUIDE_FEE", "GUIDE_COMPENSATION", "ENTRANCE_TICKET", "TRANSPORTATION", "MEAL_REFRESHMENT", "OTHER_TOUR_COST", "REVIEW_REWARD",
+      "UPSELL_ROUTE_REVENUE", "FOOD_TOUR_REVENUE", "TOUR_SERVICE_REVENUE", "UPSELL_UNEARNED_REVENUE", "UPSELL_GUIDE_CASH_HELD", "FOOD_COST",
     ]);
     // REVIEW_REWARD is fixed now: it is consistently guide compensation, so asking
     // per job was repetitive work for an answer that never changes.
     expect(FIXED_CATEGORIES).toEqual(["GUIDE_FEE", "ENTRANCE_TICKET", "TRANSPORTATION", "MEAL_REFRESHMENT", "REVIEW_REWARD"]);
+  });
+
+  it("Extras never hold back the job-sheet chart, and a job-sheet row never books to one", () => {
+    // Every tour category mapped, no Extras account at all: still ready, nothing missing.
+    expect(accountChartReady(allFixed)).toBe(true);
+    expect(missingRequired(allFixed)).toEqual([]);
+    for (const k of ["UPSELL_ROUTE_REVENUE", "FOOD_TOUR_REVENUE", "TOUR_SERVICE_REVENUE", "UPSELL_UNEARNED_REVENUE", "UPSELL_GUIDE_CASH_HELD", "FOOD_COST"]) {
+      expect(isExtrasCategory(k)).toBe(true);
+      expect(categoryForExpenseType(k)).toBeNull();
+      expect(categoryForExpenseType(k.toLowerCase())).toBeNull();
+    }
+    expect(categoryForExpenseType("meal")).toBe("MEAL_REFRESHMENT");
   });
 
   it("is ready once the four required categories carry a code", () => {

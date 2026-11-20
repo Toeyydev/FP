@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { upsellRouteExtensionEnabled } from "./flags";
+import { upsellOnsiteTourEnabled, upsellRouteExtensionEnabled } from "./flags";
 
 // Who may sell an upsell on a job (PR3: the Route Extension), checked on every request.
 //
@@ -16,8 +16,11 @@ export type SaleAccess =
   | { ok: true; userId: string; guideId: string }
   | { ok: false; status: 401 | 403 | 404 };
 
-export async function upsellSaleAccess(): Promise<SaleAccess> {
-  if (!upsellRouteExtensionEnabled()) return { ok: false, status: 404 };
+/** `which`: the product switch that must be on — Route Extension, walk-in seat, or either (the job's
+ *  Extras block and a sale looked up by its key). */
+export async function upsellSaleAccess(which: "ROUTE_EXTENSION" | "WALK_IN" | "ANY" = "ROUTE_EXTENSION"): Promise<SaleAccess> {
+  const on = which === "WALK_IN" ? upsellOnsiteTourEnabled() : which === "ANY" ? upsellRouteExtensionEnabled() || upsellOnsiteTourEnabled() : upsellRouteExtensionEnabled();
+  if (!on) return { ok: false, status: 404 };
   const session = await auth();
   const id = session?.user?.id ?? null;
   if (!id) return { ok: false, status: 401 };

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Extras cash hand-in</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=swap">
+<style>
+:root{--ink:#18181B;--muted:#52525B;--line:#E5E7EB;--bg:#F7F7F5;--card:#fff;--green:#0E3B2E;--ok-bg:#EAF4EF;--ok-line:#CBE5D6;--ok-ink:#0E5A33;--warn-bg:#FBF4E4;--warn-line:#EADFC3;--warn-ink:#5C3B06;--bad:#8A2A1C;--bad-bg:#FBEDEA}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--ink:#F4F4F5;--muted:#A1A1AA;--line:#3F3F46;--bg:#111113;--card:#1C1C1F;--green:#7FD1A8;--ok-bg:#12291F;--ok-line:#1F4A36;--ok-ink:#9BE3BD;--warn-bg:#2A2212;--warn-line:#4A3B1C;--warn-ink:#F1D39A;--bad:#F2A496;--bad-bg:#2E1814}}
+:root[data-theme="dark"]{--ink:#F4F4F5;--muted:#A1A1AA;--line:#3F3F46;--bg:#111113;--card:#1C1C1F;--green:#7FD1A8;--ok-bg:#12291F;--ok-line:#1F4A36;--ok-ink:#9BE3BD;--warn-bg:#2A2212;--warn-line:#4A3B1C;--warn-ink:#F1D39A;--bad:#F2A496;--bad-bg:#2E1814}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Sarabun,system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:20px}
+h1{margin:0;font-size:22px;font-weight:800}
+h2{margin:0;font-size:17px}
+.note{font-size:13px;color:var(--muted);margin:0}
+.board{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.art{flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.label{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+.scroll{overflow-x:auto}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.r{text-align:right}
+dl{margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:6px 12px;font-size:14px}
+dt{color:var(--muted)}dd{margin:0;text-align:right}
+.tag{display:inline-block;border-radius:6px;padding:0 6px;font-size:12px;font-weight:700}
+.warn{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink)}
+.ok{background:var(--ok-bg);border:1px solid var(--ok-line);color:var(--ok-ink)}
+.bad{background:var(--bad-bg);color:var(--bad)}
+.box{border-radius:10px;padding:10px 12px;font-size:13.5px}
+label{font-weight:700;font-size:14px}
+input,textarea,select{width:100%;font:inherit;font-size:14px;padding:9px 10px;border:1px solid #8A8A93;border-radius:8px;background:var(--card);color:var(--ink)}
+.row{display:flex;gap:8px}
+button{min-height:44px;border-radius:10px;font:inherit;font-weight:700;padding:0 14px;cursor:pointer}
+.primary{background:var(--green);color:#fff;border:0}
+:root[data-theme="dark"] .primary{color:#0B1A14}
+.plain{background:var(--card);color:var(--ink);border:1px solid #8A8A93}
+.danger{background:var(--card);color:var(--bad);border:1px solid var(--bad)}
+ul{margin:0;padding-left:18px;font-size:13.5px;line-height:1.55}
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>PR4 · Extras cash hand-in — v9 amendments (v9a)</h1>
+    <p class="note">Local amendment of the published v9 (8 artboards) for Codex / owner review. Only what changed is drawn here; everything else in v9 stands. Every figure, name and reference is invented. Not yet approved.</p>
+  </div>
+
+  <div class="board">
+    <section class="art" aria-labelledby="g1">
+      <div class="label" id="g1">G1 · Guide · Hand in the Extras cash (after the end-tour report)</div>
+      <div class="card" style="max-width:420px">
+        <h2>Extras cash · FOLK-BKK-20991119-03</h2>
+        <dl><dt>Cash held</dt><dd><b>฿800</b></dd><dt>Amount to remit</dt><dd><b>฿800</b></dd><dt>Send to</dt><dd>[Bank] ···7890 · “Folkpaths Extras”</dd></dl>
+        <ul style="list-style:none;padding:0;display:flex;flex-direction:column;gap:6px">
+          <li class="box ok"><b>Transfer 1</b> · ฿600 · <b>sent 19 Nov 17:40</b> · ref KB 7731 0042 · slip ✓<br><small>to ···7890 (as set when you reported it)</small></li>
+          <li class="box warn"><b>Transfer 2</b> · ฿200 · <b>sent 19 Nov 17:44</b> · ref KB 7731 0057 · slip ✓<br><small>to ···7890</small></li>
+        </ul>
+        <button class="plain">+ Add a transfer</button>
+        <p class="note">Each transfer: amount, <b>the date and time the bank sent it</b>, its reference and its own slip. A transfer, once reported, is never edited — take it out of this hand-in (with a reason) instead.</p>
+        <dl><dt>Total</dt><dd><b>฿800 of ฿800</b></dd></dl>
+        <button class="primary">Send hand-in</button>
+        <p class="note">Exactly the amount to remit — more or less is refused. Cannot reach it? “Contact Admin”; the amount stays owed.</p>
+      </div>
+      <div class="card" style="max-width:420px">
+        <div class="box warn"><b>Receiving account not set yet</b><br>An Admin has not chosen the account for Extras cash. Keep the cash and the slips; hand in once it is set. <i>Contact Admin</i></div>
+      </div>
+    </section>
+
+    <section class="art" aria-labelledby="g2">
+      <div class="label" id="g2">G2 · Guide · Returned for checking (replaces v9 “B”)</div>
+      <div class="card" style="max-width:420px">
+        <div class="box bad" role="alert"><b>Returned for checking · FOLK-CSH-209911-001 · submission 1</b><br>
+          <span>Admin is still checking one transfer: “Transfer 2 (KB 7731 0057) is not on the statement yet.” The transfers below stay recorded — <b>do not send them again</b>.</span></div>
+        <ul style="list-style:none;padding:0;display:flex;flex-direction:column;gap:6px">
+          <li class="box ok">✓ <b>Transfer 1</b> · ฿600 · sent 19 Nov 17:40 · KB 7731 0042 — <b>kept</b>, sent again as it is</li>
+          <li class="box warn"><b>Transfer 2</b> · ฿200 · sent 19 Nov 17:44 · KB 7731 0057 — <b>pending verification</b>. Keep it if the slip is right; take it out only if it was the wrong slip.</li>
+        </ul>
+        <p class="note">Pending verification is not “not received”: the money may already be in the bank. You never pay a transfer twice; a transfer you take out stays in the history with its slip.</p>
+        <div class="row"><button class="plain" style="flex:1">Take transfer 2 out…</button><button class="primary" style="flex:1">Send again (submission 2)</button></div>
+      </div>
+    </section>
+
+    <section class="art" aria-labelledby="a1">
+      <div class="label" id="a1">A1 · Admin · Confirm (replaces v9 dialog 1)</div>
+      <div class="card" role="dialog" aria-labelledby="a1h" style="max-width:420px">
+        <h2 id="a1h">Confirm ฿800 · submission 2</h2>
+        <dl><dt>Guide</dt><dd>G-981 Fah Example</dd><dt>To remit (ledger now)</dt><dd><b>฿800</b></dd></dl>
+        <fieldset style="border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:4px">
+          <legend style="font-weight:700;padding-bottom:4px">Each transfer is on the statement</legend>
+          <label style="font-weight:400;display:flex;gap:10px;align-items:flex-start;min-height:44px"><input type="checkbox" style="width:20px;margin-top:3px"> <span>฿600 · sent <b>19 Nov 17:40</b> · KB 7731 0042 · to ···7890 · <a href="#">slip</a></span></label>
+          <label style="font-weight:400;display:flex;gap:10px;align-items:flex-start;min-height:44px"><input type="checkbox" style="width:20px;margin-top:3px"> <span>฿200 · sent <b>19 Nov 17:44</b> · KB 7731 0057 · to ···7890 · <a href="#">slip</a></span></label>
+        </fieldset>
+        <div class="box warn">A transfer reported to an <b>earlier receiving account</b> shows that account (“to ···1234 — the account set then”) for review; it is never relabelled or asked for again.</div>
+        <p class="note">One transaction: every ticked transfer confirmed, one remittance entry (−฿800), the bank-clearing PEAK event queued — or nothing. Refused if the submission changed (a sale reversed, a newer submission) since this dialog opened: reload.</p>
+        <div class="row"><button class="plain" style="flex:1">Cancel</button><button class="primary" style="flex:2" disabled>Confirm ฿800</button></div>
+      </div>
+      <div class="card" role="dialog" style="max-width:420px">
+        <h2>Return for checking</h2>
+        <label for="a2r">What needs checking <small style="font-weight:400">the guide sees this</small></label>
+        <textarea id="a2r" rows="2">Transfer 2 (KB 7731 0057) is not on the statement yet.</textarea>
+        <p class="note">Nothing is received or refused by returning: the reported transfers stay recorded, pending verification. The guide keeps the right ones and replaces only a wrong slip.</p>
+        <div class="row"><button class="plain" style="flex:1">Cancel</button><button class="danger" style="flex:2">Return for checking</button></div>
+      </div>
+    </section>
+
+    <section class="art" aria-labelledby="s1">
+      <div class="label" id="s1">S1 · Admin · Settings › Extras receiving account</div>
+      <div class="card" style="max-width:420px">
+        <dl><dt>Now</dt><dd><span class="tag warn">Not set</span></dd></dl>
+        <label for="s1a">PEAK bank channel</label>
+        <select id="s1a"><option>Choose from PEAK…</option><option>[Bank] ···7890 · Savings</option></select>
+        <p class="note">Read from PEAK; the account number, PEAK payment channel and its bank account mapping are stored together as version 1. Nothing is guessed.</p>
+        <label style="font-weight:400;display:flex;gap:10px;align-items:flex-start;min-height:44px"><input type="checkbox" style="width:20px;margin-top:3px"> <span>I confirm this account receives the guides’ Extras cash, and its PEAK mapping is right</span></label>
+        <button class="primary">Save as version 1</button>
+        <p class="note">Changing it later makes a new version. Transfers already reported keep the account they were sent to.</p>
+      </div>
+    </section>
+
+    <section class="art" aria-labelledby="r1">
+      <div class="label" id="r1">R1 · Reverse sale (amends v9 AdminJob)</div>
+      <div class="card" style="max-width:440px">
+        <h2>Reverse FOLK-UPS-209911-002 · ฿200</h2>
+        <div class="box ok"><b>Guide’s confirmation (in the app)</b><br>
+          G-981 Fah Example · 19 Nov 17:20<br>
+          Text agreed, exactly: “I confirm I did not receive ฿200 in cash for sale FOLK-UPS-209911-002 on job FOLK-BKK-20991119-03, and I am not holding it.”<br>
+          Reason: “Pressed Sell twice for the same guest.”</div>
+        <p class="note">Recorded in error: the guide confirms first; then an Admin approves. Only then is ฿200 taken off cash held (a reversal entry).</p>
+        <hr style="border:0;border-top:1px solid var(--line);width:100%">
+        <b>Refunded to the guest</b>
+        <dl><dt>Amount</dt><dd>฿200 — the full sale (partial refunds later)</dd><dt>Paid back by</dt><dd>
+          <label style="font-weight:400"><input type="radio" name="by" checked style="width:auto"> the guide, from the cash held — cash held −฿200</label><br>
+          <label style="font-weight:400"><input type="radio" name="by" style="width:auto"> the company — cash held unchanged; the guide still hands in ฿200</label></dd></dl>
+        <label for="r1p">Proof of the refund <small style="font-weight:400">required</small></label><input id="r1p" type="file">
+        <p class="note">Not while a hand-in is sent or confirmed — return it first. Approval of the job and the guide’s fee are not affected.</p>
+      </div>
+    </section>
+
+    <section class="art" aria-labelledby="p1">
+      <div class="label" id="p1">P1 · PEAK (read only here; sending is PR4-P, off)</div>
+      <div class="card" style="max-width:440px">
+        <div class="scroll"><table style="min-width:380px">
+          <thead><tr><th>Event</th><th>Date</th><th>State</th></tr></thead>
+          <tbody>
+            <tr><td>Receipt · FOLK-UPS-209911-001</td><td>19 Nov (paid)</td><td><span class="tag warn">Blocked</span> tax profile not confirmed</td></tr>
+            <tr><td>Revenue · Additional Tour Revenue (Upsell)</td><td>19 Nov (service)</td><td><span class="tag warn">Blocked</span> account not mapped</td></tr>
+            <tr><td>Bank clearing · FOLK-CSH-209911-001</td><td>19 Nov (transfers)</td><td><span class="tag warn">Blocked</span> receiving account not mapped</td></tr>
+          </tbody>
+        </table></div>
+        <p class="note">A full walk-in seat on the guide’s tour books to <b>Tour Service Revenue</b>, not Upsell. Each event is created once, with what it would send frozen; a timeout becomes “uncertain” and is read back from PEAK, never sent blindly again.</p>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

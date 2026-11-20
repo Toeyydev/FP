@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR4 · Extras cash hand-in — slip only (v10)</title>
+<!-- Owner, 20 Nov 2026: "ให้อัพโหลดสลิปอย่างเดียวก็พอแล้ว". Supersedes the guide side of v9a: the guide
+     uploads slip(s) and sends; an Admin records the amount, time, reference and recipient from each
+     slip, at the version on screen, then confirms. Invented data only — this repository is public. -->
+<style>
+  :root { --ink:#18181B; --soft:#71717A; --brand:#0E3B2E; --line:#E5E7EB; --warnBg:#FBF4E4; --warnLine:#EADFC3; --warnInk:#5C3B06; --okBg:#EAF4EF; --okInk:#0E5A33; --badBg:#FBEDEA; --badLine:#EFCFC7; --badInk:#8A2A1C; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: #F4F4F5; }
+  h1 { font-size: 22px; margin: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; padding: 0 16px 24px; }
+  .phone { width: 390px; max-width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .cap { font-size: 12px; color: var(--soft); text-transform: uppercase; letter-spacing: .04em; }
+  h2 { margin: 0; font-size: 19px; } h2 small { font-weight: 500; color: var(--soft); }
+  .code { border: 1px solid var(--brand); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+  .memo { font: 800 20px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+  dl { margin: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 12px; font-size: 13.5px; }
+  dt { color: var(--soft); } dd { margin: 0; text-align: right; } .b { font-weight: 800; color: var(--ink); }
+  .btn { min-height: 48px; width: 100%; border-radius: 10px; border: 1px solid var(--brand); background: #fff; color: var(--brand); font: inherit; font-weight: 700; }
+  .btn.p { background: var(--brand); color: #fff; } .btn.sm { min-height: 40px; width: auto; padding: 0 12px; font-size: 13.5px; }
+  .btn.bad { border-color: var(--badInk); color: var(--badInk); }
+  .slip { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+  .note { font-size: 12.5px; color: var(--soft); }
+  .warn { background: var(--warnBg); border: 1px solid var(--warnLine); color: var(--warnInk); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+  .bad { background: var(--badBg); border: 1px solid var(--badLine); color: var(--badInk); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+  .grid2 { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 6px; }
+  label.f { display: grid; gap: 2px; font-size: 12.5px; font-weight: 700; }
+  input, select { min-height: 40px; border: 1px solid #A1A1AA; border-radius: 8px; padding: 6px 8px; font: inherit; width: 100%; }
+  .tick { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; } .tick input { width: 20px; min-height: 20px; flex: none; margin-top: 2px; }
+</style>
+</head>
+<body>
+<h1>Extras cash hand-in — slip only (v10, owner 20 Nov 2026)</h1>
+<div class="row">
+
+  <section class="phone" aria-label="Guide, before sending">
+    <div class="cap">Guide · 1 — transfer, then upload the slip</div>
+    <h2>Hand in the Extras cash <small>นำส่งเงินขายเพิ่ม</small></h2>
+    <div class="code">
+      <div class="note">Hand-in code — put it in the transfer’s memo <small>ใส่รหัสนี้ในบันทึกช่วยจำของการโอน</small></div>
+      <div style="display:flex;gap:8px;align-items:center"><span class="memo">FOLK-CSH-209911-001</span><button class="btn sm">Copy</button></div>
+      <dl>
+        <dt>Job</dt><dd>FOLK-BKK-20991101-01</dd>
+        <dt>FOLK-UPS-209911-001 · Wat Pho + Wat Arun</dt><dd>฿400</dd>
+        <dt class="b">To hand in</dt><dd class="b">฿400</dd>
+        <dt>Transfer to</dt><dd>Folkpaths Extras (example) · ···7890</dd>
+      </dl>
+    </div>
+    <div class="slip"><b>Slip 1</b> · uploaded 1 Nov, 13:00 · <a href="#">view</a><br><button class="btn sm bad" style="margin-top:6px">Wrong slip — take out…</button></div>
+    <button class="btn">+ Add another slip</button>
+    <div class="note">Upload every slip of this hand-in (one per transfer). Admin reads the amount, time and reference from the slip — nothing to type.</div>
+    <button class="btn p">Send · 1 slip</button>
+  </section>
+
+  <section class="phone" aria-label="Guide, sent and returned">
+    <div class="cap">Guide · 2 — sent</div>
+    <div class="warn"><b>ส่งแล้ว รอตรวจสอบ</b> · Sent — Admin is checking · FOLK-CSH-209911-001<br>Cash held stays ฿400 until Admin confirms it against the bank.</div>
+    <div class="cap" style="margin-top:8px">Guide · 3 — returned</div>
+    <div class="bad"><b>Returned for checking · FOLK-CSH-209911-001 · submission 1</b><br>Admin: “The slip shows ฿50 less than owed”. Your slips stay here — <b>do not transfer again</b>. Add a missing slip or take out a wrong one, then send again.</div>
+    <div class="slip"><b>Slip 1</b> · uploaded 1 Nov, 13:00 · <a href="#">view</a><br><small><b>Kept for the next send — do not transfer again.</b></small></div>
+    <button class="btn">+ Add another slip</button>
+    <button class="btn p">Send again · 1 slip</button>
+  </section>
+
+  <section class="phone" aria-label="Admin, checking the slips">
+    <div class="cap">Admin · Finance › Extras cash › Check slips…</div>
+    <h2>Check the slips · ฿400 owed</h2>
+    <div class="note">G-900 · FOLK-CSH-209911-001 (the memo) · FOLK-BKK-20991101-01 · submission 1 · owed now ฿400</div>
+    <div class="slip" style="display:grid;gap:6px">
+      <div><b>Slip 1</b> · uploaded 1 Nov, 13:00 · <a href="#">open the slip</a> · guide was shown ···7890 (v1)</div>
+      <div class="grid2">
+        <label class="f">Amount on the slip (฿)<input value="400"></label>
+        <label class="f">Bank reference<input value="KB EXAMPLE 0042"></label>
+        <label class="f">Date on the slip<input type="date" value="2099-11-01"></label>
+        <label class="f">Time on the slip<input type="time" value="09:15"></label>
+      </div>
+      <label class="f">Paid into (the recipient on the slip)<select><option>Folkpaths Extras (example) · ···7890 · v1 — shown to the guide</option><option>Older account (example) · ···1111 · v0 (retired)</option></select></label>
+      <label class="tick"><input type="checkbox"> <span>The slip’s recipient is Folkpaths Extras (example) · ···7890. Not a company account? Don’t record it — return the hand-in.</span></label>
+      <button class="btn sm p" style="justify-self:start">Save what the slip shows</button>
+    </div>
+    <div class="slip"><label class="tick"><input type="checkbox" checked> <span>On the statement: ฿400 · <b>1 Nov, 09:15</b> · ref KB EXAMPLE 0042 · into ···7890</span></label></div>
+    <b>Recorded from the slips: ฿400 of ฿400</b>
+    <div class="note">Wrong account, a missing or unreadable slip, short or over: return it. One step on Confirm: the slips become recorded transfers, one remittance, the bank clearing queued — or nothing. If another Admin changed a slip since you ticked it, Confirm is refused: reload.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sm">Close</button><button class="btn sm bad">Return…</button><button class="btn sm p">Confirm ฿400</button></div>
+  </section>
+</div>
+</body>
+</html>

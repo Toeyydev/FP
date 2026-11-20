@@ -19,6 +19,10 @@ export const upsellFoodTourEnabled = () => upsellEnabled() && on("UPSELL_FOOD_TO
 /** Three Temples on-site: a walk-in seat on the guide's own T-001 / T-002 job, paid in cash. */
 export const upsellOnsiteTourEnabled = () => upsellEnabled() && on("UPSELL_ONSITE_TOUR_ENABLED");
 
+/** The guest QR for walk-in seats: a PUBLIC registration page (no money — the guide still takes
+ *  the cash). On only with the walk-in switch, which it extends. */
+export const upsellWalkInQrEnabled = () => upsellOnsiteTourEnabled() && on("UPSELL_WALKIN_QR_ENABLED");
+
 /** Card payments through a payment link. */
 export const upsellPaymentLinkEnabled = () => upsellEnabled() && on("UPSELL_PAYMENT_LINK_ENABLED");
 
@@ -32,6 +36,7 @@ export function upsellSwitches() {
     routeExtension: upsellRouteExtensionEnabled(),
     foodTour: upsellFoodTourEnabled(),
     onsiteTour: upsellOnsiteTourEnabled(),
+    walkInQr: upsellWalkInQrEnabled(),
     paymentLink: upsellPaymentLinkEnabled(),
     peakAutoSync: upsellPeakAutoSyncEnabled(),
   };

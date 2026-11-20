@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route Extension — choose the guests (mockup pr4e, for review)</title>
+<style>
+  :root { --ink:#18181B; --soft:#52525B; --line:#E5E7EB; --bg:#f6f7f9; --brand:#0E3B2E; --ok:#EAF4EF; --okink:#0E5A33; --warn:#FBF4E4; --warnink:#5C3B06; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 -apple-system,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:16px 20px; background:#fff; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:17px; } header p { margin:4px 0 0; color:var(--soft); font-size:13px; }
+  .boards { display:flex; flex-wrap:wrap; gap:22px; padding:20px; align-items:flex-start; }
+  .board { width:390px; max-width:100%; } .board.wide { width:720px; }
+  .board > h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--soft); margin:0 0 8px; }
+  .phone { background:#fff; border:1px solid var(--line); border-radius:16px; padding:14px; display:grid; gap:10px; }
+  .row { display:grid; grid-template-columns:28px 1fr auto; gap:8px; align-items:start; border:1px solid var(--line); border-radius:10px; padding:10px; }
+  .row input[type=checkbox] { width:22px; height:22px; margin:2px 0 0; }
+  .row.off { background:#FAFAFA; color:var(--soft); }
+  .name { font-weight:700; } .sub { font-size:12.5px; color:var(--soft); } .why { font-size:12.5px; color:var(--warnink); }
+  .qty { display:inline-flex; align-items:center; gap:6px; } .qty b { min-width:24px; text-align:center; }
+  .qty span { width:44px; height:44px; border:1px solid #D4D4D8; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:20px; }
+  .total { background:#F4F4F5; border-radius:10px; padding:12px; display:flex; justify-content:space-between; font-size:17px; font-weight:800; }
+  .btn { min-height:52px; border-radius:10px; border:1px solid var(--brand); background:var(--brand); color:#fff; font:inherit; font-weight:800; width:100%; }
+  .note { border-radius:10px; padding:10px 12px; font-size:13.5px; } .ok { background:var(--ok); color:var(--okink); } .warn { background:var(--warn); color:var(--warnink); }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; } th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+  .seg { display:inline-flex; border:1px solid #D4D4D8; border-radius:8px; overflow:hidden; } .seg span { padding:6px 10px; font-size:12.5px; } .seg .on { background:var(--brand); color:#fff; }
+  .qs { max-width:1000px; margin:0 20px 30px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 18px; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Route Extension (Wat Pho + Wat Arun) — the guide chooses which guests buy it (mockup pr4e)</h1>
+  <p>Local file, invented data only. Extends the existing Extras block (PR3). Each row is a live booking on this job. What the guest originally bought is shown as context; the guide checks it and confirms — no office decision per package (owner, 20 Nov 2026).</p>
+</header>
+
+<div class="boards">
+  <section class="board">
+    <h2>1 · Guide — choose the guests (390 px)</h2>
+    <div class="phone">
+      <div><b>Sell Wat Pho + Wat Arun</b><div class="sub">Three Temples (morning) · FOLK-BKK-20991120-03 · ฿200 a guest, cash</div></div>
+      <div class="sub">Tick the guests who are buying it. What each booking originally bought is shown under the name.</div>
+
+      <label class="row"><input type="checkbox" checked><div><div class="name">Invented Ana</div><div class="sub mono">DEMO-BK-0001 · 1 guest</div><div class="sub">Bought: Invented Grand Palace only (GetYourGuide)</div></div><div></div></label>
+
+      <label class="row" style="grid-template-columns:28px 1fr"><input type="checkbox" checked><div><div class="name">Invented Family Ko</div><div class="sub mono">DEMO-BK-0002 · 4 guests</div><div class="sub">Bought: Invented Palace Morning Tour</div>
+        <div class="qty" aria-label="How many of this booking's 4 guests" style="margin-top:6px"><span>−</span><b>2</b><span>+</span></div><div class="sub">2 of 4 from this booking — no names needed</div></div></label>
+
+      <label class="row"><input type="checkbox"><div><div class="name">Invented Ben</div><div class="sub mono">DEMO-BK-0003 · 2 guests</div><div class="sub">Bought: Invented Grand Palace, Wat Pho &amp; Wat Arun Tour</div></div><div></div></label>
+
+      <label class="row off"><input type="checkbox" disabled><div><div class="name">Invented Chai</div><div class="sub mono">DEMO-BK-0004 · 1 guest</div><div class="why">Already bought this extra (FOLK-UPS-209911-010)</div></div><div></div></label>
+
+      <label class="row"><input type="checkbox"><div><div class="name">Invented Dao</div><div class="sub mono">DEMO-BK-0005 · 2 guests</div><div class="sub">Bought: not stated by the channel</div></div><div></div></label>
+
+      <div class="total"><span>3 guests · collect</span><span>฿600</span></div>
+      <button class="btn">ยืนยันเก็บเงินแล้ว ฿600<br><small style="font-weight:500">Cash received — 3 guests</small></button>
+    </div>
+  </section>
+
+  <section class="board">
+    <h2>2 · Guide — after recording</h2>
+    <div class="phone">
+      <div class="note ok"><b>Recorded · ฿600 cash with you</b></div>
+      <div><span class="sub">Sale Ref</span><div class="mono" style="font-size:18px;font-weight:700">FOLK-UPS-209911-014</div></div>
+      <table>
+        <tr><td>Invented Ana · <span class="mono">DEMO-BK-0001</span></td><td style="text-align:right">1 × ฿200</td></tr>
+        <tr><td>Invented Family Ko · <span class="mono">DEMO-BK-0002</span></td><td style="text-align:right">2 × ฿200</td></tr>
+        <tr><td><b>Paid in cash</b></td><td style="text-align:right"><b>฿600</b></td></tr>
+      </table>
+      <div class="sub">Job Ref FOLK-BKK-20991120-03 · payment acknowledgement, not the official receipt</div>
+    </div>
+  </section>
+
+</div>
+
+<div class="qs">
+  <b>Final (owner, 20 Nov 2026): tick the guests, press ONE “ยืนยันเก็บเงินแล้ว”</b>
+  <ol>
+    <li>The guide ticks the bookings buying it; a booking of several guests takes a count (“2 of 4 from this booking”), never invented names. Total = guests × ฿200, computed by the server.</li>
+    <li>What each booking originally bought is shown as the channel sent it — context only; no office decision, no separate check box.</li>
+    <li>Pressing the cash button is the acknowledgement: its exact words, who and when are kept with each booking's share of the sale.</li>
+    <li>A booking that already has the extra, a no-show, or a row typed on the sheet without a booking cannot be ticked. A reversed sale frees its guests.</li>
+    <li>Hand-in stays as it is: the hand-in code (with the Job Ref and the sales it covers) goes in the transfer memo before the transfer; the bank's own reference and the slip are added; Admin confirms.</li>
+  </ol>
+</div>
+</body>
+</html>

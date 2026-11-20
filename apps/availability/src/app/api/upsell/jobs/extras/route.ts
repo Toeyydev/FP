@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // on it now, what they have sold, and the cash they hold for Folkpaths (from the custody
 // ledger). The job's own GUIDE only; 404 while the Route Extension switch is off.
 export async function GET(req: NextRequest) {
-  const a = await upsellSaleAccess();
+  const a = await upsellSaleAccess("ANY");
   if (!a.ok) return NextResponse.json({ error: a.status === 404 ? "not-found" : "forbidden" }, { status: a.status });
   const q = req.nextUrl.searchParams;
   const guideId = q.get("guideId") ?? "", date = q.get("date") ?? "", slotIdx = Number(q.get("slotIdx"));

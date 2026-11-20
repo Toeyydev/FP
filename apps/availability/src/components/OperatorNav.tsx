@@ -40,6 +40,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "payment-batches", label: "Payment batches", href: "/payment-batches" },
       { key: "payment-slips", label: "Payment slips", href: "/payment-slips" },
       { key: "bank-transfers", label: "Bank transfers", href: "/bank-transfers" },
+      { key: "upsell-cash", label: "Extras cash", href: "/upsell-cash", upsell: true },
     ],
   },
   {

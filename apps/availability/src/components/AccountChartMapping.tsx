@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 // Account chart mapping card on Accounting → PEAK sync.
 //
@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 
 type PeakAccount = { code: string; name: string; nameEn?: string };
 type Row = {
-  key: string; label: string; th: string; example: string; scope: "FIXED" | "PER_JOB"; note: string | null;
+  key: string; label: string; th: string; example: string; scope: "FIXED" | "PER_JOB" | "EXTRAS"; note: string | null;
   peakAccountCode: string | null; peakAccountName: string | null;
   status: "MAPPED" | "NOT_MAPPED" | "REVIEW_PER_JOB";
 };
@@ -90,7 +90,7 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
     <section className="panel">
       <div className="panel-head">
         <h2>Account chart mapping</h2>
-        <span className="hint">Map FolkOPS expense categories to PEAK accounts.</span>
+        <span className="hint">Map FolkOPS categories — tour expenses and Extras — to PEAK accounts.</span>
         {rows && (
           <span style={{ marginLeft: "auto" }} className={`acct-ready ${ready ? "ok" : "warn"}`}>
             {ready ? "Account chart mapping configured" : `Account chart mapping not configured${remaining ? ` · ${remaining} mapping${remaining === 1 ? "" : "s"} remaining` : ""}`}
@@ -138,13 +138,23 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
                 <th style={{ width: 120 }}>Status</th>
               </tr></thead>
               <tbody>
-                {rows.map((c) => {
+                {rows.map((c, i) => {
                   const code = draft[c.key] ?? "";
+                  // Extras (Tour Upsell) start their own block: chosen by the accountant, and
+                  // an empty one holds back only the Extras PEAK export, never a job sheet.
+                  const extrasStart = c.scope === "EXTRAS" && rows[i - 1]?.scope !== "EXTRAS";
                   // Live status from the DRAFT, so choosing an account flips the
                   // pill before saving rather than after a round trip.
                   const status: Row["status"] = code.trim() ? "MAPPED" : c.scope === "PER_JOB" ? "REVIEW_PER_JOB" : "NOT_MAPPED";
                   return (
-                    <tr key={c.key}>
+                    <Fragment key={c.key}>
+                    {extrasStart && (
+                      <tr className="acct-group"><td colSpan={4}>
+                        <div style={{ fontWeight: 700 }}>Extras (ขายเพิ่ม)</div>
+                        <div className="acct-sub">Cash a guide collects for a tour sale and transfers to the company. Until these are mapped, Extras wait outside PEAK; job sheets are not affected.</div>
+                      </td></tr>
+                    )}
+                    <tr>
                       <td>
                         <div style={{ fontWeight: 600 }}>{c.label}</div>
                         <div className="acct-sub">{c.th}</div>
@@ -175,6 +185,7 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
                         <span className={`acct-pill ${status === "MAPPED" ? "ok" : "warn"}`}>{STATUS_LABEL[status]}</span>
                       </td>
                     </tr>
+                    </Fragment>
                   );
                 })}
               </tbody>

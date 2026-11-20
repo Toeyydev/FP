@@ -8,6 +8,7 @@ const authMock = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/auth", () => authMock);
 
 import { prisma } from "@/lib/db";
+import { fixtureAllocations } from "@/test/upsell-allocation";
 import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { seedUpsellProducts, SEED_PRODUCTS } from "./catalog";
 import { getProduct, listProducts, saveProduct, setProductActive, UpsellProductError, addDays, bangkokToday } from "./products";
@@ -77,6 +78,8 @@ async function sellUnder(versionId: string) {
       // At the version's own price: a Route Extension sale cannot be at any other (M3).
       sourceJobSheetId: job.id, sellingGuideId: SELLER, guests: 1, unitPriceSatang: v.unitPriceSatang, grossSatang: v.unitPriceSatang,
       status: "PENDING_PAYMENT", requestKey: `ups-${saleSeq}`,
+      // A Route Extension sale names its guests (allocations, PR4e) in the same insert.
+      ...(v.product.productType === "ROUTE_EXTENSION" ? { allocations: await fixtureAllocations(prisma, job.id, 1) } : {}),
     },
   });
 }
@@ -100,7 +103,7 @@ describe("the migration: what a JOIN_SOURCE_TOUR version may hold", () => {
   const good = () => ({
     productId, version: 9, unitPriceSatang: 70000, pricingBasis: "PER_GUEST", allowedPaymentMethods: ["CASH"],
     createsNewBooking: true, createsNewJob: false, eligibleSourceTourIds: ["T-001", "T-002"], allowsOtaMix: true, remittanceMethod: "BANK_TRANSFER",
-    revenueCategory: "UPSELL_ONSITE_TOUR_REVENUE", taxProfileId, activeFrom: new Date("2099-09-01"),
+    revenueCategory: "TOUR_SERVICE_REVENUE", taxProfileId, activeFrom: new Date("2099-09-01"),
   });
   beforeEach(async () => {
     const p = await prisma.upsellProduct.findUniqueOrThrow({ where: { productCode: "THREE-TEMPLES-ONSITE" }, include: { versions: true } });
@@ -389,9 +392,9 @@ describe("who may use the API", () => {
 });
 
 describe("/api/health", () => {
-  it("reports all six upsell switches, off", async () => {
-    for (const k of ["UPSELL_ENABLED", "UPSELL_ROUTE_EXTENSION_ENABLED", "UPSELL_FOOD_TOUR_ENABLED", "UPSELL_ONSITE_TOUR_ENABLED", "UPSELL_PAYMENT_LINK_ENABLED", "UPSELL_PEAK_AUTO_SYNC"]) vi.stubEnv(k, "");
+  it("reports all seven upsell switches, off", async () => {
+    for (const k of ["UPSELL_ENABLED", "UPSELL_ROUTE_EXTENSION_ENABLED", "UPSELL_FOOD_TOUR_ENABLED", "UPSELL_ONSITE_TOUR_ENABLED", "UPSELL_WALKIN_QR_ENABLED", "UPSELL_PAYMENT_LINK_ENABLED", "UPSELL_PEAK_AUTO_SYNC"]) vi.stubEnv(k, "");
     const j = await (await healthRoute()).json();
-    expect(j.upsell).toEqual({ enabled: false, routeExtension: false, foodTour: false, onsiteTour: false, paymentLink: false, peakAutoSync: false });
+    expect(j.upsell).toEqual({ enabled: false, routeExtension: false, foodTour: false, onsiteTour: false, walkInQr: false, paymentLink: false, peakAutoSync: false });
   });
 });

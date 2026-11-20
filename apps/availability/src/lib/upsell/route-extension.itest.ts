@@ -19,6 +19,7 @@ import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { seedUpsellProducts } from "./catalog";
 import { bangkokToday, addDays, getProduct, saveProduct, setProductActive, UpsellProductError } from "./products";
 import { jobExtras, recordRouteExtensionSale, UpsellSaleError } from "./sales";
+import { chooseGuests, fixtureAllocations } from "@/test/upsell-allocation";
 import { GET as extrasRoute } from "@/app/api/upsell/jobs/extras/route";
 import { POST as salesRoute } from "@/app/api/upsell/sales/route";
 import { GET as byKeyRoute } from "@/app/api/upsell/sales/by-key/[key]/route";
@@ -57,13 +58,19 @@ async function job(guideId: string, over: { date?: string; tourId?: string; pax?
   return prisma.jobSheet.create({ data: { guideId, date, slotIdx, tourId, bookings: [{ name: "Invented Guest", bookingNo: "INV-1", bookedPax: pax }] } });
 }
 const sellBody = (v: { id: string; unitPriceSatang: number }, guests: number, over: Record<string, unknown> = {}) =>
-  ({ requestKey: key(), jobSheetId: jobId, productVersionId: v.id, guests, expectedUnitPriceSatang: v.unitPriceSatang, ...over });
-const sell = (body: Record<string, unknown>, guideId = SELLER, userId = sellerUserId) => recordRouteExtensionSale(prisma, body, { userId, guideId });
+  ({ requestKey: key(), jobSheetId: jobId, productVersionId: v.id, guests, expectedUnitPriceSatang: v.unitPriceSatang, __auto: true, ...over });
+async function fill(b: Record<string, unknown>) {
+  if (!b.__auto) return b;
+  const { __auto: _a, ...body } = b;
+  if ("allocations" in body) return body;
+  return { ...body, ...(await chooseGuests(prisma, String(body.jobSheetId), String(body.productVersionId), Number(body.guests))) };
+}
+const sell = async (body: Record<string, unknown>, guideId = SELLER, userId = sellerUserId) => recordRouteExtensionSale(prisma, await fill(body), { userId, guideId });
 const counts = async () => ({
   sales: await prisma.upsellSale.count(), payments: await prisma.upsellPayment.count(), custody: await prisma.cashCustodyEntry.count(),
   bookings: await prisma.booking.count(), sheets: await prisma.jobSheet.count(), counters: await prisma.upsellDocCounter.count(),
 });
-const post = (body: unknown) => salesRoute(new Request("http://x/api/upsell/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) as never);
+const post = async (body: unknown) => salesRoute(new Request("http://x/api/upsell/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body && typeof body === "object" ? await fill(body as Record<string, unknown>) : body) }) as never);
 
 beforeAll(requireTestDatabase);
 beforeEach(async () => {
@@ -266,10 +273,17 @@ describe("M1c: a Route Extension is priced per guest, with no discount — INSER
   });
   it("a Route Extension sale is per guest at its version's price, never overridden — even in raw SQL", async () => {
     const v = await putOnSale();
-    const sale = (over: { basis?: string; unit?: number; gross?: number; reason?: string | null; approver?: string | null }) => prisma.$executeRaw`
+    const alloc = (await fixtureAllocations(prisma, jobId, 2)).create[0];
+    // Raw SQL, with the allocations a Route Extension sale must carry, in one transaction.
+    const sale = (over: { basis?: string; unit?: number; gross?: number; reason?: string | null; approver?: string | null }) => prisma.$transaction(async (tx) => {
+      const id = `s-raw-${Math.random().toString(36).slice(2, 10)}`;
+      const n = await tx.$executeRaw`
       INSERT INTO "UpsellSale" ("id","saleNo","productVersionId","ruleSnapshot","sourceJobSheetId","sellingGuideId","pricingBasis","guests","unitPriceSatang","grossSatang","priceOverrideReason","priceOverrideApprovedById","status","requestKey","updatedAt")
-      VALUES (${`s-raw-${Math.random().toString(36).slice(2, 10)}`}, ${`FOLK-UPS-209902-${String(++keySeq).padStart(3, "0")}`}, ${v.id}, '{}'::jsonb, ${jobId}, ${SELLER},
+      VALUES (${id}, ${`FOLK-UPS-209902-${String(++keySeq).padStart(3, "0")}`}, ${v.id}, '{}'::jsonb, ${jobId}, ${SELLER},
               ${over.basis ?? "PER_GUEST"}, 2, ${over.unit ?? 20000}, ${over.gross ?? 2 * (over.unit ?? 20000)}, ${over.reason ?? null}, ${over.approver ?? null}, 'PAID', ${key()}, now())`;
+      await tx.upsellSaleAllocation.create({ data: { ...alloc, saleId: id } });
+      return n;
+    });
     await fails(sale({ basis: "PER_GROUP", gross: 20000 }), /UPSELL_SALE_PRICE/);
     await fails(sale({ unit: 15000 }), /UPSELL_SALE_PRICE/);
     await fails(sale({ reason: "friend of the guide", approver: adminId }), /UPSELL_SALE_PRICE/);
@@ -292,10 +306,11 @@ describe("M1c: a Route Extension is priced per guest, with no discount — INSER
 });
 
 describe("M3: a sale follows its version", () => {
-  const rawSale = (versionId: string, jobSheetId: string) => prisma.upsellSale.create({
+  const rawSale = async (versionId: string, jobSheetId: string) => prisma.upsellSale.create({
     data: {
       saleNo: `FOLK-UPS-209901-${String(++keySeq).padStart(3, "0")}`, productVersionId: versionId, ruleSnapshot: {}, sourceJobSheetId: jobSheetId,
       sellingGuideId: SELLER, guests: 1, unitPriceSatang: 20000, grossSatang: 20000, status: "PAID", requestKey: key(),
+      allocations: await fixtureAllocations(prisma, jobSheetId, 1),
     },
   });
   it("a Route Extension is sold only on a tour its version lists", async () => {
@@ -359,7 +374,7 @@ describe("M2 / M2b: the seeded RTE-WPWA is changed only exactly as the seed left
   });
   it("stops if it has a sale", async () => {
     const id = await asPr2Seed({ eligibleSourceTourIds: [TOUR] });
-    await prisma.upsellSale.create({ data: { saleNo: "FOLK-UPS-209901-001", productVersionId: id, ruleSnapshot: {}, sourceJobSheetId: jobId, sellingGuideId: SELLER, guests: 1, unitPriceSatang: 20000, grossSatang: 20000, status: "PAID", requestKey: key() } });
+    await prisma.upsellSale.create({ data: { saleNo: "FOLK-UPS-209901-001", productVersionId: id, ruleSnapshot: {}, sourceJobSheetId: jobId, sellingGuideId: SELLER, guests: 1, unitPriceSatang: 20000, grossSatang: 20000, status: "PAID", requestKey: key(), allocations: await fixtureAllocations(prisma, jobId, 1) } });
     await prisma.$executeRawUnsafe(`ALTER TABLE "UpsellProductVersion" DISABLE TRIGGER upsell_product_version_type_rules`);
     await prisma.$executeRawUnsafe(`ALTER TABLE "UpsellProductVersion" DISABLE TRIGGER upsell_product_version_frozen`);
     try { await prisma.upsellProductVersion.update({ where: { id }, data: { eligibleSourceTourIds: [] } }); } finally {
@@ -442,7 +457,7 @@ describe("selling a Route Extension for cash", () => {
     expect(r.replay).toBe(false);
     expect(r.sale).toMatchObject({ guests: 3, unitPriceSatang: 20000, grossSatang: 60000, method: "CASH", productName: "Wat Pho + Wat Arun" });
     expect(r.sale.saleNo).toMatch(/^FOLK-UPS-\d{6}-\d{3}$/);
-    expect(r.sale.jobRef).toMatch(/^FOLK-BKK-\d{8}-\d{2}$/);
+    expect(r.sale.jobRef).toMatch(/^FOLK-BKK-\d{8}-\d{2,}$/);
     const sale = await prisma.upsellSale.findFirstOrThrow();
     expect(sale).toMatchObject({ status: "PAID", sellingGuideId: SELLER, serviceGuideId: SELLER, sourceJobSheetId: jobId, createdById: sellerUserId });
     expect(await prisma.upsellPayment.findFirstOrThrow()).toMatchObject({ method: "CASH", status: "COLLECTED", statusSource: "GUIDE_CASH", amountSatang: 60000, cashCollectorId: SELLER });

@@ -127,6 +127,21 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
     if (a) setDetail(a);
     setDeepLinked(true);
   }, [advances, deepLinked]);
+  // Bank transfers › Re-record: ?reuseAdvance=<reversed advance id>&why=<reason> opens Record
+  // advance on that transfer (Admin). The server checks the role, the reference and the account.
+  const [reuse, setReuse] = useState<ReuseAdvance | null>(null);
+  const [reuseLinked, setReuseLinked] = useState(false);
+  useEffect(() => {
+    if (reuseLinked || !advances.length || typeof window === "undefined") return;
+    setReuseLinked(true);
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("reuseAdvance");
+    if (!id || !isAdmin) return;
+    const a = advances.find((x) => x.id === id);
+    if (!a || a.status !== "VOID" || !a.txRef) { setMsg("That advance is not a reversed advance with a bank reference — re-record it from Bank transfers"); return; }
+    setReuse({ advanceId: a.id, advanceNo: a.advanceNo, bankRef: a.txRef, amount: a.amount, guideId: a.guideId, jobNo: a.jobNo, reason: q.get("why") ?? "" });
+    setIssuing(true);
+  }, [advances, reuseLinked, isAdmin]);
   const open = useMemo(() => advances.filter((a) => a.status === "OPEN" || a.status === "IN_USE" || a.status === "RETURN_DUE"), [advances]);
   const waiting = useMemo(() => receipts.filter((r) => r.status === "CLAIMED"), [receipts]);
 
@@ -334,7 +349,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
       )}
 
       {returning && <RecordReturnDialog advance={returning} onClose={() => setReturning(null)} onDone={(m) => { setReturning(null); setMsg(m); void load(); }} />}
-      {issuing && <IssueAdvanceDialog isAdmin={isAdmin} onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }}
+      {issuing && <IssueAdvanceDialog isAdmin={isAdmin} reuse={reuse} onClose={() => { setIssuing(false); setReuse(null); }} onDone={async (m) => { setIssuing(false); setReuse(null); setMsg(m); await load(); }}
         onOpenExisting={(id) => { const a = advances.find((x) => x.id === id); setIssuing(false); if (a) setDetail(a); }} />}
       {detail && <LedgerDialog advance={detail} canEdit={canEdit} isAdmin={isAdmin} canReconcile={canReconcile} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
       {linking && <RecordExistingPeakDialog target={linking} bankAccount={returnBank || undefined} onClose={() => setLinking(null)} onDone={async (m) => { setLinking(null); setMsg(m); await load(); }} />}
@@ -446,7 +461,9 @@ function RecordReturnDialog({ advance, onClose, onDone }: { advance: Advance; on
   );
 }
 
-function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onClose: () => void; onDone: (msg: string) => void; isAdmin: boolean; onOpenExisting: (advanceId: string) => void }) {
+type ReuseAdvance = { advanceId: string; advanceNo: string; bankRef: string; amount: number; guideId: string; jobNo: string | null; reason: string };
+
+function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting, reuse = null }: { onClose: () => void; onDone: (msg: string) => void; isAdmin: boolean; onOpenExisting: (advanceId: string) => void; reuse?: ReuseAdvance | null }) {
   // The slip check (components/SlipCheckPanel): whether it lets this record through, and
   // the person's answer that goes with it. The server checks the same file again.
   const [slipReady, setSlipReady] = useState(false);
@@ -454,11 +471,11 @@ function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onCl
   const [existingId, setExistingId] = useState<{ id: string; advanceNo: string } | null>(null);
   const [guideId, setGuideId] = useState("");
   const [advanceDate, setAdvanceDate] = useState(new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10));
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(reuse ? String(reuse.amount) : "");
   const [jobNo, setJobNo] = useState("");
   const [bankAccount, setBankAccount] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [bankRef, setBankRef] = useState("");
+  const [bankRef, setBankRef] = useState(reuse?.bankRef ?? "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // What it may pay for (tickets by default); "other" needs a reason, kept in its history.
@@ -481,6 +498,7 @@ function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onCl
       body.set("allowedCategories", cats.join(","));
       if (cats.includes("other")) body.set("otherReason", otherReason.trim());
       if (purpose.trim()) body.set("purpose", purpose.trim());
+      if (reuse) { body.set("reuseReversedAdvanceId", reuse.advanceId); body.set("reuseReason", reuse.reason); }
       for (const [k, v] of Object.entries(slipFields)) if (v) body.set(k, v);
       const res = await fetch("/api/advances", { method: "POST", body });
       const r = await res.json().catch(() => ({})) as { advance?: { advanceNo: string }; detail?: string; reasons?: string[]; error?: string; duplicateOf?: { id: string; advanceNo: string } };
@@ -498,6 +516,7 @@ function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onCl
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="adv-h" style={{ width: "min(520px, 100%)" }}>
         <h3 id="adv-h">Record advance</h3>
         <div className="mbody">
+          {reuse && <div className="ob warn js-reuse-banner" style={{ display: "block", whiteSpace: "normal", marginBottom: 8 }}>Re-recording the transfer of reversed advance <b>{reuse.advanceNo}</b> ({reuse.guideId}{reuse.jobNo ? ` · ${reuse.jobNo}` : ""}) — the same bank reference {reuse.bankRef}, the same company account. No new bank transfer is made. Why: “{reuse.reason}”</div>}
         <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
           Money the company transferred to a guide to buy customer tickets for this Job No. It is cleared by the approved ticket
           rows or by unused money the guide returns.
@@ -513,7 +532,7 @@ function IssueAdvanceDialog({ onClose, onDone, isAdmin, onOpenExisting }: { onCl
           {/^FOLK-[A-Z]+-\d{8}-\d+$/.test(jobNo.trim()) && <CopyMemo memo={advanceMemo([jobNo.trim()])} label="Advance transfer" />}
           <AdvanceBankSelect value={bankAccount} onChange={setBankAccount} disabled={busy} />
           <label>สลิปโอนเงิน<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={e=>setFile(e.target.files?.[0]??null)} /></label>
-          <label>Bank reference<input value={bankRef} onChange={(e) => setBankRef(e.target.value)} disabled={busy} /></label>
+          <label>Bank reference<input value={bankRef} onChange={(e) => setBankRef(e.target.value)} disabled={busy || !!reuse} readOnly={!!reuse} /></label>
           <div className="js-issue-categories" style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12.5 }}>
             <span className="muted">May pay for:</span>
             {[["entrance", "Entrance tickets"], ["meal", "Meals"], ["transport", "Transport"], ["other", "Other"]].map(([k, label]) => (

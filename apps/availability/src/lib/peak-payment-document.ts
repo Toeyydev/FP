@@ -701,8 +701,13 @@ export type PayDocumentDeps = {
   uploadSlip(): Promise<{ link: string }>;
   /** Record the payment against the EXISTING PEAK document. Never creates a document. */
   payExpense(p: { documentNo: string; documentId: string | null; paymentDate: string; paymentMethodId: string } & PaymentPlan): Promise<PaymentWriteResult>;
+  /** PEAK confirmed the payment: stamp that durably BEFORE anything local can fail, so the
+   *  document can never be offered for payment again (no "payment not found" reset). */
+  notePeakPaid(p: { paymentRef: string }): Promise<void>;
   /** PEAK recorded it: every job locked to this document becomes PAID, atomically. */
   recordPaid(p: { paymentRef: string; slipLink: string }): Promise<void>;
+  /** PEAK recorded it but marking the jobs failed: PAYMENT_UNCERTAIN, shown, reconciled by a person. */
+  recordPaidConflict(p: { paymentRef: string; reason: string }): Promise<void>;
   /** FAILED returns the document to AWAITING_PAYMENT; UNCERTAIN (PAYMENT_UNCERTAIN) keeps it. */
   recordPaymentFailed(p: { paymentRef: string; reason: string; uncertain: boolean }): Promise<void>;
   attachSlip(p: { documentId: string | null; documentNo: string }): Promise<{ ok: boolean; reason?: string }>;
@@ -776,11 +781,15 @@ export async function payCombinedDocument(
     return uncertain ? { status: "UNCERTAIN", paymentRef, reason: outcome.reason } : { status: "FAILED", paymentRef, stage: "peak", reason: outcome.reason };
   }
 
+  // From here on the money is recorded in PEAK: nothing below may make it payable again.
+  await deps.notePeakPaid({ paymentRef }).catch(() => {});
   let recordError: string | null = null;
   try {
     await deps.recordPaid({ paymentRef, slipLink });
   } catch (e) {
     recordError = `PEAK recorded the payment on ${documentNo}, but FolkOPS could not mark the jobs paid: ${msg(e)}`;
+    // Visible and reconcilable — never left looking like an ordinary in-flight payment.
+    await deps.recordPaidConflict({ paymentRef, reason: recordError }).catch(() => {});
   }
 
   let attachment: { ok: boolean; reason: string | null };

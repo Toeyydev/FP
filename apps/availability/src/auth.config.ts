@@ -41,6 +41,9 @@ export const authConfig = {
         p.startsWith("/api/session") || p.startsWith("/api/password") || p.startsWith("/api/version") ||
         p === "/api/line/webhook" || p === "/api/offers/sweep" || p === "/api/bokun/webhook" || p === "/api/push/health" || p === "/api/email/health" || p === "/api/google/health" ||
         p.startsWith("/api/passkey") || p.startsWith("/api/offers/respond") ||
+        // The guest QR for a walk-in seat (lib/upsell/walk-in-qr): a guest has no account. Every
+        // route under it answers 404 while UPSELL_WALKIN_QR_ENABLED is off and checks its own token.
+        p.startsWith("/w/") || p.startsWith("/api/public/walk-in/") ||
         // FolkOPS Mobile sends a bearer token, not a cookie. Every /api/mobile route
         // checks that token itself (lib/mobile-auth) and answers 401 without one.
         p.startsWith("/api/mobile/");
