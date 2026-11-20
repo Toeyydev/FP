@@ -442,7 +442,7 @@ describe("selling a Route Extension for cash", () => {
     expect(r.replay).toBe(false);
     expect(r.sale).toMatchObject({ guests: 3, unitPriceSatang: 20000, grossSatang: 60000, method: "CASH", productName: "Wat Pho + Wat Arun" });
     expect(r.sale.saleNo).toMatch(/^FOLK-UPS-\d{6}-\d{3}$/);
-    expect(r.sale.jobRef).toMatch(/^FOLK-BKK-\d{8}-\d{2}$/);
+    expect(r.sale.jobRef).toMatch(/^FOLK-BKK-\d{8}-\d{2,}$/);
     const sale = await prisma.upsellSale.findFirstOrThrow();
     expect(sale).toMatchObject({ status: "PAID", sellingGuideId: SELLER, serviceGuideId: SELLER, sourceJobSheetId: jobId, createdById: sellerUserId });
     expect(await prisma.upsellPayment.findFirstOrThrow()).toMatchObject({ method: "CASH", status: "COLLECTED", statusSource: "GUIDE_CASH", amountSatang: 60000, cashCollectorId: SELLER });

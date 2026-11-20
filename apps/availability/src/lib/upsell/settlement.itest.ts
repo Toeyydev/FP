@@ -14,7 +14,10 @@ import {
   SettlementError, confirmHandIn, prepareHandIn, decideReversal, errorAffirmationText, handInView, reportTransfer, requestErrorReversal,
   requestRefundReversal, returnHandIn, setReceivingAccount, submitHandIn, withdrawTransfer,
 } from "./settlement";
-import { ABSENCE_GRACE_MS, UpsellPeakRefused, recordRevenueRecognition, recoverExpiredLeases, resolveUncertain, sendPeakEvent, type UpsellPeakAdapter } from "./peak-outbox";
+import { ABSENCE_GRACE_MS, GUIDE_CASH_HELD, UpsellPeakRefused, recheckBlocked, recordRevenueRecognition, recoverExpiredLeases, resolveUncertain, sendPeakEvent, type UpsellPeakAdapter } from "./peak-outbox";
+import { upsellPeakAdapter, type PeakJournalClient } from "./peak-adapter";
+import { adminResolvePeakEvent, adminSendPeakEvent } from "./peak-send";
+import type { DailyJournalPayload } from "@/lib/peak-api";
 import { setVatRegistration } from "./tax-profile";
 
 const TODAY = bangkokToday();
@@ -521,5 +524,66 @@ describe("the PEAK sender (PR4-P plugs in the real adapter): never a blind resen
     });
     await expect(resolveUncertain(prisma, racing, id, later(ABSENCE_GRACE_MS + 1000))).rejects.toThrow(UpsellPeakRefused);
     expect(await prisma.upsellPeakEvent.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "POSTED", peakId: "peak-1", peakCode: "RE-1" });
+  });
+});
+
+describe("PR4-P: a confirmed hand-in reaches PEAK as one daily journal (real adapter, PEAK faked)", () => {
+  // resetDatabase keeps the account chart; other suites must not see this test mapping.
+  afterEach(() => prisma.peakAccountMapping.deleteMany({ where: { folkopsCategory: GUIDE_CASH_HELD } }));
+  const CONFIG = { clearingJournalTypeId: "jt-test", clearingContactId: "ct-test", receivingAccounts: { "pm-7890": { accountCode: "111299", accountSubId: "sub-test" } } };
+  async function confirmed() {
+    await ready();
+    const a = (await transfer(80000, "KB-7731-0101")).transfer;
+    const s = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [a.id] });
+    await confirmHandIn(prisma, admin, { settlementId: s.settlement.id, submissionNo: 1, transferIds: [a.id] });
+    const e = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "BANK_CLEARING" } });
+    return { e, settlementNo: s.settlement.settlementNo, receivingAccountId: (e.payload as { receivingAccountId: string }).receivingAccountId };
+  }
+  const client = (create: PeakJournalClient["createDailyJournal"], get: PeakJournalClient["getDailyJournal"] = async () => ({ ok: true, notFound: true })) => {
+    const sent: DailyJournalPayload[] = [];
+    return { sent, c: { createDailyJournal: async (j: DailyJournalPayload) => { sent.push(j); return create(j); }, getDailyJournal: get } };
+  };
+
+  it("blocked until guide cash held is mapped; then one journal: Dr the receiving bank, Cr guide cash held, memo = hand-in code", async () => {
+    const { e, settlementNo, receivingAccountId } = await confirmed();
+    expect(e.status).toBe("BLOCKED");
+    expect(e.blockedReasons.join(" ")).toContain(GUIDE_CASH_HELD);
+    await prisma.peakAccountMapping.upsert({ where: { folkopsCategory: GUIDE_CASH_HELD }, update: { peakAccountCode: "213999", isActive: true }, create: { folkopsCategory: GUIDE_CASH_HELD, peakAccountCode: "213999", peakAccountName: "Invented cash held" } });
+    expect((await recheckBlocked(prisma, e.id, { guideCashHeld: true, receivingAccountId })).status).toBe("PENDING");
+    const { sent, c } = client(async () => ({ ok: true, id: "pj-test-1", code: "JV-TEST-0001" }));
+    // Off unless switched on — nothing reaches PEAK.
+    expect(await code(adminSendPeakEvent(prisma, admin, e.id, upsellPeakAdapter(c, () => CONFIG)))).toBe("PEAK_EVENT");
+    expect(sent).toHaveLength(0);
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    expect(await adminSendPeakEvent(prisma, admin, e.id, upsellPeakAdapter(c, () => CONFIG))).toMatchObject({ status: "POSTED", peakId: "pj-test-1", peakCode: "JV-TEST-0001" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].reference.startsWith(settlementNo)).toBe(true);
+    expect(sent[0].description.startsWith(`${settlementNo} · `)).toBe(true);
+    expect(sent[0].journalEntries.map((l) => [l.accountCode, l.debit, l.credit])).toEqual([["111299", "800.00", "0.00"], ["213999", "0.00", "800.00"]]);
+    expect(await prisma.auditLog.count({ where: { action: "upsell.peak_event_sent", entityId: e.id } })).toBe(1);
+    // Never twice.
+    expect(await code(adminSendPeakEvent(prisma, admin, e.id, upsellPeakAdapter(c, () => CONFIG)))).toBe("PEAK_EVENT");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("a lost answer stays UNCERTAIN; only a code the Admin reads off PEAK, verified against the event, posts it", async () => {
+    const { e, receivingAccountId } = await confirmed();
+    await prisma.peakAccountMapping.upsert({ where: { folkopsCategory: GUIDE_CASH_HELD }, update: { peakAccountCode: "213999", isActive: true }, create: { folkopsCategory: GUIDE_CASH_HELD, peakAccountCode: "213999", peakAccountName: "Invented cash held" } });
+    await recheckBlocked(prisma, e.id, { guideCashHeld: true, receivingAccountId });
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    const journal = (debit: number) => ({ id: "pj-test-9", code: "JV-TEST-0009", journalTypeId: null, contactId: null, isVoid: false, issuedDate: null,
+      entries: [{ accountCode: "111299", accountSubId: "sub-test", accountSubCode: null, debit, credit: 0, description: null }, { accountCode: "213999", accountSubId: null, accountSubCode: null, debit: 0, credit: debit, description: null }] });
+    let inPeak = journal(700);
+    const { sent, c } = client(async () => ({ ok: false, uncertain: true, desc: "timeout" }), async (codeAsked) => (codeAsked === "JV-TEST-0009" ? { ok: true, journal: inPeak } : { ok: true, notFound: true }));
+    const a = upsellPeakAdapter(c, () => CONFIG);
+    expect((await adminSendPeakEvent(prisma, admin, e.id, a)).status).toBe("UNCERTAIN");
+    expect((await adminResolvePeakEvent(prisma, admin, e.id, undefined, a)).status).toBe("UNCERTAIN");
+    expect((await adminResolvePeakEvent(prisma, admin, e.id, "JV-TEST-0404", a)).status).toBe("UNCERTAIN");
+    expect(await code(adminResolvePeakEvent(prisma, admin, e.id, "not a code!", a))).toBe("PEAK_CODE");
+    expect((await adminResolvePeakEvent(prisma, admin, e.id, "JV-TEST-0009", a))).toMatchObject({ status: "UNCERTAIN", lastError: expect.stringContaining("not this hand-in") });
+    inPeak = journal(800);
+    expect(await adminResolvePeakEvent(prisma, admin, e.id, "JV-TEST-0009", a)).toMatchObject({ status: "POSTED", peakId: "pj-test-9", peakCode: "JV-TEST-0009" });
+    expect(sent).toHaveLength(1);
+    expect(await prisma.auditLog.count({ where: { action: "upsell.peak_event_read_back", entityId: e.id } })).toBe(4);
   });
 });

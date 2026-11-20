@@ -136,7 +136,7 @@ export type PeakReadBack = { found: true; peakId: string; peakCode: string } | {
 export interface UpsellPeakAdapter {
   post(event: { id: string; eventKind: UpsellPeakEventKind; eventDate: string; payload: unknown; mappingSnapshot: unknown }): Promise<PeakPostResult>;
   /** Look the event up in PEAK by its own reference (never by guessing): used after UNKNOWN. */
-  readBack(event: { id: string; eventKind: UpsellPeakEventKind; payload: unknown }): Promise<PeakReadBack>;
+  readBack(event: { id: string; eventKind: UpsellPeakEventKind; payload: unknown; mappingSnapshot?: unknown; peakCode?: string | null }): Promise<PeakReadBack>;
 }
 
 
@@ -182,10 +182,11 @@ export async function recoverExpiredLeases(db: PrismaClient, now = new Date()) {
  * PENDING. Anything else: stays UNCERTAIN. Compare-and-set on the version read, so a stale answer
  * can never overwrite a POSTED event or open a second send.
  */
-export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string, now = new Date()) {
+export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string, now = new Date(), opts: { peakCode?: string } = {}) {
   const e = await db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
   if (e.status !== "UNCERTAIN") throw new UpsellPeakRefused("Only an UNCERTAIN event is read back");
-  const r = await adapter.readBack({ id: e.id, eventKind: e.eventKind as UpsellPeakEventKind, payload: e.payload });
+  // `peakCode`: a code an Admin read off PEAK (journals have no reference lookup) — verified by the adapter, never trusted.
+  const r = await adapter.readBack({ id: e.id, eventKind: e.eventKind as UpsellPeakEventKind, payload: e.payload, mappingSnapshot: e.mappingSnapshot, peakCode: opts.peakCode?.trim() || e.peakCode });
   const cas = (data: Prisma.UpsellPeakEventUpdateManyMutationInput) => db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "UNCERTAIN", version: e.version }, data });
   let done;
   if ("unknown" in r) done = await cas({ lastError: r.error.slice(0, 500) });
