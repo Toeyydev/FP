@@ -440,6 +440,7 @@ model Booking {
   @@unique([source, externalId])
   @@index([date])
   @@index([status])
+  upsellAllocations UpsellSaleAllocation[]
 }
 
 // Web Push subscription (one per browser/device) for home-screen job alerts.
@@ -2263,6 +2264,7 @@ model UpsellSale {
   @@index([sourceJobSheetId])
   @@index([sellingGuideId, createdAt])
   walkInRegistration WalkInRegistration?
+  allocations UpsellSaleAllocation[]
 }
 
 // Money in for a sale. Cash is recorded by the guide who took it (and is then that guide's
@@ -2644,4 +2646,33 @@ model WalkInRegistration {
   @@unique([qrId, requestKey])
   @@index([jobSheetId, status])
   @@index([qrId, createdAt])
+}
+
+// Which booking's guests a sale is for (migration 20261125090000): how many, the booking's original
+// purchase as it was (context only), and the guide's cash-received acknowledgement (the button's exact
+// words, who, when). ACTIVE until the sale is reversed (RELEASED, once). Never deleted.
+model UpsellSaleAllocation {
+  id                   String            @id @default(cuid())
+  saleId               String
+  sale                 UpsellSale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  bookingId            String
+  booking              Booking    @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  guests               Int
+  bookingRef           String
+  bookingPaxAtSale     Int
+  source               String
+  packageKey           String
+  packageName          String
+  rateKey              String
+  rateName             String
+  cashAckText          String // the exact words of the button the guide pressed ("ยืนยันเก็บเงินแล้ว ฿…")
+  cashAckById          String
+  cashAckAt            DateTime
+  status               String            @default("ACTIVE") // ACTIVE | RELEASED
+  releasedAt           DateTime?
+  releasedByReversalId String?
+  createdAt            DateTime          @default(now())
+
+  @@unique([saleId, bookingId])
+  @@index([bookingId, status])
 }

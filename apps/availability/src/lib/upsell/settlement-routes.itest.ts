@@ -11,6 +11,7 @@ import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { seedUpsellProducts } from "./catalog";
 import { addDays, bangkokToday } from "./products";
 import { recordRouteExtensionSale } from "./sales";
+import { chooseGuests } from "@/test/upsell-allocation";
 import { setReceivingAccount } from "./settlement";
 import { GET as VIEW } from "@/app/api/upsell/hand-in/[jobSheetId]/route";
 import { POST as REPORT } from "@/app/api/upsell/hand-in/[jobSheetId]/transfers/route";
@@ -45,7 +46,7 @@ beforeEach(async () => {
   await prisma.assignment.create({ data: { guideId: "G-981", date: TODAY, slotIdx: 2, tourId: TOUR } });
   await prisma.booking.create({ data: { source: "manual", externalId: `bk-r-${Math.random()}`, tourId: TOUR, date: TODAY, slotIdx: 2, pax: 6, status: "ASSIGNED", customerName: "Invented Guest" } });
   jobId = (await prisma.jobSheet.create({ data: { guideId: "G-981", date: TODAY, slotIdx: 2, tourId: TOUR, bookings: [{ name: "Invented Guest", bookingNo: "INV-1", bookedPax: 6 }] } })).id;
-  await recordRouteExtensionSale(prisma, { requestKey: `test-key-route-${Math.random().toString(36).slice(2, 12)}`, jobSheetId: jobId, productVersionId: v.id, guests: 2, expectedUnitPriceSatang: v.unitPriceSatang }, { userId: g1, guideId: "G-981" });
+  await recordRouteExtensionSale(prisma, { requestKey: `test-key-route-${Math.random().toString(36).slice(2, 12)}`, jobSheetId: jobId, productVersionId: v.id, guests: 2, expectedUnitPriceSatang: v.unitPriceSatang, ...(await chooseGuests(prisma, jobId, v.id, 2)) }, { userId: g1, guideId: "G-981" });
   await prisma.tourReport.create({ data: { guideId: "G-981", date: TODAY, slotIdx: 2, tourId: TOUR } });
 });
 afterEach(() => vi.unstubAllEnvs());

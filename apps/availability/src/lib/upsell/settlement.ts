@@ -3,6 +3,7 @@ import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { nextUpsellDocNo } from "./counter";
 import { cancelPeakEvent, recordPeakEvent, UNDECIDED_REVERSAL_DOCUMENT } from "./peak-outbox";
+import { releaseAllocations } from "./guest-allocation";
 
 // Tour Upsell PR4 — the guide hands in the Extras cash of one job; an Admin confirms or returns
 // it; a sale can be reversed (owner + Codex, 19–20 Nov 2026; mockups/pr4-upsell-settlement-v9a).
@@ -390,6 +391,8 @@ export async function decideReversal(db: Db, admin: Admin, input: { reversalId: 
     }
     if (r!.kind === "REFUNDED") receiptInPeak = true; // the refund is its own document either way
     await tx.upsellSale.update({ where: { id: sale.id }, data: { status: "REVERSED" } });
+    // Its guests can buy it again (booking rows locked first — the sale protocol): released, kept.
+    const released = await releaseAllocations(tx, sale.id, r!.id, now);
     const walkIn = await cancelWalkInSeat(tx, admin, sale.id, `${r!.kind} · reversal ${r!.id}`);
     await tx.upsellSaleReversal.update({ where: { id: r!.id }, data: { status: "APPROVED", decidedById: admin.userId, decidedAt: now, decisionNote: input.note ?? null } });
     if (receiptInPeak) await recordPeakEvent(tx, {
@@ -398,7 +401,7 @@ export async function decideReversal(db: Db, admin: Admin, input: { reversalId: 
       needs: { blocked: [UNDECIDED_REVERSAL_DOCUMENT] },
     });
     await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: "ADMIN", action: "upsell.sale_reversed", entityType: "UpsellSale", entityId: sale.id,
-      detail: { saleNo: sale.saleNo, reversalId: r!.id, kind: r!.kind, refundPaidBy: r!.refundPaidBy, guideCashReduced: reducesCash && !!collected, amountSatang: sale.grossSatang, walkInBookingCancelled: walkIn } } });
+      detail: { saleNo: sale.saleNo, reversalId: r!.id, kind: r!.kind, refundPaidBy: r!.refundPaidBy, guideCashReduced: reducesCash && !!collected, amountSatang: sale.grossSatang, walkInBookingCancelled: walkIn, allocationsReleased: released } } });
     return { approved: true, guideCashReduced: reducesCash && !!collected, walkInBookingCancelled: walkIn };
   });
 }

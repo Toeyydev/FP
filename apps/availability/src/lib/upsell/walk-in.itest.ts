@@ -115,7 +115,7 @@ describe("walk-in seat: a new guest joins the guide's own tour", () => {
   it("a walk-in seat is not a Route Extension (each path sells its own type only)", async () => {
     const v = await version2();
     vi.stubEnv("UPSELL_ROUTE_EXTENSION_ENABLED", "1");
-    expect(await code(recordRouteExtensionSale(prisma, { requestKey: key(), jobSheetId: jobId, productVersionId: v.id, guests: 1, expectedUnitPriceSatang: 70000 }, guide))).toBe("NO_PRODUCT");
+    expect(await code(recordRouteExtensionSale(prisma, { requestKey: key(), jobSheetId: jobId, productVersionId: v.id, guests: 1, expectedUnitPriceSatang: 70000, allocations: [{ bookingId: "x", guests: 1, fingerprint: "xxxxxxxxxxxx" }] }, guide))).toBe("NO_PRODUCT");
   });
 
   it("the hand-in covers the walk-in's cash like any Extras cash", async () => {

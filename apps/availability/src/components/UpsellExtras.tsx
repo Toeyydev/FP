@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import UpsellHandIn from "@/components/UpsellHandIn";
 import WalkInGuestQr from "@/components/WalkInGuestQr";
 
@@ -23,9 +23,12 @@ import WalkInGuestQr from "@/components/WalkInGuestQr";
 // being issued, waiting for set-up). No tax invoice — the company is not VAT-registered.
 
 type Kind = "ROUTE_EXTENSION" | "WALK_IN";
-type Product = { productCode: string; name: string; productVersionId: string; unitPriceSatang: number; pricingBasis: string; guestsLeft: number; kind: Kind; jobPax: number; seatsPerGuide: number };
+type GuestRow = { bookingId: string; name: string; bookingRef: string; pax: number; remaining: number; state: "SELLABLE" | "ALREADY_BOUGHT" | "NO_SHOW"; reason: string | null; product: string; rate: string; fingerprint: string };
+type Product = { productCode: string; name: string; productVersionId: string; unitPriceSatang: number; pricingBasis: string; guestsLeft: number; kind: Kind; jobPax: number; seatsPerGuide: number;
+  rows?: GuestRow[]; unlinked?: { name: string; bookingNo: string; pax: number }[]; legacyGuests?: number };
 type Receipt = { state: "SYNCED" | "QUEUED" | "WAITING" | "CHECKING" | "NONE"; peakCode: string | null };
-type Sale = { saleNo: string; jobRef: string | null; productName: string; guests: number; unitPriceSatang: number; pricingBasis: string; grossSatang: number; method: "CASH"; recordedAt: string; kind: Kind; status: string; receipt: Receipt };
+type Sale = { saleNo: string; jobRef: string | null; productName: string; guests: number; unitPriceSatang: number; pricingBasis: string; grossSatang: number; method: "CASH"; recordedAt: string; kind: Kind; status: string; receipt: Receipt;
+  allocations?: { bookingRef: string; guests: number; name: string | null; status: string }[] };
 type Cash = { heldSatang: number; toRemitSatang: number; remitBy: "BANK_TRANSFER"; remitWhen: "END_TOUR_REPORT"; status: string };
 type Extras =
   | { show: false }
@@ -33,7 +36,7 @@ type Extras =
 type Pending = { requestKey: string; body: Record<string, unknown>; productName: string; kind?: Kind };
 type View =
   | { kind: "block" }
-  | { kind: "sell"; product: Product; guests: number; lead: string; error?: string; restart?: boolean }
+  | { kind: "sell"; product: Product; guests: number; lead: string; picks: Record<string, number>; error?: string; restart?: boolean }
   | { kind: "sending" }
   | { kind: "checking"; note?: string }
   | { kind: "notRecorded" }
@@ -131,20 +134,26 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       // A definite refusal: nothing was recorded, so the key is done with.
       const j = await r.json().catch(() => ({}));
       writePending(key, null);
-      if (product && guests) setView({ kind: "sell", product, guests, lead: String(p.body.leadName ?? ""), error: j.message ?? "Not recorded.", restart: j.error === "PRICE_CHANGED" || j.error === "NOT_ON_SALE" });
+      // Anything that means the job changed under the guide's choice: start again from fresh data.
+      const restart = ["PRICE_CHANGED", "NOT_ON_SALE", "STALE", "BOOKING_NOT_ON_JOB", "ALREADY_SOLD", "NO_SHOW", "TOO_MANY_GUESTS"].includes(j.error);
+      if (product && guests) setView({ kind: "sell", product, guests, lead: String(p.body.leadName ?? ""), picks: {}, error: j.message ?? "Not recorded.", restart });
       else { setView({ kind: "block" }); void load(); }
       return;
     }
     await check(); // no answer, or a server error: it may be saved — find out before anything else
   };
 
-  const startSell = (product: Product) => setView({ kind: "sell", product, guests: 1, lead: "" });
-  const confirmCash = (product: Product, guests: number, lead: string) => {
+  const startSell = (product: Product) => setView({ kind: "sell", product, guests: product.kind === "WALK_IN" ? 1 : 0, lead: "", picks: {} });
+  const confirmCash = (product: Product, guests: number, lead: string, picks: Record<string, number> = {}) => {
     if (!x || !x.show || inFlight.current || readPending(key)) return;
+    // A Route Extension names its guests: each chosen booking, how many, and what the guide saw of it.
+    const allocations = product.kind === "ROUTE_EXTENSION"
+      ? (product.rows ?? []).filter((r) => (picks[r.bookingId] ?? 0) > 0).map((r) => ({ bookingId: r.bookingId, guests: picks[r.bookingId], fingerprint: r.fingerprint })) : [];
     void send({
       requestKey: newKey(),
       body: { jobSheetId: x.jobSheetId, productVersionId: product.productVersionId, guests, expectedUnitPriceSatang: product.unitPriceSatang,
-        ...(product.kind === "WALK_IN" && lead.trim() ? { leadName: lead.trim() } : {}) },
+        ...(product.kind === "WALK_IN" && lead.trim() ? { leadName: lead.trim() } : {}),
+        ...(product.kind === "ROUTE_EXTENSION" ? { allocations } : {}) },
       productName: product.name, kind: product.kind,
     }, product, guests);
   };
@@ -206,7 +215,8 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
           <div className="ups-sale-ref" style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 20, fontWeight: 700, overflowWrap: "anywhere" }}>{s.saleNo}</div>
         </div>
         <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "8px 12px", fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
-          <dt style={{ color: C.soft }}>Guests</dt><dd style={{ margin: 0, textAlign: "right" }}>{s.pricingBasis === "PER_GROUP" ? `${s.guests} · ${baht(s.unitPriceSatang)} per group` : `${s.guests} × ${baht(s.unitPriceSatang)}`}</dd>
+          {(s.allocations ?? []).map((a) => <Fragment key={a.bookingRef + a.guests}><dt className="ups-alloc" style={{ color: C.ink, overflowWrap: "anywhere" }}>{a.name || "Guest"} <small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{a.bookingRef}</small></dt><dd style={{ margin: 0, textAlign: "right" }}>{a.guests} × {baht(s.unitPriceSatang)}</dd></Fragment>)}
+          {!(s.allocations ?? []).length && <><dt style={{ color: C.soft }}>Guests</dt><dd style={{ margin: 0, textAlign: "right" }}>{s.pricingBasis === "PER_GROUP" ? `${s.guests} · ${baht(s.unitPriceSatang)} per group` : `${s.guests} × ${baht(s.unitPriceSatang)}`}</dd></>}
           <dt style={{ color: C.soft }}>Paid in cash</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 800, fontSize: 17 }}>{baht(s.grossSatang)}</dd>
           <dt style={{ color: C.soft }}>Date</dt><dd style={{ margin: 0, textAlign: "right" }}>{at(s.recordedAt)}</dd>
         </dl>
@@ -224,8 +234,10 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
   }
 
   if (view.kind === "sell") {
-    const { product: p, guests, lead } = view;
+    const { product: p, lead } = view;
     const walkIn = walkInName(p);
+    const chooser = p.kind === "ROUTE_EXTENSION" && !!p.rows;
+    const guests = chooser ? Object.values(view.picks).reduce((n, k) => n + k, 0) : view.guests;
     const total = totalOf(p, guests);
     const max = p.guestsLeft;
     return shell(<>
@@ -246,7 +258,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       {view.restart ? (
         <button type="button" className="ups-restart" onClick={() => { setView({ kind: "block" }); void load(); }} style={plain}>Start again</button>
       ) : <>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {chooser ? <GuestChooser product={p} picks={view.picks} onChange={(picks) => setView({ ...view, picks, error: undefined })} /> : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <label htmlFor="ups-guests" style={{ fontWeight: 700, fontSize: 14 }}>{walkIn ? "New guests" : "Guests"} <small style={{ fontWeight: 500, color: C.soft }}>{walkIn ? "แขกใหม่" : "จำนวนแขก"}</small></label>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button type="button" aria-label="One guest fewer" disabled={guests <= 1} onClick={() => setView({ ...view, guests: guests - 1, error: undefined })} style={{ width: 48, height: 48, border: "1px solid #D4D4D8", borderRadius: 10, background: "#fff", fontSize: 22, fontWeight: 700, cursor: "pointer", color: C.ink }}>−</button>
@@ -256,7 +268,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
           {walkIn
             ? <div id="ups-guests-hint" className="ups-seats" style={{ fontSize: 12.5, color: C.soft }}>Seats left on this job: {max} of {p.seatsPerGuide} ({p.jobPax} guests now) · ที่นั่งว่าง {max}</div>
             : <div id="ups-guests-hint" style={{ fontSize: 12.5, color: C.soft }}>Up to {max}{x.show && max < x.jobPax ? ` now — ${x.jobPax} guests on this job, ${x.jobPax - max} already bought it` : " — the guests on this job"} · ไม่เกินจำนวนแขกในงานนี้</div>}
-        </div>
+        </div>}
         {walkIn && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label htmlFor="ups-lead" style={{ fontWeight: 700, fontSize: 14 }}>Lead guest’s name <small style={{ fontWeight: 500, color: C.soft }}>optional · ไม่บังคับ</small></label>
@@ -274,8 +286,9 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
         </div>
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>This cash belongs to Folkpaths. Amount to remit: the full {baht(total)}, with this job’s end-tour report.<br /><small style={{ color: C.soft }}>เงินนี้เป็นของบริษัท ยอดนำส่งเต็ม {baht(total)} พร้อมรายงานจบทัวร์ของงานนี้</small></p>
         {walkIn && <p style={{ margin: 0, fontSize: 13 }}>They are added to this job’s guest list. Nothing is added to the price.</p>}
-        <button type="button" className="ups-confirm" disabled={max < 1 || guests > max} onClick={() => confirmCash(p, guests, lead)} style={{ ...btn(true), minHeight: 52, fontSize: 16, fontWeight: 800 }}>
-          I’ve received {baht(total)} cash<br /><small style={{ fontWeight: 500, fontSize: 12.5 }}>รับเงินสดแล้ว</small>
+        <button type="button" className="ups-confirm" disabled={chooser ? guests < 1 || guests > max : max < 1 || guests > max} onClick={() => confirmCash(p, guests, lead, view.picks)} style={{ ...btn(true), minHeight: 52, fontSize: 16, fontWeight: 800 }}>
+          {chooser ? <>ยืนยันเก็บเงินแล้ว {baht(total)}<br /><small style={{ fontWeight: 500, fontSize: 12.5 }}>Cash received — {guests} {guests === 1 ? "guest" : "guests"}</small></>
+            : <>I’ve received {baht(total)} cash<br /><small style={{ fontWeight: 500, fontSize: 12.5 }}>รับเงินสดแล้ว</small></>}
         </button>
         <button type="button" onClick={() => setView({ kind: "block" })} style={plain}>Cancel</button>
       </>}
@@ -308,7 +321,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       <ul className="ups-sales" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
         {x.sales.map((s) => (
           <li key={s.saleNo} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 10, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
-            <span><b>{s.kind === "WALK_IN" ? "Walk-in seat" : s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}{s.status === "REVERSED" ? " · reversed" : ""}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small><br /><small className="ups-sale-receipt" style={{ color: C.soft }}>{receiptLine(s.receipt)}</small></span>
+            <span><b>{s.kind === "WALK_IN" ? "Walk-in seat" : s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}{s.status === "REVERSED" ? " · reversed" : ""}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small>{(s.allocations ?? []).length > 0 && <><br /><small className="ups-sale-guests" style={{ color: C.soft }}>{s.allocations!.map((a) => `${a.name || "Guest"} (${a.bookingRef}) × ${a.guests}${a.status === "RELEASED" ? " · reversed" : ""}`).join(" · ")}</small></>}<br /><small className="ups-sale-receipt" style={{ color: C.soft }}>{receiptLine(s.receipt)}</small></span>
             <b>{baht(s.grossSatang)}</b>
             {(x.cash.status === "NOT_SENT" || x.cash.status === "DRAFT" || x.cash.status === "RETURNED") && <ErrorReversal saleNo={s.saleNo} />}
           </li>
@@ -371,5 +384,59 @@ function ErrorReversal({ saleNo }: { saleNo: string }) {
       </div>
       {msg && <small role="alert">{msg}</small>}
     </div>
+  );
+}
+
+/**
+ * The guests buying a Route Extension (mockup pr4e): one native checkbox per booking on this job,
+ * and — for a booking of several guests — how many of them (never invented names). The original
+ * purchase is shown as the channel sent it, so the guide can check it; the system does not judge it.
+ */
+function GuestChooser({ product: p, picks, onChange }: { product: Product; picks: Record<string, number>; onChange: (p: Record<string, number>) => void }) {
+  const set = (id: string, n: number) => { const next = { ...picks }; if (n > 0) next[id] = n; else delete next[id]; onChange(next); };
+  const rows = p.rows ?? [];
+  const step = { width: 44, height: 44, border: "1px solid #D4D4D8", borderRadius: 10, background: "#fff", fontSize: 20, fontWeight: 700, cursor: "pointer", color: C.ink } as const;
+  return (
+    <fieldset className="ups-guests" style={{ border: 0, margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+      <legend style={{ fontWeight: 700, fontSize: 14, padding: 0, marginBottom: 4 }}>Who is buying it? <small style={{ fontWeight: 500, color: C.soft }}>เลือกแขกที่ซื้อ</small></legend>
+      <p style={{ margin: 0, fontSize: 12.5, color: C.soft }}>Tick the guests who are buying it. What each booking originally bought is shown under the name.</p>
+      {rows.map((r) => {
+        const on = (picks[r.bookingId] ?? 0) > 0;
+        const off = r.state !== "SELLABLE";
+        const bought = r.rate || r.product;
+        return (
+          <div key={r.bookingId} className={`ups-guest${off ? " ups-guest-off" : ""}`} style={{ border: `1px solid ${on ? C.brand : C.line}`, borderRadius: 10, padding: 10, background: off ? "#FAFAFA" : "#fff", display: "flex", flexWrap: "wrap", gap: "8px 10px", alignItems: "flex-start" }}>
+            <label style={{ display: "flex", gap: 10, alignItems: "flex-start", flex: "1 1 220px", minWidth: 0, cursor: off ? "default" : "pointer", minHeight: 44 }}>
+              <input type="checkbox" disabled={off} checked={on} onChange={(e) => set(r.bookingId, e.target.checked ? 1 : 0)} style={{ width: 22, height: 22, flex: "none", margin: "2px 0 0" }}
+                aria-describedby={`ups-g-${r.bookingId}`} />
+              <span style={{ minWidth: 0 }}>
+                <b style={{ color: off ? C.soft : C.ink, overflowWrap: "anywhere" }}>{r.name || "Guest"}</b>
+                <span id={`ups-g-${r.bookingId}`} style={{ display: "block", fontSize: 12.5, color: C.soft, overflowWrap: "anywhere" }}>
+                  <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{r.bookingRef || "no booking ref"}</span> · {r.pax} {r.pax === 1 ? "guest" : "guests"}
+                  <br />Bought: {bought ? (r.rate && r.product && r.product !== r.rate ? `${r.rate} (${r.product})` : bought) : "not stated by the channel"}
+                  {off && r.reason && <><br /><span style={{ color: C.warnInk }}>{r.reason}</span></>}
+                </span>
+              </span>
+            </label>
+            {on && r.remaining > 1 && (
+              <div className="ups-qty" role="group" aria-label={`How many of this booking's ${r.pax} guests`} style={{ display: "flex", flexDirection: "column", gap: 4, flex: "0 0 auto" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button type="button" aria-label="One guest fewer" disabled={(picks[r.bookingId] ?? 0) <= 1} onClick={() => set(r.bookingId, (picks[r.bookingId] ?? 1) - 1)} style={step}>−</button>
+                  <b aria-live="polite" style={{ minWidth: 28, textAlign: "center", fontSize: 18 }}>{picks[r.bookingId]}</b>
+                  <button type="button" aria-label="One guest more" disabled={(picks[r.bookingId] ?? 0) >= r.remaining} onClick={() => set(r.bookingId, (picks[r.bookingId] ?? 0) + 1)} style={step}>+</button>
+                </div>
+                <small style={{ color: C.soft, fontSize: 12 }}>{picks[r.bookingId]} of {r.remaining} from this booking</small>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {(p.unlinked ?? []).map((u) => (
+        <div key={`u-${u.bookingNo}-${u.name}`} className="ups-guest ups-guest-off" style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: 10, background: "#FAFAFA", fontSize: 12.5, color: C.soft }}>
+          <b>{u.name || "Guest"}</b> · {u.bookingNo || "no booking ref"}<br />Typed on the job sheet, not a booking — can’t be chosen here.
+        </div>
+      ))}
+      {(p.legacyGuests ?? 0) > 0 && <p style={{ margin: 0, fontSize: 12.5, color: C.soft }}>{p.legacyGuests} earlier {p.legacyGuests === 1 ? "sale was" : "sales were"} recorded without choosing guests; they still count.</p>}
+    </fieldset>
   );
 }

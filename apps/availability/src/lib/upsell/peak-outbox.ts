@@ -98,12 +98,14 @@ export const UNEARNED_REVENUE = "UPSELL_UNEARNED_REVENUE";
 export const receiptCredit = (paymentDate: string, serviceDate: string, revenueCategory: string) =>
   serviceDate <= paymentDate ? { credit: revenueCategory, deferred: false } : { credit: UNEARNED_REVENUE, deferred: true };
 
-export async function recordSaleReceipt(tx: Tx, s: { saleId: string; saleNo: string; jobRef: string | null; productCode: string; version: number; guests: number; grossSatang: number; revenueCategory: string; taxProfileId: string; paymentDate: string; serviceDate: string }) {
+export async function recordSaleReceipt(tx: Tx, s: { saleId: string; saleNo: string; jobRef: string | null; productCode: string; version: number; guests: number; grossSatang: number; revenueCategory: string; taxProfileId: string; paymentDate: string; serviceDate: string; allocations?: unknown[] }) {
   const c = receiptCredit(s.paymentDate, s.serviceDate, s.revenueCategory);
   return recordPeakEvent(tx, {
     kind: "RECEIPT", sourceTable: "UpsellSale", sourceId: s.saleId, eventDate: s.paymentDate,
     payload: { reference: s.saleNo, saleId: s.saleId, jobRef: s.jobRef, productCode: s.productCode, version: s.version, guests: s.guests, grossSatang: s.grossSatang,
-      paymentDate: s.paymentDate, serviceDate: s.serviceDate, paidVia: GUIDE_CASH_HELD, credit: c.credit, revenueCategory: s.revenueCategory, deferred: c.deferred },
+      paymentDate: s.paymentDate, serviceDate: s.serviceDate, paidVia: GUIDE_CASH_HELD, credit: c.credit, revenueCategory: s.revenueCategory, deferred: c.deferred,
+      // Whose guests (booking refs, counts, original purchase) — never a name or contact.
+      ...(s.allocations ? { allocations: s.allocations } : {}) },
     needs: { taxProfileId: s.taxProfileId, revenueCategory: c.credit, guideCashHeld: true },
   });
 }

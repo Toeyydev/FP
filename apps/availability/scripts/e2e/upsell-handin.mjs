@@ -165,8 +165,11 @@ try {
   // ── A sale (over the API, as the app sends it), then the end-tour report ──
   const guideCookie = await sessionCookie(GUIDE);
   const v = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "RTE-WPWA" } } });
+  // As the app sends it: the guests chosen from the job's booking, with what the guide was shown of it.
+  const extras = await (await fetch(`${BASE}/api/upsell/jobs/extras?guideId=${GUIDE_ID}&date=${TODAY}&slotIdx=${SLOT}`, { headers: { cookie: `${guideCookie.name}=${guideCookie.value}` } })).json();
+  const bookingRow = extras.products[0].rows[0];
   const sold = await fetch(`${BASE}/api/upsell/sales`, { method: "POST", headers: { "content-type": "application/json", cookie: `${guideCookie.name}=${guideCookie.value}` },
-    body: JSON.stringify({ requestKey: "e2e-handin-sale-key-0001", jobSheetId: sheet.id, productVersionId: v.id, guests: 2, expectedUnitPriceSatang: v.unitPriceSatang }) });
+    body: JSON.stringify({ requestKey: "e2e-handin-sale-key-0001", jobSheetId: sheet.id, productVersionId: v.id, guests: 2, expectedUnitPriceSatang: v.unitPriceSatang, allocations: [{ bookingId: bookingRow.bookingId, guests: 2, fingerprint: bookingRow.fingerprint }] }) });
   check("a sale is recorded", sold.ok, String(sold.status));
   await prisma.tourReport.create({ data: { guideId: GUIDE_ID, date: TODAY, slotIdx: SLOT, tourId: TOUR } });
   const owed = await held();

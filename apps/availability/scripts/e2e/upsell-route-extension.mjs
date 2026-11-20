@@ -81,11 +81,12 @@ async function seed() {
   await prisma.upsellProduct.update({ where: { productCode: "RTE-WPWA" }, data: { active: true } });
   // Today's job: six guests on the guide's Grand Palace tour.
   await prisma.assignment.create({ data: { guideId: GUIDE_ID, date: TODAY, slotIdx: SLOT, tourId: TOUR, pax: 6 } });
-  for (const [n, pax] of [["Invented Guest A", 2], ["Invented Guest B", 2], ["Invented Guest C", 2]]) {
-    await prisma.booking.create({ data: { source: "manual", externalId: `e2e-${n}`, tourId: TOUR, date: TODAY, slotIdx: SLOT, pax, status: "ASSIGNED", customerName: n } });
+  const people = [["Invented Guest A", 2, "E2E-BK-A", "GetYourGuide", "Invented Grand Palace only (rate)"], ["Invented Guest B", 2, "E2E-BK-B", "Invented Palace Morning Tour", null], ["Invented Guest C", 2, "E2E-BK-C", null, null]];
+  for (const [n, pax, ref, product, rate] of people) {
+    await prisma.booking.create({ data: { source: "manual", externalId: `e2e-${n}`, confirmationCode: ref, tourId: TOUR, date: TODAY, slotIdx: SLOT, pax, status: "ASSIGNED", customerName: n, productName: product, rateTitle: rate } });
   }
   await prisma.jobSheet.create({ data: { guideId: GUIDE_ID, date: TODAY, slotIdx: SLOT, tourId: TOUR,
-    bookings: [{ name: "Invented Guest A", bookedPax: 2 }, { name: "Invented Guest B", bookedPax: 2 }, { name: "Invented Guest C", bookedPax: 2 }] } });
+    bookings: people.map(([n, pax, ref]) => ({ name: n, bookingNo: ref, bookedPax: pax })) } });
 }
 
 async function startServer() {
@@ -144,7 +145,9 @@ const a11y = (page) => page.evaluate(() => {
   for (const el of root.querySelectorAll("input, button")) {
     if (!visible(el)) continue;
     if (!nameOf(el)) problems.push(`unnamed ${el.tagName.toLowerCase()}`);
-    if (el.getBoundingClientRect().height < 44) problems.push(`${el.tagName.toLowerCase()} "${nameOf(el).slice(0, 24)}" is ${Math.round(el.getBoundingClientRect().height)}px tall`);
+    // A checkbox is hit through its whole label (the row), which is what has to be 44 px.
+    const target = el.type === "checkbox" && el.closest("label") ? el.closest("label") : el;
+    if (target.getBoundingClientRect().height < 44) problems.push(`${el.tagName.toLowerCase()} "${nameOf(el).slice(0, 24)}" is ${Math.round(target.getBoundingClientRect().height)}px tall`);
   }
   const ids = [...document.querySelectorAll("[id]")].map((e) => e.id); const dup = ids.filter((x, i) => ids.indexOf(x) !== i);
   if (dup.length) problems.push(`duplicate ids ${[...new Set(dup)].join(",")}`);
@@ -205,7 +208,22 @@ async function sellGuests(page, guests) {
     console.log("Extras block when the sell form did not open:", JSON.stringify(await block(page)));
     throw e;
   }
-  for (let i = 1; i < guests; i++) await tap(page, 'button[aria-label="One guest more"]');
+  // Tick bookings in order and raise each one's count until `guests` are chosen.
+  let left = guests;
+  for (const row of await page.$$(".ups-guest:not(.ups-guest-off)")) {
+    if (left <= 0) break;
+    const box = await row.$('input[type="checkbox"]');
+    if (!box || await box.evaluate((b) => b.disabled)) continue;
+    await box.evaluate((b) => b.scrollIntoView({ block: "center" }));
+    await box.click();
+    left--;
+    while (left > 0) {
+      const more = await row.$('button[aria-label="One guest more"]');
+      if (!more || await more.evaluate((b) => b.disabled)) break;
+      await more.click();
+      left--;
+    }
+  }
 }
 
 // ── the test ─────────────────────────────────────────────────────────────────
@@ -242,8 +260,11 @@ try {
   // ── sell 3 guests, with a double tap ──
   await sellGuests(page, 3);
   let t = await block(page);
-  check("the sell form: 3 guests, ฿200 set by Folkpaths, cash to you, collect ฿600, the full ฿600 to remit", t.includes("Up to 6") && t.includes("set by Folkpaths") && t.includes("Cash to you") && t.includes("Collect from the guest") && (await page.$eval(".ups-total", (e) => e.textContent)) === "฿600" && t.includes("Amount to remit: the full ฿600"));
-  check("the sell form has no price, ref or payment-method field", await page.evaluate(() => [...document.querySelectorAll(".js-upsell input")].every((i) => i.id === "ups-guests" && i.readOnly)));
+  check("the sell form: guests chosen by booking (2 of A's 2, 1 of B's), ฿200 set by Folkpaths, cash to you, collect ฿600, the full ฿600 to remit",
+    t.includes("Who is buying it?") && t.includes("2 of 2 from this booking") && t.includes("set by Folkpaths") && t.includes("Cash to you") && t.includes("Collect from the guest") && (await page.$eval(".ups-total", (e) => e.textContent)) === "฿600" && t.includes("Amount to remit: the full ฿600"), t.slice(0, 400));
+  check("each booking shows its original purchase as sent (context only)", t.includes("Bought: Invented Grand Palace only (rate) (GetYourGuide)") && t.includes("Bought: Invented Palace Morning Tour") && t.includes("Bought: not stated by the channel"));
+  check("one cash button, the only confirmation: ยืนยันเก็บเงินแล้ว ฿600 — no other check box to tick", /ยืนยันเก็บเงินแล้ว ฿600/.test(await page.$eval("button.ups-confirm", (b) => b.textContent)) && !(await page.$(".ups-affirm")));
+  check("the sell form has no price, ref or payment-method field — only guest checkboxes", await page.evaluate(() => [...document.querySelectorAll(".js-upsell input")].every((i) => i.type === "checkbox")));
   const fs = await fits(page); check("390px sell form fits", fs.over <= 1, fs.culprits.join(" "));
   const as = await a11y(page); check("sell form accessibility", as.length === 0, as.join("; "));
   await shot(page, "sell-390");
@@ -253,6 +274,10 @@ try {
   const sale1 = await prisma.upsellSale.findFirst({ orderBy: { createdAt: "asc" } });
   check("a double tap records one sale: one sale, one cash payment, one custody entry", JSON.stringify(await counts()) === JSON.stringify({ sales: 1, payments: 1, custody: 1 }));
   check("the sale is ฿600 for 3 guests, paid in cash to the guide, custody +฿600", sale1?.grossSatang === 60000 && sale1?.guests === 3 && (await prisma.upsellPayment.findFirst())?.method === "CASH" && (await prisma.cashCustodyEntry.findFirst())?.amountSatang === 60000);
+  const allocs = await prisma.upsellSaleAllocation.findMany({ where: { saleId: sale1.id }, orderBy: { bookingRef: "asc" } });
+  check("the sale names its guests: 2 from E2E-BK-A, 1 from E2E-BK-B, with the button's words, the guide and the time", JSON.stringify(allocs.map((a) => [a.bookingRef, a.guests])) === JSON.stringify([["E2E-BK-A", 2], ["E2E-BK-B", 1]])
+    && allocs.every((a) => a.cashAckText === "ยืนยันเก็บเงินแล้ว ฿600 · Cash received" && !!a.cashAckById && !!a.cashAckAt), JSON.stringify(allocs.map((a) => [a.bookingRef, a.guests, a.cashAckText])));
+  check("the confirmation lists each booking's guests", t.includes("Invented Guest A") && t.includes("E2E-BK-A") && t.includes("2 × ฿200") && t.includes("Invented Guest B"));
   check("the payment acknowledgement shows the Sale Ref and Job Ref the system made", t.toLowerCase().includes("folkpaths · payment acknowledgement"));
   const saleRef = await page.$eval(".ups-sale-ref", (e) => e.textContent);
   const jobRef = await page.$eval(".ups-job-ref", (e) => e.textContent);
@@ -339,7 +364,7 @@ try {
   await tap(page, "button.ups-sell");
   await page.waitForSelector("button.ups-confirm");
   t = await block(page);
-  check("5 of 6 guests have it: the most is 1, and + is off", t.includes("Up to 1 now — 6 guests on this job, 5 already bought it") && await page.$eval('button[aria-label="One guest more"]', (b) => b.disabled));
+  check("5 of 6 guests have it: A and B cannot be ticked (already bought), C has 1 left", t.includes("Already bought this extra") && (await page.$$eval(".ups-guest-off input[type=checkbox]", (xs) => xs.length)) === 2 && (await page.$$eval(".ups-guest:not(.ups-guest-off) input[type=checkbox]", (xs) => xs.filter((x) => !x.disabled).length)) === 1, t.slice(0, 300));
   await tap(page, 'button[aria-label="Close"]');
 
   // ── after the end-tour report nothing more is sold ──
@@ -349,7 +374,7 @@ try {
   t = await block(page);
   check("after the end-tour report: no Sell button, the sales and the cash still shown", !(await page.$("button.ups-sell")) && t.includes("nothing more can be sold on this job") && (await page.$eval(".ups-held", (e) => e.textContent)) === "฿1,000");
   const direct = await page.evaluate(async (body) => (await fetch("/api/upsell/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).status,
-    { requestKey: "e2e-after-report-0001", jobSheetId: sheet.id, productVersionId: sale1.productVersionId, guests: 1, expectedUnitPriceSatang: 20000 });
+    { requestKey: "e2e-after-report-0001", jobSheetId: sheet.id, productVersionId: sale1.productVersionId, guests: 1, expectedUnitPriceSatang: 20000, allocations: [{ bookingId: "any", guests: 1, fingerprint: "x".repeat(24) }] });
   check("and the API refuses a sale after the report (409)", direct === 409 && (await counts()).sales === 3, String(direct));
   await page.close();
 

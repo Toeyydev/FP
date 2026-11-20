@@ -29,6 +29,7 @@ import { bangkokToday } from "./products";
 import { upsellOnsiteTourEnabled, upsellRouteExtensionEnabled } from "./flags";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import { REVENUE_CATEGORY } from "./catalog";
+import { AllocationRefused, cashAckText, allocationPayload, checkAllocations, routeExtensionCandidates, writeAllocations, type AllocationSnapshot, type CandidateRow } from "./guest-allocation";
 
 type Db = PrismaClient;
 type Tx = Prisma.TransactionClient;
@@ -49,6 +50,9 @@ export const SALE_REQUEST = z.object({
   productVersionId: z.string().min(1).max(64),
   guests: z.number().int().min(1).max(100),
   expectedUnitPriceSatang: z.number().int().min(1),
+  // Route Extension: the guests buying it, per booking on this job (mockup pr4e). `fingerprint` is
+  // what the guide was shown about the booking — changed since (pax, no-show, a sale) means refresh.
+  allocations: z.array(z.object({ bookingId: z.string().min(1).max(64), guests: z.number().int().min(1).max(100), fingerprint: z.string().min(8).max(64) }).strict()).max(50).optional(),
 }).strict();
 export type SaleRequest = z.infer<typeof SALE_REQUEST>;
 
@@ -131,6 +135,11 @@ const guestsSold = async (db: Db | Tx, jobSheetId: string, productId: string) =>
 
 // ── what the guide's job sheet shows ─────────────────────────────────────────
 
+export type GuestRow = { bookingId: string; name: string; bookingRef: string; pax: number; remaining: number; state: CandidateRow["state"]; reason: string | null;
+  product: string; rate: string; fingerprint: string };
+const guestRow = (r: CandidateRow): GuestRow => ({ bookingId: r.bookingId, name: r.name, bookingRef: r.bookingRef, pax: r.pax, remaining: r.remaining, state: r.state, reason: r.reason,
+  product: r.identity.packageName, rate: r.identity.rateName, fingerprint: r.fingerprint });
+
 export type SaleView = {
   saleNo: string; jobRef: string | null; productName: string; guests: number; unitPriceSatang: number; pricingBasis: string;
   grossSatang: number; method: "CASH"; recordedAt: string;
@@ -139,25 +148,37 @@ export type SaleView = {
   status: string;
   /** The company's official receipt in PEAK, as the outbox knows it — never claimed before it is POSTED. */
   receipt: { state: "SYNCED" | "QUEUED" | "WAITING" | "CHECKING" | "NONE"; peakCode: string | null };
+  /** Route Extension: whose guests, per booking (none for a sale recorded before guests were chosen). */
+  allocations: { bookingRef: string; guests: number; name: string | null; status: string }[];
 };
 export type JobExtras =
   | { show: false }
   | {
       show: true; jobSheetId: string; jobRef: string | null; jobPax: number;
       closed: { code: string; message: string } | null;
-      products: { productCode: string; name: string; productVersionId: string; unitPriceSatang: number; pricingBasis: string; guestsLeft: number; kind: "ROUTE_EXTENSION" | "WALK_IN"; jobPax: number; seatsPerGuide: number }[];
+      products: { productCode: string; name: string; productVersionId: string; unitPriceSatang: number; pricingBasis: string; guestsLeft: number; kind: "ROUTE_EXTENSION" | "WALK_IN"; jobPax: number; seatsPerGuide: number;
+        /** Route Extension: this job's bookings, each with what it may still buy and why not. */
+        rows?: GuestRow[]; unlinked?: { name: string; bookingNo: string; pax: number }[]; legacyGuests?: number }[];
       sales: SaleView[]; cash: JobCash;
     };
 
 const RECEIPT_STATE: Record<string, SaleView["receipt"]["state"]> = { POSTED: "SYNCED", PENDING: "QUEUED", SENDING: "QUEUED", BLOCKED: "WAITING", FAILED: "CHECKING", UNCERTAIN: "CHECKING", CANCELLED: "NONE" };
 const saleView = (s: { saleNo: string; guests: number; unitPriceSatang: number; pricingBasis: string; grossSatang: number; createdAt: Date; ruleSnapshot: Prisma.JsonValue; status?: string },
-  jobRef: string | null, receipt?: { status: string; peakCode: string | null } | null): SaleView => ({
+  jobRef: string | null, receipt?: { status: string; peakCode: string | null } | null, allocations: SaleView["allocations"] = []): SaleView => ({
   saleNo: s.saleNo, jobRef, productName: ((s.ruleSnapshot as { product?: { name?: string } } | null)?.product?.name) ?? "Extra",
   guests: s.guests, unitPriceSatang: s.unitPriceSatang, pricingBasis: s.pricingBasis, grossSatang: s.grossSatang, method: "CASH", recordedAt: s.createdAt.toISOString(),
   kind: ((s.ruleSnapshot as { product?: { type?: string } } | null)?.product?.type) === "JOIN_SOURCE_TOUR" ? "WALK_IN" : "ROUTE_EXTENSION",
   status: s.status ?? "PAID",
   receipt: receipt ? { state: RECEIPT_STATE[receipt.status] ?? "WAITING", peakCode: receipt.status === "POSTED" ? receipt.peakCode : null } : { state: "NONE", peakCode: null },
+  allocations,
 });
+/** Each sale's guests per booking, by sale id (the guide's own job: names shown). */
+async function allocationsOf(db: Db | Tx, saleIds: string[]) {
+  const rows = saleIds.length ? await db.upsellSaleAllocation.findMany({ where: { saleId: { in: saleIds } }, orderBy: { createdAt: "asc" }, select: { saleId: true, bookingRef: true, guests: true, status: true, booking: { select: { customerName: true } } } }) : [];
+  const m = new Map<string, SaleView["allocations"]>();
+  for (const r of rows) m.set(r.saleId, [...(m.get(r.saleId) ?? []), { bookingRef: r.bookingRef, guests: r.guests, name: r.booking.customerName, status: r.status }]);
+  return m;
+}
 /** The receipt event of each sale (RECEIPT, UpsellSale), by sale id. */
 async function receiptsOf(db: Db | Tx, saleIds: string[]) {
   const rows = saleIds.length ? await db.upsellPeakEvent.findMany({ where: { eventKind: "RECEIPT", sourceTable: "UpsellSale", sourceId: { in: saleIds } }, select: { sourceId: true, status: true, peakCode: true } }) : [];
@@ -186,11 +207,15 @@ export async function jobExtras(db: Db, job: { guideId: string; date: string; sl
     ? await db.booking.count({ where: { tourId: sheet.tourId, date: sheet.date, slotIdx: sheet.slotIdx, status: { in: LIVE_BOOKING }, NOT: { source: "walk-in" } } }) : 0;
   if (!offer.length && !walkIns.length && !sales.length) return { show: false };
   const products = [
-    ...(await Promise.all(offer.map(async ({ product, version }) => ({
-      productCode: product.productCode, name: product.productName, productVersionId: version.id,
-      unitPriceSatang: version.unitPriceSatang, pricingBasis: version.pricingBasis, kind: "ROUTE_EXTENSION" as const, jobPax: pax, seatsPerGuide: PAX_PER_GUIDE,
-      guestsLeft: Math.max(0, pax - (await guestsSold(db, sheet.id, product.id))),
-    })))),
+    ...(await Promise.all(offer.map(async ({ product, version }) => {
+      const c = await routeExtensionCandidates(db, sheet, product.id);
+      return {
+        productCode: product.productCode, name: product.productName, productVersionId: version.id,
+        unitPriceSatang: version.unitPriceSatang, pricingBasis: version.pricingBasis, kind: "ROUTE_EXTENSION" as const, jobPax: pax, seatsPerGuide: PAX_PER_GUIDE,
+        guestsLeft: Math.min(c.jobRemaining, Math.max(0, pax - (await guestsSold(db, sheet.id, product.id)))),
+        rows: c.rows.map(guestRow), unlinked: c.unlinked, legacyGuests: c.legacyGuests,
+      };
+    }))),
     ...walkIns.map(({ product, version }) => ({
       productCode: product.productCode, name: product.productName, productVersionId: version.id,
       unitPriceSatang: version.unitPriceSatang, pricingBasis: version.pricingBasis, kind: "WALK_IN" as const, jobPax: pax, seatsPerGuide: PAX_PER_GUIDE,
@@ -200,7 +225,7 @@ export async function jobExtras(db: Db, job: { guideId: string; date: string; sl
   return {
     show: true, jobSheetId: sheet.id, jobRef: sheet.ref, jobPax: pax,
     closed: closed ?? (pax <= 0 ? { code: "NO_GUESTS", message: "This job has no guests." } : null),
-    products, sales: await (async () => { const rc = await receiptsOf(db, sales.map((x) => x.id)); return sales.map((x) => saleView(x, sheet.ref, rc.get(x.id))); })(), cash,
+    products, sales: await (async () => { const ids = sales.map((x) => x.id); const [rc, al] = await Promise.all([receiptsOf(db, ids), allocationsOf(db, ids)]); return sales.map((x) => saleView(x, sheet.ref, rc.get(x.id), al.get(x.id))); })(), cash,
   };
 }
 
@@ -212,17 +237,20 @@ type Actor = { userId: string; guideId: string };
 export async function saleByKey(db: Db, requestKey: string, guideId: string): Promise<SaleView | null> {
   const s = await db.upsellSale.findUnique({ where: { requestKey }, include: { sourceJobSheet: { select: { ref: true } } } });
   if (!s || s.sellingGuideId !== guideId) return null;
-  return saleView(s, s.sourceJobSheet.ref, (await receiptsOf(db, [s.id])).get(s.id));
+  return saleView(s, s.sourceJobSheet.ref, (await receiptsOf(db, [s.id])).get(s.id), (await allocationsOf(db, [s.id])).get(s.id));
 }
 
 /** A replayed request: the same key must mean the same sale, by the same guide. */
 async function replay(db: Db, req: SaleRequest, actor: Actor): Promise<{ sale: SaleView; replay: true } | null> {
   const s = await db.upsellSale.findUnique({ where: { requestKey: req.requestKey }, include: { sourceJobSheet: { select: { ref: true } } } });
   if (!s) return null;
+  const al = (await allocationsOf(db, [s.id])).get(s.id) ?? [];
+  const had = (await db.upsellSaleAllocation.findMany({ where: { saleId: s.id }, select: { bookingId: true, guests: true } })).map((a) => `${a.bookingId}:${a.guests}`).sort().join();
+  const asked = (req.allocations ?? []).map((a) => `${a.bookingId}:${a.guests}`).sort().join();
   const same = s.sellingGuideId === actor.guideId && s.sourceJobSheetId === req.jobSheetId && s.productVersionId === req.productVersionId
-    && s.guests === req.guests && s.unitPriceSatang === req.expectedUnitPriceSatang;
+    && s.guests === req.guests && s.unitPriceSatang === req.expectedUnitPriceSatang && had === asked;
   if (!same) throw new UpsellSaleError(409, "REQUEST_KEY_REUSED", "This request key was already used for a different sale. Start the sale again.");
-  return { sale: saleView(s, s.sourceJobSheet.ref, (await receiptsOf(db, [s.id])).get(s.id)), replay: true };
+  return { sale: saleView(s, s.sourceJobSheet.ref, (await receiptsOf(db, [s.id])).get(s.id), al), replay: true };
 }
 
 function fromDbError(e: unknown): never {
@@ -248,15 +276,29 @@ type CashSpec = {
   guard?(tx: Tx): Promise<void>;
   /** Last thing in the transaction, with the sale (the registration becomes CONFIRMED). */
   after?(tx: Tx, sale: { id: string; saleNo: string }): Promise<void>;
+  /** Frozen into the receipt event and the audit row (a Route Extension's allocations). */
+  receiptExtra?(): { allocations?: unknown[] } | undefined;
 };
 
 export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Actor, now = new Date()): Promise<{ sale: SaleView; replay: boolean }> {
-  return recordCashSale(db, parseSaleRequest(body), actor, now, {
+  const req = parseSaleRequest(body);
+  if (!req.allocations?.length) throw new UpsellSaleError(400, "ALLOCATION_REQUIRED", "Choose the guests who are buying it.");
+  let snap: AllocationSnapshot[] = [];
+
+  return recordCashSale(db, req, actor, now, {
     type: "ROUTE_EXTENSION",
     async room(tx, sheet, version) {
+      // The departure's booking rows are locked here (after the sheet), then each chosen guest is
+      // checked against the booking's original purchase and what it has left.
+      const c = await routeExtensionCandidates(tx, sheet, version.productId, { lock: true });
+      try { snap = checkAllocations(c, req.allocations!, req.guests); }
+      catch (e) { if (e instanceof AllocationRefused) throw new UpsellSaleError(e.code === "BAD_REQUEST" || e.code === "ALLOCATION_REQUIRED" ? 400 : 409, e.code, e.message); throw e; }
       const pax = await jobPax(tx, sheet);
       return { left: pax - (await guestsSold(tx, sheet.id, version.productId)), tooMany: (left) => (left > 0 ? `${left} is the most now — this job has ${pax} guests.` : `Every guest on this job (${pax}) already has it.`) };
     },
+    receiptExtra: () => ({ allocations: allocationPayload(snap) }),
+    // The guide's one action — "ยืนยันเก็บเงินแล้ว ฿…" — is the acknowledgement kept with each allocation.
+    async after(tx, sale) { await writeAllocations(tx, sale.id, snap, { text: cashAckText(req.guests * req.expectedUnitPriceSatang), by: actor.userId, at: now }); },
   });
 }
 
@@ -325,19 +367,26 @@ async function recordCashSale(db: Db, req: SaleRequest, actor: Actor, now: Date,
       // the payment date. A Route Extension is given on this very job, so the receipt carries the
       // income itself; no second revenue event is made for it (that is only for a service paid in
       // advance — receiptCredit decides).
+      const extra = spec.receiptExtra?.() ?? {};
       const receiptEvent = await recordSaleReceipt(tx, { saleId: sale.id, saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross,
-        revenueCategory: version.revenueCategory, taxProfileId: version.taxProfileId, paymentDate: today, serviceDate: sheet.date });
+        revenueCategory: version.revenueCategory, taxProfileId: version.taxProfileId, paymentDate: today, serviceDate: sheet.date, ...extra });
       await tx.auditLog.create({
         data: {
           actorId: actor.userId, actorRole: "GUIDE", action: "upsell.sale.recorded", entityType: "UpsellSale", entityId: sale.id,
-          detail: { saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross, method: "CASH" },
+          detail: { saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross, method: "CASH", ...(extra as Record<string, unknown>) } as Prisma.InputJsonValue,
         },
       });
       await spec.after?.(tx, sale);
-      return { sale: saleView(sale, jobRef, receiptEvent), replay: false };
+      return { sale: saleView(sale, jobRef, receiptEvent, (await allocationsOf(tx, [sale.id])).get(sale.id)), replay: false };
     }, { timeout: 10_000, maxWait: 5_000 });
   } catch (e) {
-    if (e instanceof UpsellSaleError) throw e;
+    // The same request, sent twice at once: the one that waited sees what the first changed and
+    // refuses — but if its key made a sale meanwhile, that sale is the answer (never a second).
+    if (e instanceof UpsellSaleError) {
+      const won = await replay(db, req, actor);
+      if (won) return won;
+      throw e;
+    }
     // Two requests with one key at once: the second lost the race; answer with the first's sale.
     if (isUniqueViolation(e)) {
       const won = await replay(db, req, actor);

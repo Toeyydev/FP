@@ -10,6 +10,7 @@ import { requireTestDatabase, resetDatabase, seedGuide } from "@/test/db";
 import { seedUpsellProducts } from "./catalog";
 import { addDays, bangkokToday } from "./products";
 import { recordRouteExtensionSale } from "./sales";
+import { chooseGuests } from "@/test/upsell-allocation";
 import {
   SettlementError, confirmHandIn, prepareHandIn, decideReversal, errorAffirmationText, handInView, reportTransfer, requestErrorReversal,
   requestRefundReversal, returnHandIn, setReceivingAccount, submitHandIn, withdrawTransfer,
@@ -40,7 +41,7 @@ async function job(guideId: string, slotIdx: number) {
 }
 async function sale(guests: number, g = guide, onJob = jobId) {
   const v = await prisma.upsellProductVersion.findFirstOrThrow({ where: { product: { productCode: "RTE-WPWA" } }, orderBy: { version: "desc" } });
-  return (await recordRouteExtensionSale(prisma, { requestKey: key(), jobSheetId: onJob, productVersionId: v.id, guests, expectedUnitPriceSatang: v.unitPriceSatang }, g)).sale;
+  return (await recordRouteExtensionSale(prisma, { requestKey: key(), jobSheetId: onJob, productVersionId: v.id, guests, expectedUnitPriceSatang: v.unitPriceSatang, ...(await chooseGuests(prisma, onJob, v.id, guests)) }, g)).sale;
 }
 const endTour = (guideId: string, slotIdx: number) => prisma.tourReport.create({ data: { guideId, date: TODAY, slotIdx, tourId: TOUR } });
 const account = (n: string) => setReceivingAccount(prisma, admin, { peakPaymentMethodId: `pm-${n}`, label: `Extras ${n} (example)`, confirmSuitable: true },
