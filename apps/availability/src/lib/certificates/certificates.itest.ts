@@ -26,6 +26,8 @@ import { checkEvidenceBeforePaying } from "@/lib/certificates/gate";
 import { checkFiledDocument } from "@/lib/certificates/service";
 import { GET as certificateList, POST as certificatePost } from "@/app/api/jobsheet/certificate/route";
 import { GET as jobSheetGet, PUT as jobSheetPut } from "@/app/api/jobsheet/route";
+import { POST as approve } from "@/app/api/jobsheet/approve/route";
+import { certificatesOnApproval } from "@/lib/certificates/auto";
 import { GET as rendererGet, POST as rendererPost } from "@/app/api/certificates/renderer/route";
 import { POST as certificateAction } from "@/app/api/jobsheet/certificate/[id]/route";
 
@@ -126,7 +128,7 @@ const fakeDrive = (): CertificateDrive => {
 
 const ENV = "test-env";
 /** Where documents are filed now: a private finance folder, not the guides' tree. */
-const PRIVATE_FOLDER = "Folkpaths Finance/Private Expense Certificates/2099-04";
+const PRIVATE_FOLDER = "Folkpaths Finance/Private Expense Certificates/2099/04 April";
 const LEGACY_FOLDER = "Folkpaths Job Sheets/2099-04 April/Expense Certificates";
 const deps = (over: Deps = {}): Deps => ({
   renderPdf: async (html: string) => Buffer.from(`%PDF-1.4 ${html.length}`),
@@ -273,6 +275,39 @@ describe("filing it, and Drive's actual behaviour", () => {
     expect(up.driveEnvironment).toBe(ENV);
     expect(up.uploadStartedAt).toBeNull();          // the claim is released
     expect(up.uploadClaimToken).toBeNull();
+  });
+
+  it("puts a reading copy in the job's folder beside its receipts, and marks it VOID when voided", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const copies: { name: string; folderPath: string[]; bytes: Buffer }[] = [];
+    const renamed: string[] = [];
+    const jobCopy = {
+      token: async () => "fake-token",
+      save: async (o: { name: string; base64: string; folderPath: string[] }) => { copies.push({ name: o.name, folderPath: o.folderPath, bytes: Buffer.from(o.base64, "base64") }); return { id: "copy_1", link: "https://drive.example/copy_1" }; },
+      rename: async (_t: string, id: string, name: string) => { renamed.push(`${id}:${name}`); },
+    };
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const up = await uploadCertificate(c.id, ADMIN, deps({ jobCopy }));
+    expect(copies).toHaveLength(1);
+    expect(copies[0].name).toBe(`${c.certificateNo}.pdf`);
+    expect(copies[0].folderPath).toEqual(["Folkpaths Job Sheets", "2099", "04 April", REF]);
+    expect(fileHash(copies[0].bytes)).toBe(up.pdfHash); // the very document that was filed
+    expect(up).toMatchObject({ jobCopyFileId: "copy_1", jobCopyLink: "https://drive.example/copy_1" });
+    // The document of record is unchanged: still the private one.
+    expect(up.driveFileId).not.toBe("copy_1");
+    await voidCertificate(c.id, "issued at the wrong amount (test)", ADMIN, deps({ jobCopy }));
+    expect(renamed).toEqual([`copy_1:VOID_${c.certificateNo}.pdf`]);
+  });
+
+  it("filing still succeeds when the job-folder copy fails", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const c = await createCertificate({ guideId: GUIDE, date: DATE, slotIdx: 0 }, ADMIN, deps());
+    await attestCertificate(c.id, ADMIN, deps());
+    const up = await uploadCertificate(c.id, ADMIN, deps({ jobCopy: { token: async () => "t", save: async () => { throw new Error("drive-upload 500: body"); } } }));
+    expect(up.status).toBe("UPLOADED");
+    expect(up.jobCopyFileId).toBeNull();
+    expect(await prisma.auditLog.count({ where: { action: "certificate.job_copy_failed" } })).toBe(1);
   });
 
   it("the file hash is of the bytes that are actually in Drive", async () => {
@@ -1770,5 +1805,108 @@ describe("a later guide report leaves an admin-recorded certificate alone", () =
     });
     const why = await refusal(() => attestCertificate(c.id, ADMIN, deps()));
     expect(why[0]).toContain("has changed since the certificate was prepared");
+  });
+});
+
+describe("approving a job sheet carries the certificate along", () => {
+  const KEY = { guideId: GUIDE, date: DATE, slotIdx: 0 };
+  const ATTESTER = { id: "u_attester", name: "Authorised", role: "ADMIN" };
+  const OPERATOR = { id: "u_ops", name: "Somchai Testsuite", role: "OPERATOR" };
+  beforeEach(async () => {
+    vi.stubEnv("CERTIFICATE_ATTESTER_EMAILS", "authorised@example.test");
+    await prisma.user.create({ data: { id: "u_attester", email: "authorised@example.test", role: "ADMIN", displayName: "Authorised" } });
+    await prisma.user.create({ data: { id: "u_ops", email: "ops@example.test", role: "OPERATOR", displayName: "Ops" } });
+  });
+
+  it("the attester's approval issues it in one click: attested in their name, filed, rows linked", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const [done] = await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(done).toMatchObject({ kind: "GUIDE_PAID", status: "LINKED", stopped: null, totalSatang: 11 * 5 * 100 });
+    const c = await prisma.expenseCertificate.findFirstOrThrow();
+    expect(c.attestedByUserId).toBe("u_attester");
+    expect(drive.active()).toHaveLength(1);
+    expect((await rowsNow())[0].evidenceWaiver?.certificateId).toBe(c.id);
+  });
+
+  it("a row's no-receipt reason is on the certificate Approve issues, and survives an operator's save", async () => {
+    await seedSheet([e("Ferry", 11, 5, { rowId: "r_cccccccccccc", noReceipt: { reason: "Pier gives no ticket", by: "u_g", role: "GUIDE", at: "2099-04-01T10:00:00.000Z" } })]);
+    // An operator saves the sheet as their browser holds it, reason stripped: the stored one stays.
+    authMock.auth.mockResolvedValue({ user: { id: "u_ops", name: "Ops", role: "OPERATOR" } });
+    const read = await (await jobSheetGet(new NextRequest(`https://ops.example.test/api/jobsheet?guideId=${GUIDE}&date=${DATE}&slotIdx=0`))).json();
+    const sent = read.sheet.expenses.map((r: Row) => ({ ...r, noReceipt: undefined }));
+    const put = await jobSheetPut(new NextRequest("https://ops.example.test/api/jobsheet", { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guideId: GUIDE, date: DATE, slotIdx: 0, expenses: sent, bookings: read.sheet.bookings, guideFee: read.sheet.guideFee }) }));
+    expect(put.status).toBe(200);
+    expect(((await rowsNow())[0] as Row).noReceipt).toMatchObject({ reason: "Pier gives no ticket" });
+    const [done] = await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(done).toMatchObject({ kind: "GUIDE_PAID", status: "LINKED" });
+    const c = await prisma.expenseCertificate.findFirstOrThrow();
+    expect((c.coveredRows as Row[])[0].noReceiptReason).toBe("Pier gives no ticket");
+  });
+
+  it("anybody else's approval leaves a draft: their click never attests in another's name", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const [done] = await certificatesOnApproval(KEY, OPERATOR, deps());
+    expect(done).toMatchObject({ status: "READY_TO_ATTEST", stopped: null });
+    const c = await prisma.expenseCertificate.findFirstOrThrow();
+    expect(c.attestedByUserId).toBeNull();
+    expect(drive.files).toHaveLength(0);
+  });
+
+  it("an admin who is not on the attester list gets the draft too", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const [done] = await certificatesOnApproval(KEY, ADMIN, deps());
+    expect(done.status).toBe("READY_TO_ATTEST");
+  });
+
+  it("nothing to certify is nothing at all", async () => {
+    await seedSheet([e("Ferry", 11, 5, { paidBy: "company" })]);
+    expect(await certificatesOnApproval(KEY, ATTESTER, deps())).toEqual([]);
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("a guide who reported nothing stays by hand: the source is never guessed", async () => {
+    await seedSheet([e("Ferry", 11)], { guideExpensesAt: null });
+    expect(await certificatesOnApproval(KEY, ATTESTER, deps())).toEqual([]);
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("approving twice does not make a second one", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(await certificatesOnApproval(KEY, ATTESTER, deps())).toEqual([]);
+    expect(await prisma.expenseCertificate.count()).toBe(1);
+  });
+
+  it("a step that fails is reported where it stopped and left for the panel to retry", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    drive.failPut = "drive is down";
+    const [done] = await certificatesOnApproval(KEY, ATTESTER, deps());
+    expect(done.status).toBe("ATTESTED");
+    expect(done.stopped).toBeTruthy();
+    expect(await prisma.auditLog.count({ where: { action: "certificate.auto_stopped" } })).toBe(1);
+  });
+
+  it("a certificate that cannot be drafted never undoes the approval, and an operator is told nothing", async () => {
+    await seedSheet([e("Ferry", 11), e("Ferry", 11)]); // two rows that read the same are refused
+    authMock.auth.mockResolvedValue({ user: OPERATOR });
+    const { updatedAt } = await prisma.jobSheet.findFirstOrThrow();
+    const r = await approve(new NextRequest("http://test.local/api/jobsheet/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...KEY, reviewedUpdatedAt: updatedAt.toISOString() }) }));
+    const d = await r.json();
+    expect(d.ok).toBe(true);
+    expect(d.approvalStatus).toBe("APPROVED");
+    expect(JSON.stringify(d)).not.toMatch(/certificate/i);
+    expect(await prisma.expenseCertificate.count()).toBe(0);
+  });
+
+  it("only the attester is told beforehand what their click will certify", async () => {
+    await seedSheet([e("Ferry", 11)]);
+    const q = () => jobSheetGet(new NextRequest(`http://test.local/api/jobsheet?guideId=${GUIDE}&date=${DATE}&slotIdx=0`));
+    authMock.auth.mockResolvedValue({ user: ATTESTER });
+    expect((await (await q()).json()).approveCertifies).toBe(11 * 5 * 100);
+    authMock.auth.mockResolvedValue({ user: ADMIN });
+    expect((await (await q()).json()).approveCertifies).toBe(0);
+    authMock.auth.mockResolvedValue({ user: OPERATOR });
+    expect((await (await q()).json()).approveCertifies).toBe(0);
   });
 });

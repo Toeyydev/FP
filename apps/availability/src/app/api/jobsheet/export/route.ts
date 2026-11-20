@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, feeIsAdjusted, feeIsLegacyHalf, shownStandardFee, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
 import { tourCostBreakdown } from "@/lib/peak-sync";
 
@@ -114,6 +114,10 @@ export async function GET(req: NextRequest) {
   set(`E${r}`, guideFee.whtPct ?? 0);
   set(`F${r}`, t.wht, { numFmt: BAHT });
   set(`G${r}`, t.netGuideFee, { bold: true, numFmt: BAHT });
+  if (feeIsAdjusted(guideFee) || feeIsLegacyHalf(guideFee)) {
+    r++;
+    set(`A${r}`, `Standard ${thb(shownStandardFee(guideFee))} · Payable ${thb(t.gross)}${guideFee.adjustReason ? ` · ${[guideFee.adjustReason, guideFee.adjustNote].filter(Boolean).join(" — ")}` : ""}`);
+  }
 
   // Summary
   r += 2;

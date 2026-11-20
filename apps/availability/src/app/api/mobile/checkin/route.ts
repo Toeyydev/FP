@@ -18,6 +18,7 @@ export async function POST(req: Request) {
     lat: z.number().min(-90).max(90).optional(),
     lng: z.number().min(-180).max(180).optional(),
     accuracyM: z.number().int().min(0).optional(),
+    mocked: z.boolean().optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
 

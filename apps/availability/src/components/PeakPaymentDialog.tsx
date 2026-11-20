@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import { leftOutWarning } from "@/lib/peak-payment-document";
+import { documentStages } from "@/lib/payments-v2/primary-ref";
 
 // "Pay N jobs together · one ref", stage 1: create ONE PEAK expense document.
 //
@@ -270,27 +271,47 @@ export default function PeakPaymentDialog({ guideId, guide, jobs, alreadyPaid, o
 
 /** The document exists in PEAK, unpaid. Shown until the dialog closes; the Payments
  *  page keeps showing it after. */
-export function CreatedState({ doc, onRecordPayment, compact }: { doc: CreatedDocument & { recordError?: string | null; existing?: boolean }; onRecordPayment?: () => void; compact?: boolean }) {
+export function CreatedState({ doc, onRecordPayment, compact, lastError, guideLabel }: { doc: CreatedDocument & { recordError?: string | null; existing?: boolean }; onRecordPayment?: () => void; compact?: boolean;
+  /** The last PEAK payment attempt failed: the button becomes a retry (it re-reads PEAK first). */
+  lastError?: string | null; guideLabel?: string }) {
+  // The PEAK EXP is THE reference for this payment (owner 2026-11-15): large, with Copy; the
+  // FOLK-PAY reference stays beside it, small. Four independent states, never one "status".
+  const [approved, setApproved] = useState<boolean | null>(null);
+  const [copied, setCopied] = useState(false);
+  const stages = documentStages({ status: "AWAITING_PAYMENT", peakDocumentNo: doc.documentNo?.startsWith("EXP") ? doc.documentNo : null, error: lastError ?? null, approvedInPeak: doc.alreadyPaid ? true : approved });
   return (
-    <div className="paydoc-created" style={{ display: "grid", gap: 8 }} aria-live="polite">
+    <div className="paydoc-created js-exp-card" style={{ display: "grid", gap: 10 }} aria-live="polite">
       {doc.existing && <Note tone="warn">These jobs were already in this document — no second document was created.</Note>}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <b className="num" style={{ fontSize: compact ? 15 : 20, letterSpacing: "0.01em" }}>{doc.documentNo}</b>
-        <span className="badge invited" style={{ whiteSpace: "nowrap" }}>{doc.alreadyPaid ? `Paid ${doc.paidDate ? dShort(doc.paidDate) : "earlier"} · payment not recorded in PEAK` : "Awaiting payment"}</span>
-        <span style={{ fontSize: 12, color: "var(--ink-soft)", fontFamily: "monospace" }}>{doc.paymentRef}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "space-between" }}>
+        <div style={{ display: "grid", gap: 2 }}>
+          <span style={{ fontSize: 10.5, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: ".06em" }}>PEAK EXP</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <b className="num js-exp-no" style={{ fontSize: compact ? 20 : 24, letterSpacing: "0.01em", fontFamily: "ui-monospace, monospace" }}>{doc.documentNo}</b>
+            <button type="button" className="btn sm js-exp-copy" onClick={async () => { try { await navigator.clipboard.writeText(doc.documentNo); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { setCopied(false); } }}>{copied ? "Copied" : "Copy"}</button>
+          </div>
+          <span style={{ fontSize: 11.5, color: "var(--ink-soft)", fontFamily: "monospace" }}>{guideLabel ? `${guideLabel} · ` : ""}{doc.paymentRef}</span>
+        </div>
+        <div className="js-exp-stages" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {stages.map((st) => (
+            <span key={st.key} data-stage={st.key} data-state={st.state} className={`badge ${st.state === "done" ? "ok" : st.state === "problem" ? "pending" : ""}`} style={{ whiteSpace: "nowrap", ...(st.state === "problem" ? { color: "var(--danger)" } : {}) }}>{st.state === "done" ? "✓ " : ""}{st.label}</span>
+          ))}
+        </div>
       </div>
+      {doc.alreadyPaid && <span className="badge invited" style={{ justifySelf: "start" }}>Paid {doc.paidDate ? dShort(doc.paidDate) : "earlier"} · payment not recorded in PEAK</span>}
       <div className="paydoc-sum">
         <Row label={`${doc.jobs.length} job${doc.jobs.length === 1 ? "" : "s"} · ${doc.lineCount} line${doc.lineCount === 1 ? "" : "s"} · gross`} value={thb(doc.gross)} />
         {doc.wht > 0 && <Row label="WHT" value={`−${thb(doc.wht)}`} />}
-        <Row label={doc.alreadyPaid ? "Amount paid" : "Amount to pay"} value={thb(doc.total)} strong />
+        <Row label={doc.alreadyPaid ? "Amount paid" : "Bank transfer"} value={thb(doc.total)} strong />
       </div>
+      {doc.jobs.length > 0 && <div className="js-exp-jobs" style={{ fontSize: 12, color: "var(--ink-soft)", fontFamily: "monospace", overflowWrap: "anywhere" }}>{doc.jobs.map((j) => j.ref ?? j.date).join(" · ")}</div>}
       {doc.recordError && <Note tone="danger">{doc.recordError}. The jobs stay locked so nothing creates a second document — resolve it on the Payments page.</Note>}
-      {!doc.alreadyPaid && <TransferInstructions paymentRef={doc.paymentRef} />}
+      {lastError && <Note tone="danger"><b>PEAK did not take the payment:</b> {lastError}. Nothing was paid twice — FolkOPS reads the EXP in PEAK again before every retry.</Note>}
+      {!doc.alreadyPaid && <TransferInstructions paymentRef={doc.paymentRef} onChecked={setApproved} />}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {doc.documentLink
-          ? <a className="btn sm" href={doc.documentLink} target="_blank" rel="noopener noreferrer" title="Opens the link PEAK returned for this document">View PEAK document</a>
-          : <span className="btn sm ghost" aria-disabled="true" title={`PEAK returned no link. In PEAK, search expenses for ${doc.documentNo} or reference ${doc.paymentRef}.`}>View PEAK document — search {doc.documentNo} in PEAK</span>}
-        {onRecordPayment && <button className="btn sm primary" onClick={onRecordPayment}>{doc.alreadyPaid && doc.paidDate ? `Record the ${dShort(doc.paidDate)} payment` : "Record payment"}</button>}
+          ? <a className="btn sm" href={doc.documentLink} target="_blank" rel="noopener noreferrer" title="Opens the link PEAK returned for this document">View in PEAK</a>
+          : <span className="btn sm ghost" aria-disabled="true" title={`PEAK returned no link. In PEAK, search expenses for ${doc.documentNo} or reference ${doc.paymentRef}.`}>Search {doc.documentNo} in PEAK</span>}
+        {onRecordPayment && <button className="btn sm primary js-exp-record" onClick={onRecordPayment}>{lastError ? "Retry PEAK payment" : doc.alreadyPaid && doc.paidDate ? `Record the ${dShort(doc.paidDate)} payment` : "Record transfer & pay EXP in PEAK"}</button>}
       </div>
     </div>
   );
@@ -302,7 +323,7 @@ export function CreatedState({ doc, onRecordPayment, compact }: { doc: CreatedDo
 // The check is made here, on opening, rather than rendered from what the page already
 // holds: a document can be voided in PEAK, or a job sheet edited, between the page
 // loading and someone opening their banking app. It reads; it creates nothing.
-function TransferInstructions({ paymentRef }: { paymentRef: string }) {
+function TransferInstructions({ paymentRef, onChecked }: { paymentRef: string; onChecked?: (ok: boolean) => void }) {
   const [state, setState] = useState<{ ok: boolean; label: string; note: string | null; net: number; reasons: string[] } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -313,6 +334,7 @@ function TransferInstructions({ paymentRef }: { paymentRef: string }) {
         const d = await r.json().catch(() => ({}));
         if (!live) return;
         if (!r.ok || !d.ok) { setState({ ok: false, label: "Could not check PEAK", note: null, net: 0, reasons: Array.isArray(d.reasons) ? d.reasons : [] }); return; }
+        onChecked?.(!!d.canTransfer);
         setState({ ok: !!d.canTransfer, label: String(d.label ?? ""), note: d.bankNote ?? null, net: Number(d.figures?.net ?? 0), reasons: Array.isArray(d.reasons) ? d.reasons : [] });
       })
       .catch(() => { if (live) setState({ ok: false, label: "Could not reach the server", note: null, net: 0, reasons: [] }); });

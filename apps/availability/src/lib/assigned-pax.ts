@@ -42,7 +42,8 @@ export function paxIndex(bookings: PaxBooking[]) {
       // A slot split across two guides carries assignedGuideId on each booking;
       // each guide should see their own share, not the whole departure.
       const own = e.byGuide.get(guideId);
-      if (own !== undefined) return own;
+      // Tags naming only this guide are not a split (lib/sheet-bookings guideSlotBookings).
+      if (own !== undefined) return e.byGuide.size === 1 ? own + e.free : own;
       if (e.byGuide.size > 0) return e.free; // split, but none of it is theirs
       return e.total;
     },

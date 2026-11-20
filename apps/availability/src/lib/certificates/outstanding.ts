@@ -27,7 +27,7 @@ export function outstandingCertificates(sheets: Sheet[], tourNames: Map<string, 
     const tourName = s.tourId ? tourNames.get(s.tourId) ?? null : null;
     const expenses = (Array.isArray(s.expenses) ? s.expenses : []) as Expense[];
     for (const kind of ["GUIDE_PAID", "COMPANY_ADVANCE"] as const) {
-      const rows = certifiableRows(expenses, kind, { tourName, transferSlipFileIds });
+      const rows = certifiableRows(expenses, kind, { tourName, tourId: s.tourId, transferSlipFileIds });
       if (!rows.length) continue;
       const live = byKey.get(`${s.id}|${kind}`);
       if (live?.status === "LINKED") continue;

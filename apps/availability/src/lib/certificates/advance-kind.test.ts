@@ -33,6 +33,10 @@ describe("food cost only on food tours", () => {
     expect(certifiableRows([food], "GUIDE_PAID", { tourName: "Riverside Temples" })).toHaveLength(0);
     expect(certifiableRows([food], "GUIDE_PAID")).toHaveLength(0); // tour unknown: not a food tour
   });
+  it("a food tour renamed to its channel title is still a food tour — known by its id", () => {
+    for (const tourId of ["T-007", "T-008", "T-009"]) expect(certifiableRows([food], "GUIDE_PAID", { tourName: "Example Night Street Food Walk", tourId })).toHaveLength(1);
+    expect(certifiableRows([food], "GUIDE_PAID", { tourName: "Example Night Street Food Walk", tourId: "T-001" })).toHaveLength(0);
+  });
   it("drinking water is not a food cost — certifiable on every tour", () => {
     expect(certifiableRows([water], "GUIDE_PAID", { tourName: "Riverside Temples" })).toHaveLength(1);
   });

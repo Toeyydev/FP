@@ -250,6 +250,50 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-approval
 
+      # The "Who guided" calendar on Jobs: the guide per departure and a departure with
+      # no guide, at desktop and 390px. Reads only.
+      - name: Tour day calendar in a real browser
+        run: node scripts/e2e/tour-day-calendar.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/tour-day
+
+      # "มาแล้ว": the office ticks a guest and sees the time and the count on Jobs; a guide who
+      # checked in ticks their own guest at 390px.
+      - name: Guest arrived tick in a real browser
+        run: node scripts/e2e/guest-arrived.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guest-arrived
+
+      # Receipts on expense rows: a guide adds two files at 390px and is told about a
+      # duplicate; the office adds and removes with a reason; an accountant only reads.
+      # Google is faked at the network layer (drive-fake.cjs).
+      - name: Expense receipts in a real browser
+        run: node scripts/e2e/expense-attachments.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/expense-attachments
+
+      # Split dialog: "New bookings go to" saved and shown again; the /jobs?split= link opens it.
+      - name: Split dialog new-bookings guide in a real browser
+        run: node scripts/e2e/split-new-bookings.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/split-new-bookings
+
+      # Today & tomorrow on an operator's phone: guide, check-in, arrivals, unstaffed marked.
+      - name: Today and tomorrow page in a real browser
+        run: node scripts/e2e/tours-today.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/tours-today
+
       # The guest WhatsApp button on a guide's phone: only readable numbers, only the
       # guide's own guests, never a cancelled booking, never printed, nothing written.
       - name: Guest WhatsApp in a real browser
@@ -258,6 +302,55 @@ jobs:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guest-whatsapp
+
+      # Entrance-ticket badges on the guide's tour details and job sheet at 390 px: Included /
+      # Not included from the sheet or an unambiguous Rate, nothing when unknown, same on both.
+      - name: Ticket badges in a real browser
+        run: node scripts/e2e/ticket-badge.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/ticket-badge
+
+      # A guide's Company ADV: only the amount, ✓ Transferred and To return reach the guide
+      # (page, job sheet JSON, PDF); every ADV write is refused to them; their own return
+      # still records; the operator keeps the full ledger.
+      - name: Guide Company ADV in a real browser
+        run: node scripts/e2e/guide-company-adv.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-company-adv
+
+      # Company ADV → PEAK reconciliation on Payments → Advances: owner's status names, Retry on a
+      # failed item, Resolve (not in PEAK) on an uncertain one with history, a read-only Re-check;
+      # ADMIN/ACCOUNTANT only; nothing reaches PEAK.
+      - name: Advance PEAK reconciliation in a real browser
+        run: node scripts/e2e/advance-peak-reconcile.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/advance-peak-reconcile
+
+      # Guide + operator job sheet expenses (owner 2026-11-15): the guide reports only Water / Bus /
+      # Ferry, tickets are Company ADV receipts (upload-only); the operator approves / adjusts /
+      # rejects with a reason and verifies receipts without settling the advance.
+      - name: Expense review in a real browser
+        run: node scripts/e2e/expense-review.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/expense-review
+
+      # Payments EXP first (owner 2026-11-15): Create PEAK EXP is the action, no synthetic PAY memo,
+      # the EXP card leads with the EXP number + four states, Retry after a refused PEAK payment,
+      # the payments list leads with the EXP. Nothing reaches PEAK.
+      - name: Payments EXP first in a real browser
+        run: node scripts/e2e/exp-first.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/exp-first
 
       # A direct assignment reaches the guide: the operator assigns, the guide's bell shows
       # it — a "You're booked" card with the tour — and a guide cannot assign.
@@ -277,6 +370,60 @@ jobs:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-version
+
+      # Bookings → Ready to offer: a guide on ANOTHER tour at the same time does not badge a
+      # booking as handled — it says no guide runs its tour and keeps the offer controls.
+      - name: Inbox guide of another tour in a real browser
+        run: node scripts/e2e/inbox-other-tour.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/inbox-other-tour
+
+      # Move departure (ย้ายรอบ): guests go to another date or time in one act — booking
+      # pinned, the same guide at the new time, the sheet they left cleaned, a WhatsApp draft.
+      - name: Move departure in a real browser
+        run: node scripts/e2e/move-departure.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/move-departure
+
+      # A guide fee under ฿1,000 (a half fee) carries no withholding: the rate goes to 0% and
+      # locks, Save keeps it, a full fee brings 3% back, and it fits a phone.
+      - name: Guide fee under ฿1,000, no WHT, in a real browser
+        run: node scripts/e2e/guide-fee-wht.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-fee-wht
+
+      # Guide compensation: 50% shows standard, payable and WHT 0, Save needs a reason, the
+      # standard fee stays stored, an approved job is locked, and it fits a phone.
+      - name: Guide compensation on the job sheet, in a real browser
+        run: node scripts/e2e/guide-compensation.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/guide-compensation
+
+      # A food tour's food cost is one figure against the food advance: the guide sees what
+      # is left to return or what the company adds, and Send stores it from the advance.
+      - name: Food tour one food total, in a real browser
+        run: node scripts/e2e/food-tour-total.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/food-tour-total
+
+      # The operator ticks who did not come on the job sheet: saved on the booking, the row
+      # says No-show, and it fits a phone.
+      - name: No-show tick on the job sheet, in a real browser
+        run: node scripts/e2e/noshow-tick.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/noshow-tick
 
       # A payment left out of a payout that already went: created as its own obligation,
       # checked for duplicates, paid by its own transfer, reconciled with a PEAK reference —
@@ -404,6 +551,30 @@ jobs:
           SKIP_ENV_VALIDATION: "1"
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/responsive
+
+      # Settings › Upsell products (PR2): the real deploy seed run twice (the second changes
+      # nothing); the three products at 1280 and 390 px with labels, 44 px targets and unique
+      # ids; Save edits an unsold version and makes v2 after a sale; Route Extension tours and
+      # bank-transfer hand-in (PR3); ACCOUNTANT and OPERATOR read only; the server calls nothing outside.
+      - name: Upsell products settings in a real browser
+        run: node scripts/e2e/upsell-products.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-products
+
+      # Tour Upsell PR3: the guide sells Wat Pho + Wat Arun on their own job and takes the cash.
+      # 390 + 1280 px, accessibility, a payment confirmation (never a receipt) with Sale Ref and
+      # Job Ref, cash held / to remit from the custody ledger, a double tap = one sale, a lost
+      # response = "Checking the status…" then the same sale (also after a reload), a request
+      # that never arrived = Send again with the same key, the guest limit, nothing after the
+      # end-tour report, no Extras for an operator, and nothing called outside this machine.
+      - name: Upsell Route Extension sale in a real browser
+        run: node scripts/e2e/upsell-route-extension.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-route-extension
 
       # A tour that already has a guide is offered only as an explicit replacement: the
       # inbox asks; Cancel sends nothing; OK marks the offer as replacing that guide.

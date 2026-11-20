@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { adoptReportedLine, adoptReportedExpenses, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+import { foodCostRows, reportedFoodCost, FOOD_COST_DESCRIPTION, FOOD_COST_OVER_DESCRIPTION, adoptReportedLine, adoptReportedExpenses, droppedByAdoption, jobSheetDriveName, splitSlipDriveName, combinedSlipDriveName, expenseAmount, computeTotals, makeRef, thb, DEFAULT_GUIDE_FEE, guideFeeOrStandard, applyReportedAttendance, defaultExpensesForTour, noShowStatus, syncAttractionTickets, fillDownExpensePax, toggleApproval, isApproved, receiptDriveName, expenseCategory, expenseCategoryLabel, expenseAccountingStatus, tourExpenseAccountingReady, DEFAULT_EXPENSES, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, type Expense, jobCostBreakdown, uncategorisedExpenseRows, stampReviewTaxFree } from "@/lib/jobsheet";
+
+describe("jobsheet — fixed standard expense descriptions", () => {
+  it("offers the three guide-inclusive labels in their canonical spelling", () => {
+    expect(STANDARD_EXPENSE_DESCRIPTIONS.map((x) => x.description)).toEqual([
+      "Water (Inc. Guide)", "Bus (Inc. Guide)", "Ferry (Inc. Guide)",
+    ]);
+  });
+
+  it("recognises legacy short labels without capturing unrelated descriptions", () => {
+    expect(standardExpenseDescription("Water")?.description).toBe("Water (Inc. Guide)");
+    expect(standardExpenseDescription("Bus")?.description).toBe("Bus (Inc. Guide)");
+    expect(standardExpenseDescription("Ferry")?.description).toBe("Ferry (Inc. Guide)");
+    expect(standardExpenseDescription("Private bus charter")).toBeNull();
+    expect(standardExpenseDescription("Grand Palace")).toBeNull();
+  });
+});
 
 describe("jobsheet — fill down expense pax", () => {
   const rows = [
@@ -126,6 +142,15 @@ describe("syncAttractionTickets", () => {
     expect(out.find((e) => e.description.startsWith("Grand Palace"))!.pax).toBe(5); // only the 5 who came on the included booking
     expect(out.find((e) => e.description === "Lunch")!.pax).toBe(11); // untouched
   });
+
+  it("leaves attraction ticket pax unchanged while any guest row is unknown", () => {
+    const bookings = [
+      { name: "a", bookingNo: "A", bookedPax: 2, actualPax: 2, tickets: "included" as const, status: "" },
+      { name: "b", bookingNo: "B", bookedPax: 3, actualPax: 2, tickets: "" as const, status: "partial" },
+    ];
+    const expenses = [{ description: "Grand Palace entrance", price: 500, pax: 5 }, { description: "Lunch", price: 200, pax: 5 }];
+    expect(syncAttractionTickets(bookings, expenses)).toEqual(expenses);
+  });
 });
 
 describe("jobsheet — finance approval", () => {
@@ -159,15 +184,22 @@ describe("jobsheet — enriched expense fields don't change the payout math", ()
 });
 
 describe("jobsheet — receiptDriveName", () => {
+  it("names a guide's receipt apart from the operator's row of the same number", () => {
+    const operator = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" });
+    const guide = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg", from: "guide" });
+    expect(guide).toBe("FOLK-BKK-20260808-01 — guide receipt G1 Grand Palace — G-001 — 2026-08-08 — slot 0.jpg");
+    expect(guide).not.toBe(operator);
+  });
+
   it("is unique per expense row (ref + E<n>) even for identical descriptions", () => {
     const a = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 0, description: "Grand Palace", ext: "jpg" });
     const b = receiptDriveName({ ref: "FOLK-BKK-20260808-01", guideId: "G-001", date: "2026-08-08", slotIdx: 0, index: 1, description: "Grand Palace", ext: "jpg" });
-    expect(a).toBe("FOLK-BKK-20260808-01 — G-001 — 2026-08-08 — slot 0-E1 Grand Palace — receipt.jpg");
+    expect(a).toBe("FOLK-BKK-20260808-01 — receipt E1 Grand Palace — G-001 — 2026-08-08 — slot 0.jpg");
     expect(a).not.toBe(b); // same description, different row → a different Drive file
   });
-  it("falls back to guideId-date without a ref and sanitises the description", () => {
+  it("says NO-JOB without a ref and sanitises the description", () => {
     const n = receiptDriveName({ ref: null, guideId: "G-002", date: "2026-08-08", slotIdx: 0, index: 2, description: 'Taxi / airport "run"', ext: "pdf" });
-    expect(n).toBe("Job — G-002 — 2026-08-08 — slot 0-E3 Taxi airport run — receipt.pdf");
+    expect(n).toBe("NO-JOB — receipt E3 Taxi airport run — G-002 — 2026-08-08 — slot 0.pdf");
   });
 });
 
@@ -337,10 +369,21 @@ describe("jobsheet — adopting a guide's reported expenses", () => {
     ]);
     expect(out.map((e) => [e.pax, e.paidBy])).toEqual([[5, "company"], [5, "guide"], [1, "guide"]]);
   });
+  it("rows a company advance or the company paid stay: the guide never reports them", () => {
+    const official: Expense[] = [
+      { description: "Water (Inc. Guide)", price: 10, pax: null },
+      { description: "Temple ticket (example)", price: 500, pax: 2, expenseType: "entrance", paidBy: "advance" },
+      { description: "Boat (example)", price: 50, pax: 2, paidBy: "company" },
+    ];
+    const out = adoptReportedExpenses(official, [{ description: "Water", price: 10, pax: 8 }]);
+    expect(out.map((e) => e.description)).toEqual(["Temple ticket (example)", "Boat (example)", "Water"]);
+    expect(out[0]).toEqual(official[1]);
+    expect(droppedByAdoption(official, [{ description: "Water", price: 10, pax: 8 }]).map((e) => e.description)).toEqual(["Water (Inc. Guide)"]);
+  });
   it("adoption carries where the payer came from, so a default stays marked unconfirmed", () => {
     const reported: Expense = { description: "Bus (Inc. Guide)", price: 15, pax: 5, paidBy: "guide", paidBySource: "default-after-tour" };
     expect(adoptReportedLine(official[1], reported)).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
-    expect(adoptReportedExpenses(official, [reported])[0]).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
+    expect(adoptReportedExpenses(official, [reported]).find((e) => e.description === "Bus (Inc. Guide)")).toMatchObject({ paidBy: "guide", paidBySource: "default-after-tour" });
     // The operator's own payer wins and is labelled as the operator's.
     expect(adoptReportedExpenses(official, [{ ...reported, description: "Water (Inc. Guide)" }])[0]).toMatchObject({ paidBy: "company", paidBySource: "operator" });
   });
@@ -411,5 +454,71 @@ describe("review rows carry no tax from 2026-10-06 — stampReviewTaxFree and co
     expect({ base: now.whtBase, wht: now.wht, onReview: now.whtOnReview, review: now.reviewReward }).toEqual({ base: 1000, wht: 30, onReview: 0, review: 200 });
     const before = computeTotals([r50(4)], fee);
     expect({ base: before.whtBase, wht: before.wht, onReview: before.whtOnReview }).toEqual({ base: 1200, wht: 36, onReview: 6 });
+  });
+});
+
+describe("upgrading old short names on Save", () => {
+  const stamp = { paidBy: "guide", paidBySource: "operator", paidByBy: "u_ops", paidByAt: "2030-01-01T00:00:00.000Z" };
+  it("upgrades an unprotected row's old name to the fixed label and type", () => {
+    const [w] = upgradeStandardDescriptions([{ description: "Water", price: 10, pax: 2 } as Expense]);
+    expect(w.description).toBe("Water (Inc. Guide)");
+    expect(w.expenseType).toBe(standardExpenseDescription("Water")!.expenseType);
+  });
+  it("leaves a protected row exactly as it is — a confirmed payer, a waiver, a certificate request or a settlement", () => {
+    const rows = [
+      { description: "Water", price: 10, pax: 2, ...stamp },
+      { description: "Bus", price: 15, pax: 3, evidenceWaiver: { waived: true } },
+      { description: "Ferry", price: 5.5, pax: 4, certificateRequest: { requested: true } },
+      { description: "Water", price: 10, pax: 1, advanceSettlement: { id: "s1" } },
+    ] as unknown as Expense[];
+    expect(upgradeStandardDescriptions(rows)).toEqual(rows);
+  });
+  it("on a mixed sheet upgrades only the unprotected rows", () => {
+    const out = upgradeStandardDescriptions([{ description: "Bus", price: 15, pax: 3, ...stamp }, { description: "Bus", price: 15, pax: 3 }] as unknown as Expense[]);
+    expect(out.map((e) => e.description)).toEqual(["Bus", "Bus (Inc. Guide)"]);
+  });
+  it("leaves other descriptions alone", () => {
+    const rows = [{ description: "Grand Palace", price: 500, pax: 2 }] as Expense[];
+    expect(upgradeStandardDescriptions(rows)).toEqual(rows);
+  });
+});
+
+describe("guide fee under ฿1,000 — no withholding (owner 2026-10-25)", () => {
+  it("a half fee or a ฿500 fee takes 0%", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 0.5, whtPct: 3 })).toEqual({ price: 1000, time: 0.5, whtPct: 0 });
+    expect(guideFeeWhtRule({ price: 500, time: 1, whtPct: 3 }).whtPct).toBe(0);
+    expect(feeIsWhtFree({ price: 999, time: 1, whtPct: 3 })).toBe(true);
+  });
+  it("exactly ฿1,000 or more keeps the rate entered", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 1, whtPct: 3 }).whtPct).toBe(3);
+    expect(guideFeeWhtRule({ price: 1500, time: 1, whtPct: 5 }).whtPct).toBe(5);
+    expect(feeIsWhtFree({ price: 1000, time: 1, whtPct: 3 })).toBe(false);
+  });
+  it("taken back up from under ฿1,000, the rule's 0% becomes the standard 3%", () => {
+    expect(guideFeeWhtRule({ price: 1000, time: 1, whtPct: 0 }, { price: 1000, time: 0.5, whtPct: 0 }).whtPct).toBe(3);
+  });
+  it("a 0% entered on a full fee is the operator's and stays", () => {
+    expect(guideFeeWhtRule({ price: 1200, time: 1, whtPct: 0 }, { price: 1200, time: 1, whtPct: 3 }).whtPct).toBe(0);
+  });
+});
+
+
+describe("foodCostRows — a food tour's one food total against the advance", () => {
+  it("with no advance, the guide's own money, paid back", () => {
+    expect(foodCostRows(1850, 0)).toEqual([expect.objectContaining({ description: FOOD_COST_DESCRIPTION, price: 1850, pax: 1, expenseType: "meal", paidBy: "guide" })]);
+  });
+  it("within the advance, from the advance — the rest is returned", () => {
+    expect(foodCostRows(1850, 2000)).toEqual([expect.objectContaining({ price: 1850, paidBy: "advance" })]);
+    expect(foodCostRows(2000, 2000)).toEqual([expect.objectContaining({ price: 2000, paidBy: "advance" })]);
+  });
+  it("above the advance, the advance in full and the difference as the guide's own money", () => {
+    expect(foodCostRows(2100, 2000)).toEqual([
+      expect.objectContaining({ description: FOOD_COST_DESCRIPTION, price: 2000, paidBy: "advance" }),
+      expect.objectContaining({ description: FOOD_COST_OVER_DESCRIPTION, price: 100, paidBy: "guide" }),
+    ]);
+  });
+  it("nothing spent is nothing reported, and the form reopens on what was sent", () => {
+    expect(foodCostRows(0, 2000)).toEqual([]);
+    expect(reportedFoodCost(foodCostRows(2100, 2000))).toBe(2100);
   });
 });

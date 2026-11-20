@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/db";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { SLOT_TIMES, clashingSlotIdxs } from "@/lib/slots";
-import { sendTourCalendarInvite } from "@/lib/calendar";
 import { linePushButtons, linePush, lineEnabled } from "@/lib/line";
 import { sendPushToUser } from "@/lib/push";
 import { sendEmail } from "@/lib/email";
@@ -145,11 +144,11 @@ export async function createOffer(o: {
 
 // Guides who are AVAILABLE for a given date + slot:
 //  - active guide with a G-id
-//  - has NOT blocked ANY of their time that day — if a guide marks even one slot
-//    busy (availability.slots[idx] === true means busy) they're treated as off for
-//    the whole day and are never offered/assigned that date. Operator decision:
-//    a partially-blocked guide (e.g. blocked the afternoon) must not surface as
-//    "available" in the offer flow at all.
+//  - has NOT blocked this slot, or a slot that clashes with it in time
+//    (availability.slots[idx] === true means busy). Owner, 2026-10-28: a guide is
+//    busy only in the slots they blocked — one who blocked the morning is free in the
+//    afternoon. (It used to be the whole day, which hid a guide the app had told
+//    "your other times are free".)
 //  - NOT already assigned that slot OR a slot that clashes in time (same or within
 //    the clash gap — a guide can't run two overlapping tours)
 //  - the day is not company-blocked
@@ -171,8 +170,9 @@ export async function availableGuides(date: string, slotIdx: number) {
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", fromDate: { lte: date }, toDate: { gte: date } }, select: { guideId: true } }),
   ]);
 
-  // A guide who blocked ANY slot that day is off for the whole day (not just that slot).
-  const busy = new Set(avail.filter((a) => a.slots.some((s) => s === true)).map((a) => a.guideId));
+  // Busy for this departure: they blocked it, or a slot that overlaps it in time.
+  const near = clashingSlotIdxs(slotIdx);
+  const busy = new Set(avail.filter((a) => near.some((i) => a.slots[i] === true)).map((a) => a.guideId));
   const taken = new Set(assigned.map((a) => a.guideId));
   const onLeave = new Set(leaves.map((l) => l.guideId));
   return guides.filter((g) => g.guideId && !busy.has(g.guideId) && !taken.has(g.guideId) && !onLeave.has(g.guideId));
@@ -288,10 +288,10 @@ export async function acceptOffer(offerId: string, guideId: string): Promise<Acc
   }
   // Offer is resolved — clear its notification from EVERY candidate's bell.
   await prisma.notification.deleteMany({ where: { offerId } });
-  // Email the guide a calendar invite (with reminders).
-  await sendTourCalendarInvite(guideId, offer.date, offer.slotIdx);
-  // Push to connected Google Calendars (guide + operator master), if configured.
-  try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, offer.date, offer.slotIdx); } catch { /* never block accept on calendar */ }
+  // The company calendar event, with this guide invited — or, on a replacement, the same
+  // event handed over to them. Not awaited: Google must never slow or block an Accept;
+  // failures are recorded, retried and reported to ops (lib/tour-calendar-sync).
+  void import("@/lib/tour-calendar-sync").then((m) => m.pushTourToCalendars(guideId, offer.date, offer.slotIdx)).catch(() => {});
 
   // Tell the operator team a guide took the job (in-app + push). Covers BOTH the
   // in-app and LINE accept paths, and works even for auto re-offers (no creator).
@@ -456,3 +456,31 @@ export async function sweepExpiredOffers(): Promise<number> {
   }
   return due.length;
 }
+
+/** One job offer as a guide sees it, to accept or pass on. */
+export type GuideOpenOffer = {
+  id: string; tourId: string; tourName: string; meetingPoint: string | null;
+  date: string; slotIdx: number; time: string; pax: number | null; note: string | null; expiresAt: Date;
+};
+
+// The open job offers a guide can still act on, soonest first. One list for the web
+// (/api/offers/mine) and FolkOPS Mobile (/api/mobile/offers), so a guide never sees a
+// job on one and not the other.
+export async function guideOpenOffers(guideId: string, now: Date = new Date()): Promise<GuideOpenOffer[]> {
+  const responses = await prisma.jobOfferResponse.findMany({ where: { guideId, response: "OFFERED" }, select: { offerId: true } });
+  const ids = responses.map((r) => r.offerId);
+  if (ids.length === 0) return [];
+  const offers = await prisma.jobOffer.findMany({
+    where: { id: { in: ids }, status: "OPEN", expiresAt: { gt: now } },
+    orderBy: [{ date: "asc" }, { slotIdx: "asc" }],
+  });
+  const tours = await prisma.tour.findMany({ where: { id: { in: offers.map((o) => o.tourId) } }, select: { id: true, name: true, meetingPoint: true } });
+  const tmap = new Map(tours.map((t) => [t.id, t]));
+  return offers.map((o) => ({
+    id: o.id, tourId: o.tourId, tourName: tmap.get(o.tourId)?.name ?? o.tourId,
+    meetingPoint: tmap.get(o.tourId)?.meetingPoint ?? null,
+    date: o.date, slotIdx: o.slotIdx, time: timeRangeLabel(o.slotIdx, o.durationMin),
+    pax: o.pax, note: o.note, expiresAt: o.expiresAt,
+  }));
+}
+

@@ -1,5 +1,8 @@
 // Job-sheet types, the default Folkpaths expense catalogue, and the totals math.
 
+import { evidenceName } from "@/lib/evidence-name";
+import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
+
 export type Booking = {
   name: string;
   bookingNo: string;
@@ -28,6 +31,9 @@ export type Expense = {
   description: string;
   price: number | null;
   pax: number | null;
+  rowId?: string; // stable id of the row (lib/expense-row-id); its attachments are filed under it
+  /** Why the row has no receipt (lib/expense-attachments/no-receipt-row). Set only by its own endpoint. */
+  noReceipt?: { reason: string; by?: string | null; role?: string | null; at?: string } | null;
   unit?: string;
   expenseType?: ExpenseType | string; // operational category (mapped to a PEAK account in the backend, not here)
   paidBy?: string; // "guide" | "operator" | "company"
@@ -88,7 +94,17 @@ export type Expense = {
 };
 export const PAID_BY_SOURCES = ["operator", "guide", "category-default", "default-after-tour", "unconfirmed", "rate-default"] as const;
 export type PaidBySource = (typeof PAID_BY_SOURCES)[number];
-export type GuideFee = { price: number | null; time: number | null; whtPct: number | null };
+export type GuidePayType = "FULL" | "HALF_COMPENSATION" | "CUSTOM";
+export type GuideFee = {
+  /** The agreed rate × count: the Standard Guide Fee. A compensation never changes these. */
+  price: number | null; time: number | null; whtPct: number | null;
+  /** Absent on every sheet saved before compensation existed: reads as FULL. */
+  payType?: GuidePayType | null;
+  customPayable?: number | null; // CUSTOM only: the baht actually payable
+  customNature?: "FEE" | "COMPENSATION" | null; // CUSTOM only: which account it books to, chosen by a person
+  adjustReason?: string | null;
+  adjustNote?: string | null;
+};
 
 // The standard items that appear on every new sheet (prices editable per job).
 // Categories are set HERE, at the source, because these are known company items —
@@ -102,7 +118,113 @@ export const DEFAULT_EXPENSES: Expense[] = [
   { description: "Lotus (Inc. Guide)", price: 10, pax: null, expenseType: "other" },
   { description: "Bus (Inc. Guide)", price: 15, pax: null, expenseType: "transport" },
 ];
+
+// The three recurring guide-inclusive consumables/transport lines use fixed names in
+// Job Sheet.  Keeping the spelling canonical makes expense matching, certificates and
+// later accounting review stable instead of treating "Bus", "Bus (guide)" etc. as
+// different costs.
+export const STANDARD_EXPENSE_DESCRIPTIONS = [
+  { description: "Water (Inc. Guide)", expenseType: "meal" },
+  { description: "Bus (Inc. Guide)", expenseType: "transport" },
+  { description: "Ferry (Inc. Guide)", expenseType: "transport" },
+] as const;
+
+export function standardExpenseDescription(value: string): (typeof STANDARD_EXPENSE_DESCRIPTIONS)[number] | null {
+  const v = value.trim();
+  return STANDARD_EXPENSE_DESCRIPTIONS.find((item) => {
+    const base = item.description.split(" (")[0];
+    return new RegExp(`^${base}(?:\\s*\\([^)]*guide[^)]*\\))?$`, "i").test(v);
+  }) ?? null;
+}
+/**
+ * The rows a Save sends: former short names (Water / Bus / Ferry) upgraded to the fixed
+ * labels — except on a protected row (a confirmed payer, a waiver, a certificate request,
+ * an advance settlement). Its description and type are part of what was confirmed and the
+ * server refuses any change to them, so upgrading it made every Save of the sheet fail.
+ * A protected row keeps its name until a person picks a new one.
+ */
+export function upgradeStandardDescriptions<T extends Expense>(expenses: readonly T[]): T[] {
+  return expenses.map((expense) => {
+    if (isProtected(expense as ProtectedRow)) return expense;
+    const fixed = standardExpenseDescription(expense.description);
+    return fixed ? { ...expense, description: fixed.description, expenseType: fixed.expenseType } : expense;
+  });
+}
 export const DEFAULT_GUIDE_FEE: GuideFee = { price: 1000, time: 1, whtPct: 3 };
+
+/**
+ * Owner decision 2026-10-25: a job whose guide fee (rate × count) is under ฿1,000 — a half
+ * fee, say — carries no withholding. `prev` is the fee as stored: when an edit takes a fee
+ * back up from under the threshold and its rate was the rule's 0%, the standard rate comes
+ * back. A fee of ฿1,000 or more keeps whatever rate was entered.
+ *
+ * Applied only when the fee is edited (or a sheet is created): a sheet nobody touches keeps
+ * the rate it was saved — and maybe paid — with.
+ */
+export const WHT_FREE_FEE_BELOW = 1000;
+/** The normal agreed fee for the job: rate × count. */
+export const standardGuideFee = (gf: GuideFee | null | undefined) => (Number(gf?.price) || 0) * (Number(gf?.time) || 0);
+/**
+ * What Folkpaths actually pays for this job. Every total goes through here (computeTotals), so
+ * the summary, the transfer and PEAK all follow it. Worked in satang: half of ฿1,501 is ฿750.50.
+ */
+export function payableGuideFee(gf: GuideFee | null | undefined): number {
+  const standard = standardGuideFee(gf);
+  if (gf?.payType === "HALF_COMPENSATION") return Math.round(standard * 100 * 0.5) / 100;
+  if (gf?.payType === "CUSTOM") return Math.round((Number(gf.customPayable) || 0) * 100) / 100;
+  return standard;
+}
+/** Paid as agreed? False for a compensation, whose standard fee must stay on show. */
+export const feeIsAdjusted = (gf: GuideFee | null | undefined) => !!gf?.payType && gf.payType !== "FULL";
+/** A half fee saved before compensation existed: count 0.5, no payment type. Shown as 50%
+ *  from what is stored; nothing is rewritten, and no reason is asked of it. */
+export const feeIsLegacyHalf = (gf: GuideFee | null | undefined) => !gf?.payType && Number(gf?.time) === 0.5;
+/** The fee a job was agreed at, on screen and on paper. */
+export const shownStandardFee = (gf: GuideFee | null | undefined) => (feeIsLegacyHalf(gf) ? Number(gf?.price) || 0 : standardGuideFee(gf));
+/** Does this fee book to the compensation account (510123)? 50% always; Custom only when a
+ *  person said it is compensation. Never inferred from the reason, never for a legacy half. */
+export const feeIsCompensation = (gf: GuideFee | null | undefined) =>
+  gf?.payType === "HALF_COMPENSATION" || (gf?.payType === "CUSTOM" && gf.customNature === "COMPENSATION");
+export const FEE_ADJUST_OTHER = "Other";
+export const FEE_ADJUST_REASONS = [
+  "Tour changed by customer", "Tour cancelled by customer", "Force majeure",
+  "Attraction / venue closed", "Operational cancellation", FEE_ADJUST_OTHER,
+] as const;
+/** Why this compensation cannot be saved. Empty for a full fee, and for a valid one. */
+export function feeAdjustmentProblems(gf: GuideFee | null | undefined): string[] {
+  if (!feeIsAdjusted(gf)) return [];
+  const out: string[] = [];
+  if (gf!.payType !== "HALF_COMPENSATION" && gf!.payType !== "CUSTOM") out.push("Unknown payment type");
+  if (gf!.payType === "CUSTOM") {
+    const amount = gf!.customPayable;
+    if (amount == null || !Number.isFinite(Number(amount))) out.push("Enter the payable guide fee");
+    else if (Number(amount) < 0) out.push("The payable guide fee cannot be negative");
+    else if (Number(amount) > standardGuideFee(gf)) out.push("The payable guide fee cannot be more than the standard guide fee");
+    if (gf!.customNature !== "FEE" && gf!.customNature !== "COMPENSATION") out.push("Choose whether this amount is a guide fee or compensation");
+  }
+  const reason = (gf!.adjustReason ?? "").trim();
+  if (!(FEE_ADJUST_REASONS as readonly string[]).includes(reason)) out.push("Choose a reason for the adjustment");
+  if (reason === FEE_ADJUST_OTHER && !(gf!.adjustNote ?? "").trim()) out.push("Add a note: the reason is Other");
+  return out;
+}
+/** A full fee stores nothing extra, so a sheet that was never adjusted keeps its exact shape. */
+export function normaliseGuideFee(gf: GuideFee): GuideFee {
+  const { payType, customPayable, customNature, adjustReason, adjustNote, ...fee } = gf;
+  if (!payType || payType === "FULL") return fee;
+  return {
+    ...fee, payType,
+    ...(payType === "CUSTOM" ? { customPayable: customPayable ?? null, customNature: customNature ?? null } : {}),
+    adjustReason: (adjustReason ?? "").trim() || null,
+    ...((adjustNote ?? "").trim() ? { adjustNote: adjustNote!.trim() } : {}),
+  };
+}
+const feeGross = payableGuideFee;
+export function guideFeeWhtRule(next: GuideFee, prev?: GuideFee | null): GuideFee {
+  if (feeGross(next) < WHT_FREE_FEE_BELOW) return next.whtPct === 0 ? next : { ...next, whtPct: 0 };
+  if (prev && feeGross(prev) < WHT_FREE_FEE_BELOW && Number(prev.whtPct) === 0 && !Number(next.whtPct)) return { ...next, whtPct: DEFAULT_GUIDE_FEE.whtPct };
+  return next;
+}
+export const feeIsWhtFree = (gf: GuideFee | null | undefined) => feeGross(gf) < WHT_FREE_FEE_BELOW;
 
 // The fee a job sheet pays. An entered fee is kept as entered — INCLUDING zero: a job run
 // together with another (piggybacked) pays no fee of its own, and 0 × anything or ฿0 is
@@ -166,11 +288,29 @@ export function adoptReportedLine(official: Expense, reported: Expense): Expense
     ...(!hasPayer(official) && hasPayer(reported) ? { paidBy: reported.paidBy, ...(reported.paidBySource ? { paidBySource: reported.paidBySource } : {}) } : {}),
   };
 }
+// A row the company or a company advance paid for is not the guide's to report: the guide
+// is not reimbursed for it, so it is never in their report. Adopting the report keeps it as
+// it is (owner report 2026-11-04: a ticket advance's rows were dropped, and the save refused).
+const notTheGuides = (e: Expense) => ["advance", "company"].includes((e.paidBy ?? "").trim());
 export function adoptReportedExpenses(official: Expense[], reported: Expense[]): Expense[] {
-  return (reported ?? []).map((g) => {
+  const adopt = (g: Expense) => {
     const o = (official ?? []).find((e) => sameLine(e, g));
-    return hasPayer(o) ? { ...g, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g };
+    // The official row's stable id stays with it: its files and its "no receipt" reason are filed under it.
+    const id = o?.rowId ? { rowId: o.rowId } : {};
+    return hasPayer(o) ? { ...g, ...id, paidBy: o!.paidBy, paidBySource: o!.paidBySource ?? "operator" } : { ...g, ...id };
+  };
+  // In the official order, so a kept row stays where the operator put it.
+  const inOrder = (official ?? []).flatMap((e) => {
+    const g = (reported ?? []).find((r) => sameLine(e, r));
+    return g ? [adopt(g)] : notTheGuides(e) ? [e] : [];
   });
+  const extra = (reported ?? []).filter((g) => !(official ?? []).some((e) => sameLine(e, g))).map(adopt);
+  return [...inOrder, ...extra];
+}
+
+/** Official rows that adopting the guide's report would remove. */
+export function droppedByAdoption(official: Expense[], reported: Expense[]): Expense[] {
+  return (official ?? []).filter((e) => !notTheGuides(e) && !(reported ?? []).some((g) => sameLine(e, g)));
 }
 
 export function isReviewExpense(e: { description?: string | null }): boolean {
@@ -240,7 +380,7 @@ export function reviewRewardTotal(expenses: Expense[]): number {
  */
 export function computeTotals(expenses: Expense[], guideFee: GuideFee) {
   const totalExpenses = (expenses ?? []).reduce((s, e) => s + expenseAmount(e), 0);
-  const gross = n(guideFee?.price) * n(guideFee?.time);
+  const gross = payableGuideFee(guideFee);
   const rate = n(guideFee?.whtPct) / 100;
   const reviewReward = reviewRewardTotal(expenses);
   const whtBase = gross + taxableReviewTotal(expenses);
@@ -443,10 +583,39 @@ export function combinedSlipDriveName(o: { guideId: string; guideName: string; d
 // Drive file name for an expense receipt. Unique per job and expense row, even when a legacy
 // ref is shared by two sheets or missing: the name carries guide, date and slot, so a re-upload
 // replaces only this job's receipt for this row, never another guide's or slot's.
-export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string }): string {
-  const base = `${(opts.ref || "Job").trim()} — ${opts.guideId} — ${opts.date} — slot ${opts.slotIdx}`;
+// ── Food tour: one total against the company's food advance ─────────────────────
+// Owner (2026-10-27): on a food tour the guide reports ONE figure — what the food cost —
+// not each stop. Within the advance it is paid from the advance (the balance is returned);
+// above it, the difference is the guide's own money and is paid back with their pay. A food
+// tour's food cost is certified without a receipt (lib/certificates/payload isFoodCostRow).
+export const FOOD_COST_DESCRIPTION = "ค่าอาหาร Food Tour";
+export const FOOD_COST_OVER_DESCRIPTION = "ค่าอาหาร Food Tour (เกินเงินล่วงหน้า)";
+export function foodCostRows(spent: number, advance: number): Expense[] {
+  const total = Math.max(0, Math.round((Number(spent) || 0) * 100) / 100);
+  const adv = Math.max(0, Number(advance) || 0);
+  if (total <= 0) return [];
+  const row = (description: string, price: number, paidBy: "advance" | "guide"): Expense =>
+    ({ description, price, pax: 1, expenseType: "meal", paidBy, paidByChoice: "guide" } as Expense);
+  if (adv <= 0) return [row(FOOD_COST_DESCRIPTION, total, "guide")];
+  const fromAdvance = Math.min(total, adv);
+  return total > adv
+    ? [row(FOOD_COST_DESCRIPTION, fromAdvance, "advance"), row(FOOD_COST_OVER_DESCRIPTION, Math.round((total - adv) * 100) / 100, "guide")]
+    : [row(FOOD_COST_DESCRIPTION, fromAdvance, "advance")];
+}
+/** What a food-tour report already says the food cost (both rows), for re-opening the form. */
+export function reportedFoodCost(rows: readonly Expense[] | null | undefined): number {
+  return (rows ?? []).filter((e) => e.description === FOOD_COST_DESCRIPTION || e.description === FOOD_COST_OVER_DESCRIPTION).reduce((s, e) => s + expenseAmount(e), 0);
+}
+
+export function receiptDriveName(opts: { ref?: string | null; guideId: string; date: string; slotIdx: number; index: number; description?: string | null; ext: string; from?: "operator" | "guide" }): string {
   const desc = (opts.description || "").replace(/[\\/'"\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
-  return `${base}-E${opts.index + 1}${desc ? ` ${desc}` : ""} — receipt.${opts.ext}`;
+  // A guide's receipt is numbered by the line of THEIR report, which is not the
+  // operator's row of the same number — so it is named apart (G<n>, "guide
+  // receipt") and never reads as the operator's evidence for a different line.
+  const guide = opts.from === "guide";
+  const what = `${guide ? "guide receipt G" : "receipt E"}${opts.index + 1}${desc ? ` ${desc}` : ""}`;
+  // Job No. first (lib/evidence-name). guideId + slot stay: legacy refs are not unique.
+  return evidenceName({ jobs: [opts.ref], what, guide: opts.guideId, date: opts.date, refs: [`slot ${opts.slotIdx}`], ext: opts.ext });
 }
 
 // Apply a guide's reported attendance to a job sheet: remove `absent` guests
@@ -457,7 +626,14 @@ const ATTRACTION_PREFIXES = ["grand palace", "wat pho", "wat arun"];
 
 // Re-sync the attraction (Grand Palace / Wat Pho / Wat Arun) ticket expenses to the
 // number of ticket-included guests who actually showed up (sum of actualPax).
+//
+// Only when every guest row says whether its tickets are included. A blank Tickets value is
+// UNKNOWN, not "no tickets": counting it as 0 used to wipe the operator's ticket count to 0
+// whenever a no-show was reported. While any row with guests is still blank, the lines are
+// left exactly as they are and a person decides.
 export function syncAttractionTickets(bookings: Booking[], expenses: Expense[]): Expense[] {
+  const withGuests = bookings.filter((b) => (b.actualPax ?? b.bookedPax ?? 0) > 0);
+  if (withGuests.some((b) => b.tickets !== "included" && b.tickets !== "not")) return expenses;
   const inclPax = bookings.reduce((s, b) => s + (b.tickets === "included" ? (b.actualPax ?? 0) : 0), 0);
   return expenses.map((e) =>
     ATTRACTION_PREFIXES.some((a) => (e.description ?? "").trim().toLowerCase().startsWith(a)) ? { ...e, pax: inclPax } : e,

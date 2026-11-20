@@ -397,7 +397,7 @@ describe("where the file goes", () => {
   });
   it("filed beside the job sheets it belongs to", () => {
     // Not under "Folkpaths Job Sheets" — that tree is shared with guides.
-    expect(certificateFolder("2099-04-01")).toEqual(["Folkpaths Finance", "Private Expense Certificates", "2099-04"]);
+    expect(certificateFolder("2099-04-01")).toEqual(["Folkpaths Finance", "Private Expense Certificates", "2099", "04 April"]);
     expect(certificateFolder("2099-04-01")[0]).not.toBe("Folkpaths Job Sheets");
     expect(legacyCertificateFolder("2099-04-01")).toEqual(["Folkpaths Job Sheets", "2099-04 April", "Expense Certificates"]);
   });

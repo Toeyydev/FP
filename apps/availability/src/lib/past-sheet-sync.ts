@@ -58,7 +58,7 @@ async function load(db: PrismaClient, k: Key) {
   const [atSlot, guidesAtSlot, others] = await Promise.all([
     db.booking.findMany({
       where: { date: key.date, slotIdx: key.slotIdx, status: { in: ["PENDING", "OFFERED", "ASSIGNED"] } },
-      select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true, source: true, customerName: true, noShow: true, noShowPax: true },
+      select: { id: true, status: true, tourId: true, assignedGuideId: true, externalRef: true, confirmationCode: true, pax: true, source: true, customerName: true, noShow: true, noShowPax: true, rateTitle: true },
       orderBy: { createdAt: "asc" },
     }),
     db.assignment.count({ where: { date: key.date, slotIdx: key.slotIdx } }),

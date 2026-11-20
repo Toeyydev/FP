@@ -21,7 +21,7 @@ describe("the Company advances report", () => {
     const r = await fileAdvancesReport(prisma, { render, save, now: () => new Date("2099-03-10T03:00:00Z") }, { actorId: "u_op", actorRole: "OPERATOR" });
     expect(r).toMatchObject({ link: "https://drive.example.test/report", name: "Company advances 2099-03-10.pdf", advances: 1 });
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ name: reportFileName("2099-03-10"), mimeType: "application/pdf", folderPath: reportFolder("2099-03-10") }));
-    expect(reportFolder("2099-03-10")).toEqual(["Folkpaths Job Sheets", "2099-03 March", "Advances"]);
+    expect(reportFolder("2099-03-10")).toEqual(["Folkpaths Job Sheets", "2099", "03 March", "Advances"]);
     const html = render.mock.calls[0][0];
     expect(html).toContain("FOLK-ADV-209903-901");
     expect(html).toContain("1 outstanding · ฿1,000.00 with guides");

@@ -195,7 +195,7 @@ try {
   const driveLog = readFileSync(DRIVE_LOG, "utf8").trim().split("\n");
   const patches = driveLog.filter((l) => l.startsWith("PATCH"));
   check("the retry renamed the same file id, and nothing was created or deleted in Drive",
-    patches.length === 2 && patches[0] === `PATCH ${WRONG} FAILED` && patches[1].startsWith(`PATCH ${WRONG} G-902 — ${DATE} slot 2 — EXP-20990700001`) && !driveLog.some((l) => /^(POST|DELETE)/.test(l)) && !patches.some((l) => l.includes(RIGHT)), patches.join(" | "));
+    patches.length === 2 && patches[0] === `PATCH ${WRONG} FAILED` && patches[1].startsWith(`PATCH ${WRONG} NO-JOB — guide pay slip — G-902 — ${DATE} — slot 2 — EXP-20990700001`) && !driveLog.some((l) => /^(POST|DELETE)/.test(l)) && !patches.some((l) => l.includes(RIGHT)), patches.join(" | "));
   check("the page now says the file is renamed", final.includes("เปลี่ยนชื่อแล้ว") && !final.includes("ลองเปลี่ยนชื่อไฟล์อีกครั้ง"));
   check("one correction, one failed and one successful rename in the audit",
     (await prisma.auditLog.count({ where: { action: "pay.slip_detached" } })) === 1 && (await prisma.auditLog.count({ where: { action: "drive.slip_rename_failed" } })) === 1 && (await prisma.auditLog.count({ where: { action: "drive.slip_renamed" } })) === 1);

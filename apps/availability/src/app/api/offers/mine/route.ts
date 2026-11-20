@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { acceptOffer, denyOffer, timeRangeLabel } from "@/lib/offers";
+import { acceptOffer, denyOffer, guideOpenOffers } from "@/lib/offers";
 
 // GET — the open job offers this guide can act on (in-app Accept/Deny).
 export async function GET() {
@@ -11,25 +10,7 @@ export async function GET() {
   const guideId = session?.user?.guideId;
   if (!guideId) return NextResponse.json({ offers: [] });
 
-  const responses = await prisma.jobOfferResponse.findMany({ where: { guideId, response: "OFFERED" }, select: { offerId: true } });
-  const ids = responses.map((r) => r.offerId);
-  if (ids.length === 0) return NextResponse.json({ offers: [] });
-
-  const offers = await prisma.jobOffer.findMany({
-    where: { id: { in: ids }, status: "OPEN", expiresAt: { gt: new Date() } },
-    orderBy: [{ date: "asc" }, { slotIdx: "asc" }],
-  });
-  const tours = await prisma.tour.findMany({ where: { id: { in: offers.map((o) => o.tourId) } }, select: { id: true, name: true, meetingPoint: true } });
-  const tmap = new Map(tours.map((t) => [t.id, t]));
-
-  return NextResponse.json({
-    offers: offers.map((o) => ({
-      id: o.id, tourId: o.tourId, tourName: tmap.get(o.tourId)?.name ?? o.tourId,
-      meetingPoint: tmap.get(o.tourId)?.meetingPoint ?? null,
-      date: o.date, slotIdx: o.slotIdx, time: timeRangeLabel(o.slotIdx, o.durationMin),
-      pax: o.pax, note: o.note, expiresAt: o.expiresAt,
-    })),
-  });
+  return NextResponse.json({ offers: await guideOpenOffers(guideId) });
 }
 
 // POST { offerId, action: "accept" | "deny" } — guide responds in-app.

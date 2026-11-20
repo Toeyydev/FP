@@ -1,4 +1,5 @@
 import { googleAccessToken } from "@/lib/google-calendar";
+import { ALL_DRIVES, privateDriveId, privateDriveScope } from "@/lib/google-drive";
 import type { DrivePermission } from "@/lib/certificates/access";
 
 // Filing a certificate in Drive: one file per attempt, and the winner is never written
@@ -145,14 +146,14 @@ async function bearer(refreshToken: string): Promise<string> {
 }
 
 async function folder(token: string, path: string[]): Promise<string | undefined> {
-  let parent: string | undefined;
+  let parent = privateDriveId(); // a shared drive's id is its own root
   for (const name of path) {
     const q = [`name = '${esc(name)}'`, "mimeType = 'application/vnd.google-apps.folder'", "trashed = false"];
     if (parent) q.push(`'${parent}' in parents`);
-    const r = await fetch(`${api}/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)&spaces=drive`, { headers: { authorization: `Bearer ${token}` } });
+    const r = await fetch(`${api}/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(id)${privateDriveScope()}`, { headers: { authorization: `Bearer ${token}` } });
     const j = (await r.json().catch(() => ({}))) as { files?: { id?: string }[] };
     if (j.files?.[0]?.id) { parent = j.files[0].id; continue; }
-    const cr = await fetch(`${api}/files?fields=id`, {
+    const cr = await fetch(`${api}/files?fields=id&${ALL_DRIVES}`, {
       method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: parent ? [parent] : undefined }),
     });
@@ -169,7 +170,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
     const parent = await folder(token, folderPath);
     const q = [...clauses, "trashed = false"];
     if (parent) q.push(`'${parent}' in parents`);
-    const r = await fetch(`${api}/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(${FIELDS})&spaces=drive`, { headers: { authorization: `Bearer ${token}` } });
+    const r = await fetch(`${api}/files?q=${encodeURIComponent(q.join(" and "))}&fields=files(${FIELDS})${privateDriveScope()}`, { headers: { authorization: `Bearer ${token}` } });
     const j = (await r.json().catch(() => ({}))) as { files?: RawFile[] };
     return (j.files ?? []).map(shape);
   };
@@ -196,7 +197,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
       o.bytes,
       Buffer.from(`\r\n--${boundary}--`, "utf8"),
     ]);
-    const r = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}`, {
+    const r = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}&${ALL_DRIVES}`, {
       method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` }, body: new Uint8Array(body),
     });
     const j = (await r.json().catch(() => ({}))) as RawFile;
@@ -211,7 +212,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
         o.bytes,
         Buffer.from(`\r\n--${b2}--`, "utf8"),
       ]);
-      const r2 = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}`, {
+      const r2 = await fetch(`${uploadApi}/files?uploadType=multipart&fields=${FIELDS}&${ALL_DRIVES}`, {
         method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${b2}` }, body: new Uint8Array(body2),
       });
       const j2 = (await r2.json().catch(() => ({}))) as RawFile;
@@ -240,7 +241,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
       if (mine.length > 1) throw new DuplicateCertificateFile(o.certificateId, "TEMP", mine.map((f) => f.id));
       if (mine.length === 1) {
         if (mine[0].state !== "TEMP") throw new Error("drive-immutable: only a TEMP candidate is ever written to");
-        const ur = await fetch(`${uploadApi}/files/${mine[0].id}?uploadType=media&fields=${FIELDS}`, {
+        const ur = await fetch(`${uploadApi}/files/${mine[0].id}?uploadType=media&fields=${FIELDS}&${ALL_DRIVES}`, {
           method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/pdf" }, body: new Uint8Array(o.bytes),
         });
         const uj = (await ur.json().catch(() => ({}))) as RawFile;
@@ -255,9 +256,9 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
 
     async retire({ fileId, certificateId, attemptToken, at, reason }) {
       const token = await bearer(refreshToken);
-      const current = await fetch(`${api}/files/${fileId}?fields=name`, { headers: { authorization: `Bearer ${token}` } });
+      const current = await fetch(`${api}/files/${fileId}?fields=name&${ALL_DRIVES}`, { headers: { authorization: `Bearer ${token}` } });
       const cj = (await current.json().catch(() => ({}))) as { name?: string };
-      await fetch(`${api}/files/${fileId}`, {
+      await fetch(`${api}/files/${fileId}?${ALL_DRIVES}`, {
         method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({
           name: `RETIRED ${cj.name ?? fileId}`,
@@ -302,7 +303,7 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
 
     async read({ fileId }) {
       const token = await bearer(refreshToken);
-      const r = await fetch(`${api}/files/${fileId}?alt=media`, { headers: { authorization: `Bearer ${token}` } });
+      const r = await fetch(`${api}/files/${fileId}?alt=media&${ALL_DRIVES}`, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) return null;
       return Buffer.from(await r.arrayBuffer());
     },
@@ -310,13 +311,13 @@ export function googleCertificateDrive(refreshToken: string): CertificateDrive {
     async quarantine({ fileId, reason, certificateId, attemptToken, at }) {
       const token = await bearer(refreshToken);
       // A content restriction would stop the rename, so it is lifted first.
-      await fetch(`${api}/files/${fileId}`, {
+      await fetch(`${api}/files/${fileId}?${ALL_DRIVES}`, {
         method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ contentRestrictions: [{ readOnly: false }] }),
       }).catch(() => {});
-      const current = await fetch(`${api}/files/${fileId}?fields=name`, { headers: { authorization: `Bearer ${token}` } });
+      const current = await fetch(`${api}/files/${fileId}?fields=name&${ALL_DRIVES}`, { headers: { authorization: `Bearer ${token}` } });
       const cj = (await current.json().catch(() => ({}))) as { name?: string };
-      await fetch(`${api}/files/${fileId}`, {
+      await fetch(`${api}/files/${fileId}?${ALL_DRIVES}`, {
         method: "PATCH", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({
           name: `QUARANTINED ${cj.name ?? fileId}`,

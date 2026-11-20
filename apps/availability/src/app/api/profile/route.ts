@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { calendarEmailInput, storedCalendarEmail } from "@/lib/calendar-email";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     id: u.id, guideId: u.guideId, role: u.role, displayName: u.displayName, fullName: u.fullName,
-    email: u.email, phone: u.phone, lineId: u.lineId, lineLinked: !!u.lineUserId, lineLoginEnabled, languages: u.languages, qualifications: u.qualifications,
+    email: u.email, calendarEmail: u.calendarEmail, phone: u.phone, lineId: u.lineId, lineLinked: !!u.lineUserId, lineLoginEnabled, languages: u.languages, qualifications: u.qualifications,
     emergencyName: u.emergencyName, emergencyPhone: u.emergencyPhone, emergencyRelation: u.emergencyRelation,
     taxId: decrypt(u.taxId), idCardAddress: decrypt(u.idCardAddress), currentAddress: decrypt(u.currentAddress), bankName: decrypt(u.bankName),
     bankAccountNo: decrypt(u.bankAccountNo), bankAccountName: decrypt(u.bankAccountName), bankBranch: decrypt(u.bankBranch),
@@ -41,6 +42,7 @@ const putSchema = z.object({
   userId: z.string().optional(),
   fullName: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
+  calendarEmail: calendarEmailInput.optional(),
   lineId: z.string().max(80).optional(),
   emergencyName: z.string().max(120).optional(),
   emergencyPhone: z.string().max(40).optional(),
@@ -69,6 +71,7 @@ export async function PUT(req: NextRequest) {
   const data: Record<string, string | null> = {};
   if (d.fullName !== undefined) data.fullName = d.fullName.trim() || null;
   if (d.phone !== undefined) data.phone = d.phone.trim() || null;
+  if (d.calendarEmail !== undefined) data.calendarEmail = storedCalendarEmail(d.calendarEmail);
   if (d.lineId !== undefined) data.lineId = d.lineId.trim() || null;
   if (d.emergencyName !== undefined) data.emergencyName = d.emergencyName.trim() || null;
   if (d.emergencyPhone !== undefined) data.emergencyPhone = d.emergencyPhone.trim() || null;

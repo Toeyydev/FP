@@ -44,6 +44,12 @@ export async function guideFeeAccount(): Promise<PeakAccount | null> {
   return toAccount(rows[0]);
 }
 
+/** The account a guide's compensation books to (510123), or null when unmapped. */
+export async function guideCompensationAccount(): Promise<PeakAccount | null> {
+  const rows = await prisma.peakAccountMapping.findMany({ where: { folkopsCategory: "GUIDE_COMPENSATION" }, select: SELECT });
+  return toAccount(rows[0]);
+}
+
 /** The account a review reward books to. The job-sheet document never posts review
  *  rows, but a guide payment does: the reward is part of the money transferred. */
 export async function reviewRewardAccount(): Promise<PeakAccount | null> {

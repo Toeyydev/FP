@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -16,7 +17,6 @@ import { receiptDriveName, type Expense } from "@/lib/jobsheet";
 const forCaller = (sheet: { expenses?: unknown }, role: string | null | undefined) =>
   isAdmin(role) ? sheet : { ...sheet, expenses: redactRowsForNonAdmin(sheet.expenses as Record<string, unknown>[]) };
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 const OK_TYPES = /^(image\/(jpeg|jpg|png|webp)|application\/pdf)$/i;
 
@@ -54,12 +54,12 @@ export async function POST(req: NextRequest) {
   if (!refreshToken) return NextResponse.json({ error: "not-connected", hint: "Connect the Folkpaths Google account first." }, { status: 400 });
 
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
-  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+  const monthFolder = driveMonth(date);
   const name = receiptDriveName({ ref: sheet.ref, guideId, date, slotIdx, index: expenseIndex, description: expenses[expenseIndex]?.description, ext: extOf(mime) });
 
   let up: { id: string; link: string };
   try {
-    up = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", monthFolder, "Receipts"] });
+    up = await saveBufferToDrive({ refreshToken, name, base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", ...monthFolder, "Receipts"] });
   } catch (e) {
     return NextResponse.json({ error: "drive-failed", detail: (e as Error).message.slice(0, 200) }, { status: 502 });
   }

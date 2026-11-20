@@ -1,3 +1,4 @@
+import { actorMayAttest, certificatesDue } from "@/lib/certificates/auto";
 import { NextRequest, NextResponse } from "next/server";
 import { autoSettleSheet } from "@/lib/advances/auto";
 import { liveJobAdvances } from "@/lib/advances/coverage";
@@ -7,10 +8,11 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { jobAdvanceView } from "@/lib/advances/job-view";
+import { guideAdvanceCard } from "@/lib/advances/guide-card";
 import { audit } from "@/lib/audit";
 import { financialHistoryBlockers } from "@/lib/payments-v2/history";
 import { decrypt } from "@/lib/crypto";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, isApproved, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, feeAdjustmentProblems, guideFeeOrStandard, guideFeeWhtRule, isApproved, normaliseGuideFee, isReviewExpense, stampReviewTaxFree, type Booking, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { ensureJobRef } from "@/lib/jobref";
 import { scheduledStart, tourDayTimeline } from "@/lib/tour-day-timeline";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -27,6 +29,7 @@ import { peakAccountMap } from "@/lib/peak-account-map";
 import { bookingRef } from "@/lib/booking-ref";
 import { readPastSheetGaps } from "@/lib/past-sheet-sync";
 import { guideSlotBookings, keepReportedNoShows, SHEET_BOOKING_STATUSES, sheetRefs, toSheetBooking, type SheetBooking } from "@/lib/sheet-bookings";
+import { ticketsFromRate } from "@/lib/rate-kind";
 import { applyRateDefaults, expectedPayerFrom, jobRates } from "@/lib/rate-payer";
 import { sendJobSheetsForDate } from "@/lib/jobsheet-send";
 import { removeTourEvents } from "@/lib/tour-calendar-sync";
@@ -36,9 +39,15 @@ import { documentHoldsJobs, documentStatus } from "@/lib/peak-payment-document";
 import { handoverLock, handoverNeedsRecording } from "@/lib/tour-handover-server";
 import { payerRuleReasons, stampPayerActor, type PayerRuleRow } from "@/lib/payer-rules";
 import { claimsServerOwned, mergeServerOwned, stripServerOwned, type ProtectedRow } from "@/lib/protected-expense-fields";
+import { ensureRowIds } from "@/lib/expense-row-id";
+import { attachmentsFor, mirrorAll } from "@/lib/expense-attachments/service";
+import { carryNoReceipt } from "@/lib/expense-attachments/no-receipt-row";
 import { linkAdvanceRows } from "@/lib/advances/link";
 import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
+import { FIXED_ITEMS, operatorRowProblems } from "@/lib/guide-fixed-expenses";
+import { reviewHistory } from "@/lib/job-expense-review";
+import { accountForExpenseType } from "@/lib/peak-accounts";
 
 function ops(role?: string) {
   return role === "OPERATOR" || role === "ADMIN";
@@ -101,6 +110,10 @@ export async function GET(req: NextRequest) {
   // (lib/tour-day-timeline). The report is read here for both; the operator's history below
   // reads it again only for its own lines.
   const dayReport = await prisma.tourReport.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { submittedAt: true, noShow: true, leftEarly: true, completedPax: true } });
+  // What Approve would certify, shown on the button to the one person whose click attests it
+  // (lib/certificates/auto). Null for everybody else, and once approved.
+  const attester = isOps && !isApproved(existing?.approvalStatus) && existing ? await actorMayAttest({ id: session.user.id ?? "", role: session.user.role ?? "" }) : false;
+  const approveCertifies = attester ? (await certificatesDue({ guideId, date, slotIdx })).reduce((s, c) => s + c.totalSatang, 0) : 0;
   const tourDay = { scheduled: SLOT_TIMES[slotIdx] ?? null, steps: tourDayTimeline({ checkins, report: dayReport, start: scheduledStart(date, SLOT_TIMES[slotIdx] ?? "") }) };
 
   // Paid state for this slot. Once the operator has uploaded the slip / marked it paid
@@ -162,10 +175,14 @@ export async function GET(req: NextRequest) {
   })() : null;
 
   // Guide advances for this job, as the LEDGER holds them (lib/advances/job-view) — the
-  // same numbers the PDF, the Drive document and the guide's phone show. Shown to the
-  // guide too.
+  // same numbers the PDF and the Drive document show. Only finance roles (OPERATOR/ADMIN/
+  // ACCOUNTANT) receive the ledger. A guide receives the cut-down card (lib/advances/guide-card):
+  // amount, Transferred, To return — no ADV number, reference, date, slip or PEAK detail.
   const advanceSheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } }, select: { expenses: true } });
-  const advance = await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (advanceSheet?.expenses as unknown as Expense[]) ?? [] });
+  const advanceView = await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (advanceSheet?.expenses as unknown as Expense[]) ?? [] });
+  const seesLedger = canViewFinance(session.user.role);
+  const advance = seesLedger ? advanceView : undefined;
+  const guideAdvance = seesLedger ? undefined : guideAdvanceCard(advanceView);
 
   // Collapse repeated guests to a single row — the same booking must appear only once
   // (a re-import or combine can leave a guest listed twice). The SAME booking can
@@ -190,9 +207,17 @@ export async function GET(req: NextRequest) {
   // them (plus any untagged).
   const allAtSlot = await prisma.booking.findMany({
     where: { date, slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
-    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true },
+    select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true, rateTitle: true, arrivedAt: true },
     orderBy: { createdAt: "asc" },
   });
+  // When each booking was ticked "มาแล้ว" at the meeting point, by either reference
+  // (lib/guide-lifecycle recordArrival). Kept on the Booking, never in the saved sheet,
+  // so saving the sheet can never wipe it.
+  const arrivals: Record<string, string> = {};
+  for (const b of allAtSlot) {
+    if (!b.arrivedAt) continue;
+    for (const r of [b.externalRef, b.confirmationCode]) if (r) arrivals[r] = b.arrivedAt.toISOString();
+  }
   // Split slot → this guide's sheet is only the guests tagged to them (lib/sheet-bookings,
   // shared with the guide's expense report so a sheet gets the same guests either way).
   const linked = guideSlotBookings(allAtSlot, guideId);
@@ -289,6 +314,17 @@ export async function GET(req: NextRequest) {
   // WhatsApp links for the guests, read live from Booking.phone — never stored on the
   // sheet. Operators, or the guide assigned to this job for their own guests only.
   const guestContacts = await guestContactsFor(prisma, { isOps, guideId: session.user.guideId }, { guideId, date, slotIdx });
+  // Files behind each expense row, by row id (lib/expense-attachments), for whoever may see them.
+  const attachments = existing ? await attachmentsFor(prisma, existing, { id: session.user.id ?? null, role: session.user.role, guideId: session.user.guideId ?? null }) : {};
+  // Operator review (owner 2026-11-15, lib/job-expense-review): each fixed item's PEAK account as
+  // FolkOPS maps it (read-only; null = not mapped — Admin/Accountant set it), and the review history.
+  const review = isOps ? {
+    expenseAccounts: await (async () => {
+      const maps = await prisma.peakAccountMapping.findMany({ where: { isActive: true }, select: { folkopsCategory: true, peakAccountCode: true, peakAccountName: true, isActive: true } });
+      return Object.fromEntries(FIXED_ITEMS.map((f) => { const m = accountForExpenseType(f.expenseType, maps); return [f.key, m ? { code: m.peakAccountCode, name: m.peakAccountName } : null]; }));
+    })(),
+    reviewHistory: existing ? await reviewHistory(prisma, existing.id) : [],
+  } : {};
   // The last time the booking reconciliation moved this sheet's expected guest count
   // (lib/booking-reconcile) — shown as "Synced from booking · 6 → 8", never as attendance.
   const lastSync = existing ? await prisma.auditLog.findFirst({ where: { action: "jobsheet.expected_pax_changed", entityType: "JobSheet", entityId: existing.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true, detail: true } }) : null;
@@ -312,7 +348,7 @@ export async function GET(req: NextRequest) {
       peakContactId: header?.peakContactId, accountingDate: dates.accountingDate,
       origin: existing?.origin ?? null,
       accounts, jobRef: existing?.ref, bookings: (existing?.bookings as Booking[]) ?? [], state,
-      advances: liveJobAdvances(advance.advances),
+      advances: liveJobAdvances(advanceView.advances),
     });
     return {
       ...state,
@@ -355,7 +391,7 @@ export async function GET(req: NextRequest) {
       // Nothing is added by itself — but a person is told what is missing, and may add it
       // with one button (lib/past-sheet-sync). Not on a replacement's copy of the list.
       const pastBookingGaps = isOps && date < todayBKK && handover?.role !== "to" ? await readPastSheetGaps(prisma, { guideId, date, slotIdx }).catch(() => null) : null;
-      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
+      return NextResponse.json({ pastBookingGaps, header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, ...review, bookingSync, rates, sheet: fill({ ...existing, bookings: dedupeByName((Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[]) }), reconciledAdded: 0, reconciledRemoved: 0 });
     }
     const saved = (Array.isArray(existing.bookings) ? existing.bookings : []) as SheetBooking[];
 
@@ -409,6 +445,7 @@ export async function GET(req: NextRequest) {
     // off this guide's saved sheet, so the two guides' sheets stay separated.
     const otherGuideRefSet = new Set(allAtSlot.filter((b) => b.assignedGuideId && b.assignedGuideId !== guideId).flatMap(refKeys));
 
+    const inferTickets = !isApproved(existing.approvalStatus) && payment.status !== "PAID";
     const matched = new Map<SheetBooking, (typeof linked)[number]>();
     for (const r of saved) { const lb = matchLive(r); if (lb) matched.set(r, lb); }
     const coveredLive = new Set(matched.values());
@@ -423,13 +460,24 @@ export async function GET(req: NextRequest) {
           cancelledRefs: cancelledRefSet, movedRefs: movedRefSet, otherGuideRefs: otherGuideRefSet,
         }));
       })
-      .map((r) => { const lb = matched.get(r); return lb ? { ...r, bookingNo: canonRef(lb) } : r; }); // refresh GET- → GYG
+      .map((r) => {
+        const lb = matched.get(r);
+        if (!lb) return r;
+        const row = { ...r, bookingNo: canonRef(lb) }; // refresh GET- → GYG
+        // A blank Tickets on a saved row matched to its live booking is filled from the Rate
+        // where the Rate is unambiguous (lib/rate-kind) — in this response only; the
+        // operator's Save stores it. A value someone chose is never replaced, and an approved
+        // or paid sheet is shown exactly as saved.
+        if (inferTickets && !(row.tickets ?? "").trim()) { const t = ticketsFromRate(lb.rateTitle); if (t) row.tickets = t; }
+        return row;
+      });
     const added = linked
       .filter((lb) => !coveredLive.has(lb))
-      .map(toSheetBooking);
+      .map(toSheetBooking)
+      .map((r) => (inferTickets ? r : { ...r, tickets: "" })); // approved / paid: nothing inferred
     const reconciledRemoved = saved.length - kept.length;
     const sheet = fill({ ...existing, bookings: dedupeByName(kept.concat(added)) });
-    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, approvedByName, guestContacts, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
+    return NextResponse.json({ header, tour, saved: true, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, approvedByName, guestContacts, arrivals, attachments, ...review, bookingSync, rates, sheet, reconciledAdded: added.length, reconciledRemoved });
   }
 
   // No saved sheet yet — scaffold from the current bookings.
@@ -438,7 +486,7 @@ export async function GET(req: NextRequest) {
     : [{ name: "", bookingNo: "", bookedPax: assignment?.pax ?? null, actualPax: null, tickets: "", status: "" }];
 
   return NextResponse.json({
-    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, payment, combinedPayment, handover, peakStatus, advance, history, jobMeta, peak, guestContacts, bookingSync, rates,
+    header, tour, saved: false, canEdit: isOps, isAdmin: isAdmin(session.user.role), role: session.user.role ?? null, userId: session.user.id ?? null, checkedIn, tourDay, approveCertifies, payment, combinedPayment, handover, peakStatus, advance, guideAdvance, history, jobMeta, peak, guestContacts, arrivals, attachments, ...review, bookingSync, rates,
     sheet: { ref: null, guideId, date, slotIdx, tourId, status: "Confirmed", bookings: dedupeByName(bookings), expenses: defaultExpenses, guideFee: DEFAULT_GUIDE_FEE, operatorNote: null, approvalStatus: null, approvedBy: null, approvedAt: null, updatedAt: null },
   });
 }
@@ -499,7 +547,7 @@ export async function PUT(req: NextRequest) {
   const [slotLive, guidesAtSlot, otherSheets] = await Promise.all([
     prisma.booking.findMany({
       where: { date: d.date, slotIdx: d.slotIdx, OR: [{ status: { in: [...SHEET_BOOKING_STATUSES] } }, { status: "CANCELLED", OR: [{ noShow: true }, { noShowPax: { gt: 0 } }] }] },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, tourId: true, rateTitle: true },
       orderBy: { createdAt: "asc" },
     }),
     prisma.assignment.count({ where: { date: d.date, slotIdx: d.slotIdx } }),
@@ -514,12 +562,39 @@ export async function PUT(req: NextRequest) {
   // this request or a signed-for row is not the row it was signed for.
   let payerReasons: { row: string; paidBy: string | null; reason: string }[] = [];
   let payerChanges: { row: string; from: string | null; to: string | null }[] = [];
+  let amountChanges: { row: string; from: string; to: string }[] = [];
   const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
   const written = await prisma.$transaction(async (tx) => {
-    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, updatedAt: true } });
+    const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, guideFee: true, updatedAt: true, approvalStatus: true } });
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
       return { kind: "stale" as const };
+    }
+    // A guide fee under ฿1,000 carries no withholding (owner decision 2026-10-25) — enforced
+    // here, not only in the editor. Only when the fee is created or edited: an untouched fee
+    // keeps the rate it was saved, and maybe paid, with (lib/jobsheet guideFeeWhtRule).
+    const storedFee = (current?.guideFee ?? null) as GuideFee | null;
+    d.guideFee = normaliseGuideFee(d.guideFee as GuideFee) as typeof d.guideFee;
+    const FEE_KEYS = ["price", "time", "whtPct", "payType", "customPayable", "customNature", "adjustReason", "adjustNote"] as const;
+    const feeEdited = !storedFee || FEE_KEYS.some((k) => (storedFee[k] ?? null) !== ((d.guideFee as GuideFee)[k] ?? null));
+    // Approved or paid, the fee is what was approved or paid: unapprove first, as for any
+    // change to the job's money. Compared with the fee in force, so saving a sheet that
+    // stored none (it reads as the standard fee) is not an edit.
+    if (current && feeEdited) {
+      const inForce = guideFeeOrStandard(storedFee);
+      const changed = FEE_KEYS.some((k) => (inForce[k] ?? null) !== ((d.guideFee as GuideFee)[k] ?? null));
+      if (changed) {
+        const [pay, job] = await Promise.all([
+          tx.tourPayment.findUnique({ where: key, select: { status: true } }),
+          tx.guidePaymentJob.findFirst({ where: { guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, active: true }, select: { id: true } }),
+        ]);
+        if (isApproved(current.approvalStatus) || pay?.status === "PAID" || job) return { kind: "fee-locked" as const };
+      }
+    }
+    if (feeEdited) {
+      const problems = feeAdjustmentProblems(d.guideFee as GuideFee);
+      if (problems.length) return { kind: "fee-invalid" as const, problems };
+      d.guideFee = guideFeeWhtRule(d.guideFee as GuideFee, storedFee) as typeof d.guideFee;
     }
     // Review incentives carry no withholding from 2026-10-06 (owner decision): a review row
     // added from that day is marked tax-free by the server; rows already on the sheet keep the
@@ -534,6 +609,7 @@ export async function PUT(req: NextRequest) {
     const allowPayerChange = isOpsSave && tp?.status !== "PAID" && !activeJob;
     const merged = mergeServerOwned((current?.expenses as ProtectedRow[]) ?? [], d.expenses as ProtectedRow[], ref || "This job sheet", { allowPayerChange });
     payerChanges = merged.payerChanges ?? [];
+    amountChanges = merged.amountChanges ?? [];
     if (merged.conflicts.length) return { kind: "conflicts" as const, conflicts: merged.conflicts };
     // Stamped AFTER the merge, so a carried stamp is seen and left alone. Stamping the
     // request body instead would have put whoever pressed Save over the person who
@@ -552,6 +628,11 @@ export async function PUT(req: NextRequest) {
     if (linked.problems.length) return { kind: "advance-link" as const, problems: linked.problems };
     advanceLinks = linked.changes;
     const stamped = linked.rows as unknown as PayerRuleRow[];
+    // Owner 2026-11-16: a cost the guide paid is Water / Bus / Ferry (Inc. Guide) on the operator's
+    // sheet too (lib/guide-fixed-expenses operatorRowProblems). Rows unchanged since the last save
+    // are history and pass; the rule bites when a row is added or edited.
+    const fixedProblems = operatorRowProblems(stamped as unknown as Expense[], (current?.expenses as Expense[] | null) ?? []);
+    if (fixedProblems.length) return { kind: "fixed-items" as const, problems: fixedProblems };
     // A reason given for a payer that departs from the expected one: kept on the row, and
     // named in this save's audit with who gave it (the row's own stamp says when).
     const before = ((current?.expenses as PayerRuleRow[] | null) ?? []);
@@ -561,7 +642,13 @@ export async function PUT(req: NextRequest) {
       const was = before.find((b) => (b.description ?? "") === (e.description ?? "")) ?? before[i];
       return (was?.paidByReason ?? "").trim() === reason && (was?.paidBy ?? "") === (e.paidBy ?? "") ? [] : [{ row: (e.description ?? "").trim(), paidBy: e.paidBy ?? null, reason }];
     });
-    const expenses = stamped as unknown as Prisma.InputJsonValue;
+    // Every row gets its stable id (lib/expense-row-id), and the legacy receipt fields are
+    // re-read from the attachments table: a file attached while this sheet was open in
+    // another tab is not wiped by saving the older copy.
+    const withIds = ensureRowIds(stamped as unknown as Expense[]).rows;
+    // …and each row's "no receipt" reason is the stored one (lib/expense-attachments/no-receipt-row):
+    // a save never sets it, so an older copy of the sheet cannot wipe or forge it.
+    const expenses = carryNoReceipt((current?.expenses as { rowId?: string | null }[] | null) ?? [], current ? await mirrorAll(tx, current.id, withIds) : withIds) as unknown as Prisma.InputJsonValue;
     if (!current) {
       return { kind: "ok" as const, sheet: await tx.jobSheet.create({ data: { ref, guideId: d.guideId, date: d.date, slotIdx: d.slotIdx, tourId: d.tourId, status: d.status, bookings, expenses, guideFee: d.guideFee, operatorNote, createdById: session!.user!.id ?? null } }) };
     }
@@ -574,6 +661,15 @@ export async function PUT(req: NextRequest) {
     if (hit.count === 0) return { kind: "stale" as const };
     return { kind: "ok" as const, sheet: (await tx.jobSheet.findUnique({ where: { id: current.id } }))! };
   });
+  if (written.kind === "fee-locked") {
+    return NextResponse.json({ error: "fee-locked", reasons: ["This job is approved or paid, so its guide fee cannot be changed. Unapprove it first."] }, { status: 409 });
+  }
+  if (written.kind === "fixed-items") {
+    return NextResponse.json({ error: "fixed-items", reasons: written.problems, detail: written.problems.join("\n") }, { status: 400 });
+  }
+  if (written.kind === "fee-invalid") {
+    return NextResponse.json({ error: "fee-adjustment", reasons: written.problems }, { status: 400 });
+  }
   if (written.kind === "stale") {
     return NextResponse.json({ error: "stale", reasons: ["This job sheet was saved by someone else while you had it open. Reload it and make the change again — saving now would quietly undo theirs."] }, { status: 409 });
   }
@@ -610,7 +706,7 @@ export async function PUT(req: NextRequest) {
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(payerChanges.length ? { payerChanges } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(payerChanges.length ? { payerChanges } : {}), ...(amountChanges.length ? { amountChanges } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
   // The saved sheet goes back to whoever saved it — an operator, usually — so the rows
   // that a certificate stands behind are stripped on the way out for anyone but an admin.
   // The row they just saved is unchanged in the database; what they are not told is that

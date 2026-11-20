@@ -8,10 +8,13 @@ import { signOut } from "next-auth/react";
 // drops its Google Drive status here), and Sign out pinned at the bottom.
 // Grouped Operations / Finance / Reporting / Settings — existing pages only
 // (no dead links; Expenses / PEAK Sync / Logs pages join their groups when built).
-const GROUPS: { label?: string; items: { key: string; label: string; href: string; adminOnly?: boolean }[] }[] = [
+// `upsell` items show only to someone /api/upsell/settings-visible says may open them: ADMIN,
+// OPERATOR or ACCOUNTANT, and only while UPSELL_ENABLED is on.
+const GROUPS: { label?: string; items: { key: string; label: string; href: string; adminOnly?: boolean; upsell?: boolean }[] }[] = [
   {
     items: [
       { key: "dashboard", label: "Dashboard", href: "/dashboard" },
+      { key: "today", label: "Today & tomorrow", href: "/today" },
       { key: "process", label: "Job process", href: "/process" },
     ],
   },
@@ -24,6 +27,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
       { key: "guides", label: "Guides", href: "/guides" },
       { key: "tours", label: "Tours", href: "/tours" },
       { key: "blocked-slots", label: "Block slots", href: "/blocked-slots" },
+      { key: "calendar-sync", label: "Calendar sync", href: "/calendar-sync" },
       { key: "restore-bookings", label: "Restore archived bookings", href: "/admin/restore-bookings", adminOnly: true },
       { key: "create-job-sheets", label: "Create job sheets", href: "/admin/create-job-sheets", adminOnly: true },
     ],
@@ -56,6 +60,7 @@ const GROUPS: { label?: string; items: { key: string; label: string; href: strin
     label: "Settings",
     items: [
       { key: "accounts", label: "Accounts", href: "/admin" },
+      { key: "upsell-products", label: "Upsell products", href: "/admin/upsell-products", upsell: true },
     ],
   },
 ];
@@ -81,6 +86,13 @@ export function OperatorNav({ active, children }: { active?: string; children?: 
     return () => { ok = false; };
   }, []);
 
+  const [upsell, setUpsell] = useState(false);
+  useEffect(() => {
+    let ok = true;
+    fetch("/api/upsell/settings-visible", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (ok) setUpsell(j?.visible === true); }).catch(() => {});
+    return () => { ok = false; };
+  }, []);
+
   return (
     <div className="op-side">
       <nav className="op-nav" aria-label="Sections">
@@ -91,7 +103,7 @@ export function OperatorNav({ active, children }: { active?: string; children?: 
         {GROUPS.map((g, gi) => (
           <Fragment key={gi}>
             {g.label && <span className="op-nav-group">{g.label}</span>}
-            {g.items.filter((s) => !s.adminOnly || admin).map((s) => (
+            {g.items.filter((s) => (!s.adminOnly || admin) && (!s.upsell || upsell)).map((s) => (
               <a
                 key={s.key}
                 href={s.href}

@@ -33,7 +33,7 @@ const code = (rel: string) =>
 describe("the folder is not one the guides were given", () => {
   it("certificates are filed in the private finance tree, not beside the job sheets", () => {
     const path = certificateFolder("2099-04-01");
-    expect(path).toEqual(["Folkpaths Finance", "Private Expense Certificates", "2099-04"]);
+    expect(path).toEqual(["Folkpaths Finance", "Private Expense Certificates", "2099", "04 April"]);
     expect(path).not.toContain("Folkpaths Job Sheets");
   });
 
@@ -129,7 +129,7 @@ describe("who can see it is asked of Drive, and every unclear answer is a no", (
   it("the same question about the folder says which folder", () => {
     const path = certificateFolder("2099-04-01");
     const p = folderPermissionProblems([perm({ type: "anyone", emailAddress: undefined })], ALLOWED, path);
-    expect(p[0]).toContain("Folkpaths Finance/Private Expense Certificates/2099-04");
+    expect(p[0]).toContain("Folkpaths Finance/Private Expense Certificates/2099/04 April");
     expect(p[0]).not.toContain("This file");
     expect(folderPermissionProblems(null, ALLOWED, path)[0]).toContain("nothing is filed there");
   });

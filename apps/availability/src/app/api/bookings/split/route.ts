@@ -36,9 +36,13 @@ export async function POST(req: NextRequest) {
     slotIdx: z.number().int().min(0),
     tourId: z.string().min(1),
     groups: z.array(z.object({ guideId: z.string().min(1), bookingIds: z.array(z.string().min(1)).min(1) })).min(1),
+    // Which guide takes bookings that arrive later for this departure (null = an operator places each).
+    newBookingsTo: z.string().min(1).nullish(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const { date, slotIdx, tourId, groups } = parsed.data;
+  const newBookingsTo = parsed.data.newBookingsTo ?? null;
+  if (newBookingsTo && !groups.some((g) => g.guideId === newBookingsTo)) return NextResponse.json({ error: "bad-new-bookings-guide" }, { status: 400 });
 
   const ids = groups.flatMap((g) => g.bookingIds);
   // A booking may belong to at most ONE group — otherwise it would be counted and
@@ -75,8 +79,8 @@ export async function POST(req: NextRequest) {
     await prisma.booking.updateMany({ where: { id: { in: g.bookingIds } }, data: { assignedGuideId: g.guideId, status: "OFFERED" } });
     await prisma.assignment.upsert({
       where: { guideId_date_slotIdx: { guideId: g.guideId, date, slotIdx } },
-      create: { guideId: g.guideId, date, slotIdx, tourId, pax, note },
-      update: { tourId, pax, note },
+      create: { guideId: g.guideId, date, slotIdx, tourId, pax, note, takesNewBookings: newBookingsTo === g.guideId },
+      update: { tourId, pax, note, takesNewBookings: newBookingsTo === g.guideId },
     });
 
     // Prune this guide's saved sheet (if any) to their guests only — drop rows whose
@@ -149,6 +153,6 @@ export async function POST(req: NextRequest) {
     } catch { /* best-effort */ }
   }
 
-  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.split", entityType: "Booking", detail: { date, slotIdx, groups: groups.length, removed: removed.length } });
+  await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "bookings.split", entityType: "Booking", detail: { date, slotIdx, groups: groups.length, removed: removed.length, newBookingsTo } });
   return NextResponse.json({ ok: true, groups: groups.length });
 }

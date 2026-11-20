@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
           // No sheet yet: without one, Payments would pay the standard fee for this job.
           const atSlot = await tx.booking.findMany({
             where: { date, slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
-            select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true },
+            select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, status: true, rateTitle: true },
             orderBy: { createdAt: "asc" },
           });
           const created = await tx.jobSheet.create({

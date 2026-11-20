@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { evidenceName } from "@/lib/evidence-name";
 import { audit } from "@/lib/audit";
 import { recordReceipt } from "@/lib/advances/service";
 import { notifyGuide, notifyOps } from "@/lib/booking-import";
@@ -26,7 +27,7 @@ import type { Expense } from "@/lib/jobsheet";
 export type AdvanceMovement = {
   id: string;
   amount: number;
-  at: Date;
+  at: Date | null; // null for a guide: no transfer dates (lib/advances/guide-card)
   method: string;
   txRef: string | null;
   note: string | null;
@@ -63,6 +64,10 @@ export type GuideAdvanceSummary = {
   /** ledgerOutstanding less pendingReturns, never below 0. */
   stillToReturn: number;
   status: AdvanceStatus;
+  /** The expense categories the company's advances on this job may pay for (each
+   *  advance's allowedCategories, together). The app marks those lines as paid from
+   *  the advance to begin with; the guide can still change them. */
+  categories: string[];
   advances: AdvanceMovement[];
   returns: AdvanceMovement[];
 };
@@ -82,7 +87,7 @@ export async function guideAdvanceSummary(
   const [advances, checkins] = await Promise.all([
     prisma.guideAdvance.findMany({
       where, orderBy: { advanceDate: "asc" },
-      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, amountSatang: true, settledSatang: true, advanceDate: true, paidAt: true, method: true, txRef: true, note: true, slipUrl: true, reversedAt: true },
+      select: { id: true, advanceNo: true, guideId: true, date: true, slotIdx: true, amountSatang: true, settledSatang: true, advanceDate: true, paidAt: true, method: true, txRef: true, note: true, slipUrl: true, reversedAt: true, allowedCategories: true },
     }),
     prisma.checkin.count({ where }),
   ]);
@@ -127,13 +132,17 @@ export async function guideAdvanceSummary(
     // The status follows the LEDGER: a balance covered only by money still being checked is
     // not settled yet.
     status: guideStatus(summaries, tourCompleted, live.length > 0),
-    advances: live.map((a) => ({ id: a.id, amount: a.amountSatang / 100, at: a.paidAt, method: a.method, txRef: a.txRef, note: [a.advanceNo, a.note].filter(Boolean).join(" · ") || null, slip: a.slipUrl })),
+    categories: [...new Set(live.flatMap((a) => a.allowedCategories ?? []))],
+    // Owner 2026-11-11: a guide sees the amount and that it was transferred, never the ADV
+    // number, transfer date, bank reference, slip or note (lib/advances/guide-card). The keys
+    // stay, empty, so the app's existing parser keeps working.
+    advances: live.map((a) => ({ id: a.id, amount: a.amountSatang / 100, at: null, method: a.method, txRef: null, note: null, slip: null })),
     // Money the guide has sent back, whatever it has been put against yet. A CLAIMED one
     // is shown as waiting on purpose: it is a claim until someone checks the bank.
     returns: receipts.map((r) => ({
-      id: r.id, amount: r.amountSatang / 100, at: r.createdAt, method: r.method, txRef: r.bankRef,
-      note: [r.receiptNo, r.status === "CLAIMED" ? "waiting to be checked" : `allocated ${(r.allocatedSatang / 100).toFixed(2)} of ${(r.amountSatang / 100).toFixed(2)}`, r.note].filter(Boolean).join(" · "),
-      slip: r.slipUrl,
+      id: r.id, amount: r.amountSatang / 100, at: null, method: r.method, txRef: null,
+      note: r.status === "CLAIMED" ? "waiting to be checked" : "received",
+      slip: null,
     })),
   };
 }
@@ -194,9 +203,9 @@ export async function recordAdvanceReturn(o: {
   if (o.slipFile && typeof o.slipFile.arrayBuffer === "function" && (o.slipFile.size ?? 0) > 0) {
     const gUser = await prisma.user.findUnique({ where: { guideId }, select: { displayName: true, fullName: true } });
     const guideName = gUser?.fullName || gUser?.displayName || guideId;
-    // The same naming as every other Drive file of this job, so its documents sort together.
-    const base = `${sheet.ref || `${guideId}-${date}`} — ${guideName} — ${date}`;
-    const up = await uploadSlip(o.actorId ?? undefined, o.slipFile, `${base} — advance return ฿${amount}`, date);
+    // Job No. first, the same as every other Drive file of this job (lib/evidence-name).
+    const name = evidenceName({ jobs: [sheet.ref], what: "advance return slip", guide: guideName, date, amount, refs: [o.txRef, guideId] });
+    const up = await uploadSlip(o.actorId ?? undefined, o.slipFile, name, date, { ref: sheet.ref, date });
     if ("error" in up) return { ok: false, status: up.status, error: up.error };
     slip = up;
   }

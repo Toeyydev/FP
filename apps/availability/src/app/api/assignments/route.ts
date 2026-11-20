@@ -3,15 +3,12 @@ import { paxIndex } from "@/lib/assigned-pax";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { SLOT_COUNT, clashingSlotIdxs } from "@/lib/slots";
+import { SLOT_COUNT } from "@/lib/slots";
 import { dayOf } from "@/lib/dates";
 import { sweepExpiredOffers, createOffer } from "@/lib/offers";
 import { audit } from "@/lib/audit";
 import { DASHBOARD_CACHE_KEY, forgetCached } from "@/lib/api-cache";
-import { manualAssignBlockers } from "@/lib/manual-assign";
-import { sendTourCalendarInvite } from "@/lib/calendar";
-import { notifyGuide } from "@/lib/booking-import";
-import { directAssignmentNotice } from "@/lib/assignment-notice";
+import { directAssign, directAssignBlockers } from "@/lib/direct-assign";
 import { removeGuideFromDeparture } from "@/lib/assignment-removal";
 import { ensureJobSheetForAssignment } from "@/lib/jobsheet-auto";
 
@@ -129,52 +126,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (direct) {
-    const [g, tour, blocked, leave, staffed, clash] = await Promise.all([
-      prisma.user.findUnique({ where: { guideId }, select: { role: true, state: true, external: true, displayName: true, lineUserId: true } }),
-      prisma.tour.findUnique({ where: { id: tourId }, select: { name: true, meetingPoint: true } }),
-      prisma.blockedDate.findUnique({ where: { date } }),
-      prisma.leaveRequest.findFirst({ where: { guideId, status: "APPROVED", fromDate: { lte: date }, toDate: { gte: date } }, select: { id: true } }),
-      prisma.assignment.findMany({ where: { date, slotIdx }, select: { guideId: true } }),
-      prisma.assignment.findFirst({ where: { guideId, date, slotIdx: { in: clashingSlotIdxs(slotIdx).filter((i) => i !== slotIdx) } }, select: { slotIdx: true } }),
-    ]);
-    const reasons = manualAssignBlockers({
-      guideId, date, today: todayBkk, guide: g ? { role: g.role, state: g.state, external: !!g.external } : null, tourExists: !!tour,
-      dateBlocked: !!blocked, onLeave: !!leave, staffedBy: staffed.map((a) => a.guideId), clashSlotIdx: clash?.slotIdx ?? null,
-    });
+    const reasons = await directAssignBlockers({ guideId, date, slotIdx, tourId });
     if (reasons.length) return NextResponse.json({ error: "not-assignable", reasons }, { status: 409 });
-
-    const a = await prisma.assignment.upsert({
-      where: { guideId_date_slotIdx: { guideId, date, slotIdx } },
-      create: { guideId, date, slotIdx, tourId, pax: pax ?? null, note: note ?? null },
-      update: { tourId, pax: pax ?? null, note: note ?? null },
-    });
-    // The slot's guests are on this guide's job now — the same state an accepted offer
-    // leaves them in — and any offer still asking other guides is over.
-    const booked = await prisma.booking.updateMany({ where: { date, slotIdx, status: "PENDING", assignedGuideId: null }, data: { status: "OFFERED" } });
-    const open = await prisma.jobOffer.findMany({ where: { date, slotIdx, status: "OPEN" }, select: { id: true } });
-    if (open.length) {
-      await prisma.jobOffer.updateMany({ where: { id: { in: open.map((o) => o.id) }, status: "OPEN" }, data: { status: "EXPIRED" } });
-      await prisma.notification.deleteMany({ where: { offerId: { in: open.map((o) => o.id) } } });
-    }
-    await ensureJobSheetForAssignment(guideId, date, slotIdx, "direct-assign");
-    await audit({
-      actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null,
-      action: "assign.manual", entityType: "Assignment", entityId: a.id,
-      detail: { guideId, date, slotIdx, tourId, bookings: booked.count, offersClosed: open.length },
-    });
-    forgetCached(DASHBOARD_CACHE_KEY);
-    // Tell the guide it is in their schedule, as an accepted offer does. Best-effort.
-    try { await sendTourCalendarInvite(guideId, date, slotIdx); } catch { /* never block on email */ }
-    try { await (await import("@/lib/tour-calendar-sync")).pushTourToCalendars(guideId, date, slotIdx); } catch { /* never block on calendar */ }
-    // Every channel the guide can be reached on: in the app (the bell), a push to the
-    // phone or browser where the app is installed, and LINE when linked. Email is left to
-    // the calendar invite above. (A slot the guide already holds is refused above, so this
-    // is always news to them.)
-    const n = directAssignmentNotice({ guideName: g?.displayName ?? null, tourName: tour?.name ?? tourId, meetingPoint: tour?.meetingPoint ?? null, date, slotIdx, pax: pax ?? null });
-    try {
-      await notifyGuide(guideId, n.message, n.title, n.body, undefined, { url: `/tour-details?date=${date}&slotIdx=${slotIdx}`, email: false });
-    } catch { /* never block the assignment on a notice */ }
-    return NextResponse.json({ ok: true, assigned: true, direct: true, bookings: booked.count, offersClosed: open.length });
+    const r = await directAssign({ guideId, date, slotIdx, tourId, pax, note }, { id: session!.user!.id ?? null, role: session!.user!.role ?? null });
+    return NextResponse.json({ ok: true, assigned: true, direct: true, bookings: r.bookings, offersClosed: r.offersClosed });
   }
 
   if (await prisma.blockedDate.findUnique({ where: { date } })) {

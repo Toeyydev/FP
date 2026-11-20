@@ -13,12 +13,15 @@
 // money comes back to them.
 
 import { advanceGap, advanceGapReason, type AdvanceGap, type JobAdvance } from "@/lib/advances/coverage";
+import { PEAK_VAT_TYPE } from "@/lib/peak-vat";
 import { categoryForExpenseType, categoryLabel, isPerJobCategory } from "@/lib/peak-accounts";
 import {
   expenseAmount,
   expenseCategory,
   isReviewExpense,
   computeTotals,
+  feeIsCompensation,
+  payableGuideFee,
   thb,
   jobCostBreakdown,
   type Expense,
@@ -700,7 +703,7 @@ export type PeakExpenseLine = {
   quantity: number;
   price: number;
   accountCode: string;
-  vatType?: string;
+  vatType?: string | number;
   withHoldingTaxAmount: number;
 };
 
@@ -742,13 +745,14 @@ export function buildJobSheetExpense(input: {
   /** The GUIDE_FEE account. Separate because PeakAccountMap only keys tour-expense
    *  categories — the guide fee is not one of them. */
   guideFeeAccount: PeakAccount | null;
+  guideCompensationAccount?: PeakAccount | null;
   accountingDate: string;
   documentDate?: string | null;
   jobRef?: string | null;
   bookings?: Booking[];
   vatType?: string;
 }): JobSheetExpenseDoc {
-  const { guideId, peakContactId, expenses, guideFee, accounts, guideFeeAccount, accountingDate, jobRef, bookings, vatType } = input;
+  const { guideId, peakContactId, expenses, guideFee, accounts, guideFeeAccount, guideCompensationAccount, accountingDate, jobRef, bookings, vatType } = input;
   if (!peakContactId) throw new JobSheetNotPostable("Guide is not mapped to a PEAK Contact");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(accountingDate ?? "")) throw new JobSheetNotPostable("No accounting date set");
 
@@ -756,14 +760,15 @@ export function buildJobSheetExpense(input: {
   const lines: PeakExpenseLine[] = [];
 
   if (totals.guideFeeGross > 0) {
-    const code = (guideFeeAccount?.code ?? "").trim();
-    if (!code) throw new JobSheetNotPostable(`${categoryLabel("GUIDE_FEE")} has no PEAK account mapping`);
+    const category = feeIsCompensation(guideFee) ? "GUIDE_COMPENSATION" : "GUIDE_FEE";
+    const code = ((category === "GUIDE_COMPENSATION" ? guideCompensationAccount : guideFeeAccount)?.code ?? "").trim();
+    if (!code) throw new JobSheetNotPostable(`${categoryLabel(category)} has no PEAK account mapping`);
     lines.push({
-      description: `${categoryLabel("GUIDE_FEE")}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.whtOnFee))}`,
+      description: `${categoryLabel(category)}${jobRef ? ` — ${jobRef}` : ""}${whtNote(guideFee?.whtPct, round2(totals.whtOnFee))}`,
       quantity: 1,
       price: round2(totals.guideFeeGross),
       accountCode: code,
-      vatType,
+      vatType: vatType || PEAK_VAT_TYPE,
       // The fee's own withholding, not the whole of it. A review incentive is also
       // withheld on (2026-09-23) but never appears in THIS document — syncableExpenses
       // leaves review rows out — and a document must not carry tax for a line it does
@@ -786,7 +791,7 @@ export function buildJobSheetExpense(input: {
       quantity: 1,
       price: round2(expenseAmount(e)),
       accountCode: account.code,
-      vatType,
+      vatType: vatType || PEAK_VAT_TYPE,
       withHoldingTaxAmount: 0,
     });
   }
@@ -845,8 +850,9 @@ export function peakPayloadHash(input: {
   const payload = [
     `contact=${peakContactId ?? ""}`,
     `date=${accountingDate ?? ""}`,
-    `fee=${Math.round((guideFee?.price ?? 0) * (guideFee?.time ?? 0) * 100)}`,
+    `fee=${Math.round(payableGuideFee(guideFee) * 100)}`,
     `wht=${guideFee?.whtPct ?? 0}`,
+    ...(feeIsCompensation(guideFee) ? ["compensation=1"] : []), // an account change is an accounting change; absent otherwise, so no existing fingerprint moves
     `rows=${rows.join("|")}`,
     `rewards=${reviews.join("|")}`,
   ].join(";");

@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { logSync, markPosted } from "@/lib/advances/peak-sync-record";
 import { createDailyJournal, sanitizePeakError } from "@/lib/peak-api";
 import { advanceJournal, type AdvancePeakConfig, type JournalSource } from "./peak-journal";
 import { advanceWritesFrozen, existingPeakLinksEnabled } from "./freeze";
@@ -76,7 +77,7 @@ async function sourceFor(db: PrismaClient, kind: string, id: string, config: Adv
       expenses: lines.lines.map((l) => ({ description: l.description, amount: l.amountSatang / 100, category: l.category, peakAccountCode: config.expenseAccounts[l.category] })) };
   } else throw new Error("Unsupported advance event");
   const guide = await db.user.findUnique({ where: { guideId }, select: { peakContactId: true } });
-  return { ...source, guideContactId: guide?.peakContactId ?? "" };
+  return { ...source, guideId, guideContactId: guide?.peakContactId ?? "" };
 }
 
 /** Atomic claims plus an immutable payload. A timeout or process death never retries a POST. */
@@ -94,7 +95,11 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
   // category books to its account in the saved chart; an unmapped one blocks the item.
   config.expenseAccounts = expenseAccountsFrom(await db.peakAccountMapping.findMany({ where: { isActive: true } }));
   // A crashed sender may have created a document. Human reconciliation is mandatory.
-  await db.advancePeakSync.updateMany({ where: { status: "SENDING", updatedAt: { lt: new Date(Date.now() - 10 * 60_000) } }, data: { status: "UNCERTAIN", error: "Sender interrupted; check PEAK before any further action" } });
+  const stale = await db.advancePeakSync.findMany({ where: { status: "SENDING", updatedAt: { lt: new Date(Date.now() - 10 * 60_000) } }, select: { id: true } });
+  for (const s of stale) {
+    const moved = await db.advancePeakSync.updateMany({ where: { id: s.id, status: "SENDING" }, data: { status: "UNCERTAIN", error: "Sender interrupted; check PEAK before any further action" } });
+    if (moved.count) await logSync(db, s.id, "advance.peak.attempt", { to: "UNCERTAIN", error: "Sender interrupted" });
+  }
   const queue = await db.advancePeakSync.findMany({ where: { status: { in: ["PENDING", "BLOCKED"] }, nextAttemptAt: { lte: new Date() } }, orderBy: { createdAt: "asc" }, take: 10 });
   let done = 0;
   for (const row of queue) {
@@ -107,6 +112,7 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
     const linked = await db.advancePeakDocumentLink?.findUnique?.({ where: { kind_sourceId: { kind: row.kind, sourceId: row.sourceId } } });
     if (linked) {
       await db.advancePeakSync.update({ where: { id: row.id }, data: { status: "POSTED", documentNo: linked.documentNo, documentId: linked.documentId, error: null } });
+      await logSync(db, row.id, "advance.peak.attempt", { to: "POSTED", documentNo: linked.documentNo, via: "existing link" });
       continue;
     }
     let payload;
@@ -114,24 +120,28 @@ export async function syncAdvanceBatch(db: PrismaClient, post = createDailyJourn
       payload = advanceJournal(await sourceFor(db, row.kind, row.sourceId, config), config);
       await db.advancePeakSync.update({ where: { id: row.id }, data: { payload: payload as unknown as Prisma.InputJsonValue } });
     } catch (e) {
-      await db.advancePeakSync.update({ where: { id: row.id }, data: { status: "BLOCKED", error: sanitizePeakError(e), nextAttemptAt: new Date(Date.now() + 5 * 60_000) } });
+      const error = sanitizePeakError(e);
+      await db.advancePeakSync.update({ where: { id: row.id }, data: { status: "BLOCKED", error, nextAttemptAt: new Date(Date.now() + 5 * 60_000) } });
+      await logSync(db, row.id, "advance.peak.attempt", { to: "BLOCKED", error, attempt: row.attempts + 1 });
       continue;
     }
     try {
       const result = await post(payload);
       if (!result.ok || !result.id || !result.code) {
-        await db.advancePeakSync.update({ where: { id: row.id }, data: { status: result.uncertain || result.ok ? "UNCERTAIN" : "BLOCKED", error: result.desc ?? "No confirmed document returned", nextAttemptAt: new Date(Date.now() + 5 * 60_000) } });
+        const to = result.uncertain || result.ok ? "UNCERTAIN" : "BLOCKED", error = result.desc ?? "No confirmed document returned";
+        await db.advancePeakSync.update({ where: { id: row.id }, data: { status: to, error, nextAttemptAt: new Date(Date.now() + 5 * 60_000) } });
+        await logSync(db, row.id, "advance.peak.attempt", { to, error, attempt: row.attempts + 1 });
         continue;
       }
-      await db.$transaction(async tx => {
-        await tx.advancePeakSync.update({ where: { id: row.id }, data: { status: "POSTED", documentId: result.id, documentNo: result.code, error: null } });
-        if (row.kind === "ADVANCE") await tx.guideAdvance.update({ where: { id: row.sourceId }, data: { peakDocumentNo: result.code, peakRef: result.code, peakReference: payload.reference } });
-        if (row.kind === "EXPENSE") await tx.guideAdvanceEntry.update({ where: { id: row.sourceId }, data: { peakDocumentNo: result.code, peakReference: payload.reference } });
-      });
+      // Shared with "Found in PEAK" (lib/advances/peak-sync-record), so both stamp the same.
+      const posted = await db.$transaction((tx) => markPosted(tx, row, "SENDING", { id: result.id!, code: result.code!, reference: payload.reference }));
+      if (!posted) throw new Error("Item left SENDING while PEAK answered");
+      await logSync(db, row.id, "advance.peak.attempt", { to: "POSTED", documentNo: result.code, attempt: row.attempts + 1 });
       done++;
     } catch {
       // Includes a successful PEAK POST followed by a failed local save.
       await db.advancePeakSync.update({ where: { id: row.id }, data: { status: "UNCERTAIN", error: "PEAK outcome needs reconciliation; automatic resend stopped" } }).catch(() => {});
+      await logSync(db, row.id, "advance.peak.attempt", { to: "UNCERTAIN", error: "PEAK outcome needs reconciliation", attempt: row.attempts + 1 });
     }
   }
   return done;

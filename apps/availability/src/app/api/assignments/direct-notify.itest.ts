@@ -13,9 +13,8 @@ const lineMock = vi.hoisted(() => ({ linePush: vi.fn(async () => true), linePush
 vi.mock("@/lib/line", async (orig) => ({ ...(await orig<typeof import("@/lib/line")>()), ...lineMock }));
 const mailMock = vi.hoisted(() => ({ sendEmail: vi.fn(async () => true) }));
 vi.mock("@/lib/email", async (orig) => ({ ...(await orig<typeof import("@/lib/email")>()), ...mailMock }));
-const calMock = vi.hoisted(() => ({ sendTourCalendarInvite: vi.fn(async () => {}) }));
-vi.mock("@/lib/calendar", async (orig) => ({ ...(await orig<typeof import("@/lib/calendar")>()), ...calMock }));
-vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof import("@/lib/tour-calendar-sync")>()), pushTourToCalendars: vi.fn(async () => {}), removeTourEvents: vi.fn(async () => {}) }));
+const calMock = vi.hoisted(() => ({ pushTourToCalendars: vi.fn(async () => {}), removeTourEvents: vi.fn(async () => {}) }));
+vi.mock("@/lib/tour-calendar-sync", async (orig) => ({ ...(await orig<typeof import("@/lib/tour-calendar-sync")>()), ...calMock }));
 
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
@@ -62,8 +61,8 @@ describe("a direct assignment reaches the guide on every channel", () => {
     expect(pushMock.sendPushToUser).toHaveBeenCalledWith(guide.id, expect.objectContaining({ title: "📌 You're booked", url: `/tour-details?date=${FUTURE}&slotIdx=0` }));
     expect(lineMock.linePush).toHaveBeenCalledTimes(1);
     expect(lineMock.linePush).toHaveBeenCalledWith("U-line-test-901", notices[0].message);
-    expect(calMock.sendTourCalendarInvite).toHaveBeenCalledTimes(1);
-    expect(mailMock.sendEmail).not.toHaveBeenCalled(); // the invite is the email
+    expect(calMock.pushTourToCalendars).toHaveBeenCalledWith("G-901", FUTURE, 0); // the company calendar invites them
+    expect(mailMock.sendEmail).not.toHaveBeenCalled(); // no email — the invitation comes from Google
   });
 
   it("a guide with no LINE still gets the in-app notice and the push", async () => {

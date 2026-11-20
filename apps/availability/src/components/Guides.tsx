@@ -5,7 +5,7 @@ import { AuthHeader } from "@/components/AuthHeader";
 import { OperatorNav } from "@/components/OperatorNav";
 import { isOnline, lastSeenLabel } from "@/lib/presence";
 
-type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; external?: boolean; email: string; fullName: string; phone: string; taxId: string; address: string; lineLinked: boolean; hasPush: boolean; hasEmail: boolean };
+type Row = { id: string; guideId: string; name: string; languages: string; tours: number; leave: string | null; lastSeenAt: string | null; offerBlocked: boolean; external?: boolean; email: string; calendarEmail: string; fullName: string; phone: string; taxId: string; address: string; lineLinked: boolean; hasPush: boolean; hasEmail: boolean };
 
 // Which channels a job offer can reach this guide on. LINE / push are "fast" (a
 // phone ping); email is the slow fallback. No fast channel → flag it, because a
@@ -24,19 +24,19 @@ function Reach({ g }: { g: Row }) {
     </span>
   );
 }
-type EditForm = { email: string; fullName: string; phone: string; taxId: string; address: string };
+type EditForm = { email: string; calendarEmail: string; fullName: string; phone: string; taxId: string; address: string };
 
 export default function Guides() {
   const [rows, setRows] = useState<Row[]>([]);
   const load = () => fetch("/api/guides", { cache: "no-store" }).then((r) => r.json()).then((d) => setRows(d.rows ?? [])).catch(() => {});
   useEffect(() => { load(); }, []);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState<EditForm>({ email: "", fullName: "", phone: "", taxId: "", address: "" });
+  const [form, setForm] = useState<EditForm>({ email: "", calendarEmail: "", fullName: "", phone: "", taxId: "", address: "" });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   function startEdit(g: Row) {
     setEditId(g.id); setMsg("");
-    setForm({ email: g.email || "", fullName: g.fullName || g.name || "", phone: g.phone || "", taxId: g.taxId || "", address: g.address || "" });
+    setForm({ email: g.email || "", calendarEmail: g.calendarEmail || "", fullName: g.fullName || g.name || "", phone: g.phone || "", taxId: g.taxId || "", address: g.address || "" });
   }
   async function saveProfile(id: string) {
     setBusy(true); setMsg("");
@@ -95,6 +95,7 @@ export default function Guides() {
                   <tr><td colSpan={8} style={{ background: "var(--grey-bg,#f7f8f7)", padding: 14 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
                       <label style={lbl}>E-mail (login){g.email?.endsWith(".folkpath.local") ? <span style={{ color: "var(--danger)", fontWeight: 600 }}> · placeholder</span> : null}<input className="search" type="email" value={form.email} onChange={(e) => setForm((x) => ({ ...x, email: e.target.value }))} placeholder="name@email.com" /></label>
+                      <label style={lbl}>Calendar email (invites)<input className="search" type="email" value={form.calendarEmail} onChange={(e) => setForm((x) => ({ ...x, calendarEmail: e.target.value }))} placeholder={g.email ? `Blank = ${g.email}` : "Blank = login e-mail"} /></label>
                       <label style={lbl}>Full name<input className="search" value={form.fullName} onChange={(e) => setForm((x) => ({ ...x, fullName: e.target.value }))} /></label>
                       <label style={lbl}>Phone<input className="search" value={form.phone} onChange={(e) => setForm((x) => ({ ...x, phone: e.target.value }))} /></label>
                       <label style={lbl}>Tax ID<input className="search" value={form.taxId} onChange={(e) => setForm((x) => ({ ...x, taxId: e.target.value }))} /></label>

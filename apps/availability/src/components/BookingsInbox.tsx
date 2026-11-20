@@ -8,6 +8,7 @@ import { isOnline } from "@/lib/presence";
 import { DOW, MON, parseYMD } from "@/lib/dates";
 import BookingsTable from "@/components/BookingsTable";
 import RecordPastTourDialog from "@/components/RecordPastTourDialog";
+import JoinDepartureDialog from "@/components/JoinDepartureDialog";
 import { bookingRef } from "@/lib/booking-ref";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 
@@ -18,6 +19,8 @@ type Booking = {
   tourId: string | null; date: string | null; startTime: string | null; slotIdx: number | null;
   pax: number | null; customerName: string | null; status: string;
   guideId?: string | null; guide?: string | null;
+  /** A guide at the same time on ANOTHER tour — not this booking's guide (api/bookings). */
+  otherTourGuide?: { guideId: string; guide: string; tourId: string } | null;
 };
 type Tour = { id: string; name: string; time: string };
 
@@ -126,6 +129,7 @@ export default function BookingsInbox() {
 
   // Over-capacity split editor: assign each booking to a guide, ≤ CAP pax per guide.
   const [splitFor, setSplitFor] = useState<{ date: string; slotIdx: number; tourId: string; items: Booking[] } | null>(null);
+  const [joinFor, setJoinFor] = useState<{ date: string; slotIdx: number; tourId: string | null; items: Booking[] } | null>(null);
   const [splitMap, setSplitMap] = useState<Record<string, string>>({});
   function openSplit(items: Booking[]) {
     setSplitFor({ date: items[0].date!, slotIdx: items[0].slotIdx!, tourId: groupTourId(items), items });
@@ -444,6 +448,7 @@ export default function BookingsInbox() {
                         const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0);
                         const assignedGuide = items.find((b) => b.guideId)?.guideId ?? null;
                         const assignedName = items.find((b) => b.guide)?.guide ?? null;
+                        const otherTour = assignedGuide ? null : items.find((b) => b.otherTourGuide)?.otherTourGuide ?? null;
                         return (
                           <div key={key} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", background: assignedGuide ? "var(--grey-bg, #f6f5f3)" : "#fff", flexWrap: "wrap", alignItems: "center" }}>
                             <div style={{ flex: 1, minWidth: 240 }}>
@@ -464,6 +469,7 @@ export default function BookingsInbox() {
                               <span className="badge active" title="This slot is already dispatched to a guide" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700 }}>✓ Assigned to <span className="gid">{assignedGuide}</span>{assignedName && assignedName !== assignedGuide ? ` · ${assignedName}` : ""}</span>
                             ) : (
                               <>
+                                {otherTour && <span className="badge js-other-tour" title={`${otherTour.guideId} runs ${tourName(otherTour.tourId)} at this time — not this booking's tour. Check the booking's tour, or use รวมรอบ.`} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, background: "#fff3e0", color: "#a85a00", whiteSpace: "normal" }}>⚠ No guide for this tour · {otherTour.guideId} · {otherTour.guide} runs {tourName(otherTour.tourId)}</span>}
                                 <label style={{ fontSize: 12 }}>Dur (h)<input className="search" style={{ width: 56, marginLeft: 4 }} type="number" min={0} step={0.5} value={dur[key] ?? "3"} onChange={(e) => setDur((x) => ({ ...x, [key]: e.target.value }))} /></label>
                                 <select className="search" style={{ flex: "none", width: 168 }} value={grpGuide[key] ?? ""} onChange={(e) => setGrpGuide((x) => ({ ...x, [key]: e.target.value }))}>
                                   <option value="">Offer to all available</option>
@@ -482,6 +488,7 @@ export default function BookingsInbox() {
                                     </>
                                   : <button className="btn sm primary" onClick={() => offerGroup(key, items)}>📣 Offer all</button>}
                                 {pax > CAP && <button className="btn sm" title="Split this over-capacity slot across several guides instead" onClick={() => openSplit(items)}>Split across guides</button>}
+                                <button className="btn sm line js-join-open" title="รวมรอบ — put these guests on a tour another guide already runs (e.g. one 14:00 guest onto the 13:30 departure)" onClick={() => setJoinFor({ date, slotIdx, tourId, items })}><MergeIcon />รวมรอบ</button>
                               </>
                             )}
                             <button className="btn sm" title="Export this tour's job sheet as a PDF (Save as PDF in the print dialog)" onClick={() => openJobSheetPdf(items, assignedGuide || grpGuide[key])}>📄 Job sheet PDF</button>
@@ -516,14 +523,7 @@ export default function BookingsInbox() {
                 <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "end", color: detail.noShow ? "var(--danger)" : undefined, fontWeight: detail.noShow ? 700 : undefined }}>
                   <input type="checkbox" checked={!!detail.noShow} onChange={async (e) => {
                     const v = e.target.checked;
-                    // Withdrawing a reported no-show is a deliberate edit: ask why, and change nothing without a reason.
-                    let reason: string | undefined;
-                    if (!v && (detail.noShow || Number(detail.noShowPax ?? 0) > 0)) {
-                      const given = window.prompt("Withdraw this reported no-show? Give the reason (kept in the audit log):", "");
-                      if (!given || !given.trim()) { setMsg("No-show kept — a reason is needed to withdraw it."); return; }
-                      reason = given.trim();
-                    }
-                    const r = await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v, reason }) });
+                    const r = await fetch("/api/bookings/noshow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, noShow: v }) });
                     if (!r.ok) { setMsg("No-show not changed — try again."); return; }
                     setField("noShow", v); load();
                   }} />
@@ -561,6 +561,11 @@ export default function BookingsInbox() {
         </div>
       )}
 
+      {joinFor && (
+        <JoinDepartureDialog date={joinFor.date} slotIdx={joinFor.slotIdx} tourId={joinFor.tourId} tourName={tourName(joinFor.tourId)}
+          items={joinFor.items.map((b) => ({ id: b.id, label: bookingRef(b.externalRef, b.confirmationCode) || b.source, name: b.customerName ?? "", pax: b.pax }))}
+          onClose={() => setJoinFor(null)} onJoined={() => { load(); }} />
+      )}
       {splitFor && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) setSplitFor(null); }}>
           <div className="modal" style={{ maxWidth: 560 }}>
@@ -597,5 +602,14 @@ export default function BookingsInbox() {
         </div>
       </div>
     </div>
+  );
+}
+
+// รวมรอบ: the 🔀 crossing arrows, drawn as a line in the text colour — no emoji tile.
+function MergeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 4.5h2.2c1.2 0 2.3.6 3 1.6l2.6 3.8c.7 1 1.8 1.6 3 1.6h2.2M1.5 11.5h2.2c1.2 0 2.3-.6 3-1.6l2.6-3.8c.7-1 1.8-1.6 3-1.6h2.2M12.5 2.5l2 2-2 2M12.5 9.5l2 2-2 2" />
+    </svg>
   );
 }

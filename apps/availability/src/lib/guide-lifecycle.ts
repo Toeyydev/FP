@@ -83,6 +83,9 @@ export async function recordCheckin(o: {
   lat?: number;
   lng?: number;
   accuracyM?: number;
+  /** The phone said its position came from a mock-location app (Android). Kept in the
+   *  audit log with the check-in, so a distance that looks right can still be questioned. */
+  mocked?: boolean;
   actorId: string | null; // the signed-in user who pressed it, for the audit log
   recordedBy?: { id: string | null; role: string | null }; // set only when an OPERATOR records it for the guide
 }, nowMs: number = Date.now()): Promise<CheckinResult> {
@@ -125,7 +128,7 @@ export async function recordCheckin(o: {
     recordedById: o.recordedBy ? o.recordedBy.id : null,
     recordedByRole: o.recordedBy ? o.recordedBy.role : null,
   } });
-  await audit({ actorId: o.actorId, actorRole: "GUIDE", action: `checkin.${type.toLowerCase()}`, entityType: "Assignment", detail: { date, slotIdx, tourId: assignment.tourId, lat, lng } });
+  await audit({ actorId: o.actorId, actorRole: "GUIDE", action: `checkin.${type.toLowerCase()}`, entityType: "Assignment", detail: { date, slotIdx, tourId: assignment.tourId, lat, lng, accuracyM, distanceM, withinGeofence, ...(o.mocked ? { mocked: true } : {}) } });
   return { ok: true, type };
 }
 
@@ -188,7 +191,9 @@ export async function submitTourReport(o: {
   // historic whole-slot reach.
   let scope: { tourId?: string; status?: { in: string[] }; assignedGuideId?: string } = {};
   if (o.tourId) {
-    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null } } })) > 0;
+    // Split = another guide's guests are tagged here. Guests tagged to this guide alone (one
+    // joined by รวมรอบ) do not make it split (lib/sheet-bookings guideSlotBookings).
+    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null }, NOT: { assignedGuideId: guideId } } })) > 0;
     scope = { tourId: o.tourId, status: { in: LIVE_STATUSES }, ...(split ? { assignedGuideId: guideId } : {}) };
   }
 
@@ -244,8 +249,11 @@ export async function submitTourReport(o: {
           return { ...r, noShowPax: ns, status: noShowStatus(ns, r.bookedPax), actualPax: Math.max(0, (r.bookedPax ?? 0) - ns) };
         });
       }
-      // Then remove any left-early pax generically and re-sync attraction tickets.
-      const applied = applyReportedAttendance(rows, expenses, o.noShowCounts ? leftEarly : absent);
+      // Then remove any left-early pax generically and re-sync attraction tickets. A no-show
+      // count that names no booking is NOT spread over the rows: which guest did not come is
+      // not known, so the sheet shows the guide's report and the operator ticks who (owner,
+      // 2026-10-27). It used to come off the biggest booking, unmarked and unseen.
+      const applied = applyReportedAttendance(rows, expenses, leftEarly);
       // A row settled against a company advance keeps its count (lib/advances/settlement).
       const kept = keepSettledRows(expenses as SheetRow[], applied.expenses as SheetRow[]);
       await prisma.jobSheet.update({ where: { id: sheet.id }, data: { bookings: applied.bookings as object, expenses: kept.rows as object, status: "Review: no-show" } });
@@ -294,8 +302,7 @@ export async function submitTourReport(o: {
 export type NoShowResult =
   | { ok: true; noShowPax: number }
   | { ok: false; status: 403; error: "not-in-window" }
-  | { ok: false; status: 404; error: "booking-not-found" }
-  | { ok: false; status: 400; error: "reason-required" };
+  | { ok: false; status: 404; error: "booking-not-found" };
 
 // The tour a guide is assigned to on one departure, or null if none.
 export async function assignedTourId(guideId: string, date: string, slotIdx: number): Promise<string | null> {
@@ -324,7 +331,7 @@ export async function recordNoShow(o: {
   actorId: string | null;
   actorRole: string;
   via: string; // where it came from, for the audit log
-  reason?: string | null; // required when an operator lowers or withdraws a reported no-show
+  reason?: string | null; // optional: kept in the audit when given
 }, nowMs: number = Date.now()): Promise<NoShowResult> {
   const { guideId, date, slotIdx, bookingNo } = o;
 
@@ -342,23 +349,23 @@ export async function recordNoShow(o: {
   // tagged to a guide).
   let scope: { tourId?: string; status?: { in: string[] }; assignedGuideId?: string } = {};
   if (o.tourId) {
-    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null } } })) > 0;
+    // Split = another guide's guests are tagged here. Guests tagged to this guide alone (one
+    // joined by รวมรอบ) do not make it split (lib/sheet-bookings guideSlotBookings).
+    const split = (await prisma.booking.count({ where: { tourId: o.tourId, date, slotIdx, status: { in: LIVE_STATUSES }, assignedGuideId: { not: null }, NOT: { assignedGuideId: guideId } } })) > 0;
     scope = { tourId: o.tourId, status: { in: LIVE_STATUSES }, ...(split ? { assignedGuideId: guideId } : {}) };
   }
   const where = { date, slotIdx, ...scope, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
   // Newest first: a GetYourGuide booking amended on the OTA keeps one reference across
   // several Bokun records, and only the latest is the guest's current booking.
-  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true, noShow: true, noShowPax: true }, orderBy: { createdAt: "desc" } });
+  const b = await prisma.booking.findFirst({ where, select: { pax: true, customerName: true, externalRef: true, confirmationCode: true, assignedGuideId: true, status: true, tourId: true, noShow: true, noShowPax: true, rateTitle: true }, orderBy: { createdAt: "desc" } });
   if (o.tourId && !b) return { ok: false, status: 404, error: "booking-not-found" };
 
   // Clamp the count to the booking's group size and persist it.
   const noShowPax = Math.min(o.noShowPax, b?.pax ?? o.noShowPax);
-  // Owner rule (2026-09-13): lowering or withdrawing a reported no-show is a deliberate edit.
-  // An operator must say why; the guide's own correction inside the reporting window is the
-  // report itself. Either way the audit keeps who changed it and the count before and after.
+  // Owner rule (2026-11-01, replacing 2026-09-13): lowering or withdrawing a no-show needs no
+  // reason. The audit keeps who changed it and the count before and after.
   const previousNoShowPax = b ? (b.noShowPax || (b.noShow ? b.pax ?? 0 : 0)) : 0;
   const reason = o.reason?.trim() || null;
-  if (o.operator && noShowPax < previousNoShowPax && !reason) return { ok: false, status: 400, error: "reason-required" };
   await prisma.booking.updateMany({ where, data: { noShowPax, noShow: noShowPax > 0 } });
 
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
@@ -397,4 +404,42 @@ export async function recordNoShow(o: {
   }
   await audit({ actorId: o.actorId, actorRole: o.actorRole, action: noShowPax > 0 ? "booking.noshow" : "booking.noshow_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, previousNoShowPax, noShowPax, by: o.via, ...(reason ? { reason } : {}) } });
   return { ok: true, noShowPax };
+}
+
+// ── Guest arrived ("มาแล้ว") ─────────────────────────────────────────────────
+// The guide ticks each booking off at the meeting point; the time of the tick is
+// kept (Booking.arrivedAt) so the office sees who is there, live, and when they came.
+// A guide may tick from check-in until the no-show window closes (30 min after the
+// start); operators may correct any time. Ticking says nothing about a no-show —
+// that stays its own report (recordNoShow).
+export type ArrivalResult =
+  | { ok: true; arrivedAt: string | null }
+  | { ok: false; status: 403; error: "not-in-window" }
+  | { ok: false; status: 404; error: "booking-not-found" };
+
+export async function recordArrival(o: {
+  guideId: string;
+  date: string;
+  slotIdx: number;
+  bookingNo: string;
+  arrived: boolean;
+  operator: boolean;
+  actorId: string | null;
+  actorRole: string;
+  via: string;
+}, nowMs: number = Date.now()): Promise<ArrivalResult> {
+  const { guideId, date, slotIdx, bookingNo } = o;
+  if (!o.operator) {
+    const started = await prisma.checkin.count({ where: { guideId, date, slotIdx } });
+    const startMs = slotStartMs(date, slotIdx);
+    if (!started || nowMs > startMs + NO_SHOW_WINDOW_MS) return { ok: false, status: 403, error: "not-in-window" };
+  }
+  const where = { date, slotIdx, OR: [{ externalRef: bookingNo }, { confirmationCode: bookingNo }] };
+  const b = await prisma.booking.findFirst({ where, select: { arrivedAt: true }, orderBy: { createdAt: "desc" } });
+  if (!b) return { ok: false, status: 404, error: "booking-not-found" };
+  // Ticking again keeps the first time: the guest arrived when they were first ticked.
+  const arrivedAt = o.arrived ? (b.arrivedAt ?? new Date(nowMs)) : null;
+  await prisma.booking.updateMany({ where, data: { arrivedAt } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: o.arrived ? "booking.arrived" : "booking.arrived_cleared", entityType: "Booking", detail: { guideId, date, slotIdx, bookingNo, previous: b.arrivedAt?.toISOString() ?? null, arrivedAt: arrivedAt?.toISOString() ?? null, by: o.via } });
+  return { ok: true, arrivedAt: arrivedAt?.toISOString() ?? null };
 }

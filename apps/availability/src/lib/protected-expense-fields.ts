@@ -83,7 +83,9 @@ export function financialIdentity(row: ProtectedRow | null | undefined): string 
 
 export type MergeResult = { rows: ProtectedRow[]; conflicts: string[];
   /** Rows whose recorded payer an operator changed in this save (allowPayerChange). */
-  payerChanges?: { row: string; from: string | null; to: string | null }[] };
+  payerChanges?: { row: string; from: string | null; to: string | null }[];
+  /** Rows whose guest count an operator corrected in this save (allowPayerChange). */
+  amountChanges?: { row: string; from: string; to: string }[] };
 
 /** The phrase every duplicate-identity refusal carries, so the case is greppable. */
 export const DUPLICATE_IDENTITY = "duplicate protected expense identity";
@@ -104,6 +106,11 @@ function identityWithoutPayer(row: ProtectedRow): string {
 /** financialIdentity without the accounting category. */
 function identityWithoutCategory(row: ProtectedRow): string {
   return financialIdentity({ ...row, expenseType: undefined });
+}
+
+/** financialIdentity without the guest count. */
+function identityWithoutPax(row: ProtectedRow): string {
+  return financialIdentity({ ...row, pax: null });
 }
 
 /**
@@ -146,6 +153,7 @@ export function mergeServerOwned(
   const count = (rows: readonly ProtectedRow[], id: string) => rows.reduce((n, r) => n + (financialIdentity(r) === id ? 1 : 0), 0);
   const reported = new Set<string>();
   const payerChanges: NonNullable<MergeResult["payerChanges"]> = [];
+  const amountChanges: NonNullable<MergeResult["amountChanges"]> = [];
 
   prev.forEach((old, i) => {
     if (!isProtected(old)) return;
@@ -192,6 +200,19 @@ export function mergeServerOwned(
         return;
       }
     }
+    // The same expense, price and payer for another number of guests, on an unpaid job.
+    // Refusing this left a wrong ticket count that nobody could correct (owner report
+    // 2026-11-01: 5 guests on rows for a 4-ticket advance). A price stays protected.
+    // The stamp and any advance link stay; the change is named in this save's audit.
+    if (at < 0 && stampOnly(old) && opts.allowPayerChange) {
+      const loose = identityWithoutPax(old);
+      const hits = next.flatMap((r, j) => (identityWithoutPax(r) === loose ? [j] : []));
+      const before = prev.filter((r) => identityWithoutPax(r) === loose).length;
+      if (hits.length === 1 && before === 1) {
+        at = hits[0];
+        amountChanges.push({ row: what, from: describe(old), to: describe(next[at]) });
+      }
+    }
     if (at < 0) {
       const replacing = next[i] ? ` The row now in position ${i + 1} is ${describe(next[i])}.` : "";
       conflicts.push(`${where} row ${i + 1} "${what}" carries ${carries}, and the expense it was granted for (${describe(old)}) is not in this save.${replacing} Withdraw the record first if this row really changed — the acceptance was given for what it used to say.`);
@@ -203,7 +224,7 @@ export function mergeServerOwned(
     }
   });
 
-  return { rows: next, conflicts, ...(payerChanges.length ? { payerChanges } : {}) };
+  return { rows: next, conflicts, ...(payerChanges.length ? { payerChanges } : {}), ...(amountChanges.length ? { amountChanges } : {}) };
 }
 
 function describe(row: ProtectedRow): string {

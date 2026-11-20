@@ -44,27 +44,10 @@ import { guideSlotBookings, SHEET_BOOKING_STATUSES } from "@/lib/sheet-bookings"
 // or an unconfirmed payer — never a payer a person or the guide chose, never a stamped,
 // waived or certificate-requested row, never a category default payments already rely on.
 
-export type RateKind = "TICKET_INCLUDED" | "GUIDED_EXPERIENCE" | "UNKNOWN";
-export const RATE_KIND_LABEL: Record<RateKind, string> = {
-  TICKET_INCLUDED: "tickets included",
-  GUIDED_EXPERIENCE: "guided experience",
-  UNKNOWN: "not recognised",
-};
-
-/** Rate titles verified (in Bókun's rate configuration) to be a guided experience without tickets. Empty until one is. */
-export const GUIDED_TITLES: readonly string[] = [];
-const NEGATED = /\b(no|not|without|excluding|excl\.?|except)\b[^.]*\btickets?\b|\btickets?\s+(are\s+)?not\s+included\b/i;
-const TICKETS_INCLUDED = /\b(with|incl(?:uding|udes|uded)?)\s+(all\s+)?(the\s+)?(entrance\s+|entry\s+|admission\s+)?tickets?\b|\btickets?\s+(are\s+)?included\b/i;
-
-/** The kind of a Rate by its title. No title, or one nothing here recognises, is UNKNOWN. */
-export function rateKind(title: string | null | undefined): RateKind {
-  const t = (title ?? "").trim().replace(/\s+/g, " ");
-  if (!t) return "UNKNOWN";
-  if (NEGATED.test(t)) return "GUIDED_EXPERIENCE";
-  if (TICKETS_INCLUDED.test(t)) return "TICKET_INCLUDED";
-  if (GUIDED_TITLES.includes(t.toLowerCase())) return "GUIDED_EXPERIENCE";
-  return "UNKNOWN";
-}
+// The classifier itself lives in lib/rate-kind (no imports), so the job sheet's row
+// builder (lib/sheet-bookings) can use it without importing this module.
+export { RATE_KIND_LABEL, GUIDED_TITLES, rateKind, type RateKind } from "@/lib/rate-kind";
+import { rateKind, type RateKind } from "@/lib/rate-kind";
 
 /** The Rates of a job's bookings: the kinds present, and each title with how many bookings carry it. */
 export type JobRates = { kinds: RateKind[]; titles: { title: string | null; kind: RateKind; bookings: number }[] };

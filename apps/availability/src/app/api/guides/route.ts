@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { calendarEmailInput, storedCalendarEmail } from "@/lib/calendar-email";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -15,7 +16,7 @@ export async function GET() {
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
   const [guides, assigns, leaves, pushSubs] = await Promise.all([
-    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true, external: true, email: true, fullName: true, phone: true, taxId: true, currentAddress: true, lineUserId: true } }),
+    prisma.user.findMany({ where: { role: "GUIDE", state: "ACTIVE", guideId: { not: null } }, select: { id: true, guideId: true, displayName: true, languages: true, lastSeenAt: true, offerBlocked: true, external: true, email: true, calendarEmail: true, fullName: true, phone: true, taxId: true, currentAddress: true, lineUserId: true } }),
     prisma.assignment.groupBy({ by: ["guideId"], _count: { _all: true } }),
     prisma.leaveRequest.findMany({ where: { status: "APPROVED", toDate: { gte: today } }, select: { guideId: true, fromDate: true, toDate: true } }),
     prisma.pushSubscription.groupBy({ by: ["userId"], _count: { _all: true } }),
@@ -31,7 +32,7 @@ export async function GET() {
     const realEmail = !!g.email && !/@(?:guides\.)?folkpath\.local$/i.test(g.email);
     // A "fast" alert channel = LINE or web-push. Without one, a job offer only reaches
     // the guide by email (or not at all) — slow/unreliable for day-of dispatch.
-    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked, external: g.external, email: g.email, fullName: g.fullName ?? "", phone: g.phone ?? "", taxId: decrypt(g.taxId), address: decrypt(g.currentAddress), lineLinked, hasPush, hasEmail: realEmail };
+    return { id: g.id, guideId: g.guideId, name: g.displayName, languages: g.languages ?? "", tours: tours.get(g.guideId!) ?? 0, leave: l ? `${l.fromDate}${l.toDate !== l.fromDate ? `–${l.toDate}` : ""}` : null, lastSeenAt: g.lastSeenAt ?? null, offerBlocked: g.offerBlocked, external: g.external, email: g.email, calendarEmail: g.calendarEmail ?? "", fullName: g.fullName ?? "", phone: g.phone ?? "", taxId: decrypt(g.taxId), address: decrypt(g.currentAddress), lineLinked, hasPush, hasEmail: realEmail };
   }).sort((a, b) => b.tours - a.tours);
   return NextResponse.json({ rows });
 }
@@ -45,6 +46,7 @@ export async function PATCH(req: NextRequest) {
     offerBlocked: z.boolean().optional(),
     email: z.string().email().optional(), fullName: z.string().max(160).optional(),
     phone: z.string().max(40).optional(), taxId: z.string().max(60).optional(), address: z.string().max(300).optional(),
+    calendarEmail: calendarEmailInput.optional(),
   }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "bad-body" }, { status: 400 });
   const d = parsed.data;
@@ -57,6 +59,7 @@ export async function PATCH(req: NextRequest) {
   if (d.offerBlocked !== undefined) data.offerBlocked = d.offerBlocked;
   if (d.fullName !== undefined) data.fullName = d.fullName.trim() || null;
   if (d.phone !== undefined) data.phone = d.phone.trim() || null;
+  if (d.calendarEmail !== undefined) data.calendarEmail = storedCalendarEmail(d.calendarEmail);
   if (d.taxId !== undefined) data.taxId = d.taxId.trim() ? encrypt(d.taxId.trim()) : null;
   if (d.address !== undefined) data.currentAddress = d.address.trim() ? encrypt(d.address.trim()) : null;
   if (d.email !== undefined) {

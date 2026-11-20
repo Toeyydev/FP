@@ -7,7 +7,7 @@ import { localSwitches, type ServiceName } from "@/lib/peak-switches";
 
 /** Tables these tests write, in an order safe to truncate together. */
 const TABLES = [
-  "AuditLog", "ServiceStatus", "ReceiptClassification", "Checkin", "TourReport", "PushSubscription", "Notification",
+  "AuditLog", "ExpenseAttachment", "ServiceStatus", "ReceiptClassification", "Checkin", "TourReport", "PushSubscription", "Notification",
   // The advance ledger and everything that hangs off it. Listed before JobSheet
   // and User because these rows reference them.
   "AdvancePeakDocumentLink", "AdvancePeakSync", "GuideAdvanceEntry",
@@ -22,7 +22,12 @@ const TABLES = [
   // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it
   // makes the NEXT test collide on a file id its own fake Drive just reissued.
   "ExpenseCertificate", "AttesterSignature", "HistoricalEvidenceReview",
+  // Tour Upsell: custody and settlements point at sales, payments and JobSheet; sales at
+  // product versions, which point at products and tax profiles.
+  "CashCustodyEntry", "CashSettlementReturn", "CashSettlement", "UpsellPayment", "UpsellSale", "UpsellProductVersion", "UpsellProduct", "TaxProfile", "UpsellDocCounter",
   "PaymentTransaction", "PaymentEvidence", "PaymentBatchItem", "PaymentBatch", "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
+  // Calendar invitations (lib/tour-calendar-sync) and the Google connection they use.
+  "TourCalendarEvent", "GoogleCalendar",
   "Availability", "RefreshToken", "User", "Tour",
 ];
 

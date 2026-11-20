@@ -67,10 +67,56 @@ export function isChannelProductName(name?: string | null): boolean {
 const COMBINED_PALACE_TOUR_IDS = new Set(["T-001", "T-002"]);
 const PALACE_ONLY_TOUR_ID = "T-005";
 const SLOT_1400 = SLOT_TIMES.indexOf("14:00");
+//
+// And the other way (owner, 2026-10-25): the palace-only tour runs ONLY at 14:00. A booking
+// filed under it at 08:30 or 13:30 — a channel product mapped by name, or a booking moved off
+// 14:00 — is the combined tour that departs then: T-001 in the morning, T-002 at 13:30. Filed
+// wrong, it never joined the 13:30 guide's job and sat in "Ready to offer" (GYG, 27 Oct 2026).
+// At any other time it is left alone: nobody has said which tour that would be.
+//
+// The combined tour itself is one channel product sold at 08:30 and 13:30, mapped by name to
+// ONE of T-001/T-002 (owner, 2026-10-27: 13:30 runs only the combined tour). A 13:30 booking
+// filed under T-001 never reached the 13:30 guide's job — three bookings, 5 guests, missed it
+// (27 Oct 2026). So the combined tour, too, is filed under the id of the time it departs.
+// Guests merged in from 14:00 (รวมรอบ) are unaffected: they arrive as T-005 and become T-002.
+const COMBINED_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("08:30")]: "T-001", [SLOT_TIMES.indexOf("13:30")]: "T-002" };
+//
+// The China Town food tour is one tour run at three times, kept as one tour id per
+// departure: T-007 16:30, T-008 17:30, T-009 18:30. A product name maps to ONE of them, so
+// a food booking is filed under the id of the time it actually departs. The channel renamed
+// the product in Oct 2026 ("Eat Like a Local" → "Bangkok Chinatown Street Food Tour"), and a
+// name mapped to one food tour must not file the other two times under it.
+// At a time no food tour runs it is left alone.
+const FOOD_TOUR_BY_SLOT: Record<number, string> = { [SLOT_TIMES.indexOf("16:30")]: "T-007", [SLOT_TIMES.indexOf("17:30")]: "T-008", [SLOT_TIMES.indexOf("18:30")]: "T-009" };
+const FOOD_TOUR_IDS = new Set(Object.values(FOOD_TOUR_BY_SLOT));
 export function slotAwareTourId(tourId: string | null | undefined, slotIdx: number | null | undefined): string | null {
   if (!tourId) return tourId ?? null;
+  if (FOOD_TOUR_IDS.has(tourId) && slotIdx != null && FOOD_TOUR_BY_SLOT[slotIdx]) return FOOD_TOUR_BY_SLOT[slotIdx];
   if (SLOT_1400 >= 0 && slotIdx === SLOT_1400 && COMBINED_PALACE_TOUR_IDS.has(tourId)) return PALACE_ONLY_TOUR_ID;
+  if ((tourId === PALACE_ONLY_TOUR_ID || COMBINED_PALACE_TOUR_IDS.has(tourId)) && slotIdx != null && COMBINED_BY_SLOT[slotIdx]) return COMBINED_BY_SLOT[slotIdx];
   return tourId;
+}
+
+// A booking that arrives with only the channel's name ("GetYourGuide") says nothing about
+// which tour it is — but 16:30, 17:30 and 18:30 run only the food tour (owner, 2026-10-27),
+// so at those times the time alone names it. Left without a tour, an 18:30 food booking sat
+// on no board on the day it departed. Any other evening time is left for the operator.
+/** The food tour, at any of its times (T-007/T-008/T-009) — by id, whatever its display name. */
+export const isFoodTourId = (tourId: string | null | undefined): boolean => !!tourId && FOOD_TOUR_IDS.has(tourId);
+
+export function channelOnlyEveningTourId(slotIdx: number | null | undefined): string | null {
+  return slotIdx != null ? FOOD_TOUR_BY_SLOT[slotIdx] ?? null : null;
+}
+
+// Tours that are one tour run at different times, kept under one id per departure (above).
+// Jobs made before the ids were filed by time can carry the other id of the same tour — a
+// 13:30 job under T-001 — so a booking follows the guide's job when it is the same tour
+// under another id (lib/booking-import followGuideTour). Otherwise the two never meet: the
+// board shows the guide's tour with no guests and the guests as a tour with no guide.
+const TOUR_FAMILIES: string[][] = [["T-001", "T-002"], Object.values(FOOD_TOUR_BY_SLOT)];
+export function sameTour(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a === b || TOUR_FAMILIES.some((f) => f.includes(a) && f.includes(b));
 }
 
 export function normTime(v: unknown): string | undefined {
@@ -109,6 +155,10 @@ export type ParsedBooking = {
   // under. Read only for a single-product booking: with several products one booking code
   // names them all, so it cannot say which FolkOPS record a cancellation is for.
   bookingConfirmationCode?: string;
+  // This product is cancelled but the Bókun booking it belongs to is still CONFIRMED: an
+  // amendment (a date change books a new product under the same booking). The cancellation
+  // is for this product only — never for a record now holding the booking's other product.
+  amendmentCancel?: boolean;
   // When the channel cancelled it (Bokun cancellationDate), as ISO. The source's own
   // event time — never the moment FolkOPS happened to receive the cancellation.
   cancelledAt?: string;
@@ -175,7 +225,14 @@ export function parseBokun(raw: unknown): ParsedBooking {
   // Read from known places only: a deep search could pick up another booking's id or code.
   const bokunBookingId = externalId ?? r.parentBookingId;
   const productConfirmationCode = ab.productConfirmationCode ?? pi.productConfirmationCode ?? r.productConfirmationCode;
-  const bookingCodeRaw = arr(r.activityBookings).length === 1 ? r.confirmationCode : undefined;
+  // A product cancelled inside a booking that is itself still CONFIRMED is an amendment —
+  // Bókun moving a date cancels the old product and books a new one under the same booking
+  // (GET-…). The booking code then names the live booking, not this cancelled product, so it
+  // is not read: a cancellation must never reach the booking's live copy through it.
+  // (27 Oct 2026: a guest moved to 29 Oct vanished from the guide's job this way.)
+  const productCancelled = typeof ab.status === "string" && /cancel/i.test(ab.status);
+  const bookingLive = typeof r.status === "string" && r.status.trim() !== "" && !/cancel/i.test(r.status);
+  const bookingCodeRaw = arr(r.activityBookings).length === 1 && !(productCancelled && bookingLive) ? r.confirmationCode : undefined;
   const cancelledAt = toISO(r.cancellationDate ?? ab.cancellationDate);
   // The webhook carries the Rate on the activity booking; the booking search on the item
   // itself (or its fields). Known places only — a deep search could find another's title.
@@ -236,6 +293,7 @@ export function parseBokun(raw: unknown): ParsedBooking {
     productConfirmationCode: productConfirmationCode != null && typeof productConfirmationCode !== "object" ? String(productConfirmationCode) : undefined,
     bokunBookingId: bokunBookingId != null && typeof bokunBookingId !== "object" ? String(bokunBookingId) : undefined,
     ...(typeof bookingCodeRaw === "string" && bookingCodeRaw.trim() ? { bookingConfirmationCode: bookingCodeRaw.trim() } : {}),
+    ...(productCancelled && bookingLive ? { amendmentCancel: true } : {}),
     cancelledAt,
     ...(rateTitle ? { rateTitle } : {}),
   };

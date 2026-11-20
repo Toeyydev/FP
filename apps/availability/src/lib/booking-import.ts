@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, type ParsedBooking } from "@/lib/bookings";
+import { parseBokun, isCancellation, productKey, detectChannel, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId, sameTour, type ParsedBooking } from "@/lib/bookings";
 import { isEveningSlot } from "@/lib/slots";
 import { sendPushToUser } from "@/lib/push";
 import { linePush, linePushFlex, lineEnabled } from "@/lib/line";
@@ -212,13 +212,13 @@ export async function reconcileAssignedBookings(force = false): Promise<number> 
         placed += r.placed.size;
       } catch { /* one departure must not stop the sweep */ }
     }
-    // Safety net: a departure with no live guests left for this tour loses its calendar events.
+    // Safety net: a tour whose bookings were ALL cancelled loses its calendar event (Google
+    // tells the guide). Only then — a job with no bookings at all (made by hand) keeps its
+    // event, the same rule the one-hour reminder uses (lib/tour-reminders). removeTourEvents
+    // only acts when the departure has a company event (lib/tour-calendar-sync).
     for (const a of ga) {
-      const anyLive = gb.some((b) => ["OFFERED", "ASSIGNED"].includes(b.status) && (!b.tourId || b.tourId === a.tourId));
-      if (!anyLive && (a.googleEventId || a.opsGoogleEventId)) {
-        try { await removeTourEvents(a); } catch { /* best-effort */ }
-        await prisma.assignment.update({ where: { id: a.id }, data: { googleEventId: null, opsGoogleEventId: null } });
-      }
+      const forTour = gb.filter((b) => !b.tourId || b.tourId === a.tourId);
+      if (forTour.length && forTour.every((b) => b.status === "CANCELLED")) { try { await removeTourEvents(a); } catch { /* best-effort */ } }
     }
   }
 
@@ -449,6 +449,17 @@ async function announceCancelled(bookings: { date: string | null; slotIdx: numbe
   for (const b of bySlot.values()) await onBookingCancelled(b);
 }
 
+// The guide's job at this departure runs the same tour under another id (lib/bookings
+// sameTour): the booking takes the job's id, so the two meet. Only when exactly one such id
+// is running there and none runs under the booking's own id.
+export async function followGuideTour(tourId: string | null, date: string | null | undefined, slotIdx: number | null | undefined): Promise<string | null> {
+  if (!tourId || !date || slotIdx == null) return tourId;
+  const there = await prisma.assignment.findMany({ where: { date, slotIdx }, select: { tourId: true } }).catch(() => []);
+  if (there.some((a) => a.tourId === tourId)) return tourId;
+  const kin = [...new Set(there.map((a) => a.tourId).filter((t) => sameTour(t, tourId)))];
+  return kin.length === 1 ? kin[0] : tourId;
+}
+
 export async function importParsed(p: ParsedBooking, opts: { source: string; cancelled: boolean; raw?: unknown; via?: ReconcileSource; collect?: DirtyBookings }): Promise<ImportResult> {
   const via: ReconcileSource = opts.via ?? "csv";
   const collect = opts.collect;
@@ -463,6 +474,8 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       const eveningChannelOnly = isChannelProductName(p.productName) && isEveningSlot(p.slotIdx);
       if (!eveningChannelOnly) tourId = map.tourId;
     }
+    // ...unless the time alone says which tour it is (16:30–18:30 run only the food tour).
+    if (isChannelProductName(p.productName) && isEveningSlot(p.slotIdx)) tourId = channelOnlyEveningTourId(p.slotIdx);
   }
   // A product name nobody has mapped to a tour yet — usually the channel renamed a product.
   // Its bookings land on no board until someone maps it, so say so the same day, once per
@@ -478,6 +491,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
   // Correct the resolved tour by departure time: the 14:00 slot is the palace-only tour,
   // not the combined day tour a channel product maps to by name. (No-op for other slots.)
   tourId = slotAwareTourId(tourId, p.slotIdx);
+  tourId = await followGuideTour(tourId, p.date, p.slotIdx);
   const { source, cancelled } = opts;
   const raw = (opts.raw ?? undefined) as object | undefined;
   // Recorded only with a cancellation, and only when the channel says when it happened.
@@ -485,14 +499,27 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
 
   // A booking whose date/slot an operator pinned by hand (a rebooking arranged outside
   // the OTA) must survive the sync: when pinned, an import updates everything EXCEPT the
-  // date/slot/time, so the channel's original date can't drag it back. Non-pinned (the
-  // default) behaves exactly as before.
+  // date/slot/time and the tour, so the channel's original departure can't drag it back —
+  // the tour too, since a move may put the guests on another guide's tour (รวมรอบ).
+  // Non-pinned (the default) behaves exactly as before.
   const slotFields = (pinned: boolean) =>
-    pinned ? {} : { date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
+    pinned ? {} : { tourId: tourId ?? undefined, date: p.date ?? undefined, startTime: p.startTime ?? undefined, slotIdx: p.slotIdx ?? undefined };
 
   if (p.externalId) {
-    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true, date: true, slotIdx: true } });
-    if (existing && (await ignoreStaleLive(existing, cancelled, via))) return "skipped";
+    const existing = await prisma.booking.findUnique({ where: { source_externalId: { source, externalId: p.externalId } }, select: { id: true, status: true, datePinned: true, date: true, slotIdx: true, confirmationCode: true } });
+    // One Bókun booking id can carry two products: a date change in Bókun cancels the old
+    // product and books a new one under the same booking, and both arrive under this id
+    // (27 Oct 2026). Which product the record now holds decides what each event may do.
+    const otherProduct = !!existing?.confirmationCode && !!p.confirmationCode && existing.confirmationCode !== p.confirmationCode;
+    // The old product's cancellation must not cancel the record now holding the live new one.
+    if (existing && cancelled && p.amendmentCancel && otherProduct) {
+      await audit({ action: "booking.cancel_not_applied", entityType: "Booking", entityId: existing.id, detail: { ref: p.confirmationCode ?? null, holds: existing.confirmationCode, via, reason: "a product cancelled inside a booking still confirmed in Bókun; this record holds the booking's other product — left unchanged" } });
+      return "skipped";
+    }
+    // The new live product after the old one's cancellation is not a stale payload: it is the
+    // booking now. The record takes the new product and is live again.
+    const replacement = !!existing && !cancelled && existing.status === "CANCELLED" && otherProduct;
+    if (existing && !replacement && (await ignoreStaleLive(existing, cancelled, via))) return "skipped";
     // The SAME OTA booking can re-arrive under a different Bokun externalId (a
     // re-issue / channel remap). If we already hold this externalRef, update THAT
     // record in place instead of creating a duplicate — but only a record nothing marks
@@ -504,7 +531,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       const byRef = sameRef.find((b) => (!b.externalId || b.externalId === p.externalId) && (!b.confirmationCode || b.confirmationCode === p.confirmationCode));
       if (byRef) {
         if (await ignoreStaleLive(byRef, cancelled, via)) return "skipped";
-        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, tourId: tourId ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
+        const updated = await prisma.booking.update({ where: { id: byRef.id }, data: { confirmationCode: p.confirmationCode ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, ...slotFields(byRef.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw } });
         if (cancelled && byRef.status !== "CANCELLED") await onBookingCancelled(updated);
         await reconcileAfterImport(updated.id, via, byRef, collect);
         return "updated";
@@ -532,13 +559,16 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
       },
       update: {
         confirmationCode: p.confirmationCode ?? undefined, externalRef: p.externalRef ?? undefined, productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined,
-        tourId: tourId ?? undefined, ...slotFields(existing?.datePinned ?? false),
-        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : undefined, cancelledAtSource, raw,
+        ...slotFields(existing?.datePinned ?? false),
+        pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), status: cancelled ? "CANCELLED" : replacement ? "PENDING" : undefined, ...(replacement ? { cancelledAtSource: null } : { cancelledAtSource }), raw,
       },
     });
+    if (replacement) await audit({ action: "booking.amendment_replaced", entityType: "Booking", entityId: rec.id, detail: { from: existing!.confirmationCode, to: p.confirmationCode ?? null, via, reason: "the booking's cancelled product was replaced by a new live product in Bókun" } });
     // A cancelled record is never hidden as a duplicate of a live one: hiding it is how a
     // cancellation used to vanish. It cannot double-count a guest — it is not live.
-    const keep = existing || cancelled || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true, via)) && !(await flagCrossChannelDuplicate(rec)));
+    // A replacement is live again as if new: the booking's other live copy (the search's
+    // "GET-…" record) may already hold the guest, so it goes through dedupe like a new one.
+    const keep = (existing && !replacement) || cancelled || (!(await autoRemoveExactDuplicate(rec, p.phoneHidden === true, via)) && !(await flagCrossChannelDuplicate(rec)));
     // Other copies of the same Bokun booking (e.g. the visible "GET-…" copy while this one
     // was a hidden webhook copy) are cancelled too — exact identity only, see cancelOtherCopies.
     const others = cancelled ? await cancelOtherCopies(p, rec.id, cancelledAtSource, via) : { cancelledNow: [] as CopyRow[] };
@@ -567,7 +597,7 @@ export async function importParsed(p: ParsedBooking, opts: { source: string; can
     }
     if (dup && (await ignoreStaleLive(dup, cancelled, via))) return "skipped";
     if (dup) {
-      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { tourId: tourId ?? undefined, ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
+      const updated = await prisma.booking.update({ where: { id: dup.id }, data: { ...slotFields(dup.datePinned), pax: p.pax ?? undefined, customerName: p.customerName ?? undefined, phone: p.phoneHidden ? null : (p.phone ?? undefined), productName: p.productName ?? undefined, rateTitle: p.rateTitle ?? undefined, status: cancelled ? "CANCELLED" : undefined, cancelledAtSource } });
       const copies = cancelled ? (await cancelOtherCopies(p, dup.id, cancelledAtSource, via)).cancelledNow : [];
       // Tell the guide/ops once per slot, after every copy is cancelled, so the recount is right.
       await announceCancelled([...(dup.status !== "CANCELLED" && cancelled ? [updated] : []), ...copies]);

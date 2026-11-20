@@ -142,6 +142,16 @@ try {
   const legacy = buttons.filter((t) => /FOLK-BKK-2026010[89]-01/.test(t));
   check("2 · old-style jobs paid the same day with different slips are a button each", legacy.length === 2 && legacy.every((t) => /^Put 1 job /.test(t)), JSON.stringify(buttons));
   check("no other button offers them together", buttons.length === 4, JSON.stringify(buttons));
+  // The same action on each job's own line, beside + EXP: it opens for that job's whole transfer.
+  const rowButtons = await page.$$(".js-put-in-peak");
+  check("2b · every job waiting for PEAK has Put in PEAK on its own line", rowButtons.length === 5, String(rowButtons.length));
+  await rowButtons[0].click();
+  await page.waitForSelector(".modal", { timeout: 15000 });
+  const dialog = await page.$eval(".modal", (x) => x.innerText.replace(/\s+/g, " "));
+  check("2b · it opens the PEAK document dialog for that transfer", /PEAK document/.test(dialog), dialog.slice(0, 160));
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => { const c = [...document.querySelectorAll(".modal button")].find((b) => /^(Cancel|Close|×)$/.test(b.textContent.trim())); c?.click(); });
+  await pause(400);
 
   // 3 — the server's own rule, asked directly: jobs from both payments in one document.
   const refused = await page.evaluate(async (jobs) => {
@@ -158,10 +168,10 @@ try {
     set.call(el, m); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
   }, MONTH);
   await pause(1500);
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click()
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record without PEAK EXP/.test(b.textContent.trim()))?.click()
     ?? [...document.querySelectorAll("tr")].find((t) => /G-952/.test(t.innerText) && /PENDING|Pending/.test(t.innerText))?.click());
   await pause(600);
-  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click());
+  await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record without PEAK EXP/.test(b.textContent.trim()))?.click());
   await page.waitForSelector(".js-split-transfers", { timeout: 15000 });
   const memo = await page.$eval(".modal .js-bank-memo code", (x) => x.innerText).catch(() => "");
   check("4 · Record payment shows the bank memo for the job, before the transfer", memo === "PAY FOLK-BKK-20260104-01", memo);

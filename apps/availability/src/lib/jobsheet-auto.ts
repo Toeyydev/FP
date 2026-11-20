@@ -42,7 +42,7 @@ export async function ensureJobSheetForAssignment(guideId: string, date: string,
     if (!assignment) return { created: false, ref: null };
     const atSlot = await prisma.booking.findMany({
       where: { date, slotIdx, status: { in: [...SHEET_BOOKING_STATUSES] } },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true },
+      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true, source: true, rateTitle: true },
       orderBy: { createdAt: "asc" },
     });
     const mine = guideSlotBookings(atSlot, guideId).map(toSheetBooking);

@@ -6,6 +6,7 @@
 // the one definition the Advances page uses) and writes nothing but the PDF and an audit
 // row. Same-day reports replace each other (Drive replace mode on the same name), so a
 // person pressing it twice gets one file.
+import { driveMonth } from "@/lib/drive-month";
 import type { PrismaClient } from "@prisma/client";
 import { audit } from "@/lib/audit";
 import { fromSatang } from "@/lib/advances/rules";
@@ -69,10 +70,9 @@ export async function reportRows(db: PrismaClient): Promise<ReportRow[]> {
   });
 }
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const bangkokNow = (d = new Date()) => new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 16).replace("T", " ");
 /** Where it is filed: the same Advances folder as the slips and vouchers of that month. */
-export const reportFolder = (day: string) => ["Folkpaths Job Sheets", `${day.slice(0, 7)} ${MONTHS[Number(day.slice(5, 7)) - 1] ?? ""}`.trim(), "Advances"];
+export const reportFolder = (day: string) => ["Folkpaths Job Sheets", ...driveMonth(day), "Advances"];
 export const reportFileName = (day: string) => `Company advances ${day}.pdf`;
 
 export type FileDeps = {

@@ -1,14 +1,15 @@
 // Server half of "Pay N jobs together": reads the jobs, enforces every guard that needs
 // the database, and supplies the side effects lib/peak-payment-document orders — for
 // stage 1 (create the PEAK expense document) and stage 2 (record its payment).
+import { driveMonth } from "@/lib/drive-month";
 import { isHistoricalPayment } from "@/lib/payments-v2/rules";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { downloadDriveFile, saveBufferToDrive } from "@/lib/google-drive";
-import { DEFAULT_GUIDE_FEE, guideFeeOrStandard, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, feeIsCompensation, guideFeeOrStandard, isApproved, thb, type Expense, type GuideFee } from "@/lib/jobsheet";
 import { currentJobFigures, documentChangeReasons, documentDrift, type Figures } from "@/lib/payment-document-drift";
-import { guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
+import { guideCompensationAccount, guideFeeAccount, peakAccountMap, reviewRewardAccount } from "@/lib/peak-account-map";
 import { createExpenseAllInOne, getExpense, getPaymentMethods, insertExpenseFile, payExistingExpense } from "@/lib/peak-api";
 import { coveredByPayrollRun } from "@/lib/payment-coverage";
 import { combinedPaymentBlock, paidJobPeakBlock, paidTransferOf, sheetInPeak, type CombinedBlock } from "@/lib/combined-payment";
@@ -32,7 +33,6 @@ import {
 export type JobKey = { date: string; slotIdx: number };
 type Actor = { actorId: string | null; actorRole: string | null };
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const extOf = (mime: string) => (mime.includes("png") ? "png" : mime.includes("pdf") ? "pdf" : mime.includes("webp") ? "webp" : "jpg");
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -107,6 +107,8 @@ export async function loadPaymentContext(
     guideFeeAccount(),
     reviewRewardAccount(),
   ]);
+  // Only a job paying compensation needs its account (lib/jobsheet feeIsCompensation).
+  const compensationAccount = sheets.some((x) => feeIsCompensation(guideFeeOf(x.guideFee))) ? await guideCompensationAccount() : null;
   const docs = await documentsByRef(pays.map((p) => p.peakPaymentRef));
   // The live company advances of each of these jobs (lib/advances/coverage).
   const advanced = await liveAdvancesByJob(prisma, { jobs: keys.map((k) => ({ guideId, date: k.date, slotIdx: k.slotIdx })) });
@@ -172,7 +174,7 @@ export async function loadPaymentContext(
     peakContactId: user?.peakContactId ?? null,
     jobs,
     awaitingApproval,
-    accounts: { guideFee: feeAccount, reviewReward: rewardAccount, categories },
+    accounts: { guideFee: feeAccount, guideCompensation: compensationAccount, reviewReward: rewardAccount, categories },
     alreadyPaid: !!opts.alreadyPaid,
     paidDate: transfer.paidDate,
     slipLink: transfer.slipLink,
@@ -700,12 +702,12 @@ export function prismaPayDeps(opts: {
       }
       if (!refreshToken) throw new Error("Google Drive is not connected");
       const earliest = [...jobs.map((j) => j.date)].sort()[0] ?? bangkokToday();
-      const monthFolder = `${earliest.slice(0, 7)} ${MONTHS[Number(earliest.slice(5, 7)) - 1] ?? ""}`.trim();
-      // <EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext> — the document it settles, the
+      const monthFolder = driveMonth(earliest);
+      // <JOB_NO>_<EXP>_<FOLK-PAY>_<GUIDE_ID>_<NET>_<BANK_REF>.<ext> — the job(s), the document it settles, the
       // payment it belongs to, whose it is, what left the bank and the bank's own
       // reference, so a slip found on its own can be placed without opening it.
-      const name = slipFileName({ documentNo: docNo, paymentRef: doc.paymentRef, guideId: doc.guideId, net: Number(doc.total) || 0, bankRef, ext });
-      const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", monthFolder] });
+      const name = slipFileName({ jobNos: jobs.map((j) => j.ref), documentNo: docNo, paymentRef: doc.paymentRef, guideId: doc.guideId, net: Number(doc.total) || 0, bankRef, ext });
+      const { link } = await saveBufferToDrive({ refreshToken, name, base64: file.base64, mimeType: file.mime, folderPath: ["Folkpaths E-slips", ...monthFolder] });
       // Stored now, so a payment that later needs resolving by hand still has its slip.
       // The bank reference and the amount were written with the claim, before PEAK.
       await prisma.guidePaymentDocument.update({

@@ -1,20 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/db";
-import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, noShowStatus, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { guideJobOrder } from "@/lib/job-order";
 import { canViewFinance } from "@/lib/roles";
-import { bookingRef } from "@/lib/booking-ref";
 
 function ops(role?: string) { return role === "OPERATOR" || role === "ADMIN"; }
 function esc(v: unknown): string {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 }
 
-// Folkpaths company constants for the legal job order (edit here if they change).
-const OPERATOR_NAME = "โฟลค์พาธส์ ทราเวล";
-const OPERATOR_LICENSE = "11/12700";
-const SIGNATORY = "นางสาว หทัยวรรณ ใจปลอด";
 const BLANK = "______________________";
 
 // GET ?guideId&date&slotIdx — print-ready Thai "ใบสั่งงานมัคคุเทศก์ / Guide Job Order"
@@ -29,36 +22,17 @@ export async function GET(req: NextRequest) {
   if (!guideId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !(slotIdx >= 0)) return NextResponse.json({ error: "bad-query" }, { status: 400 });
   if (!canViewFinance(session.user.role) && session.user.guideId !== guideId) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const [u, sheet, assignment] = await Promise.all([
-    prisma.user.findUnique({ where: { guideId } }),
-    prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
-    prisma.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId, date, slotIdx } } }),
-  ]);
-  const tourId = sheet?.tourId || assignment?.tourId || "";
-  const tour = tourId ? await prisma.tour.findUnique({ where: { id: tourId } }) : null;
-
-  // A guide can open their job order before the operator has saved a sheet — so
-  // when the sheet has no rows yet, fall back to the live bookings for this slot.
-  // Split-aware: on a split slot the guide sees only the guests tagged to them.
-  let bookings = ((sheet?.bookings as Booking[]) ?? []);
-  if (bookings.length === 0) {
-    const live = await prisma.booking.findMany({
-      where: { date, slotIdx, status: { notIn: ["CANCELLED", "IGNORED"] } },
-      select: { customerName: true, externalRef: true, confirmationCode: true, pax: true, assignedGuideId: true, noShow: true, noShowPax: true },
-      orderBy: { customerName: "asc" },
-    });
-    const splitHere = live.some((b) => b.assignedGuideId);
-    const mine = splitHere ? live.filter((b) => !b.assignedGuideId || b.assignedGuideId === guideId) : live;
-    bookings = mine.map((b) => { const P = b.pax ?? 0; const ns = b.noShow ? (b.noShowPax || P) : 0; return { name: b.customerName ?? "", bookingNo: bookingRef(b.externalRef, b.confirmationCode), bookedPax: b.pax ?? null, actualPax: ns > 0 ? Math.max(0, P - ns) : null, tickets: "" as const, status: noShowStatus(ns, P || null), noShowPax: ns }; });
-  }
-  const guideFee = ((sheet?.guideFee as GuideFee) ?? DEFAULT_GUIDE_FEE);
-  const guideName = u?.fullName || u?.displayName || "";
-  const ref = sheet?.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
+  // The facts of the order are gathered in one place, shared with the app's own
+  // job order (lib/job-order) so a guide asked for it on the road and the
+  // operator's printed copy can never state different things.
+  const order = await guideJobOrder(guideId, date, slotIdx);
+  const { bookings, ref } = order;
+  const guideName = order.guide.name;
+  const licenseNo = order.guide.licenseNo;
   const [yy, mm, dd] = date.split("-");
   const dateTH = `${dd}/${mm}/${yy}`;
-  const adults = bookings.reduce((s, b) => s + (b.actualPax ?? b.bookedPax ?? 0), 0) || (assignment?.pax ?? 0);
-  const rate = guideFee.price != null ? guideFee.price.toLocaleString("en-US") : "............";
-  const licenseNo = u?.licenseNo?.trim() || "";
+  const adults = order.pax;
+  const rate = order.rate != null ? order.rate.toLocaleString("en-US") : "............";
 
   // Tourist rows: list known names; passport + nationality stay blank to fill in.
   let n = 0;
@@ -108,12 +82,12 @@ export async function GET(req: NextRequest) {
 
     <div class="sec">ส่วนที่ ๑ ข้อมูลใบสั่งงานและผู้ประกอบการ</div>
     <div class="meta"><span>ใบสั่งงานเลขที่ <b>${esc(ref)}</b></span><span>วันที่ <b>${esc(dateTH)}</b></span></div>
-    <div class="row">๑. ชื่อผู้ประกอบธุรกิจนำเที่ยว: <b>${esc(OPERATOR_NAME)}</b></div>
-    <div class="row indent">ใบอนุญาตประกอบธุรกิจนำเที่ยวเลขที่ <b>${esc(OPERATOR_LICENSE)}</b></div>
+    <div class="row">๑. ชื่อผู้ประกอบธุรกิจนำเที่ยว: <b>${esc(order.operator.name)}</b></div>
+    <div class="row indent">ใบอนุญาตประกอบธุรกิจนำเที่ยวเลขที่ <b>${esc(order.operator.license)}</b></div>
     <div class="row">๒. ขอมอบหมายให้</div>
     <div class="row indent">๒.๑ <b>${esc(guideName)}</b> ใบอนุญาตเป็นมัคคุเทศก์เลขที่ <input id="licNo" class="lic" contenteditable="false" value="${esc(licenseNo)}" placeholder="เลขที่ใบอนุญาต" /></div>
     <div class="row indent">ปฏิบัติหน้าที่เป็นมัคคุเทศก์เพื่อให้บริการแก่นักท่องเที่ยวคณะนี้ ในอัตราค่าตอบแทนวันละ <b>${esc(rate)}</b> บาท</div>
-    <div class="row indent">ทัวร์: <b>${esc(tour?.name ?? tourId)}</b> · เวลา ${esc(SLOT_TIMES[slotIdx] ?? tour?.time ?? "")}</div>
+    <div class="row indent">ทัวร์: <b>${esc(order.tour.name)}</b> · เวลา ${esc(order.time)}</div>
 
     <div class="sec">ส่วนที่ ๒ ข้อมูลคณะนักท่องเที่ยวและการเดินทาง</div>
     <div class="row">๓. ชื่อบริษัทนำเที่ยวจากต่างประเทศ ${BLANK}${BLANK}</div>
@@ -140,7 +114,7 @@ export async function GET(req: NextRequest) {
     <div class="sign">
       <img src="/operator-signature.png" alt="ลายเซ็นผู้ประกอบการ" contenteditable="false" draggable="false" style="height:46px;display:block;margin:0 0 -6px auto;user-select:none;-webkit-user-select:none;pointer-events:none" />
       ลงชื่อ .............................................<br>
-      ( ${esc(SIGNATORY)} )<br>
+      ( ${esc(order.operator.signatory)} )<br>
       ผู้ประกอบธุรกิจนำเที่ยว / ผู้ได้รับมอบอำนาจ
     </div>
   </div>

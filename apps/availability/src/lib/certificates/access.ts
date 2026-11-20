@@ -16,6 +16,8 @@
 //   the payload   the metadata stripped out of what non-admins are sent
 //   the file      a Drive folder the guides were never given
 
+import { driveMonth, YEAR_FOLDERS_FROM } from "@/lib/drive-month";
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /**
@@ -28,7 +30,8 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
  * three months ago.
  */
 export function certificateFolder(tourDate: string): string[] {
-  return ["Folkpaths Finance", "Private Expense Certificates", tourDate.slice(0, 7)];
+  const month = tourDate.slice(0, 7);
+  return ["Folkpaths Finance", "Private Expense Certificates", ...(month >= YEAR_FOLDERS_FROM ? driveMonth(tourDate) : [month])];
 }
 
 /**

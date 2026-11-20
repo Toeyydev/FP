@@ -1,4 +1,5 @@
 import { accountingWriteRefusal } from "@/lib/advances/write-guard";
+import { evidenceName } from "@/lib/evidence-name";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -23,11 +24,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const file = form?.get("file");
   let slip: { url: string; fileId: string } | null = null;
   if (file instanceof File && file.size > 0) {
-    const refund = await prisma.guideAdvanceRefund.findUnique({ where: { id }, select: { refundNo: true, guideId: true, status: true } });
+    const refund = await prisma.guideAdvanceRefund.findUnique({ where: { id }, select: { refundNo: true, guideId: true, status: true, amountSatang: true, receipt: { select: { advance: { select: { jobNo: true } }, jobSheetId: true } } } });
     if (!refund) return NextResponse.json({ error: "not-found", reasons: ["No such refund"] }, { status: 404 });
     if (refund.status !== "APPROVED") return NextResponse.json({ error: "not-allowed", reasons: [`${refund.refundNo} is ${refund.status.toLowerCase()} — a refund is paid only after it is approved`] }, { status: 409 });
     const paidDate = (body.paidAt || new Date().toISOString()).slice(0, 10);
-    const up = await uploadSlip(session!.user!.id ?? undefined, file, `${refund.refundNo} — ${refund.guideId} — advance refund`, paidDate);
+    // Job No. first (lib/evidence-name): the job the guide's money was for.
+    const sheetRef = refund.receipt.jobSheetId ? (await prisma.jobSheet.findUnique({ where: { id: refund.receipt.jobSheetId }, select: { ref: true } }))?.ref : null;
+    const slipName = evidenceName({ jobs: [refund.receipt.advance?.jobNo ?? sheetRef], what: "advance refund slip", guide: refund.guideId, date: paidDate, amount: refund.amountSatang / 100, refs: [refund.refundNo, body.bankRef] });
+    const up = await uploadSlip(session!.user!.id ?? undefined, file, slipName, paidDate);
     if ("error" in up) return NextResponse.json({ error: up.error, reasons: [`The slip could not be stored (${up.error})`] }, { status: up.status });
     slip = up;
   }

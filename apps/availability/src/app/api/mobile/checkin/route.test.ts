@@ -43,6 +43,11 @@ describe("POST /api/mobile/checkin", () => {
     expect(recordCheckin).toHaveBeenCalledWith({ date: "2026-09-11", slotIdx: 0, type: "ARRIVE", lat: 13.74, lng: 100.49, accuracyM: 12, guideId: "G-001", actorId: "u_1" });
   });
 
+  it("passes on that the phone reported a simulated location", async () => {
+    await post({ ...body, lat: 13.74, lng: 100.49, accuracyM: 12, mocked: true }, token);
+    expect(recordCheckin).toHaveBeenCalledWith(expect.objectContaining({ mocked: true, guideId: "G-001" }));
+  });
+
   it("passes a refusal from the rules on", async () => {
     recordCheckin.mockResolvedValue({ ok: false, status: 400, error: "too-early" });
     const res = await post(body, token);

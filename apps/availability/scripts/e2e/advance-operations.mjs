@@ -220,11 +220,21 @@ try {
   await page.goto(J0, { waitUntil: "networkidle0" });
   await page.waitForSelector(".js-payer-select", { timeout: 20000 });
 
-  // 7 — no advance on the job: Company Advance is not offered.
-  check("7 · Company Advance is not offered while no advance on the job may pay for it", !(await payerOptions(page, 0)).includes("advance"));
+  // 7 — Company Advance is always offered (#359); while no advance may pay for the row, choosing
+  // it shows a warning and the server refuses the save.
+  check("7 · Company Advance is offered even before the job has an advance (#359)", (await payerOptions(page, 0)).includes("advance"));
 
-  // 2 — the operator's job sheet records no advance itself: no Record advance, no form.
-  check("2 · the job sheet has no Record advance — advances are recorded on Payments → Advances", (await page.$(".js-advance-submit")) === null && !(await clickText(page, ".advance-settlement", "+ Record advance")));
+  // 2 — the operator may also record an advance from the job sheet (#360). It is not pressed
+  // here: the advances below are created on Payments → Advances.
+  // Owner 2026-11-07: the button sits on the Company advance line, VISIBLE, even before the
+  // job has an advance (it had been left inside the closed Details, so nobody could reach it).
+  const visibleRecord = await page.$eval(".js-advance-summary .js-advance-record", (b) => b.offsetParent !== null && !b.disabled && b.innerText.trim() === "+ Record advance").catch(() => false);
+  const formBefore = (await page.$(".js-advance-submit")) === null;
+  await page.click(".js-advance-summary .js-advance-record");
+  await page.waitForSelector(".js-advance-form .js-advance-submit", { visible: true, timeout: 5000 }).catch(() => null);
+  const formOpens = await page.$eval(".js-advance-form", (f) => f.offsetParent !== null).catch(() => false);
+  check("2 · + Record advance is on the job sheet's advance line, visible, and opens the form (#360, 2026-11-07)", visibleRecord && formBefore && formOpens);
+  await page.evaluate(() => [...document.querySelectorAll(".advance-settlement button")].find((b) => b.innerText.trim() === "Cancel")?.click());
   // Details open on this device from here on (remembered — the summary line is closed by default).
   await page.evaluate(() => localStorage.setItem("folkops.advanceDetailsOpen", "1"));
   await createAdvanceOnPayments(page, { amount: 1000, txRef: "TX-E2E-A", cats: ["entrance", "meal"] });
@@ -551,7 +561,7 @@ try {
     const filedMsg = await p2.evaluate(() => document.querySelector(".banner.ok")?.innerText ?? document.querySelector(".banner.danger")?.innerText ?? "");
     const driveLog = readFileSync(DRIVE_LOG, "utf8").slice(before);
     check("the Company advances report is filed as a PDF in Drive, in the month's Advances folder",
-      /Company advances \d{4}-\d{2}-\d{2}\.pdf filed in Drive · Folkpaths Job Sheets \/ \d{4}-\d{2} \w+ \/ Advances/.test(filedMsg) && /FOLDER[^\n]*\nFOLDER[^\n]*\nFOLDER[^\n]*\nUPLOAD /.test(driveLog) && !!(await p2.$(".js-report-link")),
+      /Company advances \d{4}-\d{2}-\d{2}\.pdf filed in Drive · Folkpaths Job Sheets \/ \d{4} \/ \d{2} \w+ \/ Advances/.test(filedMsg) && /FOLDER[^\n]*\nFOLDER[^\n]*\nFOLDER[^\n]*\nUPLOAD /.test(driveLog) && !!(await p2.$(".js-report-link")),
       filedMsg.slice(0, 200));
   }
   // Phase 1E — linking a settlement: chosen from the ledger with its exact amount, never typed.

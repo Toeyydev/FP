@@ -1,4 +1,5 @@
 import { accountingWriteRefusal } from "@/lib/advances/write-guard";
+import { evidenceName } from "@/lib/evidence-name";
 import { uploadSlip } from "@/lib/advance-slip";
 import { NextRequest, NextResponse } from "next/server";
 import { advanceSyncStates } from "@/lib/advances/peak-sync";
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.data.bankAccount?.trim()) return NextResponse.json({ error: "Choose the company bank account used for this transfer" }, { status: 400 });
   if (!parsed.data.bankRef?.trim()) return NextResponse.json({ error: "Enter the bank transfer reference" }, { status: 400 });
   if (!(file instanceof File) || !file.size) return NextResponse.json({ error: "Attach the transfer slip" }, { status: 400 });
-  const sheet = await prisma.jobSheet.findFirst({ where: { ref: parsed.data.jobNo, guideId: parsed.data.guideId }, select: { id: true } });
+  const sheet = await prisma.jobSheet.findFirst({ where: { ref: parsed.data.jobNo, guideId: parsed.data.guideId }, select: { id: true, ref: true, date: true } });
   if (!sheet) return NextResponse.json({ error: "Choose an existing Job No. for this guide before uploading" }, { status: 400 });
   // Before anything is uploaded: one transfer is one advance (lib/advances/tx-ref) …
   const existing = await liveAdvanceForTransfer(prisma, parsed.data.bankRef);
@@ -78,7 +79,11 @@ export async function POST(req: NextRequest) {
   const gate = await gateSlip(prisma, file, parsed.data.guideId, { txRef: parsed.data.bankRef ?? null, amount: parsed.data.amount, advanceDate: parsed.data.advanceDate },
     slipDecisionFrom((k) => form?.get(k) ?? (raw as Record<string, unknown> | null)?.[k]), actor);
   if (!gate.ok) return NextResponse.json(gate.body, { status: gate.status });
-  const uploaded = await uploadSlip(session!.user!.id, file, `${parsed.data.jobNo} — advance`, parsed.data.advanceDate);
+  // Job No. first (lib/evidence-name). The bank reference is unique per transfer, so a
+  // second advance on the same job never replaces the first one's slip in Drive.
+  const g = await prisma.user.findUnique({ where: { guideId: parsed.data.guideId }, select: { displayName: true, fullName: true } });
+  const slipName = evidenceName({ jobs: [parsed.data.jobNo], what: "advance slip", guide: g?.fullName || g?.displayName || parsed.data.guideId, date: parsed.data.advanceDate, amount: parsed.data.amount, refs: [parsed.data.bankRef, parsed.data.guideId] });
+  const uploaded = await uploadSlip(session!.user!.id, file, slipName, parsed.data.advanceDate, { ref: sheet.ref, date: sheet.date });
   if ("error" in uploaded) return NextResponse.json({ error: uploaded.error }, { status: uploaded.status });
   const slip = uploaded;
   const result = await issueAdvance(prisma, {

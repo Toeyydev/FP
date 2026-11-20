@@ -19,10 +19,8 @@ import SupplementalPayments, { type SupplementalPrefill } from "@/components/Sup
 import { separatePaymentWarning } from "@/lib/peak-payment-document";
 import { jobPeakDocumentNo } from "@/lib/peak-job-status";
 import { type DocumentDrift } from "@/lib/payment-document-drift";
-import CopyMemo from "@/components/CopyMemo";
 import RecordPastTourDialog from "@/components/RecordPastTourDialog";
 import { type UnstaffedDay } from "@/lib/unstaffed-departures";
-import { payMemo } from "@/lib/bank-memo";
 
 type Job = { date: string; slotIdx: number; tour: string; ref?: string | null; amount: number; paid: boolean; payStatus: string; peakRef?: string | null; paidAt?: string | null; eslipUrl?: string | null; slips?: Slip[] | null; peakPaymentRef?: string | null; fee: number; expenses: number;
   // From /api/payments (lib/combined-payment): whether the job can go into "Pay N jobs
@@ -220,6 +218,10 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
   // gap in the books; before payment it is the normal state — so the paid one stands out.
   const notInPeak = (j: Job) => j.peakStatus?.state === "NOT_IN_PEAK";
   const expCandidate = (j: Job) => !!j.canRecordExp && notInPeak(j);
+  // One transfer, one PEAK document: which jobs a paid job shares its transfer with.
+  const transferKey = (j: Job) => j.payment?.id ? `pmt:${j.payment.id}`
+    : (j.slips?.find((s) => s.url)?.url ?? j.eslipUrl) ? `slip:${j.slips?.find((s) => s.url)?.url ?? j.eslipUrl}` : `day:${bkkDateOf(j.paidAt!)}`;
+  const canPutJob = (j: Job) => !!j.canPutInPeak && notInPeak(j) && !!j.paidAt;
   const peakBadge = (j: Job) => notInPeak(j)
     ? <span className={`pay-peak-missing${j.paid ? " paid" : ""}`} title={j.paid ? "Paid, but FolkOPS has no PEAK document for this job — record its EXP ref, or post it to PEAK" : "No PEAK document for this job yet"}>Not in PEAK</span>
     : j.peakStatus?.state === "NOTHING_TO_POST"
@@ -518,8 +520,8 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
           <td style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
             {mode === "paid" && r.eslipUrl && <a className="btn sm" href={r.eslipUrl} target="_blank" rel="noopener noreferrer" title="View payment slip in Drive">View slip</a>}
             {mode === "paid" && r.paidAt && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{new Date(r.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
-            {mode === "unpaid" && canEdit && payable.length > 0 && <button className="btn sm primary" title={payable.length > 1 ? `Pay ${payable.length} jobs in one transfer — ONE PEAK document with a line per job` : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Pay {payable.length}</button>}
-            {mode === "unpaid" && canEdit && <button className="btn sm" title="Record a bank transfer to this guide: the jobs it paid, the date, the amount and the slip" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record payment…</button>}
+            {mode === "unpaid" && canEdit && payable.length > 0 && <button className="btn sm primary" title={payable.length > 1 ? `Pay ${payable.length} jobs in one transfer — ONE PEAK document with a line per job` : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Create PEAK EXP · {payable.length}</button>}
+            {mode === "unpaid" && canEdit && <button className="btn sm ghost js-record-no-exp" title="Only when this transfer has no PEAK EXP from FolkOPS (e.g. one made by hand in PEAK) — the EXP-first path is “Create PEAK EXP”" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record without PEAK EXP…</button>}
           </td>
         </tr>
         {isOpen && (
@@ -529,9 +531,8 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                 <span style={{ fontWeight: 700 }}>{d.alreadyPaid ? `PEAK document created for jobs paid ${d.paidDate ? dShort(d.paidDate) : "earlier"} · record that payment` : "PEAK document created · awaiting payment"}</span>
                 {outOfSync(d) && <DriftPanel doc={d} />}
                 {/* A job in the document changed: the payment is not offered — PEAK must match the job sheets first (the server refuses it too). */}
-                <CreatedState compact doc={asCreated(d)} onRecordPayment={canEdit && !paymentBlocked(d) ? () => setRecordPayment({ guideId: r.guideId, guide: r.guide, doc: asCreated(d) }) : undefined} />
+                <CreatedState compact doc={asCreated(d)} lastError={d.error} guideLabel={`${r.guideId} · ${r.guide}`} onRecordPayment={canEdit && !paymentBlocked(d) ? () => setRecordPayment({ guideId: r.guideId, guide: r.guide, doc: asCreated(d) }) : undefined} />
                 {canEdit && paymentBlocked(d) && <button type="button" className="btn sm" disabled aria-disabled="true" title={`Align ${d.peakDocumentNo ?? d.paymentRef} in PEAK with the current job sheets first`} style={{ justifySelf: "start" }}>Record payment — blocked until PEAK matches</button>}
-                {d.error && <span style={{ fontSize: 12, color: "var(--danger)" }}>Last attempt: {d.error}</span>}
                 {canEdit && <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Voided this document in PEAK instead? <button className="btn sm ghost" onClick={() => resolveDoc(d, "voided")}>Voided in PEAK…</button></span>}
               </div>
             ))}
@@ -563,8 +564,6 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
               const cands = jobs.filter(expCandidate);
               // One transfer, one document. A recorded payment (FOLK-PMT-…) is one transfer; for
               // jobs paid before those existed, a shared slip is; failing both, the day is.
-              const transferKey = (j: Job) => j.payment?.id ? `pmt:${j.payment.id}`
-                : (j.slips?.find((s) => s.url)?.url ?? j.eslipUrl) ? `slip:${j.slips?.find((s) => s.url)?.url ?? j.eslipUrl}` : `day:${bkkDateOf(j.paidAt!)}`;
               const byTransfer = new Map<string, Job[]>();
               for (const j of jobs) if (j.canPutInPeak && notInPeak(j) && j.paidAt) byTransfer.set(transferKey(j), [...(byTransfer.get(transferKey(j)) ?? []), j]);
               const groups = [...byTransfer.values()].map((js) => ({ js, day: bkkDateOf(js[0].paidAt!), paymentNo: js[0].payment?.paymentNo ?? null }))
@@ -585,13 +584,13 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
             })()}
             {mode === "unpaid" && canEdit && unlocked.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0 8px" }}>
               {payable.length > 0 && <>
-                <button className="btn sm primary" title={payable.length > 1 ? "Step 1: create ONE unpaid PEAK document for these jobs. Step 2, after reviewing it in PEAK and transferring: record the payment against it." : "Pay this job"} onClick={() => payBatch(r.guideId, payable)}>Pay {payable.length} job{payable.length === 1 ? "" : "s"} together · one ref</button>
-                <span className="pay-doc-note" title="PEAK bills each document created, not each job">= 1 PEAK document</span>
+                <button className="btn sm primary js-create-exp" title="Step 1: create ONE unpaid PEAK EXP for these jobs — a line per job. Step 2, after transferring: record the transfer and FolkOPS pays the EXP in PEAK." onClick={() => payBatch(r.guideId, payable)}>Create PEAK EXP · {payable.length} job{payable.length === 1 ? "" : "s"}</button>
+                <span className="pay-doc-note" title="PEAK bills each document created, not each job">one transfer = one EXP · the EXP number is the bank memo</span>
               </>}
               {leftOut && <span className="pay-doc-note" title="These jobs stay listed below and can still be paid on their own">Not in it: {leftOut}</span>}
-              {canEdit && <button className="btn sm" title="Record the transfer that paid these jobs — date, amount, slip" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record payment · {unlocked.length} unpaid</button>}
-              {canEdit && unlocked.length > 0 && <CopyMemo memo={payMemo({ guideId: r.guideId, jobs: unlocked.map((j) => ({ jobNo: j.ref ?? null, date: j.date })) })} label="Transfer" />}
-              <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>A job is paid by a recorded payment — one per bank transfer.</span>
+              {/* No synthetic "PAY G-… dates" memo here any more (owner 2026-11-15): the bank memo is
+                  the PEAK EXP number, shown once the EXP exists. */}
+              {canEdit && <button className="btn sm ghost js-record-no-exp" title="Only when this transfer has no PEAK EXP from FolkOPS (e.g. one made by hand in PEAK)" onClick={() => openRecordPayment(r.guideId, r.guide, jobs)}>Record without PEAK EXP…</button>}
             </div>}
             {jobs.map((j, i) => {
               const ms = matchState(j.slips ?? [], j.amount);
@@ -616,6 +615,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                   {paymentChip(j)}
                   {inPeakTag(j)}{advanceGapTag(j)}
                   {peakBadge(j)}
+                  {canEdit && mode === "paid" && canPutJob(j) && <button type="button" className="btn sm primary js-put-in-peak" style={{ padding: "1px 8px" }} title="Create the PEAK document for this transfer. Check PEAK first: if one was made by hand, use + EXP instead." onClick={() => setPutInPeak({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter((x) => canPutJob(x) && transferKey(x) === transferKey(j)), paidDate: bkkDateOf(j.paidAt!) })}>Put in PEAK</button>}
                   {canEdit && expCandidate(j) && <button type="button" className="btn sm ghost" style={{ padding: "1px 8px" }} title="Record the number of the PEAK document made by hand for this payment" onClick={() => setRecordExp({ guideId: r.guideId, guide: r.guide, jobs: jobs.filter(expCandidate), preselect: [`${j.date}|${j.slotIdx}`] })}>+ EXP</button>}
                   <span className={`badge ${j.paid ? "active" : "invited"}`} style={{ minWidth: 64, textAlign: "center" }}>{j.paid ? "Paid" : j.peakPaymentRef ? docBadge(j) : hasSlips ? "Partial" : "Pending"}</span>{j.paid && j.paidAt ? <span style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{new Date(j.paidAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span> : null}
                   </span>
@@ -630,7 +630,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                         : j.payment
                           ? <button className="btn sm ghost" title={`Paid by ${j.payment.paymentNo} — reverse that payment, with a reason; the record stays`} onClick={() => reversePayment(j.payment!)}>Reverse payment…</button>
                           : <button className="btn sm ghost" title="Marked paid before payments were recorded — put it back to pending" onClick={() => setJobPaid(j, r.guideId)}>Undo</button>)
-                    : !j.peakPaymentRef && !j.payBlock && <button className="btn sm primary" title="Record the transfer that pays this job" onClick={() => openRecordPayment(r.guideId, r.guide, jobs, [`${j.date}|${j.slotIdx}`])}>Record payment…</button>)}
+                    : !j.peakPaymentRef && !j.payBlock && <button className="btn sm ghost" title="Record a transfer for this job without a PEAK EXP from FolkOPS — the EXP-first path is “Create PEAK EXP” above" onClick={() => openRecordPayment(r.guideId, r.guide, jobs, [`${j.date}|${j.slotIdx}`])}>Record without EXP…</button>)}
                   {canEdit && !j.peakPaymentRef && <button className="btn sm danger" title="Remove this job sheet, its tour records and the imported booking (won't re-sync)" onClick={() => removeJob(j, r.guideId, r.guide)}>Delete</button>}
                   </span>
                 </div>
@@ -798,7 +798,7 @@ export default function Payments({ canEdit = true, isAdmin = false, role = null,
                     {j.peakPaymentRef && <span className="pay-doc-tag" title={`The combined PEAK document this job belongs to${docEvidence(j)}`}>{docTag(j)} · {docBadge(j)}</span>}
                     {inPeakTag(j)}{advanceGapTag(j)}
                     {peakBadge(j)}
-                    {canEdit && !j.peakPaymentRef && !j.payBlock && <button className="btn sm primary" title="Record the transfer that pays this job" onClick={() => openRecordPayment(j.guideId, j.guide, rows.find((x) => x.guideId === j.guideId)?.jobs ?? [j], [`${j.date}|${j.slotIdx}`])}>Record payment…</button>}
+                    {canEdit && !j.peakPaymentRef && !j.payBlock && <button className="btn sm ghost" title="Record a transfer for this job without a PEAK EXP from FolkOPS — use Create PEAK EXP on the guide's row for the EXP-first path" onClick={() => openRecordPayment(j.guideId, j.guide, rows.find((x) => x.guideId === j.guideId)?.jobs ?? [j], [`${j.date}|${j.slotIdx}`])}>Record without EXP…</button>}
                   </td>
                 </tr>
               ))}

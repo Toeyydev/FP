@@ -58,7 +58,13 @@ describe("what the operator pastes into the bank", () => {
 describe("the slip's filename", () => {
   it("carries every field someone would otherwise open the file to learn", () => {
     expect(slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "KB209901051234", ext: "jpeg" }))
-      .toBe(`${EXP}_${REF}_G-901_2584.00_KB209901051234.jpeg`);
+      .toBe(`NO-JOB_${EXP}_${REF}_G-901_2584.00_KB209901051234.jpeg`);
+  });
+
+  it("leads with the Job No., and says how many more jobs one slip pays", () => {
+    const of = (jobNos: string[]) => slipFileName({ jobNos, documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "R1", ext: "jpeg" });
+    expect(of(["FOLK-BKK-20261015-02"])).toBe(`FOLK-BKK-20261015-02_${EXP}_${REF}_G-901_2584.00_R1.jpeg`);
+    expect(of(["FOLK-BKK-20261015-02", "FOLK-BKK-20261016-01", "FOLK-BKK-20261017-03"]).startsWith("FOLK-BKK-20261015-02-PLUS2_")).toBe(true);
   });
 
   it("spells one amount one way", () => {
@@ -70,8 +76,8 @@ describe("the slip's filename", () => {
 
   it("keeps underscores between the fields and out of them", () => {
     const n = slipFileName({ documentNo: EXP, paymentRef: REF, guideId: "G-901", net: 2584, bankRef: "kb 2099/01 #12", ext: "JPEG" });
-    expect(n).toBe(`${EXP}_${REF}_G-901_2584.00_KB2099-01-12.jpeg`);
-    expect(n.split("_")).toHaveLength(5);
+    expect(n).toBe(`NO-JOB_${EXP}_${REF}_G-901_2584.00_KB2099-01-12.jpeg`);
+    expect(n.split("_")).toHaveLength(6);
   });
 
   it("files a reference typed in any case or spacing under one name", () => {
@@ -95,7 +101,7 @@ describe("the slip's filename", () => {
 
   it("still names a file when the pieces are missing, rather than producing a blank one", () => {
     expect(slipFileName({ documentNo: null, paymentRef: REF, guideId: "G-901", net: 10, bankRef: "", ext: "pdf" }))
-      .toBe(`NO-EXP_${REF}_G-901_10.00_NO-REF.pdf`);
+      .toBe(`NO-JOB_NO-EXP_${REF}_G-901_10.00_NO-REF.pdf`);
   });
 });
 

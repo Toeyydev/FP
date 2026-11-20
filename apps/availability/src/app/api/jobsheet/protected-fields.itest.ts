@@ -77,9 +77,10 @@ describe("an ordinary save keeps what the server owns", () => {
     expect((await rowsNow())[0].paidByBy).toBe("u_ops");
   });
 
+  // Company-paid: a cost the guide paid must be Water / Bus / Ferry (owner 2026-11-16).
   it("everything else on the sheet still saves normally", async () => {
     await seedSheet([ferry({ evidenceWaiver: WAIVER })]);
-    await save([ferry(), { description: "Snacks", price: 40, pax: 4, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }], { operatorNote: "added a snack stop" });
+    await save([ferry(), { description: "Snacks", price: 40, pax: 4, expenseType: "meal", paidBy: "company", paidBySource: "operator" }], { operatorNote: "added a snack stop" });
     const rows = await rowsNow();
     expect(rows).toHaveLength(2);
     expect(rows[0].evidenceWaiver).toEqual(WAIVER);
@@ -252,5 +253,26 @@ describe("two rows that say the same thing", () => {
     expect(rows[0].paidByBy).toBe("u_admin");
     expect(rows[1].evidenceWaiver).toEqual(OTHER);
     expect(rows[2].evidenceWaiver).toEqual(WAIVER);
+  });
+});
+
+describe("a wrong count on a confirmed row", () => {
+  it("an operator corrects it on an unpaid job: the payer stamp stays and the audit names the change", async () => {
+    await seedSheet([ferry({ ...STAMP, pax: 5 })]);
+    const { status } = await save([ferry({ pax: 4 })]);
+    expect(status).toBe(200);
+    const rows = await rowsNow();
+    expect(rows[0].pax).toBe(4);
+    expect(rows[0].paidByBy).toBe("u_admin");
+    const log = await prisma.auditLog.findFirst({ where: { action: "jobsheet.saved" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(log!.detail)).toContain("amountChanges");
+  });
+
+  it("once the job is paid the count stays as it was paid", async () => {
+    await seedSheet([ferry({ ...STAMP, pax: 5 })]);
+    await prisma.tourPayment.create({ data: { guideId: GUIDE, date: DATE, slotIdx: 0, tourId: "T-900", status: "PAID" } });
+    const { status } = await save([ferry({ pax: 4 })]);
+    expect(status).not.toBe(200);
+    expect((await rowsNow())[0].pax).toBe(5);
   });
 });

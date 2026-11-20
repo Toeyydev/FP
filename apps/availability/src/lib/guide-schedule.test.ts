@@ -6,11 +6,12 @@ const prismaMock = vi.hoisted(() => ({
   checkin: { findMany: vi.fn(), findFirst: vi.fn() },
   tourReport: { findMany: vi.fn() },
   jobSheet: { findUnique: vi.fn() },
+  tourPayment: { findUnique: vi.fn() },
   tour: { findUnique: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 
-import { bangkokToday, guideSchedule, guideTourDetails } from "./guide-schedule";
+import { bangkokToday, guideSchedule, guestPhoneVisibleUntilMs, guideTourDetails } from "./guide-schedule";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -20,6 +21,7 @@ beforeEach(() => {
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.tourReport.findMany.mockResolvedValue([]);
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
+  prismaMock.tourPayment.findUnique.mockResolvedValue(null);
 });
 
 describe("bangkokToday", () => {
@@ -34,6 +36,26 @@ describe("guideSchedule", () => {
     await guideSchedule("G-001", Date.UTC(2026, 8, 10, 18));
     const where = prismaMock.assignment.findMany.mock.calls[0][0].where;
     expect(where).toEqual({ guideId: "G-001", date: { gte: "2026-09-11" } });
+  });
+
+  it("reaches back only when asked, and only as far as asked", async () => {
+    await guideSchedule("G-001", Date.UTC(2026, 8, 10, 18), { unreportedDays: 7 });
+    expect(prismaMock.assignment.findMany.mock.calls[0][0].where).toEqual({ guideId: "G-001", date: { gte: "2026-09-04" } });
+    // Across a month boundary, too.
+    await guideSchedule("G-001", Date.UTC(2026, 9, 2, 3), { unreportedDays: 7 });
+    expect(prismaMock.assignment.findMany.mock.calls[1][0].where.date).toEqual({ gte: "2026-09-25" });
+  });
+
+  it("keeps a past tour still owing its report, and lets a reported one go", async () => {
+    prismaMock.assignment.findMany.mockResolvedValue([
+      { date: "2026-09-09", slotIdx: 0, tourId: "T-001", pax: 2, note: null, tour: null },
+      { date: "2026-09-10", slotIdx: 7, tourId: "T-002", pax: 2, note: null, tour: null },
+      { date: "2026-09-11", slotIdx: 0, tourId: "T-003", pax: 2, note: null, tour: null },
+    ]);
+    // Reported: the 9th (past) and the 11th (today). Only the past one drops out.
+    prismaMock.tourReport.findMany.mockResolvedValue([{ date: "2026-09-09", slotIdx: 0 }, { date: "2026-09-11", slotIdx: 0 }]);
+    const items = await guideSchedule("G-001", Date.UTC(2026, 8, 10, 18), { unreportedDays: 7 });
+    expect(items.map((i) => [i.date, i.reported])).toEqual([["2026-09-10", false], ["2026-09-11", true]]);
   });
 
   it("skips the booking and check-in lookups when nothing is assigned", async () => {
@@ -105,16 +127,22 @@ describe("guideTourDetails", () => {
     prismaMock.booking.findMany.mockResolvedValue([{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, phone: "+39333111222" }]);
     prismaMock.checkin.findFirst.mockResolvedValue({ type: "ARRIVE" });
 
-    expect(await guideTourDetails("G-001", "2026-09-11", 0)).toEqual({
+    const details = await guideTourDetails("G-001", "2026-09-11", 0, { nowMs: Date.UTC(2026, 8, 11, 1, 0) });
+    // The job's own costs ride along; they have their own tests below.
+    expect(Array.isArray(details?.expenses)).toBe(true);
+    expect({ ...details, expenses: undefined }).toEqual({
+      expenses: undefined,
+      // 08:30 Bangkok + a full day out (no length set) + 24 hours.
+      phoneVisibleUntil: "2026-09-12T09:30:00.000Z",
       date: "2026-09-11", slotIdx: 0, time: "08:30", pax: 8, note: "Meet 15 min early", checkinState: "ARRIVE",
-      tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water" },
+      tour: { id: "T-001", name: "Grand Palace", time: "08:30", meetingPoint: "MRT Sanam Chai Exit 1", itinerary: "Palace → Wat Pho", included: "Tickets", bring: "Water", meetingLat: 13.74, meetingLng: null, meetingRadiusM: null },
       // `id` is sent so the app can report this booking's no-shows precisely.
       bookings: [{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 1, phone: "+39333111222", tickets: "" }],
     });
     // assignedGuideId is read to work out a split guide's share, and never sent.
     const select = prismaMock.booking.findMany.mock.calls[0][0].select;
     // phone is now selected and sent; the OTA relay email still is not, and never should be.
-    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "phone", "source"]);
+    expect(Object.keys(select).sort()).toEqual(["assignedGuideId", "confirmationCode", "customerName", "externalRef", "id", "noShowPax", "pax", "phone", "rateTitle", "source"]);
     expect(Object.keys(select)).not.toContain("email");
     expect(prismaMock.checkin.findFirst.mock.calls[0][0]).toEqual({ where: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 }, orderBy: { at: "desc" }, select: { type: true } });
   });
@@ -140,7 +168,7 @@ describe("guideTourDetails", () => {
     expect(details?.bookings.map((b) => b.tickets)).toEqual(["included", "not", ""]);
     expect(prismaMock.jobSheet.findUnique.mock.calls[0][0]).toEqual({
       where: { guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } },
-      select: { bookings: true },
+      select: { bookings: true, expenses: true, approvalStatus: true },
     });
   });
 
@@ -149,6 +177,82 @@ describe("guideTourDetails", () => {
     prismaMock.tour.findUnique.mockResolvedValue(null);
     prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Emily", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 0 }]);
     expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+  });
+
+  it("shows Included from an unambiguous booking rate when there is no saved sheet row", async () => {
+    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+    prismaMock.tour.findUnique.mockResolvedValue(null);
+    prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Guest", confirmationCode: "FP-1", externalRef: "OTA-1", pax: 2, source: "viator", noShowPax: 0, rateTitle: "Tour with all entrance tickets" }]);
+    expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("included");
+  });
+
+  describe("a saved blank ticket tag — the same rule the job sheet shows", () => {
+    const blankRow = (over: Record<string, unknown> = {}) => ({ bookings: [{ name: "Guest", bookingNo: "OTA-1", bookedPax: 2, actualPax: null, tickets: "", status: "" }], ...over });
+    beforeEach(() => {
+      prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+      prismaMock.tour.findUnique.mockResolvedValue(null);
+      prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Guest", confirmationCode: "FP-1", externalRef: "OTA-1", pax: 2, source: "viator", noShowPax: 0, rateTitle: "Tour with all entrance tickets" }]);
+    });
+    it("is filled from an unambiguous rate while the sheet is open", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue(blankRow());
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("included");
+    });
+    it("stays blank on an approved sheet", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue(blankRow({ approvalStatus: "APPROVED" }));
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+    });
+    it("stays blank once the job is paid", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue(blankRow());
+      prismaMock.tourPayment.findUnique.mockResolvedValue({ status: "PAID" });
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+    });
+    it("never replaces a value someone chose", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [{ name: "Guest", bookingNo: "OTA-1", bookedPax: 2, actualPax: null, tickets: "not", status: "" }] });
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("not");
+    });
+  });
+
+  describe("the job's expense lines", () => {
+    beforeEach(() => {
+      prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 4, note: null });
+      prismaMock.booking.findMany.mockResolvedValue([]);
+    });
+
+    it("uses the operator's own set when the sheet has one", async () => {
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Wat Pho Evening", time: "17:30" });
+      prismaMock.jobSheet.findUnique.mockResolvedValue({
+        bookings: [],
+        expenses: [
+          { description: "Wat Pho ticket", price: 300, pax: 2, expenseType: "entrance", paidBy: "advance" },
+          { description: "Water (Inc. Guide)", price: 10, pax: 3, expenseType: "meal", paidBy: "guide" },
+        ],
+      });
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(details?.expenses).toEqual([
+        { description: "Wat Pho ticket", price: 300, pax: 2, unit: null, expenseType: "entrance", paidBy: "advance" },
+        { description: "Water (Inc. Guide)", price: 10, pax: 3, unit: null, expenseType: "meal", paidBy: "guide" },
+      ]);
+    });
+
+    it("falls back to the standard set for the tour when no sheet exists yet", async () => {
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30" });
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(details?.expenses.length).toBeGreaterThan(0);
+      expect(details?.expenses.every((e) => typeof e.description === "string")).toBe(true);
+    });
+
+    it("leaves out review rewards, which are the guide's pay and not a tour cost", async () => {
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30" });
+      prismaMock.jobSheet.findUnique.mockResolvedValue({
+        bookings: [],
+        expenses: [
+          { description: "Wat Pho ticket", price: 300, pax: 2 },
+          { description: "Review Reward", price: 100, pax: 1, expenseType: "review_reward" },
+        ],
+      });
+      const details = await guideTourDetails("G-001", "2026-09-11", 0);
+      expect(details?.expenses.map((e) => e.description)).toEqual(["Wat Pho ticket"]);
+    });
   });
 
   describe("a split departure", () => {
@@ -184,5 +288,31 @@ describe("guideTourDetails", () => {
     prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 8, note: null });
     prismaMock.tour.findUnique.mockResolvedValue(null);
     expect(await guideTourDetails("G-001", "2026-09-11", 0)).toMatchObject({ checkinState: null, tour: null, bookings: [] });
+  });
+});
+
+describe("how long a guide keeps a guest's phone", () => {
+  it("lapses 24 hours after the tour ends", () => {
+    // 08:30 Bangkok = 01:30 UTC; a 4-hour tour ends 05:30 UTC; plus 24 hours.
+    expect(new Date(guestPhoneVisibleUntilMs("2026-09-11", 0, 240)).toISOString()).toBe("2026-09-12T05:30:00.000Z");
+    expect(guestPhoneVisibleUntilMs("2026-09-11", 0, null)).toBe(guestPhoneVisibleUntilMs("2026-09-11", 0, 8 * 60));
+  });
+
+  it("stops sending a guide the numbers after that, but never the operator", async () => {
+    const setup = () => {
+      prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+      prismaMock.tour.findUnique.mockResolvedValue({ id: "T-001", name: "Grand Palace", time: "08:30", durationMin: 240 });
+      prismaMock.booking.findMany.mockResolvedValue([{ id: "bk_1", customerName: "Emily Carter", confirmationCode: "FP-1", externalRef: "GYG1", pax: 2, source: "gyg", noShowPax: 0, phone: "+39333111222", assignedGuideId: null }]);
+      prismaMock.checkin.findFirst.mockResolvedValue(null);
+    };
+    const until = guestPhoneVisibleUntilMs("2026-09-11", 0, 240);
+    setup();
+    expect((await guideTourDetails("G-001", "2026-09-11", 0, { ownShareOnly: true, nowMs: until }))?.bookings[0].phone).toBe("+39333111222");
+    setup();
+    expect((await guideTourDetails("G-001", "2026-09-11", 0, { ownShareOnly: true, nowMs: until + 1 }))?.bookings[0].phone).toBeNull();
+    setup();
+    const ops = await guideTourDetails("G-001", "2026-09-11", 0, { everyPhone: true, nowMs: until + 1 });
+    expect(ops?.bookings[0].phone).toBe("+39333111222");
+    expect(ops?.phoneVisibleUntil).toBeNull();
   });
 });

@@ -94,6 +94,13 @@ describe("recordCheckin", () => {
     expect(data.distanceM).toBeLessThan(120);
   });
 
+  it("keeps a simulated location in the audit log, and says nothing when there was none", async () => {
+    await checkin({ lat: 13.7437, lng: 100.494, accuracyM: 12, mocked: true });
+    expect(vi.mocked(audit).mock.calls.at(-1)?.[0].detail).toMatchObject({ lat: 13.7437, lng: 100.494, accuracyM: 12, withinGeofence: true, mocked: true });
+    await checkin({ lat: 13.7437, lng: 100.494, accuracyM: 12 });
+    expect(vi.mocked(audit).mock.calls.at(-1)?.[0].detail).not.toHaveProperty("mocked");
+  });
+
   it("records no distance without GPS, and marks an operator's entry as theirs", async () => {
     await checkin({ type: "START", recordedBy: { id: "u_ops", role: "OPERATOR" } });
     expect(prismaMock.checkin.create.mock.calls[0][0].data).toMatchObject({ type: "START", lat: null, lng: null, accuracyM: null, distanceM: null, withinGeofence: null, recordedById: "u_ops", recordedByRole: "OPERATOR" });
@@ -153,7 +160,7 @@ describe("recordNoShow", () => {
   it("scoped to a split departure, looks only within the guide's own group", async () => {
     prismaMock.booking.count.mockResolvedValue(2); // the operator has tagged bookings to guides
     await noShow({ tourId: "T-001", bookingNo: "GYG1" });
-    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null } } });
+    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null }, NOT: { assignedGuideId: "G-001" } } });
     const where = { date: "2026-09-11", slotIdx: 0, tourId: "T-001", status: LIVE, assignedGuideId: "G-001", OR: refs("GYG1") };
     expect(prismaMock.booking.findFirst.mock.calls[0][0].where).toEqual(where);
     expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual(where);
@@ -317,7 +324,7 @@ describe("submitTourReport", () => {
     prismaMock.booking.findMany.mockResolvedValue(BOOKINGS);
     await report({ tourId: "T-001", noShowCounts: COUNTS });
     const where = { date: "2026-09-11", slotIdx: 0, tourId: "T-001", status: LIVE, assignedGuideId: "G-001" };
-    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null } } });
+    expect(prismaMock.booking.count).toHaveBeenCalledWith({ where: { tourId: "T-001", date: "2026-09-11", slotIdx: 0, status: LIVE, assignedGuideId: { not: null }, NOT: { assignedGuideId: "G-001" } } });
     expect(prismaMock.booking.updateMany.mock.calls[0][0].where).toEqual(where);
   });
 
@@ -362,16 +369,15 @@ describe("submitTourReport", () => {
   });
 });
 
-describe("recordNoShow — owner rule: lowering a reported no-show is deliberate", () => {
+describe("recordNoShow — owner rule: lowering a reported no-show needs no reason", () => {
   beforeEach(() => {
     prismaMock.booking.findFirst.mockResolvedValue({ pax: 4, noShow: true, noShowPax: 3, externalRef: "GYG1", confirmationCode: null });
   });
 
-  it("an operator lowering or withdrawing a reported count without a reason changes nothing", async () => {
-    expect(await noShow({ operator: true, noShowPax: 1 }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: false, status: 400, error: "reason-required" });
-    expect(await noShow({ operator: true, noShowPax: 0, reason: " " }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: false, status: 400, error: "reason-required" });
-    expect(prismaMock.booking.updateMany).not.toHaveBeenCalled();
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+  it("an operator lowers or withdraws a reported count without a reason, and the audit keeps who, before and after", async () => {
+    expect(await noShow({ operator: true, noShowPax: 0, actorId: "op_1", actorRole: "OPERATOR", via: "guide-list" }, START + 3 * 24 * 60 * MIN)).toEqual({ ok: true, noShowPax: 0 });
+    expect(prismaMock.booking.updateMany).toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ actorId: "op_1", action: "booking.noshow_cleared", detail: expect.objectContaining({ previousNoShowPax: 3 }) }));
   });
 
   it("with a reason it is saved, and the audit keeps who, before, after and why", async () => {

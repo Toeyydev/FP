@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { seedUpsellProducts } from "../src/lib/upsell/catalog";
 
 const prisma = new PrismaClient();
 
@@ -32,6 +33,13 @@ async function main() {
     create: { email: adminEmail, displayName: "Folkpath Admin", role: "ADMIN", state: "ACTIVE", passwordHash: bcrypt.hashSync(adminPw, 10) },
     update: { role: "ADMIN", state: "ACTIVE" },
   });
+
+  // Tour Upsell products: created once, inactive, with a draft tax profile. A product that
+  // already exists is never touched, so an admin's edits survive the next deploy. Every
+  // upsell switch is off, so none of them sells anything (lib/upsell/flags).
+  const bangkokToday = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const upsell = await seedUpsellProducts(prisma, bangkokToday);
+  if (upsell.length) console.log(`Created upsell products (inactive): ${upsell.join(", ")}`);
 
   // No guide records are pre-seeded. Each guide self-registers (free-flow sign-up
   // → operator approval mints a new G-xxx) and fills in their own details. This

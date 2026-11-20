@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { bookingRef } from "@/lib/booking-ref";
+import { PAX_PER_GUIDE } from "@/lib/capacity";
 import { SLOT_TIMES } from "@/lib/slots";
 import { tourStartMs } from "@/lib/no-show-count";
 import { toSheetBooking, SHEET_BOOKING_STATUSES, type SheetBooking } from "@/lib/sheet-bookings";
@@ -138,9 +139,13 @@ export type Plan = {
  * the same plan. `releasable(guideId, row)` says whether a row may come off that guide's
  * sheet (sheet editable, row carries no attendance); without it nothing is released.
  */
-export function planDeparture(assigns: PlanAssign[], bookings: PlanBooking[], sheets: PlanSheet[], opts: { releasable?: (guideId: string, row: SheetBooking) => boolean } = {}): Plan {
+export function planDeparture(assigns: PlanAssign[], bookings: PlanBooking[], allSheets: PlanSheet[], opts: { releasable?: (guideId: string, row: SheetBooking) => boolean } = {}): Plan {
   const plan: Plan = { owner: new Map(), review: new Map(), frozen: new Map(), cancelHolder: new Map(), release: [] };
   const assignOf = new Map(assigns.map((a) => [a.guideId, a]));
+  // A sheet whose guide is no longer on this departure is a leftover (a guide who cancelled
+  // their own tour kept theirs), not a job: it holds no guest, and it never stops the guides
+  // who ARE on the tour from getting theirs. It used to freeze the whole departure (29 Oct 2026).
+  const sheets = allSheets.filter((s) => assignOf.has(s.guideId));
   const freeze = (g: string, why: string) => { if (!assignOf.has(g)) return; const l = plan.frozen.get(g) ?? []; l.push(why); plan.frozen.set(g, l); };
   const rowOn = (g: string, b: PlanBooking) => sheets.find((s) => s.guideId === g)?.rows.find((r) => refKeys(b).includes(rowKey(r)));
   const holdersOf = (b: PlanBooking) => { const k = refKeys(b); return sheets.filter((s) => s.rows.some((r) => k.includes(rowKey(r)))).map((s) => s.guideId); };
@@ -353,9 +358,30 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
   // everything read below is the state the writes land on. (A NEW assignment or sheet row
   // is not stopped by a row lock; the final validation catches those.)
   await tx.$queryRaw`SELECT id FROM "Assignment" WHERE "date" = ${dep.date} AND "slotIdx" = ${dep.slotIdx} ORDER BY id FOR UPDATE`;
-  const assigns = await tx.assignment.findMany({ where: dep, select: { id: true, guideId: true, tourId: true, pax: true }, orderBy: { id: "asc" } });
+  const assigns = await tx.assignment.findMany({ where: dep, select: { id: true, guideId: true, tourId: true, pax: true, takesNewBookings: true }, orderBy: { id: "asc" } });
   if (!assigns.length) return { result: { ...result, kind: "no-job" as const }, issues, notices };
   await tx.$queryRaw`SELECT id FROM "JobSheet" WHERE "date" = ${dep.date} AND "slotIdx" = ${dep.slotIdx} ORDER BY id FOR UPDATE`;
+
+  // A guide the operator named in the Split dialog to take new bookings (owner, 2026-11-07):
+  // a NEW booking (PENDING, untagged) on that guide's tour here is tagged to them first,
+  // so the ordinary rule below places it on their sheet. Only when exactly one guide on
+  // that tour was named, and only while their group stays within the seat cap; otherwise
+  // it waits for an operator as before.
+  for (const tourId of new Set(assigns.filter((a) => a.takesNewBookings).map((a) => a.tourId))) {
+    const named = assigns.filter((a) => a.tourId === tourId && a.takesNewBookings);
+    if (named.length !== 1) continue;
+    const g = named[0].guideId;
+    const fresh = await tx.booking.findMany({ where: { ...dep, tourId, status: "PENDING", assignedGuideId: null }, select: { id: true, pax: true, externalRef: true, confirmationCode: true }, orderBy: { createdAt: "asc" } });
+    if (!fresh.length) continue;
+    let held = (await tx.booking.aggregate({ where: { ...dep, tourId, assignedGuideId: g, status: { in: [...LIVE] } }, _sum: { pax: true } }))._sum.pax ?? 0;
+    for (const b of fresh) {
+      if (held + (b.pax ?? 0) > PAX_PER_GUIDE) break;
+      held += b.pax ?? 0;
+      await tx.booking.update({ where: { id: b.id }, data: { assignedGuideId: g } });
+      await tx.auditLog.create({ data: { actorId: null, actorRole: "SYSTEM", action: "booking.tagged_new_bookings_guide", entityType: "Booking", entityId: b.id,
+        detail: { date: dep.date, slotIdx: dep.slotIdx, guideId: g, bookingRef: bookingRef(b.externalRef, b.confirmationCode) || null, pax: b.pax, why: "the departure's new bookings go to this guide (Split dialog)" } } });
+    }
+  }
 
   const bookings: LoadedBooking[] = await tx.booking.findMany({
     where: { ...dep, status: { in: [...LIVE, "CANCELLED"] } },

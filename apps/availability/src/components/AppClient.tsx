@@ -1,5 +1,7 @@
 "use client";
 
+import { FIXED_ITEMS } from "@/lib/guide-fixed-expenses";
+import { DEFAULT_EXPENSES } from "@/lib/jobsheet";
 import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -11,6 +13,7 @@ import { OperatorNav } from "@/components/OperatorNav";
 import AvailabilityLegend from "@/components/AvailabilityLegend";
 import { availabilitySaveError, type AvailabilitySaveError } from "@/lib/availability-errors";
 import { SLOTS } from "@/lib/slots";
+import { tourReminderHref } from "@/lib/tour-reminder-text";
 import { guidesNeeded, SPLIT_AT } from "@/lib/capacity";
 import { gcalUrl } from "@/lib/gcal";
 import {
@@ -482,13 +485,13 @@ export default function AppClient({
     setModal({ kind: "newoffer" });
   }
   // A guide is "off" for a whole day — and so must never appear in the assign/offer
-  // flow that day — if they are inactive, offer-blocked, on approved leave, or have
-  // blocked ANY of their own slots that day. Mirrors availableGuides() on the server.
+  // flow that day — if they are inactive, offer-blocked or on approved leave. Slots
+  // they blocked are busy one by one (owner, 2026-10-28): blocking the morning leaves
+  // the afternoon free. Mirrors availableGuides() on the server.
   function offToday(g: { guideId: string; state?: string; offerBlocked?: boolean }, d: Date): boolean {
     if (g.state && g.state !== "ACTIVE") return true;
     if (g.offerBlocked) return true;
-    if (onLeave(g.guideId, ymd(d))) return true;
-    return (getAvail(g.guideId, d) ?? EMPTY).some(Boolean);
+    return onLeave(g.guideId, ymd(d));
   }
   // How many guides are free for a date+slot (client-side preview before sending).
   // Free = not off today (see offToday) and not already assigned that slot.
@@ -498,6 +501,7 @@ export default function AppClient({
     if (isBlocked(d)) return [];
     return (ref?.guides ?? []).filter((g) => {
       if (offToday(g, d)) return false;
+      if ((getAvail(g.guideId, d) ?? EMPTY)[slotIdx]) return false;
       const asg = getAssign(g.guideId, d);
       return !asg[slotIdx];
     });
@@ -555,8 +559,9 @@ export default function AppClient({
   // Where a notification leads when tapped, so the operator can act on it from the
   // alert: an over-capacity / late booking → the Bookings inbox (to split/dispatch),
   // an offer update → Dispatch. The date in the message focuses the inbox.
-  function notifHref(kind: string | undefined, message: string): string | null {
-    if (role === "guide") return null;
+  function notifHref(kind: string | undefined, message: string, createdAt?: string): string | null {
+    // A guide's one-hour reminder opens that job (lib/tour-reminder-text).
+    if (role === "guide") return kind === "tour-reminder" && guideId && createdAt ? tourReminderHref(guideId, message, createdAt) : null;
     const date = (message.match(/\d{4}-\d{2}-\d{2}/) || [])[0];
     if (kind === "late-booking") return `/bookings${date ? `?focus=${date}` : ""}`;
     if (kind === "offer") return "/jobs";
@@ -573,7 +578,7 @@ export default function AppClient({
     const text = lines.filter((l) => !l.includes("฿"));
     const head = text[0] ?? "";
     const rows = text.slice(1);
-    const href = notifHref(i.kind, i.message);
+    const href = notifHref(i.kind, i.message, i.createdAt);
     const Card = (href ? "a" : "div") as "a";
     return (
       <Card key={i.id} {...(href ? { href } : {})} className={`notif-card${href ? " notif-link" : ""}`} style={href ? { cursor: "pointer", textDecoration: "none", color: "inherit", display: "block" } : undefined}>
@@ -591,7 +596,7 @@ export default function AppClient({
           </div>
         )}
         <div className="nc-time">{new Date(i.createdAt).toLocaleString()}</div>
-        {href && <div style={{ marginTop: 6, fontSize: 12.5, fontWeight: 700, color: "var(--primary)" }}>Tap to open & resolve ›</div>}
+        {href && <div style={{ marginTop: 6, fontSize: 12.5, fontWeight: 700, color: "var(--primary)" }}>{i.kind === "tour-reminder" ? "Open the job ›" : "Tap to open & resolve ›"}</div>}
       </Card>
     );
   }
@@ -700,9 +705,10 @@ export default function AppClient({
 
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
     setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({});
-    // One blank line to start, with the pax count prefilled — most lines are a
-    // per-head ticket, and retyping the group size on every row is the tedious part.
-    setRExp([{ description: "", price: "", pax: String(s.pax ?? "") }]); setRNoExp(false); setRExpNote(""); setRBusy(false);
+    // The three fixed items (owner 2026-11-15, lib/guide-fixed-expenses): Water / Bus / Ferry
+    // (Inc. Guide), quantity prefilled with the group plus the guide. 0 / empty = not used.
+    setRExp(FIXED_ITEMS.map((f) => ({ description: f.description, price: String(DEFAULT_EXPENSES.find((d) => d.description === f.description)?.price ?? ""), pax: s.pax != null ? String(s.pax + 1) : "" })));
+    setRNoExp(false); setRExpNote(""); setRBusy(false);
     setReportFor(s);
     fetch(`/api/report?date=${s.date}&slotIdx=${s.slotIdx}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
@@ -990,8 +996,8 @@ export default function AppClient({
       for (let i = 0; i < SLOTS.length; i++) { if (asg[i]) continue; if (avd[i]) busySlots++; else free++; }
       const assignedN = Object.keys(asg).length;
       const dayOff = busySlots === SLOTS.length && assignedN === 0; // whole day blocked → day off
-      // "Available" now means genuinely offerable: a guide who blocked any slot,
-      // is on leave, or is inactive/blocked is off for the day, not available.
+      // "Available" means genuinely offerable: at least one free slot, and not on leave
+      // or inactive/blocked. Blocking some slots leaves the others free.
       if (!blocked && !offToday(g, d) && free > 0) availGuides++;
       if (assignedN > 0) assignGuides++;
       if (busySlots > 0 && !dayOff) busyGuides++;
@@ -1083,7 +1089,7 @@ export default function AppClient({
                         if (a) { const c = conf.has(s.idx); return <td key={s.idx} className={`cell assigned${c ? " conflict" : ""}${nm}`} title={c ? t("conflictWarn") : (tourById[a.tour]?.name || a.tour)} onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }}><span className="ttag">{c ? "⚠ " : ""}{a.tour}</span></td>; }
                         if (leave) return <td key={s.idx} className={`cell leave${nm}`} title={t("onLeave")} />;
                         if (avd[s.idx]) return <td key={s.idx} className={`cell busy${nm}`} title={t("busy")} />;
-                        // Guide is off for the whole day (blocked part of it, on leave, blocked or inactive):
+                        // Guide is off for the whole day (on leave, offer-blocked or inactive):
                         // their remaining free slots must not be assignable either.
                         if (off) return <td key={s.idx} className={`cell off${nm}`} title={t("offToday")} />;
                         return <td key={s.idx} className={`cell on${nm}`} title="Available — click to assign" onClick={() => { if (!blocked) openAssign(g.guideId, s.idx, ymd(d)); }} />;
@@ -1539,15 +1545,15 @@ export default function AppClient({
                     <div style={{ display: "grid", gap: 6, margin: "10px 0 0", maxHeight: 240, overflowY: "auto" }}>
                       {rExp.map((e, i) => (
                         <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 76px 58px 26px", gap: 6, alignItems: "center" }}>
-                          <input value={e.description} placeholder={t("expItemHint")} aria-label={t("expItem")} onChange={(ev) => setExp(i, { description: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px" }} />
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{e.description.replace(" (Inc. Guide)", "")} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. Guide)</span></span>
                           <input type="number" inputMode="decimal" min={0} value={e.price} placeholder={t("expPrice")} aria-label={t("expPrice")} onChange={(ev) => setExp(i, { price: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
                           <input type="number" inputMode="numeric" min={0} value={e.pax} placeholder={t("expPax")} aria-label={t("expPax")} onChange={(ev) => setExp(i, { pax: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
-                          <button type="button" aria-label={t("expRemove")} title={t("expRemove")} onClick={() => setRExp((rows) => (rows.length > 1 ? rows.filter((_, j) => j !== i) : [{ description: "", price: "", pax: "" }]))} style={{ border: "none", background: "none", color: "var(--ink-soft)", cursor: "pointer", fontSize: 15, padding: 0 }}>✕</button>
+                          <span />
                         </div>
                       ))}
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
-                      <button type="button" className="btn sm" onClick={() => setRExp((rows) => [...rows, { description: "", price: "", pax: String(reportFor.pax ?? "") }])}>{t("expAdd")}</button>
+                      <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>🔒 {t("expFixed")}</span>
                       <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "var(--primary)" }}>{t("expTotal")} ฿{Math.round(expenseTotal).toLocaleString("en-US")}</span>
                     </div>
                     <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("expNoteLabel")}</span>

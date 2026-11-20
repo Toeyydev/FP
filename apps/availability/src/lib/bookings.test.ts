@@ -1,6 +1,6 @@
 import { isDirectWebsiteBooking } from "@/lib/bookings";
 import { describe, it, expect } from "vitest";
-import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName, slotAwareTourId } from "@/lib/bookings";
+import { productKey, normTime, timeToSlot, parseBokun, detectChannel, isCancellation, isChannelProductName, slotAwareTourId, channelOnlyEveningTourId, sameTour } from "@/lib/bookings";
 import { isEveningSlot, SLOT_TIMES } from "@/lib/slots";
 
 describe("channel-only bookings — don't default evening tours to Grand Palace", () => {
@@ -22,6 +22,61 @@ describe("channel-only bookings — don't default evening tours to Grand Palace"
   });
 });
 
+describe("slotAwareTourId — a food tour is filed under the time it departs", () => {
+  const at = (t: string) => SLOT_TIMES.indexOf(t);
+  it("files a food booking under the food tour of its own time, whichever food tour the name maps to", () => {
+    for (const mapped of ["T-007", "T-008", "T-009"]) {
+      expect(slotAwareTourId(mapped, at("16:30"))).toBe("T-007");
+      expect(slotAwareTourId(mapped, at("17:30"))).toBe("T-008");
+      expect(slotAwareTourId(mapped, at("18:30"))).toBe("T-009");
+    }
+  });
+  it("leaves a food tour alone at a time no food tour runs, and never makes a day tour a food tour", () => {
+    expect(slotAwareTourId("T-009", at("15:00"))).toBe("T-009");
+    expect(slotAwareTourId("T-009", null)).toBe("T-009");
+    expect(slotAwareTourId("T-001", at("18:30"))).toBe("T-001");
+    expect(slotAwareTourId("T-003", at("16:30"))).toBe("T-003");
+  });
+});
+
+describe("slotAwareTourId — the combined tour is filed under the time it departs", () => {
+  const at = (t: string) => SLOT_TIMES.indexOf(t);
+  it("08:30 is T-001 and 13:30 is T-002, whichever of the two the name maps to", () => {
+    for (const mapped of ["T-001", "T-002"]) {
+      expect(slotAwareTourId(mapped, at("08:30"))).toBe("T-001");
+      expect(slotAwareTourId(mapped, at("13:30"))).toBe("T-002");
+    }
+  });
+  it("leaves it alone at a time neither runs (14:00 is still the palace-only tour)", () => {
+    expect(slotAwareTourId("T-001", at("10:00"))).toBe("T-001");
+    expect(slotAwareTourId("T-002", at("15:00"))).toBe("T-002");
+    expect(slotAwareTourId("T-001", at("14:00"))).toBe("T-005");
+  });
+});
+
+describe("channelOnlyEveningTourId — the food tour times name the tour", () => {
+  it("16:30, 17:30 and 18:30 are the food tour of that time; other times name no tour", () => {
+    expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("16:30"))).toBe("T-007");
+    expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("17:30"))).toBe("T-008");
+    expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf("18:30"))).toBe("T-009");
+    for (const t of ["08:30", "13:30", "15:00"]) expect(channelOnlyEveningTourId(SLOT_TIMES.indexOf(t))).toBeNull();
+    expect(channelOnlyEveningTourId(null)).toBeNull();
+  });
+});
+
+describe("sameTour — one tour under the id of each departure time", () => {
+  it("the combined tour's ids are one tour, and the food tour's ids are one tour", () => {
+    expect(sameTour("T-001", "T-002")).toBe(true);
+    expect(sameTour("T-007", "T-009")).toBe(true);
+    expect(sameTour("T-002", "T-002")).toBe(true);
+  });
+  it("different tours are not", () => {
+    expect(sameTour("T-001", "T-005")).toBe(false);
+    expect(sameTour("T-002", "T-009")).toBe(false);
+    expect(sameTour(null, "T-001")).toBe(false);
+  });
+});
+
 describe("slotAwareTourId — 14:00 is the palace-only tour", () => {
   const slot1400 = SLOT_TIMES.indexOf("14:00");
   it("remaps the combined day tour (T-001/T-002) to palace-only T-005 at 14:00", () => {
@@ -32,6 +87,11 @@ describe("slotAwareTourId — 14:00 is the palace-only tour", () => {
     expect(slotAwareTourId("T-001", 0)).toBe("T-001");  // 08:30
     expect(slotAwareTourId("T-002", 2)).toBe("T-002");  // 13:30
     expect(slotAwareTourId("T-001", 4)).toBe("T-001");  // 15:00
+  });
+  it("palace-only runs only at 14:00 — at 13:30 it is the combined T-002, at 08:30 T-001 (owner 2026-10-25)", () => {
+    expect(slotAwareTourId("T-005", SLOT_TIMES.indexOf("13:30"))).toBe("T-002");
+    expect(slotAwareTourId("T-005", SLOT_TIMES.indexOf("08:30"))).toBe("T-001");
+    expect(slotAwareTourId("T-005", SLOT_TIMES.indexOf("10:00"))).toBe("T-005"); // nobody said which tour — left alone
   });
   it("never touches a tour that isn't the combined day tour", () => {
     expect(slotAwareTourId("T-005", slot1400)).toBe("T-005");  // already palace-only

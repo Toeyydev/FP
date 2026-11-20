@@ -11,6 +11,8 @@ import { resolveDurationMin } from "@/lib/tour-duration";
 import { ensureJobRef } from "@/lib/jobref";
 import { saveJobSheetToDrive } from "@/lib/jobsheet-drive";
 import { attributableBookings, sheetRefs, toSheetBooking } from "@/lib/sheet-bookings";
+import { normalizeGuideReport, type ReportRow } from "@/lib/guide-fixed-expenses";
+import { isFoodTourId } from "@/lib/bookings";
 
 /**
  * What a guide says they spent on a tour.
@@ -190,7 +192,17 @@ export async function submitGuideExpenses(o: {
   const rates = await jobRates(prisma, { guideId, date, slotIdx });
   // A review reward is the operator's to record — compensation, not something the guide
   // paid on tour. A report never carries one (the form used to be seeded with it).
-  const reported = o.expenses.filter((e) => !isReviewExpense(e));
+  let reported = o.expenses.filter((e) => !isReviewExpense(e));
+  // A GUIDE reports only Water / Bus / Ferry (Inc. Guide), or a food tour's food total —
+  // the same rule on the web form, the tour-completion report and FolkOPS Mobile, because
+  // every one of them files through here (owner 2026-11-15, lib/guide-fixed-expenses).
+  // Anything else is refused, never stored. An operator filing on a guide's behalf is not limited.
+  if (o.actorRole === "GUIDE") {
+    const tourId = existing?.tourId || (await prisma.assignment.findUnique({ where: key, select: { tourId: true } }))?.tourId || null;
+    const fixed = normalizeGuideReport(reported as unknown as Expense[], { foodTour: isFoodTourId(tourId), previous: existing?.guideExpenses as ReportRow[] | null });
+    if (!fixed.ok) throw Object.assign(new Error(fixed.reasons.join("\n")), { refused: true, status: 400, reasons: fixed.reasons });
+    reported = fixed.rows as unknown as GuideExpenseInput[];
+  }
   const payers = classifyPayers(reported, { official: existing?.expenses as Expense[] | undefined, previous: existing?.guideExpenses as Expense[] | undefined, defaultApplies: paidRule.apply, rates });
   const expenses = payers.rows;
 
@@ -199,7 +211,7 @@ export async function submitGuideExpenses(o: {
   // number only appears once the guide has reported. Operators can still override.
   const slotBookings = await prisma.booking.findMany({
     where: { date, slotIdx },
-    select: { externalRef: true, confirmationCode: true, noShow: true, noShowPax: true, pax: true, customerName: true, assignedGuideId: true, status: true, tourId: true },
+    select: { externalRef: true, confirmationCode: true, noShow: true, noShowPax: true, pax: true, customerName: true, assignedGuideId: true, status: true, tourId: true, rateTitle: true },
     orderBy: { createdAt: "asc" },
   });
   const noShowByRef = new Map<string, number>(); // booking ref -> absent pax

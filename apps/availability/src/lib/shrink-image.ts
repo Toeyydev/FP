@@ -3,7 +3,7 @@
 // ~1600px JPEG before sending cuts upload time and Drive/DB storage many-fold.
 // Non-images (PDFs) pass through untouched; if anything fails we return the
 // original so an upload never breaks because of compression.
-export async function shrinkImage(file: File, max = 1600, quality = 0.82): Promise<Blob> {
+export async function shrinkImage(file: File, max = 1600, quality = 0.82, alwaysJpeg = false): Promise<Blob> {
   if (!file.type.startsWith("image/")) return file; // PDFs etc. upload as-is
   const bmp = await createImageBitmap(file).catch(() => null);
   if (!bmp) return file;
@@ -13,6 +13,7 @@ export async function shrinkImage(file: File, max = 1600, quality = 0.82): Promi
   const ctx = c.getContext("2d"); if (!ctx) return file;
   ctx.drawImage(bmp, 0, 0, w, h);
   const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", quality));
+  if (blob && alwaysJpeg && file.type !== "image/jpeg") return blob; // a PNG/WebP becomes a JPEG even if larger
   return blob && blob.size < file.size ? blob : file;
 }
 

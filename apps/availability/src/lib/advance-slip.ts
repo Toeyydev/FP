@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 
 /**
@@ -9,7 +10,6 @@ import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/li
  * evidence nobody finds.
  */
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const OK_TYPES = /^(image\/(jpeg|jpg|png|webp)|application\/pdf)$/i;
 export const MAX_SLIP_BYTES = 10 * 1024 * 1024;
 
@@ -21,17 +21,50 @@ export type SlipFile = { size?: number; type?: string; name?: string; arrayBuffe
 export type SlipUpload = { url: string; fileId: string };
 export type SlipFailure = { error: string; status: number };
 
-export async function uploadSlip(userId: string | undefined, file: SlipFile, name: string, date: string): Promise<SlipUpload | SlipFailure> {
+/**
+ * `job`, when the slip belongs to one job: filed in that job's own folder, beside its
+ * receipts and certificate (owner, 2026-11-07) — Folkpaths Job Sheets / <tour month> /
+ * <job ref>. Without one (a refund across several jobs) it goes to the month's Advances.
+ */
+export async function uploadSlip(userId: string | undefined, file: SlipFile, name: string, date: string, job?: { ref: string | null; date: string } | null): Promise<SlipUpload | SlipFailure> {
+  return uploadJobFile({ userId, file, date, folder: "Advances", name: (ext) => `${name}.${ext}`, folderPath: jobFolderPath(job) });
+}
+
+/** A job's own Drive folder, or null when there is no job ref to name it by. */
+export const jobFolderPath = (job?: { ref: string | null; date: string } | null): string[] | null =>
+  job?.ref ? ["Folkpaths Job Sheets", ...driveMonth(job.date), job.ref] : null;
+
+/** Where under a month's job-sheet folder a piece of evidence is filed. */
+export type JobFileFolder = "Advances" | "Receipts";
+
+/**
+ * One piece of evidence for a job, filed in the company Drive under
+ * Folkpaths Job Sheets / <month> / <folder>. The same checks and the same place
+ * whoever sends it — a slip from the advance screen, a receipt from a guide's
+ * report — so the accountant looks in one folder, not one per route.
+ *
+ * `name` is given the file's extension, since only the upload knows what arrived.
+ */
+export async function uploadJobFile(o: {
+  userId: string | undefined;
+  file: SlipFile;
+  date: string;
+  folder: JobFileFolder;
+  name: (ext: string) => string;
+  /** Overrides <month> / <folder> — a job's own folder (jobFolderPath). */
+  folderPath?: string[] | null;
+}): Promise<SlipUpload | SlipFailure> {
+  const { file, date } = o;
   const mime = file.type || "image/jpeg";
   if (!OK_TYPES.test(mime)) return { error: "bad-type", status: 400 };
   if ((file.size ?? 0) > MAX_SLIP_BYTES) return { error: "too-large", status: 400 };
   if (!googleDriveEnabled) return { error: "not-configured", status: 400 };
-  const refreshToken = await folkpathsDriveToken(userId);
+  const refreshToken = await folkpathsDriveToken(o.userId);
   if (!refreshToken) return { error: "not-connected", status: 400 };
   const base64 = Buffer.from(await file.arrayBuffer!()).toString("base64");
-  const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+  const monthFolder = driveMonth(date);
   try {
-    const up = await saveBufferToDrive({ refreshToken, name: `${name}.${extOf(mime)}`, base64, mimeType: mime, folderPath: ["Folkpaths Job Sheets", monthFolder, "Advances"] });
+    const up = await saveBufferToDrive({ refreshToken, name: o.name(extOf(mime)), base64, mimeType: mime, folderPath: o.folderPath ?? ["Folkpaths Job Sheets", ...monthFolder, o.folder] });
     return { url: up.link, fileId: up.id };
   } catch (e) {
     return { error: `drive-failed: ${(e as Error).message.slice(0, 160)}`, status: 502 };

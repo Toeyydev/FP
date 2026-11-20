@@ -3,8 +3,9 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
-import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
+import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, feeIsAdjusted, feeIsLegacyHalf, shownStandardFee, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { guideAdvanceCard } from "@/lib/advances/guide-card";
 import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
@@ -56,6 +57,10 @@ export async function GET(req: NextRequest) {
   // exists. Cash movements — never added into the expense or payable totals.
   // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
   const advView = guideId ? await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (existing?.expenses as unknown as Expense[]) ?? [] }) : null;
+  // A guide's copy carries only their Company ADV card (lib/advances/guide-card) — no ADV
+  // number, bank reference, dates or settlement ledger. The full section is finance roles only.
+  const seesLedger = canViewFinance(session.user.role);
+  const guideCard = seesLedger ? null : guideAdvanceCard(advView);
   let bookings = (sheet.bookings as Booking[]) ?? [];
   // No saved sheet yet → pull the slot's live bookings so the prep PDF still
   // lists every guest (name + OTA ref + pax) for the operator to work from.
@@ -247,6 +252,7 @@ export async function GET(req: NextRequest) {
       <thead><tr><th>Description<small>รายการ</small></th><th class="n">Rate<small>อัตราค่าจ้าง</small></th><th class="c"></th><th class="n">Qty<small>จำนวนครั้ง</small></th><th class="n">WHT %<small>อัตราภาษีหัก ณ ที่จ่าย</small></th><th class="n">WHT<small>ภาษีหัก ณ ที่จ่าย</small></th><th class="n">Net Guide Fee<small>ค่าจ้างมัคคุเทศก์สุทธิ</small></th></tr></thead>
       <tbody>
         <tr><td>Guide Fee <small style="display:block;font-size:8px;color:#8a8f8b">ค่าจ้างมัคคุเทศก์</small></td><td class="n">${guideFee.price != null ? thb(guideFee.price) : ""}</td><td class="c">×</td><td class="n">${guideFee.time ?? ""}</td><td class="n">${guideFee.whtPct ?? 0}%</td><td class="n">${thb(t.wht)}</td><td class="n">${thb(t.netGuideFee)}</td></tr>
+        ${feeIsAdjusted(guideFee) || feeIsLegacyHalf(guideFee) ? `<tr><td colspan="7">Standard Guide Fee <small>ค่าจ้างมาตรฐาน</small> ${thb(shownStandardFee(guideFee))} · Guide Fee Payable <small>ค่าจ้างที่จ่ายจริง</small> <b>${thb(t.gross)}</b>${guideFee.adjustReason ? ` · Reason <small>เหตุผล</small>: ${esc([guideFee.adjustReason, guideFee.adjustNote].filter(Boolean).join(" — "))}` : ""}</td></tr>` : ""}
       </tbody>
     </table>
     ${(() => {
@@ -264,7 +270,12 @@ export async function GET(req: NextRequest) {
     </div>
 
 
-    ${advView && (advView.advances.length || advView.returns.length) ? (() => {
+    ${guideCard ? `<div class="adv advance-settlement js-guide-adv"><h3>Company ADV <small>เงินทดรองจ่ายจากบริษัท</small></h3>
+      <table><tbody>
+        <tr><td>✓ Transferred <small>โอนแล้ว</small></td><td class="n">${thb(guideCard.amount)}</td></tr>
+        ${guideCard.toReturn > 0 ? `<tr><td>To return <small>ต้องคืนบริษัท</small></td><td class="n">${thb(guideCard.toReturn)}</td></tr>` : ""}
+      </tbody></table></div>` : ""}
+    ${seesLedger && advView && (advView.advances.length || advView.returns.length) ? (() => {
       const v = advView;
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
       const waiting = v.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);

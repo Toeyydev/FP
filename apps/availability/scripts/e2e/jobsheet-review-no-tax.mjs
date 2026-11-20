@@ -143,12 +143,13 @@ try {
   await gp.goto(`${BASE}/job-sheet?guideId=${G}&date=${DATE}&slotIdx=0`, { waitUntil: "networkidle0" });
   await gp.waitForSelector(".guide-sum", { timeout: 20000 });
   const listed = await gp.$$eval(".guide-sum .gs-exp li", (xs) => xs.map((x) => x.innerText.replace(/\s+/g, " ")));
-  const reportRows = await gp.$$eval(".guide-sum table input:not([type=number])", (xs) => xs.map((x) => x.value));
+  // The report form is the three fixed items (owner 2026-11-15) — never a review reward.
+  const reportRows = await gp.$$eval(".guide-sum .js-fixed-item", (xs) => xs.map((x) => `${x.getAttribute("data-item")}:${x.innerText.split("\n")[0]}`));
   const gsum = await gp.$eval(".guide-sum", (x) => x.innerText);
   check("guide: the expense list has no review reward, and its total is the tour expenses only (฿40)",
     listed.length === 2 && /Water/.test(listed[0]) && !listed.some((l) => /review/i.test(l)) && /Total expenses ฿40\.00/.test(listed[1]), JSON.stringify(listed));
   check("guide: the review reward is its own payout line, in full", /Review reward · no tax[\s\S]*฿200\.00/.test(gsum), (gsum.match(/Review[^\n]*\n?[^\n]*/i) ?? [""])[0]);
-  check("guide: the expense report form is not seeded with the review reward", reportRows.length > 0 && !reportRows.some((v) => /review|รีวิว/i.test(v)), JSON.stringify(reportRows));
+  check("guide: the expense report form is the three fixed items, never the review reward", JSON.stringify(reportRows.map((v) => v.split(":")[0])) === JSON.stringify(["WATER", "BUS", "FERRY"]) && !reportRows.some((v) => /review|รีวิว/i.test(v)), JSON.stringify(reportRows));
   if (SHOTS) await gp.screenshot({ path: join(SHOTS, "jobsheet-review-guide.png"), fullPage: true });
   await gp.close();
   check("no page errors", errors.length === 0, errors.join(" | "));

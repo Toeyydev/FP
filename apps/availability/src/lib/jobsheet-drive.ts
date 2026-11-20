@@ -1,3 +1,4 @@
+import { driveMonth } from "@/lib/drive-month";
 import { prisma } from "@/lib/db";
 import { SLOT_TIMES } from "@/lib/slots";
 import { googleDriveEnabled, folkpathsDriveToken, saveHtmlToDrive } from "@/lib/google-drive";
@@ -9,7 +10,6 @@ import { approvalHtml, approvalView, approverNameOf } from "@/lib/jobsheet-appro
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 // Render the saved job sheet and store it in the shared Folkpaths Drive under
 // "Folkpaths Job Sheets / YYYY-MM". Uses the company Drive account (no operator
@@ -39,7 +39,7 @@ export async function saveJobSheetToDrive(guideId: string, date: string, slotIdx
     const ref = sheet.ref || `FOLK-BKK-${date.replace(/-/g, "")}`;
     const guideName = u?.fullName || u?.displayName || guideId;
     const time = SLOT_TIMES[slotIdx] ?? tour?.time ?? "";
-    const monthFolder = `${date.slice(0, 7)} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ""}`.trim();
+    const monthFolder = driveMonth(date);
     const updated = sheet.updatedAt ? new Date(sheet.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }) : "";
 
     const bookingRows = bookings.map((b) => {
@@ -121,7 +121,7 @@ ${advanceHtml}
       ${approvalBlock}
     </body></html>`;
 
-    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", monthFolder] });
+    const { link } = await saveHtmlToDrive({ refreshToken, name: jobSheetDriveName({ ref, guideName, date, guideId, slotIdx }), html, folderPath: ["Folkpaths Job Sheets", ...monthFolder] });
     return link;
   } catch {
     return null;
