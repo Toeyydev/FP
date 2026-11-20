@@ -286,6 +286,14 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/split-new-bookings
 
+      # Jobs → Upcoming assigned jobs: 20 days ahead listed and found by name, offers not, two guides' sheets.
+      - name: Upcoming assigned jobs in a real browser
+        run: node scripts/e2e/upcoming-assigned.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upcoming-assigned
+
       # Today & tomorrow on an operator's phone: guide, check-in, arrivals, unstaffed marked.
       - name: Today and tomorrow page in a real browser
         run: node scripts/e2e/tours-today.mjs
