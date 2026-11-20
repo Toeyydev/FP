@@ -120,6 +120,13 @@ try {
   check("four cards in order: who came, what the guide spent, approve, pay & PEAK", JSON.stringify(c.map((x) => x.step)) === JSON.stringify(["guests", "expenses", "approve", "pay"]), JSON.stringify(c.map((x) => x.step)));
   check("guests not counted yet → Who came is the one highlighted", !c[0].done && c[0].now && /2 bookings · 3 booked · not counted yet/.test(c[0].text), c[0].text);
   check("What the guide spent says the guide has not reported", /1 row · ฿40\.00 · guide has not reported/.test(c[1].text), `${c[1].text} || ${c[1].tip}`);
+  // The guide fee is on screen — rate, WHT and the fee after WHT (owner 2026-10-18).
+  const fee = await page.evaluate(() => {
+    const vis = (el) => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+    const table = document.querySelector(".js-pay-table");
+    return { input: vis(document.querySelector('input[title="Agreed rate"]')), table: vis(table), text: table ? table.innerText.replace(/\s+/g, " ") : "" };
+  });
+  check("the guide fee table is on screen: rate, WHT and Guide fee, net ฿970", fee.input && fee.table && /WHT on fee −฿30\.00/.test(fee.text) && /Guide fee, net ฿970\.00/.test(fee.text), fee.text.slice(0, 160));
   check("Approve names what the guide will be paid", /Pay the guide ฿1,010\.00 · fee ฿970\.00 \+ reimbursement ฿40\.00/.test(c[2].text), c[2].text);
 
   // Guests opens the guests part of the sheet; Expenses the expenses part.
