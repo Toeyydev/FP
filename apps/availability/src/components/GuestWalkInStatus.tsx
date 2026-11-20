@@ -9,7 +9,7 @@ import { Brand, G, baht, box, dateLabel, page, secondary } from "./GuestWalkIn";
 
 type Status = {
   reference: string; guests: number; totalSatang: number; unitPriceSatang: number; tourName: string; date: string; time: string | null;
-  state: "WAITING" | "PAID" | "ENDED"; endedBecause: string | null; validUntil: string;
+  state: "WAITING" | "PAID" | "REFUNDED" | "CANCELLED" | "ENDED"; endedBecause: string | null; validUntil: string;
   sale: { saleNo: string; jobRef: string | null; receipt: { state: "SYNCED" | "QUEUED" | "WAITING" | "CHECKING" | "NONE"; peakCode: string | null } } | null;
 };
 const RECEIPT: Record<string, string> = {
@@ -56,11 +56,11 @@ export default function GuestWalkInStatus() {
 
   const rows = (
     <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "max-content minmax(0,1fr)", gap: "8px 16px" }}>
-      <dt style={{ color: G.soft }}>{s.state === "PAID" ? "Sale Ref" : "Registration"}</dt><dd className="js-guest-ref" style={{ margin: 0, textAlign: "right", ...mono, fontWeight: 700 }}>{s.sale?.saleNo ?? s.reference}</dd>
+      <dt style={{ color: G.soft }}>{s.sale ? "Sale Ref" : "Registration"}</dt><dd className="js-guest-ref" style={{ margin: 0, textAlign: "right", ...mono, fontWeight: 700 }}>{s.sale?.saleNo ?? s.reference}</dd>
       {s.sale?.jobRef && <><dt style={{ color: G.soft }}>Job Ref</dt><dd style={{ margin: 0, textAlign: "right", ...mono }}>{s.sale.jobRef}</dd></>}
       <dt style={{ color: G.soft }}>Tour</dt><dd style={{ margin: 0, textAlign: "right" }}>{s.tourName} · {dateLabel(s.date)}{s.time ? ` · ${s.time}` : ""}</dd>
       <dt style={{ color: G.soft }}>Guests</dt><dd style={{ margin: 0, textAlign: "right" }}>{s.guests} × {baht(s.unitPriceSatang)}</dd>
-      <dt style={{ color: G.soft }}>{s.state === "PAID" ? "Paid in cash" : "To pay your guide in cash"}</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 800, fontSize: 18 }}>{baht(s.totalSatang)}</dd>
+      <dt style={{ color: G.soft }}>{s.state === "PAID" ? "Paid in cash" : s.state === "REFUNDED" ? "Paid, then refunded" : s.state === "CANCELLED" ? "Not charged" : "To pay your guide in cash"}</dt><dd style={{ margin: 0, textAlign: "right", fontWeight: 800, fontSize: 18 }}>{baht(s.totalSatang)}</dd>
     </dl>
   );
   return (
@@ -69,6 +69,8 @@ export default function GuestWalkInStatus() {
       {s.state === "WAITING" && <div role="status" style={box(G.warnBg, G.warnLine, G.warnInk)}><b>Waiting for your guide — not paid, no seat yet.</b><br />Show this screen to your guide and pay {baht(s.totalSatang)} in cash. Valid until {time(s.validUntil)}.<br /><small>รอไกด์ยืนยันการรับเงินสด ยังไม่ได้ชำระและยังไม่มีที่นั่ง</small></div>}
       {s.state === "PAID" && <div role="status" style={box(G.okBg, G.okLine, G.okInk)}><b>Paid · you’re on the tour</b><br /><small>ชำระแล้ว · ร่วมทัวร์ได้</small></div>}
       {s.state === "ENDED" && <div role="status" style={box(G.badBg, G.badLine, G.badInk)}><b>This registration has ended — not paid.</b><br />{s.endedBecause ?? "Ask your guide."}</div>}
+      {s.state === "REFUNDED" && <div role="status" style={box(G.warnBg, G.warnLine, G.warnInk)}><b>Refunded — this booking is cancelled.</b><br />Folkpaths refunded your payment; you no longer have a seat on this tour.<br /><small>คืนเงินแล้ว · การจองนี้ถูกยกเลิก</small></div>}
+      {s.state === "CANCELLED" && <div role="status" style={box(G.badBg, G.badLine, G.badInk)}><b>Cancelled by Folkpaths — no payment is held for it.</b><br />This sale was recorded in error. You have no seat from it; ask your guide if that is wrong.<br /><small>ยกเลิกแล้ว · ไม่มีการเก็บเงินสำหรับรายการนี้</small></div>}
       {rows}
       {s.state === "PAID" && s.sale && <p className="js-guest-receipt" style={{ margin: 0, fontSize: 14, color: G.soft }}>{RECEIPT[s.sale.receipt.state]}{s.sale.receipt.peakCode ? ` · ${s.sale.receipt.peakCode}` : ""}. This page acknowledges the cash you paid; it is not the official receipt. No tax invoice — Folkpaths is not VAT-registered.</p>}
       {s.state === "WAITING" && <>

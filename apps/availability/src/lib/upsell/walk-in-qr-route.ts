@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { upsellWalkInQrEnabled } from "./flags";
 import { WalkInQrError, type QrActor } from "./walk-in-qr";
 import { UpsellSaleError } from "./sales";
+import { readJsonBounded } from "@/lib/bounded-body";
 
 // Route plumbing for the guest QR. Public answers are never cached, never indexed and send no
 // referrer; while UPSELL_WALKIN_QR_ENABLED is off every route is a 404.
@@ -14,12 +15,11 @@ export const PUBLIC_BODY_LIMIT = 2048;
 
 export const off = () => NextResponse.json({ error: "not-found" }, { status: 404, headers: PUBLIC_HEADERS });
 
+/** The guest's JSON body, never holding more than PUBLIC_BODY_LIMIT bytes of it (lib/bounded-body). */
 export async function publicBody(req: Request): Promise<unknown | NextResponse> {
-  const len = Number(req.headers.get("content-length") ?? "0");
-  if (len > PUBLIC_BODY_LIMIT) return NextResponse.json({ error: "TOO_LARGE" }, { status: 413, headers: PUBLIC_HEADERS });
-  const text = await req.text().catch(() => "");
-  if (text.length > PUBLIC_BODY_LIMIT) return NextResponse.json({ error: "TOO_LARGE" }, { status: 413, headers: PUBLIC_HEADERS });
-  try { return JSON.parse(text); } catch { return NextResponse.json({ error: "BAD_REQUEST", message: "Not JSON" }, { status: 400, headers: PUBLIC_HEADERS }); }
+  const r = await readJsonBounded(req, PUBLIC_BODY_LIMIT);
+  if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status, headers: PUBLIC_HEADERS });
+  return r.value;
 }
 
 /** A refusal the person can act on → its status and message (generic for the public); anything else is thrown. */

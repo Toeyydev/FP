@@ -107,6 +107,10 @@ from this session. No private data: every figure, name and reference is invented
    - Mappings: `UPSELL_GUIDE_CASH_HELD`, `UPSELL_ROUTE_REVENUE`, `TOUR_SERVICE_REVENUE`, `UPSELL_UNEARNED_REVENUE`.
    - Tax profile confirmed by the accountant, with `peakDocumentKind`.
    - The wrapper-key case (`peakReceipts` vs `PeakReceipts`): the docs disagree; check on UAT.
+   - **Receiving channel:** a verified candidate was found read-only in PEAK (20 Nov 2026). It is kept in a
+     private note, not in this public repo. An Admin picks it in Extras cash › Receiving account. Its
+     ledger account code and sub-id are still unknown, so the clearing stays blocked.
+   - **Card payments (Stripe):** future phase, chosen by the owner. Backlog only; no SDK or checkout now.
 5. Void / credit note for sale reversals: still BLOCKED (decided after UAT). PEAK documents
    `POST /Receipts/void` (by id or code).
 6. Done: the walk-in UI (lead name optional) and the guest QR (`pr4q-guest-qr-walkin.html`). Both are behind `UPSELL_ONSITE_TOUR_ENABLED` / `UPSELL_WALKIN_QR_ENABLED` (off). Activating needs THREE-TEMPLES-ONSITE v2 at Tour Service Revenue, saved by an Admin in Settings › Products.

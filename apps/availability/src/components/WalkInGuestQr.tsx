@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 // nothing. Draws nothing while the QR switch is off (the API answers 404).
 
 type Card = { open: true; url: string; svg: string; expiresAt: string; unitPriceSatang: number; seatsLeft: number; productName: string } | { open: false; reason: string; message: string };
-type Reg = { id: string; reference: string; guests: number; totalSatang: number; unitPriceSatang: number; leadName: string | null; contact: string | null; createdAt: string; validUntil: string; state: "WAITING" | "PAID" | "ENDED"; endedBecause: string | null; saleNo: string | null };
+type Reg = { id: string; reference: string; guests: number; totalSatang: number; unitPriceSatang: number; leadName: string | null; contact: string | null; createdAt: string; validUntil: string; state: "WAITING" | "PAID" | "REFUNDED" | "CANCELLED" | "ENDED"; endedBecause: string | null; saleNo: string | null };
 
 const C = { ink: "#18181B", soft: "#52525B", brand: "#0E3B2E", line: "#E5E7EB", warnBg: "#FBF4E4", warnLine: "#EADFC3", warnInk: "#5C3B06", okBg: "#EAF4EF", okLine: "#CBE5D6", okInk: "#0E5A33", badBg: "#FBEDEA", badLine: "#EFCFC7", badInk: "#8A2A1C" };
 const baht = (s: number) => `฿${(s / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
@@ -83,7 +83,7 @@ export default function WalkInGuestQr({ jobSheetId, onSold }: { jobSheetId: stri
         ))}
       </ul>}
       {done.length > 0 && <ul style={{ listStyle: "none", margin: 0, padding: 0, fontSize: 12.5, color: C.soft, display: "flex", flexDirection: "column", gap: 2 }}>
-        {done.map((r) => <li key={r.id}>{r.reference} · {r.guests} · {r.state === "PAID" ? `paid · ${r.saleNo}` : `ended — ${r.endedBecause ?? ""}`}</li>)}
+        {done.map((r) => <li key={r.id}>{r.reference} · {r.guests} · {r.state === "PAID" ? `paid · ${r.saleNo}` : r.state === "REFUNDED" ? `refunded · ${r.saleNo}` : r.state === "CANCELLED" ? `sale cancelled · ${r.saleNo}` : `ended — ${r.endedBecause ?? ""}`}</li>)}
       </ul>}
       {msg && <p role="status" style={{ margin: 0, fontSize: 13.5, color: C.okInk, background: C.okBg, border: `1px solid ${C.okLine}`, borderRadius: 8, padding: "8px 10px" }}>{msg}</p>}
       {err && <p role="alert" className="js-qr-error" style={{ margin: 0, fontSize: 13.5, color: C.badInk, background: C.badBg, border: `1px solid ${C.badLine}`, borderRadius: 8, padding: "8px 10px" }}>{err}</p>}

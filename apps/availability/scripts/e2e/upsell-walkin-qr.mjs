@@ -264,6 +264,24 @@ try {
   const code = await text(guide, ".ups-code");
   check("after the report: the hand-in code covers both walk-in sales (฿2,100) before any transfer", /^FOLK-CSH-\d{6}-\d{3}$/.test((await text(guide, ".ups-memo")).trim()) && /฿2,100/.test(code) && (await prisma.cashSettlementTransfer.count()) === 0, code.slice(0, 240));
   await shot(guide, "guide-handin-code-390");
+
+  // ── An Admin refunds the QR guest (the company pays it back): the guest's page tells the truth ──
+  const adminCookie = await sessionCookie(ADMIN);
+  const cookie = `${adminCookie.name}=${adminCookie.value}`;
+  const qrSale = await prisma.walkInRegistration.findFirstOrThrow({ where: { status: "CONFIRMED" }, include: { sale: true } });
+  const asked = await fetch(`${BASE}/api/upsell/sales/${encodeURIComponent(qrSale.sale.saleNo)}/refund`, { method: "POST", headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ reason: "the guest left before the start (example)", paidBy: "COMPANY", evidence: { url: "https://example.test/refund-e2e" } }) });
+  const reversalId = (await asked.json()).id ?? (await prisma.upsellSaleReversal.findFirstOrThrow()).id;
+  const decided = await fetch(`${BASE}/api/upsell/reversals/${reversalId}/decide`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ approve: true }) });
+  check("the Admin's refund is recorded and approved", asked.ok && decided.ok, `${asked.status} ${decided.status}`);
+  await guest.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+  await guest.reload({ waitUntil: "networkidle0" });
+  await guest.waitForSelector(".js-guest-refunded", { timeout: 15000 });
+  const refunded = await text(guest, ".js-guest-status");
+  check("the guest's page now says Refunded — not 'on the tour' — and keeps the Sale Ref", /Refunded — this booking is cancelled/.test(refunded) && !/you’re on the tour/.test(refunded) && refunded.includes(qrSale.sale.saleNo), refunded.slice(0, 240));
+  check("the refunded guest is off the job's guest list; the walk-in booking is cancelled, not deleted",
+    !(await guestRows(sheet.id)).some((r) => r.name === "Invented Ana") && (await prisma.booking.findFirstOrThrow({ where: { externalId: qrSale.sale.saleNo } })).status === "CANCELLED");
+  await shot(guest, "guest-refunded-390");
   check("the server called nothing off this machine (no QR service, no PEAK)", readFileSync(OUTBOUND, "utf8").trim() === "", readFileSync(OUTBOUND, "utf8").slice(0, 300));
 } catch (e) {
   check("the run completed", false, String(e?.stack ?? e).slice(0, 800));

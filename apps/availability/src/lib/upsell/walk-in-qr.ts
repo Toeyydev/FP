@@ -31,6 +31,7 @@ import { PUBLIC_BASE_URL } from "@/lib/site";
 import { SLOT_TIMES } from "@/lib/slots";
 import { PAX_PER_GUIDE } from "@/lib/capacity";
 import { UpsellSaleError, recordWalkInSale, saleByKey, walkInOffer, type SaleView } from "./sales";
+import { upsellWalkInQrEnabled } from "./flags";
 
 type Db = PrismaClient;
 type Tx = Prisma.TransactionClient;
@@ -238,13 +239,30 @@ export async function registerFromQr(db: Db, token: string, body: unknown, now =
 
 export type GuestRegistrationView = {
   reference: string; guests: number; totalSatang: number; unitPriceSatang: number; tourName: string; date: string; time: string | null;
-  state: "WAITING" | "PAID" | "ENDED"; endedBecause: string | null; validUntil: string;
+  state: RegState; endedBecause: string | null; validUntil: string;
   sale: { saleNo: string; jobRef: string | null; receipt: SaleView["receipt"] } | null;
 };
+
+/**
+ * What a registration is now, truthfully. A CONFIRMED registration whose sale an Admin later
+ * reversed is not "paid, on the tour": REFUNDED (the guest got the money back) or CANCELLED
+ * (recorded in error — no money was taken). Its references stay readable; nothing is reopened.
+ */
+export type RegState = "WAITING" | "PAID" | "REFUNDED" | "CANCELLED" | "ENDED";
+type SaleOutcome = { status: string; reversals: { kind: string }[] } | null;
+function stateOf(status: string, closedWhy: string | null, sale: SaleOutcome): RegState {
+  if (status === "CONFIRMED") {
+    if (sale?.status === "REVERSED") return sale.reversals.some((x) => x.kind === "REFUNDED") ? "REFUNDED" : "CANCELLED";
+    return "PAID";
+  }
+  return status === "PENDING" && !closedWhy ? "WAITING" : "ENDED";
+}
+const SALE_OUTCOME = { select: { id: true, saleNo: true, status: true, sourceJobSheet: { select: { ref: true } }, reversals: { where: { status: "APPROVED" }, select: { kind: true } } } } as const;
 
 /** Why a PENDING registration can no longer be paid — or null while it can (read-time; the sweep writes it). */
 async function closedBecause(db: Db | Tx, r: { status: string; expiresAt: Date; jobSheetId: string; productVersionId: string; qr: { revokedAt: Date | null; expiresAt: Date } }, now: Date): Promise<string | null> {
   if (r.status !== "PENDING") return null;
+  if (!upsellWalkInQrEnabled()) return "Guest registration is switched off — ask your guide";
   if (r.expiresAt <= now || r.qr.expiresAt <= now) return "Time ran out — register again from your guide's current QR";
   if (r.qr.revokedAt) return "The QR was replaced or stopped — register again from your guide's current QR";
   const offer = await walkInOffer(db, r.jobSheetId, r.productVersionId, now);
@@ -258,7 +276,7 @@ const RECEIPT_STATE: Record<string, SaleView["receipt"]["state"]> = { POSTED: "S
 export async function guestRegistrationView(db: Db, viewToken: string, now = new Date()): Promise<GuestRegistrationView | null> {
   if (!TOKEN_RE.test(viewToken)) return null;
   const r = await db.walkInRegistration.findUnique({ where: { viewTokenHash: sha(viewToken) }, include: { qr: { select: { revokedAt: true, expiresAt: true } }, jobSheet: { select: { date: true, slotIdx: true, tourId: true } },
-    sale: { select: { id: true, saleNo: true, status: true, sourceJobSheet: { select: { ref: true } } } } } });
+    sale: SALE_OUTCOME } });
   if (!r) return null;
   const tour = await db.tour.findUnique({ where: { id: r.jobSheet.tourId }, select: { name: true } });
   const why = await closedBecause(db, r, now);
@@ -270,7 +288,7 @@ export async function guestRegistrationView(db: Db, viewToken: string, now = new
   }
   return {
     reference: r.reference, guests: r.guests, totalSatang: r.totalSatang, unitPriceSatang: r.unitPriceSatang, tourName: tour?.name ?? "Tour", date: r.jobSheet.date, time: SLOT_TIMES[r.jobSheet.slotIdx] ?? null,
-    state: r.status === "CONFIRMED" ? "PAID" : r.status === "PENDING" && !why ? "WAITING" : "ENDED",
+    state: stateOf(r.status, why, r.sale),
     endedBecause: r.status === "PENDING" ? why : r.status === "CONFIRMED" ? null : r.endReason, validUntil: r.expiresAt.toISOString(), sale,
   };
 }
@@ -294,17 +312,17 @@ export async function guestCancel(db: Db, viewToken: string, now = new Date()) {
 // ── The guide: waiting registrations, cash received ───────────────────────────────────────
 
 export type GuideRegistration = { id: string; reference: string; guests: number; totalSatang: number; unitPriceSatang: number; leadName: string | null; contact: string | null;
-  createdAt: string; validUntil: string; state: "WAITING" | "PAID" | "ENDED"; endedBecause: string | null; saleNo: string | null };
+  createdAt: string; validUntil: string; state: RegState; endedBecause: string | null; saleNo: string | null };
 
 /** This job's registrations for its own guide (or Admin): today's waiting ones and what became of the rest. */
 export async function guideRegistrations(db: Db, actor: QrActor, jobSheetId: string, now = new Date()): Promise<GuideRegistration[]> {
   await actorMayOpen(db, actor, jobSheetId);
   const rows = await db.walkInRegistration.findMany({ where: { jobSheetId }, orderBy: { createdAt: "asc" }, take: 200,
-    include: { qr: { select: { revokedAt: true, expiresAt: true } }, sale: { select: { saleNo: true } } } });
+    include: { qr: { select: { revokedAt: true, expiresAt: true } }, sale: SALE_OUTCOME } });
   const out: GuideRegistration[] = [];
   for (const r of rows) {
     const why = await closedBecause(db, r, now);
-    const state = r.status === "CONFIRMED" ? "PAID" : r.status === "PENDING" && !why ? "WAITING" : "ENDED";
+    const state = stateOf(r.status, why, r.sale);
     out.push({ id: r.id, reference: r.reference, guests: r.guests, totalSatang: r.totalSatang, unitPriceSatang: r.unitPriceSatang,
       leadName: state === "ENDED" ? null : r.leadName, contact: state === "ENDED" || !r.contactEnc ? null : decrypt(r.contactEnc),
       createdAt: r.createdAt.toISOString(), validUntil: r.expiresAt.toISOString(), state, endedBecause: r.status === "PENDING" ? why : r.endReason, saleNo: r.sale?.saleNo ?? null });
@@ -369,16 +387,19 @@ export async function guideDecline(db: Db, actor: QrActor, registrationId: strin
 }
 
 /**
- * Write the end of every registration that can no longer be paid (time, QR revoked, report sent,
- * product changed, job no longer sold): EXPIRED with the reason, personal data cleared. Run by the
- * worker and after a refused confirmation. Paid registrations are never touched.
+ * Write the end of every registration that can no longer be paid (switch off, time, QR revoked,
+ * report sent, product changed, job no longer sold): EXPIRED with the reason, personal data
+ * cleared — and clear any personal data still left on an ended unpaid row. Paid registrations are
+ * never touched. Runs in the worker whatever the switches say (turning the QR off must not strand
+ * waiting registrations or their data) and after a refused confirmation. Bounded per run.
  */
 export async function sweepWalkInRegistrations(db: Db, now = new Date(), only: Prisma.WalkInRegistrationWhereInput = {}) {
-  const rows = await db.walkInRegistration.findMany({ where: { ...only, status: "PENDING" }, include: { qr: { select: { revokedAt: true, expiresAt: true } } }, take: 500 });
+  const rows = await db.walkInRegistration.findMany({ where: { ...only, status: "PENDING" }, include: { qr: { select: { revokedAt: true, expiresAt: true } } }, orderBy: { createdAt: "asc" }, take: 500 });
   let ended = 0;
   for (const r of rows) {
     const why = await closedBecause(db, r, now);
     if (why) ended += await closePending(db, { id: r.id }, "EXPIRED", why, null, now);
   }
-  return ended;
+  const scrubbed = (await db.walkInRegistration.updateMany({ where: { ...only, status: { in: ["CANCELLED", "EXPIRED"] }, OR: [{ leadName: { not: null } }, { contactEnc: { not: null } }] }, data: { leadName: null, contactEnc: null } })).count;
+  return { ended, scrubbed };
 }

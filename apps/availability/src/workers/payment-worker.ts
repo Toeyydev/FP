@@ -32,7 +32,7 @@ import { bokunApiEnabled } from "@/lib/bokun-api";
 import * as peakApi from "@/lib/peak-api";
 import { upsellPeakAdapter } from "@/lib/upsell/peak-adapter";
 import { syncUpsellPeakBatch } from "@/lib/upsell/peak-sync";
-import { upsellPeakAutoSyncEnabled, upsellWalkInQrEnabled } from "@/lib/upsell/flags";
+import { upsellPeakAutoSyncEnabled } from "@/lib/upsell/flags";
 import { sweepWalkInRegistrations } from "@/lib/upsell/walk-in-qr";
 
 const POLL_INTERVAL_MS = Number(process.env.PAYMENT_WORKER_POLL_MS ?? 15_000);
@@ -148,6 +148,31 @@ async function syncUpsellPeak(): Promise<void> {
   }
 }
 
+/**
+ * Guest walk-in registrations that can no longer be paid end and their personal data goes —
+ * whatever the switches say (switching the QR off ends waiting ones). Every few minutes, not
+ * every tick. Before the QR migration is applied the table does not exist: that, and only that,
+ * is skipped quietly; any other error is thrown to the tick (logged and recorded).
+ */
+const WALKIN_SWEEP_MS = Number(process.env.WALKIN_SWEEP_INTERVAL_MS ?? 5 * 60_000);
+let nextWalkInSweepAt = 0;
+let walkInSchemaMissingLogged = false;
+async function walkInSweep(): Promise<void> {
+  if (Date.now() < nextWalkInSweepAt) return;
+  nextWalkInSweepAt = Date.now() + WALKIN_SWEEP_MS;
+  try {
+    const r = await sweepWalkInRegistrations(prisma);
+    if (r.ended || r.scrubbed) log("walk-in-registrations-swept", r);
+  } catch (err) {
+    if ((err as { code?: string })?.code === "P2021") {
+      if (!walkInSchemaMissingLogged) log("walk-in-sweep-skipped", { reason: "WalkInRegistration table not migrated yet" });
+      walkInSchemaMissingLogged = true;
+      return;
+    }
+    throw err;
+  }
+}
+
 async function tick(): Promise<void> {
   if (ticking || shuttingDown) return;
   ticking = true;
@@ -156,13 +181,9 @@ async function tick(): Promise<void> {
     await reportPostingDecision();
     await syncAdvanceBatch(prisma);
     await syncUpsellPeak();
-    // Guest walk-in registrations that can no longer be paid end, and their personal data goes.
-    if (upsellWalkInQrEnabled()) {
-      try { const n = await sweepWalkInRegistrations(prisma); if (n > 0) log("walk-in-registrations-ended", { count: n }); }
-      catch (err) { log("walk-in-sweep-error", { error: String(err).slice(0, 200) }); }
-    }
     const n = await processQueuedBatch();
     if (n > 0) log("batch-processed", { count: n });
+    await walkInSweep();
     await recordServiceStatus(prisma, "payment-worker", { success: true });
   } catch (err) {
     log("tick-error", { error: String(err) });

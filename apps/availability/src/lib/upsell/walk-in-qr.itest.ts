@@ -15,7 +15,7 @@ import {
   WalkInQrError, confirmRegistrationCash, currentQr, guestCancel, guestRegistrationView, guideDecline, guideRegistrations, openQr, publicQrView,
   qrOrigin, registerFromQr, stopQr, sweepWalkInRegistrations, type QrActor,
 } from "./walk-in-qr";
-import { confirmHandIn, prepareHandIn, reportTransfer, setReceivingAccount, submitHandIn } from "./settlement";
+import { confirmHandIn, decideReversal, errorAffirmationText, prepareHandIn, reportTransfer, requestErrorReversal, requestRefundReversal, setReceivingAccount, submitHandIn } from "./settlement";
 import { syncUpsellPeakBatch } from "./peak-sync";
 import { upsellPeakAdapter, type PeakJournalClient } from "./peak-adapter";
 import { GUIDE_CASH_HELD } from "./peak-outbox";
@@ -230,7 +230,7 @@ describe("the guide records the cash", () => {
     expect(await code(guideDecline(prisma, other, regB.id))).toBe("NOT_YOUR_JOB");
     await guideDecline(prisma, guide, regB.id);
     const later = new Date(Date.now() + 5 * 3600_000);
-    expect(await sweepWalkInRegistrations(prisma, later)).toBe(1);
+    expect(await sweepWalkInRegistrations(prisma, later)).toEqual({ ended: 1, scrubbed: 0 });
     expect(await prisma.walkInRegistration.findFirstOrThrow({ where: { reference: c.reference } })).toMatchObject({ status: "EXPIRED", leadName: null });
     const list = await guideRegistrations(prisma, guide, jobId, later);
     expect(list.map((r) => r.state)).toEqual(["ENDED", "ENDED", "ENDED"]);
@@ -281,5 +281,65 @@ describe("end to end: scan → register → guide confirms the cash → guest PA
     expect(JSON.stringify(sent)).not.toMatch(/Invented|@example/); // no guest data in PEAK
     expect(await guestRegistrationView(prisma, r.viewToken)).toMatchObject({ state: "PAID", sale: { receipt: { state: "SYNCED", peakCode: expect.stringMatching(/^RE-TEST-/) } } });
     await prisma.peakAccountMapping.deleteMany({ where: { folkopsCategory: { in: [GUIDE_CASH_HELD, "TOUR_SERVICE_REVENUE"] } } });
+  });
+});
+
+describe("switched off, the cleanup still runs: waiting registrations end, personal data goes, paid history stays", () => {
+  for (const off of ["UPSELL_WALKIN_QR_ENABLED", "UPSELL_ENABLED"]) {
+    it(`with ${off} off`, async () => {
+      const card = await openQr(prisma, guide, jobId) as { url: string };
+      const paid = await register(tokenOf(card.url), 1, { leadName: "Invented Paid", contact: "p@example.test" });
+      const unpaid = await register(tokenOf(card.url), 2, { leadName: "Invented Waiting", contact: "w@example.test" });
+      const sold = await confirmRegistrationCash(prisma, guide, (await prisma.walkInRegistration.findFirstOrThrow({ where: { reference: paid.reference } })).id);
+      const before = await financial();
+      vi.stubEnv(off, "0");
+      expect(await sweepWalkInRegistrations(prisma)).toEqual({ ended: 1, scrubbed: 0 });
+      expect(await prisma.walkInRegistration.findFirstOrThrow({ where: { reference: unpaid.reference } })).toMatchObject({ status: "EXPIRED", leadName: null, contactEnc: null, endReason: expect.stringMatching(/switched off/) });
+      expect(await prisma.walkInRegistration.findFirstOrThrow({ where: { reference: paid.reference } })).toMatchObject({ status: "CONFIRMED", saleId: expect.any(String) });
+      expect(await financial()).toEqual(before); // the cleanup makes no sale, cash, booking or PEAK event
+      expect((await prisma.upsellSale.findFirstOrThrow()).saleNo).toBe(sold.sale.saleNo);
+    });
+  }
+
+  it("an ended unpaid row that still carries personal data is scrubbed; a paid one keeps its name", async () => {
+    const card = await openQr(prisma, guide, jobId) as { url: string };
+    const a = await register(tokenOf(card.url), 1, { leadName: "Invented Left", contact: "l@example.test" });
+    const reg = await prisma.walkInRegistration.findFirstOrThrow({ where: { reference: a.reference } });
+    // As an older code path might have ended it: status changed, data left behind.
+    await prisma.walkInRegistration.update({ where: { id: reg.id }, data: { status: "EXPIRED", decidedAt: new Date(), endReason: "ended (example)" } });
+    expect(await sweepWalkInRegistrations(prisma)).toEqual({ ended: 0, scrubbed: 1 });
+    expect(await prisma.walkInRegistration.findUniqueOrThrow({ where: { id: reg.id } })).toMatchObject({ leadName: null, contactEnc: null, status: "EXPIRED" });
+  });
+});
+
+describe("after the cash: an Admin's reversal shows truthfully to the guest and the guide", () => {
+  async function paidRegistration(name: string) {
+    const card = await openQr(prisma, guide, jobId) as { url: string };
+    const r = await register(tokenOf(card.url), 2, { leadName: name });
+    const reg = await prisma.walkInRegistration.findFirstOrThrow({ where: { reference: r.reference } });
+    const sold = await confirmRegistrationCash(prisma, guide, reg.id);
+    return { r, reg, saleNo: sold.sale.saleNo };
+  }
+
+  it("refunded by the company → REFUNDED (not 'on the tour'), references kept, readable after a new QR; nothing reopened", async () => {
+    const { r, reg, saleNo } = await paidRegistration("Invented Refund");
+    const asked = await requestRefundReversal(prisma, admin, { saleNo, reason: "guest left before the start (example)", paidBy: "COMPANY", evidence: { url: "https://example.test/refund-qr" } });
+    await decideReversal(prisma, admin, { reversalId: asked.id, approve: true });
+    const before = await financial();
+    await openQr(prisma, guide, jobId); // rotation
+    const v = await guestRegistrationView(prisma, r.viewToken);
+    expect(v).toMatchObject({ state: "REFUNDED", reference: r.reference, sale: { saleNo } });
+    expect((await guideRegistrations(prisma, guide, jobId)).find((x) => x.id === reg.id)).toMatchObject({ state: "REFUNDED", saleNo });
+    expect(await prisma.walkInRegistration.findUniqueOrThrow({ where: { id: reg.id } })).toMatchObject({ status: "CONFIRMED" });
+    expect((await prisma.booking.findFirstOrThrow({ where: { source: "walk-in" } })).status).toBe("CANCELLED");
+    expect(await financial()).toEqual(before); // no seat, sale or receipt minted by reading or rotating
+    expect(await code(guestCancel(prisma, r.viewToken))).toBe("PAID");
+  });
+
+  it("recorded in error → CANCELLED", async () => {
+    const { r, saleNo } = await paidRegistration("Invented Error");
+    const asked = await requestErrorReversal(prisma, guide, { saleNo, reason: "the guest never paid (example)", affirmationText: errorAffirmationText({ saleNo, grossSatang: 140000 }, (await prisma.jobSheet.findUniqueOrThrow({ where: { id: jobId } })).ref) });
+    await decideReversal(prisma, admin, { reversalId: asked.id, approve: true });
+    expect(await guestRegistrationView(prisma, r.viewToken)).toMatchObject({ state: "CANCELLED", sale: { saleNo } });
   });
 });
